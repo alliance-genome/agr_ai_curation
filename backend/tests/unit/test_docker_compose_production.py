@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
+from unittest.mock import Mock, patch
 
+import pytest
 import yaml
 
 
@@ -15,6 +18,10 @@ COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.production.yml"
 DEV_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.yml"
 ENV_TEMPLATE_PATH = WORKSPACE_ROOT / "scripts/install/lib/templates/env.standalone"
 START_VERIFY_PATH = WORKSPACE_ROOT / "scripts/install/06_start_verify.sh"
+MAKEFILE_PATH = WORKSPACE_ROOT / "Makefile"
+PREFLIGHT_PATH = WORKSPACE_ROOT / "scripts/testing/production_compose_preflight.py"
+if not PREFLIGHT_PATH.exists():
+    PREFLIGHT_PATH = Path("/app/scripts/testing/production_compose_preflight.py")
 WEAVIATE_IMAGE = (
     "semitechnologies/weaviate@sha256:"
     "5f0dc1fe066685558e22f324fbe9fadbc18730ce155ff47c27f891e62c652d2a"
@@ -23,7 +30,11 @@ MINIO_IMAGE = (
     "minio/minio@sha256:"
     "14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
 )
-EXPECTED_DEFAULT_IMAGE_TAG = "latest"
+
+spec = importlib.util.spec_from_file_location("production_compose_preflight", PREFLIGHT_PATH)
+assert spec and spec.loader
+production_preflight = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(production_preflight)
 
 
 def _load_compose() -> dict:
@@ -57,15 +68,15 @@ def test_production_compose_uses_published_app_images_without_local_builds():
     assert backend["image"].startswith(
         "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:"
     )
-    assert "${BACKEND_IMAGE_TAG:-" in backend["image"]
+    assert "${BACKEND_IMAGE_TAG:?" in backend["image"]
     assert frontend["image"].startswith(
         "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:"
     )
-    assert "${FRONTEND_IMAGE_TAG:-" in frontend["image"]
+    assert "${FRONTEND_IMAGE_TAG:?" in frontend["image"]
     assert trace_review_backend["image"].startswith(
         "${TRACE_REVIEW_BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend}:"
     )
-    assert "${TRACE_REVIEW_BACKEND_IMAGE_TAG:-" in trace_review_backend["image"]
+    assert "${TRACE_REVIEW_BACKEND_IMAGE_TAG:?" in trace_review_backend["image"]
     assert services["weaviate"]["image"] == WEAVIATE_IMAGE
     assert services["minio"]["image"] == MINIO_IMAGE
 
@@ -103,23 +114,183 @@ def test_dev_compose_trace_review_defaults_to_local_langfuse_bootstrap_keys():
     )
 
 
-def test_production_compose_fallback_image_tags_match_standalone_template_defaults():
+def test_production_compose_requires_pinned_app_image_tags():
     compose = _load_compose()
     services = compose["services"]
     env_template = ENV_TEMPLATE_PATH.read_text(encoding="utf-8")
 
     assert (
         services["backend"]["image"]
-        == "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:-latest}"
+        == "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:?set a release or sha tag in the production env}"
     )
     assert (
         services["frontend"]["image"]
-        == "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:-latest}"
+        == "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:?set a release or sha tag in the production env}"
     )
-    assert f"BACKEND_IMAGE_TAG={EXPECTED_DEFAULT_IMAGE_TAG}" in env_template
-    assert f"FRONTEND_IMAGE_TAG={EXPECTED_DEFAULT_IMAGE_TAG}" in env_template
-    assert "smoke-20260310-final" not in compose["services"]["backend"]["image"]
-    assert "smoke-20260310-final" not in compose["services"]["frontend"]["image"]
+    assert "BACKEND_IMAGE_TAG=CHANGE_ME_PINNED_RELEASE_TAG" in env_template
+    assert "FRONTEND_IMAGE_TAG=CHANGE_ME_PINNED_RELEASE_TAG" in env_template
+
+    for name, service in services.items():
+        image = service["image"]
+        assert not image.endswith(":latest"), name
+        if name in production_preflight.STATEFUL_SERVICES:
+            assert "@sha256:" in image, name
+
+
+def _safe_rendered_config() -> dict:
+    digest = "example.invalid/image@sha256:" + "a" * 64
+    services: dict[str, dict] = {
+        name: {"image": digest} for name in production_preflight.STATEFUL_SERVICES
+    }
+    services.update(
+        {
+            "frontend": {
+                "image": "example.invalid/frontend:v0.9.0",
+                "environment": {"VITE_DEV_MODE": "false"},
+            },
+            "backend": {
+                "image": "example.invalid/backend:v0.9.0",
+                "environment": {
+                    "AUTH_PROVIDER": "oidc",
+                    "OIDC_ISSUER_URL": "https://issuer.example.org",
+                    "OIDC_CLIENT_ID": "curation-production",
+                    "OIDC_REDIRECT_URI": "https://curation.example.org/auth/callback",
+                    "DEBUG": "false",
+                    "DEV_MODE": "false",
+                    "HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS": "true",
+                    "HEALTH_CHECK_REQUIRE_LITERATURE_DB": "true",
+                    "HEALTH_CHECK_STRICT_MODE": "true",
+                    "SECURE_COOKIES": "true",
+                    "SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS": "2000",
+                    "SENTRY_TRANSACTION_RETAINED_SPANS_MAX": "50",
+                },
+            },
+            "trace_review_backend": {
+                "image": "example.invalid/trace-review:v0.9.0",
+                "environment": {"DEV_MODE": "false", "SECURE_COOKIES": "true"},
+            },
+        }
+    )
+    services["weaviate"]["environment"] = {
+        "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "false",
+        "AUTHENTICATION_APIKEY_ENABLED": "true",
+        "AUTHENTICATION_APIKEY_ALLOWED_KEYS": "test-production-key",
+        "AUTHORIZATION_ADMINLIST_USERS": "curation-backend",
+    }
+    return {"services": services}
+
+
+def test_effective_production_contract_accepts_secure_rendered_config():
+    assert production_preflight.validate_config(_safe_rendered_config()) == []
+
+
+def test_effective_production_contract_defaults_match_sentry_runtime_configuration():
+    compose = _load_compose()
+    backend_env = compose["services"]["backend"]["environment"]
+
+    assert backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"] == (
+        "${SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS:-2000}"
+    )
+    assert backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"] == (
+        "${SENTRY_TRANSACTION_RETAINED_SPANS_MAX:-50}"
+    )
+    assert production_preflight.validate_config(
+        _safe_rendered_config(), enforce_operational_defaults=True
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("service", "key", "unsafe_value", "expected_error"),
+    [
+        ("frontend", "VITE_DEV_MODE", "true", "frontend.VITE_DEV_MODE"),
+        ("backend", "DEV_MODE", "true", "backend.DEV_MODE"),
+        ("backend", "DEBUG", "true", "backend.DEBUG"),
+        ("backend", "AUTH_PROVIDER", "dev", "backend.AUTH_PROVIDER"),
+        ("backend", "SECURE_COOKIES", "false", "backend.SECURE_COOKIES"),
+        ("backend", "HEALTH_CHECK_STRICT_MODE", "false", "backend.HEALTH_CHECK_STRICT_MODE"),
+        (
+            "backend",
+            "HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS",
+            "false",
+            "backend.HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS",
+        ),
+        (
+            "backend",
+            "HEALTH_CHECK_REQUIRE_LITERATURE_DB",
+            "false",
+            "backend.HEALTH_CHECK_REQUIRE_LITERATURE_DB",
+        ),
+        ("trace_review_backend", "DEV_MODE", "true", "trace_review_backend.DEV_MODE"),
+        (
+            "trace_review_backend",
+            "SECURE_COOKIES",
+            "false",
+            "trace_review_backend.SECURE_COOKIES",
+        ),
+        (
+            "weaviate",
+            "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED",
+            "true",
+            "weaviate.AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED",
+        ),
+        (
+            "backend",
+            "SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS",
+            "20000",
+            "SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS",
+        ),
+        (
+            "backend",
+            "SENTRY_TRANSACTION_RETAINED_SPANS_MAX",
+            "",
+            "SENTRY_TRANSACTION_RETAINED_SPANS_MAX",
+        ),
+    ],
+)
+def test_effective_production_contract_rejects_unsafe_environment_values(
+    service: str, key: str, unsafe_value: str, expected_error: str
+):
+    config = _safe_rendered_config()
+    config["services"][service]["environment"][key] = unsafe_value
+    assert any(
+        expected_error in error
+        for error in production_preflight.validate_config(
+            config, enforce_operational_defaults=True
+        )
+    )
+
+
+def test_effective_production_contract_rejects_mutable_stateful_image_and_data_port():
+    config = _safe_rendered_config()
+    config["services"]["postgres"]["image"] = "postgres:latest"
+    config["services"]["weaviate"]["ports"] = [{"target": 8080, "published": "8080"}]
+
+    errors = production_preflight.validate_config(config)
+
+    assert any("postgres.image must not use" in error for error in errors)
+    assert any("postgres.image must be pinned by digest" in error for error in errors)
+    assert any("weaviate must not publish data ports" in error for error in errors)
+
+
+def test_preflight_renders_the_exact_supported_compose_path(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("BACKEND_IMAGE_TAG=v0.9.0\n", encoding="utf-8")
+    completed = Mock(returncode=0, stdout='{"services": {}}', stderr="")
+
+    with patch.object(production_preflight.subprocess, "run", return_value=completed) as run:
+        production_preflight.render_config(env_file)
+
+    assert run.call_args.args[0] == [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env_file),
+        "-f",
+        str(production_preflight.PRODUCTION_COMPOSE),
+        "config",
+        "--format",
+        "json",
+    ]
 
 
 def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostics_first_class():
@@ -223,3 +394,13 @@ def test_standalone_template_and_installer_reference_the_production_compose_path
 
     assert "main_compose_file" in start_verify_script
     assert "docker-compose.production.yml" in start_verify_script
+    assert "production_compose_preflight.py" in start_verify_script
+
+
+def test_make_prod_is_the_single_source_checkout_production_launch_path():
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+
+    assert "production_compose_preflight.py --env-file" in makefile
+    assert 'docker compose --env-file "$(ENV_FILE)" -f docker-compose.production.yml up -d' in makefile
+    assert "docker-compose.prod.yml" not in makefile
+    assert "prod-build:" not in makefile

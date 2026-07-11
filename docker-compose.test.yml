@@ -108,9 +108,11 @@ services:
       - ./packages:/workspace/packages:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
+      - ./Makefile:/workspace/Makefile:ro
       - ./promtail-config.yml:/workspace/promtail-config.yml:ro
       - ./scripts/install:/workspace/scripts/install:ro
       - ./scripts/testing:/app/scripts/testing:ro
+      - ./scripts/testing:/workspace/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
@@ -166,9 +168,11 @@ services:
       - ./packages:/workspace/packages:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
+      - ./Makefile:/workspace/Makefile:ro
       - ./promtail-config.yml:/workspace/promtail-config.yml:ro
       - ./scripts/install:/workspace/scripts/install:ro
       - ./scripts/testing:/app/scripts/testing:ro
+      - ./scripts/testing:/workspace/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false

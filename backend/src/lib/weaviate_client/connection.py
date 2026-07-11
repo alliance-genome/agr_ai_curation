@@ -55,18 +55,24 @@ class WeaviateConnection:
             parsed = urlparse(self.url)
             host = parsed.hostname or "localhost"
             port = parsed.port or (443 if parsed.scheme == "https" else 8080)
+            auth_config = Auth.api_key(self.api_key) if self.api_key else None
 
             # For local connections, use the simpler connect_to_local method
             if host in ["localhost", "127.0.0.1", "weaviate"] and port == 8080:
                 if host == "weaviate":
                     # Docker container hostname
-                    self._client = weaviate.connect_to_local(host="weaviate", port=8080)
+                    self._client = weaviate.connect_to_local(
+                        host="weaviate",
+                        port=8080,
+                        auth_credentials=auth_config,
+                    )
                 else:
-                    self._client = weaviate.connect_to_local()
+                    self._client = weaviate.connect_to_local(
+                        auth_credentials=auth_config,
+                    )
             else:
                 # For remote connections, use custom connection
                 secure = parsed.scheme == "https"
-                auth_config = Auth.api_key(self.api_key) if self.api_key else None
                 grpc_host = os.getenv("WEAVIATE_GRPC_HOST", host)
                 grpc_port_raw = os.getenv("WEAVIATE_GRPC_PORT", "50051")
                 try:
@@ -126,14 +132,6 @@ class WeaviateConnection:
         except Exception:
             return False
 
-    async def connect_to_weaviate(self) -> None:
-        """Async method to connect to Weaviate."""
-        self.connect()
-
-    async def close(self) -> None:
-        """Async method to close connection."""
-        self.disconnect()
-
     @contextmanager
     def session(self):
         """Context manager for Weaviate session.
@@ -164,21 +162,20 @@ class WeaviateConnection:
         """
         def _health_check():
             try:
-                if not self._client:
-                    self.connect()
+                client = self._client or self.connect()
 
                 # Check if client is ready
-                if not self._client.is_ready():
+                if not client.is_ready():
                     return {
                         "status": "unhealthy",
                         "message": "Client is not ready"
                     }
 
                 # Get cluster info
-                cluster_info = self._client.cluster.nodes()
+                cluster_info = client.cluster.nodes()
 
                 # Get collections count
-                collections = self._client.collections.list_all()
+                collections = client.collections.list_all()
 
                 return {
                     "status": "healthy",
@@ -216,9 +213,10 @@ def get_connection() -> WeaviateConnection:
         weaviate_host = os.getenv("WEAVIATE_HOST", "localhost")
         weaviate_port = os.getenv("WEAVIATE_PORT", "8080")
         weaviate_scheme = os.getenv("WEAVIATE_SCHEME", "http")
+        weaviate_api_key = os.getenv("WEAVIATE_API_KEY") or None
         weaviate_url = f"{weaviate_scheme}://{weaviate_host}:{weaviate_port}"
 
-        _connection = WeaviateConnection(url=weaviate_url)
+        _connection = WeaviateConnection(url=weaviate_url, api_key=weaviate_api_key)
         # Actually connect to Weaviate
         _connection.connect()
     return _connection

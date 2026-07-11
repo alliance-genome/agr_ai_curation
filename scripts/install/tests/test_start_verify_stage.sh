@@ -39,7 +39,7 @@ assert_not_exists() {
 run_core_config() {
   local home_dir="$1"
   local input_text="$2"
-  printf '\n%s' "$input_text" | HOME="$home_dir" bash "$core_config_script"
+  printf '\n%s' "$input_text" | HOME="$home_dir" INSTALL_IMAGE_TAG="sha-test-release" bash "$core_config_script"
 }
 
 run_auth_setup() {
@@ -75,6 +75,13 @@ if [[ " $* " == *" compose "* && " $* " == *" config "* && " $* " == *" --servic
     touch "${state_dir}/main_compose_is_production"
   fi
   printf '%s\n' backend frontend langfuse postgres trace_review_backend
+  exit 0
+fi
+
+if [[ " $* " == *" compose "* && " $* " == *" config "* && " $* " == *" --format json "* ]]; then
+  cat <<'JSON'
+{"services":{"backend":{"image":"example/backend:sha-test-release","environment":{"AUTH_PROVIDER":"oidc","OIDC_ISSUER_URL":"https://issuer.example.org","OIDC_CLIENT_ID":"curation-production","OIDC_REDIRECT_URI":"https://curation.example.org/auth/callback","DEBUG":"false","DEV_MODE":"false","HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS":"true","HEALTH_CHECK_REQUIRE_LITERATURE_DB":"true","HEALTH_CHECK_STRICT_MODE":"true","SECURE_COOKIES":"true","SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS":"2000","SENTRY_TRANSACTION_RETAINED_SPANS_MAX":"50"}},"frontend":{"image":"example/frontend:sha-test-release","environment":{"VITE_DEV_MODE":"false"}},"trace_review_backend":{"image":"example/trace-review:sha-test-release","environment":{"DEV_MODE":"false","SECURE_COOKIES":"true"}},"weaviate":{"image":"example/weaviate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":{"AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED":"false","AUTHENTICATION_APIKEY_ENABLED":"true","AUTHENTICATION_APIKEY_ALLOWED_KEYS":"test-key","AUTHORIZATION_ADMINLIST_USERS":"curation-backend"}},"postgres":{"image":"example/postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"redis":{"image":"example/redis@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"clickhouse":{"image":"example/clickhouse@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"minio":{"image":"example/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"loki":{"image":"example/loki@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"promtail":{"image":"example/promtail@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"langfuse":{"image":"example/langfuse@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"langfuse-worker":{"image":"example/langfuse-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
+JSON
   exit 0
 fi
 
@@ -248,7 +255,7 @@ test_start_verify_marks_pdfx_skipped_when_not_configured() {
   trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
 
   run_core_config "$temp_home" $'sk-openai-test\n\n\n\n\n\n'
-  run_auth_setup "$temp_home" $'1\n'
+  run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org/realms/alliance\nalliance-web\nsecret-value\nhttps://app.example.org/auth/callback\nrealm_access.roles\n'
   make_stub_tools "$stub_dir"
 
   run_start_verify "$temp_home" "$stub_dir" "$state_dir" "$output_path"
@@ -268,7 +275,7 @@ test_start_verify_marks_pdfx_skipped_when_not_configured() {
   assert_contains "${temp_home}/.agr_ai_curation/runtime/config" "$output_path"
   assert_contains 'pdf_extraction' "$output_path"
   assert_contains 'Skipped' "$output_path"
-  assert_contains 'Auth mode: dev' "$output_path"
+  assert_contains 'Auth mode: oidc' "$output_path"
 }
 
 test_start_verify_fails_with_clear_pdfx_state_guidance() {

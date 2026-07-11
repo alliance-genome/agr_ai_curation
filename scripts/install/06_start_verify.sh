@@ -339,6 +339,10 @@ start_pdfx_stack_if_configured() {
 }
 
 start_main_stack() {
+  log_info "Validating effective production Compose configuration"
+  "${repo_root}/scripts/testing/production_compose_preflight.py" \
+    --env-file "$env_output_path" \
+    --compose-file "$main_compose_file"
   log_info "Starting main stack"
   RUN_DB_BOOTSTRAP_ON_START=true RUN_DB_MIGRATIONS_ON_START=true run_main_compose up -d
 }

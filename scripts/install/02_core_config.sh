@@ -481,6 +481,7 @@ main() {
   local langfuse_init_secret_key
   local langfuse_init_user_password
   local trace_review_internal_api_token
+  local weaviate_api_key
 
   postgres_password="$(generate_hex_secret 16)"
   redis_auth="$(generate_hex_secret 16)"
@@ -493,6 +494,7 @@ main() {
   langfuse_init_secret_key="$(generate_prefixed_langfuse_key "sk-lf-")"
   langfuse_init_user_password="$(generate_hex_secret 16)"
   trace_review_internal_api_token="$(generate_hex_secret 32)"
+  weaviate_api_key="$(generate_hex_secret 32)"
 
   require_hex_64 "NEXTAUTH_SECRET" "$nextauth_secret"
   require_hex_64 "SALT" "$salt"
@@ -523,6 +525,7 @@ main() {
   upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_PUBLIC_KEY" "$langfuse_init_public_key"
   upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_SECRET_KEY" "$langfuse_init_secret_key"
   upsert_env_var "$env_output_path" "TRACE_REVIEW_INTERNAL_API_TOKEN" "$trace_review_internal_api_token"
+  upsert_env_var "$env_output_path" "WEAVIATE_API_KEY" "$weaviate_api_key"
 
   upsert_env_var "$env_output_path" "LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY" '${MINIO_ROOT_PASSWORD}'
   upsert_env_var "$env_output_path" "LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY" '${MINIO_ROOT_PASSWORD}'
