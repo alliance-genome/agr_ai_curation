@@ -107,6 +107,14 @@ def get_submission_attempt_retention_days() -> int:
     return max(1, _get_env_int_with_fallback("SUBMISSION_ATTEMPT_RETENTION_DAYS", 90))
 
 
+def get_submission_attempt_cleanup_interval_seconds() -> int:
+    """Seconds between periodic submission-attempt retention cleanup passes."""
+    return max(
+        1,
+        _get_env_int_with_fallback("SUBMISSION_ATTEMPT_CLEANUP_INTERVAL_SECONDS", 3600),
+    )
+
+
 def is_retryable_groq_tool_call_error(exc: Exception) -> bool:
     """Return True when an exception matches known transient Groq tool-call parse failures."""
     text = str(exc or "").lower()

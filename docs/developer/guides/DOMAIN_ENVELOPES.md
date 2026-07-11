@@ -266,7 +266,9 @@ the adapter's read-only reconciliation hook, so a client retry cannot blindly
 repeat an external mutation. Confirmed failures may be retried against the same
 attempt and key. Terminal attempts retain an append-only transition history and
 become cleanup-eligible after `SUBMISSION_ATTEMPT_RETENTION_DAYS`; unresolved
-attempts are never removed by retention cleanup.
+attempts are never removed by retention cleanup. Backend lifecycle maintenance
+purges eligible attempts outside the submission request path every
+`SUBMISSION_ATTEMPT_CLEANUP_INTERVAL_SECONDS`.
 
 ## Agent Studio and Flow Builder
 

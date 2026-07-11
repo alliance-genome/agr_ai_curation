@@ -1967,7 +1967,6 @@ def _execute_direct_submission_attempt(
 
     transport_adapter = _resolve_submission_transport_adapter(target_key)
     requested_at = datetime.now(timezone.utc)
-    purge_expired_submission_attempts(db, before=requested_at)
     serialized_payload = _serialize_submission_payload_contract(payload)
     submission_row = db.scalar(
         select(SubmissionModel).where(SubmissionModel.idempotency_key == idempotency_key)

@@ -451,13 +451,23 @@ async def lifespan(app: FastAPI):
     recovered_batch_count = schedule_startup_batch_recovery()
     logger.info("Batch recovery startup scan dispatched %d batch(es)", recovered_batch_count)
 
-    yield
+    from src.lib.curation_workspace.submission_attempt_cleanup import (
+        schedule_submission_attempt_cleanup,
+        stop_submission_attempt_cleanup,
+    )
 
-    logger.info("Shutting down Weaviate Control Panel API...")
+    schedule_submission_attempt_cleanup()
+    logger.info("Submission attempt retention cleanup scheduled")
+
     try:
-        await connection.close()
-    except Exception as e:
-        logger.error("Error during shutdown: %s", e)
+        yield
+    finally:
+        await stop_submission_attempt_cleanup()
+        logger.info("Shutting down Weaviate Control Panel API...")
+        try:
+            await connection.close()
+        except Exception as e:
+            logger.error("Error during shutdown: %s", e)
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
