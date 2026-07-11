@@ -113,21 +113,30 @@ class TestBatchStatusTransitions:
 class TestBatchServiceMocked:
     """Tests for BatchService using mocks to avoid DB constraints."""
 
-    def test_claim_pending_batch_returns_none_when_conditional_update_loses(self):
+    def test_claim_recoverable_batch_returns_none_when_conditional_update_loses(self):
         mock_db = Mock()
         mock_db.execute.return_value.scalar_one_or_none.return_value = None
 
-        result = BatchService(mock_db).claim_pending_batch(uuid4())
+        result = BatchService(mock_db).claim_recoverable_batch(uuid4(), uuid4(), 120)
 
         assert result is None
-        mock_db.commit.assert_called_once()
+        mock_db.rollback.assert_called_once()
         mock_db.scalars.assert_not_called()
 
     def test_complete_running_batch_returns_false_after_cancellation(self):
         mock_db = Mock()
+        mock_db.scalars.return_value.first.return_value = None
+
+        result = BatchService(mock_db).complete_running_batch(uuid4(), uuid4())
+
+        assert result is False
+        mock_db.rollback.assert_called_once()
+
+    def test_cancel_running_batch_for_lease_returns_false_after_lease_loss(self):
+        mock_db = Mock()
         mock_db.execute.return_value.scalar_one_or_none.return_value = None
 
-        result = BatchService(mock_db).complete_running_batch(uuid4())
+        result = BatchService(mock_db).cancel_running_batch_for_lease(uuid4(), uuid4())
 
         assert result is False
         mock_db.commit.assert_called_once()
@@ -165,33 +174,19 @@ class TestBatchServiceMocked:
         assert result is mock_batch
         mock_db.commit.assert_called_once()
 
-    def test_increment_batch_completed(self):
-        """Increment batch completed should increase count by 1."""
+    def test_recompute_batch_counters(self):
+        """Counters are derived from terminal document rows."""
         mock_db = Mock()
         service = BatchService(mock_db)
-
         mock_batch = Mock()
-        mock_batch.completed_documents = 0
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_batch
+        mock_db.execute.return_value.one.return_value = (6, 3, 2)
 
-        service.increment_batch_completed(uuid4())
+        service.recompute_batch_counters(mock_batch)
 
-        assert mock_batch.completed_documents == 1
-        mock_db.commit.assert_called_once()
-
-    def test_increment_batch_failed(self):
-        """Increment batch failed should increase count by 1."""
-        mock_db = Mock()
-        service = BatchService(mock_db)
-
-        mock_batch = Mock()
-        mock_batch.failed_documents = 0
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_batch
-
-        service.increment_batch_failed(uuid4())
-
-        assert mock_batch.failed_documents == 1
-        mock_db.commit.assert_called_once()
+        assert mock_batch.total_documents == 6
+        assert mock_batch.completed_documents == 3
+        assert mock_batch.failed_documents == 2
+        mock_db.flush.assert_called_once()
 
     def test_update_batch_status(self):
         """Update batch status should change status and timestamps."""

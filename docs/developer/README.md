@@ -34,6 +34,7 @@ Start here for new developers:
 8. **[AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md)** -- Comprehensive agent/runtime architecture reference
 9. **[UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md)** -- Upload runtime contract (status/cancellation/rollback/idempotency; implementation in ALL-23)
 10. **[SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md)** -- Backend Sentry initialization, redaction, reporting facades, and dev smoke procedure
+11. **[BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md)** -- Durable worker leases, startup recovery, and idempotent document resume policy
 
 ### Developer Guides
 
@@ -57,6 +58,7 @@ Start here for new developers:
 | [SYMPHONY_VM_CODEX_SHORTCUTS.md](guides/SYMPHONY_VM_CODEX_SHORTCUTS.md) | Interactive Codex shortcuts in the Symphony VM, including PAT-backed `co` and rebuild persistence |
 | [SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md) | Backend Sentry operating model: initialization, redaction, reporting facades, CloudWatch/Langfuse boundaries, and dev smoke testing |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
+| [BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md) | Durable batch worker leases, startup scan behavior, stale processing policy, and counter invariants |
 | [ABC Literature API Contract Verification](integrations/abc_literature/api_contract_verification.md) | Verified Literature OpenAPI hostnames, endpoint allowlist, forbidden endpoints, and fixture-backed live-check procedure |
 | [ABC Literature Conversion Handoff](integrations/abc_literature/conversion_handoff.md) | Boundary between AI Curation, ABC Literature conversion_request, nXML/TEI behavior, and local PDFX fallback |
 | [ABC Literature Import Lifecycle](integrations/abc_literature/import_lifecycle.md) | Provider-neutral ABC import lifecycle, conversion polling/status mapping, failures, cancellation, and timeout behavior |

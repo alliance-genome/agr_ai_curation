@@ -126,7 +126,8 @@ class TestLifespan:
                      "summary": {},
                  },
              ), \
-             patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):
+             patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False), \
+             patch("src.lib.batch.recovery.schedule_startup_batch_recovery", return_value=0):
             # Mock the database session context manager
             mock_db = MagicMock()
             mock_session.return_value = mock_db
@@ -478,7 +479,8 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
              new_callable=AsyncMock,
              return_value=(True, []),
          ), \
-         patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):
+         patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False), \
+         patch("src.lib.batch.recovery.schedule_startup_batch_recovery", return_value=0):
         async with main.lifespan(FastAPI()):
             pass
 

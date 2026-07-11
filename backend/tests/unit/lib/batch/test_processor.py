@@ -12,7 +12,10 @@ from unittest.mock import Mock
 import pytest
 
 from src.lib.batch import processor
+from src.lib.batch.service import BatchService
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
+
+_maintain_batch_lease = processor._maintain_batch_lease
 
 
 def _build_batch_context() -> tuple[Any, Any, Any]:
@@ -23,6 +26,8 @@ def _build_batch_context() -> tuple[Any, Any, Any]:
         total_documents=1,
         completed_documents=0,
         failed_documents=0,
+        lease_owner=None,
+        lease_expires_at=None,
     )
     batch_doc = SimpleNamespace(
         id=uuid4(),
@@ -36,7 +41,45 @@ def _build_batch_context() -> tuple[Any, Any, Any]:
         error_message=None,
     )
     flow = SimpleNamespace(name="Gene Expression Batch Flow")
+    batch.documents = [batch_doc]
     return batch, batch_doc, flow
+
+
+@pytest.fixture(autouse=True)
+def mocked_batch_persistence(monkeypatch):
+    """Keep processor unit doubles focused on orchestration, not SQL shapes."""
+    def recompute(_service, batch):
+        batch.completed_documents = sum(
+            document.status == BatchDocumentStatus.COMPLETED for document in batch.documents
+        )
+        batch.failed_documents = sum(
+            document.status == BatchDocumentStatus.FAILED for document in batch.documents
+        )
+
+    def claim(service, _batch_id, owner, _seconds):
+        batch = service.db.batch
+        if batch.status != BatchStatus.PENDING:
+            return None
+        batch.status = BatchStatus.RUNNING
+        batch.lease_owner = owner
+        batch.lease_expires_at = datetime.max.replace(tzinfo=timezone.utc)
+        return batch
+
+    def complete(service, _batch_id, owner):
+        batch = service.db.batch
+        if batch.status != BatchStatus.RUNNING or batch.lease_owner != owner:
+            return False
+        batch.status = BatchStatus.COMPLETED
+        return True
+
+    @contextmanager
+    def no_heartbeat(*_args, **_kwargs):
+        yield
+
+    monkeypatch.setattr(BatchService, "recompute_batch_counters", recompute)
+    monkeypatch.setattr(BatchService, "claim_recoverable_batch", claim)
+    monkeypatch.setattr(BatchService, "complete_running_batch", complete)
+    monkeypatch.setattr(processor, "_maintain_batch_lease", no_heartbeat)
 
 
 def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
@@ -85,6 +128,57 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
             "timestamp": batch_doc.processed_at.isoformat(),
         }
     ]
+
+
+def test_batch_lease_heartbeat_retries_after_session_error(monkeypatch, caplog):
+    batch_id = uuid4()
+    lease_owner = uuid4()
+    heartbeat_calls = 0
+
+    class FakeEvent:
+        def __init__(self):
+            self.wait_calls = 0
+
+        def wait(self, _seconds):
+            self.wait_calls += 1
+            return self.wait_calls > 2
+
+        def set(self):
+            pass
+
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+        def join(self):
+            pass
+
+    @contextmanager
+    def heartbeat_session():
+        nonlocal heartbeat_calls
+        heartbeat_calls += 1
+        if heartbeat_calls == 1:
+            raise RuntimeError("temporary database outage")
+        yield object()
+
+    monkeypatch.setattr(processor.threading, "Event", FakeEvent)
+    monkeypatch.setattr(processor.threading, "Thread", InlineThread)
+    monkeypatch.setattr(processor, "get_db_session", heartbeat_session)
+    monkeypatch.setattr(
+        BatchService,
+        "heartbeat_batch_lease",
+        lambda *_args, **_kwargs: True,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with _maintain_batch_lease(batch_id, lease_owner):
+            pass
+
+    assert heartbeat_calls == 2
+    assert "renewal will retry on the next interval" in caplog.text
 
 
 def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
@@ -219,6 +313,13 @@ class _DummyDB:
     def query(self, model):
         return _DummyQuery(self, model)
 
+    def get(self, model, _identifier):
+        if model is processor.Batch:
+            return self.batch
+        if model is processor.BatchDocument:
+            return self.batch_doc
+        return None
+
     def refresh(self, _obj, **_kwargs):
         return None
 
@@ -245,7 +346,7 @@ def test_process_batch_task_does_not_double_count_failed_documents(monkeypatch):
     def _fake_get_db_session():
         yield db
 
-    def _fake_process_single_document(db, batch, batch_doc, flow, cognito_sub):
+    def _fake_process_single_document(db, batch, batch_doc, flow, cognito_sub, **_kwargs):
         batch_doc.status = BatchDocumentStatus.FAILED
         batch_doc.error_message = "Flow completed without FILE_READY output"
         batch_doc.processed_at = datetime.now(timezone.utc)
@@ -298,6 +399,54 @@ def test_process_batch_task_skips_all_processing_when_claim_fails(monkeypatch):
     broadcaster.assert_not_called()
 
 
+def test_recovered_batch_processes_only_pending_document(monkeypatch):
+    batch, pending_document, flow = _build_batch_context()
+    completed_document = SimpleNamespace(
+        id=uuid4(),
+        document_id=uuid4(),
+        position=0,
+        status=BatchDocumentStatus.COMPLETED,
+        result_file_path="/files/completed",
+        review_session_ids=["existing-review"],
+        processing_time_ms=10,
+        processed_at=datetime.now(timezone.utc),
+        error_message=None,
+    )
+    pending_document.position = 1
+    batch.documents = [completed_document, pending_document]
+    batch.flow_id = uuid4()
+    batch.total_documents = 2
+    batch.completed_documents = 1
+    batch.status = BatchStatus.RUNNING
+    lease_owner = uuid4()
+    batch.lease_owner = lease_owner
+    batch.lease_expires_at = datetime.max.replace(tzinfo=timezone.utc)
+    db = _DummyDB(
+        batch=batch,
+        batch_doc=pending_document,
+        flow=flow,
+        user=SimpleNamespace(id=batch.user_id, auth_sub="auth-sub"),
+    )
+    processed: list[Any] = []
+
+    def process_pending(_db, _batch, document, _flow, _sub, **_kwargs):
+        processed.append(document)
+        document.status = BatchDocumentStatus.COMPLETED
+
+    monkeypatch.setattr(processor, "_process_single_document", process_pending)
+
+    processor._process_claimed_batch(
+        db,
+        BatchService(db),
+        batch,
+        lease_owner,
+    )
+
+    assert processed == [pending_document]
+    assert completed_document.result_file_path == "/files/completed"
+    assert completed_document.review_session_ids == ["existing-review"]
+
+
 def test_process_batch_task_does_not_report_already_reported_flow_failure(monkeypatch, caplog):
     batch, batch_doc, _flow = _build_batch_context()
     batch.flow_id = uuid4()
@@ -315,7 +464,7 @@ def test_process_batch_task_does_not_report_already_reported_flow_failure(monkey
     def _fake_get_db_session():
         yield db
 
-    def _fake_process_single_document(db, batch, batch_doc, flow, cognito_sub):
+    def _fake_process_single_document(db, batch, batch_doc, flow, cognito_sub, **_kwargs):
         batch_doc.status = BatchDocumentStatus.FAILED
         batch_doc.error_message = "Flow extraction persistence failed"
         batch_doc.processed_at = datetime.now(timezone.utc)
@@ -365,7 +514,7 @@ def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
     def _fake_get_db_session():
         yield db
 
-    def _raise_process_single_document(db, batch, batch_doc, flow, cognito_sub):
+    def _raise_process_single_document(db, batch, batch_doc, flow, cognito_sub, **_kwargs):
         raise RuntimeError("batch document failed")
 
     monkeypatch.setattr(processor, "get_db_session", _fake_get_db_session)
