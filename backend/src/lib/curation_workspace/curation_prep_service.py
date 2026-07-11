@@ -420,7 +420,6 @@ def ensure_domain_envelope_materialization(
                     document_id=extraction_result.document_id,
                     flow_run_id=extraction_result.flow_run_id,
                 ),
-                manage_transaction=False,
             )
             envelope_revision = checkpoint.revision
             persisted_envelope = envelope

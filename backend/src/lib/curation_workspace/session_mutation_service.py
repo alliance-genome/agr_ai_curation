@@ -1333,7 +1333,6 @@ def _checkpoint_patch_result(
                 object_model_ref_json=dict(envelope_row.object_model_ref_json or {}),
                 model_field_ref_json=dict(envelope_row.model_field_ref_json or {}),
             ),
-            manage_transaction=False,
         )
     except DomainEnvelopePersistenceError as exc:
         raise HTTPException(

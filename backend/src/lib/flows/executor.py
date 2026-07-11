@@ -1693,7 +1693,6 @@ async def _execute_validation_groups_for_step(
                     object_model_ref_json=envelope_row.object_model_ref_json or {},
                     model_field_ref_json=envelope_row.model_field_ref_json or {},
                 ),
-                manage_transaction=False,
             )
             materialized_revision = checkpoint.revision
             phase_timings_ms["checkpoint_write_ms"] = _elapsed_ms(

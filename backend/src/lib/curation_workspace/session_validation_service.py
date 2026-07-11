@@ -497,7 +497,6 @@ def _dispatch_workspace_envelope_validation(
                 object_model_ref_json=dict(envelope_row.object_model_ref_json),
                 model_field_ref_json=dict(envelope_row.model_field_ref_json),
             ),
-            manage_transaction=False,
         )
     except DomainEnvelopePersistenceError as exc:
         raise HTTPException(

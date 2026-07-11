@@ -217,7 +217,6 @@ def migrate_legacy_curation_workspace_to_domain_envelopes(
                 object_model_ref_json=_legacy_model_ref_json(),
                 model_field_ref_json=_legacy_field_ref_json(),
             ),
-            manage_transaction=False,
         )
         summary.migrated_envelopes += 1
         summary.linked_candidate_projection_refs += _link_session_candidates(
@@ -265,7 +264,6 @@ def migrate_legacy_curation_workspace_to_domain_envelopes(
                 object_model_ref_json=_legacy_model_ref_json(),
                 model_field_ref_json=_legacy_field_ref_json(),
             ),
-            manage_transaction=False,
         )
         summary.migrated_envelopes += 1
         migrated_sources.update(_source_refs_from_envelope(envelope))
