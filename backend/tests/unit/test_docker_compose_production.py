@@ -103,6 +103,13 @@ def test_dev_compose_trace_review_defaults_to_local_langfuse_bootstrap_keys():
     )
 
 
+def test_dev_compose_mounts_canonical_agent_studio_prompt_source():
+    compose = _load_dev_compose()
+    backend_volumes = compose["services"]["backend"]["volumes"]
+
+    assert "./alliance_config:/app/alliance_config:ro" in backend_volumes
+
+
 def test_production_compose_fallback_image_tags_match_standalone_template_defaults():
     compose = _load_compose()
     services = compose["services"]

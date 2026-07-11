@@ -61,6 +61,14 @@ def get_trace_review_url() -> str:
     return os.getenv("TRACE_REVIEW_URL", "http://trace_review_backend:8001")
 
 
+def _trace_review_request_headers() -> Dict[str, str]:
+    """Authenticate backend-to-TraceReview requests when a service token exists."""
+    token = os.getenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 # ============================================================================
 # Validation Helpers
 # ============================================================================
@@ -150,7 +158,11 @@ async def _get_claude_endpoint(
     try:
         timeout = httpx.Timeout(timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(f"{_get_claude_api_url()}{path}", params=request_params)
+            resp = await client.get(
+                f"{_get_claude_api_url()}{path}",
+                params=request_params,
+                headers=_trace_review_request_headers(),
+            )
 
         if resp.status_code == 200:
             payload = resp.json()
@@ -240,7 +252,11 @@ async def get_trace_summary(trace_id: str) -> Dict[str, Any]:
         timeout = httpx.Timeout(30.0)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params={"source": get_trace_source()})
+            resp = await client.get(
+                url,
+                params={"source": get_trace_source()},
+                headers=_trace_review_request_headers(),
+            )
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -334,7 +350,11 @@ async def get_tool_calls_summary(trace_id: str) -> Dict[str, Any]:
         timeout = httpx.Timeout(30.0)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params={"source": get_trace_source()})
+            resp = await client.get(
+                url,
+                params={"source": get_trace_source()},
+                headers=_trace_review_request_headers(),
+            )
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -436,7 +456,11 @@ async def get_tool_calls_page(
             params["tool_name"] = tool_name
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params=params)
+            resp = await client.get(
+                url,
+                params=params,
+                headers=_trace_review_request_headers(),
+            )
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -540,7 +564,11 @@ async def get_tool_call_detail(trace_id: str, call_id: str) -> Dict[str, Any]:
         timeout = httpx.Timeout(30.0)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params={"source": get_trace_source()})
+            resp = await client.get(
+                url,
+                params={"source": get_trace_source()},
+                headers=_trace_review_request_headers(),
+            )
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -621,7 +649,11 @@ async def get_trace_conversation(trace_id: str) -> Dict[str, Any]:
         timeout = httpx.Timeout(30.0)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params={"source": get_trace_source()})
+            resp = await client.get(
+                url,
+                params={"source": get_trace_source()},
+                headers=_trace_review_request_headers(),
+            )
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -715,7 +747,11 @@ async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
         timeout = httpx.Timeout(30.0)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params={"source": get_trace_source()})
+            resp = await client.get(
+                url,
+                params={"source": get_trace_source()},
+                headers=_trace_review_request_headers(),
+            )
 
             if resp.status_code == 200:
                 data = resp.json()

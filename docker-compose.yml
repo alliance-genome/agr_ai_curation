@@ -289,6 +289,7 @@ services:
       - ./backend/tests:/app/backend/tests:ro  # Mount tests for running routing consistency checks
       - ./backend/alembic:/app/backend/alembic:ro  # Mount migrations for alembic upgrade
       - ./packages:/app/packages:ro
+      - ./alliance_config:/app/alliance_config:ro  # Canonical project-owned Agent Studio system prompt
       - ./config:/workspace/config:ro
       - ./packages:/workspace/packages:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
