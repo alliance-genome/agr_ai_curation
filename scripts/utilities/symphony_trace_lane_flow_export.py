@@ -214,23 +214,34 @@ def linear_transition_events(event: dict[str, Any]) -> list[dict[str, Any]]:
 
 def scripted_lane_events(event: dict[str, Any]) -> list[dict[str, Any]]:
     payload = mapping_value(event.get("payload"))
-    if get_in(payload, ("method",)) != "symphony/scripted_lane/completed":
+    method = string_value(get_in(payload, ("method",)))
+    phases = {
+        "symphony/scripted_lane/started": "started",
+        "symphony/scripted_lane/completed": "completed",
+        "symphony/scripted_lane/failed": "failed",
+    }
+    phase = phases.get(method or "")
+    if phase is None:
         return []
 
     params = mapping_value(get_in(payload, ("params",)))
-    output_transition = parse_linear_state_transition(string_value(params.get("output")))
+    transition = mapping_value(params.get("transition"))
+    if not transition:
+        transition = parse_linear_state_transition(string_value(params.get("output"))) or {}
 
     scripted_event = {
-        "type": "scripted_lane_completed",
+        "type": f"scripted_lane_{phase}",
         "lane": string_value(params.get("lane_name")),
         "helper": string_value(params.get("helper")),
+        "exit_status": params.get("exit_status"),
+        "error": string_value(params.get("error")),
         "timestamp": string_value(event.get("timestamp")),
         "source": "scripted_lane",
     }
 
-    if output_transition:
+    if transition:
         for key in ("from", "to", "status", "target_id", "error"):
-            if value := string_value(output_transition.get(key)):
+            if value := string_value(transition.get(key)):
                 scripted_event[key] = value
 
     return [drop_none(scripted_event)]

@@ -79,6 +79,7 @@ EOF
     symphony_pre_merge_cleanup.sh \
     symphony_prepare_docker_config.sh \
     symphony_guard_workspace_repo.sh \
+    symphony_backend_test.sh \
     symphony_guard_no_code_changes.sh \
     symphony_todo_lane.sh \
     symphony_human_review_prep.sh \
@@ -298,7 +299,10 @@ test_missing_required_git_owned_files_are_reported() {
   mkdir -p "${workspace}"
   make_source_root "${source_root}"
   seed_workspace_repo "${source_root}" "${workspace}"
-  rm -f "${workspace}/scripts/utilities/symphony_human_review_prep.sh" "${workspace}/docker-compose.yml"
+  rm -f \
+    "${workspace}/scripts/utilities/symphony_human_review_prep.sh" \
+    "${workspace}/scripts/utilities/symphony_backend_test.sh" \
+    "${workspace}/docker-compose.yml"
 
   set +e
   output="$(
@@ -314,7 +318,8 @@ test_missing_required_git_owned_files_are_reported() {
     exit 1
   }
   assert_contains "SYNC_ENV_STATUS=missing_required" "${output}"
-  assert_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_human_review_prep.sh" "${output}"
+  assert_contains "scripts/utilities/symphony_human_review_prep.sh" "${output}"
+  assert_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_backend_test.sh" "${output}"
   assert_contains "docker-compose.yml" "${output}"
 }
 

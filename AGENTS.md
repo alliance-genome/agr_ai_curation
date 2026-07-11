@@ -39,9 +39,10 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
   - Scoped TypeScript guard: `cd frontend && npm run type-check:changed -- --base origin/main`
   - `type-check:changed` still runs the full TypeScript compiler, but only fails on errors in changed frontend TypeScript files or unscoped/config-level errors. If it reports `FRONTEND_TYPECHECK_STATUS=baseline_only`, record the baseline debt and do not treat it as a ticket-local failure.
 - Symphony issue workspaces and isolated backend test runs:
-  - Backend unit tests: `docker compose -f docker-compose.test.yml run --rm backend-unit-tests`
-  - Backend contract tests: `docker compose -f docker-compose.test.yml run --rm backend-contract-tests`
-  - Specific backend test file: `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"`
+  - Backend unit tests: `bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests`
+  - Backend contract tests: `bash scripts/utilities/symphony_backend_test.sh run --rm backend-contract-tests`
+  - Specific backend test file: `bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"`
+  - The wrapper serializes Compose test commands per workspace. Cleanup is opt-in with `--repair-known-collision` and only runs for recognized container/network collision signatures.
 - Syntax-only validation: `PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache python3 -m py_compile backend/src/path/to/file.py` (keeps compile artifacts out of the workspace)
 - LLM provider smoke (local evidence JSON):
   - `./scripts/testing/llm_provider_smoke_local.sh`

@@ -10,18 +10,31 @@ Use the narrowest suite that covers the change:
 
 ```bash
 # Backend unit suite
-docker compose -f docker-compose.test.yml run --rm backend-unit-tests
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests
 
 # Backend contract suite
-docker compose -f docker-compose.test.yml run --rm backend-contract-tests
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-contract-tests
 
 # Full backend suite
-docker compose -f docker-compose.test.yml run --rm backend-tests
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-tests
 
 # Specific backend test file
-docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests \
   bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"
 ```
+
+The Symphony wrapper takes a real-workspace lock and a derived
+Docker-daemon/Compose-project lock before invoking `docker-compose.test.yml`,
+preventing unit/contract/integration commands from starting concurrently
+against the same project resources. It never cleans up containers on the
+normal path. If it reports a recognized stale
+container/network collision, `--repair-known-collision` explicitly permits a
+project-scoped `down --remove-orphans` followed by the configured bounded retry.
+Do not opt into repair while a raw Compose command is still active in that
+workspace.
+The `--rootful` and `--rootless` selectors are supported. Custom Compose
+project, directory, env-file, profile, and file selectors are rejected because
+they would make lock and cleanup identity ambiguous.
 
 Frontend validation runs on the host Node toolchain:
 
@@ -62,7 +75,7 @@ The 0.7.0 domain-envelope gates are recorded in
 The offline provider-agnostic release gate uses:
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests \
   bash -lc "bash tests/unit/run_ci_unit_tests.sh --suite domain-envelope-release"
 ```
 
@@ -71,7 +84,7 @@ The path list is `backend/tests/unit/.domain-envelope-release-test-paths`.
 The Alliance domain-pack contract gate uses:
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm backend-contract-tests \
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-contract-tests \
   bash -lc "bash tests/contract/run_ci_contract_core_tests.sh \
     --path-file tests/contract/.alliance-domain-pack-test-paths \
     --suite-label alliance-domain-pack"
@@ -89,7 +102,7 @@ the repo-relative test module or guard file.
 The cheap structural catalog check is:
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests \
   bash -lc "python -m pytest tests/unit/test_guardrail_catalog.py -v --tb=short"
 ```
 
@@ -146,7 +159,7 @@ backend/tests/contract/.alliance-live-db-test-paths
 Run only with explicit enablement:
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm backend-contract-tests \
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-contract-tests \
   bash -lc "ALLIANCE_LIVE_DB_CONTRACT_TESTS=1 \
     bash tests/contract/run_ci_contract_core_tests.sh \
       --path-file tests/contract/.alliance-live-db-test-paths \

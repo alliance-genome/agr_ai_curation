@@ -155,6 +155,19 @@ def test_reconstructs_scripted_lane_completion() -> None:
                 "payload": {"method": "item/started", "params": {}},
             },
             {
+                "timestamp": "2026-06-14T15:00:01Z",
+                "issue_identifier": "ALL-589",
+                "issue_state": "Needs Review",
+                "event": "scripted_lane_started",
+                "payload": {
+                    "method": "symphony/scripted_lane/started",
+                    "params": {
+                        "lane_name": "Needs Review claim",
+                        "helper": "scripts/utilities/symphony_needs_review_claim.sh",
+                    },
+                },
+            },
+            {
                 "timestamp": "2026-06-14T15:00:05Z",
                 "issue_identifier": "ALL-589",
                 "issue_state": "Needs Review",
@@ -164,6 +177,12 @@ def test_reconstructs_scripted_lane_completion() -> None:
                     "params": {
                         "lane_name": "Needs Review claim",
                         "helper": "scripts/utilities/symphony_needs_review_claim.sh",
+                        "exit_status": 0,
+                        "transition": {
+                            "from": "Needs Review",
+                            "to": "In Review",
+                            "status": "claimed",
+                        },
                         "output": "\n".join(
                             [
                                 "LINEAR_STATE_STATUS=ok",
@@ -188,17 +207,75 @@ def test_reconstructs_scripted_lane_completion() -> None:
             "type": "run_start",
         },
         {
+            "helper": "scripts/utilities/symphony_needs_review_claim.sh",
+            "lane": "Needs Review claim",
+            "source": "scripted_lane",
+            "timestamp": "2026-06-14T15:00:01Z",
+            "type": "scripted_lane_started",
+        },
+        {
+            "exit_status": 0,
             "from": "Needs Review",
             "helper": "scripts/utilities/symphony_needs_review_claim.sh",
             "lane": "Needs Review claim",
             "source": "scripted_lane",
-            "status": "ok",
-            "target_id": "state-in-review",
+            "status": "claimed",
             "timestamp": "2026-06-14T15:00:05Z",
             "to": "In Review",
             "type": "scripted_lane_completed",
         },
     ]
+
+
+def test_reconstructs_scripted_lane_failure() -> None:
+    tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="symphony-lane-flow-test-"))
+    run_dir = tmp_path / "issues" / "ALL-590" / "2026-06-14T15-30-00Z-01"
+    run_dir.mkdir(parents=True)
+
+    write_jsonl(
+        run_dir / "trace.ndjson",
+        [
+            {
+                "timestamp": "2026-06-14T15:30:00Z",
+                "issue_identifier": "ALL-590",
+                "issue_state": "Ready for PR",
+                "payload": {"method": "item/started", "params": {}},
+            },
+            {
+                "timestamp": "2026-06-14T15:30:03Z",
+                "issue_identifier": "ALL-590",
+                "issue_state": "Ready for PR",
+                "event": "scripted_lane_failed",
+                "payload": {
+                    "method": "symphony/scripted_lane/failed",
+                    "params": {
+                        "lane_name": "Ready for PR",
+                        "helper": "scripts/utilities/symphony_ready_for_pr_lane.sh",
+                        "exit_status": 3,
+                        "transition": {
+                            "from": "Ready for PR",
+                            "status": "error",
+                            "error": "Linear state update failed",
+                        },
+                    },
+                },
+            },
+        ],
+    )
+
+    payload = run_export(tmp_path / "issues")
+
+    assert payload["issue_flows"][0]["lane_flow"][-1] == {
+        "error": "Linear state update failed",
+        "exit_status": 3,
+        "from": "Ready for PR",
+        "helper": "scripts/utilities/symphony_ready_for_pr_lane.sh",
+        "lane": "Ready for PR",
+        "source": "scripted_lane",
+        "status": "error",
+        "timestamp": "2026-06-14T15:30:03Z",
+        "type": "scripted_lane_failed",
+    }
 
 
 def test_corrupt_trace_line_fails_with_path_and_line() -> None:
@@ -360,6 +437,7 @@ def test_preserves_repeated_transitions_without_command_id() -> None:
 def main() -> int:
     test_reconstructs_explicit_linear_transition()
     test_reconstructs_scripted_lane_completion()
+    test_reconstructs_scripted_lane_failure()
     test_corrupt_trace_line_fails_with_path_and_line()
     test_corrupt_session_metadata_fails_with_path()
     test_preserves_failed_linear_transition_attempt()

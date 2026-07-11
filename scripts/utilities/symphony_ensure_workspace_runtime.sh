@@ -210,6 +210,7 @@ verify_one "scripts/utilities/ensure_python_tools_venv.sh" "required"
 verify_one "scripts/utilities/symphony_pre_merge_cleanup.sh" "required"
 verify_one "scripts/utilities/symphony_prepare_docker_config.sh" "required"
 verify_one "scripts/utilities/symphony_guard_workspace_repo.sh" "required"
+verify_one "scripts/utilities/symphony_backend_test.sh" "required"
 # Existing workspaces may be on branches created before this helper was added.
 # AgentRunner can execute it from SYMPHONY_LOCAL_SOURCE_ROOT when the workspace
 # checkout lacks the tracked copy, so do not block pre-existing workspaces here.

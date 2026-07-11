@@ -456,12 +456,14 @@ EOF
 }
 
 test_clean_claude_review_does_not_auto_bounce() {
-  local temp_dir pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub report_file output
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub classifier_log disposition_file workpad_stub state_stub report_file output
   temp_dir="$(mktemp -d)"
   pr_json="${temp_dir}/prs.json"
   pr_view_json="${temp_dir}/pr-view.json"
   loop_stub="${temp_dir}/claude-loop"
   classifier_stub="${temp_dir}/classifier"
+  classifier_log="${temp_dir}/classifier.log"
+  disposition_file="${temp_dir}/disposition.md"
   workpad_stub="${temp_dir}/workpad"
   state_stub="${temp_dir}/state"
   report_file="${temp_dir}/claude-report.md"
@@ -488,6 +490,8 @@ None.
 Previous approval stands. **Approve.**
 EOF
 
+  printf '%s\n' '- Prior retry finding was already resolved in commit abc123.' > "${disposition_file}"
+
   cat > "${loop_stub}" <<EOF
 #!/usr/bin/env bash
 cat <<'OUT'
@@ -502,6 +506,7 @@ EOF
 
   cat > "${classifier_stub}" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$@" > "${CLASSIFIER_LOG}"
 echo PR_FEEDBACK_CLASSIFIER_STATUS=clean
 echo PR_FEEDBACK_CLASSIFIER_CLASSIFICATION=clean
 echo PR_FEEDBACK_CLASSIFIER_REASON=Review clearly approves with no remaining work.
@@ -528,12 +533,14 @@ EOF
     SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
     SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
     SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    CLASSIFIER_LOG="${classifier_log}" \
     bash "${SCRIPT_PATH}" \
       --delivery-mode pr \
       --issue-identifier ALL-341 \
       --branch all-341 \
       --repo alliance-genome/agr_ai_curation \
       --wait-for-review-seconds 1 \
+      --disposition-file "${disposition_file}" \
       --pr-json-file "${pr_json}" \
       --pr-view-json-file "${pr_view_json}"
   )"
@@ -543,6 +550,10 @@ EOF
   assert_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
   assert_contains "move to Human Review Prep" "${output}"
   assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
+  assert_contains "--github-check-status" "$(cat "${classifier_log}")"
+  assert_contains "clean" "$(cat "${classifier_log}")"
+  assert_contains "--disposition-file" "$(cat "${classifier_log}")"
+  assert_contains "${disposition_file}" "$(cat "${classifier_log}")"
 }
 
 test_default_classifier_uses_source_root_fallback() {
