@@ -99,14 +99,7 @@ export function usePdfToFormLinking({
   const [pendingTarget, setPendingTarget] = useState<ScopedPdfToFormTarget | null>(null)
   const highlightedElementRef = useRef<HTMLElement | null>(null)
   const highlightTimeoutRef = useRef<number | null>(null)
-  const optionsRef = useRef({
-    activeCandidateId,
-    candidates,
-    documentId,
-    evidenceByAnchorId,
-    ownerToken,
-    setActiveCandidate,
-  })
+  const optionsRef = useRef<UsePdfToFormLinkingOptions>()
   optionsRef.current = {
     activeCandidateId,
     candidates,
@@ -137,7 +130,8 @@ export function usePdfToFormLinking({
       const current = optionsRef.current
       const anchorId = event.detail?.anchorId
       if (
-        !anchorId
+        !current
+        || !anchorId
         || event.detail.documentId !== current.documentId
         || event.detail.ownerToken !== current.ownerToken
       ) {
