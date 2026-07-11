@@ -96,6 +96,7 @@ from src.lib.flows.output_projection import (
     default_projection_plan,
     finalize_output_projection,
 )
+from src.lib.executable_flow_graph import project_executable_flow_graph
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
@@ -124,7 +125,6 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding
 from src.schemas.domain_validator import DomainValidationRequest, ValidatorAgentRef
-from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -2116,13 +2116,7 @@ def is_agent_in_flow(flow: CurationFlow, agent_id: str) -> bool:
     Returns:
         True if the agent is in the flow, False otherwise
     """
-    flow_def = flow.flow_definition
-    nodes = flow_def.get("nodes", [])
-    for node in nodes:
-        node_data = node.get("data", {})
-        if node_data.get("agent_id") == agent_id:
-            return True
-    return False
+    return agent_id in get_flow_agent_ids(flow)
 
 
 def get_flow_agent_ids(flow: CurationFlow) -> Set[str]:
@@ -2136,14 +2130,11 @@ def get_flow_agent_ids(flow: CurationFlow) -> Set[str]:
     Returns:
         Set of agent IDs (e.g., {"gene", "disease", "allele"})
     """
-    agent_ids = set()
-    for node in flow.flow_definition.get("nodes", []):
-        agent_id = node.get("data", {}).get("agent_id")
-        node_type = node.get("type", "agent")
-        # Skip task_input nodes - they're not agents
-        if agent_id and node_type != "task_input" and agent_id != "task_input":
-            agent_ids.add(agent_id)
-    return agent_ids
+    return {
+        agent_id
+        for node in _get_ordered_executable_nodes(flow)
+        if (agent_id := node.get("data", {}).get("agent_id"))
+    }
 
 
 def get_task_instructions(flow: CurationFlow) -> Optional[str]:
@@ -2167,74 +2158,13 @@ def get_task_instructions(flow: CurationFlow) -> Optional[str]:
 
 
 def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
-    """Return executable flow nodes in edge-traversal order.
+    """Return executable nodes from the canonical sequential projection."""
 
-    Uses entry_node_id + edges when available, and appends disconnected
-    executable nodes at the end so no configured step is silently ignored.
-    """
     flow_def = flow.flow_definition or {}
     nodes: List[Dict[str, Any]] = flow_def.get("nodes", []) or []
-    edges: List[Dict[str, Any]] = flow_def.get("edges", []) or []
-    entry_node_id = flow_def.get("entry_node_id")
-
     node_by_id = {n.get("id"): n for n in nodes if n.get("id")}
-    if not node_by_id:
-        return []
-
-    edges_from: Dict[str, List[str]] = {}
-    incoming_targets: Set[str] = set()
-    validation_attachment_targets: Set[str] = set()
-    for edge in edges:
-        edge_role = edge.get("role", DEFAULT_FLOW_EDGE_ROLE)
-        source = edge.get("source")
-        target = edge.get("target")
-        if not source or not target:
-            continue
-        if edge_role == VALIDATION_ATTACHMENT_EDGE_ROLE:
-            validation_attachment_targets.add(target)
-            continue
-        edges_from.setdefault(source, []).append(target)
-        incoming_targets.add(target)
-
-    if entry_node_id and entry_node_id in node_by_id:
-        start_node_id = entry_node_id
-    else:
-        potential_starts = [n.get("id") for n in nodes if n.get("id") not in incoming_targets]
-        start_node_id = potential_starts[0] if potential_starts else nodes[0].get("id")
-
-    ordered: List[Dict[str, Any]] = []
-    visited: Set[str] = set()
-    queue: List[str] = [start_node_id] if start_node_id else []
-
-    def _is_executable(node: Dict[str, Any]) -> bool:
-        node_type = node.get("type", "agent")
-        agent_id = node.get("data", {}).get("agent_id")
-        node_id = node.get("id")
-        return (
-            node_id not in validation_attachment_targets
-            and node_type != "task_input"
-            and agent_id not in ("task_input", "supervisor")
-        )
-
-    while queue:
-        node_id = queue.pop(0)
-        if node_id in visited:
-            continue
-        visited.add(node_id)
-        node = node_by_id.get(node_id)
-        if node and _is_executable(node):
-            ordered.append(node)
-        for next_id in edges_from.get(node_id, []):
-            if next_id not in visited:
-                queue.append(next_id)
-
-    # Append any disconnected executable nodes to preserve configured steps.
-    for node in nodes:
-        node_id = node.get("id")
-        if node_id not in visited and _is_executable(node):
-            ordered.append(node)
-
-    return ordered
+    projection = project_executable_flow_graph(flow_def)
+    return [node_by_id[node_id] for node_id in projection.ordered_executable_node_ids]
 
 
 def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
@@ -2250,10 +2180,9 @@ def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
         Dict mapping agent_id to occurrence count.
     """
     counts: Dict[str, int] = {}
-    for node in flow.flow_definition.get("nodes", []):
-        node_type = node.get("type", "agent")
+    for node in _get_ordered_executable_nodes(flow):
         agent_id = node.get("data", {}).get("agent_id")
-        if node_type == "task_input" or agent_id == "task_input" or not agent_id:
+        if not agent_id:
             continue
         counts[agent_id] = counts.get(agent_id, 0) + 1
     return counts

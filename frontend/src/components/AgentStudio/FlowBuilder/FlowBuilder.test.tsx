@@ -759,6 +759,11 @@ describe('FlowBuilder', () => {
       dataTransfer,
     })
 
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
+    })
+
     await user.click(screen.getByText('File'))
 
     const fileMenu = await screen.findByRole('menu')
@@ -859,6 +864,11 @@ describe('FlowBuilder', () => {
       clientX: 320,
       clientY: 220,
       dataTransfer,
+    })
+
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
     })
 
     await user.click(screen.getByText('File'))
@@ -988,6 +998,10 @@ describe('FlowBuilder', () => {
 
     await waitFor(() => {
       expect(reactFlowMocks.onConnect).toBeTypeOf('function')
+    })
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
     })
 
     React.act(() => {
@@ -1175,6 +1189,10 @@ describe('FlowBuilder', () => {
     })
 
     React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
+    })
+
+    React.act(() => {
       reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_2' })
     })
 
@@ -1212,14 +1230,14 @@ describe('FlowBuilder', () => {
       expect(serviceMocks.createFlow).toHaveBeenCalledWith(
         expect.objectContaining({
           flow_definition: expect.objectContaining({
-            edges: [
+            edges: expect.arrayContaining([
               expect.objectContaining({
                 source: 'node_1',
                 target: 'node_2',
                 role: 'validation_attachment',
                 satisfies_binding_id: 'identifier',
               }),
-            ],
+            ]),
             nodes: expect.arrayContaining([
               expect.objectContaining({
                 id: 'node_1',
