@@ -84,6 +84,7 @@ jobs:
             -v "${{ github.workspace }}/scripts/testing:/app/scripts/testing:ro" \
             -v "${{ github.workspace }}/docker-compose.yml:/workspace/docker-compose.yml:ro" \
             -v "${{ github.workspace }}/docker-compose.production.yml:/workspace/docker-compose.production.yml:ro" \
+            -v "${{ github.workspace }}/Makefile:/workspace/Makefile:ro" \
             -v "${{ github.workspace }}/promtail-config.yml:/workspace/promtail-config.yml:ro" \
             -v "${{ github.workspace }}/scripts/install:/workspace/scripts/install:ro" \
             -e PYTHONUNBUFFERED=1 \

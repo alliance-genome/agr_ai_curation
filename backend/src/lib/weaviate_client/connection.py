@@ -59,17 +59,13 @@ class WeaviateConnection:
 
             # For local connections, use the simpler connect_to_local method
             if host in ["localhost", "127.0.0.1", "weaviate"] and port == 8080:
+                local_kwargs = {}
                 if host == "weaviate":
                     # Docker container hostname
-                    self._client = weaviate.connect_to_local(
-                        host="weaviate",
-                        port=8080,
-                        auth_credentials=auth_config,
-                    )
-                else:
-                    self._client = weaviate.connect_to_local(
-                        auth_credentials=auth_config,
-                    )
+                    local_kwargs.update(host="weaviate", port=8080)
+                if auth_config is not None:
+                    local_kwargs["auth_credentials"] = auth_config
+                self._client = weaviate.connect_to_local(**local_kwargs)
             else:
                 # For remote connections, use custom connection
                 secure = parsed.scheme == "https"
