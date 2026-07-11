@@ -1,10 +1,10 @@
 """Batch processing service layer."""
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
@@ -175,55 +175,180 @@ class BatchService:
                 batch_doc.processed_at = datetime.now(timezone.utc)
             self.db.commit()
 
-    def increment_batch_completed(self, batch_id: UUID) -> None:
-        """Increment the completed document count."""
-        batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
-        if batch:
-            batch.completed_documents += 1
-            self.db.commit()
-
-    def increment_batch_failed(self, batch_id: UUID) -> None:
-        """Increment the failed document count."""
-        batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
-        if batch:
-            batch.failed_documents += 1
-            self.db.commit()
+    def recompute_batch_counters(self, batch: Batch) -> None:
+        """Derive progress counters from durable terminal document rows."""
+        self.db.flush()
+        total, completed, failed = self.db.execute(
+            select(
+                func.count(BatchDocument.id),
+                func.count(BatchDocument.id).filter(
+                    BatchDocument.status == BatchDocumentStatus.COMPLETED
+                ),
+                func.count(BatchDocument.id).filter(
+                    BatchDocument.status == BatchDocumentStatus.FAILED
+                ),
+            ).where(BatchDocument.batch_id == batch.id)
+        ).one()
+        batch.total_documents = total
+        batch.completed_documents = completed
+        batch.failed_documents = failed
 
     def is_batch_cancelled(self, batch_id: UUID) -> bool:
         """Check if batch has been cancelled."""
         batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
         return batch is not None and batch.status == BatchStatus.CANCELLED
 
-    def claim_pending_batch(self, batch_id: UUID) -> Optional[Batch]:
-        """Atomically claim a pending batch for one worker.
+    def claim_recoverable_batch(
+        self,
+        batch_id: UUID,
+        lease_owner: UUID,
+        lease_seconds: int,
+    ) -> Optional[Batch]:
+        """Atomically claim pending or stale running work for one worker.
 
-        The conditional update is the claim. A worker that loses to cancellation
-        or another worker receives ``None`` and must perform no processing work.
+        A stale ``PROCESSING`` document is failed rather than re-executed because
+        its external flow side effects may already have occurred. Terminal rows
+        and their artifact/review references are never modified.
         """
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=lease_seconds)
         claimed_id = self.db.execute(
             update(Batch)
-            .where(Batch.id == batch_id, Batch.status == BatchStatus.PENDING)
-            .values(status=BatchStatus.RUNNING, started_at=datetime.now(timezone.utc))
+            .where(
+                Batch.id == batch_id,
+                or_(
+                    Batch.status == BatchStatus.PENDING,
+                    (
+                        (Batch.status == BatchStatus.RUNNING)
+                        & or_(
+                            Batch.lease_expires_at.is_(None),
+                            Batch.lease_expires_at <= now,
+                        )
+                    ),
+                ),
+            )
+            .values(
+                status=BatchStatus.RUNNING,
+                started_at=func.coalesce(Batch.started_at, now),
+                lease_owner=lease_owner,
+                lease_expires_at=expires_at,
+                lease_heartbeat_at=now,
+            )
             .returning(Batch.id)
             .execution_options(synchronize_session=False)
         ).scalar_one_or_none()
-        self.db.commit()
 
         if claimed_id is None:
+            self.db.rollback()
             return None
 
+        batch = self.db.scalars(
+            select(Batch)
+            .where(Batch.id == claimed_id)
+            .with_for_update()
+            .options(selectinload(Batch.documents))
+        ).first()
+        assert batch is not None
+
+        interrupted_at = datetime.now(timezone.utc)
+        for document in batch.documents:
+            if document.status == BatchDocumentStatus.PROCESSING:
+                document.status = BatchDocumentStatus.FAILED
+                document.error_message = (
+                    "Worker lease expired during processing; document was not re-run"
+                )
+                document.processed_at = interrupted_at
+        self.recompute_batch_counters(batch)
+        self.db.commit()
         return self.db.scalars(
             select(Batch)
             .where(Batch.id == claimed_id)
             .options(selectinload(Batch.documents))
-        ).first()
+        ).one()
 
-    def complete_running_batch(self, batch_id: UUID) -> bool:
-        """Atomically complete a running batch unless cancellation won first."""
+    def heartbeat_batch_lease(
+        self,
+        batch_id: UUID,
+        lease_owner: UUID,
+        lease_seconds: int,
+    ) -> bool:
+        """Extend a lease only while the caller remains the exclusive owner."""
+        now = datetime.now(timezone.utc)
+        renewed_id = self.db.execute(
+            update(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.status == BatchStatus.RUNNING,
+                Batch.lease_owner == lease_owner,
+                Batch.lease_expires_at > now,
+            )
+            .values(
+                lease_heartbeat_at=now,
+                lease_expires_at=now + timedelta(seconds=lease_seconds),
+            )
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
+        self.db.commit()
+        return renewed_id is not None
+
+    def list_recoverable_batch_ids(self) -> list[UUID]:
+        """Return durable pending and expired-running work for startup dispatch."""
+        now = datetime.now(timezone.utc)
+        return list(
+            self.db.scalars(
+                select(Batch.id)
+                .where(
+                    or_(
+                        Batch.status == BatchStatus.PENDING,
+                        (
+                            (Batch.status == BatchStatus.RUNNING)
+                            & or_(
+                                Batch.lease_expires_at.is_(None),
+                                Batch.lease_expires_at <= now,
+                            )
+                        ),
+                    )
+                )
+                .order_by(Batch.created_at)
+            ).all()
+        )
+
+    def complete_running_batch(self, batch_id: UUID, lease_owner: UUID) -> bool:
+        """Complete a fully terminal batch only for its current lease owner."""
+        now = datetime.now(timezone.utc)
+        batch = self.db.scalars(
+            select(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.status == BatchStatus.RUNNING,
+                Batch.lease_owner == lease_owner,
+                Batch.lease_expires_at > now,
+            )
+            .with_for_update()
+        ).first()
+        if batch is None:
+            self.db.rollback()
+            return False
+        self.recompute_batch_counters(batch)
+        if batch.completed_documents + batch.failed_documents != batch.total_documents:
+            self.db.commit()
+            return False
         completed_id = self.db.execute(
             update(Batch)
-            .where(Batch.id == batch_id, Batch.status == BatchStatus.RUNNING)
-            .values(status=BatchStatus.COMPLETED, completed_at=datetime.now(timezone.utc))
+            .where(
+                Batch.id == batch_id,
+                Batch.status == BatchStatus.RUNNING,
+                Batch.lease_owner == lease_owner,
+                Batch.lease_expires_at > now,
+            )
+            .values(
+                status=BatchStatus.COMPLETED,
+                completed_at=now,
+                lease_owner=None,
+                lease_expires_at=None,
+                lease_heartbeat_at=None,
+            )
             .returning(Batch.id)
             .execution_options(synchronize_session=False)
         ).scalar_one_or_none()
@@ -251,7 +376,13 @@ class BatchService:
                 Batch.user_id == user_id,
                 Batch.status.in_((BatchStatus.PENDING, BatchStatus.RUNNING)),
             )
-            .values(status=BatchStatus.CANCELLED, completed_at=now)
+            .values(
+                status=BatchStatus.CANCELLED,
+                completed_at=now,
+                lease_owner=None,
+                lease_expires_at=None,
+                lease_heartbeat_at=None,
+            )
             .returning(Batch.id)
             .execution_options(synchronize_session=False)
         ).scalar_one_or_none()

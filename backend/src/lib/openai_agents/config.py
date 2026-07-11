@@ -87,6 +87,16 @@ def _get_env_int_with_fallback(key: str, default: int) -> int:
         return default
 
 
+def get_batch_worker_lease_seconds() -> int:
+    """Duration of an exclusive batch worker lease before crash recovery."""
+    return max(1, _get_env_int_with_fallback("BATCH_WORKER_LEASE_SECONDS", 120))
+
+
+def get_batch_worker_heartbeat_seconds() -> int:
+    """Interval between durable batch worker lease heartbeats."""
+    return max(1, _get_env_int_with_fallback("BATCH_WORKER_HEARTBEAT_SECONDS", 30))
+
+
 def is_retryable_groq_tool_call_error(exc: Exception) -> bool:
     """Return True when an exception matches known transient Groq tool-call parse failures."""
     text = str(exc or "").lower()

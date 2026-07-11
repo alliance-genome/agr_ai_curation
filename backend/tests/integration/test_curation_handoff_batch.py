@@ -494,7 +494,7 @@ def test_multi_adapter_flow_creates_one_session_per_adapter(handoff_db):
     assert _candidate_count(handoff_db, batch_doc.review_session_ids) >= 2
 
 
-def test_handoff_rerun_with_same_flow_run_reuses_sessions(handoff_db):
+def test_completed_handoff_batch_is_not_rerun(handoff_db):
     suffix = uuid4().hex[:10]
     user = _create_user(handoff_db, suffix)
     document = _create_document(handoff_db, user, suffix)
@@ -518,7 +518,7 @@ def test_handoff_rerun_with_same_flow_run_reuses_sessions(handoff_db):
 
     sessions = _review_sessions(handoff_db, second_session_ids)
     assert len(sessions) == 2
-    assert {session.session_version for session in sessions} == {2}
+    assert {session.session_version for session in sessions} == {1}
 
 
 def test_file_output_batch_flow_still_completes_with_result_file_path(handoff_db):

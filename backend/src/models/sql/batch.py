@@ -61,6 +61,9 @@ class Batch(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_owner: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     documents: Mapped[list["BatchDocument"]] = relationship(
@@ -71,6 +74,7 @@ class Batch(Base):
     __table_args__ = (
         Index("idx_batches_user_id", "user_id"),
         Index("idx_batches_status", "status"),
+        Index("idx_batches_recovery_lease", "status", "lease_expires_at"),
     )
 
 

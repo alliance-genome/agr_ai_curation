@@ -446,6 +446,11 @@ async def lifespan(app: FastAPI):
         logger.error("The application cannot start without Weaviate database connection!")
         raise  # Fail fast - don't start if DB isn't ready
 
+    from src.lib.batch.recovery import schedule_startup_batch_recovery
+
+    recovered_batch_count = schedule_startup_batch_recovery()
+    logger.info("Batch recovery startup scan dispatched %d batch(es)", recovered_batch_count)
+
     yield
 
     logger.info("Shutting down Weaviate Control Panel API...")
