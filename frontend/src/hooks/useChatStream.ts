@@ -12,7 +12,7 @@
  * Note: Uses POST fetch with ReadableStream, NOT EventSource API
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { debug } from '@/utils/env'
 
 export interface SSEEvent {
@@ -112,6 +112,13 @@ interface SharedChatStreamState {
   error: Error | null
 }
 
+interface ActiveStreamRun {
+  runId: number
+  controller: AbortController
+  ownerToken: symbol
+  sessionId: string
+}
+
 const sharedListeners = new Set<() => void>()
 let sharedState: SharedChatStreamState = {
   events: [],
@@ -120,7 +127,10 @@ let sharedState: SharedChatStreamState = {
   isLoading: false,
   error: null,
 }
-let sharedAbortController: AbortController | null = null
+let nextRunId = 0
+let activeStreamRun: ActiveStreamRun | null = null
+let retainedEventOwnerToken: symbol | null = null
+let retainedEventSessionId: string | null = null
 
 function emitSharedState(nextState: Partial<SharedChatStreamState>) {
   sharedState = { ...sharedState, ...nextState }
@@ -155,23 +165,108 @@ function emitChatRunTerminal(detail: ChatRunTerminalEventDetail) {
   }))
 }
 
+function startStreamRun(
+  ownerToken: symbol,
+  sessionId: string,
+): ActiveStreamRun | null {
+  // Restart policy: reject starts while an owner is active. A user stop releases
+  // that owner synchronously, so a replacement need not wait for stale work to settle.
+  if (activeStreamRun) {
+    return null
+  }
+
+  const run = {
+    runId: ++nextRunId,
+    controller: new AbortController(),
+    ownerToken,
+    sessionId,
+  }
+  activeStreamRun = run
+  emitSharedState({ isLoading: true, error: null })
+  return run
+}
+
+function replaceRunEvents(
+  run: ActiveStreamRun,
+  events: SSEEvent[],
+) {
+  retainedEventOwnerToken = run.ownerToken
+  retainedEventSessionId = run.sessionId
+  replaceSharedEvents(events)
+}
+
+function ownsActiveRun(run: ActiveStreamRun): boolean {
+  return activeStreamRun?.runId === run.runId
+}
+
+function releaseStreamRun(
+  run: ActiveStreamRun,
+  nextState: Partial<SharedChatStreamState> = {},
+): boolean {
+  if (!ownsActiveRun(run)) {
+    return false
+  }
+
+  activeStreamRun = null
+  emitSharedState({ ...nextState, isLoading: false })
+  return true
+}
+
+function cleanupOwnedStream(ownerToken: symbol, sessionId?: string | null) {
+  const run = activeStreamRun
+  if (
+    run
+    && run.ownerToken === ownerToken
+    && (sessionId === undefined || run.sessionId === sessionId)
+  ) {
+    run.controller.abort()
+    releaseStreamRun(run)
+  }
+
+  if (
+    retainedEventOwnerToken === ownerToken
+    && (sessionId === undefined || retainedEventSessionId === sessionId)
+  ) {
+    retainedEventOwnerToken = null
+    retainedEventSessionId = null
+    replaceSharedEvents([])
+    emitSharedState({ error: null })
+  }
+}
+
 /**
  * Hook for managing chat SSE stream
  *
+ * The hook instance owns its stream; unmounting it aborts the run instead of
+ * preserving it across remounts.
+ *
+ * @param activeSessionId Session whose owned stream should be cleaned up when it changes.
  * @returns Stream state and control functions
  */
-export function useChatStream(): UseChatStreamReturn {
+export function useChatStream(activeSessionId?: string | null): UseChatStreamReturn {
   const [snapshot, setSnapshot] = useState<SharedChatStreamState>(sharedState)
+  const ownerToken = useRef(Symbol('chat-stream-owner')).current
 
   useEffect(() => {
     const listener = () => setSnapshot(sharedState)
     sharedListeners.add(listener)
     return () => {
       sharedListeners.delete(listener)
+      cleanupOwnedStream(ownerToken)
     }
-  }, [])
+  }, [ownerToken])
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      return
+    }
+
+    return () => cleanupOwnedStream(ownerToken, activeSessionId)
+  }, [activeSessionId, ownerToken])
 
   const clearEvents = useCallback(() => {
+    retainedEventOwnerToken = null
+    retainedEventSessionId = null
     replaceSharedEvents([])
     emitSharedState({ error: null })
   }, [])
@@ -190,11 +285,16 @@ export function useChatStream(): UseChatStreamReturn {
   }, [])
 
   const stopStream = useCallback(async (sessionId: string) => {
-    if (sharedAbortController) {
-      sharedAbortController.abort()
-      sharedAbortController = null
+    const run = activeStreamRun
+    if (!run || run.sessionId !== sessionId) {
+      return
     }
-    emitSharedState({ isLoading: false })
+
+    run.controller.abort()
+    if (!releaseStreamRun(run)) {
+      return
+    }
+
     // Emit a synthetic event so Audit/Chat can show a stop notice even without SSE
     updateSharedEvents(prev => [
       ...prev,
@@ -233,18 +333,15 @@ export function useChatStream(): UseChatStreamReturn {
       return
     }
 
-    if (sharedState.isLoading) {
+    const run = startStreamRun(ownerToken, sessionId)
+    if (!run) {
       console.warn('Cannot start a new chat message while another stream is active')
       return
     }
 
-    sharedAbortController = new AbortController()
-
-    emitSharedState({ isLoading: true, error: null })
-
     // Start each run with a fresh stream so consumers do not have to reconcile
     // stale events from prior turns before processing the new audit trail.
-    replaceSharedEvents([
+    replaceRunEvents(run, [
       {
         type: 'AGENT_GENERATING',
         session_id: sessionId,
@@ -269,7 +366,7 @@ export function useChatStream(): UseChatStreamReturn {
           session_id: sessionId,
           turn_id: options?.turnId,
         }),
-        signal: sharedAbortController.signal
+        signal: run.controller.signal
       })
 
       if (!response.ok) {
@@ -288,6 +385,7 @@ export function useChatStream(): UseChatStreamReturn {
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
+        if (!ownsActiveRun(run)) return
 
         // Append new chunk to buffer
         buffer += decoder.decode(value, { stream: true })
@@ -314,7 +412,9 @@ export function useChatStream(): UseChatStreamReturn {
                 debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
 
                 // Add event to events array
-                updateSharedEvents(prev => [...prev, parsed])
+                if (ownsActiveRun(run)) {
+                  updateSharedEvents(prev => [...prev, parsed])
+                }
               } catch (parseError) {
                 console.error('Failed to parse SSE event:', parseError, data)
               }
@@ -323,30 +423,34 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
+      if (!ownsActiveRun(run)) return
+
       const terminalStatus = getRunTerminalStatus(sharedState.events)
-      sharedAbortController = null
-      emitSharedState({ isLoading: false })
+      const eventStreamVersion = sharedState.eventStreamVersion
+      releaseStreamRun(run)
       emitChatRunTerminal({
         sessionId,
         runKind: 'chat',
         status: terminalStatus,
-        eventStreamVersion: sharedState.eventStreamVersion,
+        eventStreamVersion,
       })
     } catch (err) {
+      if (!ownsActiveRun(run)) return
+
       // Ignore abort errors (user cancelled)
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Stream aborted by user')
-        emitSharedState({ isLoading: false })
+        releaseStreamRun(run)
         return
       }
 
       const error = err instanceof Error ? err : new Error('Unknown error during streaming')
-      emitSharedState({ error, isLoading: false })
+      releaseStreamRun(run, { error })
       console.error('Error in chat stream:', error)
     } finally {
-      sharedAbortController = null
+      releaseStreamRun(run)
     }
-  }, [])
+  }, [ownerToken])
 
   /**
    * Execute a curation flow with SSE streaming
@@ -365,18 +469,16 @@ export function useChatStream(): UseChatStreamReturn {
       return
     }
 
-    if (sharedState.isLoading) {
+    const turnId = options?.turnId ?? buildClientTurnId()
+    const run = startStreamRun(ownerToken, sessionId)
+    if (!run) {
       console.warn('Cannot start a new flow execution while another stream is active')
       return
     }
 
-    const turnId = options?.turnId ?? buildClientTurnId()
-    sharedAbortController = new AbortController()
-    emitSharedState({ isLoading: true, error: null })
-
     // Start each flow execution with a fresh stream for the same reason as
     // normal chat sends: right-panel consumers should only process this run.
-    replaceSharedEvents([
+    replaceRunEvents(run, [
       {
         type: 'AGENT_GENERATING',
         session_id: sessionId,
@@ -401,7 +503,7 @@ export function useChatStream(): UseChatStreamReturn {
           document_id: documentId || null,
           user_query: userQuery || null
         }),
-        signal: sharedAbortController.signal
+        signal: run.controller.signal
       })
 
       if (!response.ok) {
@@ -419,6 +521,7 @@ export function useChatStream(): UseChatStreamReturn {
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
+        if (!ownsActiveRun(run)) return
 
         buffer += decoder.decode(value, { stream: true })
         const eventBoundary = '\n\n'
@@ -436,7 +539,9 @@ export function useChatStream(): UseChatStreamReturn {
               try {
                 const parsed: SSEEvent = JSON.parse(data)
                 debug.log('🔍 [useChatStream] Flow SSE event:', parsed.type, parsed)
-                updateSharedEvents(prev => [...prev, parsed])
+                if (ownsActiveRun(run)) {
+                  updateSharedEvents(prev => [...prev, parsed])
+                }
               } catch (parseError) {
                 console.error('Failed to parse SSE event:', parseError, data)
               }
@@ -445,28 +550,32 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
+      if (!ownsActiveRun(run)) return
+
       const terminalStatus = getRunTerminalStatus(sharedState.events)
-      sharedAbortController = null
-      emitSharedState({ isLoading: false })
+      const eventStreamVersion = sharedState.eventStreamVersion
+      releaseStreamRun(run)
       emitChatRunTerminal({
         sessionId,
         runKind: 'flow',
         status: terminalStatus,
-        eventStreamVersion: sharedState.eventStreamVersion,
+        eventStreamVersion,
       })
     } catch (err) {
+      if (!ownsActiveRun(run)) return
+
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Flow execution aborted by user')
-        emitSharedState({ isLoading: false })
+        releaseStreamRun(run)
         return
       }
       const error = err instanceof Error ? err : new Error('Unknown error during flow execution')
-      emitSharedState({ error, isLoading: false })
+      releaseStreamRun(run, { error })
       console.error('Error in flow execution:', error)
     } finally {
-      sharedAbortController = null
+      releaseStreamRun(run)
     }
-  }, [])
+  }, [ownerToken])
 
   return {
     events: snapshot.events,

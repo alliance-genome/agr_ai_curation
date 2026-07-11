@@ -190,7 +190,7 @@ function HomePage() {
     markEventsProcessed,
     stopStream,
     executeFlow,
-  } = useChatStream()
+  } = useChatStream(sessionId)
 
   const clearDocumentLoadingTimeout = useCallback(() => {
     if (documentLoadingTimeoutIdRef.current === null) {
