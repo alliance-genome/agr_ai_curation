@@ -272,6 +272,29 @@ def test_effective_production_contract_rejects_mutable_stateful_image_and_data_p
     assert any("weaviate must not publish data ports" in error for error in errors)
 
 
+@pytest.mark.parametrize("unsafe_tag", ["main", "develop", "release-0.9.0", "latest"])
+def test_effective_production_contract_rejects_mutable_or_undocumented_app_tags(
+    unsafe_tag: str,
+):
+    config = _safe_rendered_config()
+    for service in production_preflight.APP_SERVICES:
+        config["services"][service]["image"] = f"example.invalid/{service}:{unsafe_tag}"
+
+    errors = production_preflight.validate_config(config)
+
+    for service in production_preflight.APP_SERVICES:
+        assert any(error.startswith(f"{service}.image must") for error in errors)
+
+
+@pytest.mark.parametrize("safe_tag", ["v0.9.0", "sha-abcdef1", "sha-0123456789abcdef"])
+def test_effective_production_contract_accepts_documented_app_tags(safe_tag: str):
+    config = _safe_rendered_config()
+    for service in production_preflight.APP_SERVICES:
+        config["services"][service]["image"] = f"example.invalid/{service}:{safe_tag}"
+
+    assert production_preflight.validate_config(config) == []
+
+
 def test_preflight_renders_the_exact_supported_compose_path(tmp_path: Path):
     env_file = tmp_path / ".env"
     env_file.write_text("BACKEND_IMAGE_TAG=v0.9.0\n", encoding="utf-8")

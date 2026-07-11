@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,10 @@ INTERNAL_DATA_SERVICES = {
     "redis",
     "weaviate",
 }
+APP_SERVICES = {"backend", "frontend", "trace_review_backend"}
+PINNED_APP_IMAGE_PATTERN = re.compile(
+    r".+:(?:v\d+\.\d+\.\d+|sha-[0-9a-fA-F]{7,40})$"
+)
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -150,6 +155,10 @@ def validate_config(
             errors.append(f"{service_name}.image must not use the mutable latest tag")
         elif "change_me" in image.lower():
             errors.append(f"{service_name}.image must use a real pinned release tag")
+        elif service_name in APP_SERVICES and not PINNED_APP_IMAGE_PATTERN.fullmatch(image):
+            errors.append(
+                f"{service_name}.image must use a vX.Y.Z or sha-<shortsha> tag"
+            )
         if service_name in STATEFUL_SERVICES and "@sha256:" not in image:
             errors.append(f"{service_name}.image must be pinned by digest")
 

@@ -66,6 +66,10 @@ jobs:
         run: |
           bash backend/tests/unit/run_ci_unit_tests.sh --validate-only
 
+      - name: Validate rendered production Compose contract
+        run: |
+          bash scripts/testing/production_compose_contract_test.sh
+
       - name: Run unit tests
         run: |
           mkdir -p backend/htmlcov backend/file_outputs/ci
