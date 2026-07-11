@@ -1406,6 +1406,7 @@ def _create_dynamic_specialist_tools(
                 specialist_name=specialist_name,
                 ledger=ledger,
                 inline_chat_persistence=True,
+                # Ordinary chat intentionally preserves handled tool errors as output.
                 propagate_errors=False,
             )
             specialist_tools.append(streaming_tool)
