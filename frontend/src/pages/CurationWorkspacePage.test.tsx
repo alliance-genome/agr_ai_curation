@@ -9,6 +9,8 @@ import type {
   CurationWorkspace,
   DomainEnvelopeReviewRowsResponse,
 } from '@/features/curation/types'
+import { dispatchPDFViewerEvidenceAnchorSelected } from '@/components/pdfViewer/pdfEvents'
+import { PDF_TO_FORM_HIGHLIGHT_CLASSNAME } from '@/features/curation/workspace/usePdfToFormLinking'
 import theme from '@/theme'
 import CurationWorkspacePage from './CurationWorkspacePage'
 
@@ -501,7 +503,10 @@ function renderPage(initialEntry: string | { pathname: string; state?: unknown }
 }
 
 describe('CurationWorkspacePage', () => {
+  const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+
   beforeEach(() => {
+    HTMLElement.prototype.scrollIntoView = vi.fn()
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.createManualCurationCandidate.mockReset()
     serviceMocks.deleteCurationCandidate.mockReset()
@@ -518,6 +523,7 @@ describe('CurationWorkspacePage', () => {
   })
 
   afterEach(() => {
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     vi.useRealTimers()
     vi.clearAllMocks()
   })
@@ -585,6 +591,20 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByText('Gene Assertion')).toBeInTheDocument()
     expect(screen.getByLabelText('Gene symbol')).toHaveValue('TMEM67')
     expect(screen.getByTestId('field-evidence-projection-projection-anchor-1')).toBeInTheDocument()
+
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'projection-anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByLabelText('Gene symbol')).toHaveFocus()
+      expect(screen.getByTestId('field-row-gene.symbol')).toHaveClass(
+        PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
+      )
+    })
 
     fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
 
@@ -833,6 +853,120 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByTestId('location')).toHaveTextContent(
       '/curation/session-1/candidate-pending',
     )
+  })
+
+  it('links a scoped PDF highlight action to candidate selection, field scrolling, focus, and highlight', async () => {
+    const workspace = buildWorkspace()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    expect(await screen.findByLabelText('Gene symbol')).toHaveValue('BRCA1')
+
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
+    })
+
+    const linkedInput = await screen.findByLabelText('Gene symbol')
+    await waitFor(() => {
+      expect(linkedInput).toHaveValue('APOE')
+      expect(linkedInput).toHaveFocus()
+      expect(linkedInput.closest('[data-field-key="gene_symbol"]')).toHaveClass(
+        PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
+      )
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'center',
+        inline: 'nearest',
+      })
+    })
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/curation/session-1/candidate-pending',
+    )
+  })
+
+  it('ignores stale workspace events and anchors without an authoritative field mapping', async () => {
+    const workspace = buildWorkspace()
+    workspace.candidates[1].evidence_anchors[0].field_keys = ['removed_field']
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    expect(await screen.findByLabelText('Gene symbol')).toHaveValue('BRCA1')
+
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-2',
+        'document-from-previous-session',
+        'curation:previous-session',
+      )
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
+    })
+
+    expect(screen.getByLabelText('Gene symbol')).toHaveValue('BRCA1')
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/curation/session-1/candidate-accepted',
+    )
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('keeps one evidence listener across candidate route changes and removes it on unmount', async () => {
+    const workspace = buildWorkspace()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+    const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
+    const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener')
+    const rendered = renderPage('/curation/session-1/candidate-accepted')
+
+    expect(await screen.findByLabelText('Gene symbol')).toHaveValue('BRCA1')
+    const evidenceListenerAdds = () => addEventListenerSpy.mock.calls.filter(
+      ([eventName]) => eventName === 'pdf-viewer-evidence-anchor-selected',
+    )
+    const evidenceListenerRemovals = () => removeEventListenerSpy.mock.calls.filter(
+      ([eventName]) => eventName === 'pdf-viewer-evidence-anchor-selected',
+    )
+    expect(evidenceListenerAdds()).toHaveLength(1)
+
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-pending',
+      )
+    })
+    expect(evidenceListenerAdds()).toHaveLength(1)
+    expect(evidenceListenerRemovals()).toHaveLength(0)
+
+    rendered.unmount()
+
+    expect(evidenceListenerRemovals()).toHaveLength(1)
+    expect(evidenceListenerRemovals()[0][1]).toBe(evidenceListenerAdds()[0][1])
   })
 
   it('patches active envelope fields from the field editor with revision and before value', async () => {

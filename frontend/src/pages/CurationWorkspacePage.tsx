@@ -52,6 +52,10 @@ import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 import { buildWorkspaceEnvelopeObjectReviewRows } from '@/features/curation/workspace/envelopeObjectReviewRows'
+import {
+  type PdfToFormEvidence,
+  usePdfToFormLinking,
+} from '@/features/curation/workspace/usePdfToFormLinking'
 import ObjectSelectorStrip from '@/features/curation/workspace/ObjectSelectorStrip'
 import WorkPaneToolbar from '@/features/curation/workspace/WorkPaneToolbar'
 import {
@@ -131,6 +135,39 @@ function CurationWorkspacePageContent({
     () => buildCurationPDFViewerOwner(workspace.session.session_id),
     [workspace.session.session_id],
   )
+  const evidenceByAnchorId = useMemo(
+    () => candidates.reduce<Record<string, PdfToFormEvidence>>(
+      (index, candidate) => {
+        for (const evidence of candidate.evidence_anchors) {
+          index[evidence.anchor_id] = {
+            anchorId: evidence.anchor_id,
+            candidateId: candidate.candidate_id,
+            fieldPaths: evidence.field_keys,
+          }
+        }
+        for (const projection of candidate.evidence_anchor_projections ?? []) {
+          if (projection.field_path) {
+            index[projection.anchor_id] = {
+              anchorId: projection.anchor_id,
+              candidateId: candidate.candidate_id,
+              fieldPaths: [projection.field_path],
+            }
+          }
+        }
+        return index
+      },
+      {},
+    ),
+    [candidates],
+  )
+  usePdfToFormLinking({
+    activeCandidateId,
+    candidates,
+    documentId: workspaceDocumentId,
+    evidenceByAnchorId,
+    ownerToken: viewerOwnerToken,
+    setActiveCandidate,
+  })
   const [manualObjectDialogOpen, setManualObjectDialogOpen] = useState(false)
   const [manualObjectCreating, setManualObjectCreating] = useState(false)
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)

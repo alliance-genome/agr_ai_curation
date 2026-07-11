@@ -1919,7 +1919,11 @@ describe('PdfViewer evidence navigation', () => {
     nativeHighlight.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
     expect(onAnchorSelected).toHaveBeenCalledTimes(1)
-    expect(onAnchorSelected.mock.calls[0][0].detail.anchorId).toBe('anchor-click')
+    expect(onAnchorSelected.mock.calls[0][0].detail).toEqual({
+      anchorId: 'anchor-click',
+      documentId: 'doc-click',
+      ownerToken: null,
+    })
 
     unsubscribe()
   })
