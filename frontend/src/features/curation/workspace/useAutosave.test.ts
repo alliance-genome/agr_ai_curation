@@ -350,6 +350,7 @@ describe('useAutosave', () => {
 
   afterEach(() => {
     vi.clearAllMocks()
+    vi.restoreAllMocks()
     vi.unstubAllEnvs()
   })
 
@@ -1118,6 +1119,8 @@ describe('useAutosave', () => {
   })
 
   it('refreshes a draft conflict and preserves a newer local edit for a fresh version', async () => {
+    vi.stubEnv('VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS', '25')
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
     const authoritativeRefresh = createDeferred<CurationWorkspace>()
     const authoritativeWorkspace = buildWorkspace()
     authoritativeWorkspace.candidates[0] = {
@@ -1174,6 +1177,7 @@ describe('useAutosave', () => {
       })
     })
     expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+    expect(timeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 25)
     expect(result.current.autosave.warning).toContain('rebased onto the latest version')
 
     serviceMocks.autosaveCurationCandidateDraft.mockResolvedValueOnce(
@@ -1470,6 +1474,8 @@ describe('useAutosave', () => {
 
   it('uses the configured draft autosave attempt limit for transient failures', async () => {
     vi.stubEnv('VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS', '3')
+    vi.stubEnv('VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS', '25')
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
     serviceMocks.autosaveCurationCandidateDraft
       .mockRejectedValueOnce(new Error('temporarily unavailable'))
       .mockRejectedValueOnce(new Error('still temporarily unavailable'))
@@ -1494,5 +1500,6 @@ describe('useAutosave', () => {
       expect(result.current.isDirty).toBe(false)
     })
     expect(result.current.warning).toBeNull()
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 25)
   })
 })

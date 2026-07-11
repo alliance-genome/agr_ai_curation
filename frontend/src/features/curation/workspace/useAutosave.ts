@@ -25,6 +25,7 @@ import {
 
 const DEFAULT_AUTOSAVE_DEBOUNCE_MS = 2_500
 const DEFAULT_DRAFT_AUTOSAVE_MAX_ATTEMPTS = 2
+const DEFAULT_DRAFT_AUTOSAVE_RETRY_DELAY_MS = 0
 
 function getDraftAutosaveMaxAttempts(): number {
   return Math.max(
@@ -32,6 +33,16 @@ function getDraftAutosaveMaxAttempts(): number {
     getEnvInt(
       'VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS',
       DEFAULT_DRAFT_AUTOSAVE_MAX_ATTEMPTS,
+    ),
+  )
+}
+
+function getDraftAutosaveRetryDelayMs(): number {
+  return Math.max(
+    0,
+    getEnvInt(
+      'VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS',
+      DEFAULT_DRAFT_AUTOSAVE_RETRY_DELAY_MS,
     ),
   )
 }
@@ -612,6 +623,10 @@ export function useAutosave(
           } catch (error) {
             if (isVersionConflict(error) || attempt === maxAttempts) {
               throw error
+            }
+            const retryDelayMs = getDraftAutosaveRetryDelayMs()
+            if (retryDelayMs > 0) {
+              await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelayMs))
             }
           }
         }

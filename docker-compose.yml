@@ -93,6 +93,7 @@ services:
         # Git SHA: set VITE_GIT_SHA env var or use: docker compose build --build-arg VITE_GIT_SHA=$(git rev-parse --short HEAD)
         VITE_GIT_SHA: ${VITE_GIT_SHA:-unknown}
         VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS: ${VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS:-2}
+        VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS: ${VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS:-0}
     restart: unless-stopped
     depends_on:
       - backend
