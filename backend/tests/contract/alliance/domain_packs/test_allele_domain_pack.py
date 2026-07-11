@@ -563,13 +563,10 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
                     resolved_values=resolved_values,
                     resolved_objects=[
                         {
-                            "object_type": "Allele",
-                            "canonical_id": resolved_values["curie"],
-                            "payload": {
-                                "primary_external_id": resolved_values["curie"],
-                                "allele_symbol": resolved_values["symbol"],
-                                "taxon": resolved_values["taxon"],
-                            },
+                            "allele_id": resolved_values["curie"],
+                            "symbol": resolved_values["symbol"],
+                            "species": "Drosophila melanogaster",
+                            "data_provider": "FB",
                         }
                     ],
                     missing_expected_fields=[],
@@ -641,6 +638,10 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
         "allele_symbol": "resolved",
         "taxon": "resolved",
     }
+    assert not any(
+        finding.code == "domain_pack.validator_expected_field_unmapped"
+        for finding in result.appended_findings
+    )
     unresolved_finding = next(
         finding
         for finding in result.appended_findings
