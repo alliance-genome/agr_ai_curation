@@ -52,7 +52,18 @@ async def execute_flow(*args, **kwargs):
 def _make_flow(nodes):
     """Create a mock CurationFlow with the given nodes list."""
     flow = MagicMock()
-    flow.flow_definition = {"nodes": nodes}
+    flow.flow_definition = {
+        "nodes": nodes,
+        "edges": [
+            {
+                "id": f"edge_{index}",
+                "source": nodes[index]["id"],
+                "target": nodes[index + 1]["id"],
+            }
+            for index in range(len(nodes) - 1)
+        ],
+        "entry_node_id": nodes[0]["id"] if nodes else "",
+    }
     flow.name = "Test Flow"
     flow.id = "11111111-1111-1111-1111-111111111111"
     return flow
@@ -831,7 +842,8 @@ class TestCountAgentIds:
 
     def test_empty_flow(self):
         flow = _make_flow([])
-        assert _count_agent_ids(flow) == {}
+        with pytest.raises(ValueError, match="ambiguous_entry"):
+            _count_agent_ids(flow)
 
 
 class TestFlowTemplateHelpers:

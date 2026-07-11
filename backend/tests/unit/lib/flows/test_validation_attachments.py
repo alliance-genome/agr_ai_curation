@@ -327,6 +327,7 @@ def test_validation_attachment_edges_require_direct_extraction_source(monkeypatc
         "fixture_extractor",
         extra_nodes=[_validator_node("custom_validator", "custom_validator")],
         edges=[
+            {"id": "control", "source": "task_1", "target": "extract_1"},
             {
                 "id": "e1",
                 "source": "task_1",
@@ -352,33 +353,31 @@ def test_validation_attachment_edges_require_distinct_binding_ids(monkeypatch):
         ),
     )
 
-    flow = _flow_definition(
-        "fixture_extractor",
-        extra_nodes=[
-            _validator_node("custom_validator_1", "custom_validator_1"),
-            _validator_node("custom_validator_2", "custom_validator_2"),
-        ],
-        edges=[
-            {"id": "e1", "source": "task_1", "target": "extract_1"},
-            {
-                "id": "e2",
-                "source": "extract_1",
-                "target": "custom_validator_1",
-                "role": "validation_attachment",
-                "satisfies_binding_id": "identifier",
-            },
-            {
-                "id": "e3",
-                "source": "extract_1",
-                "target": "custom_validator_2",
-                "role": "validation_attachment",
-                "satisfies_binding_id": "identifier",
-            },
-        ],
-    )
-
-    with pytest.raises(FlowValidationAttachmentError, match="distinct validator bindings"):
-        apply_flow_validation_attachment_defaults(flow)
+    with pytest.raises(ValueError, match="duplicate_validation_binding"):
+        _flow_definition(
+            "fixture_extractor",
+            extra_nodes=[
+                _validator_node("custom_validator_1", "custom_validator_1"),
+                _validator_node("custom_validator_2", "custom_validator_2"),
+            ],
+            edges=[
+                {"id": "e1", "source": "task_1", "target": "extract_1"},
+                {
+                    "id": "e2",
+                    "source": "extract_1",
+                    "target": "custom_validator_1",
+                    "role": "validation_attachment",
+                    "satisfies_binding_id": "identifier",
+                },
+                {
+                    "id": "e3",
+                    "source": "extract_1",
+                    "target": "custom_validator_2",
+                    "role": "validation_attachment",
+                    "satisfies_binding_id": "identifier",
+                },
+            ],
+        )
 
 
 def test_validation_attachment_edge_rejects_disabled_replacement(monkeypatch):
