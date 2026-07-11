@@ -199,6 +199,21 @@ def test_effective_production_contract_defaults_match_sentry_runtime_configurati
     ) == []
 
 
+def test_runtime_preflight_allows_explicit_sentry_operational_overrides():
+    config = _safe_rendered_config()
+    backend_env = config["services"]["backend"]["environment"]
+    backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"] = "4096"
+    backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"] = "75"
+
+    assert production_preflight.validate_config(config) == []
+    assert production_preflight.validate_config(
+        config, enforce_operational_defaults=True
+    ) == [
+        "backend.SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS must render as 2000",
+        "backend.SENTRY_TRANSACTION_RETAINED_SPANS_MAX must render as 50",
+    ]
+
+
 @pytest.mark.parametrize(
     ("service", "key", "unsafe_value", "expected_error"),
     [

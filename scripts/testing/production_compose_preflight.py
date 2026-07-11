@@ -218,6 +218,9 @@ def main() -> int:
         print(f"PRODUCTION PREFLIGHT FAILED: {exc}", file=sys.stderr)
         return 1
 
+    # Keep operator-tunable Sentry limits overrideable at launch. The contract
+    # suite opts into default enforcement separately so documented defaults
+    # cannot drift without turning those operational knobs into fixed policy.
     errors = validate_config(config)
     if errors:
         print("PRODUCTION PREFLIGHT FAILED:", file=sys.stderr)
