@@ -314,6 +314,34 @@ class BatchService:
             ).all()
         )
 
+    def cancel_running_batch_for_lease(
+        self,
+        batch_id: UUID,
+        lease_owner: UUID,
+    ) -> bool:
+        """Cancel a running batch only while the caller owns its live lease."""
+        now = datetime.now(timezone.utc)
+        cancelled_id = self.db.execute(
+            update(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.status == BatchStatus.RUNNING,
+                Batch.lease_owner == lease_owner,
+                Batch.lease_expires_at > now,
+            )
+            .values(
+                status=BatchStatus.CANCELLED,
+                completed_at=now,
+                lease_owner=None,
+                lease_expires_at=None,
+                lease_heartbeat_at=None,
+            )
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
+        self.db.commit()
+        return cancelled_id is not None
+
     def complete_running_batch(self, batch_id: UUID, lease_owner: UUID) -> bool:
         """Complete a fully terminal batch only for its current lease owner."""
         now = datetime.now(timezone.utc)

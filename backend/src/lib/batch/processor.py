@@ -35,10 +35,7 @@ from src.lib.openai_agents.config import (
 )
 from .events import get_batch_broadcaster
 from .service import BatchService
-from .status import (
-    require_batch_document_status_transition,
-    require_batch_status_transition,
-)
+from .status import require_batch_document_status_transition
 
 logger = logging.getLogger(__name__)
 _BACKEND_ONLY_EVENT_FIELDS = {"internal"}
@@ -211,25 +208,21 @@ def _process_claimed_batch(
     flow = db.query(CurationFlow).filter(CurationFlow.id == batch.flow_id).first()
     if not flow:
         logger.error("Flow not found: flow_id=%s, batch_id=%s", batch.flow_id, batch_id)
-        require_batch_status_transition(batch.status, BatchStatus.CANCELLED)
-        batch.status = BatchStatus.CANCELLED
-        batch.completed_at = datetime.now(timezone.utc)
-        batch.lease_owner = None
-        batch.lease_expires_at = None
-        batch.lease_heartbeat_at = None
-        db.commit()
+        if not service.cancel_running_batch_for_lease(batch_id, lease_owner):
+            logger.info(
+                "Skipping missing-flow cancellation after lease loss: batch_id=%s",
+                batch_id,
+            )
         return
 
     user = db.query(User).filter(User.id == batch.user_id).first()
     if not user or not user.auth_sub:
         logger.error("User not found or missing auth_sub: user_id=%s, batch_id=%s", batch.user_id, batch_id)
-        require_batch_status_transition(batch.status, BatchStatus.CANCELLED)
-        batch.status = BatchStatus.CANCELLED
-        batch.completed_at = datetime.now(timezone.utc)
-        batch.lease_owner = None
-        batch.lease_expires_at = None
-        batch.lease_heartbeat_at = None
-        db.commit()
+        if not service.cancel_running_batch_for_lease(batch_id, lease_owner):
+            logger.info(
+                "Skipping missing-user cancellation after lease loss: batch_id=%s",
+                batch_id,
+            )
         return
     cognito_sub = user.auth_sub
 

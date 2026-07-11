@@ -270,6 +270,55 @@ def test_unexpired_lease_blocks_recovery_then_expired_lease_can_be_claimed():
         _delete_batch(batch_id)
 
 
+def test_missing_flow_stale_worker_cannot_cancel_takeover_owner():
+    original_owner = uuid4()
+    recovery_owner = uuid4()
+    batch_id, _document_ids = _create_batch_with_statuses(
+        BatchStatus.RUNNING,
+        [BatchDocumentStatus.PENDING],
+        lease_owner=original_owner,
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    original_db = SessionLocal()
+    takeover_db = SessionLocal()
+    try:
+        stale_batch = original_db.get(Batch, batch_id)
+        assert stale_batch is not None
+
+        takeover_db.execute(
+            update(Batch)
+            .where(Batch.id == batch_id, Batch.lease_owner == original_owner)
+            .values(lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+        )
+        takeover_db.commit()
+        claimed = BatchService(takeover_db).claim_recoverable_batch(
+            batch_id,
+            recovery_owner,
+            120,
+        )
+        assert claimed is not None
+
+        processor._process_claimed_batch(
+            original_db,
+            BatchService(original_db),
+            stale_batch,
+            original_owner,
+        )
+
+        takeover_db.expire_all()
+        current_batch = takeover_db.get(Batch, batch_id)
+        assert current_batch is not None
+        assert current_batch.status == BatchStatus.RUNNING
+        assert current_batch.lease_owner == recovery_owner
+        assert current_batch.lease_expires_at is not None
+    finally:
+        original_db.rollback()
+        original_db.close()
+        takeover_db.rollback()
+        takeover_db.close()
+        _delete_batch(batch_id)
+
+
 def test_restart_claim_preserves_terminal_outputs_and_fails_only_interrupted_work():
     batch_id, document_ids = _create_batch_with_statuses(
         BatchStatus.RUNNING,

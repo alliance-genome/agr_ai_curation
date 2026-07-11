@@ -132,6 +132,15 @@ class TestBatchServiceMocked:
         assert result is False
         mock_db.rollback.assert_called_once()
 
+    def test_cancel_running_batch_for_lease_returns_false_after_lease_loss(self):
+        mock_db = Mock()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        result = BatchService(mock_db).cancel_running_batch_for_lease(uuid4(), uuid4())
+
+        assert result is False
+        mock_db.commit.assert_called_once()
+
     def test_cancel_batch_validates_cancellable_status(self):
         """Cancel batch should only work for pending/running batches."""
         # Test that ValueError is raised for completed status
