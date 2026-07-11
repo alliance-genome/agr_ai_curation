@@ -5003,16 +5003,21 @@ class TestExecuteFlowTermination:
             "evidence_records": [],
             "evidence_count": 0,
         }
-        supervisor = MagicMock(name="Flow Supervisor")
-        supervisor._flow_unavailable_steps = []
-        supervisor._flow_execution_state = _make_flow_execution_state(
-            gene_step,
-            chat_step,
-            ordered_tool_names=[
-                "ask_gene_specialist",
-                "ask_chat_output_specialist",
-                "ask_curation_handoff_specialist",
-            ],
+        supervisor = SimpleNamespace(
+            name="Flow Supervisor",
+            model="gpt-5",
+            tools=[],
+            output_type=None,
+            _flow_unavailable_steps=[],
+            _flow_execution_state=_make_flow_execution_state(
+                gene_step,
+                chat_step,
+                ordered_tool_names=[
+                    "ask_gene_specialist",
+                    "ask_chat_output_specialist",
+                    "ask_curation_handoff_specialist",
+                ],
+            ),
         )
         persisted_requests = []
 
@@ -5026,36 +5031,100 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            lambda *_args, **_kwargs: SimpleNamespace(
+                hierarchy=None,
+                abstract=None,
+                section_count=lambda: 0,
+            ),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
             _recording_persist_extraction_results(persisted_requests),
         )
 
-        async def _fake_run_agent_streamed(**_kwargs):
-            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
-            # The SDK may finish both calls before the executor consumes either
-            # TOOL_COMPLETE event from the runner stream.
+        runner = importlib.import_module("src.lib.openai_agents.runner")
+
+        def _sdk_tool_event(item_type, *, tool_name=None, output=None, call_id):
+            raw_item = SimpleNamespace(call_id=call_id)
+            if tool_name is not None:
+                raw_item.arguments = "{}"
+            return SimpleNamespace(
+                type="run_item_stream_event",
+                item=SimpleNamespace(
+                    type=item_type,
+                    name=tool_name,
+                    output=output,
+                    raw_item=raw_item,
+                ),
+            )
+
+        sdk_events = [
+            _sdk_tool_event(
+                "tool_call_item",
+                tool_name="ask_chat_output_specialist",
+                call_id="chat-call",
+            ),
+            _sdk_tool_event(
+                "tool_call_output_item",
+                output=chat_step["output"],
+                call_id="chat-call",
+            ),
+            _sdk_tool_event(
+                "tool_call_item",
+                tool_name="ask_curation_handoff_specialist",
+                call_id="handoff-call",
+            ),
+            _sdk_tool_event(
+                "tool_call_output_item",
+                output=handoff_step["output"],
+                call_id="handoff-call",
+            ),
+        ]
+
+        class _FakeSdkRunResult:
+            final_output = "should not leak"
+
+            async def stream_events(self):
+                for sdk_event in sdk_events:
+                    yield sdk_event
+
+        class _FakeProvider:
+            async def aclose(self):
+                return None
+
+        def _fake_sdk_run_streamed(*_args, **_kwargs):
+            # The SDK may finish both calls before execute_flow consumes either
+            # TOOL_COMPLETE translated by the production runner.
             supervisor._flow_execution_state["completed_steps"].append(handoff_step)
             supervisor._flow_execution_state["curation_handoff"] = {
                 "review_session_ids": ["session-gene"],
                 "adapter_keys": ["gene"],
             }
-            yield {
-                "type": "TOOL_COMPLETE",
-                "details": {"toolName": "ask_chat_output_specialist"},
-            }
-            yield {
-                "type": "TOOL_COMPLETE",
-                "details": {"toolName": "ask_curation_handoff_specialist"},
-            }
-            yield {"type": "RUN_FINISHED", "data": {"response": "should not leak"}}
+            return _FakeSdkRunResult()
 
+        monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+        monkeypatch.setattr(runner, "provider_context_preflight", lambda **_kwargs: None)
+        monkeypatch.setattr(runner, "commit_pending_prompts", lambda _agent: None)
+        monkeypatch.setattr(runner, "write_stream_event", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(
-            "src.lib.openai_agents.runner.run_agent_streamed",
-            _fake_run_agent_streamed,
+            runner,
+            "write_extraction_trace_event",
+            lambda **event: event,
         )
+        monkeypatch.setattr(runner, "_log_used_prompts_to_db", lambda **_kwargs: 0)
+        monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda: object())
+        monkeypatch.setattr(
+            runner,
+            "_build_request_openai_provider",
+            lambda _client: _FakeProvider(),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_build_agents_run_config",
+            lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+        monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+        monkeypatch.setattr(runner.Runner, "run_streamed", _fake_sdk_run_streamed)
 
         events = [
             event
@@ -5070,6 +5139,14 @@ class TestExecuteFlowTermination:
 
         assert "FLOW_ERROR" not in event_types
         assert event_types.count("TOOL_COMPLETE") == 2
+        tool_completions = [
+            event for event in events if event.get("type") == "TOOL_COMPLETE"
+        ]
+        assert [event["details"]["toolName"] for event in tool_completions] == [
+            "ask_chat_output_specialist",
+            "ask_curation_handoff_specialist",
+        ]
+        assert all(event["details"]["success"] is True for event in tool_completions)
         assert event_types.count("CHAT_OUTPUT_READY") == 1
         assert event_types.count("CURATION_HANDOFF_READY") == 1
         handoff_complete_index = max(
