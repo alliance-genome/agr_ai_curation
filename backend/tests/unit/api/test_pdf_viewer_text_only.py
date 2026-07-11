@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
 from src.api import pdf_viewer
 
 
@@ -16,10 +18,14 @@ class _FakeDb:
         self.commits = 0
         self.refreshed = []
 
-    def get(self, _model, document_id):
-        if document_id == _DOC_ID:
-            return self.record
-        return None
+    def execute(self, _statement):
+        record = self.record
+
+        class _Result:
+            def scalar_one_or_none(self):
+                return record
+
+        return _Result()
 
     def commit(self):
         self.commits += 1
@@ -39,9 +45,20 @@ def _record(**overrides):
         "file_hash": "a" * 64,
         "file_path": "user123/paper.pdf",
         "viewer_mode": "local_pdf",
+        "user_id": 7,
     }
     payload.update(overrides)
     return SimpleNamespace(**payload)
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_owner(monkeypatch):
+    monkeypatch.setattr(
+        pdf_viewer,
+        "provision_user",
+        lambda _db, principal: SimpleNamespace(id=7, auth_sub=principal["sub"]),
+    )
+    monkeypatch.setattr(pdf_viewer, "principal_from_claims", lambda claims: claims)
 
 
 def test_get_document_viewer_url_returns_null_for_text_only_document():
@@ -52,7 +69,11 @@ def test_get_document_viewer_url_returns_null_for_text_only_document():
         )
     )
 
-    response = pdf_viewer.get_document_viewer_url(document_id=_DOC_ID, db=db)
+    response = pdf_viewer.get_document_viewer_url(
+        document_id=_DOC_ID,
+        db=db,
+        user={"sub": "user123"},
+    )
 
     assert response.viewer_url is None
     assert response.viewer_mode == "text_only"
@@ -67,7 +88,11 @@ def test_get_document_detail_includes_text_only_viewer_mode_without_viewer_url()
         )
     )
 
-    response = pdf_viewer.get_document_detail(document_id=_DOC_ID, db=db)
+    response = pdf_viewer.get_document_detail(
+        document_id=_DOC_ID,
+        db=db,
+        user={"sub": "user123"},
+    )
 
     assert response.viewer_url is None
     assert response.viewer_mode == "text_only"
@@ -79,7 +104,11 @@ def test_get_document_detail_includes_text_only_viewer_mode_without_viewer_url()
 def test_get_document_detail_preserves_local_pdf_viewer_url():
     db = _FakeDb(_record())
 
-    response = pdf_viewer.get_document_detail(document_id=_DOC_ID, db=db)
+    response = pdf_viewer.get_document_detail(
+        document_id=_DOC_ID,
+        db=db,
+        user={"sub": "user123"},
+    )
 
-    assert response.viewer_url == "/uploads/user123/paper.pdf"
+    assert response.viewer_url == f"/api/pdf-viewer/documents/{_DOC_ID}/content"
     assert response.viewer_mode == "local_pdf"

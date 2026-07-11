@@ -12,7 +12,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 # Disable telemetry before any imports that might use it
 os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
@@ -797,9 +796,7 @@ def create_app() -> FastAPI:
     application.include_router(admin_prompts_router, tags=["Admin - Prompts"])
     application.include_router(admin_connections_router, tags=["Admin - Health"])
 
-    pdf_storage_path = get_pdf_storage_path()
-    ensure_writable_directory(pdf_storage_path)
-    application.mount("/uploads", StaticFiles(directory=pdf_storage_path), name="uploads")
+    ensure_writable_directory(get_pdf_storage_path())
 
     application.add_api_route("/", root, methods=["GET"])
     application.add_api_route("/health", health_check, methods=["GET"])

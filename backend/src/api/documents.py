@@ -24,6 +24,7 @@ import httpx
 from .auth import get_auth_dependency
 
 from ..services.user_service import principal_from_claims, provision_user
+from ..services.document_access import require_owned_document
 from ..lib.weaviate_helpers import get_tenant_name
 
 from ..models.api_schemas import (
@@ -372,26 +373,8 @@ def verify_document_ownership(
     # Get database user
     db_user = provision_user(db, principal_from_claims(auth_user))
 
-    # Query document from PostgreSQL
     document_uuid = _parse_document_uuid(document_id)
-    doc = db.query(ViewerPDFDocument).filter(
-        ViewerPDFDocument.id == document_uuid
-    ).first()
-
-    if not doc:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Document with ID {document_id} not found"
-        )
-
-    # Verify ownership - return 403 for cross-user access (FR-014)
-    if doc.user_id != db_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="You do not have permission to access this document"
-        )
-
-    return doc
+    return require_owned_document(db, document_uuid, db_user.id)
 
 
 def _parse_document_uuid(document_id: str) -> uuid.UUID:
@@ -1787,22 +1770,7 @@ async def get_download_info(
             # T031: Get database user for ownership verification (FR-014)
             db_user = provision_user(session, principal_from_claims(user))
 
-            doc = session.query(ViewerPDFDocument).filter(
-                ViewerPDFDocument.id == document_uuid
-            ).first()
-
-            if not doc:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Document with ID {document_id} not found"
-                )
-
-            # T031: Ownership check (FR-014) - Return 403 for cross-user access
-            if doc.user_id != db_user.id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="You do not have permission to access this document"
-                )
+            doc = require_owned_document(session, document_uuid, db_user.id)
 
             viewer_mode = str(getattr(doc, "viewer_mode", "") or "").strip().lower()
             is_text_only = viewer_mode == "text_only"
@@ -1923,22 +1891,7 @@ async def download_document_file(
             # T031: Get database user for ownership verification (FR-014)
             db_user = provision_user(session, principal_from_claims(user))
 
-            doc = session.query(ViewerPDFDocument).filter(
-                ViewerPDFDocument.id == document_uuid
-            ).first()
-
-            if not doc:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Document with ID {document_id} not found"
-                )
-
-            # T031: Ownership check (FR-014) - Return 403 for cross-user access
-            if doc.user_id != db_user.id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="You do not have permission to access this document"
-                )
+            doc = require_owned_document(session, document_uuid, db_user.id)
 
             # Determine file path based on type with path validation (T032)
             file_path = None

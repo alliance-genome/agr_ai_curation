@@ -168,6 +168,38 @@ def _now() -> datetime:
     return datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc)
 
 
+def test_document_ref_uses_protected_document_id_url():
+    document_id = uuid4()
+    document = SimpleNamespace(
+        id=document_id,
+        title=None,
+        filename="paper.pdf",
+        page_count=5,
+        viewer_mode="local_pdf",
+    )
+
+    reference = serializer_module._document_ref(document)
+
+    protected_url = f"/api/pdf-viewer/documents/{document_id}/content"
+    assert reference.pdf_url == protected_url
+    assert reference.viewer_url == protected_url
+
+
+def test_document_ref_omits_pdf_url_for_text_only_document():
+    document = SimpleNamespace(
+        id=uuid4(),
+        title="Imported article",
+        filename="article.md",
+        page_count=1,
+        viewer_mode="text_only",
+    )
+
+    reference = serializer_module._document_ref(document)
+
+    assert reference.pdf_url is None
+    assert reference.viewer_url is None
+
+
 def _create_document(db_session):
     now = _now()
     document = PDFDocument(
