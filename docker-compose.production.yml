@@ -4,9 +4,9 @@
 # It does not build backend/frontend locally and does not require repo source
 # mounts for the application services.
 #
-# Usage:
-#   docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml config
-#   docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d
+# Supported production launch:
+#   make prod
+# This renders and validates this file before Docker is allowed to deploy it.
 
 # Keep the standalone project name stable for predictable container naming.
 name: ai_curation_prototype
@@ -66,7 +66,7 @@ x-langfuse-worker-env: &langfuse-worker-env
 
 services:
   langfuse-worker:
-    image: docker.io/langfuse/langfuse-worker:3
+    image: docker.io/langfuse/langfuse-worker@sha256:080377807b6d1fca2117662840161e60a0ab6842b2578ef39ea17df80ba42bfd
     restart: always
     depends_on: *langfuse-depends-on
     labels:
@@ -82,7 +82,7 @@ services:
     environment: *langfuse-worker-env
 
   langfuse:
-    image: docker.io/langfuse/langfuse:3
+    image: docker.io/langfuse/langfuse@sha256:35461119756177199bf4412ceed03e0f637ca5c4a6b8b85d9e31c35e515e670d
     restart: always
     depends_on: *langfuse-depends-on
     labels:
@@ -105,7 +105,7 @@ services:
       LANGFUSE_INIT_USER_PASSWORD:
 
   frontend:
-    image: "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:-latest}"
+    image: "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:?set a release or sha tag in the production env}"
     restart: unless-stopped
     depends_on:
       backend:
@@ -116,6 +116,8 @@ services:
       log_component: nextjs
     ports:
       - "${FRONTEND_HOST_PORT:-3002}:80"
+    environment:
+      VITE_DEV_MODE: "false"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
       interval: 30s
@@ -128,7 +130,7 @@ services:
     # Security hardening 2026-03-24: drop all capabilities, block IMDS metadata access
     cap_drop:
       - ALL
-    image: "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:-latest}"
+    image: "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:?set a release or sha tag in the production env}"
     restart: unless-stopped
     depends_on:
       postgres:
@@ -147,7 +149,7 @@ services:
       PYTHONUNBUFFERED: "1"
       AGR_RUNTIME_ROOT: /runtime
       AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START: "${AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START:-true}"
-      DEV_MODE: "${DEV_MODE:-false}"
+      DEV_MODE: "false"
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
       SENTRY_RELEASE: "${SENTRY_RELEASE:-}"
@@ -163,7 +165,8 @@ services:
       SENTRY_OPENAI_INCLUDE_PROMPTS: "${SENTRY_OPENAI_INCLUDE_PROMPTS:-false}"
       SENTRY_AI_CONTENT_CAPTURE_TIER: "${SENTRY_AI_CONTENT_CAPTURE_TIER:-2}"
       SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS: "${SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS:-2000}"
-      SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS: "${SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS:-20000}"
+      SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS: "${SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS:-2000}"
+      SENTRY_TRANSACTION_RETAINED_SPANS_MAX: "${SENTRY_TRANSACTION_RETAINED_SPANS_MAX:-50}"
       LOKI_URL: "${LOKI_URL:-http://loki:3100}"
       RUN_DB_BOOTSTRAP_ON_START: "${RUN_DB_BOOTSTRAP_ON_START:-true}"
       RUN_DB_MIGRATIONS_ON_START: "${RUN_DB_MIGRATIONS_ON_START:-true}"
@@ -233,13 +236,13 @@ services:
       EXTRACTION_TRACE_EVENT_DIR: "${EXTRACTION_TRACE_EVENT_DIR:-/runtime/state/extraction_trace_events}"
       UNSTRUCTURED_API_URL: "${UNSTRUCTURED_API_URL:-}"
       UNSTRUCTURED_API_KEY: "${UNSTRUCTURED_API_KEY:-}"
-      DEBUG: "${DEBUG:-false}"
+      DEBUG: "false"
       POSTHOG_DISABLED: "true"
       ANONYMIZED_TELEMETRY: "False"
       DATABASE_URL: "${DATABASE_URL:?set in standalone env}"
       HEALTH_CHECK_STRICT_MODE: "${HEALTH_CHECK_STRICT_MODE:-true}"
-      HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS: "${HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS:-false}"
-      HEALTH_CHECK_REQUIRE_LITERATURE_DB: "${HEALTH_CHECK_REQUIRE_LITERATURE_DB:-false}"
+      HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS: "${HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS:-true}"
+      HEALTH_CHECK_REQUIRE_LITERATURE_DB: "${HEALTH_CHECK_REQUIRE_LITERATURE_DB:-true}"
       POSTGRES_HOST: "${POSTGRES_HOST:-postgres}"
       POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
       POSTGRES_DB: "${POSTGRES_DB:-ai_curation}"
@@ -285,7 +288,9 @@ services:
       OIDC_LOGOUT_URL: "${OIDC_LOGOUT_URL:-}"
       OIDC_LOGOUT_REDIRECT_PARAM: "${OIDC_LOGOUT_REDIRECT_PARAM:-post_logout_redirect_uri}"
       SESSION_TIMEOUT_HOURS: "${SESSION_TIMEOUT_HOURS:-24}"
-      SECURE_COOKIES: "${SECURE_COOKIES:-false}"
+      SECURE_COOKIES: "${SECURE_COOKIES:-true}"
+      WEAVIATE_AUTH_ENABLED: "true"
+      WEAVIATE_API_KEY: "${WEAVIATE_API_KEY:?set in production env}"
       TESTING_API_KEY: "${TESTING_API_KEY:-}"
       TESTING_API_KEY_USER: "${TESTING_API_KEY_USER:-testuser}"
       TESTING_API_KEY_EMAIL: "${TESTING_API_KEY_EMAIL:-testuser@example.org}"
@@ -328,7 +333,7 @@ services:
 
   trace_review_backend:
     pids_limit: 100
-    image: "${TRACE_REVIEW_BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend}:${TRACE_REVIEW_BACKEND_IMAGE_TAG:-latest}"
+    image: "${TRACE_REVIEW_BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend}:${TRACE_REVIEW_BACKEND_IMAGE_TAG:?set a release or sha tag in the production env}"
     restart: unless-stopped
     labels:
       log_env: "${LOG_ENV:-production}"
@@ -343,9 +348,9 @@ services:
       COGNITO_CLIENT_SECRET: "${TRACE_REVIEW_COGNITO_CLIENT_SECRET:-${COGNITO_CLIENT_SECRET:-}}"
       COGNITO_DOMAIN: "${TRACE_REVIEW_COGNITO_DOMAIN:-${COGNITO_DOMAIN:-}}"
       COGNITO_REDIRECT_URI: "${TRACE_REVIEW_COGNITO_REDIRECT_URI:-${COGNITO_REDIRECT_URI:-http://localhost:3001/api/auth/callback}}"
-      DEV_MODE: "${TRACE_REVIEW_DEV_MODE:-${DEV_MODE:-false}}"
+      DEV_MODE: "false"
       TRACE_REVIEW_INTERNAL_API_TOKEN: "${TRACE_REVIEW_INTERNAL_API_TOKEN:-}"
-      SECURE_COOKIES: "${TRACE_REVIEW_SECURE_COOKIES:-${SECURE_COOKIES:-false}}"
+      SECURE_COOKIES: "${TRACE_REVIEW_SECURE_COOKIES:-${SECURE_COOKIES:-true}}"
       LANGFUSE_HOST: "${TRACE_REVIEW_LANGFUSE_HOST:-http://langfuse:3000}"
       LANGFUSE_PUBLIC_KEY: "${TRACE_REVIEW_LANGFUSE_PUBLIC_KEY:-${LANGFUSE_PUBLIC_KEY:-}}"
       LANGFUSE_SECRET_KEY: "${TRACE_REVIEW_LANGFUSE_SECRET_KEY:-${LANGFUSE_SECRET_KEY:-}}"
@@ -377,12 +382,13 @@ services:
       log_env: "${LOG_ENV:-production}"
       log_tier: database
       log_component: weaviate
-    ports:
-      - "${WEAVIATE_HTTP_HOST_PORT:-8080}:8080"
-      - "${WEAVIATE_GRPC_HOST_PORT:-50051}:50051"
     environment:
       QUERY_DEFAULTS_LIMIT: "${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}"
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "${WEAVIATE_ANONYMOUS_ACCESS:-true}"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"
+      AUTHENTICATION_APIKEY_ENABLED: "true"
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: "${WEAVIATE_API_KEY:?set in production env}"
+      AUTHORIZATION_ADMINLIST_ENABLED: "true"
+      AUTHORIZATION_ADMINLIST_USERS: "${WEAVIATE_API_KEY_USER:-curation-backend}"
       PERSISTENCE_DATA_PATH: /var/lib/weaviate
       DEFAULT_VECTORIZER_MODULE: text2vec-openai
       ENABLE_MODULES: "text2vec-openai,reranker-transformers"
@@ -408,7 +414,7 @@ services:
   reranker-transformers:
     pids_limit: 100
     profiles: ["local-reranker"]
-    image: cr.weaviate.io/semitechnologies/reranker-transformers:cross-encoder-ms-marco-MiniLM-L-6-v2
+    image: cr.weaviate.io/semitechnologies/reranker-transformers@sha256:2447f0bd5322a24793da7239118ab817a17b23904eec6337bb893409f286529b
     restart: always
     labels:
       log_env: "${LOG_ENV:-production}"
@@ -424,7 +430,7 @@ services:
       start_period: 60s
 
   redis:
-    image: docker.io/redis:7-alpine
+    image: docker.io/redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     restart: always
     command: >
       --requirepass ${REDIS_AUTH:?set in standalone env}
@@ -432,8 +438,6 @@ services:
       log_env: "${LOG_ENV:-production}"
       log_tier: cache
       log_component: redis
-    ports:
-      - "${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH:?set in standalone env}", "ping"]
       interval: 15s
@@ -442,7 +446,7 @@ services:
       start_period: 5s
 
   clickhouse:
-    image: docker.io/clickhouse/clickhouse-server:24.6.2.17-alpine
+    image: docker.io/clickhouse/clickhouse-server@sha256:43d8d67ea843c5687b6bfe859427a29da2bebd2ec88eb3c337cae3a711bc017f
     restart: always
     labels:
       log_env: "${LOG_ENV:-production}"
@@ -457,9 +461,6 @@ services:
     volumes:
       - langfuse_clickhouse_data:/var/lib/clickhouse
       - langfuse_clickhouse_logs:/var/log/clickhouse-server
-    ports:
-      - "${CLICKHOUSE_HTTP_HOST_PORT:-8123}:8123"
-      - "${CLICKHOUSE_NATIVE_HOST_PORT:-9000}:9000"
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 30s
@@ -479,9 +480,6 @@ services:
     environment:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minio}"
       MINIO_ROOT_PASSWORD:
-    ports:
-      - "${MINIO_API_HOST_PORT:-9090}:9000"
-      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9091}:9001"
     volumes:
       - langfuse_minio_data:/data
     healthcheck:
@@ -492,7 +490,7 @@ services:
       start_period: 10s
 
   postgres:
-    image: docker.io/postgres:16
+    image: docker.io/postgres@sha256:be01cf82fc7dbba824acf0a82e150b4b360f3ff93c6631d7844af431e841a95c
     restart: always
     labels:
       log_env: "${LOG_ENV:-production}"
@@ -508,26 +506,22 @@ services:
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
       POSTGRES_PASSWORD:
       POSTGRES_DB: "${POSTGRES_DB:-ai_curation}"
-    ports:
-      - "127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
   loki:
-    image: grafana/loki:3.6.4
+    image: grafana/loki@sha256:be31579ac047e9f78b81e48f3b69d3af709e7299b431d5aa78bcda43382f9511
     restart: always
     labels:
       log_env: "${LOG_ENV:-production}"
       log_tier: observability
       log_component: loki
-    ports:
-      - "${LOKI_HOST_PORT:-3100}:3100"
     volumes:
       - ./loki-config.yml:/etc/loki/local-config.yml:ro
       - loki-data:/loki
 
   promtail:
-    image: grafana/promtail:latest
+    image: grafana/promtail@sha256:6cfa64ec432b24a912d640e2edb940eeae2666f61861a66c121d763dd7241381
     restart: always
     command: ["-config.file=/etc/promtail/config.yml"]
     depends_on:

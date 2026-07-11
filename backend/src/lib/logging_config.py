@@ -1,7 +1,7 @@
 """Centralized logging configuration for the AI Curation backend.
 
-Provides structured JSON logging output that is parseable by Kibana/Elasticsearch
-when sent via Docker GELF driver, while remaining human-readable in local development.
+Provides structured JSON logging output for container log collection and
+Kibana/Elasticsearch parsing, while remaining human-readable in local development.
 
 Usage:
     # In main.py (once, at startup):

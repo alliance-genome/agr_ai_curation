@@ -28,13 +28,20 @@ The standalone stack now expects `backend`, `frontend`, and `trace_review_backen
 
 ## Compose file
 
-Use `docker-compose.production.yml` for standalone deployments.
+`docker-compose.production.yml` is the sole production Compose contract.
 
 - `docker-compose.production.yml` is the published-image path with modular runtime/data mounts
-- `docker-compose.prod.yml` remains the GELF logging override for the source-build stack and is unchanged by this deployment path
-- Validation commands:
-  - `docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml config`
-  - `docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d`
+- `make prod` is the supported repository-checkout launch command. It renders
+  the effective config, runs the fail-closed production preflight, and only then
+  starts the published-image stack.
+- The standalone installer invokes the same preflight and the same Compose file.
+- `docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml config`
+  is a diagnostic render command, not an alternate deployment path.
+- Production app image tags must be pinned to `vX.Y.Z` or `sha-<shortsha>`;
+  stateful service images are pinned by digest in the Compose contract.
+- Production requires secure cookies, non-development auth, strict external and
+  literature health checks, authenticated Weaviate, and no host-published data
+  service ports. Unsafe env overrides stop the preflight.
 
 ## Installed runtime layout
 
@@ -165,16 +172,17 @@ The authoritative standalone template is `scripts/install/lib/templates/env.stan
 Key values:
 
 - `BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-backend`
-- `BACKEND_IMAGE_TAG=latest`
+- `BACKEND_IMAGE_TAG=CHANGE_ME_PINNED_RELEASE_TAG` (installer replaces it)
 - `FRONTEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend`
-- `FRONTEND_IMAGE_TAG=latest`
+- `FRONTEND_IMAGE_TAG=CHANGE_ME_PINNED_RELEASE_TAG` (installer replaces it)
 - `TRACE_REVIEW_BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend`
-- `TRACE_REVIEW_BACKEND_IMAGE_TAG=latest`
+- `TRACE_REVIEW_BACKEND_IMAGE_TAG=CHANGE_ME_PINNED_RELEASE_TAG` (installer replaces it)
 - `TRACE_REVIEW_URL=http://trace_review_backend:8001`
 - `TRACE_REVIEW_LANGFUSE_HOST=http://langfuse:3000`
 - `TRACE_REVIEW_LANGFUSE_LOCAL_HOST=http://langfuse:3000`
 
-The checked-in template is the manual baseline.
+The checked-in template intentionally cannot launch production without installer
+resolution or an explicit pinned tag.
 When you run the installer from a Git checkout, Stage 2 rewrites those image tags to the matching published release tag or `sha-<shortsha>` for that checkout unless you pass `--image-tag`.
 Tagged releases publish a pinned `env.standalone-vX.Y.Z` companion asset so standalone installs can consume exact versioned image tags without editing the template by hand.
 
@@ -238,10 +246,11 @@ To add it later, set either:
 - or `CURATION_DB_CREDENTIALS_SOURCE=aws_secrets` plus the relevant
   `CURATION_DB_AWS_SECRET_ID`, `AWS_PROFILE`, and `AWS_REGION`
 
-Then restart the backend:
+Then rerun the guarded production start-and-verify stage. Compose only recreates
+services whose effective configuration changed:
 
 ```bash
-docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d backend
+scripts/install/install.sh --from-stage 6
 ```
 
 On a generic third-party install, `/health` should not be degraded just because
@@ -281,10 +290,10 @@ PDF_EXTRACTION_SERVICE_URL=http://localhost:5000
 PDF_EXTRACTION_SERVICE_URL=http://host.docker.internal:5000
 ```
 
-After changing the URL, restart the backend:
+After changing the URL, rerun the guarded production start-and-verify stage:
 
 ```bash
-docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d backend
+scripts/install/install.sh --from-stage 6
 ```
 
 ## Authentication (OIDC)

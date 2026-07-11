@@ -1,0 +1,25 @@
+services:
+  frontend:
+    environment:
+      VITE_DEV_MODE: "true"
+  backend:
+    environment:
+      AUTH_PROVIDER: dev
+      DEBUG: "true"
+      DEV_MODE: "true"
+      HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS: "false"
+      HEALTH_CHECK_REQUIRE_LITERATURE_DB: "false"
+      HEALTH_CHECK_STRICT_MODE: "false"
+      SECURE_COOKIES: "false"
+      SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS: "20000"
+      SENTRY_TRANSACTION_RETAINED_SPANS_MAX: ""
+  trace_review_backend:
+    environment:
+      DEV_MODE: "true"
+      SECURE_COOKIES: "false"
+  weaviate:
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      AUTHENTICATION_APIKEY_ENABLED: "false"
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: change_me
+      AUTHORIZATION_ADMINLIST_USERS: change_me

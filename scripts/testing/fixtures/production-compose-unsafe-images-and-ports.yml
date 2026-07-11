@@ -1,0 +1,12 @@
+services:
+  backend:
+    image: example.invalid/backend:main
+  frontend:
+    image: example.invalid/frontend:main
+  trace_review_backend:
+    image: example.invalid/trace-review:main
+  postgres:
+    image: postgres:latest
+  weaviate:
+    ports:
+      - "18080:8080"
