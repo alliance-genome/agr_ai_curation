@@ -31,6 +31,16 @@ interface CurationWorkspaceRequestOptions {
   keepalive?: boolean
 }
 
+export class CurationWorkspaceRequestError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'CurationWorkspaceRequestError'
+    this.status = status
+  }
+}
+
 export interface DomainEnvelopeReviewRowsRequest {
   envelope_id: string
   envelope_revision?: number | null
@@ -52,7 +62,10 @@ async function fetchCurationWorkspaceJson<T>(
   })
 
   if (!response.ok) {
-    throw new Error(await readCurationApiError(response))
+    throw new CurationWorkspaceRequestError(
+      response.status,
+      await readCurationApiError(response),
+    )
   }
 
   return response.json() as Promise<T>
