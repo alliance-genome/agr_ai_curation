@@ -16,18 +16,21 @@ import {
 } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
-import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurateButton'
+import AuthoritativeReviewAndCurateButton from '@/features/curation/components/AuthoritativeReviewAndCurateButton'
 
 export type FlowEvidenceExportFormat = 'csv' | 'tsv' | 'json'
 
 export interface FlowRunCompletionSummary {
   adapterKeys: string[]
   documentId: string | null
+  extractionResultIds: string[]
+  extractionResultRefs: Array<Record<string, unknown>>
   failureReason: string | null
   flowId: string | null
   flowName: string
   flowRunId: string
   originSessionId: string | null
+  reviewSessionIds: string[]
   status: string
   totalEvidenceRecords: number
 }
@@ -92,7 +95,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
   const [error, setError] = useState<string | null>(null)
 
   const exportReady = run.status === 'completed' && run.totalEvidenceRecords > 0
-  const reviewReady = run.status === 'completed' && Boolean(run.documentId)
+  const reviewReady = run.status === 'completed' && run.reviewSessionIds.length > 0
   const statusColor = run.status === 'completed'
     ? theme.palette.success.main
     : theme.palette.error.main
@@ -230,7 +233,9 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
         </Box>
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
-          <ReviewAndCurateButton
+          <AuthoritativeReviewAndCurateButton
+            authoritativeReviewSessionIds={run.reviewSessionIds}
+            disabledReason="No prepared review sessions were produced by this run."
             documentId={run.documentId}
             flowRunId={run.flowRunId}
             originSessionId={run.originSessionId}
@@ -303,7 +308,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
             },
           }}
         >
-          This run can be exported, but it does not have enough document scope metadata to open the curation workspace directly.
+          This run completed without prepared review sessions, so there is no curation workspace to open.
         </Alert>
       )}
 

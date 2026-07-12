@@ -2,16 +2,24 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import BatchPage from './BatchPage'
+import BatchPage, { mapBatchDocument } from './BatchPage'
 import { DEFAULT_FLOW_LIST_PAGE_SIZE } from '@/services/agentStudioService'
 import { submitFeedback } from '@/services/feedbackService'
 
+const openCurationWorkspaceMock = vi.fn()
+
+vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
+  const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
+    '@/features/curation/navigation/openCurationWorkspace',
+  )
+  return {
+    ...actual,
+    openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
+  }
+})
+
 vi.mock('@/components/AuditPanel', () => ({
   default: () => <div data-testid="audit-panel" />,
-}))
-
-vi.mock('@/features/curation/components/PreparedReviewAndCurateButton', () => ({
-  default: () => <button type="button">Review & Curate</button>,
 }))
 
 vi.mock('@/services/feedbackService', () => ({
@@ -26,6 +34,24 @@ vi.mock('@/contexts/AuthContext', () => ({
 
 const mockFetch = vi.fn()
 global.fetch = mockFetch
+
+class MockEventSource {
+  static instances: MockEventSource[] = []
+
+  onmessage: ((event: MessageEvent<string>) => void) | null = null
+  onerror: (() => void) | null = null
+  close = vi.fn()
+
+  constructor(public readonly url: string) {
+    MockEventSource.instances.push(this)
+  }
+
+  emit(payload: unknown) {
+    this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent<string>)
+  }
+}
+
+vi.stubGlobal('EventSource', MockEventSource)
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -57,6 +83,8 @@ function renderPage() {
 describe('BatchPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    MockEventSource.instances = []
+    openCurationWorkspaceMock.mockResolvedValue('review-gene')
 
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
       const url =
@@ -108,6 +136,142 @@ describe('BatchPage', () => {
       expect(mockFetch).toHaveBeenCalledWith(`/api/flows?page=1&page_size=${DEFAULT_FLOW_LIST_PAGE_SIZE}`, {
         credentials: 'include',
       })
+    })
+  })
+
+  it('preserves authoritative handoff identities in the batch detail mapping', () => {
+    const extractionResultRefs = [
+      {
+        result_ref: 'extraction-result:extract-gene',
+        extraction_result_id: 'extract-gene',
+        adapter_key: 'gene',
+      },
+    ]
+
+    expect(mapBatchDocument({
+      id: 'batch-doc-1',
+      document_id: 'doc-1',
+      document_title: 'Alpha paper',
+      position: 0,
+      status: 'completed',
+      review_session_ids: ['review-gene'],
+      adapter_keys: ['gene'],
+      extraction_result_ids: ['extract-gene'],
+      extraction_result_refs: extractionResultRefs,
+      flow_run_id: 'flow-run-1',
+      origin_session_id: 'origin-1',
+    })).toEqual(expect.objectContaining({
+      review_session_ids: ['review-gene'],
+      adapter_keys: ['gene'],
+      extraction_result_ids: ['extract-gene'],
+      extraction_result_refs: extractionResultRefs,
+      flow_run_id: 'flow-run-1',
+      origin_session_id: 'origin-1',
+    }))
+  })
+
+  it('maps absent or null review-session IDs to authoritative zero', () => {
+    expect(mapBatchDocument({
+      id: 'batch-doc-zero',
+      document_id: 'doc-zero',
+      position: 0,
+      status: 'completed',
+      review_session_ids: null,
+    }).review_session_ids).toEqual([])
+
+    expect(mapBatchDocument({
+      id: 'batch-doc-missing-ids',
+      document_id: 'doc-missing-ids',
+      position: 1,
+      status: 'completed',
+    }).review_session_ids).toEqual([])
+  })
+
+  it('hydrates a completed row from the live snapshot and opens its exact review session', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+
+      if (url === `/api/flows?page=1&page_size=${DEFAULT_FLOW_LIST_PAGE_SIZE}`) {
+        return Promise.resolve(jsonResponse({
+          flows: [],
+          total: 0,
+          page: 1,
+          page_size: DEFAULT_FLOW_LIST_PAGE_SIZE,
+        }))
+      }
+
+      if (url === '/api/batches') {
+        return Promise.resolve(jsonResponse({
+          batches: [{
+            id: 'batch-live',
+            flow_id: 'flow-1',
+            flow_name: 'Evidence Flow',
+            status: 'running',
+            total_documents: 1,
+            completed_documents: 0,
+            failed_documents: 0,
+            created_at: '2026-04-03T00:00:00Z',
+          }],
+        }))
+      }
+
+      if (url === '/api/batches/batch-live') {
+        return Promise.resolve(jsonResponse({
+          id: 'batch-live',
+          flow_id: 'flow-1',
+          status: 'running',
+          total_documents: 1,
+          completed_documents: 0,
+          failed_documents: 0,
+          documents: [{
+            id: 'batch-doc-1',
+            document_id: 'doc-1',
+            document_title: 'Alpha paper',
+            position: 0,
+            status: 'pending',
+          }],
+        }))
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1))
+    MockEventSource.instances[0].emit({
+      type: 'DOCUMENT_STATUS',
+      batch_id: 'batch-live',
+      document_id: 'doc-1',
+      batch_document_id: 'batch-doc-1',
+      position: 0,
+      status: 'completed',
+      review_session_ids: ['review-gene'],
+      adapter_keys: ['gene'],
+      extraction_result_ids: ['extract-gene'],
+      extraction_result_refs: [{
+        result_ref: 'extraction-result:extract-gene',
+        extraction_result_id: 'extract-gene',
+        adapter_key: 'gene',
+      }],
+      flow_run_id: 'flow-run-1',
+      origin_session_id: 'origin-1',
+      processing_time_ms: 1200,
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review & Curate' }))
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'review-gene',
+        documentId: 'doc-1',
+        flowRunId: 'flow-run-1',
+        originSessionId: 'origin-1',
+      }))
     })
   })
 

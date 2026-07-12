@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
-import CurationFlows from '../../components/RightPanel/Tools/CurationFlows'
+import CurationFlows, { mapFlowFinishedEvent } from '../../components/RightPanel/Tools/CurationFlows'
 import type { SSEEvent } from '../../hooks/useChatStream'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 
@@ -78,6 +78,13 @@ function completedRunEvent(overrides: Partial<SSEEvent> = {}): SSEEvent {
     document_id: 'document-123',
     origin_session_id: 'session-123',
     adapter_keys: ['gene'],
+    extraction_result_ids: ['extract-1'],
+    extraction_result_refs: [{
+      result_ref: 'extraction-result:extract-1',
+      extraction_result_id: 'extract-1',
+      adapter_key: 'gene',
+    }],
+    review_session_ids: ['curation-session-1'],
     status: 'completed',
     total_evidence_records: 4,
     ...overrides,
@@ -150,25 +157,70 @@ describe('CurationFlows', () => {
           flowRunId: 'flow-run-123',
           originSessionId: 'session-123',
           adapterKeys: ['gene'],
+          sessionId: 'curation-session-1',
           navigate: expect.any(Function),
         }),
       )
     })
   })
 
-  it('does not infer missing curation scope from ambient component state', async () => {
-    renderComponent([
-      completedRunEvent({
-        document_id: undefined,
-        origin_session_id: undefined,
-      }),
-    ])
+  it('disables review when the authoritative completion contains zero sessions', async () => {
+    renderComponent([completedRunEvent({ review_session_ids: [] })])
+
+    const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
+    expect(reviewButton).toBeDisabled()
+    expect(screen.getByText(/completed without prepared review sessions/i)).toBeInTheDocument()
+  })
+
+  it('preserves extraction identities and offers each authoritative session for multi-adapter runs', async () => {
+    const user = userEvent.setup()
+    const extractionResultRefs = [
+      { result_ref: 'extraction-result:extract-gene', extraction_result_id: 'extract-gene', adapter_key: 'gene' },
+      { result_ref: 'extraction-result:extract-allele', extraction_result_id: 'extract-allele', adapter_key: 'allele' },
+    ]
+
+    renderComponent([completedRunEvent({
+      adapter_keys: ['gene', 'allele'],
+      extraction_result_ids: ['extract-gene', 'extract-allele'],
+      extraction_result_refs: extractionResultRefs,
+      review_session_ids: ['review-gene', 'review-allele'],
+    })])
+
+    await user.click(await screen.findByRole('button', { name: /Review & Curate/i }))
+    expect(await screen.findByRole('button', { name: /gene — review-gene/i })).toBeInTheDocument()
+    const alleleChoice = screen.getByRole('button', { name: /allele — review-allele/i })
+    await user.click(alleleChoice)
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'review-allele' }),
+      )
+    })
+    expect(mapFlowFinishedEvent(completedRunEvent({
+      extraction_result_ids: ['extract-gene', 'extract-allele'],
+      extraction_result_refs: extractionResultRefs,
+      review_session_ids: ['review-gene', 'review-allele'],
+    }), 'session-123')).toEqual(expect.objectContaining({
+      extractionResultIds: ['extract-gene', 'extract-allele'],
+      extractionResultRefs,
+      reviewSessionIds: ['review-gene', 'review-allele'],
+    }))
+  })
+
+  it('does not reconstruct a review session when authoritative IDs are missing', async () => {
+    const incompleteEvent = completedRunEvent({
+      document_id: undefined,
+      origin_session_id: undefined,
+    })
+    delete incompleteEvent.review_session_ids
+    renderComponent([incompleteEvent])
 
     const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
     expect(reviewButton).toBeDisabled()
     expect(
-      screen.getByText(/does not have enough document scope metadata/i),
+      screen.getByText(/completed without prepared review sessions/i),
     ).toBeInTheDocument()
+    expect(openCurationWorkspaceMock).not.toHaveBeenCalled()
   })
 
   it('downloads evidence export from the flow evidence endpoint', async () => {

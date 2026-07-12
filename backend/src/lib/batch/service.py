@@ -10,6 +10,11 @@ from sqlalchemy.orm import Session, selectinload
 from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.pdf_document import PDFDocument
+from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+from src.lib.curation_workspace.models import (
+    CurationExtractionResultRecord,
+    CurationReviewSession,
+)
 from src.schemas.batch import BatchResponse, BatchDocumentResponse
 from .status import (
     require_batch_document_status_transition,
@@ -478,6 +483,7 @@ class BatchService:
         # Build document responses with titles
         document_responses = []
         for d in batch.documents:
+            handoff_metadata = self.get_document_handoff_metadata(batch, d)
             doc_dict = {
                 "id": d.id,
                 "document_id": d.document_id,
@@ -486,6 +492,7 @@ class BatchService:
                 "status": d.status,
                 "result_file_path": d.result_file_path,
                 "review_session_ids": getattr(d, "review_session_ids", None),
+                **handoff_metadata,
                 "error_message": d.error_message,
                 "processing_time_ms": d.processing_time_ms,
                 "processed_at": d.processed_at,
@@ -505,3 +512,90 @@ class BatchService:
             completed_at=batch.completed_at,
             documents=document_responses,
         )
+
+    def get_document_handoff_metadata(
+        self,
+        batch: Batch,
+        document: BatchDocument,
+    ) -> dict[str, object]:
+        """Return authoritative curation identities for one persisted batch result."""
+
+        if document.status != BatchDocumentStatus.COMPLETED:
+            return {
+                "adapter_keys": [],
+                "extraction_result_ids": [],
+                "extraction_result_refs": [],
+                "flow_run_id": str(batch.id),
+                "origin_session_id": None,
+            }
+
+        review_session_ids = list(document.review_session_ids or [])
+        try:
+            session_ids = [UUID(session_id) for session_id in review_session_ids]
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError(
+                f"Batch document {document.id} has an invalid authoritative review-session ID"
+            ) from exc
+
+        sessions_by_id: dict[UUID, CurationReviewSession] = {}
+        if session_ids:
+            sessions_by_id = {
+                session.id: session
+                for session in self.db.scalars(
+                    select(CurationReviewSession).where(CurationReviewSession.id.in_(session_ids))
+                ).all()
+            }
+            missing_session_ids = [
+                str(session_id) for session_id in session_ids if session_id not in sessions_by_id
+            ]
+            if missing_session_ids:
+                raise ValueError(
+                    f"Batch document {document.id} references missing authoritative review "
+                    f"sessions: {', '.join(missing_session_ids)}"
+                )
+
+        extraction_results = list(
+            self.db.scalars(
+                select(CurationExtractionResultRecord)
+                .where(
+                    CurationExtractionResultRecord.document_id == document.document_id,
+                    CurationExtractionResultRecord.flow_run_id == str(batch.id),
+                    CurationExtractionResultRecord.agent_key != CURATION_PREP_AGENT_ID,
+                )
+                .order_by(
+                    CurationExtractionResultRecord.created_at.asc(),
+                    CurationExtractionResultRecord.id.asc(),
+                )
+            ).all()
+        )
+        extraction_result_refs = [
+            {
+                "result_ref": f"extraction-result:{record.id}",
+                "extraction_result_id": str(record.id),
+                "adapter_key": record.adapter_key,
+                "agent_key": record.agent_key,
+                "candidate_count": record.candidate_count,
+                "trace_id": record.trace_id,
+            }
+            for record in extraction_results
+        ]
+
+        return {
+            "adapter_keys": [
+                sessions_by_id[session_id].adapter_key
+                for session_id in session_ids
+            ],
+            "extraction_result_ids": [
+                ref["extraction_result_id"] for ref in extraction_result_refs
+            ],
+            "extraction_result_refs": extraction_result_refs,
+            "flow_run_id": str(batch.id),
+            "origin_session_id": next(
+                (
+                    record.origin_session_id
+                    for record in extraction_results
+                    if record.origin_session_id
+                ),
+                None,
+            ),
+        }
