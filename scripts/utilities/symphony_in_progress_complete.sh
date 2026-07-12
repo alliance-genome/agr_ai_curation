@@ -21,6 +21,8 @@ Behavior:
   - Verifies required repo hooks exist and are executable.
   - Verifies the current branch has an upstream and local HEAD is synchronized
     with that upstream.
+  - Requires a completed `### Test Plan` in the implementer's Review Handoff,
+    including behavior, focused tests, and the broader-local-coverage decision.
   - Writes or updates the `Review Handoff` workpad section.
   - Moves the issue from `In Progress` to `Needs Review` only after the guard
     passes. If the guard fails, it records exact repair context in the handoff
@@ -211,12 +213,36 @@ if [[ "${section_stdin}" -eq 1 ]]; then
 fi
 
 handoff_input_status="missing"
+test_plan_status="missing"
+test_plan_issue="Add a completed ### Test Plan with Behavior proved, Focused tests, and Broader local coverage entries."
 if [[ -n "${section_file}" ]]; then
   if [[ ! -f "${section_file}" ]]; then
     echo "Review Handoff section file does not exist: ${section_file}" >&2
     exit 2
   fi
   handoff_input_status="provided"
+
+  test_plan_body="$(awk '
+    /^### Test Plan[[:space:]]*$/ {in_plan=1; next}
+    in_plan && /^#{1,3} / {exit}
+    in_plan {print}
+  ' "${section_file}")"
+  behavior_value="$(sed -n 's/^[[:space:]]*-[[:space:]]*Behavior proved:[[:space:]]*//p' <<< "${test_plan_body}" | head -n 1)"
+  focused_tests_value="$(sed -n 's/^[[:space:]]*-[[:space:]]*Focused tests:[[:space:]]*//p' <<< "${test_plan_body}" | head -n 1)"
+  broader_coverage_value="$(sed -n 's/^[[:space:]]*-[[:space:]]*Broader local coverage:[[:space:]]*//p' <<< "${test_plan_body}" | head -n 1)"
+
+  if [[ -n "${test_plan_body}" && -n "${behavior_value}" && -n "${focused_tests_value}" && -n "${broader_coverage_value}" ]]; then
+    combined_test_plan="${behavior_value} ${focused_tests_value} ${broader_coverage_value}"
+    if ! grep -Eiq '(^|[^[:alnum:]])(tbd|todo|placeholder|fill[[:space:]-]*in)([^[:alnum:]]|$)' <<< "${combined_test_plan}"; then
+      test_plan_status="complete"
+      test_plan_issue=""
+    else
+      test_plan_status="placeholder"
+      test_plan_issue="Replace Test Plan placeholder text with the actual behavior, focused test commands or nodes, and broader-local-coverage decision."
+    fi
+  elif [[ -n "${test_plan_body}" ]]; then
+    test_plan_status="incomplete"
+  fi
 fi
 
 if [[ ! -d "${workspace_dir}" ]]; then
@@ -381,6 +407,10 @@ elif [[ "${handoff_input_status}" != "provided" ]]; then
   completion_status="blocked"
   target_state="In Progress"
   reason="missing_review_handoff_input"
+elif [[ "${test_plan_status}" != "complete" ]]; then
+  completion_status="blocked"
+  target_state="In Progress"
+  reason="test_plan_${test_plan_status}"
 fi
 
 completion_time="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -406,6 +436,7 @@ assembled_section_file="$(mktemp "${TMPDIR:-/tmp}/symphony-in-progress-complete-
   printf '%s\n' "- Upstream refresh: ${upstream_refresh_status}"
   printf '%s\n' "- Push status: ${push_status} (ahead=${ahead_count}, behind=${behind_count})"
   printf '%s\n' "- Review Handoff input: ${handoff_input_status}"
+  printf '%s\n' "- Test Plan: ${test_plan_status}"
   printf '%s\n' "- Next state: \`${target_state}\`"
   if [[ "${workspace_status}" == "dirty" ]]; then
     printf '%s\n' "- Dirty workspace entries:"
@@ -420,6 +451,9 @@ assembled_section_file="$(mktemp "${TMPDIR:-/tmp}/symphony-in-progress-complete-
   fi
   if [[ "${handoff_input_status}" != "provided" ]]; then
     printf '%s\n' "- Missing handoff issue: provide the implementation summary, files changed, validation, and reviewer focus via \`--section-file\` or \`--section-stdin\`."
+  fi
+  if [[ "${handoff_input_status}" == "provided" && "${test_plan_status}" != "complete" ]]; then
+    printf '%s\n' "- Test Plan issue: ${test_plan_issue}"
   fi
   if [[ "${completion_status}" == "blocked" ]]; then
     printf '%s\n' "- Next: repair the guard failure, rerun validation if needed, then rerun \`symphony_in_progress_complete.sh\`."

@@ -402,6 +402,7 @@ EOF
 
 classify_claude_report() {
   local report_file="$1"
+  local github_check_status="${2:-unknown}"
 
   if [[ ! -s "${report_file}" ]]; then
     echo "PR_FEEDBACK_CLASSIFIER_STATUS=error"
@@ -415,7 +416,15 @@ classify_claude_report() {
     return 2
   fi
 
-  bash "${FEEDBACK_CLASSIFIER_HELPER}" --report-file "${report_file}"
+  local -a classifier_cmd=(
+    bash "${FEEDBACK_CLASSIFIER_HELPER}"
+    --report-file "${report_file}"
+    --github-check-status "${github_check_status}"
+  )
+  if [[ -n "${disposition_file}" ]]; then
+    classifier_cmd+=(--disposition-file "${disposition_file}")
+  fi
+  "${classifier_cmd[@]}"
 }
 
 analyze_check_rollup() {
@@ -755,7 +764,7 @@ INST
         echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
 
         set +e
-        claude_classifier_output="$(classify_claude_report "${CLAUDE_REPORT_FILE}" 2>&1)"
+        claude_classifier_output="$(classify_claude_report "${CLAUDE_REPORT_FILE}" "clean" 2>&1)"
         claude_classifier_rc=$?
         set -e
         if [[ -n "${claude_classifier_output}" ]]; then
@@ -765,7 +774,7 @@ INST
         if (( claude_classifier_rc == 0 )); then
           echo "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce"
           cat <<INST
-READY_FOR_PR_INSTRUCTIONS=Claude Code left a clean approval/LGTM on PR #${pr_num}. GitHub checks are clean; write PR Handoff, move to Human Review Prep, and stop this run.
+READY_FOR_PR_INSTRUCTIONS=Claude Code left a clean approval/LGTM, only CI-gate caveats, or fully dispositioned feedback on PR #${pr_num}. GitHub checks are clean; write PR Handoff, move to Human Review Prep, and stop this run.
 INST
           return 0
         fi

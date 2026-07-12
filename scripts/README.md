@@ -42,6 +42,8 @@ scripts/
     ├── symphony_ensure_git_safety_tools.sh # Ensure Gitleaks + TruffleHog are installed in the Symphony VM user environment
     ├── symphony_git_safety_tool_versions.sh # Shared pinned versions/checksums for VM git safety scanners
     ├── symphony_install_vm_shell_shortcuts.sh # Install/update the managed ~/.bash_aliases block for Symphony VM Codex shortcuts
+    ├── symphony_backend_test.sh # Serialize backend Compose tests per Symphony workspace
+    ├── symphony_linear_issue_state.sh # Validate and apply Symphony lane transitions in Linear
     ├── symphony_materialize_linear_auth.sh # Materialize low-risk Linear helper files inside the Symphony VM user home
     ├── symphony_prod_loki_status.sh     # VM-safe status probe for the host-owned production Loki read-only endpoint
     ├── symphony_prod_loki_query.sh      # VM-safe helper for focused production Loki log searches
@@ -327,6 +329,82 @@ unexpected branch, it records the exact blocker context and moves the issue to
   --issue-identifier ALL-49 \
   --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
 ```
+
+### utilities/symphony_linear_issue_state.sh
+
+Canonical Linear state mutation helper for Symphony lanes. It validates the
+issue's actual current state and rejects edges outside the repository workflow
+graph before sending a mutation to Linear. Same-state calls are successful
+no-op preflight checks. `--allow-any-from-state` skips only the caller's
+optimistic `--from-state` assertion; it never bypasses the workflow graph.
+Immediately before mutation, the helper refreshes Linear's current state and
+aborts without mutation if another actor changed it after validation.
+
+Routine lane helpers should always use a documented graph edge:
+
+```bash
+./scripts/utilities/symphony_linear_issue_state.sh \
+  --issue-identifier ALL-49 \
+  --state "Needs Review" \
+  --from-state "In Progress"
+```
+
+Administrative or emergency recovery outside the graph is explicit and
+auditable. The override flag requires a human-readable reason, emits a warning,
+and records the reason in the helper's machine-readable output:
+
+```bash
+./scripts/utilities/symphony_linear_issue_state.sh \
+  --issue-identifier ALL-49 \
+  --state "Canceled" \
+  --allow-any-from-state \
+  --allow-workflow-override \
+  --override-reason "Coordinator canceled obsolete work after reconciliation"
+```
+
+Run `./scripts/utilities/symphony_linear_issue_state.sh --help` for the complete
+transition graph, output contract, and exit codes.
+
+### utilities/symphony_backend_test.sh
+
+Canonical backend-test entry point for Symphony issue workspaces. It holds a
+`flock` for the real workspace path and another for the derived Docker
+daemon/Compose project, then delegates to
+`scripts/testing/docker-test-compose.sh`, so concurrent unit, contract,
+integration, persistence, and full-suite commands cannot collide on the same
+Compose resources.
+
+```bash
+bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests
+```
+
+Cleanup is deliberately opt-in. When the helper recognizes a stale Compose
+container/network collision, rerun with `--repair-known-collision` only after
+confirming no raw Compose command is active in that workspace. The repair runs
+`down --remove-orphans` and uses the bounded retry count documented in
+`.env.example`; unrelated test failures never trigger cleanup.
+`--rootful` and `--rootless` are preserved during repair. Custom Compose
+project/file/env/profile selectors are rejected so a repair cannot target a
+different stack than the failed command.
+
+### utilities/symphony_classify_pr_feedback.sh
+
+Semantic classifier for Claude Code PR reports. The Ready for PR helper passes
+the deterministic GitHub check status and, when present, the current feedback
+disposition file. Pure CI/check-gate caveats are clean only after the check gate
+is clean; real repository work remains actionable. Prior dispositions can
+prevent repeated bounces only when they clearly match the current finding as
+already resolved, factually wrong, explicitly out of scope, or
+regression-causing.
+
+### utilities/symphony_trace_lane_flow_export.py
+
+Reconstructs weekly lane flow from durable trace events without inferring state
+changes from agent prose. Script-only lanes emit structured
+`symphony/scripted_lane/started`, `completed`, and `failed` events with the
+helper, exit status, bounded output, and parsed transition. The exporter also
+retains compatibility with older completion events that contain only raw
+machine-readable helper output.
 
 ### utilities/symphony_in_progress_complete.sh
 
