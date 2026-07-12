@@ -16,6 +16,10 @@ _SUCCESS_OUTPUT_EVENT_PRIORITY = {
 }
 
 
+class FlowRunOutcomeNotDurableError(RuntimeError):
+    """Signal that no terminal event may publish for the failed outcome."""
+
+
 @dataclass
 class FlowRunOutcome:
     """Reduce runtime events to the one durable, user-visible flow outcome.

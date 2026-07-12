@@ -331,6 +331,45 @@ async def test_failed_terminal_run_replays_without_restart_for_same_run_id(monke
 
 
 @pytest.mark.asyncio
+async def test_none_terminal_error_event_suppresses_publish_but_marks_run_failed(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_event_replay_limit",
+        lambda: 10,
+    )
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_retention_seconds",
+        lambda: 60,
+    )
+
+    manager = ExecutableRunManager()
+
+    async def stream_factory():
+        raise RuntimeError("non-durable producer failure")
+        yield 'data: {"type":"unreachable"}\n\n'
+
+    run, created = await manager.get_or_start_stream(
+        run_id="curation_flow_run:session-1:turn-2",
+        kind="curation_flow_run",
+        owner_user_id="user-1",
+        session_id="session-1",
+        turn_id="turn-2",
+        stream_factory=stream_factory,
+        terminal_error_event_factory=lambda _exc: None,
+    )
+
+    assert created is True
+    observer = manager.observe(run)
+    if run.task is not None:
+        await asyncio.wait_for(run.task, timeout=1)
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(observer.__anext__(), timeout=1)
+
+    assert run.status == "failed"
+    assert run.events == []
+
+
+@pytest.mark.asyncio
 async def test_terminal_error_event_factory_failure_is_reported(monkeypatch, caplog):
     monkeypatch.setattr(
         "src.lib.executable_runs.get_executable_run_event_replay_limit",

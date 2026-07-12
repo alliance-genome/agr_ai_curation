@@ -1701,6 +1701,114 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     assert calls["clear"] == ["session-completion-persistence-failure"] * 2
 
 
+def test_execute_flow_endpoint_suppresses_terminal_sse_when_failure_cannot_persist(
+    monkeypatch,
+    caplog,
+):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-double-persistence-failure",
+        turn_id="turn-double-persistence-failure",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Double Persistence Failure Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-double-failure"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"output": "This stale output must never become final."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "completed",
+                "flow_run_id": "flow-run-double-failure",
+            },
+        }
+
+    persistence_attempts = 0
+
+    def _fail_all_completion_persistence(**_kwargs):
+        nonlocal persistence_attempts
+        persistence_attempts += 1
+        raise RuntimeError(f"completion transcript write {persistence_attempts} failed")
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(
+        monkeypatch,
+        "_persist_completed_execute_flow_turn",
+        _fail_all_completion_persistence,
+    )
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
+
+    async def _execute_and_consume():
+        response = await chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+        return await _consume_stream(response)
+
+    events = asyncio.run(_execute_and_consume())
+
+    assert [event["type"] for event in events] == ["RUN_STARTED"]
+    assert "stale output" not in json.dumps(events).lower()
+    assert persistence_attempts == 2
+    repository = calls["repository"]
+    assert isinstance(repository, _FakeChatHistoryRepository)
+    turn_messages = repository.list_messages_for_turn(
+        session_id=request.session_id,
+        user_auth_sub="auth-sub",
+        chat_kind=chat.ASSISTANT_CHAT_KIND,
+        turn_id=request.turn_id,
+    )
+    assert [message.role for message in turn_messages] == ["user"]
+    assert all(
+        message.message_type != chat.FLOW_SUMMARY_MESSAGE_TYPE
+        for message in turn_messages
+    )
+    assert all(
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+        not in (message.payload_json or {})
+        for message in turn_messages
+    )
+    assert all(
+        chat._FLOW_TRANSCRIPT_REPLAY_RUN_STARTED_KEY
+        not in (message.payload_json or {})
+        for message in turn_messages
+    )
+    assert all(
+        chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY
+        not in (message.payload_json or {})
+        for message in turn_messages
+    )
+    run_id = f"curation_flow_run:{request.session_id}:{request.turn_id}"
+    executable_run = chat.executable_run_manager._runs[run_id]
+    assert executable_run.status == "failed"
+    assert all("RUN_ERROR" not in event for event in executable_run.events)
+    assert "completion transcript write 1 failed" in caplog.text
+    assert "completion transcript write 2 failed" in caplog.text
+
+    retry_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    assert asyncio.run(_consume_stream(retry_response)) == events
+    assert persistence_attempts == 2
+
+
 def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-owned-elsewhere")

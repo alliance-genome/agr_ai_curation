@@ -28,7 +28,7 @@ from src.lib.executable_runs import (
 )
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
-from src.lib.flows.outcome import FlowRunOutcome
+from src.lib.flows.outcome import FlowRunOutcome, FlowRunOutcomeNotDurableError
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -1267,7 +1267,9 @@ async def execute_flow_endpoint(
                     },
                     exc_info=True,
                 )
-                raise
+                raise FlowRunOutcomeNotDurableError(
+                    "Flow terminal outcome could not be persisted."
+                ) from recovery_exc
 
             outcome.mark_persisted(transcript=True, recovered_failure=True)
             for terminal_event in outcome.publishable_terminal_events():
@@ -1277,7 +1279,9 @@ async def execute_flow_endpoint(
 
     run_id = f"curation_flow_run:{request.session_id}:{prepared_turn.turn_id}"
 
-    def terminal_error_event(exc: Exception) -> str:
+    def terminal_error_event(exc: Exception) -> str | None:
+        if isinstance(exc, FlowRunOutcomeNotDurableError):
+            return None
         detail = getattr(exc, "detail", None)
         message = str(detail or exc or "Flow execution failed to start.")
         return _stream_event_sse(

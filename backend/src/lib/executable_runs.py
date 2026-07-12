@@ -90,7 +90,7 @@ class ExecutableRun:
     subscribers: set[asyncio.Queue[str | None]] = field(default_factory=set)
     task: asyncio.Task[None] | None = None
     terminal_monotonic: float | None = None
-    terminal_error_event_factory: Callable[[Exception], str] | None = None
+    terminal_error_event_factory: Callable[[Exception], str | None] | None = None
     outcome_status: Literal["completed", "failed"] | None = None
 
     def snapshot(self) -> ExecutableRunSnapshot:
@@ -138,7 +138,7 @@ class ExecutableRunManager:
         batch_id: str | None = None,
         job_id: str | None = None,
         can_cancel: bool = True,
-        terminal_error_event_factory: Callable[[Exception], str] | None = None,
+        terminal_error_event_factory: Callable[[Exception], str | None] | None = None,
     ) -> tuple[ExecutableRun, bool]:
         await self._prune_expired_terminal_runs()
 
@@ -282,7 +282,9 @@ class ExecutableRunManager:
             )
             if run.terminal_error_event_factory is not None:
                 try:
-                    await self._publish(run, run.terminal_error_event_factory(exc))
+                    terminal_event = run.terminal_error_event_factory(exc)
+                    if terminal_event is not None:
+                        await self._publish(run, terminal_event)
                 except Exception as terminal_exc:
                     terminal_exc.__context__ = None
                     report_runtime_exception(
