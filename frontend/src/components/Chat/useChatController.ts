@@ -1114,10 +1114,12 @@ export function useChatController({
       const detail = customEvent.detail || {}
       debug.log('[Chat] Event detail:', detail)
 
+      if (!isActive || !operation.ownsLatest()) {
+        return
+      }
+      setIsUnloadingPDF(false)
+
       if (detail?.active && detail.document) {
-        if (!isActive || !operation.ownsLatest()) {
-          return
-        }
         debug.log('[Chat] Setting active document:', detail.document.filename || detail.document.id)
         setActiveDocument(detail.document)
 
@@ -1177,9 +1179,6 @@ export function useChatController({
           }
         }
       } else {
-        if (!isActive || !operation.ownsLatest()) {
-          return
-        }
         debug.log('[Chat] Clearing active document')
         setActiveDocument(null)
         clearStoredActiveDocument()
@@ -1513,8 +1512,8 @@ export function useChatController({
       return
     }
 
-    setIsUnloadingPDF(true)
     const operation = documentIntentRef.current.begin()
+    setIsUnloadingPDF(true)
     try {
       const response = await fetch('/api/chat/document', {
         method: 'DELETE',
@@ -1525,7 +1524,11 @@ export function useChatController({
         },
       })
 
-      if (response.ok && operation.ownsLatest()) {
+      if (!operation.ownsLatest()) {
+        return
+      }
+
+      if (response.ok) {
         debug.log('PDF unloaded successfully')
 
         // Clear from local state
@@ -1547,10 +1550,15 @@ export function useChatController({
         alert('Failed to unload PDF. Please try again.')
       }
     } catch (error) {
+      if (!operation.ownsLatest()) {
+        return
+      }
       console.error('Error unloading PDF:', error)
       alert('An error occurred while unloading the PDF.')
     } finally {
-      setIsUnloadingPDF(false)
+      if (operation.ownsLatest()) {
+        setIsUnloadingPDF(false)
+      }
     }
   }
 
