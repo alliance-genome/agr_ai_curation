@@ -101,6 +101,27 @@ worktree_dirty() {
   [[ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null || true)" ]]
 }
 
+ensure_issue_fetch_refspec() {
+  local refspec="+refs/heads/${target_branch}:refs/remotes/origin/${target_branch}"
+  local configured_refspec
+
+  if ! git remote get-url origin >/dev/null 2>&1; then
+    return 0
+  fi
+
+  while IFS= read -r configured_refspec; do
+    case "${configured_refspec}" in
+      "+refs/heads/*:refs/remotes/origin/*"|"refs/heads/*:refs/remotes/origin/*"|"${refspec}"|"${refspec#+}")
+        return 0
+        ;;
+    esac
+  done < <(git config --get-all remote.origin.fetch || true)
+
+  if ! git config --add remote.origin.fetch "${refspec}"; then
+    echo "Warning: could not register the issue-branch fetch refspec: ${refspec}" >&2
+  fi
+}
+
 if [[ -z "${target_branch}" ]]; then
   if ! target_branch="$(derive_branch_name "${issue_identifier}")"; then
     echo "Could not derive a valid branch name from issue identifier: ${issue_identifier}" >&2
@@ -116,6 +137,9 @@ if [[ -z "${current_branch}" ]]; then
 fi
 
 if [[ "${current_branch}" == "${target_branch}" ]]; then
+  if [[ "${dry_run}" -eq 0 ]]; then
+    ensure_issue_fetch_refspec
+  fi
   emit_result "already_on_target" "${target_branch}" "${current_branch}" \
     "Already on issue branch ${target_branch}."
   exit 0
@@ -135,6 +159,7 @@ if git show-ref --verify --quiet "refs/heads/${target_branch}"; then
   fi
 
   git switch "${target_branch}" >/dev/null 2>&1
+  ensure_issue_fetch_refspec
   emit_result "switched" "${target_branch}" "${current_branch}" \
     "Switched from ${current_branch} to existing issue branch ${target_branch}."
   exit 0
@@ -147,6 +172,7 @@ if git show-ref --verify --quiet "refs/remotes/origin/${target_branch}"; then
     exit 0
   fi
 
+  ensure_issue_fetch_refspec
   git switch --track -c "${target_branch}" "origin/${target_branch}" >/dev/null 2>&1
   emit_result "switched_remote" "${target_branch}" "${current_branch}" \
     "Created local issue branch ${target_branch} from origin/${target_branch}."
@@ -160,6 +186,7 @@ if git ls-remote --exit-code --heads origin "${target_branch}" >/dev/null 2>&1; 
     exit 0
   fi
 
+  ensure_issue_fetch_refspec
   git fetch origin "refs/heads/${target_branch}:refs/remotes/origin/${target_branch}" >/dev/null 2>&1
   git switch -c "${target_branch}" "origin/${target_branch}" >/dev/null 2>&1
   git branch --set-upstream-to="origin/${target_branch}" "${target_branch}" >/dev/null 2>&1 || true
@@ -181,5 +208,6 @@ if [[ "${dry_run}" -eq 1 ]]; then
 fi
 
 git switch -c "${target_branch}" >/dev/null 2>&1
+ensure_issue_fetch_refspec
 emit_result "created" "${target_branch}" "${current_branch}" \
   "Created issue branch ${target_branch} from ${current_branch}."

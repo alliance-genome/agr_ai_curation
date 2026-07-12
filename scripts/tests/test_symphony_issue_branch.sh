@@ -16,6 +16,17 @@ assert_contains() {
   fi
 }
 
+assert_issue_fetch_refspec() {
+  local repo_dir="$1"
+  local branch_name="$2"
+  local expected="+refs/heads/${branch_name}:refs/remotes/origin/${branch_name}"
+
+  git -C "${repo_dir}" config --get-all remote.origin.fetch | grep -Fqx -- "${expected}" || {
+    echo "Expected remote.origin.fetch to contain ${expected}" >&2
+    exit 1
+  }
+}
+
 make_repo() {
   local repo_dir="$1"
 
@@ -205,6 +216,53 @@ test_switches_to_remote_only_issue_branch_from_depth_one_main_clone() {
     echo "Expected current branch to be all-126, got ${current_branch}" >&2
     exit 1
   }
+  assert_issue_fetch_refspec "${repo_dir}" "all-126"
+  [[ "$(git -C "${repo_dir}" rev-parse '@{upstream}')" == "$(git -C "${repo_dir}" rev-parse HEAD)" ]] || {
+    echo "Expected the fetched issue branch to resolve through @{upstream}" >&2
+    exit 1
+  }
+}
+
+test_new_issue_branch_from_depth_one_clone_tracks_after_push() {
+  local temp_dir remote_dir source_dir repo_dir output upstream fetch_refspec_count
+  temp_dir="$(mktemp -d)"
+  remote_dir="${temp_dir}/remote.git"
+  source_dir="${temp_dir}/source"
+  repo_dir="${temp_dir}/repo"
+
+  make_bare_remote "${remote_dir}"
+  make_repo "${source_dir}"
+  git -C "${source_dir}" remote add origin "${remote_dir}"
+  git -C "${source_dir}" push -u origin main >/dev/null
+  git clone --depth 1 --branch main "file://${remote_dir}" "${repo_dir}" >/dev/null
+
+  output="$(
+    cd "${repo_dir}" &&
+      bash "${SCRIPT_PATH}" --issue-identifier ALL-126
+  )"
+  assert_contains "ISSUE_BRANCH_STATUS=created" "${output}"
+  assert_issue_fetch_refspec "${repo_dir}" "all-126"
+
+  git -C "${repo_dir}" push -u origin all-126 >/dev/null
+  upstream="$(git -C "${repo_dir}" rev-parse '@{upstream}')"
+  [[ "${upstream}" == "$(git -C "${repo_dir}" rev-parse HEAD)" ]] || {
+    echo "Expected a newly pushed issue branch to resolve through @{upstream}" >&2
+    exit 1
+  }
+
+  output="$(
+    cd "${repo_dir}" &&
+      bash "${SCRIPT_PATH}" --issue-identifier ALL-126
+  )"
+  assert_contains "ISSUE_BRANCH_STATUS=already_on_target" "${output}"
+  fetch_refspec_count="$(
+    git -C "${repo_dir}" config --get-all remote.origin.fetch |
+      grep -Fxc -- '+refs/heads/all-126:refs/remotes/origin/all-126'
+  )"
+  [[ "${fetch_refspec_count}" == "1" ]] || {
+    echo "Expected one issue-branch fetch refspec, got ${fetch_refspec_count}" >&2
+    exit 1
+  }
 }
 
 test_detached_head_is_blocked_when_issue_branch_missing() {
@@ -245,6 +303,7 @@ test_unexpected_existing_branch_is_blocked
 test_dirty_base_branch_is_blocked
 test_switches_to_remote_only_issue_branch
 test_switches_to_remote_only_issue_branch_from_depth_one_main_clone
+test_new_issue_branch_from_depth_one_clone_tracks_after_push
 test_detached_head_is_blocked_when_issue_branch_missing
 
 echo "symphony_issue_branch tests passed"
