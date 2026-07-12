@@ -399,12 +399,46 @@ def _extraction_record(
 
 
 @contextmanager
-def _patched_handoff_execute_flow(adapter_keys: list[str]):
+def _patched_handoff_execute_flow(
+    adapter_keys: list[str],
+    *,
+    failure_boundary: str | None = None,
+):
     from src.lib.flows.executor import execute_flow as original_execute_flow
-    from src.lib.flows.executor import _persist_flow_extraction_candidates
-    from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
     from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
     from src.models.sql.database import SessionLocal
+    import src.lib.curation_workspace.bootstrap_service as bootstrap_service
+    import src.lib.flows.executor as executor
+
+    original_persist = executor.persist_idempotent_extraction_results
+    original_materialize = executor.ensure_domain_envelope_materialization
+    original_prep = bootstrap_service.run_curation_prep
+    original_bootstrap = bootstrap_service.bootstrap_document_session
+
+    def _raise_after(boundary: str, result):
+        if failure_boundary == boundary:
+            raise RuntimeError(f"injected {boundary} failure")
+        return result
+
+    def _persist_with_fault(requests, *, db=None):
+        return _raise_after("canonical_insert", original_persist(requests, db=db))
+
+    def _materialize_with_fault(record, *, persist, db=None):
+        return _raise_after(
+            "materialization",
+            original_materialize(record, persist=persist, db=db),
+        )
+
+    async def _prep_with_fault(*args, **kwargs):
+        return _raise_after("prep", await original_prep(*args, **kwargs))
+
+    async def _bootstrap_with_fault(*args, **kwargs):
+        return _raise_after("review_session", await original_bootstrap(*args, **kwargs))
+
+    executor.persist_idempotent_extraction_results = _persist_with_fault
+    executor.ensure_domain_envelope_materialization = _materialize_with_fault
+    bootstrap_service.run_curation_prep = _prep_with_fault
+    bootstrap_service.bootstrap_document_session = _bootstrap_with_fault
 
     async def _fake_execute_flow(**kwargs):
         document_id = kwargs["document_id"]
@@ -433,8 +467,12 @@ def _patched_handoff_execute_flow(adapter_keys: list[str]):
             for record in extraction_fixtures
         ]
         handoff_db = SessionLocal()
+        if failure_boundary == "final_commit":
+            handoff_db.commit = lambda: (_ for _ in ()).throw(
+                RuntimeError("injected final_commit failure")
+            )
         try:
-            extraction_results = _persist_flow_extraction_candidates(
+            extraction_results = executor._persist_flow_extraction_candidates(
                 candidates=candidates,
                 document_id=document_id,
                 user_id=user_id,
@@ -443,7 +481,7 @@ def _patched_handoff_execute_flow(adapter_keys: list[str]):
                 flow_run_id=flow_run_id,
                 db=handoff_db,
             )
-            handoff = await run_flow_curation_handoff(
+            handoff = await bootstrap_service.run_flow_curation_handoff(
                 extraction_results=extraction_results,
                 document_id=document_id,
                 runner_user_id=user_id,
@@ -471,13 +509,15 @@ def _patched_handoff_execute_flow(adapter_keys: list[str]):
             },
         }
 
-    import src.lib.flows.executor as executor
-
     executor.execute_flow = _fake_execute_flow
     try:
         yield
     finally:
         executor.execute_flow = original_execute_flow
+        executor.persist_idempotent_extraction_results = original_persist
+        executor.ensure_domain_envelope_materialization = original_materialize
+        bootstrap_service.run_curation_prep = original_prep
+        bootstrap_service.bootstrap_document_session = original_bootstrap
 
 
 @contextmanager
@@ -638,7 +678,14 @@ def test_multi_adapter_flow_creates_one_session_per_adapter(handoff_db):
 
 async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
     from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
+    from src.lib.curation_workspace.domain_envelope_normalization import (
+        domain_envelope_from_extraction_result,
+    )
     from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
+    from src.lib.curation_workspace.models import (
+        CurationExtractionResultRecord,
+        DomainEnvelopeModel,
+    )
     from src.lib.flows.executor import _persist_flow_extraction_candidates
 
     suffix = uuid4().hex[:10]
@@ -655,10 +702,16 @@ async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
         session_id=origin_session_id,
         flow_run_id=flow_run_id,
     )
+    canonical_payload = domain_envelope_from_extraction_result(fixture).model_dump(
+        mode="json"
+    )
+    assert canonical_payload["metadata"]["source_extraction_result_id"].endswith(
+        ":source"
+    )
     candidate = ExtractionEnvelopeCandidate(
         agent_key=fixture.agent_key,
         adapter_key=fixture.adapter_key,
-        payload_json=fixture.payload_json,
+        payload_json=canonical_payload,
         candidate_count=fixture.candidate_count,
         conversation_summary=fixture.conversation_summary,
         metadata=dict(fixture.metadata),
@@ -697,6 +750,55 @@ async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
     assert first_counts[1] == 1
     assert first_counts[2] == 1
     assert first_counts[3] > 0
+
+    source_row = handoff_db.scalars(
+        select(CurationExtractionResultRecord).where(
+            CurationExtractionResultRecord.document_id == document.id,
+            CurationExtractionResultRecord.agent_key == fixture.agent_key,
+        )
+    ).one()
+    envelope_row = handoff_db.scalars(
+        select(DomainEnvelopeModel).where(
+            DomainEnvelopeModel.source_extraction_result_id == str(source_row.id)
+        )
+    ).one()
+    assert "source_extraction_result_id" not in source_row.payload_json["metadata"]
+    assert envelope_row.envelope_json["metadata"][
+        "source_extraction_result_id"
+    ] == str(source_row.id)
+
+
+@pytest.mark.parametrize(
+    "failure_boundary",
+    [
+        "canonical_insert",
+        "materialization",
+        "prep",
+        "review_session",
+        "final_commit",
+    ],
+)
+def test_handoff_failure_rolls_back_all_ready_state(handoff_db, failure_boundary):
+    from src.models.sql.batch import BatchDocumentStatus
+
+    suffix = uuid4().hex[:10]
+    user = _create_user(handoff_db, suffix)
+    document = _create_document(handoff_db, user, suffix)
+    flow = _create_flow(handoff_db, user, suffix, ["gene"])
+    handoff_db.commit()
+
+    batch = _create_batch(handoff_db, user, flow, document)
+    with _patched_handoff_execute_flow(
+        ["gene"],
+        failure_boundary=failure_boundary,
+    ):
+        _run_batch(batch.id)
+
+    handoff_db.expire_all()
+    batch_doc = _batch_document(handoff_db, batch.id)
+    assert batch_doc.status == BatchDocumentStatus.FAILED
+    assert batch_doc.review_session_ids is None
+    assert _handoff_state_counts(handoff_db, document.id) == (0, 0, 0, 0)
 
 
 def test_completed_handoff_batch_is_not_rerun(handoff_db):

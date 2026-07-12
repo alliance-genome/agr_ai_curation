@@ -879,6 +879,21 @@ def _validate_flow_extraction_candidate_payload(payload: Any) -> None:
         )
 
 
+def _sanitize_flow_extraction_candidate_payload(payload: Any) -> Any:
+    """Remove untrusted row provenance until canonical persistence assigns it."""
+
+    if not isinstance(payload, Mapping) or not is_canonical_domain_envelope_payload(
+        payload
+    ):
+        return payload
+
+    sanitized_payload = dict(payload)
+    metadata = dict(sanitized_payload.get("metadata") or {})
+    metadata.pop("source_extraction_result_id", None)
+    sanitized_payload["metadata"] = metadata
+    return sanitized_payload
+
+
 def _flow_record_persistence_key(record: CurationExtractionResultRecord) -> str:
     metadata = record.metadata or {}
     explicit_key = str(metadata.get("flow_step_key") or "").strip()
@@ -3213,6 +3228,7 @@ def _persist_flow_extraction_candidates(
     requests: list[CurationExtractionPersistenceRequest] = []
     for candidate in candidates:
         _validate_flow_extraction_candidate_payload(candidate.payload_json)
+        payload_json = _sanitize_flow_extraction_candidate_payload(candidate.payload_json)
         flow_step_key = _flow_candidate_persistence_key(candidate)
         metadata = dict(candidate.metadata)
         metadata.setdefault(
@@ -3225,7 +3241,7 @@ def _persist_flow_extraction_candidates(
         )
         metadata["flow_step_key"] = flow_step_key
         adapter_key = _resolve_flow_candidate_adapter_key(candidate) or candidate.agent_key
-        payload_hash = canonical_extraction_payload_hash(candidate.payload_json)
+        payload_hash = canonical_extraction_payload_hash(payload_json)
         idempotency_key = build_flow_extraction_idempotency_key(
             document_id=document_id,
             user_id=user_id,
@@ -3254,7 +3270,7 @@ def _persist_flow_extraction_candidates(
                 user_id=user_id,
                 candidate_count=candidate.candidate_count,
                 conversation_summary=candidate.conversation_summary,
-                payload_json=candidate.payload_json,
+                payload_json=payload_json,
                 idempotency_key=idempotency_key,
                 payload_hash=payload_hash,
                 metadata=metadata,

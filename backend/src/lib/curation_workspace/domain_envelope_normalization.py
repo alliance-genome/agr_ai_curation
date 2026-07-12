@@ -25,9 +25,7 @@ def domain_envelope_from_extraction_result(
     """Return the canonical downstream DomainEnvelope for an extraction result.
 
     Pre-persistence callers can omit the persistence event so canonical payloads do
-    not claim a persistence timestamp before the authoritative row exists.
-    For example, flow candidate canonicalization passes
-    ``include_persistence_history=False`` before computing its payload hash; callers
+    not claim a persistence timestamp before the authoritative row exists. Callers
     normalizing an authoritative persisted record should keep the default.
     """
 
@@ -44,7 +42,15 @@ def domain_envelope_from_extraction_result(
         )
 
     if is_canonical_domain_envelope_payload(payload):
-        return DomainEnvelope.model_validate(payload)
+        envelope = DomainEnvelope.model_validate(payload)
+        return envelope.model_copy(
+            update={
+                "metadata": {
+                    **dict(envelope.metadata),
+                    **_authoritative_source_metadata(extraction_result),
+                }
+            }
+        )
 
     source = DomainEnvelopeExtractionResult.model_validate(payload)
     adapter_key = resolve_extraction_adapter_key(extraction_result)
@@ -60,10 +66,7 @@ def domain_envelope_from_extraction_result(
 
     metadata = {
         "semantic_source": "domain_envelope.extracted_objects",
-        "source_extraction_result_id": extraction_result.extraction_result_id,
-        "source_agent_key": extraction_result.agent_key,
-        "source_adapter_key": adapter_key,
-        "source_kind": extraction_result.source_kind.value,
+        **_authoritative_source_metadata(extraction_result),
         "extraction_summary": source.summary,
         "extraction_metadata": source.metadata.model_dump(mode="json"),
         "run_summary": source.run_summary.model_dump(mode="json"),
@@ -96,6 +99,19 @@ def domain_envelope_from_extraction_result(
         history=history,
         metadata=metadata,
     )
+
+
+def _authoritative_source_metadata(
+    extraction_result: CurationExtractionResultRecord,
+) -> dict[str, Any]:
+    """Return provenance bound to the persisted extraction row."""
+
+    return {
+        "source_extraction_result_id": str(extraction_result.extraction_result_id),
+        "source_agent_key": extraction_result.agent_key,
+        "source_adapter_key": resolve_extraction_adapter_key(extraction_result),
+        "source_kind": extraction_result.source_kind.value,
+    }
 
 
 def is_canonical_domain_envelope_payload(payload: Mapping[str, Any]) -> bool:

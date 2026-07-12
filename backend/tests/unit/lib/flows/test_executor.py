@@ -478,6 +478,9 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
             ],
             "validation_findings": [],
             "history": [],
+            "metadata": {
+                "source_extraction_result_id": "flow:session-1:step:1:extraction"
+            },
         },
         metadata={"tool_name": "ask_gene_extractor_specialist", "step": 1},
     )
@@ -493,6 +496,12 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
 
     assert len(records) == 1
     assert len(persisted_requests) == 1
+    assert (
+        persisted_requests[0].payload_json["metadata"].get(
+            "source_extraction_result_id"
+        )
+        is None
+    )
     assert materialized == [(records[0], True)]
 
 
