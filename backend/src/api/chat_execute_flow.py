@@ -28,6 +28,7 @@ from src.lib.executable_runs import (
 )
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
+from src.lib.flows.outcome import FlowRunOutcome
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -335,6 +336,17 @@ def _build_execute_flow_transcript_row_from_event(
         return ExecuteFlowTranscriptRow(
             content=content,
             message_type="file_download",
+            payload_json=dict(event_payload),
+            trace_id=trace_id,
+            created_at=created_at,
+        )
+
+    if event_type == "FLOW_ERROR":
+        failure_message = details.get("message") or details.get("error")
+        content = str(failure_message or "Flow failure diagnostic missing message metadata.")
+        return ExecuteFlowTranscriptRow(
+            content=content,
+            message_type="flow_diagnostic",
             payload_json=dict(event_payload),
             trace_id=trace_id,
             created_at=created_at,
@@ -848,10 +860,7 @@ async def execute_flow_endpoint(
         current_turn_id = prepared_turn.turn_id
         cancel_event = stream_lifecycle.cancel_event
         trace_id = None
-        flow_status: Optional[str] = None
-        flow_failure_reason: Optional[str] = None
-        run_finished_response = ""
-        chat_output_response = ""
+        outcome = FlowRunOutcome()
         agents_used: List[str] = []
         extraction_result_refs: List[Dict[str, Any]] = []
         review_session_ids: List[str] = []
@@ -860,9 +869,6 @@ async def execute_flow_endpoint(
         file_outputs: List[Dict[str, Any]] = []
         transcript_rows: List[ExecuteFlowTranscriptRow] = []
         run_started_event: Optional[Dict[str, Any]] = None
-        chat_output_ready_event: Optional[Dict[str, Any]] = None
-        run_error_event: Optional[Dict[str, Any]] = None
-        buffered_flow_finished_event: Optional[Dict[str, Any]] = None
 
         try:
             async for event in execute_flow(
@@ -922,13 +928,10 @@ async def execute_flow_endpoint(
                     )
 
                 if event_type == "RUN_FINISHED":
-                    run_finished_response = str(event_data.get("response") or "")
                     agents_used.extend([
                         str(agent_name) for agent_name in (event_data.get("agents_used") or [])
                         if agent_name
                     ])
-                elif event_type == "CHAT_OUTPUT_READY":
-                    chat_output_response = str(event_details.get("output") or event_data.get("output") or "")
                 elif event_type == "CREW_START":
                     crew_name = event_details.get("crewDisplayName") or event_details.get("crewName")
                     if crew_name:
@@ -939,8 +942,6 @@ async def execute_flow_endpoint(
                     if not _append_deduped_file_output(file_outputs, dict(event_details)):
                         continue
                 elif event_type == "FLOW_FINISHED":
-                    flow_status = event_data.get("status")
-                    flow_failure_reason = event_data.get("failure_reason")
                     extraction_result_refs = [
                         dict(ref)
                         for ref in (event_data.get("extraction_result_refs") or [])
@@ -989,8 +990,6 @@ async def execute_flow_endpoint(
 
                 if event_type == "RUN_STARTED":
                     run_started_event = dict(flat_event)
-                elif event_type == "CHAT_OUTPUT_READY":
-                    chat_output_ready_event = dict(flat_event)
                 elif event_type == "RUN_ERROR":
                     raw_message = str(flat_event.get("message") or "").strip()
                     if raw_message:
@@ -1018,79 +1017,103 @@ async def execute_flow_endpoint(
                     details = flat_event.get("details")
                     if isinstance(details, dict) and "error" in details:
                         flat_event["details"] = {**details, "error": "Flow execution failed unexpectedly."}
-                    run_error_event = dict(flat_event)
-                elif event_type == "FLOW_FINISHED":
-                    buffered_flow_finished_event = dict(flat_event)
+
+                outcome.observe(flat_event)
+
+                if event_type in {"RUN_FINISHED", "CHAT_OUTPUT_READY", "FILE_READY", "RUN_ERROR", "FLOW_FINISHED"}:
+                    continue
 
                 transcript_row = _build_execute_flow_transcript_row_from_event(flat_event)
                 if transcript_row is not None:
                     transcript_rows.append(transcript_row)
 
-                if event_type == "FLOW_FINISHED":
-                    continue
-
                 yield _stream_event_sse(flat_event)
 
-            if flow_status:
+            if outcome.terminal:
+                terminal_events = outcome.events_for_persistence()
+                terminal_transcript_rows = [
+                    row
+                    for event_payload in terminal_events
+                    if (row := _build_execute_flow_transcript_row_from_event(event_payload))
+                    is not None
+                ]
                 history_assistant_message = _build_flow_memory_assistant_message(
                     flow_name=flow.name,
                     flow_id=str(flow.id),
                     flow_run_id=str(
-                        (buffered_flow_finished_event or {}).get("flow_run_id")
+                        next(
+                            (
+                                event_payload.get("flow_run_id")
+                                for event_payload in reversed(terminal_events)
+                                if event_payload.get("type") == "FLOW_FINISHED"
+                            ),
+                            None,
+                        )
                         or prepared_turn.flow_run_id
                         or ""
                     ).strip() or None,
                     session_id=current_session_id,
                     document_id=str(request.document_id) if request.document_id else None,
-                    status=flow_status,
+                    status=outcome.status,
                     trace_id=trace_id,
-                    final_user_output=chat_output_response or run_finished_response,
+                    final_user_output=outcome.final_user_visible_text,
                     agents_used=agents_used,
                     extraction_result_refs=extraction_result_refs,
                     review_session_ids=review_session_ids,
                     adapter_keys=adapter_keys,
                     domain_warning_count=domain_warning_count,
                     file_outputs=file_outputs,
-                    failure_reason=flow_failure_reason,
+                    failure_reason=outcome.failure_reason,
                 )
                 summary_row = _build_execute_flow_summary_row(
                     flow_id=str(flow.id),
                     flow_name=flow.name,
                     flow_run_id=str(
-                        (buffered_flow_finished_event or {}).get("flow_run_id") or ""
+                        next(
+                            (
+                                event_payload.get("flow_run_id")
+                                for event_payload in reversed(terminal_events)
+                                if event_payload.get("type") == "FLOW_FINISHED"
+                            ),
+                            None,
+                        )
+                        or ""
                     ).strip() or None,
                     session_id=current_session_id,
                     document_id=str(request.document_id) if request.document_id else None,
-                    status=flow_status,
+                    status=outcome.status,
                     trace_id=trace_id,
-                    final_user_output=chat_output_response or run_finished_response,
-                    failure_reason=flow_failure_reason,
+                    final_user_output=outcome.final_user_visible_text,
+                    failure_reason=outcome.failure_reason,
                     assistant_message=history_assistant_message,
                     run_started_event=run_started_event,
-                    terminal_events=[
-                        event_payload
-                        for event_payload in [
-                            chat_output_ready_event,
-                            run_error_event,
-                            buffered_flow_finished_event,
-                        ]
-                        if event_payload is not None
-                    ],
+                    terminal_events=terminal_events,
                 )
                 _persist_completed_execute_flow_turn(
                     session_id=current_session_id,
                     user_id=user_id,
                     turn_id=current_turn_id,
                     user_message=prepared_turn.effective_user_message,
-                    transcript_rows=[*transcript_rows, summary_row],
+                    transcript_rows=[*transcript_rows, *terminal_transcript_rows, summary_row],
+                )
+                outcome.mark_persisted(
+                    transcript=True,
+                    extraction_result_refs=extraction_result_refs,
+                )
+                authoritative_run_status = (
+                    "completed" if outcome.status == "completed" else "failed"
+                )
+                await executable_run_manager.set_outcome_status(
+                    run_id,
+                    authoritative_run_status,
                 )
                 generated_title_candidate = _generate_title_from_turn(
                     user_message=prepared_turn.effective_user_message,
-                    assistant_message=chat_output_response or run_finished_response or history_assistant_message,
+                    assistant_message=outcome.final_user_visible_text or history_assistant_message,
                 )
 
-            if buffered_flow_finished_event is not None:
-                yield _stream_event_sse(buffered_flow_finished_event)
+                for terminal_event in outcome.publishable_terminal_events():
+                    yield _stream_event_sse(terminal_event)
 
         except asyncio.CancelledError:
             logger.warning(
@@ -1127,6 +1150,8 @@ async def execute_flow_endpoint(
                 )
             )
         except Exception as exc:
+            outcome.mark_persistence_failed("Flow execution failed before its terminal outcome was durable.")
+            await executable_run_manager.set_outcome_status(run_id, "failed")
             run_error_message = (
                 str(exc)
                 if isinstance(exc, ValueError)

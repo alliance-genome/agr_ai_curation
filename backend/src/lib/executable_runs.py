@@ -91,6 +91,7 @@ class ExecutableRun:
     task: asyncio.Task[None] | None = None
     terminal_monotonic: float | None = None
     terminal_error_event_factory: Callable[[Exception], str] | None = None
+    outcome_status: Literal["completed", "failed"] | None = None
 
     def snapshot(self) -> ExecutableRunSnapshot:
         return ExecutableRunSnapshot(
@@ -205,6 +206,20 @@ class ExecutableRunManager:
             active_run.updated_at = datetime.now(timezone.utc)
             return active_run
 
+    async def set_outcome_status(
+        self,
+        run_id: str,
+        status: Literal["completed", "failed"],
+    ) -> None:
+        """Record the producer's authoritative outcome for final run status."""
+
+        async with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                raise LookupError(f"Executable run not found: {run_id}")
+            run.outcome_status = status
+            run.updated_at = datetime.now(timezone.utc)
+
     async def observe(self, run: ExecutableRun) -> AsyncIterator[str]:
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         async with self._lock:
@@ -307,6 +322,8 @@ class ExecutableRunManager:
 
     async def _finish(self, run: ExecutableRun, status: ExecutableRunStatus) -> None:
         async with self._lock:
+            if status == "completed" and run.outcome_status is not None:
+                status = run.outcome_status
             run.status = (
                 "cancelled"
                 if run.status == "cancel_requested" and status == "completed"

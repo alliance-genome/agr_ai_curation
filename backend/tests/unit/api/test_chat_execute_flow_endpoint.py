@@ -584,6 +584,99 @@ def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transc
     ]
 
 
+def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-stale-success",
+        turn_id="turn-flow-stale-success",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Stale Success Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    execute_calls = []
+
+    async def _fake_execute_flow(**_kwargs):
+        execute_calls.append(_kwargs["flow_run_id"])
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stale-success"}}
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {"response": "The model declared completion prematurely."},
+        }
+        yield {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_failed",
+                "message": "Extraction persistence failed after model completion.",
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "failed",
+                "failure_reason": "Extraction persistence failed.",
+                "flow_run_id": "flow-run-stale-success",
+            },
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    events = asyncio.run(_consume_stream(response))
+
+    replay_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    replay_events = asyncio.run(_consume_stream(replay_response))
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "FLOW_ERROR",
+        "FLOW_FINISHED",
+    ]
+    assert all(
+        "declared completion prematurely" not in json.dumps(event).lower()
+        for event in events
+    )
+    assert replay_events == events
+    assert len(execute_calls) == 1
+
+    stored_messages = calls["repository"].messages[
+        ("auth-sub", "session-flow-stale-success")
+    ]
+    summary = next(
+        message
+        for message in stored_messages
+        if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    )
+    assert summary.content == (
+        "Flow failed before producing a final output. "
+        "Reason: Extraction persistence failed."
+    )
+    assert summary.payload_json["status"] == "failed"
+    assert summary.payload_json["final_user_output"] is None
+    assert "declared completion prematurely" not in summary.payload_json[
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+    ].lower()
+
+
+
 def test_execute_flow_endpoint_maps_real_mgi_cognito_groups_to_active_groups(monkeypatch):
     from src.lib.config.groups_loader import (
         get_groups_for_provider_groups,
@@ -1547,14 +1640,14 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
-        "CHAT_OUTPUT_READY",
         "SUPERVISOR_ERROR",
         "RUN_ERROR",
     ]
     assert all(event["type"] != "FLOW_FINISHED" for event in events)
-    assert events[2]["details"]["context"] == "RuntimeError"
-    assert events[2]["details"]["error"] == "Flow execution failed unexpectedly."
-    assert events[3]["message"] == "Flow execution failed unexpectedly."
+    assert "output should be discarded" not in json.dumps(events).lower()
+    assert events[1]["details"]["context"] == "RuntimeError"
+    assert events[1]["details"]["error"] == "Flow execution failed unexpectedly."
+    assert events[2]["message"] == "Flow execution failed unexpectedly."
     assert "completion transcript write failed" not in json.dumps(events)
     assert "completion transcript write failed" in caplog.text
     turn_messages = calls["repository"].list_messages_for_turn(
