@@ -22,7 +22,6 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -31,6 +30,7 @@ from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Set, cast
 from uuid import uuid4
 
 from agents import Agent, RunContextWrapper, function_tool
+from sqlalchemy.orm import Session
 from src.lib.context import (
     get_current_run_config,
     get_current_trace_id,
@@ -54,7 +54,6 @@ from src.lib.curation_workspace.curation_prep_service import (
     ensure_domain_envelope_materialization,
 )
 from src.lib.curation_workspace.domain_envelope_normalization import (
-    domain_envelope_from_extraction_result,
     is_canonical_domain_envelope_payload,
 )
 from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
@@ -866,83 +865,33 @@ def _flow_candidate_envelope_id(
     return f"flow:{run_scope}:{candidate_scope}"
 
 
-def _flow_candidate_record_id(
-    candidate: ExtractionEnvelopeCandidate,
-    *,
-    session_id: str,
-    flow_run_id: Optional[str],
-) -> str:
-    """Return a stable temporary extraction-result id for normalization."""
+def _validate_flow_extraction_candidate_payload(payload: Any) -> None:
+    """Reject ambiguous source/canonical envelope mixtures before persistence."""
 
-    return f"{_flow_candidate_envelope_id(candidate, session_id=session_id, flow_run_id=flow_run_id)}:extraction"
-
-
-def _canonicalize_flow_extraction_candidate(
-    candidate: ExtractionEnvelopeCandidate,
-    *,
-    document_id: Optional[str],
-    user_id: Optional[str],
-    session_id: Optional[str],
-    trace_id: Optional[str],
-    flow_run_id: Optional[str],
-) -> ExtractionEnvelopeCandidate:
-    """Normalize extractor output payloads to canonical DomainEnvelope payloads."""
-
-    payload = candidate.payload_json
     if not isinstance(payload, Mapping):
-        return candidate
-    if is_canonical_domain_envelope_payload(payload):
-        return candidate
-    if not _is_flow_domain_envelope_source_payload(payload):
-        return candidate
+        return
+    if isinstance(payload.get("curatable_objects"), list) and isinstance(
+        payload.get("extracted_objects"), list
+    ):
+        raise ValueError(
+            "extraction payload mixes DomainEnvelope.extracted_objects[] with "
+            "DomainEnvelopeExtractionResult.curatable_objects[]"
+        )
 
-    normalized_document_id = str(document_id or "").strip()
-    normalized_session_id = str(session_id or "").strip()
-    if not normalized_document_id or not normalized_session_id:
-        return candidate
 
-    metadata = dict(candidate.metadata or {})
-    metadata.setdefault(
-        "envelope_id",
-        _flow_candidate_envelope_id(
-            candidate,
-            session_id=normalized_session_id,
-            flow_run_id=flow_run_id,
-        ),
-    )
-    extraction_record = CurationExtractionResultRecord.model_validate(
-        {
-            "extraction_result_id": _flow_candidate_record_id(
-                candidate,
-                session_id=normalized_session_id,
-                flow_run_id=flow_run_id,
-            ),
-            "document_id": normalized_document_id,
-            "adapter_key": candidate.adapter_key,
-            "agent_key": candidate.agent_key,
-            "source_kind": CurationExtractionSourceKind.FLOW,
-            "origin_session_id": normalized_session_id,
-            "trace_id": trace_id,
-            "flow_run_id": flow_run_id,
-            "user_id": user_id,
-            "candidate_count": candidate.candidate_count,
-            "conversation_summary": candidate.conversation_summary,
-            "payload_json": dict(payload),
-            "created_at": datetime.now(timezone.utc),
-            "metadata": metadata,
-        }
-    )
-    envelope = domain_envelope_from_extraction_result(
-        extraction_record,
-        include_persistence_history=False,
-    )
-    envelope_payload = envelope.model_dump(mode="json")
-    return replace(
-        candidate,
-        payload_json=envelope_payload,
-        candidate_count=len(envelope_payload.get("extracted_objects") or []),
-        metadata=metadata,
-    )
+def _sanitize_flow_extraction_candidate_payload(payload: Any) -> Any:
+    """Remove untrusted row provenance until canonical persistence assigns it."""
+
+    if not isinstance(payload, Mapping) or not is_canonical_domain_envelope_payload(
+        payload
+    ):
+        return payload
+
+    sanitized_payload = dict(payload)
+    metadata = dict(sanitized_payload.get("metadata") or {})
+    metadata.pop("source_extraction_result_id", None)
+    sanitized_payload["metadata"] = metadata
+    return sanitized_payload
 
 
 def _flow_record_persistence_key(record: CurationExtractionResultRecord) -> str:
@@ -971,55 +920,6 @@ def _unique_non_empty_scope_values(values: list[Optional[str]]) -> list[str]:
         seen.add(normalized)
         ordered.append(normalized)
     return ordered
-
-
-def _build_flow_prep_extraction_results(
-    *,
-    completed_steps: list[dict[str, Any]],
-    document_id: str,
-    user_id: str,
-    session_id: str,
-    flow_run_id: Optional[str],
-    conversation_summary: str,
-) -> list[CurationExtractionResultRecord]:
-    """Convert completed flow extraction steps into prep-service input records."""
-
-    created_at = datetime.now(timezone.utc)
-    trace_id = get_current_trace_id()
-    extraction_results: list[CurationExtractionResultRecord] = []
-
-    for step in completed_steps:
-        candidate = step.get("candidate")
-        if not isinstance(candidate, ExtractionEnvelopeCandidate):
-            continue
-        if candidate.agent_key == CURATION_PREP_AGENT_ID:
-            continue
-
-        step_number = int(step.get("step") or 0)
-        extraction_results.append(
-            CurationExtractionResultRecord.model_validate(
-                {
-                    "extraction_result_id": (
-                        f"flow:{session_id}:step:{step_number}:{candidate.agent_key}"
-                    ),
-                    "document_id": document_id,
-                    "adapter_key": candidate.adapter_key,
-                    "agent_key": candidate.agent_key,
-                    "source_kind": CurationExtractionSourceKind.FLOW,
-                    "origin_session_id": session_id,
-                    "trace_id": trace_id,
-                    "flow_run_id": flow_run_id,
-                    "user_id": user_id,
-                    "candidate_count": candidate.candidate_count,
-                    "conversation_summary": candidate.conversation_summary or conversation_summary,
-                    "payload_json": candidate.payload_json,
-                    "created_at": created_at,
-                    "metadata": dict(candidate.metadata),
-                }
-            )
-        )
-
-    return extraction_results
 
 
 def _accumulate_step_evidence(
@@ -2497,15 +2397,6 @@ def get_all_agent_tools(
             phase_timings_ms["validation_groups_ms"] = _elapsed_ms(
                 validation_started_at
             )
-            if candidate is not None:
-                candidate = _canonicalize_flow_extraction_candidate(
-                    candidate,
-                    document_id=document_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    trace_id=get_current_trace_id(),
-                    flow_run_id=flow_run_id,
-                )
             state_update_started_at = time.monotonic()
             total_step_duration_ms = _elapsed_ms(step_started_at)
             step_timing = {
@@ -2766,35 +2657,53 @@ def get_all_agent_tools(
                             "Curation prep flow steps require document_id, user_id, and session_id."
                         )
 
-                    extraction_results = _build_flow_prep_extraction_results(
-                        completed_steps=execution_state["completed_steps"],
-                        document_id=document_id,
-                        user_id=user_id,
-                        session_id=session_id,
-                        flow_run_id=flow_run_id,
-                        conversation_summary=flow_conversation_summary,
-                    )
-                    if not extraction_results:
-                        raise RuntimeError(
-                            "Curation prep flow steps require at least one upstream extraction envelope."
-                        )
-
-                    prep_output = await run_curation_prep(
-                        extraction_results,
-                        scope_confirmation=_build_flow_scope_confirmation(
-                            extraction_results,
-                            flow_name=flow.name,
-                        ),
-                        persistence_context=CurationPrepPersistenceContext(
+                    prep_db = SessionLocal()
+                    try:
+                        extraction_results = _persist_flow_extraction_candidates(
+                            candidates=_collect_completed_step_candidates(
+                                execution_state["completed_steps"]
+                            ),
                             document_id=document_id,
-                            source_kind=CurationExtractionSourceKind.FLOW,
-                            origin_session_id=session_id,
+                            user_id=user_id,
+                            session_id=session_id,
                             trace_id=get_current_trace_id(),
                             flow_run_id=flow_run_id,
-                            user_id=user_id,
-                            conversation_summary=flow_conversation_summary,
-                            workflow="curation_prep_flow",
-                        ),
+                            db=prep_db,
+                        )
+                        if not extraction_results:
+                            raise RuntimeError(
+                                "Curation prep flow steps require at least one upstream extraction envelope."
+                            )
+
+                        prep_output = await run_curation_prep(
+                            extraction_results,
+                            scope_confirmation=_build_flow_scope_confirmation(
+                                extraction_results,
+                                flow_name=flow.name,
+                            ),
+                            persistence_context=CurationPrepPersistenceContext(
+                                document_id=document_id,
+                                source_kind=CurationExtractionSourceKind.FLOW,
+                                origin_session_id=session_id,
+                                trace_id=get_current_trace_id(),
+                                flow_run_id=flow_run_id,
+                                user_id=user_id,
+                                conversation_summary=flow_conversation_summary,
+                                workflow="curation_prep_flow",
+                            ),
+                            db=prep_db,
+                        )
+                        prep_db.commit()
+                    except Exception:
+                        if prep_db.in_transaction():
+                            prep_db.rollback()
+                        raise
+                    finally:
+                        prep_db.close()
+
+                    _merge_persisted_flow_extraction_results(
+                        execution_state,
+                        extraction_results,
                     )
                     return prep_output.model_dump_json()
 
@@ -2822,21 +2731,24 @@ def get_all_agent_tools(
                             "Curation handoff flow steps require document_id, user_id, and session_id."
                         )
 
-                    extraction_results = _build_flow_prep_extraction_results(
-                        completed_steps=execution_state["completed_steps"],
-                        document_id=document_id,
-                        user_id=user_id,
-                        session_id=session_id,
-                        flow_run_id=flow_run_id,
-                        conversation_summary=flow_conversation_summary,
-                    )
-                    if not extraction_results:
-                        raise RuntimeError(
-                            "Curation handoff flow steps require at least one upstream extraction envelope."
-                        )
-
                     handoff_db = SessionLocal()
                     try:
+                        extraction_results = _persist_flow_extraction_candidates(
+                            candidates=_collect_completed_step_candidates(
+                                execution_state["completed_steps"]
+                            ),
+                            document_id=document_id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            trace_id=get_current_trace_id(),
+                            flow_run_id=flow_run_id,
+                            db=handoff_db,
+                        )
+                        if not extraction_results:
+                            raise RuntimeError(
+                                "Curation handoff flow steps require at least one upstream extraction envelope."
+                            )
+
                         handoff_output = await run_flow_curation_handoff(
                             extraction_results=extraction_results,
                             document_id=document_id,
@@ -2846,6 +2758,10 @@ def get_all_agent_tools(
                             conversation_summary=flow_conversation_summary,
                             db=handoff_db,
                         )
+                    except Exception:
+                        if handoff_db.in_transaction():
+                            handoff_db.rollback()
+                        raise
                     finally:
                         handoff_db.close()
 
@@ -2853,6 +2769,10 @@ def get_all_agent_tools(
                         "review_session_ids": handoff_output.review_session_ids,
                         "adapter_keys": handoff_output.adapter_keys,
                     }
+                    _merge_persisted_flow_extraction_results(
+                        execution_state,
+                        extraction_results,
+                    )
                     execution_state["curation_handoff"] = handoff_state
                     return json.dumps(handoff_state)
 
@@ -3298,6 +3218,7 @@ def _persist_flow_extraction_candidates(
     session_id: str,
     trace_id: Optional[str],
     flow_run_id: Optional[str],
+    db: Session | None = None,
 ) -> list[CurationExtractionResultRecord]:
     """Persist flow-produced extraction envelopes and return stored records."""
 
@@ -3306,19 +3227,21 @@ def _persist_flow_extraction_candidates(
 
     requests: list[CurationExtractionPersistenceRequest] = []
     for candidate in candidates:
-        candidate = _canonicalize_flow_extraction_candidate(
-            candidate,
-            document_id=document_id,
-            user_id=user_id,
-            session_id=session_id,
-            trace_id=trace_id,
-            flow_run_id=flow_run_id,
-        )
+        _validate_flow_extraction_candidate_payload(candidate.payload_json)
+        payload_json = _sanitize_flow_extraction_candidate_payload(candidate.payload_json)
         flow_step_key = _flow_candidate_persistence_key(candidate)
         metadata = dict(candidate.metadata)
+        metadata.setdefault(
+            "envelope_id",
+            _flow_candidate_envelope_id(
+                candidate,
+                session_id=session_id,
+                flow_run_id=flow_run_id,
+            ),
+        )
         metadata["flow_step_key"] = flow_step_key
         adapter_key = _resolve_flow_candidate_adapter_key(candidate) or candidate.agent_key
-        payload_hash = canonical_extraction_payload_hash(candidate.payload_json)
+        payload_hash = canonical_extraction_payload_hash(payload_json)
         idempotency_key = build_flow_extraction_idempotency_key(
             document_id=document_id,
             user_id=user_id,
@@ -3347,37 +3270,40 @@ def _persist_flow_extraction_candidates(
                 user_id=user_id,
                 candidate_count=candidate.candidate_count,
                 conversation_summary=candidate.conversation_summary,
-                payload_json=candidate.payload_json,
+                payload_json=payload_json,
                 idempotency_key=idempotency_key,
                 payload_hash=payload_hash,
                 metadata=metadata,
             )
         )
 
+    persistence_responses = (
+        persist_idempotent_extraction_results(requests, db=db)
+        if db is not None
+        else persist_idempotent_extraction_results(requests)
+    )
     ordered_records = [
-        response.extraction_result
-        for response in persist_idempotent_extraction_results(requests)
+        response.extraction_result for response in persistence_responses
     ]
 
-    _materialize_flow_domain_envelope_records(ordered_records)
+    _materialize_flow_domain_envelope_records(ordered_records, db=db)
     return ordered_records
 
 
 def _materialize_flow_domain_envelope_records(
     records: list[CurationExtractionResultRecord],
+    *,
+    db: Session | None = None,
 ) -> None:
     """Ensure flow-persisted domain-envelope extraction records get review rows."""
 
     for record in records:
-        if not _is_flow_domain_envelope_payload(record.payload_json):
+        if not _is_flow_domain_envelope_source_payload(record.payload_json):
             continue
-        ensure_domain_envelope_materialization(record, persist=True)
-
-
-def _is_flow_domain_envelope_payload(payload: Any) -> bool:
-    if not isinstance(payload, Mapping):
-        return False
-    return is_canonical_domain_envelope_payload(payload)
+        if db is None:
+            ensure_domain_envelope_materialization(record, persist=True)
+        else:
+            ensure_domain_envelope_materialization(record, persist=True, db=db)
 
 
 def _is_flow_domain_envelope_source_payload(payload: Any) -> bool:

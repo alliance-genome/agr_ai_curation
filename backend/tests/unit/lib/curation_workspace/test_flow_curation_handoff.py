@@ -1,7 +1,9 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 
@@ -43,7 +45,8 @@ async def test_run_flow_curation_handoff_creates_one_session_per_distinct_adapte
     ]
     prep_calls = []
     events = []
-    sentry: dict[str, object] = {"span_data": {}, "statuses": []}
+    sentry: dict[str, Any] = {"span_data": {}, "statuses": []}
+    db.execute.return_value.all.return_value = []
 
     class FakeSpan:
         def set_data(self, key, value):
@@ -159,6 +162,7 @@ async def test_run_flow_curation_handoff_creates_one_session_per_distinct_adapte
 async def test_run_flow_curation_handoff_rolls_back_on_failure(monkeypatch):
     db = Mock()
     db.in_transaction.return_value = True
+    db.execute.return_value.all.return_value = []
 
     async def _boom(*_args, **_kwargs):
         raise RuntimeError("prep failed")
@@ -179,10 +183,101 @@ async def test_run_flow_curation_handoff_rolls_back_on_failure(monkeypatch):
     db.rollback.assert_called_once()
 
 
+async def test_run_flow_curation_handoff_reuses_exact_canonical_source_sessions(monkeypatch):
+    db = Mock()
+    session_id = uuid4()
+    record = _record("gene", "gene-1")
+    db.execute.return_value.all.return_value = [
+        (session_id, "gene", record.extraction_result_id)
+    ]
+
+    async def _unexpected(*_args, **_kwargs):
+        pytest.fail("an exact committed handoff must be reused without new prep state")
+
+    monkeypatch.setattr(bootstrap_service, "run_curation_prep", _unexpected)
+    monkeypatch.setattr(bootstrap_service, "bootstrap_document_session", _unexpected)
+
+    result = await run_flow_curation_handoff(
+        extraction_results=[record],
+        document_id="doc-1",
+        runner_user_id="runner-sub",
+        flow_run_id="run-1",
+        origin_session_id="sess-1",
+        conversation_summary="summary",
+        db=db,
+    )
+
+    assert result.review_session_ids == [str(session_id)]
+    assert result.adapter_keys == ["gene"]
+    db.commit.assert_called_once()
+    db.rollback.assert_not_called()
+
+
+async def test_run_flow_curation_handoff_rolls_back_on_review_session_failure(monkeypatch):
+    db = Mock()
+    db.in_transaction.return_value = True
+    db.execute.return_value.all.return_value = []
+
+    async def _prep(*_args, **_kwargs):
+        return SimpleNamespace(envelope_refs=[])
+
+    async def _review_failure(*_args, **_kwargs):
+        raise RuntimeError("review session failed")
+
+    monkeypatch.setattr(bootstrap_service, "run_curation_prep", _prep)
+    monkeypatch.setattr(bootstrap_service, "bootstrap_document_session", _review_failure)
+
+    with pytest.raises(RuntimeError, match="review session failed"):
+        await run_flow_curation_handoff(
+            extraction_results=[_record("gene", "gene-1")],
+            document_id="doc-1",
+            runner_user_id="runner-sub",
+            flow_run_id="run-1",
+            origin_session_id="sess-1",
+            conversation_summary="summary",
+            db=db,
+        )
+
+    db.commit.assert_not_called()
+    db.rollback.assert_called_once()
+
+
+async def test_run_flow_curation_handoff_rolls_back_on_final_commit_failure(monkeypatch):
+    db = Mock()
+    db.in_transaction.return_value = True
+    db.execute.return_value.all.return_value = []
+    db.commit.side_effect = RuntimeError("final commit failed")
+
+    async def _prep(*_args, **_kwargs):
+        return SimpleNamespace(envelope_refs=[])
+
+    async def _bootstrap(*_args, **_kwargs):
+        return SimpleNamespace(
+            session=SimpleNamespace(session_id="session-gene"), created=True
+        )
+
+    monkeypatch.setattr(bootstrap_service, "run_curation_prep", _prep)
+    monkeypatch.setattr(bootstrap_service, "bootstrap_document_session", _bootstrap)
+
+    with pytest.raises(RuntimeError, match="final commit failed"):
+        await run_flow_curation_handoff(
+            extraction_results=[_record("gene", "gene-1")],
+            document_id="doc-1",
+            runner_user_id="runner-sub",
+            flow_run_id="run-1",
+            origin_session_id="sess-1",
+            conversation_summary="summary",
+            db=db,
+        )
+
+    db.commit.assert_called_once()
+    db.rollback.assert_called_once()
+
+
 async def test_run_flow_curation_handoff_records_sentry_error_metadata(monkeypatch):
     db = Mock()
     db.in_transaction.return_value = True
-    sentry: dict[str, object] = {"span_data": {}, "statuses": []}
+    sentry: dict[str, Any] = {"span_data": {}, "statuses": []}
     record = _record("gene", "gene-1").model_copy(update={"adapter_key": None})
 
     class FakeSpan:

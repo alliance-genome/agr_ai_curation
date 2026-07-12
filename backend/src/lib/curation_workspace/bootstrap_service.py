@@ -25,7 +25,10 @@ from src.lib.curation_workspace.curation_prep_service import (
 )
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.models import (
+    CurationCandidate as CandidateModel,
     CurationExtractionResultRecord as ExtractionResultModel,
+    CurationReviewSession as ReviewSessionModel,
+    DomainEnvelopeModel,
 )
 from src.lib.curation_workspace.pipeline import (
     PipelineExecutionMode,
@@ -267,6 +270,21 @@ async def _run_flow_curation_handoff_impl(
                 "Curation handoff requires extraction results for at least one adapter key."
             )
 
+        reusable_session_ids = _find_reusable_flow_handoff_sessions(
+            db,
+            extraction_results=extraction_results,
+            document_id=document_id,
+            runner_user_id=runner_user_id,
+            flow_run_id=flow_run_id,
+            adapter_keys=adapter_keys,
+        )
+        if reusable_session_ids is not None:
+            db.commit()
+            return FlowCurationHandoffResult(
+                review_session_ids=reusable_session_ids,
+                adapter_keys=list(adapter_keys),
+            )
+
         for adapter_key in adapter_keys:
             adapter_records = [
                 record for record in extraction_results if record.adapter_key == adapter_key
@@ -316,6 +334,71 @@ async def _run_flow_curation_handoff_impl(
         if db.in_transaction():
             db.rollback()
         raise
+
+
+def _find_reusable_flow_handoff_sessions(
+    db: Session,
+    *,
+    extraction_results: Sequence[CurationExtractionResultRecord],
+    document_id: str,
+    runner_user_id: str,
+    flow_run_id: str | None,
+    adapter_keys: Sequence[str],
+) -> list[str] | None:
+    """Return the already-committed handoff for this exact canonical source set."""
+
+    if flow_run_id is None:
+        return None
+
+    expected_source_ids_by_adapter = {
+        adapter_key: {
+            str(record.extraction_result_id)
+            for record in extraction_results
+            if record.adapter_key == adapter_key
+        }
+        for adapter_key in adapter_keys
+    }
+    if any(not source_ids for source_ids in expected_source_ids_by_adapter.values()):
+        return None
+
+    rows = db.execute(
+        select(
+            ReviewSessionModel.id,
+            ReviewSessionModel.adapter_key,
+            DomainEnvelopeModel.source_extraction_result_id,
+        )
+        .join(CandidateModel, CandidateModel.session_id == ReviewSessionModel.id)
+        .join(
+            DomainEnvelopeModel,
+            DomainEnvelopeModel.envelope_id == CandidateModel.envelope_id,
+        )
+        .where(ReviewSessionModel.document_id == document_id)
+        .where(ReviewSessionModel.flow_run_id == flow_run_id)
+        .where(ReviewSessionModel.created_by_id == runner_user_id)
+        .where(ReviewSessionModel.adapter_key.in_(adapter_keys))
+    ).all()
+
+    source_ids_by_session: dict[tuple[str, UUID], set[str]] = {}
+    for session_id, adapter_key, source_extraction_result_id in rows:
+        if source_extraction_result_id is None:
+            continue
+        source_ids_by_session.setdefault((adapter_key, session_id), set()).add(
+            str(source_extraction_result_id)
+        )
+
+    reusable_by_adapter: dict[str, str] = {}
+    for adapter_key in adapter_keys:
+        expected_source_ids = expected_source_ids_by_adapter[adapter_key]
+        matching_session_ids = [
+            str(session_id)
+            for (row_adapter_key, session_id), source_ids in source_ids_by_session.items()
+            if row_adapter_key == adapter_key and source_ids == expected_source_ids
+        ]
+        if len(matching_session_ids) != 1:
+            return None
+        reusable_by_adapter[adapter_key] = matching_session_ids[0]
+
+    return [reusable_by_adapter[adapter_key] for adapter_key in adapter_keys]
 
 
 async def bootstrap_document_session(
