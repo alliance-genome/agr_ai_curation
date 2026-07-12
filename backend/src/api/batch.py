@@ -494,7 +494,14 @@ async def stream_batch_progress(
                 yield f"data: {json.dumps(event)}\n\n"
                 last_completed = batch.completed_documents
                 last_failed = batch.failed_documents
-                last_doc_statuses = {str(d.id): d.status.value for d in batch.documents}
+                for doc in batch.documents:
+                    doc_event = _batch_document_status_event(
+                        batch,
+                        doc,
+                        stream_service.get_document_handoff_metadata(batch, doc),
+                    )
+                    yield f"data: {json.dumps(doc_event)}\n\n"
+                    last_doc_statuses[str(doc.id)] = doc.status.value
 
             batch_complete = False
 

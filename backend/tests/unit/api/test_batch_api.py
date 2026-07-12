@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+import json
 import logging
 from types import SimpleNamespace
 from uuid import uuid4
@@ -494,6 +495,105 @@ async def test_stream_batch_progress_strips_internal_event_fields(monkeypatch):
 
     assert b'"type": "TOOL_COMPLETE"' in body
     assert b'"internal"' not in body
+
+
+@pytest.mark.asyncio
+async def test_stream_batch_progress_replays_completed_document_snapshot_on_reconnect(
+    monkeypatch,
+):
+    _mock_auth(monkeypatch, user_id=8)
+    batch_id = uuid4()
+    document_id = uuid4()
+    batch_document_id = uuid4()
+    completed_document = SimpleNamespace(
+        id=batch_document_id,
+        document_id=document_id,
+        position=0,
+        status=BatchDocumentStatus.COMPLETED,
+        result_file_path=None,
+        review_session_ids=["review-gene"],
+        error_message=None,
+        processing_time_ms=1200,
+    )
+    batch = SimpleNamespace(
+        id=batch_id,
+        status=BatchStatus.COMPLETED,
+        total_documents=1,
+        completed_documents=1,
+        failed_documents=0,
+        documents=[completed_document],
+        started_at=None,
+        completed_at=None,
+    )
+    handoff_metadata = {
+        "adapter_keys": ["gene"],
+        "extraction_result_ids": ["extract-gene"],
+        "extraction_result_refs": [
+            {
+                "result_ref": "extraction-result:extract-gene",
+                "extraction_result_id": "extract-gene",
+                "adapter_key": "gene",
+            }
+        ],
+        "flow_run_id": "flow-run-1",
+        "origin_session_id": "origin-1",
+    }
+    service = SimpleNamespace(
+        get_batch=lambda *_args, **_kwargs: batch,
+        get_document_handoff_metadata=lambda *_args, **_kwargs: handoff_metadata,
+    )
+    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+
+    class _StreamDB:
+        def expire_all(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(batch_api, "SessionLocal", lambda: _StreamDB())
+
+    class _Broadcaster:
+        async def subscribe(self, _batch_id):
+            return asyncio.Queue()
+
+        async def unsubscribe(self, _batch_id, _queue):
+            return None
+
+    monkeypatch.setattr(batch_api, "get_batch_broadcaster", lambda: _Broadcaster())
+    monkeypatch.setattr(batch_api.asyncio, "sleep", lambda _seconds: _async_noop())
+
+    for _connection in range(2):
+        response = await batch_api.stream_batch_progress(
+            batch_id,
+            {"sub": "u-1"},
+            db=object(),
+        )
+        body = await _read_streaming_response(response)
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in body.decode("utf-8").splitlines()
+            if line.startswith("data: ")
+        ]
+        document_event = next(event for event in events if event["type"] == "DOCUMENT_STATUS")
+
+        assert document_event == {
+            "type": "DOCUMENT_STATUS",
+            "batch_id": str(batch_id),
+            "document_id": str(document_id),
+            "batch_document_id": str(batch_document_id),
+            "position": 0,
+            "status": "completed",
+            "result_file_path": None,
+            "review_session_ids": ["review-gene"],
+            **handoff_metadata,
+            "error_message": None,
+            "processing_time_ms": 1200,
+        }
+
+
+async def _async_noop():
+    return None
 
 
 async def _read_streaming_response(response):
