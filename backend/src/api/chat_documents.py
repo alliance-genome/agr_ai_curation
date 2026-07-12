@@ -1,6 +1,8 @@
 # ruff: noqa: F403,F405
 """Document selection endpoints for chat."""
 
+from typing import Annotated
+
 from fastapi import Header
 
 from .chat_common import *
@@ -102,15 +104,15 @@ async def get_loaded_document(user: Dict[str, Any] = get_auth_dependency()) -> D
 @router.delete("/chat/document", response_model=DocumentStatusResponse)
 async def clear_loaded_document(
     user: Dict[str, Any] = get_auth_dependency(),
-    intent_owner: Optional[str] = Header(default=None, alias="X-Chat-Document-Intent-Owner"),
-    intent_generation: Optional[int] = Header(
-        default=None, alias="X-Chat-Document-Intent-Generation"
-    ),
+    intent_owner: Annotated[
+        Optional[str], Header(alias="X-Chat-Document-Intent-Owner")
+    ] = None,
+    intent_generation: Annotated[
+        Optional[int], Header(alias="X-Chat-Document-Intent-Generation")
+    ] = None,
 ) -> DocumentStatusResponse:
     """Clear the current document selection."""
     user_id = _require_user_sub(user)
-    intent_owner = intent_owner if isinstance(intent_owner, str) else None
-    intent_generation = intent_generation if isinstance(intent_generation, int) else None
     if intent_owner is not None and intent_generation is not None:
         if not document_state.claim_intent(user_id, intent_owner, intent_generation):
             raise HTTPException(

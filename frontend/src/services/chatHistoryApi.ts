@@ -212,18 +212,19 @@ function extractFileData(payload: Record<string, unknown> | null): FileInfo | nu
 function extractFlowStepEvidence(payload: Record<string, unknown> | null): FlowStepEvidenceDetails | null {
   for (const candidate of extractPayloadRecords(payload)) {
     const flowId = readString(candidate.flow_id)
+    const flowName = readString(candidate.flow_name)
     const flowRunId = readString(candidate.flow_run_id)
     const step = readNumber(candidate.step)
     const evidenceCount = readNumber(candidate.evidence_count)
     const totalEvidenceRecords = readNumber(candidate.total_evidence_records)
 
-    if (!flowId || !flowRunId || step == null || evidenceCount == null || totalEvidenceRecords == null) {
+    if (!flowId || !flowName || !flowRunId || step == null || evidenceCount == null || totalEvidenceRecords == null) {
       continue
     }
 
     return {
       flow_id: flowId,
-      flow_name: readString(candidate.flow_name)!,
+      flow_name: flowName,
       flow_run_id: flowRunId,
       step,
       tool_name: readString(candidate.tool_name),
