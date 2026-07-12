@@ -1042,6 +1042,42 @@ def test_patch_review_session_updates_status_and_notes(
     assert refreshed.notes == "Paused for curator follow-up"
 
 
+def test_patch_review_session_rejects_stale_expected_session_version(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import CurationReviewSession
+
+    session_id = seeded_review_sessions["session_alpha_id"]
+    latest_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "current_candidate_id": seeded_review_sessions["candidate_alpha_id"],
+        },
+    )
+    assert latest_response.status_code == 200, latest_response.text
+    assert latest_response.json()["session"]["session_version"] == 2
+
+    response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "notes": "This stale mutation must not commit",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Session version mismatch: expected 1, found 2"
+    test_db.expire_all()
+    refreshed = test_db.get(CurationReviewSession, UUID(session_id))
+    assert refreshed is not None
+    assert refreshed.notes != "This stale mutation must not commit"
+
+
 def test_post_candidate_decision_updates_status_and_writes_action_log(
     client: TestClient,
     seeded_review_sessions,

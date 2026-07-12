@@ -1,5 +1,6 @@
 """Unit tests for chat misc/document/history endpoints and non-stream chat path."""
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from src.lib.chat_history_repository import (
     ChatMessageRecord,
 )
 from src.lib import http_errors
+from src.lib.chat_state import DocumentSelectionState
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.observability import sentry
 from tests.chat_api_test_support import patch_chat_impl_for
@@ -633,6 +635,43 @@ async def test_load_document_for_chat_success(monkeypatch):
     assert result.document.id == "doc-1"
     assert captured["user-1"]["filename"] == "paper.pdf"
     assert captured["cache"] == ("user-1", "doc-1")
+
+
+@pytest.mark.asyncio
+async def test_latest_document_intent_owns_reverse_order_completion(monkeypatch):
+    state = DocumentSelectionState()
+    pending = {
+        "doc-a": asyncio.Future(),
+        "doc-b": asyncio.Future(),
+    }
+
+    async def _get_document(_user_sub, doc_id):
+        return await pending[doc_id]
+
+    _patch_chat_impl(monkeypatch, "get_document", _get_document)
+    _patch_chat_impl(monkeypatch, "document_state", state)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args: None)
+
+    first = asyncio.create_task(chat.load_document_for_chat(
+        chat.LoadDocumentRequest(document_id="doc-a", intent_token="intent-a"),
+        {"sub": "user-1"},
+    ))
+    await asyncio.sleep(0)
+    second = asyncio.create_task(chat.load_document_for_chat(
+        chat.LoadDocumentRequest(document_id="doc-b", intent_token="intent-b"),
+        {"sub": "user-1"},
+    ))
+
+    pending["doc-b"].set_result({"document": {"id": "doc-b", "filename": "b.pdf"}})
+    result = await second
+    assert result.document.id == "doc-b"
+
+    pending["doc-a"].set_result({"document": {"id": "doc-a", "filename": "a.pdf"}})
+    with pytest.raises(HTTPException) as exc:
+        await first
+
+    assert exc.value.status_code == 409
+    assert state.get_document("user-1")["id"] == "doc-b"
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ import {
   replaceWorkspaceSession,
   updateWorkspaceActiveCandidate,
 } from './workspaceState'
+import { LatestIntent } from '@/lib/latestIntent'
 
 const HYDRATION_METADATA_CONTAINERS = [
   'session_state',
@@ -170,8 +171,12 @@ export function useSessionHydration(
   const lastPersistedCandidateIdRef = useRef<string | null>(
     workspace.session.current_candidate_id ?? workspace.active_candidate_id ?? null,
   )
+  const candidateIntentRef = useRef(new LatestIntent())
+  const hasPendingCandidateUpdateRef = useRef(false)
 
   useEffect(() => {
+    candidateIntentRef.current.invalidate()
+    hasPendingCandidateUpdateRef.current = false
     setHydratedSessionId(null)
     lastPersistedCandidateIdRef.current =
       workspace.session.current_candidate_id ?? workspace.active_candidate_id ?? null
@@ -213,28 +218,37 @@ export function useSessionHydration(
       return
     }
 
-    if (activeCandidateId === lastPersistedCandidateIdRef.current) {
+    if (
+      activeCandidateId === lastPersistedCandidateIdRef.current
+      && !hasPendingCandidateUpdateRef.current
+    ) {
       return
     }
 
-    let cancelled = false
+    const operation = candidateIntentRef.current.begin()
+    hasPendingCandidateUpdateRef.current = true
     const nextCandidateId = activeCandidateId
+    const expectedSessionVersion = workspace.session.session_version
 
-    setWorkspace((currentWorkspace) =>
-      updateWorkspaceActiveCandidate(currentWorkspace, nextCandidateId),
-    )
+    if (operation.ownsLatest()) {
+      setWorkspace((currentWorkspace) =>
+        updateWorkspaceActiveCandidate(currentWorkspace, nextCandidateId),
+      )
+    }
 
     void updateCurationSession({
       session_id: workspace.session.session_id,
+      expected_session_version: expectedSessionVersion,
       current_candidate_id: nextCandidateId,
-    })
+    }, { signal: operation.signal })
       .then((response) => {
-        if (cancelled) {
+        if (!operation.ownsLatest()) {
           return
         }
 
         lastPersistedCandidateIdRef.current =
           response.session.current_candidate_id ?? nextCandidateId
+        hasPendingCandidateUpdateRef.current = false
         setWorkspace((currentWorkspace) =>
           updateWorkspaceActiveCandidate(
             replaceWorkspaceSession(currentWorkspace, response.session),
@@ -243,15 +257,18 @@ export function useSessionHydration(
         )
       })
       .catch(() => {
-        if (cancelled) {
+        if (!operation.ownsLatest()) {
           return
         }
 
+        hasPendingCandidateUpdateRef.current = false
         setWarning('Unable to persist the current candidate selection for resume.')
       })
 
     return () => {
-      cancelled = true
+      if (operation.ownsLatest()) {
+        candidateIntentRef.current.invalidate()
+      }
     }
   }, [
     activeCandidateId,

@@ -10,6 +10,7 @@ import {
   failDocumentLoad,
   startDocumentLoad,
 } from '@/features/documents/documentLoadEvents'
+import { LatestIntent } from '@/lib/latestIntent'
 
 export interface UploadDialogState {
   open: boolean
@@ -27,6 +28,7 @@ interface UsePdfViewerUploadOptions {
 
 export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
   const uploadAbortRef = useRef<AbortController | null>(null)
+  const documentIntentRef = useRef(new LatestIntent())
   const [uploadInFlight, setUploadInFlight] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [dropError, setDropError] = useState<string | null>(null)
@@ -131,7 +133,14 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
         message: `Loading ${file.name} for chat...`,
       })
       startedChatLoad = true
-      const payload = await loadDocumentForChat(documentId)
+      const documentOperation = documentIntentRef.current.begin()
+      const payload = await loadDocumentForChat(documentId, {
+        signal: documentOperation.signal,
+        intentToken: documentOperation.token,
+      })
+      if (controller.signal.aborted || !documentOperation.ownsLatest()) {
+        return
+      }
       dispatchChatDocumentChanged(payload)
 
       setUploadDialog((prev) => ({
@@ -211,6 +220,7 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
     return () => {
       uploadAbortRef.current?.abort()
       uploadAbortRef.current = null
+      documentIntentRef.current.invalidate()
     }
   }, [])
 

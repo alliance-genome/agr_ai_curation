@@ -718,6 +718,7 @@ export interface CurationDocumentBootstrapAvailabilityResponse {
 
 export interface CurationSessionUpdateRequest {
   session_id: string
+  expected_session_version?: number | null
   status?: CurationSessionStatus | null
   notes?: string | null
   curator_id?: string | null

@@ -83,6 +83,7 @@ export interface ChatHistoryDetailRequest {
   chatKind?: ChatHistoryListKind
   messageLimit?: number
   messageCursor?: string | null
+  signal?: AbortSignal
 }
 
 export interface ChatHistoryDetailResponse {
@@ -222,7 +223,7 @@ function extractFlowStepEvidence(payload: Record<string, unknown> | null): FlowS
 
     return {
       flow_id: flowId,
-      flow_name: readString(candidate.flow_name),
+      flow_name: readString(candidate.flow_name) ?? flowId,
       flow_run_id: flowRunId,
       step,
       tool_name: readString(candidate.tool_name),
@@ -443,6 +444,7 @@ export async function fetchChatHistoryDetail(
 
   return fetchChatHistoryJson<ChatHistoryDetailResponse>(
     `/api/chat/history/${encodeSessionId(request.sessionId)}${query ? `?${query}` : ''}`,
+    { signal: request.signal },
   )
 }
 

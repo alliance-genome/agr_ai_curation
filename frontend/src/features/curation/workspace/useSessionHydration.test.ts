@@ -1,5 +1,5 @@
 import { createElement, type ReactNode, useCallback, useMemo, useState } from 'react'
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurationWorkspace } from '@/features/curation/types'
@@ -12,6 +12,16 @@ import { useSessionHydration } from './useSessionHydration'
 const serviceMocks = vi.hoisted(() => ({
   updateCurationSession: vi.fn(),
 }))
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   updateCurationSession: serviceMocks.updateCurationSession,
@@ -245,13 +255,82 @@ describe('useSessionHydration', () => {
     await waitFor(() => {
       expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
         session_id: 'session-1',
+        expected_session_version: 1,
         current_candidate_id: 'candidate-1',
-      })
+      }, { signal: expect.any(AbortSignal) })
     })
 
     expect(result.current.hydration.restoredCandidateId).toBe('candidate-1')
     expect(result.current.hydration.restoredScrollPosition).toBeNull()
     expect(result.current.hydration.restoredCursorFieldKey).toBeNull()
     expect(result.current.hydration.dirtyFieldKeys).toEqual([])
+  })
+
+  it('lets the latest candidate selection own reverse-order PATCH completion', async () => {
+    const first = deferred<ReturnType<typeof serviceMocks.updateCurationSession>>()
+    const second = deferred<ReturnType<typeof serviceMocks.updateCurationSession>>()
+    serviceMocks.updateCurationSession
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValue(new Promise(() => {}))
+
+    const { result, rerender } = renderHook(
+      ({ routeCandidateId }: { routeCandidateId: string }) => ({
+        hydration: useSessionHydration({ routeCandidateId }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+        initialProps: { routeCandidateId: 'candidate-2' },
+      },
+    )
+
+    await waitFor(() => expect(result.current.hydration.isHydrated).toBe(true))
+
+    rerender({ routeCandidateId: 'candidate-1' })
+    await waitFor(() => expect(serviceMocks.updateCurationSession).toHaveBeenCalledTimes(1))
+    const firstSignal = serviceMocks.updateCurationSession.mock.calls[0][1].signal as AbortSignal
+
+    rerender({ routeCandidateId: 'candidate-2' })
+    await waitFor(() => expect(serviceMocks.updateCurationSession).toHaveBeenCalledTimes(2))
+    expect(firstSignal.aborted).toBe(true)
+
+    second.resolve({
+      session: {
+        ...buildWorkspace().session,
+        current_candidate_id: 'candidate-2',
+        session_version: 2,
+      },
+      action_log_entry: null,
+    })
+    await waitFor(() => {
+      expect(result.current.context.workspace.session.current_candidate_id).toBe('candidate-2')
+    })
+
+    first.resolve({
+      session: {
+        ...buildWorkspace().session,
+        current_candidate_id: 'candidate-1',
+        session_version: 2,
+      },
+      action_log_entry: null,
+    })
+    await act(async () => first.promise)
+
+    expect(result.current.context.activeCandidateId).toBe('candidate-2')
+    expect(result.current.context.workspace.active_candidate_id).toBe('candidate-2')
+    expect(result.current.context.workspace.session.current_candidate_id).toBe('candidate-2')
+    expect(serviceMocks.updateCurationSession.mock.calls.map(([request]) => request)).toEqual([
+      {
+        session_id: 'session-1',
+        expected_session_version: 1,
+        current_candidate_id: 'candidate-1',
+      },
+      {
+        session_id: 'session-1',
+        expected_session_version: 1,
+        current_candidate_id: 'candidate-2',
+      },
+    ])
   })
 })

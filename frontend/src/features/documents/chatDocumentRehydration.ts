@@ -7,6 +7,7 @@ import { loadDocumentForChat } from '@/features/documents/pdfUploadFlow'
 import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import { safeRemoveItem, safeSetJson } from '@/lib/browserStorage'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
+import type { LatestIntentOperation } from '@/lib/latestIntent'
 
 export interface RehydratableChatDocument {
   id: string
@@ -28,8 +29,7 @@ export interface RehydrateChatDocumentOptions {
   chatStorageKeys: ChatLocalStorageKeys | null
   ensureLoadedForChat?: boolean
   ownerToken?: string
-  shouldCommitViewerRestore?: (
-  ) => Promise<boolean | void> | boolean | void
+  operation?: LatestIntentOperation
   viewerState?: PDFViewerDocumentChangedDetail['viewerState']
 }
 
@@ -46,8 +46,7 @@ export interface RehydrateFromSourceOptions {
   chatStorageKeys: ChatLocalStorageKeys | null
   ownerToken?: string
   ensureLoadedForChat?: boolean
-  shouldCommitViewerRestore?: (
-  ) => Promise<boolean | void> | boolean | void
+  operation?: LatestIntentOperation
   onDocument?: (
     document: RehydratableChatDocument
   ) => Promise<boolean | void> | boolean | void
@@ -76,9 +75,13 @@ export async function rehydrateChatDocument(
     chatStorageKeys,
     ensureLoadedForChat = false,
     ownerToken = HOME_PDF_VIEWER_OWNER,
-    shouldCommitViewerRestore,
+    operation,
     viewerState,
   } = options
+
+  if (operation && !operation.ownsLatest()) {
+    throw new DOMException('Document restore superseded', 'AbortError')
+  }
 
   if (chatStorageKeys) {
     safeSetJson(() => window.localStorage, chatStorageKeys.activeDocument, document, {
@@ -88,12 +91,18 @@ export async function rehydrateChatDocument(
   }
 
   if (ensureLoadedForChat) {
-    await loadDocumentForChat(document.id)
+    await loadDocumentForChat(document.id, {
+      signal: operation?.signal,
+      intentToken: operation?.token,
+    })
+    if (operation && !operation.ownsLatest()) {
+      throw new DOMException('Document restore superseded', 'AbortError')
+    }
   }
 
   const [detailResponse, urlResponse] = await Promise.all([
-    fetch(`/api/pdf-viewer/documents/${document.id}`),
-    fetch(`/api/pdf-viewer/documents/${document.id}/url`),
+    fetch(`/api/pdf-viewer/documents/${document.id}`, { signal: operation?.signal }),
+    fetch(`/api/pdf-viewer/documents/${document.id}/url`, { signal: operation?.signal }),
   ])
 
   if (!detailResponse.ok || !urlResponse.ok) {
@@ -133,9 +142,8 @@ export async function rehydrateChatDocument(
     loadedAt,
   }
 
-  // Effect-scoped callers can cancel late viewer restore side effects after async fetches settle.
-  if (await shouldCommitViewerRestore?.() === false) {
-    return result
+  if (operation && !operation.ownsLatest()) {
+    throw new DOMException('Document restore superseded', 'AbortError')
   }
 
   if (chatStorageKeys) {
@@ -186,20 +194,26 @@ export async function rehydrateChatDocumentFromSource(
     chatStorageKeys,
     ownerToken = HOME_PDF_VIEWER_OWNER,
     ensureLoadedForChat = false,
-    shouldCommitViewerRestore,
+    operation,
     onDocument,
     onMissingDocument,
   } = options
 
   const document = await loadDocument()
 
+  if (operation && !operation.ownsLatest()) {
+    return null
+  }
+
   if (!document || !document.id) {
-    await onMissingDocument?.()
+    if (!operation || operation.ownsLatest()) {
+      await onMissingDocument?.()
+    }
     return null
   }
 
   const shouldContinue = await onDocument?.(document)
-  if (shouldContinue === false) {
+  if (shouldContinue === false || (operation && !operation.ownsLatest())) {
     return document
   }
 
@@ -208,7 +222,7 @@ export async function rehydrateChatDocumentFromSource(
     chatStorageKeys,
     ensureLoadedForChat,
     ownerToken,
-    shouldCommitViewerRestore,
+    operation,
   })
 
   return document

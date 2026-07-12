@@ -1,7 +1,7 @@
 import { type ComponentProps, StrictMode } from 'react'
 import { ThemeProvider } from '@mui/material/styles'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import theme from '@/theme'
@@ -80,7 +80,22 @@ function buildAssistantHistoryDetailUrl(sessionId: string): string {
 
 function LocationProbe() {
   const location = useLocation()
-  return <div data-testid="location-search">{location.search}</div>
+  const navigate = useNavigate()
+  return (
+    <>
+      <div data-testid="location-search">{location.search}</div>
+      <button type="button" onClick={() => navigate('/?session=session-a')}>Restore A</button>
+      <button type="button" onClick={() => navigate('/?session=session-b')}>Restore B</button>
+    </>
+  )
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 type HomeInitialEntry = NonNullable<ComponentProps<typeof MemoryRouter>['initialEntries']>[number]
@@ -260,6 +275,87 @@ describe('HomePage durable session bootstrap', () => {
     window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
   })
 
+  it('keeps the latest history restore across reverse-order completion', async () => {
+    const firstHistory = deferred<Response>()
+    const loadBodies: Array<Record<string, unknown>> = []
+    const pdfDocumentChangedSpy = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+
+    vi.mocked(global.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === buildAssistantHistoryDetailUrl('session-a')) {
+        return firstHistory.promise
+      }
+      if (url === buildAssistantHistoryDetailUrl('session-b')) {
+        return Promise.resolve(jsonResponse({
+          session: {
+            session_id: 'session-b',
+            created_at: '2026-04-20T00:00:00Z',
+            updated_at: '2026-04-20T00:05:00Z',
+            recent_activity_at: '2026-04-20T00:05:00Z',
+          },
+          active_document: { id: 'doc-b', filename: 'b.pdf' },
+          messages: [{
+            message_id: 'message-b',
+            session_id: 'session-b',
+            role: 'assistant',
+            message_type: 'text',
+            content: 'Latest history',
+            created_at: '2026-04-20T00:01:00Z',
+          }],
+          message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+          next_message_cursor: null,
+        }))
+      }
+      if (url === '/api/chat/document/load') {
+        loadBodies.push(JSON.parse(String(init?.body)))
+        return Promise.resolve(jsonResponse({
+          active: true,
+          document: { id: 'doc-b', filename: 'b.pdf' },
+        }))
+      }
+      if (url === '/api/pdf-viewer/documents/doc-b') {
+        return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
+      }
+      if (url === '/api/pdf-viewer/documents/doc-b/url') {
+        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b' }))
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-a')
+    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
+
+    expect(await screen.findByText('session-b')).toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-b')
+    expect(localStorage.getItem(chatStorageKeys.messages)).toContain('Latest history')
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-b')
+    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-b')
+    expect(loadBodies).toHaveLength(1)
+    expect(loadBodies[0]).toMatchObject({ document_id: 'doc-b' })
+
+    firstHistory.resolve(jsonResponse({
+      session: {
+        session_id: 'session-a',
+        created_at: '2026-04-20T00:00:00Z',
+        updated_at: '2026-04-20T00:02:00Z',
+        recent_activity_at: '2026-04-20T00:02:00Z',
+      },
+      active_document: { id: 'doc-a', filename: 'a.pdf' },
+      messages: [],
+      message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+      next_message_cursor: null,
+    }))
+    await act(async () => firstHistory.promise)
+
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-b')
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-b')
+    expect(pdfDocumentChangedSpy).toHaveBeenCalledTimes(1)
+    expect((pdfDocumentChangedSpy.mock.calls[0][0] as CustomEvent).detail.documentId).toBe('doc-b')
+
+    window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+  })
+
   it('loads a Documents tab route-state handoff after Home and Chat are mounted', async () => {
     const chatDocumentChangedSpy = vi.fn()
     window.addEventListener('chat-document-changed', chatDocumentChangedSpy as EventListener)
@@ -286,7 +382,7 @@ describe('HomePage durable session bootstrap', () => {
 
       if (url === '/api/chat/document/load') {
         expect(init?.method).toBe('POST')
-        expect(init?.body).toBe(JSON.stringify({ document_id: 'doc-route' }))
+        expect(JSON.parse(String(init?.body))).toMatchObject({ document_id: 'doc-route' })
         return jsonResponse({
           active: true,
           document: {

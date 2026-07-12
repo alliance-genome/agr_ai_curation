@@ -1917,6 +1917,11 @@ class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):
     """Request contract for patching session status, ownership, or notes."""
 
     session_id: str = Field(description="Session identifier")
+    expected_session_version: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Session version that must still own this mutation",
+    )
     status: Optional[CurationSessionStatus] = Field(
         default=None,
         description="New session status",

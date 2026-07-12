@@ -12,6 +12,7 @@ from ..lib.chat_history_repository import ChatMessageRecord
 class LoadDocumentRequest(BaseModel):
     """Request payload when selecting a document for chat."""
     document_id: str
+    intent_token: Optional[str] = None
 
 
 class ActiveDocument(BaseModel):

@@ -1,6 +1,8 @@
 # ruff: noqa: F403,F405
 """Document selection endpoints for chat."""
 
+from fastapi import Header
+
 from .chat_common import *
 
 
@@ -10,7 +12,9 @@ async def load_document_for_chat(
     user: Dict[str, Any] = get_auth_dependency()
 ) -> DocumentStatusResponse:
     """Select a document for chat interactions."""
-    user_id = user.get("sub")
+    user_id = _require_user_sub(user)
+    if payload.intent_token:
+        document_state.claim_intent(user_id, payload.intent_token)
     logger.info(
         "Loading document for chat: %s",
         payload.document_id,
@@ -18,7 +22,7 @@ async def load_document_for_chat(
     )
 
     try:
-        document_detail = await get_document(user["sub"], payload.document_id)
+        document_detail = await get_document(user_id, payload.document_id)
         logger.info(
             "Successfully retrieved document: %s",
             payload.document_id,
@@ -51,11 +55,23 @@ async def load_document_for_chat(
         )
         raise HTTPException(status_code=500, detail="Document summary unavailable")
 
-    document_state.set_document(user['sub'], document_summary)
+    if payload.intent_token:
+        committed = document_state.set_document_if_current(
+            user_id,
+            document_summary,
+            payload.intent_token,
+        )
+        if not committed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document selection was superseded by a newer intent",
+            )
+    else:
+        document_state.set_document(user_id, document_summary)
 
     # Invalidate document metadata cache to ensure fresh data for new document
     from src.lib.document_cache import invalidate_cache
-    invalidate_cache(user['sub'], payload.document_id)
+    invalidate_cache(user_id, payload.document_id)
 
     active_document = _build_active_document(document_summary)
     return DocumentStatusResponse(
@@ -68,7 +84,8 @@ async def load_document_for_chat(
 @router.get("/chat/document", response_model=DocumentStatusResponse)
 async def get_loaded_document(user: Dict[str, Any] = get_auth_dependency()) -> DocumentStatusResponse:
     """Return information about the currently loaded document."""
-    document_summary = document_state.get_document(user['sub'])
+    user_id = _require_user_sub(user)
+    document_summary = document_state.get_document(user_id)
     if not document_summary:
         return DocumentStatusResponse(active=False, message="No document selected")
 
@@ -76,14 +93,28 @@ async def get_loaded_document(user: Dict[str, Any] = get_auth_dependency()) -> D
 
 
 @router.delete("/chat/document", response_model=DocumentStatusResponse)
-async def clear_loaded_document(user: Dict[str, Any] = get_auth_dependency()) -> DocumentStatusResponse:
+async def clear_loaded_document(
+    user: Dict[str, Any] = get_auth_dependency(),
+    intent_token: Optional[str] = Header(default=None, alias="X-Chat-Document-Intent"),
+) -> DocumentStatusResponse:
     """Clear the current document selection."""
-    document_summary = document_state.get_document(user['sub'])
+    user_id = _require_user_sub(user)
+    intent_token = intent_token if isinstance(intent_token, str) else None
+    if intent_token:
+        document_state.claim_intent(user_id, intent_token)
+    document_summary = document_state.get_document(user_id)
     if not document_summary:
         return DocumentStatusResponse(active=False, message="No document was loaded")
 
     active_document = _build_active_document(document_summary)
-    document_state.clear_document(user['sub'])
+    if intent_token:
+        if not document_state.clear_document_if_current(user_id, intent_token):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document clear was superseded by a newer intent",
+            )
+    else:
+        document_state.clear_document(user_id)
     return DocumentStatusResponse(
         active=False,
         document=active_document,
