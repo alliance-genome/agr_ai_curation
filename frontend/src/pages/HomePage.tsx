@@ -554,6 +554,10 @@ function HomePage() {
         clearPersistedMessages()
         await clearDocumentContext(operation)
 
+        if (!operation.ownsLatest()) {
+          return
+        }
+
         const errorMessage = error instanceof Error
           ? error.message
           : 'Unable to initialize the durable chat session.'
