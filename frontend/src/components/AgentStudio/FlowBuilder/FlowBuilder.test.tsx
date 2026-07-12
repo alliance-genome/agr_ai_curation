@@ -1375,12 +1375,16 @@ describe('FlowBuilder', () => {
     })
   }, 15000)
 
-  it('does not handle save shortcuts from editable dialog fields', async () => {
+  it('does not handle builder shortcuts from editable dialog fields', async () => {
     const user = userEvent.setup()
 
     render(<FlowBuilder />)
 
     await screen.findByText('1 step')
+
+    const canvas = screen.getByRole('region', { name: 'Flow canvas' })
+    canvas.focus()
+    await user.keyboard('{Control>}a{/Control}')
 
     await user.click(screen.getByText('File'))
     await user.click(within(await screen.findByRole('menu')).getByText('Save'))
@@ -1397,6 +1401,25 @@ describe('FlowBuilder', () => {
     expect(saveShortcutEvent.defaultPrevented).toBe(false)
     expect(serviceMocks.createFlow).not.toHaveBeenCalled()
     expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+
+    const selectAllShortcutEvent = dispatchKeyboardShortcut(flowNameInput, {
+      key: 'a',
+      ctrlKey: true,
+    })
+    const deleteShortcutEvent = dispatchKeyboardShortcut(flowNameInput, {
+      key: 'Delete',
+    })
+
+    expect(selectAllShortcutEvent.defaultPrevented).toBe(false)
+    expect(deleteShortcutEvent.defaultPrevented).toBe(false)
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+
+    await user.click(within(saveDialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Save Flow' })).not.toBeInTheDocument()
+    })
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(within(await screen.findByRole('menu')).getByText('Delete Selected (1)')).toBeInTheDocument()
   }, 15000)
 
   it('selects all and deletes selected flow elements only from the canvas shortcut context', async () => {
@@ -1423,6 +1446,50 @@ describe('FlowBuilder', () => {
     })
 
     expect(deleteEvent.defaultPrevented).toBe(true)
+    await waitFor(() => {
+      expect(screen.queryByText('1 step')).not.toBeInTheDocument()
+    })
+  }, 15000)
+
+  it('reaches the menus and canvas shortcuts using only the keyboard', async () => {
+    const user = userEvent.setup()
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    const fileMenuTrigger = screen.getByRole('button', { name: 'File' })
+    const editMenuTrigger = screen.getByRole('button', { name: 'Edit' })
+    const canvas = screen.getByRole('region', { name: 'Flow canvas' })
+
+    await user.tab()
+    expect(fileMenuTrigger).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('menu')).toBeInTheDocument()
+    expect(fileMenuTrigger).toHaveAttribute('aria-expanded', 'true')
+    await user.keyboard('{Escape}')
+    expect(fileMenuTrigger).toHaveFocus()
+
+    await user.tab()
+    expect(editMenuTrigger).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('menu')).toBeInTheDocument()
+    expect(editMenuTrigger).toHaveAttribute('aria-expanded', 'true')
+    await user.keyboard('{Escape}')
+    expect(editMenuTrigger).toHaveFocus()
+
+    await user.tab()
+    await user.tab()
+    await user.tab()
+    await user.tab()
+    await user.tab()
+    await user.tab()
+    expect(canvas).toHaveFocus()
+
+    await user.keyboard('{Control>}a{/Control}')
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+
+    await user.keyboard('{Delete}')
     await waitFor(() => {
       expect(screen.queryByText('1 step')).not.toBeInTheDocument()
     })
