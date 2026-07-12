@@ -1130,7 +1130,7 @@ const BatchPage: React.FC = () => {
                       authoritativeReviewSessionIds={doc.review_session_ids}
                       disabledReason="No prepared review sessions are available for this completed document."
                       documentId={doc.document_id}
-                      flowRunId={doc.flow_run_id ?? activeBatchId}
+                      flowRunId={doc.flow_run_id}
                       originSessionId={doc.origin_session_id}
                       adapterKeys={doc.adapter_keys}
                       iconOnly={true}
@@ -1226,7 +1226,7 @@ const BatchPage: React.FC = () => {
                       authoritativeReviewSessionIds={doc.review_session_ids}
                       disabledReason="No prepared review sessions are available for this completed document."
                       documentId={doc.document_id}
-                      flowRunId={doc.flow_run_id ?? activeBatchId}
+                      flowRunId={doc.flow_run_id}
                       originSessionId={doc.origin_session_id}
                       adapterKeys={doc.adapter_keys}
                       iconOnly={true}
