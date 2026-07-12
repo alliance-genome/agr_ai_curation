@@ -3914,10 +3914,11 @@ async def execute_flow(
                             "output_length": len(projected_chat_output),
                         },
                     }
-            if (
+            terminal_output_ready = (
                 pending_terminal_output_event is not None
                 and not _missing_consumed_tool_completions()
-            ):
+            )
+            if terminal_output_ready or projected_chat_ready_event is not None:
                 yield event
                 for flow_validator_audit_event in flow_validator_audit_events:
                     yield flow_validator_audit_event
@@ -3927,6 +3928,7 @@ async def execute_flow(
                 if (
                     not curation_handoff_emitted
                     and isinstance(curation_handoff_state, Mapping)
+                    and not _missing_consumed_tool_completions()
                 ):
                     curation_handoff_emitted = True
                     yield {
@@ -3946,24 +3948,13 @@ async def execute_flow(
                         "[Flow Executor] Curation handoff produced for flow '%s'",
                         flow.name,
                     )
-                event = pending_terminal_output_event
-                event_type = str(event.get("type") or "")
-                event_data = event.get("data", {}) or {}
-                pending_terminal_output_event = None
+                if projected_chat_ready_event is not None:
+                    pending_terminal_output_event = projected_chat_ready_event
                 flow_validator_audit_events = []
                 flow_step_evidence_event = None
-
-        if projected_chat_ready_event is not None:
-            yield event
-            for flow_validator_audit_event in flow_validator_audit_events:
-                yield flow_validator_audit_event
-            if flow_step_evidence_event is not None:
-                yield flow_step_evidence_event
-            event = projected_chat_ready_event
-            event_type = "CHAT_OUTPUT_READY"
-            event_data = event.get("data", {}) or {}
-            flow_validator_audit_events = []
-            flow_step_evidence_event = None
+                if not _missing_consumed_tool_completions():
+                    break
+                continue
 
         # Terminate flow after output is produced
         # FILE_READY indicates a file output agent (CSV, TSV, JSON) completed
@@ -4029,10 +4020,10 @@ async def execute_flow(
                 },
             }
             break
-        if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
+        if event_type in {"RUN_FINISHED", "FILE_READY", "CHAT_OUTPUT_READY"}:
             missing_steps = _missing_consumed_tool_completions()
+            pending_terminal_output_event = event
             if missing_steps:
-                pending_terminal_output_event = event
                 logger.info(
                     "[Flow Executor] Deferring terminal %s for flow '%s' until all "
                     "required steps complete; missing=%s",
@@ -4041,67 +4032,10 @@ async def execute_flow(
                     missing_steps,
                 )
                 continue
-
-            handoff_failures = _flow_expected_extraction_handoff_failures(completed_steps)
-            if handoff_failures:
-                failure_reason, flow_error_event = (
-                    _flow_expected_extraction_output_error_event(
-                        flow_name=flow.name,
-                        failures=handoff_failures,
-                        completed_steps=completed_steps,
-                    )
-                )
-                flow_status = "failed"
-                yield flow_error_event
-                break
-
-            extraction_candidates = _collect_completed_step_candidates(completed_steps)
-            extraction_output_required = (
-                _flow_extraction_output_expected(completed_steps)
-                or bool(extraction_candidates)
-            )
-            persisted, failure_reason, flow_error_event, persisted_records = (
-                _persist_flow_extraction_candidates_or_build_error(
-                    flow_name=flow.name,
-                    candidates=extraction_candidates,
-                    document_id=document_id,
-                    user_id=str(user_id),
-                    session_id=session_id,
-                    trace_id=trace_id,
-                    flow_run_id=flow_run_id,
-                    extraction_output_required=extraction_output_required,
-                )
-            )
-            if not persisted:
-                _apply_persisted_result_counts_to_handoff_audits(
-                    completed_steps,
-                    persisted_records,
-                    persistence_status="failed",
-                    persistence_error_reason=failure_reason,
-                )
-                flow_status = "failed"
-                if flow_error_event is not None:
-                    flow_error_event = _attach_extraction_handoff_audits_to_flow_error(
-                        flow_error_event,
-                        completed_steps,
-                    )
-                    yield flow_error_event
-                break
-
-            extraction_persisted = True
-            _apply_persisted_result_counts_to_handoff_audits(
-                completed_steps,
-                persisted_records,
-                persistence_status="success",
-            )
-            _merge_persisted_flow_extraction_results(
-                flow_execution_state,
-                persisted_records,
-            )
-            yield event
             logger.info(
-                "[Flow Executor] %s produced - terminating flow '%s'",
-                "Output file" if event_type == "FILE_READY" else "Chat output",
+                "[Flow Executor] Buffering terminal %s for flow '%s' until "
+                "post-loop validation and persistence complete",
+                event_type,
                 flow.name,
             )
             break
@@ -4200,8 +4134,7 @@ async def execute_flow(
                     persisted_records,
                 )
 
-    # Emit flow-specific completion event
-    yield {
+    flow_finished_event = {
         "type": "FLOW_FINISHED",
         "timestamp": _now_iso(),
         "data": {
@@ -4234,6 +4167,10 @@ async def execute_flow(
             ),
         }
     }
+
+    if flow_status == "completed" and pending_terminal_output_event is not None:
+        yield pending_terminal_output_event
+    yield flow_finished_event
 
     if flow_status == "failed":
         logger.warning(

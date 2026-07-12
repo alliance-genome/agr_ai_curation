@@ -4724,6 +4724,7 @@ class TestExecuteFlowTermination:
         assert "FLOW_STARTED" in event_types
         assert "SPECIALIST_ERROR" in event_types
         assert "FLOW_ERROR" in event_types
+        assert "RUN_FINISHED" not in event_types
         assert "CHAT_OUTPUT_READY" not in event_types
 
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
@@ -4833,6 +4834,7 @@ class TestExecuteFlowTermination:
         assert flow_error["details"]["missing_steps"] == [
             {"step": 2, "tool_name": "ask_phenotype_extractor_specialist"}
         ]
+        assert "RUN_FINISHED" not in event_types
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "failed"
         assert "step 2" in (flow_finished["data"]["failure_reason"] or "")
@@ -6577,7 +6579,10 @@ class TestExecuteFlowTermination:
                 "type": "TOOL_COMPLETE",
                 "details": {"toolName": "ask_gene_expression_specialist"},
             }
-            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+            yield {
+                "type": "RUN_FINISHED",
+                "data": {"response": "Stale success must not escape."},
+            }
 
         monkeypatch.setattr(
             "src.lib.openai_agents.runner.run_agent_streamed",
@@ -6596,7 +6601,7 @@ class TestExecuteFlowTermination:
         ]
 
         event_types = [event.get("type") for event in events]
-        assert "CHAT_OUTPUT_READY" not in event_types
+        assert "RUN_FINISHED" not in event_types
         assert "FLOW_ERROR" in event_types
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "failed"
