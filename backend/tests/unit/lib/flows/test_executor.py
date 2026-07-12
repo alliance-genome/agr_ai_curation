@@ -317,7 +317,8 @@ def _recording_persist_idempotent_extraction_results(persisted_requests=None):
 
     recorded_requests = persisted_requests if persisted_requests is not None else []
 
-    def _persist(requests):
+    def _persist(requests, *, db=None):
+        _ = db
         recorded_requests.extend(requests)
         return [
             SimpleNamespace(
@@ -495,8 +496,8 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
     assert materialized == [(records[0], True)]
 
 
-def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkeypatch):
-    """Flow persistence must convert curatable_objects[] to DomainEnvelope.extracted_objects[]."""
+def test_flow_candidate_persistence_normalizes_from_authoritative_record(monkeypatch):
+    """Flow persistence must retain extractor input until its canonical row exists."""
 
     executor = _executor_module()
     persisted_requests = []
@@ -550,13 +551,13 @@ def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkey
     assert len(records) == 1
     assert len(persisted_requests) == 1
     persisted_payload = persisted_requests[0].payload_json
-    assert persisted_payload["envelope_id"] == (
+    assert "envelope_id" not in persisted_payload
+    assert persisted_payload["curatable_objects"][0]["object_id"] == "gene-row-1"
+    assert "extracted_objects" not in persisted_payload
+    assert "source_extraction_result_id" not in persisted_payload.get("metadata", {})
+    assert persisted_requests[0].metadata["envelope_id"] == (
         "flow:flow-run-1:flow-1:1:ask_gene_extractor_specialist:gene_extractor"
     )
-    assert persisted_payload["domain_pack_id"] == "gene"
-    assert "curatable_objects" not in persisted_payload
-    assert persisted_payload["extracted_objects"][0]["object_id"] == "gene-row-1"
-    assert persisted_payload["history"] == []
     assert persisted_requests[0].candidate_count == 1
     assert persisted_requests[0].idempotency_key.startswith("flow-extraction:")
     assert persisted_requests[0].payload_hash == executor.canonical_extraction_payload_hash(
@@ -663,7 +664,9 @@ def test_flow_candidate_persistence_retry_has_stable_normalized_payload(monkeypa
     ]
     assert persisted_requests[0].payload_json == persisted_requests[1].payload_json
     assert persisted_requests[0].payload_hash == persisted_requests[1].payload_hash
-    assert persisted_requests[0].payload_json["history"] == []
+    assert "source_extraction_result_id" not in persisted_requests[0].payload_json.get(
+        "metadata", {}
+    )
 
 
 def test_flow_candidate_persistence_rejects_mixed_shape_candidate(monkeypatch):
@@ -3579,6 +3582,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
         """Curation prep steps should hand upstream flow extractions to the deterministic mapper."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         captured = {}
+        persisted_requests = []
+        fake_db = MagicMock()
+        fake_db.in_transaction.return_value = True
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -3667,6 +3673,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
         with patch("src.lib.flows.executor.run_curation_prep", _fake_run_curation_prep), patch(
             "src.lib.flows.executor.get_current_trace_id",
             lambda: "trace-123",
+        ), patch(
+            "src.lib.flows.executor.SessionLocal",
+            lambda: fake_db,
+        ), patch(
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
+        ), patch(
+            "src.lib.flows.executor._materialize_flow_domain_envelope_records",
+            lambda *_args, **_kwargs: None,
         ):
             flow = _make_flow([
                 _task_input_node("Prepare the extracted gene-expression findings for review."),
@@ -3699,6 +3714,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         payload = json.loads(prep_output)
         assert payload["run_metadata"]["model_name"] == "deterministic_programmatic_mapper_v1"
         assert len(captured["extraction_results"]) == 1
+        assert UUID(captured["extraction_results"][0].extraction_result_id)
         assert captured["extraction_results"][0].agent_key == "gene"
         assert captured["extraction_results"][0].source_kind is _executor_module().CurationExtractionSourceKind.FLOW
         assert captured["scope_confirmation"].confirmed is True
@@ -3708,6 +3724,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert captured["persistence_context"].flow_run_id == "flow-run-123"
         assert captured["persistence_context"].trace_id == "trace-123"
         assert captured["persistence_context"].user_id == "user-123"
+        assert captured["db"] is fake_db
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].idempotency_key
+        assert persisted_requests[0].payload_hash
+        fake_db.commit.assert_called_once()
+        fake_db.close.assert_called_once()
         assert mock_get_agent.call_count == 1
 
     @patch("src.lib.flows.executor._create_streaming_tool")
@@ -3718,6 +3740,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         """Curation handoff steps should materialize review sessions without an LLM specialist."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         captured = {}
+        persisted_requests = []
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -3742,6 +3765,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
         class _FakeSession:
             def __init__(self):
                 self.closed = False
+
+            def in_transaction(self):
+                return True
+
+            def rollback(self):
+                raise AssertionError("successful handoff must not roll back")
 
             def close(self):
                 self.closed = True
@@ -3784,6 +3813,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ), patch(
             "src.lib.flows.executor.get_agent_metadata",
             _fake_get_agent_metadata,
+        ), patch(
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
+        ), patch(
+            "src.lib.flows.executor._materialize_flow_domain_envelope_records",
+            lambda *_args, **_kwargs: None,
         ):
             flow = _make_flow([
                 _task_input_node("Hand extracted findings to the review workspace."),
@@ -3819,6 +3854,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "adapter_keys": ["gene"],
         }
         assert len(captured["extraction_results"]) == 1
+        assert UUID(captured["extraction_results"][0].extraction_result_id)
         assert captured["extraction_results"][0].agent_key == "gene"
         assert captured["document_id"] == "doc-123"
         assert captured["runner_user_id"] == "user-123"
@@ -3826,8 +3862,89 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert captured["origin_session_id"] == "session-123"
         assert captured["conversation_summary"] is not None
         assert captured["db"] is fake_db
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].idempotency_key
+        assert persisted_requests[0].payload_hash
         assert fake_db.closed is True
         assert mock_get_agent.call_count == 1
+
+    @pytest.mark.parametrize(
+        "failure_boundary", ["canonical_insert", "materialization", "final_commit"]
+    )
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_curation_handoff_source_failure_rolls_back_without_ready_state(
+        self, mock_get_agent, mock_streaming, failure_boundary
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        fake_db = MagicMock()
+        fake_db.in_transaction.return_value = True
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return json.dumps(_structured_step_output("unc-54"))
+
+            return _tool
+
+        def _fake_get_agent_metadata(agent_id, **_kwargs):
+            return {
+                "display_name": agent_id,
+                "description": agent_id,
+                "requires_document": agent_id == "curation_handoff",
+                "curation": {"adapter_key": "gene"} if agent_id == "gene" else None,
+            }
+
+        def _persist(requests, *, db=None):
+            if failure_boundary == "canonical_insert":
+                raise RuntimeError("canonical insert failed")
+            return _recording_persist_idempotent_extraction_results()(requests, db=db)
+
+        def _materialize(*_args, **_kwargs):
+            if failure_boundary == "materialization":
+                raise RuntimeError("materialization failed")
+
+        handoff_failure = (
+            RuntimeError("final commit failed")
+            if failure_boundary == "final_commit"
+            else AssertionError("handoff must not run after source failure")
+        )
+
+        mock_streaming.side_effect = _make_streaming_tool
+        with patch("src.lib.flows.executor.SessionLocal", lambda: fake_db), patch(
+            "src.lib.flows.executor.get_agent_metadata", _fake_get_agent_metadata
+        ), patch(
+            "src.lib.flows.executor.persist_idempotent_extraction_results", _persist
+        ), patch(
+            "src.lib.flows.executor._materialize_flow_domain_envelope_records", _materialize
+        ), patch(
+            "src.lib.flows.executor.run_flow_curation_handoff",
+            side_effect=handoff_failure,
+        ):
+            flow = _make_flow([
+                _task_input_node("Extract and hand off."),
+                _agent_node("n1", "gene", step_goal="Extract genes"),
+                _agent_node("n2", "curation_handoff", step_goal="Create review sessions"),
+            ])
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                document_id="doc-123",
+                user_id="user-123",
+                session_id="session-123",
+                flow_run_id="flow-run-123",
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+            with pytest.raises(RuntimeError, match=failure_boundary.split("_")[0]):
+                asyncio.run(
+                    tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "handoff"}))
+                )
+
+        assert "curation_handoff" not in execution_state
+        assert execution_state["persisted_extraction_results"] == []
+        fake_db.rollback.assert_called_once()
+        fake_db.close.assert_called_once()
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")

@@ -130,6 +130,32 @@ def _cleanup_handoff_rows(db) -> None:
             db.execute(
                 delete(CurationCandidate).where(CurationCandidate.session_id.in_(session_ids))
             )
+            if envelope_ids:
+                db.execute(
+                    delete(DomainValidationFinding).where(
+                        DomainValidationFinding.envelope_id.in_(envelope_ids)
+                    )
+                )
+                db.execute(
+                    delete(DomainEnvelopeProjectionIndex).where(
+                        DomainEnvelopeProjectionIndex.envelope_id.in_(envelope_ids)
+                    )
+                )
+                db.execute(
+                    delete(DomainEnvelopeHistory).where(
+                        DomainEnvelopeHistory.envelope_id.in_(envelope_ids)
+                    )
+                )
+                db.execute(
+                    delete(DomainEnvelopeObject).where(
+                        DomainEnvelopeObject.envelope_id.in_(envelope_ids)
+                    )
+                )
+                db.execute(
+                    delete(DomainEnvelopeModel).where(
+                        DomainEnvelopeModel.envelope_id.in_(envelope_ids)
+                    )
+                )
             db.execute(delete(CurationReviewSession).where(CurationReviewSession.id.in_(session_ids)))
 
         if batch_ids:
@@ -142,33 +168,6 @@ def _cleanup_handoff_rows(db) -> None:
             db.execute(
                 delete(CurationExtractionResultRecord).where(
                     CurationExtractionResultRecord.document_id.in_(doc_ids)
-                )
-            )
-
-        if envelope_ids:
-            db.execute(
-                delete(DomainValidationFinding).where(
-                    DomainValidationFinding.envelope_id.in_(envelope_ids)
-                )
-            )
-            db.execute(
-                delete(DomainEnvelopeProjectionIndex).where(
-                    DomainEnvelopeProjectionIndex.envelope_id.in_(envelope_ids)
-                )
-            )
-            db.execute(
-                delete(DomainEnvelopeHistory).where(
-                    DomainEnvelopeHistory.envelope_id.in_(envelope_ids)
-                )
-            )
-            db.execute(
-                delete(DomainEnvelopeObject).where(
-                    DomainEnvelopeObject.envelope_id.in_(envelope_ids)
-                )
-            )
-            db.execute(
-                delete(DomainEnvelopeModel).where(
-                    DomainEnvelopeModel.envelope_id.in_(envelope_ids)
                 )
             )
 
@@ -307,6 +306,56 @@ def _candidate_count(db, session_ids: list[str]) -> int:
     )
 
 
+def _handoff_state_counts(db, document_id: UUID) -> tuple[int, int, int, int]:
+    from src.lib.curation_workspace.models import (
+        CurationCandidate,
+        CurationExtractionResultRecord,
+        CurationReviewSession,
+        DomainEnvelopeModel,
+    )
+
+    extraction_count = len(
+        list(
+            db.scalars(
+                select(CurationExtractionResultRecord).where(
+                    CurationExtractionResultRecord.document_id == document_id
+                )
+            )
+        )
+    )
+    envelope_count = len(
+        list(
+            db.scalars(
+                select(DomainEnvelopeModel).where(
+                    DomainEnvelopeModel.document_id == document_id
+                )
+            )
+        )
+    )
+    session_count = len(
+        list(
+            db.scalars(
+                select(CurationReviewSession).where(
+                    CurationReviewSession.document_id == document_id
+                )
+            )
+        )
+    )
+    candidate_count = len(
+        list(
+            db.scalars(
+                select(CurationCandidate)
+                .join(
+                    CurationReviewSession,
+                    CurationReviewSession.id == CurationCandidate.session_id,
+                )
+                .where(CurationReviewSession.document_id == document_id)
+            )
+        )
+    )
+    return extraction_count, envelope_count, session_count, candidate_count
+
+
 def _extraction_record(
     *,
     adapter_key: str,
@@ -352,7 +401,9 @@ def _extraction_record(
 @contextmanager
 def _patched_handoff_execute_flow(adapter_keys: list[str]):
     from src.lib.flows.executor import execute_flow as original_execute_flow
+    from src.lib.flows.executor import _persist_flow_extraction_candidates
     from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
+    from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
     from src.models.sql.database import SessionLocal
 
     async def _fake_execute_flow(**kwargs):
@@ -360,7 +411,7 @@ def _patched_handoff_execute_flow(adapter_keys: list[str]):
         user_id = kwargs["user_id"]
         session_id = kwargs["session_id"]
         flow_run_id = kwargs["flow_run_id"]
-        extraction_results = [
+        extraction_fixtures = [
             _extraction_record(
                 adapter_key=adapter_key,
                 document_id=document_id,
@@ -370,8 +421,28 @@ def _patched_handoff_execute_flow(adapter_keys: list[str]):
             )
             for adapter_key in adapter_keys
         ]
+        candidates = [
+            ExtractionEnvelopeCandidate(
+                agent_key=record.agent_key,
+                adapter_key=record.adapter_key,
+                payload_json=record.payload_json,
+                candidate_count=record.candidate_count,
+                conversation_summary=record.conversation_summary,
+                metadata=dict(record.metadata),
+            )
+            for record in extraction_fixtures
+        ]
         handoff_db = SessionLocal()
         try:
+            extraction_results = _persist_flow_extraction_candidates(
+                candidates=candidates,
+                document_id=document_id,
+                user_id=user_id,
+                session_id=session_id,
+                trace_id=f"trace-{adapter_keys[0]}",
+                flow_run_id=flow_run_id,
+                db=handoff_db,
+            )
             handoff = await run_flow_curation_handoff(
                 extraction_results=extraction_results,
                 document_id=document_id,
@@ -440,8 +511,23 @@ def _run_batch(batch_id):
 
 
 def test_batch_flow_ending_in_curation_handoff_creates_owned_sessions(handoff_db):
+    from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+    from src.lib.curation_workspace.domain_envelope_normalization import (
+        domain_envelope_from_extraction_result,
+    )
+    from src.lib.curation_workspace.extraction_results import (
+        canonical_extraction_payload_hash,
+        list_extraction_results,
+    )
+    from src.lib.curation_workspace.models import (
+        CurationCandidate,
+        CurationExtractionResultRecord,
+        DomainEnvelopeModel,
+    )
+    from src.lib.domain_envelopes.persistence import domain_envelope_payload_hash
     from src.lib.batch.validation import validate_flow_for_batch
     from src.models.sql.batch import BatchDocumentStatus
+    from src.schemas.curation_workspace import CurationExtractionSourceKind
 
     suffix = uuid4().hex[:10]
     user = _create_user(handoff_db, suffix)
@@ -468,6 +554,62 @@ def test_batch_flow_ending_in_curation_handoff_creates_owned_sessions(handoff_db
     assert sessions[0].assigned_curator_id == user.auth_sub
     assert _candidate_count(handoff_db, batch_doc.review_session_ids) > 0
 
+    source_row = handoff_db.scalars(
+        select(CurationExtractionResultRecord).where(
+            CurationExtractionResultRecord.document_id == document.id,
+            CurationExtractionResultRecord.source_kind == CurationExtractionSourceKind.FLOW,
+            CurationExtractionResultRecord.agent_key != CURATION_PREP_AGENT_ID,
+        )
+    ).one()
+    source_schema = next(
+        record
+        for record in list_extraction_results(
+            db=handoff_db,
+            document_id=str(document.id),
+            source_kind=CurationExtractionSourceKind.FLOW,
+        )
+        if record.extraction_result_id == str(source_row.id)
+    )
+    envelope_row = handoff_db.scalars(
+        select(DomainEnvelopeModel).where(
+            DomainEnvelopeModel.source_extraction_result_id == str(source_row.id)
+        )
+    ).one()
+    candidate_rows = list(
+        handoff_db.scalars(
+            select(CurationCandidate).where(CurationCandidate.session_id == sessions[0].id)
+        )
+    )
+    assert candidate_rows
+    prep_row = handoff_db.get(
+        CurationExtractionResultRecord,
+        candidate_rows[0].extraction_result_id,
+    )
+
+    assert source_row.document_id == document.id
+    assert source_row.user_id == user.auth_sub
+    assert source_row.flow_run_id == sessions[0].flow_run_id
+    assert source_row.adapter_key == sessions[0].adapter_key == "gene"
+    assert source_row.payload_hash == canonical_extraction_payload_hash(source_row.payload_json)
+    assert envelope_row.document_id == source_row.document_id
+    assert envelope_row.flow_run_id == source_row.flow_run_id
+    assert envelope_row.adapter_key == source_row.adapter_key
+    assert envelope_row.envelope_json["metadata"]["source_extraction_result_id"] == str(
+        source_row.id
+    )
+    assert envelope_row.source_payload_hash == domain_envelope_payload_hash(
+        domain_envelope_from_extraction_result(source_schema)
+    )
+    assert {candidate.envelope_id for candidate in candidate_rows} == {
+        envelope_row.envelope_id
+    }
+    assert prep_row is not None
+    assert prep_row.agent_key == CURATION_PREP_AGENT_ID
+    assert prep_row.document_id == source_row.document_id
+    assert prep_row.user_id == source_row.user_id
+    assert prep_row.flow_run_id == source_row.flow_run_id
+    assert prep_row.adapter_key == source_row.adapter_key
+
 
 def test_multi_adapter_flow_creates_one_session_per_adapter(handoff_db):
     from src.models.sql.batch import BatchDocumentStatus
@@ -492,6 +634,69 @@ def test_multi_adapter_flow_creates_one_session_per_adapter(handoff_db):
     assert {session.adapter_key for session in sessions} == {"gene", "gene_expression"}
     assert {session.assigned_curator_id for session in sessions} == {user.auth_sub}
     assert _candidate_count(handoff_db, batch_doc.review_session_ids) >= 2
+
+
+async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
+    from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
+    from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
+    from src.lib.flows.executor import _persist_flow_extraction_candidates
+
+    suffix = uuid4().hex[:10]
+    user = _create_user(handoff_db, suffix)
+    document = _create_document(handoff_db, user, suffix)
+    handoff_db.commit()
+
+    flow_run_id = f"{TEST_PREFIX}_retry_{suffix}"
+    origin_session_id = f"{TEST_PREFIX}_session_{suffix}"
+    fixture = _extraction_record(
+        adapter_key="gene",
+        document_id=str(document.id),
+        user_id=user.auth_sub,
+        session_id=origin_session_id,
+        flow_run_id=flow_run_id,
+    )
+    candidate = ExtractionEnvelopeCandidate(
+        agent_key=fixture.agent_key,
+        adapter_key=fixture.adapter_key,
+        payload_json=fixture.payload_json,
+        candidate_count=fixture.candidate_count,
+        conversation_summary=fixture.conversation_summary,
+        metadata=dict(fixture.metadata),
+    )
+
+    async def _run_once():
+        source_records = _persist_flow_extraction_candidates(
+            candidates=[candidate],
+            document_id=str(document.id),
+            user_id=user.auth_sub,
+            session_id=origin_session_id,
+            trace_id="trace-retry",
+            flow_run_id=flow_run_id,
+            db=handoff_db,
+        )
+        return await run_flow_curation_handoff(
+            extraction_results=source_records,
+            document_id=str(document.id),
+            runner_user_id=user.auth_sub,
+            flow_run_id=flow_run_id,
+            origin_session_id=origin_session_id,
+            conversation_summary="Retry integration fixture.",
+            db=handoff_db,
+        )
+
+    first = await _run_once()
+    first_counts = _handoff_state_counts(handoff_db, document.id)
+    second = await _run_once()
+    handoff_db.expire_all()
+    second_counts = _handoff_state_counts(handoff_db, document.id)
+
+    assert second.review_session_ids == first.review_session_ids
+    assert second.adapter_keys == first.adapter_keys == ["gene"]
+    assert second_counts == first_counts
+    assert first_counts[0] == 2  # canonical FLOW source plus curation prep output
+    assert first_counts[1] == 1
+    assert first_counts[2] == 1
+    assert first_counts[3] > 0
 
 
 def test_completed_handoff_batch_is_not_rerun(handoff_db):
