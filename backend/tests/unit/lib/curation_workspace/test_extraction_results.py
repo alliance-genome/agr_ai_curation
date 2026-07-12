@@ -10,11 +10,15 @@ from sqlalchemy.exc import IntegrityError
 
 from src.lib.curation_workspace import extraction_results as module
 from src.lib.curation_workspace.extraction_results import (
+    ExtractionResultPayloadMismatchError,
+    build_flow_extraction_idempotency_key,
     build_extraction_envelope_candidate,
     build_extraction_envelope_candidate_with_evidence,
+    canonical_extraction_payload_hash,
     persist_inline_validated_extraction_result,
     persist_extraction_result,
     persist_extraction_results,
+    persist_idempotent_extraction_results,
 )
 from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
@@ -1082,6 +1086,125 @@ def test_persist_extraction_results_leaves_shared_session_rollback_to_caller():
     assert session.flush_calls == 1
     assert session.rollback_calls == 0
     assert session.refresh_calls == 0
+
+
+def _flow_persistence_request(
+    *,
+    idempotency_key: str = "flow-extraction:key-1",
+    payload_json: dict | None = None,
+    payload_hash: str | None = None,
+) -> CurationExtractionPersistenceRequest:
+    payload = payload_json or _sample_envelope_payload()
+    return CurationExtractionPersistenceRequest(
+        document_id=str(uuid4()),
+        adapter_key="gene",
+        agent_key="gene-expression",
+        source_kind=CurationExtractionSourceKind.FLOW,
+        origin_session_id="session-1",
+        flow_run_id="flow-run-1",
+        user_id="user-1",
+        payload_json=payload,
+        idempotency_key=idempotency_key,
+        payload_hash=payload_hash or canonical_extraction_payload_hash(payload),
+    )
+
+
+def test_flow_idempotency_key_is_stable_and_source_scoped():
+    key_material = {
+        "document_id": "11111111-1111-1111-1111-111111111111",
+        "user_id": "user-1",
+        "origin_session_id": "session-1",
+        "flow_run_id": "flow-run-1",
+        "adapter_key": "gene",
+        "agent_key": "gene-extractor",
+        "source_kind": CurationExtractionSourceKind.FLOW,
+        "candidate_identity": "flow-1:1:ask_gene_extractor_specialist:gene-extractor",
+    }
+
+    first = build_flow_extraction_idempotency_key(**key_material)
+    retry = build_flow_extraction_idempotency_key(**dict(reversed(key_material.items())))
+    different_user = build_flow_extraction_idempotency_key(
+        **{**key_material, "user_id": "user-2"}
+    )
+
+    assert first == retry
+    assert first.startswith("flow-extraction:")
+    assert different_user != first
+
+
+def test_idempotent_batch_deduplicates_same_call_keys_in_first_seen_order():
+    session = _FakeSession()
+    first = _flow_persistence_request(idempotency_key="flow-extraction:first")
+    duplicate = first.model_copy(deep=True)
+    second = _flow_persistence_request(idempotency_key="flow-extraction:second")
+
+    responses = persist_idempotent_extraction_results(
+        [first, duplicate, second],
+        db=session,
+    )
+
+    assert len(responses) == 2
+    assert len(session.added_records) == 2
+    assert session.begin_nested_calls == 2
+    assert [response.extraction_result.idempotency_key for response in responses] == [
+        "flow-extraction:first",
+        "flow-extraction:second",
+    ]
+
+
+def test_idempotent_batch_rejects_same_call_payload_mismatch_before_writing():
+    session = _FakeSession()
+    first = _flow_persistence_request(idempotency_key="flow-extraction:conflict")
+    assert isinstance(first.payload_json, dict)
+    incompatible_payload = {**first.payload_json, "items": [{"label": "wingless"}]}
+    incompatible = first.model_copy(
+        update={
+            "payload_json": incompatible_payload,
+            "payload_hash": canonical_extraction_payload_hash(incompatible_payload),
+        },
+    )
+
+    with pytest.raises(
+        ExtractionResultPayloadMismatchError,
+        match="idempotency payload mismatch.*flow-extraction:conflict",
+    ):
+        persist_idempotent_extraction_results([first, incompatible], db=session)
+
+    assert session.added_records == []
+    assert session.flush_calls == 0
+
+
+def test_idempotent_batch_reuses_authoritative_row_and_detects_mismatch():
+    request = _flow_persistence_request(idempotency_key="flow-extraction:existing")
+    existing = _record_row(
+        id=uuid4(),
+        document_id=request.document_id,
+        agent_key=request.agent_key,
+        source_kind=request.source_kind,
+        origin_session_id=request.origin_session_id,
+        flow_run_id=request.flow_run_id,
+        user_id=request.user_id,
+        payload_json=request.payload_json,
+        idempotency_key=request.idempotency_key,
+        payload_hash=request.payload_hash,
+    )
+    session = _FakeSession(existing_rows=[existing])
+
+    responses = persist_idempotent_extraction_results([request], db=session)
+
+    assert responses[0].extraction_result.extraction_result_id == str(existing.id)
+    assert session.added_records == []
+
+    assert isinstance(request.payload_json, dict)
+    incompatible_payload = {**request.payload_json, "items": [{"label": "wingless"}]}
+    mismatch = request.model_copy(
+        update={
+            "payload_json": incompatible_payload,
+            "payload_hash": canonical_extraction_payload_hash(incompatible_payload),
+        }
+    )
+    with pytest.raises(ExtractionResultPayloadMismatchError):
+        persist_idempotent_extraction_results([mismatch], db=session)
 
 
 def test_list_extraction_results_returns_empty_for_invalid_document_id(monkeypatch, caplog):

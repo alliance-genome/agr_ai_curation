@@ -19,8 +19,17 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 
 def domain_envelope_from_extraction_result(
     extraction_result: CurationExtractionResultRecord,
+    *,
+    include_persistence_history: bool = True,
 ) -> DomainEnvelope:
-    """Return the canonical downstream DomainEnvelope for an extraction result."""
+    """Return the canonical downstream DomainEnvelope for an extraction result.
+
+    Pre-persistence callers can omit the persistence event so canonical payloads do
+    not claim a persistence timestamp before the authoritative row exists.
+    For example, flow candidate canonicalization passes
+    ``include_persistence_history=False`` before computing its payload hash; callers
+    normalizing an authoritative persisted record should keep the default.
+    """
 
     payload = extraction_result.payload_json
     if not isinstance(payload, Mapping):
@@ -62,14 +71,9 @@ def domain_envelope_from_extraction_result(
 
     # curatable_objects[] is extractor output; extracted_objects[] is the
     # canonical, post-conversion envelope list used by review and export code.
-    return DomainEnvelope(
-        envelope_id=extraction_envelope_id(extraction_result),
-        domain_pack_id=domain_pack.pack_id,
-        domain_pack_version=domain_pack.version,
-        status=DomainEnvelopeStatus.EXTRACTED,
-        schema_ref=source.schema_ref,
-        extracted_objects=list(source.curatable_objects),
-        history=[
+    history = []
+    if include_persistence_history:
+        history.append(
             HistoryEvent(
                 event_type=HistoryEventKind.CREATED,
                 actor_type=HistoryActorType.SYSTEM,
@@ -80,7 +84,16 @@ def domain_envelope_from_extraction_result(
                     f"{extraction_result.extraction_result_id}."
                 ),
             )
-        ],
+        )
+
+    return DomainEnvelope(
+        envelope_id=extraction_envelope_id(extraction_result),
+        domain_pack_id=domain_pack.pack_id,
+        domain_pack_version=domain_pack.version,
+        status=DomainEnvelopeStatus.EXTRACTED,
+        schema_ref=source.schema_ref,
+        extracted_objects=list(source.curatable_objects),
+        history=history,
         metadata=metadata,
     )
 

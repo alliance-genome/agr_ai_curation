@@ -312,7 +312,7 @@ def _make_extraction_handoff_audit(
     }
 
 
-def _recording_persist_extraction_results(persisted_requests=None):
+def _recording_persist_idempotent_extraction_results(persisted_requests=None):
     """Build a test double that records requests and returns persistence responses."""
 
     recorded_requests = persisted_requests if persisted_requests is not None else []
@@ -449,16 +449,14 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
 
     monkeypatch.setattr(
         executor,
-        "persist_extraction_results",
-        _recording_persist_extraction_results(persisted_requests),
+        "persist_idempotent_extraction_results",
+        _recording_persist_idempotent_extraction_results(persisted_requests),
     )
     monkeypatch.setattr(
         executor,
         "ensure_domain_envelope_materialization",
         lambda record, *, persist: materialized.append((record, persist)),
     )
-    monkeypatch.setattr(executor, "list_extraction_results", lambda **_kwargs: [])
-
     candidate = executor.ExtractionEnvelopeCandidate(
         agent_key="gene_extractor",
         adapter_key="gene",
@@ -506,16 +504,14 @@ def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkey
 
     monkeypatch.setattr(
         executor,
-        "persist_extraction_results",
-        _recording_persist_extraction_results(persisted_requests),
+        "persist_idempotent_extraction_results",
+        _recording_persist_idempotent_extraction_results(persisted_requests),
     )
     monkeypatch.setattr(
         executor,
         "ensure_domain_envelope_materialization",
         lambda record, *, persist: materialized.append((record, persist)),
     )
-    monkeypatch.setattr(executor, "list_extraction_results", lambda **_kwargs: [])
-
     candidate = executor.ExtractionEnvelopeCandidate(
         agent_key="gene_extractor",
         adapter_key="gene",
@@ -560,63 +556,79 @@ def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkey
     assert persisted_payload["domain_pack_id"] == "gene"
     assert "curatable_objects" not in persisted_payload
     assert persisted_payload["extracted_objects"][0]["object_id"] == "gene-row-1"
+    assert persisted_payload["history"] == []
     assert persisted_requests[0].candidate_count == 1
+    assert persisted_requests[0].idempotency_key.startswith("flow-extraction:")
+    assert persisted_requests[0].payload_hash == executor.canonical_extraction_payload_hash(
+        persisted_payload
+    )
+    assert persisted_requests[0].metadata["flow_step_key"] == (
+        "flow-1:1:ask_gene_extractor_specialist:gene_extractor"
+    )
     assert materialized == [(records[0], True)]
 
 
-def test_flow_candidate_persistence_rejects_existing_noncanonical_domain_record(
-    monkeypatch,
-):
-    """Existing flow domain records must already use DomainEnvelope.extracted_objects[]."""
+def test_flow_candidate_persistence_retry_has_stable_normalized_payload(monkeypatch):
+    """An extractor-shaped retry must reload one row instead of changing its hash."""
 
     executor = _executor_module()
+    persisted_requests = []
+    authoritative_by_key = {}
 
-    existing_record = SimpleNamespace(
-        extraction_result_id="extract-old-1",
-        metadata={
-            "flow_id": "flow-1",
-            "step": 1,
-            "tool_name": "ask_gene_extractor_specialist",
-        },
-        agent_key="gene_extractor",
-        payload_json={
-            "summary": "Old first-pass payload.",
-            "envelope_id": "env-old-mixed-1",
-            "domain_pack_id": "gene",
-            "extracted_objects": [
-                {
-                    "object_type": "gene_mention_evidence",
-                    "payload": {"primary_external_id": "FB:stale"},
-                }
-            ],
-            "curatable_objects": [
-                {
-                    "object_type": "gene_mention_evidence",
-                    "payload": {"primary_external_id": "FB:FBgn0259685"},
-                }
-            ],
-            "run_summary": {"candidate_count": 1},
-        },
-    )
-    monkeypatch.setattr(executor, "list_extraction_results", lambda **_kwargs: [existing_record])
+    def persist_idempotently(requests):
+        responses = []
+        for request in requests:
+            persisted_requests.append(request)
+            record = authoritative_by_key.get(request.idempotency_key)
+            if record is None:
+                record = SimpleNamespace(
+                    extraction_result_id="11111111-1111-1111-1111-111111111111",
+                    document_id=request.document_id,
+                    adapter_key=request.adapter_key,
+                    agent_key=request.agent_key,
+                    source_kind=request.source_kind,
+                    origin_session_id=request.origin_session_id,
+                    trace_id=request.trace_id,
+                    flow_run_id=request.flow_run_id,
+                    user_id=request.user_id,
+                    candidate_count=request.candidate_count,
+                    conversation_summary=request.conversation_summary,
+                    payload_json=request.payload_json,
+                    metadata=dict(request.metadata),
+                )
+                authoritative_by_key[request.idempotency_key] = record
+            elif request.payload_hash != record.metadata["payload_hash"]:
+                pytest.fail("identical retry produced an incompatible payload hash")
+            responses.append(SimpleNamespace(extraction_result=record))
+        return responses
+
     monkeypatch.setattr(
         executor,
-        "persist_extraction_results",
-        lambda _requests: pytest.fail("stale noncanonical records must fail before persist"),
+        "persist_idempotent_extraction_results",
+        persist_idempotently,
     )
-
+    monkeypatch.setattr(
+        executor,
+        "ensure_domain_envelope_materialization",
+        lambda record, *, persist: None,
+    )
     candidate = executor.ExtractionEnvelopeCandidate(
         agent_key="gene_extractor",
         adapter_key="gene",
         candidate_count=1,
+        conversation_summary="Extract Crumbs.",
         payload_json={
             "summary": "One gene mention was extracted.",
             "curatable_objects": [
                 {
                     "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
+                    "object_id": "gene-row-1",
                     "payload": {"primary_external_id": "FB:FBgn0259685"},
+                    "evidence_record_ids": ["evidence-1"],
                 }
             ],
+            "metadata": {},
             "run_summary": {"candidate_count": 1},
         },
         metadata={
@@ -625,26 +637,42 @@ def test_flow_candidate_persistence_rejects_existing_noncanonical_domain_record(
             "step": 1,
         },
     )
+    persistence_scope = {
+        "candidates": [candidate],
+        "document_id": "11111111-1111-1111-1111-111111111111",
+        "user_id": "curator-1",
+        "session_id": "session-1",
+        "flow_run_id": "flow-run-1",
+    }
 
-    with pytest.raises(ValueError, match=r"uses curatable_objects\[\] instead"):
-        executor._persist_flow_extraction_candidates(
-            candidates=[candidate],
-            document_id="11111111-1111-1111-1111-111111111111",
-            user_id="curator-1",
-            session_id="session-1",
-            trace_id="trace-1",
-            flow_run_id="flow-run-1",
-        )
+    first_records = executor._persist_flow_extraction_candidates(
+        **persistence_scope,
+        trace_id="trace-1",
+    )
+    retry_records = executor._persist_flow_extraction_candidates(
+        **persistence_scope,
+        trace_id="trace-2",
+    )
+
+    assert len(authoritative_by_key) == 1
+    assert [record.extraction_result_id for record in first_records] == [
+        record.extraction_result_id for record in retry_records
+    ]
+    assert [executor._flow_extraction_result_ref(record) for record in first_records] == [
+        executor._flow_extraction_result_ref(record) for record in retry_records
+    ]
+    assert persisted_requests[0].payload_json == persisted_requests[1].payload_json
+    assert persisted_requests[0].payload_hash == persisted_requests[1].payload_hash
+    assert persisted_requests[0].payload_json["history"] == []
 
 
 def test_flow_candidate_persistence_rejects_mixed_shape_candidate(monkeypatch):
     """New flow candidates must not mix canonical and extractor envelope shapes."""
 
     executor = _executor_module()
-    monkeypatch.setattr(executor, "list_extraction_results", lambda **_kwargs: [])
     monkeypatch.setattr(
         executor,
-        "persist_extraction_results",
+        "persist_idempotent_extraction_results",
         lambda _requests: pytest.fail("mixed-shape candidates must fail before persist"),
     )
 
@@ -695,8 +723,8 @@ def test_flow_candidate_persistence_skips_legacy_non_domain_payloads(monkeypatch
 
     monkeypatch.setattr(
         executor,
-        "persist_extraction_results",
-        _recording_persist_extraction_results(),
+        "persist_idempotent_extraction_results",
+        _recording_persist_idempotent_extraction_results(),
     )
     monkeypatch.setattr(
         executor,
@@ -4777,7 +4805,7 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             lambda *_args, **_kwargs: pytest.fail(
                 "incomplete flows must not persist final extraction results"
             ),
@@ -5149,8 +5177,8 @@ class TestExecuteFlowTermination:
             ),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         runner = importlib.import_module("src.lib.openai_agents.runner")
@@ -5319,7 +5347,7 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             lambda *_args, **_kwargs: pytest.fail(
                 "missing extraction handoff must fail before persistence"
             ),
@@ -5415,7 +5443,7 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             lambda _requests: [],
         )
         monkeypatch.setattr(
@@ -5528,10 +5556,10 @@ class TestExecuteFlowTermination:
         )
 
         def _persist_first_only(requests):
-            return _recording_persist_extraction_results([])(requests[:1])
+            return _recording_persist_idempotent_extraction_results([])(requests[:1])
 
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             _persist_first_only,
         )
         monkeypatch.setattr(
@@ -5636,8 +5664,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -5749,7 +5777,7 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             lambda *_args, **_kwargs: pytest.fail(
                 "curation handoff should suppress fallback extraction persistence"
             ),
@@ -5860,8 +5888,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.uuid4",
@@ -5989,7 +6017,7 @@ class TestExecuteFlowTermination:
             raise RuntimeError("db unavailable")
 
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             _raise_persistence_error,
         )
         monkeypatch.setattr(
@@ -6111,8 +6139,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -6206,8 +6234,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -6273,8 +6301,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -6352,8 +6380,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -6427,7 +6455,10 @@ class TestExecuteFlowTermination:
         assert captured["trace_context"] == {"trace_id": "trace-existing"}
 
     @pytest.mark.asyncio
-    async def test_skips_duplicate_extraction_persistence_when_flow_run_already_has_results(self, monkeypatch):
+    async def test_retry_routes_extraction_through_idempotent_database_boundary(
+        self,
+        monkeypatch,
+    ):
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
@@ -6460,12 +6491,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.list_extraction_results",
-            lambda **_kwargs: [SimpleNamespace(id="existing-result")],
-        )
-        monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -6493,7 +6520,10 @@ class TestExecuteFlowTermination:
         ]
 
         assert "FLOW_FINISHED" in [event.get("type") for event in events]
-        assert persisted_requests == []
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].flow_run_id == "flow-run-existing"
+        assert persisted_requests[0].idempotency_key.startswith("flow-extraction:")
+        assert persisted_requests[0].payload_hash
 
     @pytest.mark.asyncio
     async def test_marks_flow_failed_when_extraction_persistence_fails(self, monkeypatch):
@@ -6533,7 +6563,7 @@ class TestExecuteFlowTermination:
             raise RuntimeError("db unavailable")
 
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             _raise_persistence,
         )
         monkeypatch.setattr(
