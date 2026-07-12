@@ -556,6 +556,7 @@ def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkey
     assert persisted_payload["domain_pack_id"] == "gene"
     assert "curatable_objects" not in persisted_payload
     assert persisted_payload["extracted_objects"][0]["object_id"] == "gene-row-1"
+    assert persisted_payload["history"] == []
     assert persisted_requests[0].candidate_count == 1
     assert persisted_requests[0].idempotency_key.startswith("flow-extraction:")
     assert persisted_requests[0].payload_hash == executor.canonical_extraction_payload_hash(
@@ -565,6 +566,104 @@ def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkey
         "flow-1:1:ask_gene_extractor_specialist:gene_extractor"
     )
     assert materialized == [(records[0], True)]
+
+
+def test_flow_candidate_persistence_retry_has_stable_normalized_payload(monkeypatch):
+    """An extractor-shaped retry must reload one row instead of changing its hash."""
+
+    executor = _executor_module()
+    persisted_requests = []
+    authoritative_by_key = {}
+
+    def persist_idempotently(requests):
+        responses = []
+        for request in requests:
+            persisted_requests.append(request)
+            record = authoritative_by_key.get(request.idempotency_key)
+            if record is None:
+                record = SimpleNamespace(
+                    extraction_result_id="11111111-1111-1111-1111-111111111111",
+                    document_id=request.document_id,
+                    adapter_key=request.adapter_key,
+                    agent_key=request.agent_key,
+                    source_kind=request.source_kind,
+                    origin_session_id=request.origin_session_id,
+                    trace_id=request.trace_id,
+                    flow_run_id=request.flow_run_id,
+                    user_id=request.user_id,
+                    candidate_count=request.candidate_count,
+                    conversation_summary=request.conversation_summary,
+                    payload_json=request.payload_json,
+                    metadata=dict(request.metadata),
+                )
+                authoritative_by_key[request.idempotency_key] = record
+            elif request.payload_hash != record.metadata["payload_hash"]:
+                pytest.fail("identical retry produced an incompatible payload hash")
+            responses.append(SimpleNamespace(extraction_result=record))
+        return responses
+
+    monkeypatch.setattr(
+        executor,
+        "persist_idempotent_extraction_results",
+        persist_idempotently,
+    )
+    monkeypatch.setattr(
+        executor,
+        "ensure_domain_envelope_materialization",
+        lambda record, *, persist: None,
+    )
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        candidate_count=1,
+        conversation_summary="Extract Crumbs.",
+        payload_json={
+            "summary": "One gene mention was extracted.",
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
+                    "object_id": "gene-row-1",
+                    "payload": {"primary_external_id": "FB:FBgn0259685"},
+                    "evidence_record_ids": ["evidence-1"],
+                }
+            ],
+            "metadata": {},
+            "run_summary": {"candidate_count": 1},
+        },
+        metadata={
+            "flow_id": "flow-1",
+            "tool_name": "ask_gene_extractor_specialist",
+            "step": 1,
+        },
+    )
+    persistence_scope = {
+        "candidates": [candidate],
+        "document_id": "11111111-1111-1111-1111-111111111111",
+        "user_id": "curator-1",
+        "session_id": "session-1",
+        "flow_run_id": "flow-run-1",
+    }
+
+    first_records = executor._persist_flow_extraction_candidates(
+        **persistence_scope,
+        trace_id="trace-1",
+    )
+    retry_records = executor._persist_flow_extraction_candidates(
+        **persistence_scope,
+        trace_id="trace-2",
+    )
+
+    assert len(authoritative_by_key) == 1
+    assert [record.extraction_result_id for record in first_records] == [
+        record.extraction_result_id for record in retry_records
+    ]
+    assert [executor._flow_extraction_result_ref(record) for record in first_records] == [
+        executor._flow_extraction_result_ref(record) for record in retry_records
+    ]
+    assert persisted_requests[0].payload_json == persisted_requests[1].payload_json
+    assert persisted_requests[0].payload_hash == persisted_requests[1].payload_hash
+    assert persisted_requests[0].payload_json["history"] == []
 
 
 def test_flow_candidate_persistence_rejects_mixed_shape_candidate(monkeypatch):

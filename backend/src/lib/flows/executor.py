@@ -930,7 +930,10 @@ def _canonicalize_flow_extraction_candidate(
             "metadata": metadata,
         }
     )
-    envelope = domain_envelope_from_extraction_result(extraction_record)
+    envelope = domain_envelope_from_extraction_result(
+        extraction_record,
+        include_persistence_history=False,
+    )
     envelope_payload = envelope.model_dump(mode="json")
     return replace(
         candidate,
