@@ -256,6 +256,8 @@ describe('useSessionHydration', () => {
       expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
         session_id: 'session-1',
         expected_session_version: 1,
+        intent_owner: expect.any(String),
+        intent_generation: expect.any(Number),
         current_candidate_id: 'candidate-1',
       }, { signal: expect.any(AbortSignal) })
     })
@@ -320,17 +322,21 @@ describe('useSessionHydration', () => {
     expect(result.current.context.activeCandidateId).toBe('candidate-2')
     expect(result.current.context.workspace.active_candidate_id).toBe('candidate-2')
     expect(result.current.context.workspace.session.current_candidate_id).toBe('candidate-2')
-    expect(serviceMocks.updateCurationSession.mock.calls.map(([request]) => request)).toEqual([
-      {
-        session_id: 'session-1',
-        expected_session_version: 1,
-        current_candidate_id: 'candidate-1',
-      },
-      {
-        session_id: 'session-1',
-        expected_session_version: 1,
-        current_candidate_id: 'candidate-2',
-      },
-    ])
+    const requests = serviceMocks.updateCurationSession.mock.calls.map(([request]) => request)
+    expect(requests).toHaveLength(2)
+    expect(requests[0]).toMatchObject({
+      session_id: 'session-1',
+      expected_session_version: 1,
+      current_candidate_id: 'candidate-1',
+    })
+    expect(requests[1]).toMatchObject({
+      session_id: 'session-1',
+      expected_session_version: 1,
+      current_candidate_id: 'candidate-2',
+    })
+    expect(requests[1].intent_owner).toBe(requests[0].intent_owner)
+    expect(Number(requests[1].intent_generation)).toBeGreaterThan(
+      Number(requests[0].intent_generation),
+    )
   })
 })

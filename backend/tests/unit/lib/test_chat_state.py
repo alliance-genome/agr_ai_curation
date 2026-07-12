@@ -33,10 +33,12 @@ def test_document_intent_claim_supersedes_older_operation():
     state = DocumentSelectionState()
     state.set_document("user-a", {"document_id": "doc-b"})
 
-    state.claim_intent("user-a", "intent-a")
+    assert state.claim_intent("user-a", "browser-a", 1) is True
 
-    state.claim_intent("user-a", "intent-b")
-    assert state.clear_document_if_current("user-a", "intent-a") is False
+    assert state.claim_intent("user-a", "browser-a", 2) is True
+    assert state.claim_intent("user-a", "browser-a", 1) is False
+    assert state.claim_intent("user-a", "older-browser", 1) is False
+    assert state.clear_document_if_current("user-a", "browser-a", 1) is False
     assert state.get_document("user-a") == {"document_id": "doc-b"}
-    assert state.clear_document_if_current("user-a", "intent-b") is True
+    assert state.clear_document_if_current("user-a", "browser-a", 2) is True
     assert state.get_document("user-a") is None

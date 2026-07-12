@@ -1519,7 +1519,10 @@ export function useChatController({
       const response = await fetch('/api/chat/document', {
         method: 'DELETE',
         signal: operation.signal,
-        headers: { 'X-Chat-Document-Intent': operation.token },
+        headers: {
+          'X-Chat-Document-Intent-Owner': operation.owner,
+          'X-Chat-Document-Intent-Generation': String(operation.generation),
+        },
       })
 
       if (response.ok && operation.ownsLatest()) {

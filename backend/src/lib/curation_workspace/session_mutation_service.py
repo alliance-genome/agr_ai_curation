@@ -141,16 +141,46 @@ def update_session(
         )
     session = sessions[0]
 
+    latest_candidate_intent = (
+        request.intent_owner is not None
+        and request.intent_generation is not None
+        and "current_candidate_id" in request.model_fields_set
+    )
+    intent_generation = request.intent_generation
+    if latest_candidate_intent:
+        assert intent_generation is not None
     if request.expected_session_version is not None:
         db.refresh(session, with_for_update=True)
         if session.session_version != request.expected_session_version:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Session version mismatch: expected "
-                    f"{request.expected_session_version}, found {session.session_version}"
-                ),
+            newer_intent = (
+                latest_candidate_intent
+                and intent_generation > (session.current_candidate_intent_generation or 0)
             )
+            intent_only_request = request.model_fields_set <= {
+                "session_id",
+                "expected_session_version",
+                "intent_owner",
+                "intent_generation",
+                "current_candidate_id",
+            }
+            if not (newer_intent and intent_only_request):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Session version mismatch: expected "
+                        f"{request.expected_session_version}, found {session.session_version}"
+                    ),
+                )
+
+    if (
+        latest_candidate_intent
+        and session.current_candidate_intent_generation is not None
+        and intent_generation <= session.current_candidate_intent_generation
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Current candidate selection was superseded by a newer intent",
+        )
 
     now = datetime.now(timezone.utc)
     action_log_row: SessionActionLogModel | None = None
@@ -172,11 +202,15 @@ def update_session(
                 session.current_candidate_id = candidate_id
                 session.last_worked_at = now
                 changed = True
-            elif request.expected_session_version is not None:
+            elif latest_candidate_intent:
                 # A latest-intent selection is also a fencing write when it
                 # reselects the persisted candidate while an older PATCH is in flight.
                 session.last_worked_at = now
                 changed = True
+        if latest_candidate_intent:
+            session.current_candidate_intent_owner = request.intent_owner
+            session.current_candidate_intent_generation = intent_generation
+            changed = True
 
     if "notes" in request.model_fields_set and request.notes != session.notes:
         session.notes = request.notes

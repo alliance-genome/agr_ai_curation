@@ -223,7 +223,7 @@ function extractFlowStepEvidence(payload: Record<string, unknown> | null): FlowS
 
     return {
       flow_id: flowId,
-      flow_name: readString(candidate.flow_name) ?? flowId,
+      flow_name: readString(candidate.flow_name)!,
       flow_run_id: flowRunId,
       step,
       tool_name: readString(candidate.tool_name),

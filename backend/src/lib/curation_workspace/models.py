@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -111,6 +112,10 @@ class CurationReviewSession(Base):
         default=1,
         server_default="1",
     )
+    current_candidate_intent_owner: Mapped[str | None] = mapped_column(String(), nullable=True)
+    current_candidate_intent_generation: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[list[str]] = mapped_column(
         JSONB,
@@ -200,6 +205,13 @@ class CurationReviewSession(Base):
 
     __table_args__ = (
         CheckConstraint("session_version >= 1", name="ck_curation_review_sessions_version"),
+        CheckConstraint(
+            "(current_candidate_intent_owner IS NULL) = "
+            "(current_candidate_intent_generation IS NULL) AND "
+            "(current_candidate_intent_generation IS NULL OR "
+            "current_candidate_intent_generation >= 1)",
+            name="ck_curation_sessions_candidate_intent_pair",
+        ),
         CheckConstraint(
             "total_candidates >= 0 AND reviewed_candidates >= 0 AND pending_candidates >= 0 "
             "AND accepted_candidates >= 0 AND rejected_candidates >= 0 "

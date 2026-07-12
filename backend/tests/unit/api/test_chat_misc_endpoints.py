@@ -653,12 +653,16 @@ async def test_latest_document_intent_owns_reverse_order_completion(monkeypatch)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args: None)
 
     first = asyncio.create_task(chat.load_document_for_chat(
-        chat.LoadDocumentRequest(document_id="doc-a", intent_token="intent-a"),
+        chat.LoadDocumentRequest(
+            document_id="doc-a", intent_owner="browser-a", intent_generation=1
+        ),
         {"sub": "user-1"},
     ))
     await asyncio.sleep(0)
     second = asyncio.create_task(chat.load_document_for_chat(
-        chat.LoadDocumentRequest(document_id="doc-b", intent_token="intent-b"),
+        chat.LoadDocumentRequest(
+            document_id="doc-b", intent_owner="browser-a", intent_generation=2
+        ),
         {"sub": "user-1"},
     ))
 
@@ -669,6 +673,37 @@ async def test_latest_document_intent_owns_reverse_order_completion(monkeypatch)
     pending["doc-a"].set_result({"document": {"id": "doc-a", "filename": "a.pdf"}})
     with pytest.raises(HTTPException) as exc:
         await first
+
+    assert exc.value.status_code == 409
+    assert state.get_document("user-1")["id"] == "doc-b"
+
+
+@pytest.mark.asyncio
+async def test_late_arriving_older_document_intent_is_rejected(monkeypatch):
+    state = DocumentSelectionState()
+
+    async def _get_document(_user_sub, doc_id):
+        return {"document": {"id": doc_id, "filename": f"{doc_id}.pdf"}}
+
+    _patch_chat_impl(monkeypatch, "get_document", _get_document)
+    _patch_chat_impl(monkeypatch, "document_state", state)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args: None)
+
+    latest = await chat.load_document_for_chat(
+        chat.LoadDocumentRequest(
+            document_id="doc-b", intent_owner="browser-a", intent_generation=2
+        ),
+        {"sub": "user-1"},
+    )
+    assert latest.document.id == "doc-b"
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.load_document_for_chat(
+            chat.LoadDocumentRequest(
+                document_id="doc-a", intent_owner="browser-a", intent_generation=1
+            ),
+            {"sub": "user-1"},
+        )
 
     assert exc.value.status_code == 409
     assert state.get_document("user-1")["id"] == "doc-b"

@@ -293,7 +293,10 @@ function HomePage() {
         credentials: 'include',
         signal: operation?.signal,
         headers: operation
-          ? { 'X-Chat-Document-Intent': operation.token }
+          ? {
+              'X-Chat-Document-Intent-Owner': operation.owner,
+              'X-Chat-Document-Intent-Generation': String(operation.generation),
+            }
           : undefined,
       })
     } catch (error) {
@@ -632,7 +635,8 @@ function HomePage() {
       try {
         const payload = await loadDocumentForChat(routeDocument.id, {
           signal: operation.signal,
-          intentToken: operation.token,
+          intentOwner: operation.owner,
+          intentGeneration: operation.generation,
         })
         if (handledRouteDocumentLoadRef.current !== routeLoadKey || !operation.ownsLatest()) {
           return

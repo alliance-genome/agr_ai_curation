@@ -751,6 +751,8 @@ describe('CurationWorkspacePage', () => {
       expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
         session_id: 'session-1',
         expected_session_version: 1,
+        intent_owner: expect.any(String),
+        intent_generation: expect.any(Number),
         current_candidate_id: 'candidate-manual-1',
       }, { signal: expect.any(AbortSignal) })
     })

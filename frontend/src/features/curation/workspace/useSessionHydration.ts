@@ -239,6 +239,8 @@ export function useSessionHydration(
     void updateCurationSession({
       session_id: workspace.session.session_id,
       expected_session_version: expectedSessionVersion,
+      intent_owner: operation.owner,
+      intent_generation: operation.generation,
       current_candidate_id: nextCandidateId,
     }, { signal: operation.signal })
       .then((response) => {

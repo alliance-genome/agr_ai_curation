@@ -446,7 +446,8 @@ export const waitForDocumentProcessing = async (
 
 export interface LoadDocumentForChatOptions {
   signal?: AbortSignal;
-  intentToken?: string;
+  intentOwner?: string;
+  intentGeneration?: number;
 }
 
 export const loadDocumentForChat = async (
@@ -461,7 +462,8 @@ export const loadDocumentForChat = async (
     },
     body: JSON.stringify({
       document_id: documentId,
-      intent_token: options.intentToken,
+      intent_owner: options.intentOwner,
+      intent_generation: options.intentGeneration,
     }),
     signal: options.signal,
   });

@@ -136,7 +136,8 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
       const documentOperation = documentIntentRef.current.begin()
       const payload = await loadDocumentForChat(documentId, {
         signal: documentOperation.signal,
-        intentToken: documentOperation.token,
+        intentOwner: documentOperation.owner,
+        intentGeneration: documentOperation.generation,
       })
       if (controller.signal.aborted || !documentOperation.ownsLatest()) {
         return

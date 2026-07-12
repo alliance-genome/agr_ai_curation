@@ -127,7 +127,8 @@ describe('usePdfViewerUpload', () => {
     await waitFor(() => {
       expect(loadDocumentForChat).toHaveBeenCalledWith('doc-1', {
         signal: expect.any(AbortSignal),
-        intentToken: expect.stringMatching(/^latest-intent-/),
+        intentOwner: expect.stringMatching(/^latest-intent-/),
+        intentGeneration: expect.any(Number),
       })
     })
 

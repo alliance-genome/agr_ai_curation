@@ -31,30 +31,37 @@ class DocumentSelectionState:
     def __init__(self) -> None:
         self._lock = RLock()
         self._user_documents: Dict[str, Optional[Dict[str, Any]]] = {}
-        self._user_intent_tokens: Dict[str, str] = {}
+        self._user_intents: Dict[str, tuple[str, int]] = {}
 
-    def claim_intent(self, user_id: str, intent_token: str) -> None:
-        """Mark ``intent_token`` as the only operation allowed to commit."""
+    def claim_intent(self, user_id: str, intent_owner: str, intent_generation: int) -> bool:
+        """Claim a globally monotonic client intent, rejecting late arrivals."""
         with self._lock:
-            self._user_intent_tokens[user_id] = intent_token
+            current = self._user_intents.get(user_id)
+            if current is not None and current[1] >= intent_generation:
+                return False
+            self._user_intents[user_id] = (intent_owner, intent_generation)
+            return True
 
     def set_document_if_current(
         self,
         user_id: str,
         document: Dict[str, Any],
-        intent_token: str,
+        intent_owner: str,
+        intent_generation: int,
     ) -> bool:
         """Atomically commit a document only for the latest claimed intent."""
         with self._lock:
-            if self._user_intent_tokens.get(user_id) != intent_token:
+            if self._user_intents.get(user_id) != (intent_owner, intent_generation):
                 return False
             self._user_documents[user_id] = dict(document)
             return True
 
-    def clear_document_if_current(self, user_id: str, intent_token: str) -> bool:
+    def clear_document_if_current(
+        self, user_id: str, intent_owner: str, intent_generation: int
+    ) -> bool:
         """Atomically clear a document only for the latest claimed intent."""
         with self._lock:
-            if self._user_intent_tokens.get(user_id) != intent_token:
+            if self._user_intents.get(user_id) != (intent_owner, intent_generation):
                 return False
             self._user_documents.pop(user_id, None)
             return True

@@ -13,8 +13,14 @@ async def load_document_for_chat(
 ) -> DocumentStatusResponse:
     """Select a document for chat interactions."""
     user_id = _require_user_sub(user)
-    if payload.intent_token:
-        document_state.claim_intent(user_id, payload.intent_token)
+    if payload.intent_owner is not None and payload.intent_generation is not None:
+        if not document_state.claim_intent(
+            user_id, payload.intent_owner, payload.intent_generation
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document selection was superseded by a newer intent",
+            )
     logger.info(
         "Loading document for chat: %s",
         payload.document_id,
@@ -55,11 +61,12 @@ async def load_document_for_chat(
         )
         raise HTTPException(status_code=500, detail="Document summary unavailable")
 
-    if payload.intent_token:
+    if payload.intent_owner is not None and payload.intent_generation is not None:
         committed = document_state.set_document_if_current(
             user_id,
             document_summary,
-            payload.intent_token,
+            payload.intent_owner,
+            payload.intent_generation,
         )
         if not committed:
             raise HTTPException(
@@ -95,20 +102,30 @@ async def get_loaded_document(user: Dict[str, Any] = get_auth_dependency()) -> D
 @router.delete("/chat/document", response_model=DocumentStatusResponse)
 async def clear_loaded_document(
     user: Dict[str, Any] = get_auth_dependency(),
-    intent_token: Optional[str] = Header(default=None, alias="X-Chat-Document-Intent"),
+    intent_owner: Optional[str] = Header(default=None, alias="X-Chat-Document-Intent-Owner"),
+    intent_generation: Optional[int] = Header(
+        default=None, alias="X-Chat-Document-Intent-Generation"
+    ),
 ) -> DocumentStatusResponse:
     """Clear the current document selection."""
     user_id = _require_user_sub(user)
-    intent_token = intent_token if isinstance(intent_token, str) else None
-    if intent_token:
-        document_state.claim_intent(user_id, intent_token)
+    intent_owner = intent_owner if isinstance(intent_owner, str) else None
+    intent_generation = intent_generation if isinstance(intent_generation, int) else None
+    if intent_owner is not None and intent_generation is not None:
+        if not document_state.claim_intent(user_id, intent_owner, intent_generation):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document clear was superseded by a newer intent",
+            )
     document_summary = document_state.get_document(user_id)
     if not document_summary:
         return DocumentStatusResponse(active=False, message="No document was loaded")
 
     active_document = _build_active_document(document_summary)
-    if intent_token:
-        if not document_state.clear_document_if_current(user_id, intent_token):
+    if intent_owner is not None and intent_generation is not None:
+        if not document_state.clear_document_if_current(
+            user_id, intent_owner, intent_generation
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Document clear was superseded by a newer intent",

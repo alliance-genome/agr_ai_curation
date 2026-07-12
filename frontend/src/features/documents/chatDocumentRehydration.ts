@@ -93,7 +93,8 @@ export async function rehydrateChatDocument(
   if (ensureLoadedForChat) {
     await loadDocumentForChat(document.id, {
       signal: operation?.signal,
-      intentToken: operation?.token,
+      intentOwner: operation?.owner,
+      intentGeneration: operation?.generation,
     })
     if (operation && !operation.ownsLatest()) {
       throw new DOMException('Document restore superseded', 'AbortError')

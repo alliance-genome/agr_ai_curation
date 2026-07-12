@@ -170,11 +170,13 @@ describe('chatDocumentRehydration', () => {
     expect(firstOperation.signal.aborted).toBe(true)
     expect(JSON.parse(String(loadRequests[0].body))).toMatchObject({
       document_id: 'doc-a',
-      intent_token: firstOperation.token,
+      intent_owner: firstOperation.owner,
+      intent_generation: firstOperation.generation,
     })
     expect(JSON.parse(String(loadRequests[1].body))).toMatchObject({
       document_id: 'doc-b',
-      intent_token: secondOperation.token,
+      intent_owner: secondOperation.owner,
+      intent_generation: secondOperation.generation,
     })
     expect(localStorage.getItem(storageKeys.activeDocument)).toContain('doc-b')
     expect(localStorage.getItem(storageKeys.pdfViewerSession)).toContain('doc-b')
