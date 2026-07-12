@@ -26,6 +26,9 @@ def domain_envelope_from_extraction_result(
 
     Pre-persistence callers can omit the persistence event so canonical payloads do
     not claim a persistence timestamp before the authoritative row exists.
+    For example, flow candidate canonicalization passes
+    ``include_persistence_history=False`` before computing its payload hash; callers
+    normalizing an authoritative persisted record should keep the default.
     """
 
     payload = extraction_result.payload_json

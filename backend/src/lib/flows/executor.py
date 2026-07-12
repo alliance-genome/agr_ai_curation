@@ -833,6 +833,8 @@ def _flow_candidate_persistence_key(candidate: ExtractionEnvelopeCandidate) -> s
     """Return the deterministic persistence key for one flow extraction step."""
 
     metadata = candidate.metadata or {}
+    # Extraction candidate parsing rejects blank agent keys, so the final part
+    # guarantees a non-empty identity even when no flow metadata is available.
     key_parts = [
         str(metadata.get("flow_id") or "").strip(),
         str(metadata.get("step") or "").strip(),
