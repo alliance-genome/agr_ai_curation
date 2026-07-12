@@ -55,6 +55,61 @@ export interface CurationFlowsProps {
   currentDocumentId?: string
 }
 
+export function mapFlowFinishedEvent(
+  event: SSEEvent,
+  sessionId: string | null,
+): FlowRunCompletionSummary | null {
+  if (event.type !== 'FLOW_FINISHED') {
+    return null
+  }
+
+  const eventSessionId = getStreamEventSessionId(event)
+  if (sessionId && eventSessionId && eventSessionId !== sessionId) {
+    return null
+  }
+
+  const flowRunId = typeof event.flow_run_id === 'string' ? event.flow_run_id.trim() : ''
+  const flowName = typeof event.flow_name === 'string' ? event.flow_name.trim() : ''
+  const status = typeof event.status === 'string' ? event.status.trim() : ''
+  const totalEvidenceRecords = Number(event.total_evidence_records)
+  if (!flowRunId || !flowName || !status || !Number.isFinite(totalEvidenceRecords)) {
+    return null
+  }
+
+  return {
+    adapterKeys: Array.isArray(event.adapter_keys)
+      ? event.adapter_keys.filter((value): value is string => typeof value === 'string' && value.length > 0)
+      : [],
+    documentId: typeof event.document_id === 'string' && event.document_id.length > 0
+      ? event.document_id
+      : null,
+    extractionResultIds: Array.isArray(event.extraction_result_ids)
+      ? event.extraction_result_ids.filter((value): value is string => typeof value === 'string' && value.length > 0)
+      : [],
+    extractionResultRefs: Array.isArray(event.extraction_result_refs)
+      ? event.extraction_result_refs.filter(
+        (value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value),
+      )
+      : [],
+    flowId: typeof event.flow_id === 'string' ? event.flow_id : null,
+    flowName,
+    flowRunId,
+    originSessionId: typeof event.origin_session_id === 'string' && event.origin_session_id.length > 0
+      ? event.origin_session_id
+      : null,
+    reviewSessionIds: Object.prototype.hasOwnProperty.call(event, 'review_session_ids')
+      ? (Array.isArray(event.review_session_ids)
+        ? event.review_session_ids.filter((value): value is string => typeof value === 'string' && value.length > 0)
+        : [])
+      : null,
+    status,
+    failureReason: typeof event.failure_reason === 'string' && event.failure_reason.length > 0
+      ? event.failure_reason
+      : null,
+    totalEvidenceRecords,
+  }
+}
+
 /**
  * CurationFlows component for the Tools panel.
  *
@@ -85,48 +140,9 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
 
   const latestCompletedRun = useMemo<FlowRunCompletionSummary | null>(() => {
     for (let index = sseEvents.length - 1; index >= 0; index -= 1) {
-      const event = sseEvents[index]
-      if (event.type !== 'FLOW_FINISHED') {
-        continue
-      }
-
-      const eventSessionId = getStreamEventSessionId(event)
-
-      if (sessionId && eventSessionId && eventSessionId !== sessionId) {
-        continue
-      }
-
-      const flowRunId = typeof event.flow_run_id === 'string'
-        ? event.flow_run_id.trim()
-        : ''
-      const flowName = typeof event.flow_name === 'string'
-        ? event.flow_name.trim()
-        : ''
-      const status = typeof event.status === 'string' ? event.status.trim() : ''
-      const totalEvidenceRecords = Number(event.total_evidence_records)
-
-      if (!flowRunId || !flowName || !status || !Number.isFinite(totalEvidenceRecords)) {
-        continue
-      }
-
-      return {
-        adapterKeys: Array.isArray(event.adapter_keys)
-          ? event.adapter_keys.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-          : [],
-        documentId: typeof event.document_id === 'string' && event.document_id.trim()
-          ? event.document_id
-          : null,
-        flowId: typeof event.flow_id === 'string' ? event.flow_id : null,
-        flowName,
-        flowRunId,
-        originSessionId: typeof event.origin_session_id === 'string' && event.origin_session_id.trim()
-          ? event.origin_session_id
-          : null,
-        status,
-        failureReason: typeof event.failure_reason === 'string' && event.failure_reason.trim()
-          ? event.failure_reason
-          : null,
-        totalEvidenceRecords,
+      const summary = mapFlowFinishedEvent(sseEvents[index], sessionId)
+      if (summary) {
+        return summary
       }
     }
 

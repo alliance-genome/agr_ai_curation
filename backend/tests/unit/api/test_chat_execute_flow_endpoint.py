@@ -1076,7 +1076,25 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
     assert "review-flow-context-1" in history_assistant_msg
 
 
-def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypatch):
+@pytest.mark.parametrize(
+    ("review_session_ids", "adapter_keys", "extraction_result_ids"),
+    [
+        ([], [], []),
+        (["review-gene"], ["gene"], ["extract-gene"]),
+        (
+            ["review-gene", "review-allele"],
+            ["gene", "allele"],
+            ["extract-gene", "extract-allele"],
+        ),
+    ],
+    ids=["zero-review-sessions", "one-review-session", "multiple-review-sessions"],
+)
+def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(
+    monkeypatch,
+    review_session_ids,
+    adapter_keys,
+    extraction_result_ids,
+):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(
         flow_id=flow_id,
@@ -1119,7 +1137,21 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
                 "failure_reason": None,
                 "total_evidence_records": 0,
                 "step_evidence_counts": {},
-                "adapter_keys": [],
+                "adapter_keys": adapter_keys,
+                "extraction_result_ids": extraction_result_ids,
+                "extraction_result_refs": [
+                    {
+                        "result_ref": f"extraction-result:{result_id}",
+                        "extraction_result_id": result_id,
+                        "adapter_key": adapter_key,
+                    }
+                    for result_id, adapter_key in zip(
+                        extraction_result_ids,
+                        adapter_keys,
+                        strict=True,
+                    )
+                ],
+                "review_session_ids": review_session_ids,
             },
         }
 
@@ -1153,6 +1185,10 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
     assert {event["turn_id"] for event in second_events} == {"turn-flow-replay"}
     assert second_events[0]["trace_id"] == "trace-flow-replay"
     assert second_events[1]["details"]["output"] == "Selected TP53 for highest evidence confidence."
+    assert second_events[2]["adapter_keys"] == adapter_keys
+    assert second_events[2]["extraction_result_ids"] == extraction_result_ids
+    assert second_events[2]["extraction_result_refs"] == first_events[2]["extraction_result_refs"]
+    assert second_events[2]["review_session_ids"] == review_session_ids
     stored_turn_messages = repository.list_messages_for_turn(
         session_id="session-flow-replay",
         user_auth_sub="auth-sub",

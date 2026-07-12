@@ -1,6 +1,6 @@
 """Pydantic schemas for batch processing API."""
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +27,11 @@ class BatchDocumentResponse(BaseModel):
     status: BatchDocumentStatus
     result_file_path: Optional[str] = None
     review_session_ids: Optional[List[str]] = None
+    adapter_keys: List[str] = Field(default_factory=list)
+    extraction_result_ids: List[str] = Field(default_factory=list)
+    extraction_result_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    flow_run_id: Optional[str] = None
+    origin_session_id: Optional[str] = None
     error_message: Optional[str] = None
     processing_time_ms: Optional[int] = None
     processed_at: Optional[datetime] = None

@@ -652,6 +652,7 @@ def test_batch_flow_ending_in_curation_handoff_creates_owned_sessions(handoff_db
 
 
 def test_multi_adapter_flow_creates_one_session_per_adapter(handoff_db):
+    from src.lib.batch.service import BatchService
     from src.models.sql.batch import BatchDocumentStatus
 
     suffix = uuid4().hex[:10]
@@ -674,6 +675,36 @@ def test_multi_adapter_flow_creates_one_session_per_adapter(handoff_db):
     assert {session.adapter_key for session in sessions} == {"gene", "gene_expression"}
     assert {session.assigned_curator_id for session in sessions} == {user.auth_sub}
     assert _candidate_count(handoff_db, batch_doc.review_session_ids) >= 2
+
+    batch_service = BatchService(handoff_db)
+    persisted_batch = batch_service.get_batch(batch.id, user.id)
+    assert persisted_batch is not None
+    batch_response = batch_service.batch_to_response(persisted_batch, flow_name=flow.name)
+    response_document = batch_response.documents[0]
+    assert response_document.review_session_ids == batch_doc.review_session_ids
+    assert response_document.adapter_keys == [
+        session.adapter_key
+        for session_id in batch_doc.review_session_ids
+        for session in sessions
+        if str(session.id) == session_id
+    ]
+    assert response_document.extraction_result_ids
+    assert response_document.extraction_result_refs == [
+        {
+            "result_ref": f"extraction-result:{result_id}",
+            "extraction_result_id": result_id,
+            "adapter_key": ref["adapter_key"],
+            "agent_key": ref["agent_key"],
+            "candidate_count": ref["candidate_count"],
+            "trace_id": ref["trace_id"],
+        }
+        for result_id, ref in zip(
+            response_document.extraction_result_ids,
+            response_document.extraction_result_refs,
+            strict=True,
+        )
+    ]
+    assert response_document.flow_run_id == str(batch.id)
 
 
 async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):

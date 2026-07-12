@@ -2,6 +2,8 @@
 import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 from src.lib.batch.service import BatchService
@@ -9,7 +11,7 @@ from src.lib.batch.status import (
     require_batch_document_status_transition,
     require_batch_status_transition,
 )
-from src.models.sql.batch import BatchDocument, BatchStatus, BatchDocumentStatus
+from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 
 
 class TestBatchService:
@@ -408,6 +410,55 @@ class TestCreateBatchMocked:
 class TestBatchToResponseMocked:
     """CR-5: Tests for batch_to_response method using mocks."""
 
+    def test_document_handoff_metadata_preserves_authoritative_ids_and_refs(self):
+        review_session_id = uuid4()
+        extraction_result_id = uuid4()
+        mock_db = Mock()
+        mock_db.scalars.side_effect = [
+            SimpleNamespace(
+                all=lambda: [SimpleNamespace(id=review_session_id, adapter_key="gene")]
+            ),
+            SimpleNamespace(
+                all=lambda: [
+                    SimpleNamespace(
+                        id=extraction_result_id,
+                        adapter_key="gene",
+                        agent_key="gene_extractor",
+                        candidate_count=2,
+                        trace_id="trace-1",
+                        origin_session_id="origin-1",
+                    )
+                ]
+            ),
+        ]
+        service = BatchService(mock_db)
+        batch = SimpleNamespace(id=uuid4())
+        document = SimpleNamespace(
+            document_id=uuid4(),
+            status=BatchDocumentStatus.COMPLETED,
+            review_session_ids=[str(review_session_id)],
+        )
+
+        result = service.get_document_handoff_metadata(
+            cast("Batch", batch),
+            cast(BatchDocument, document),
+        )
+
+        assert result["adapter_keys"] == ["gene"]
+        assert result["extraction_result_ids"] == [str(extraction_result_id)]
+        assert result["extraction_result_refs"] == [
+            {
+                "result_ref": f"extraction-result:{extraction_result_id}",
+                "extraction_result_id": str(extraction_result_id),
+                "adapter_key": "gene",
+                "agent_key": "gene_extractor",
+                "candidate_count": 2,
+                "trace_id": "trace-1",
+            }
+        ]
+        assert result["flow_run_id"] == str(batch.id)
+        assert result["origin_session_id"] == "origin-1"
+
     def test_batch_to_response_converts_batch_model(self):
         """batch_to_response should convert Batch model to response schema."""
         mock_db = Mock()
@@ -443,7 +494,18 @@ class TestBatchToResponseMocked:
         mock_db.query.return_value.filter.return_value.first.return_value = None
 
         # Mock document titles lookup
-        with patch.object(service, 'get_document_titles', return_value={}):
+        handoff_metadata = {
+            "adapter_keys": ["gene"],
+            "extraction_result_ids": ["extract-gene"],
+            "extraction_result_refs": [{"extraction_result_id": "extract-gene"}],
+            "flow_run_id": str(mock_batch.id),
+            "origin_session_id": "origin-1",
+        }
+        with patch.object(service, 'get_document_titles', return_value={}), patch.object(
+            service,
+            'get_document_handoff_metadata',
+            return_value=handoff_metadata,
+        ):
             result = service.batch_to_response(mock_batch, flow_name="Test Flow")
 
         assert result.id == mock_batch.id
@@ -454,6 +516,9 @@ class TestBatchToResponseMocked:
         assert result.completed_documents == 2
         assert len(result.documents) == 1
         assert result.documents[0].review_session_ids == ["session-gene"]
+        assert result.documents[0].adapter_keys == ["gene"]
+        assert result.documents[0].extraction_result_ids == ["extract-gene"]
+        assert result.documents[0].origin_session_id == "origin-1"
 
     def test_batch_to_response_looks_up_flow_name(self):
         """batch_to_response should look up flow name if not provided."""
@@ -514,7 +579,17 @@ class TestBatchToResponseMocked:
         mock_batch.documents = [mock_doc]
 
         # Mock document titles lookup
-        with patch.object(service, 'get_document_titles', return_value={doc_id: "My Document"}) as mock_titles:
+        with patch.object(service, 'get_document_titles', return_value={doc_id: "My Document"}) as mock_titles, patch.object(
+            service,
+            'get_document_handoff_metadata',
+            return_value={
+                "adapter_keys": [],
+                "extraction_result_ids": [],
+                "extraction_result_refs": [],
+                "flow_run_id": str(mock_batch.id),
+                "origin_session_id": None,
+            },
+        ):
             result = service.batch_to_response(mock_batch, flow_name="Flow")
 
         mock_titles.assert_called_once()

@@ -2,16 +2,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import BatchPage from './BatchPage'
+import BatchPage, { mapBatchDocument } from './BatchPage'
 import { DEFAULT_FLOW_LIST_PAGE_SIZE } from '@/services/agentStudioService'
 import { submitFeedback } from '@/services/feedbackService'
 
 vi.mock('@/components/AuditPanel', () => ({
   default: () => <div data-testid="audit-panel" />,
-}))
-
-vi.mock('@/features/curation/components/PreparedReviewAndCurateButton', () => ({
-  default: () => <button type="button">Review & Curate</button>,
 }))
 
 vi.mock('@/services/feedbackService', () => ({
@@ -109,6 +105,54 @@ describe('BatchPage', () => {
         credentials: 'include',
       })
     })
+  })
+
+  it('preserves authoritative handoff identities in the batch detail mapping', () => {
+    const extractionResultRefs = [
+      {
+        result_ref: 'extraction-result:extract-gene',
+        extraction_result_id: 'extract-gene',
+        adapter_key: 'gene',
+      },
+    ]
+
+    expect(mapBatchDocument({
+      id: 'batch-doc-1',
+      document_id: 'doc-1',
+      document_title: 'Alpha paper',
+      position: 0,
+      status: 'completed',
+      review_session_ids: ['review-gene'],
+      adapter_keys: ['gene'],
+      extraction_result_ids: ['extract-gene'],
+      extraction_result_refs: extractionResultRefs,
+      flow_run_id: 'flow-run-1',
+      origin_session_id: 'origin-1',
+    })).toEqual(expect.objectContaining({
+      review_session_ids: ['review-gene'],
+      adapter_keys: ['gene'],
+      extraction_result_ids: ['extract-gene'],
+      extraction_result_refs: extractionResultRefs,
+      flow_run_id: 'flow-run-1',
+      origin_session_id: 'origin-1',
+    }))
+  })
+
+  it('distinguishes authoritative zero sessions from legacy missing IDs', () => {
+    expect(mapBatchDocument({
+      id: 'batch-doc-zero',
+      document_id: 'doc-zero',
+      position: 0,
+      status: 'completed',
+      review_session_ids: null,
+    }).review_session_ids).toEqual([])
+
+    expect(mapBatchDocument({
+      id: 'batch-doc-legacy',
+      document_id: 'doc-legacy',
+      position: 1,
+      status: 'completed',
+    }).review_session_ids).toBeUndefined()
   })
 
   it('surfaces shared flow load errors in the setup panel', async () => {

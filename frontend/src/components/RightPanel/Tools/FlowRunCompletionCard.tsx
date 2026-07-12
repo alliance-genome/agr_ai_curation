@@ -16,18 +16,22 @@ import {
 } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
-import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurateButton'
+import AuthoritativeReviewAndCurateButton from '@/features/curation/components/AuthoritativeReviewAndCurateButton'
 
 export type FlowEvidenceExportFormat = 'csv' | 'tsv' | 'json'
 
 export interface FlowRunCompletionSummary {
   adapterKeys: string[]
   documentId: string | null
+  extractionResultIds: string[]
+  extractionResultRefs: Array<Record<string, unknown>>
   failureReason: string | null
   flowId: string | null
   flowName: string
   flowRunId: string
   originSessionId: string | null
+  /** Null identifies a legacy event where the authoritative field was absent. */
+  reviewSessionIds: string[] | null
   status: string
   totalEvidenceRecords: number
 }
@@ -92,7 +96,12 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
   const [error, setError] = useState<string | null>(null)
 
   const exportReady = run.status === 'completed' && run.totalEvidenceRecords > 0
-  const reviewReady = run.status === 'completed' && Boolean(run.documentId)
+  const hasAuthoritativeReviewSessions = run.reviewSessionIds !== null
+  const reviewReady = run.status === 'completed' && (
+    hasAuthoritativeReviewSessions
+      ? (run.reviewSessionIds?.length ?? 0) > 0
+      : Boolean(run.documentId)
+  )
   const statusColor = run.status === 'completed'
     ? theme.palette.success.main
     : theme.palette.error.main
@@ -230,7 +239,9 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
         </Box>
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
-          <ReviewAndCurateButton
+          <AuthoritativeReviewAndCurateButton
+            authoritativeReviewSessionIds={run.reviewSessionIds ?? undefined}
+            disabledReason="No prepared review sessions were produced by this run."
             documentId={run.documentId}
             flowRunId={run.flowRunId}
             originSessionId={run.originSessionId}
@@ -303,7 +314,9 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
             },
           }}
         >
-          This run can be exported, but it does not have enough document scope metadata to open the curation workspace directly.
+          {hasAuthoritativeReviewSessions
+            ? 'This run completed without prepared review sessions, so there is no curation workspace to open.'
+            : 'This legacy run does not have authoritative review-session IDs or enough document scope metadata to reconstruct a supported curation workspace.'}
         </Alert>
       )}
 

@@ -55,7 +55,11 @@ def _sanitize_batch_stream_event(event: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _batch_document_status_event(batch: Any, doc: Any) -> Dict[str, Any]:
+def _batch_document_status_event(
+    batch: Any,
+    doc: Any,
+    handoff_metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     return {
         "type": "DOCUMENT_STATUS",
         "batch_id": str(batch.id),
@@ -65,6 +69,7 @@ def _batch_document_status_event(batch: Any, doc: Any) -> Dict[str, Any]:
         "status": doc.status.value,
         "result_file_path": doc.result_file_path,
         "review_session_ids": doc.review_session_ids,
+        **(handoff_metadata or {}),
         "error_message": doc.error_message,
         "processing_time_ms": doc.processing_time_ms,
     }
@@ -540,7 +545,11 @@ async def stream_batch_progress(
                     current_status = doc.status.value
 
                     if doc_id not in last_doc_statuses or last_doc_statuses[doc_id] != current_status:
-                        doc_event = _batch_document_status_event(batch, doc)
+                        doc_event = _batch_document_status_event(
+                            batch,
+                            doc,
+                            stream_service.get_document_handoff_metadata(batch, doc),
+                        )
                         yield f"data: {json.dumps(doc_event)}\n\n"
                         last_doc_statuses[doc_id] = current_status
 

@@ -51,10 +51,30 @@ def test_batch_document_status_event_includes_review_session_ids():
         processing_time_ms=1200,
     )
 
-    event = batch_api._batch_document_status_event(batch, doc)
+    event = batch_api._batch_document_status_event(
+        batch,
+        doc,
+        {
+            "adapter_keys": ["gene"],
+            "extraction_result_ids": ["extract-gene"],
+            "extraction_result_refs": [
+                {
+                    "result_ref": "extraction-result:extract-gene",
+                    "extraction_result_id": "extract-gene",
+                }
+            ],
+            "flow_run_id": "flow-run-1",
+            "origin_session_id": "origin-1",
+        },
+    )
 
     assert event["type"] == "DOCUMENT_STATUS"
     assert event["review_session_ids"] == ["session-gene"]
+    assert event["adapter_keys"] == ["gene"]
+    assert event["extraction_result_ids"] == ["extract-gene"]
+    assert event["extraction_result_refs"][0]["result_ref"] == "extraction-result:extract-gene"
+    assert event["flow_run_id"] == "flow-run-1"
+    assert event["origin_session_id"] == "origin-1"
 
 
 def test_batch_create_request_limits_document_ids_to_ten():
