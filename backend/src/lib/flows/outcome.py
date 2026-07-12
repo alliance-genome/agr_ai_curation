@@ -33,6 +33,7 @@ class FlowRunOutcome:
     _success_output_event: dict[str, Any] | None = None
     _run_error_event: dict[str, Any] | None = None
     _flow_finished_event: dict[str, Any] | None = None
+    _replacement_failure_events: list[dict[str, Any]] = field(default_factory=list)
 
     def observe(self, event: dict[str, Any]) -> None:
         """Consume one flattened endpoint event without publishing it."""
@@ -80,6 +81,9 @@ class FlowRunOutcome:
     def events_for_persistence(self) -> list[dict[str, Any]]:
         """Return the canonical terminal order to store for durable replay."""
 
+        if self.status == "failed" and self._replacement_failure_events:
+            return [dict(event) for event in self._replacement_failure_events]
+
         events: list[dict[str, Any]] = []
         if self.status == "completed" and self._success_output_event is not None:
             events.append(dict(self._success_output_event))
@@ -93,13 +97,23 @@ class FlowRunOutcome:
         self.persistence_status = "succeeded"
         self.persistence_result = dict(result)
 
-    def mark_persistence_failed(self, reason: str) -> None:
+    def replace_with_persistence_failure(
+        self,
+        reason: str,
+        *,
+        terminal_events: list[dict[str, Any]],
+    ) -> None:
+        """Replace a non-durable candidate with its recoverable failed truth."""
+
         self.persistence_status = "failed"
         self.persistence_result = {"reason": reason}
         self.status = "failed"
         self.failure_reason = reason
         self.final_user_visible_text = None
         self._success_output_event = None
+        self._run_error_event = None
+        self._flow_finished_event = None
+        self._replacement_failure_events = [dict(event) for event in terminal_events]
 
     def publishable_terminal_events(self) -> list[dict[str, Any]]:
         """Release terminal events only after their durable transcript commit."""

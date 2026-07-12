@@ -53,3 +53,32 @@ def test_completed_outcome_releases_exactly_one_preferred_result_after_persisten
         "CHAT_OUTPUT_READY",
         "FLOW_FINISHED",
     ]
+
+
+def test_persistence_failure_replaces_stale_success_terminal_order():
+    outcome = FlowRunOutcome()
+    outcome.observe({"type": "CHAT_OUTPUT_READY", "details": {"output": "stale"}})
+    outcome.observe({"type": "FLOW_FINISHED", "status": "completed"})
+
+    outcome.replace_with_persistence_failure(
+        "The final outcome was not durable.",
+        terminal_events=[
+            {"type": "SUPERVISOR_ERROR", "details": {"error": "failed"}},
+            {"type": "RUN_ERROR", "message": "failed"},
+        ],
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.final_user_visible_text is None
+    assert [event["type"] for event in outcome.events_for_persistence()] == [
+        "SUPERVISOR_ERROR",
+        "RUN_ERROR",
+    ]
+    assert outcome.publishable_terminal_events() == []
+
+    outcome.mark_persisted(transcript=True, recovered_failure=True)
+
+    assert [event["type"] for event in outcome.publishable_terminal_events()] == [
+        "SUPERVISOR_ERROR",
+        "RUN_ERROR",
+    ]

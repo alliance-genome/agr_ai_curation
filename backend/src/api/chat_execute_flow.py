@@ -1150,8 +1150,6 @@ async def execute_flow_endpoint(
                 )
             )
         except Exception as exc:
-            outcome.mark_persistence_failed("Flow execution failed before its terminal outcome was durable.")
-            await executable_run_manager.set_outcome_status(run_id, "failed")
             run_error_message = (
                 str(exc)
                 if isinstance(exc, ValueError)
@@ -1181,29 +1179,99 @@ async def execute_flow_endpoint(
                 },
                 exc_info=True,
             )
-            yield _stream_event_sse(
-                _stream_event_payload(
-                    "SUPERVISOR_ERROR",
-                    session_id=current_session_id,
-                    turn_id=current_turn_id,
-                    trace_id=trace_id,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    details=_stream_error_details(
-                        error="Flow execution failed unexpectedly.",
-                        exc=exc,
-                    ),
-                )
+            supervisor_error_event = _stream_event_payload(
+                "SUPERVISOR_ERROR",
+                session_id=current_session_id,
+                turn_id=current_turn_id,
+                trace_id=trace_id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                details=_stream_error_details(
+                    error="Flow execution failed unexpectedly.",
+                    exc=exc,
+                ),
             )
-            yield _stream_event_sse(
-                _stream_event_payload(
-                    "RUN_ERROR",
-                    session_id=current_session_id,
-                    turn_id=current_turn_id,
-                    trace_id=trace_id,
-                    message=run_error_message,
-                    error_type=type(exc).__name__,
-                )
+            run_error_event = _stream_event_payload(
+                "RUN_ERROR",
+                session_id=current_session_id,
+                turn_id=current_turn_id,
+                trace_id=trace_id,
+                message=run_error_message,
+                error_type=type(exc).__name__,
             )
+            outcome.replace_with_persistence_failure(
+                "Flow execution failed before its terminal outcome was durable.",
+                terminal_events=[supervisor_error_event, run_error_event],
+            )
+            await executable_run_manager.set_outcome_status(run_id, "failed")
+
+            failure_terminal_events = outcome.events_for_persistence()
+            failure_assistant_message = _build_flow_memory_assistant_message(
+                flow_name=flow.name,
+                flow_id=str(flow.id),
+                flow_run_id=prepared_turn.flow_run_id,
+                session_id=current_session_id,
+                document_id=str(request.document_id) if request.document_id else None,
+                status=outcome.status,
+                trace_id=trace_id,
+                final_user_output=outcome.final_user_visible_text,
+                agents_used=agents_used,
+                extraction_result_refs=extraction_result_refs,
+                review_session_ids=review_session_ids,
+                adapter_keys=adapter_keys,
+                domain_warning_count=domain_warning_count,
+                file_outputs=file_outputs,
+                failure_reason=outcome.failure_reason,
+            )
+            failure_summary_row = _build_execute_flow_summary_row(
+                flow_id=str(flow.id),
+                flow_name=flow.name,
+                flow_run_id=prepared_turn.flow_run_id,
+                session_id=current_session_id,
+                document_id=str(request.document_id) if request.document_id else None,
+                status=outcome.status,
+                trace_id=trace_id,
+                final_user_output=outcome.final_user_visible_text,
+                failure_reason=outcome.failure_reason,
+                assistant_message=failure_assistant_message,
+                run_started_event=run_started_event,
+                terminal_events=failure_terminal_events,
+            )
+            try:
+                _persist_completed_execute_flow_turn(
+                    session_id=current_session_id,
+                    user_id=user_id,
+                    turn_id=current_turn_id,
+                    user_message=prepared_turn.effective_user_message,
+                    transcript_rows=[*transcript_rows, failure_summary_row],
+                )
+            except Exception as recovery_exc:
+                report_runtime_exception(
+                    recovery_exc,
+                    component="execute_flow_stream",
+                    operation="failure_outcome_persistence_failed",
+                    context={
+                        "session_id": current_session_id,
+                        "turn_id": current_turn_id,
+                        "trace_id": trace_id,
+                        "flow_id": str(flow.id),
+                        "flow_run_id": prepared_turn.flow_run_id,
+                    },
+                )
+                logger.error(
+                    "Failed to persist recoverable execute-flow failure outcome",
+                    extra={
+                        "session_id": current_session_id,
+                        "user_id": user_id,
+                        "trace_id": trace_id,
+                        "turn_id": current_turn_id,
+                    },
+                    exc_info=True,
+                )
+                raise
+
+            outcome.mark_persisted(transcript=True, recovered_failure=True)
+            for terminal_event in outcome.publishable_terminal_events():
+                yield _stream_event_sse(terminal_event)
         finally:
             await stream_lifecycle.finalize(generated_title_candidate)
 

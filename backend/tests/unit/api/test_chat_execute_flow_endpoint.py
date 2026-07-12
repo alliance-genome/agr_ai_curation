@@ -1616,16 +1616,27 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
         yield {
             "type": "FLOW_FINISHED",
             "data": {
-                "status": "success",
+                "status": "completed",
                 "flow_run_id": "flow-run-completion-failure",
             },
         }
 
-    def _raise_completion_failure(**_kwargs):
-        raise RuntimeError("completion transcript write failed")
+    original_persist_completed_turn = chat._persist_completed_execute_flow_turn
+    persistence_attempts = 0
+
+    def _fail_initial_completion_persistence(**kwargs):
+        nonlocal persistence_attempts
+        persistence_attempts += 1
+        if persistence_attempts == 1:
+            raise RuntimeError("completion transcript write failed")
+        return original_persist_completed_turn(**kwargs)
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
-    _patch_chat_impl(monkeypatch, "_persist_completed_execute_flow_turn", _raise_completion_failure)
+    _patch_chat_impl(
+        monkeypatch,
+        "_persist_completed_execute_flow_turn",
+        _fail_initial_completion_persistence,
+    )
     caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     response = asyncio.run(
@@ -1656,11 +1667,38 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
         chat_kind=chat.ASSISTANT_CHAT_KIND,
         turn_id="turn-completion-persistence-failure",
     )
-    assert [message.role for message in turn_messages] == ["user"]
-    assert calls["unregister"] == [
-        ("session-completion-persistence-failure", "auth-sub", ANY)
+    assert [message.role for message in turn_messages] == ["user", "flow"]
+    failure_summary = turn_messages[-1]
+    assert failure_summary.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    assert failure_summary.payload_json["status"] == "failed"
+    assert failure_summary.payload_json["final_user_output"] is None
+    assert "output should be discarded" not in json.dumps(failure_summary.payload_json).lower()
+    assert [
+        event["type"]
+        for event in failure_summary.payload_json[
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY
+        ]
+    ] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert "Flow failed" in failure_summary.payload_json[
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
-    assert calls["clear"] == ["session-completion-persistence-failure"]
+
+    replay_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    replay_events = asyncio.run(_consume_stream(replay_response))
+
+    assert replay_events == events
+    assert persistence_attempts == 2
+    assert calls["unregister"] == [
+        ("session-completion-persistence-failure", "auth-sub", ANY),
+        ("session-completion-persistence-failure", "auth-sub", ANY),
+    ]
+    assert calls["clear"] == ["session-completion-persistence-failure"] * 2
 
 
 def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch):
