@@ -108,6 +108,12 @@ test_clean_pushed_workspace_moves_to_needs_review() {
 - Files changed: completion helper and tests.
 - Validation: shell tests.
 - Reviewer focus: Verify state transition safety.
+
+### Test Plan
+
+- Behavior proved: The completion guard accepts a clean and pushed implementation.
+- Focused tests: `scripts/tests/test_symphony_in_progress_complete.sh`
+- Broader local coverage: Not needed; GitHub Actions supplies the broad clean-checkout gate.
 EOF
 
   output="$(
@@ -275,7 +281,15 @@ test_main_only_fetch_workspace_refreshes_configured_issue_upstream() {
     exit 1
   fi
 
-  printf '%s\n' "- Outcome: Ready from a main-only Symphony clone." > "${handoff}"
+  cat > "${handoff}" <<'EOF'
+- Outcome: Ready from a main-only Symphony clone.
+
+### Test Plan
+
+- Behavior proved: The completion guard refreshes an absent issue-branch upstream reference.
+- Focused tests: `scripts/tests/test_symphony_in_progress_complete.sh`
+- Broader local coverage: Not needed; GitHub Actions supplies the broad clean-checkout gate.
+EOF
   output="$(
     WORKPAD_STUB_TITLE_LOG="${temp_dir}/workpad-title.log" \
     WORKPAD_STUB_SECTION_LOG="${temp_dir}/workpad-section.md" \
@@ -333,6 +347,42 @@ test_missing_handoff_input_blocks_even_when_git_ready() {
   rm -rf "${temp_dir}"
 }
 
+test_missing_test_plan_blocks_even_when_git_ready() {
+  local temp_dir workspace workpad_helper state_helper handoff output section
+  temp_dir="$(mktemp -d)"
+  make_pushed_workspace "${temp_dir}"
+  write_helper_stubs "${temp_dir}"
+  workspace="${temp_dir}/workspace"
+  workpad_helper="${temp_dir}/workpad-helper.sh"
+  state_helper="${temp_dir}/state-helper.sh"
+  handoff="${temp_dir}/handoff.md"
+  printf '%s\n' "- Outcome: Implementation is ready but its test plan is missing." > "${handoff}"
+
+  output="$(
+    WORKPAD_STUB_TITLE_LOG="${temp_dir}/workpad-title.log" \
+    WORKPAD_STUB_SECTION_LOG="${temp_dir}/workpad-section.md" \
+    STATE_STUB_ARGS_LOG="${temp_dir}/state-args.log" \
+    bash "${SCRIPT_PATH}" \
+      --issue-identifier ALL-123 \
+      --workspace-dir "${workspace}" \
+      --workpad-helper "${workpad_helper}" \
+      --state-helper "${state_helper}" \
+      --section-file "${handoff}"
+  )"
+
+  section="$(cat "${temp_dir}/workpad-section.md")"
+  assert_contains "IN_PROGRESS_COMPLETE_STATUS=blocked" "${output}"
+  assert_contains "IN_PROGRESS_COMPLETE_REASON=test_plan_missing" "${output}"
+  assert_contains "Test Plan: missing" "${section}"
+  assert_contains "Test Plan issue" "${section}"
+  [[ ! -e "${temp_dir}/state-args.log" ]] || {
+    echo "Expected missing Test Plan not to call the state helper" >&2
+    exit 1
+  }
+
+  rm -rf "${temp_dir}"
+}
+
 test_help_describes_completion_guard
 test_clean_pushed_workspace_moves_to_needs_review
 test_dirty_workspace_blocks_and_keeps_in_progress
@@ -340,5 +390,6 @@ test_missing_hooks_blocks_and_reports_hook_paths
 test_unpushed_commit_blocks_and_reports_ahead_count
 test_main_only_fetch_workspace_refreshes_configured_issue_upstream
 test_missing_handoff_input_blocks_even_when_git_ready
+test_missing_test_plan_blocks_even_when_git_ready
 
 echo "symphony_in_progress_complete tests passed"
