@@ -97,11 +97,9 @@ export function mapFlowFinishedEvent(
     originSessionId: typeof event.origin_session_id === 'string' && event.origin_session_id.length > 0
       ? event.origin_session_id
       : null,
-    reviewSessionIds: Object.prototype.hasOwnProperty.call(event, 'review_session_ids')
-      ? (Array.isArray(event.review_session_ids)
-        ? event.review_session_ids.filter((value): value is string => typeof value === 'string' && value.length > 0)
-        : [])
-      : null,
+    reviewSessionIds: Array.isArray(event.review_session_ids)
+      ? event.review_session_ids.filter((value): value is string => typeof value === 'string')
+      : [],
     status,
     failureReason: typeof event.failure_reason === 'string' && event.failure_reason.length > 0
       ? event.failure_reason

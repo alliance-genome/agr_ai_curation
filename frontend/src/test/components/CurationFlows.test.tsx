@@ -207,19 +207,20 @@ describe('CurationFlows', () => {
     }))
   })
 
-  it('does not infer missing curation scope from ambient component state', async () => {
-    const legacyEvent = completedRunEvent({
+  it('does not reconstruct a review session when authoritative IDs are missing', async () => {
+    const incompleteEvent = completedRunEvent({
       document_id: undefined,
       origin_session_id: undefined,
     })
-    delete legacyEvent.review_session_ids
-    renderComponent([legacyEvent])
+    delete incompleteEvent.review_session_ids
+    renderComponent([incompleteEvent])
 
     const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
     expect(reviewButton).toBeDisabled()
     expect(
-      screen.getByText(/legacy run does not have authoritative review-session IDs or enough document scope metadata/i),
+      screen.getByText(/completed without prepared review sessions/i),
     ).toBeInTheDocument()
+    expect(openCurationWorkspaceMock).not.toHaveBeenCalled()
   })
 
   it('downloads evidence export from the flow evidence endpoint', async () => {

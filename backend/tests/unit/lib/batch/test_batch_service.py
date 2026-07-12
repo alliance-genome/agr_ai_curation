@@ -412,11 +412,15 @@ class TestBatchToResponseMocked:
 
     def test_document_handoff_metadata_preserves_authoritative_ids_and_refs(self):
         review_session_id = uuid4()
+        second_review_session_id = uuid4()
         extraction_result_id = uuid4()
         mock_db = Mock()
         mock_db.scalars.side_effect = [
             SimpleNamespace(
-                all=lambda: [SimpleNamespace(id=review_session_id, adapter_key="gene")]
+                all=lambda: [
+                    SimpleNamespace(id=second_review_session_id, adapter_key="allele"),
+                    SimpleNamespace(id=review_session_id, adapter_key="gene"),
+                ]
             ),
             SimpleNamespace(
                 all=lambda: [
@@ -434,9 +438,10 @@ class TestBatchToResponseMocked:
         service = BatchService(mock_db)
         batch = SimpleNamespace(id=uuid4())
         document = SimpleNamespace(
+            id=uuid4(),
             document_id=uuid4(),
             status=BatchDocumentStatus.COMPLETED,
-            review_session_ids=[str(review_session_id)],
+            review_session_ids=[str(review_session_id), str(second_review_session_id)],
         )
 
         result = service.get_document_handoff_metadata(
@@ -444,7 +449,7 @@ class TestBatchToResponseMocked:
             cast(BatchDocument, document),
         )
 
-        assert result["adapter_keys"] == ["gene"]
+        assert result["adapter_keys"] == ["gene", "allele"]
         assert result["extraction_result_ids"] == [str(extraction_result_id)]
         assert result["extraction_result_refs"] == [
             {
@@ -458,6 +463,40 @@ class TestBatchToResponseMocked:
         ]
         assert result["flow_run_id"] == str(batch.id)
         assert result["origin_session_id"] == "origin-1"
+
+    def test_document_handoff_metadata_rejects_invalid_review_session_id(self):
+        service = BatchService(Mock())
+        batch = SimpleNamespace(id=uuid4())
+        document = SimpleNamespace(
+            id=uuid4(),
+            document_id=uuid4(),
+            status=BatchDocumentStatus.COMPLETED,
+            review_session_ids=["not-a-uuid"],
+        )
+
+        with pytest.raises(ValueError, match="invalid authoritative review-session ID"):
+            service.get_document_handoff_metadata(
+                cast("Batch", batch),
+                cast(BatchDocument, document),
+            )
+
+    def test_document_handoff_metadata_rejects_missing_review_session(self):
+        mock_db = Mock()
+        mock_db.scalars.return_value = SimpleNamespace(all=lambda: [])
+        service = BatchService(mock_db)
+        batch = SimpleNamespace(id=uuid4())
+        document = SimpleNamespace(
+            id=uuid4(),
+            document_id=uuid4(),
+            status=BatchDocumentStatus.COMPLETED,
+            review_session_ids=[str(uuid4())],
+        )
+
+        with pytest.raises(ValueError, match="references missing authoritative review sessions"):
+            service.get_document_handoff_metadata(
+                cast("Batch", batch),
+                cast(BatchDocument, document),
+            )
 
     def test_batch_to_response_converts_batch_model(self):
         """batch_to_response should convert Batch model to response schema."""

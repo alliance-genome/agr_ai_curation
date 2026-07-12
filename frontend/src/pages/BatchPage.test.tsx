@@ -170,7 +170,7 @@ describe('BatchPage', () => {
     }))
   })
 
-  it('distinguishes authoritative zero sessions from legacy missing IDs', () => {
+  it('maps absent or null review-session IDs to authoritative zero', () => {
     expect(mapBatchDocument({
       id: 'batch-doc-zero',
       document_id: 'doc-zero',
@@ -180,11 +180,11 @@ describe('BatchPage', () => {
     }).review_session_ids).toEqual([])
 
     expect(mapBatchDocument({
-      id: 'batch-doc-legacy',
-      document_id: 'doc-legacy',
+      id: 'batch-doc-missing-ids',
+      document_id: 'doc-missing-ids',
       position: 1,
       status: 'completed',
-    }).review_session_ids).toBeUndefined()
+    }).review_session_ids).toEqual([])
   })
 
   it('hydrates a completed row from the live snapshot and opens its exact review session', async () => {

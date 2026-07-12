@@ -3,22 +3,14 @@ import { ExpandMore as ExpandMoreIcon, RateReview as RateReviewIcon } from '@mui
 import { Button, IconButton, Menu, MenuItem, Tooltip, Typography } from '@mui/material'
 import type { ButtonProps, IconButtonProps } from '@mui/material'
 
-import PreparedReviewAndCurateButton from './PreparedReviewAndCurateButton'
 import ReviewAndCurateButton, { type ReviewAndCurateButtonProps } from './ReviewAndCurateButton'
-
-export const LEGACY_REVIEW_SESSION_POLICY = 'reconstruct_only_when_authoritative_ids_are_missing' as const
 
 type AuthoritativeReviewAndCurateButtonProps = Omit<
   ReviewAndCurateButtonProps,
   'sessionId'
 > & {
-  /** Undefined means this is an explicitly supported legacy result. Null/empty is authoritative zero. */
-  authoritativeReviewSessionIds?: string[] | null
+  authoritativeReviewSessionIds: string[]
   disabledReason?: string
-}
-
-function normalizedOpaqueIds(values: string[] | null | undefined): string[] {
-  return [...new Set((values ?? []).filter((value) => typeof value === 'string' && value.length > 0))]
 }
 
 function sessionChoiceLabel(sessionId: string, adapterKey: string | undefined, index: number): string {
@@ -43,24 +35,7 @@ export default function AuthoritativeReviewAndCurateButton({
 }: AuthoritativeReviewAndCurateButtonProps) {
   const [menuAnchorEl, setMenuAnchorEl] = useState<HTMLElement | null>(null)
 
-  if (authoritativeReviewSessionIds === undefined) {
-    // LEGACY_REVIEW_SESSION_POLICY: this is the only path that may reconstruct/bootstrap a session.
-    return (
-      <PreparedReviewAndCurateButton
-        {...launchTarget}
-        adapterKeys={adapterKeys}
-        disabled={disabled}
-        iconOnly={iconOnly}
-        label={label}
-        size={size}
-        variant={variant}
-        color={color}
-        sx={sx}
-      />
-    )
-  }
-
-  const sessionIds = normalizedOpaqueIds(authoritativeReviewSessionIds)
+  const sessionIds = authoritativeReviewSessionIds
   if (sessionIds.length <= 1) {
     const effectiveLabel = sessionIds.length === 0 && disabledReason
       ? `${label} unavailable: ${disabledReason}`

@@ -30,8 +30,7 @@ export interface FlowRunCompletionSummary {
   flowName: string
   flowRunId: string
   originSessionId: string | null
-  /** Null identifies a legacy event where the authoritative field was absent. */
-  reviewSessionIds: string[] | null
+  reviewSessionIds: string[]
   status: string
   totalEvidenceRecords: number
 }
@@ -96,12 +95,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
   const [error, setError] = useState<string | null>(null)
 
   const exportReady = run.status === 'completed' && run.totalEvidenceRecords > 0
-  const hasAuthoritativeReviewSessions = run.reviewSessionIds !== null
-  const reviewReady = run.status === 'completed' && (
-    hasAuthoritativeReviewSessions
-      ? (run.reviewSessionIds?.length ?? 0) > 0
-      : Boolean(run.documentId)
-  )
+  const reviewReady = run.status === 'completed' && run.reviewSessionIds.length > 0
   const statusColor = run.status === 'completed'
     ? theme.palette.success.main
     : theme.palette.error.main
@@ -240,7 +234,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
           <AuthoritativeReviewAndCurateButton
-            authoritativeReviewSessionIds={run.reviewSessionIds ?? undefined}
+            authoritativeReviewSessionIds={run.reviewSessionIds}
             disabledReason="No prepared review sessions were produced by this run."
             documentId={run.documentId}
             flowRunId={run.flowRunId}
@@ -314,9 +308,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
             },
           }}
         >
-          {hasAuthoritativeReviewSessions
-            ? 'This run completed without prepared review sessions, so there is no curation workspace to open.'
-            : 'This legacy run does not have authoritative review-session IDs or enough document scope metadata to reconstruct a supported curation workspace.'}
+          This run completed without prepared review sessions, so there is no curation workspace to open.
         </Alert>
       )}
 

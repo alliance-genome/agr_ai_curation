@@ -520,32 +520,39 @@ class BatchService:
     ) -> dict[str, object]:
         """Return authoritative curation identities for one persisted batch result."""
 
-        empty_metadata: dict[str, object] = {
-            "adapter_keys": [],
-            "extraction_result_ids": [],
-            "extraction_result_refs": [],
-            "flow_run_id": str(batch.id),
-            "origin_session_id": None,
-        }
         if document.status != BatchDocumentStatus.COMPLETED:
-            return empty_metadata
+            return {
+                "adapter_keys": [],
+                "extraction_result_ids": [],
+                "extraction_result_refs": [],
+                "flow_run_id": str(batch.id),
+                "origin_session_id": None,
+            }
 
         review_session_ids = list(document.review_session_ids or [])
-        session_ids: list[UUID] = []
-        for session_id in review_session_ids:
-            try:
-                session_ids.append(UUID(session_id))
-            except (TypeError, ValueError, AttributeError):
-                continue
+        try:
+            session_ids = [UUID(session_id) for session_id in review_session_ids]
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError(
+                f"Batch document {document.id} has an invalid authoritative review-session ID"
+            ) from exc
 
-        sessions_by_id = {}
+        sessions_by_id: dict[UUID, CurationReviewSession] = {}
         if session_ids:
             sessions_by_id = {
-                str(session.id): session
+                session.id: session
                 for session in self.db.scalars(
                     select(CurationReviewSession).where(CurationReviewSession.id.in_(session_ids))
                 ).all()
             }
+            missing_session_ids = [
+                str(session_id) for session_id in session_ids if session_id not in sessions_by_id
+            ]
+            if missing_session_ids:
+                raise ValueError(
+                    f"Batch document {document.id} references missing authoritative review "
+                    f"sessions: {', '.join(missing_session_ids)}"
+                )
 
         extraction_results = list(
             self.db.scalars(
@@ -574,16 +581,15 @@ class BatchService:
         ]
 
         return {
-            **empty_metadata,
             "adapter_keys": [
                 sessions_by_id[session_id].adapter_key
-                for session_id in review_session_ids
-                if session_id in sessions_by_id
+                for session_id in session_ids
             ],
             "extraction_result_ids": [
                 ref["extraction_result_id"] for ref in extraction_result_refs
             ],
             "extraction_result_refs": extraction_result_refs,
+            "flow_run_id": str(batch.id),
             "origin_session_id": next(
                 (
                     record.origin_session_id

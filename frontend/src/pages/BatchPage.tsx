@@ -101,8 +101,7 @@ export interface BatchDocument {
   extraction_result_refs?: Array<Record<string, unknown>>;
   flow_run_id?: string;
   origin_session_id?: string;
-  /** Undefined is reserved for legacy results where the authoritative field is absent. */
-  review_session_ids?: string[];
+  review_session_ids: string[];
 }
 
 interface BatchDocumentPayload {
@@ -138,9 +137,7 @@ export function mapBatchDocument(doc: BatchDocumentPayload): BatchDocument {
     extraction_result_refs: doc.extraction_result_refs,
     flow_run_id: doc.flow_run_id,
     origin_session_id: doc.origin_session_id,
-    review_session_ids: Object.prototype.hasOwnProperty.call(doc, 'review_session_ids')
-      ? (Array.isArray(doc.review_session_ids) ? doc.review_session_ids : [])
-      : undefined,
+    review_session_ids: Array.isArray(doc.review_session_ids) ? doc.review_session_ids : [],
   };
 }
 
@@ -183,6 +180,7 @@ const BatchPage: React.FC = () => {
       document_id: doc.id,
       title: doc.title,
       status: 'pending',
+      review_session_ids: [],
     })),
     selectedFlowId: null,
     flowValidation: null,

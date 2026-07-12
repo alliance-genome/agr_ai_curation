@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@/test/test-utils'
 
-import AuthoritativeReviewAndCurateButton, {
-  LEGACY_REVIEW_SESSION_POLICY,
-} from './AuthoritativeReviewAndCurateButton'
+import AuthoritativeReviewAndCurateButton from './AuthoritativeReviewAndCurateButton'
 
 const mockNavigate = vi.fn()
 const openCurationWorkspaceMock = vi.fn()
@@ -28,12 +26,6 @@ describe('AuthoritativeReviewAndCurateButton', () => {
     mockNavigate.mockReset()
     openCurationWorkspaceMock.mockReset()
     openCurationWorkspaceMock.mockResolvedValue('opened-session')
-  })
-
-  it('documents the only supported legacy reconstruction policy', () => {
-    expect(LEGACY_REVIEW_SESSION_POLICY).toBe(
-      'reconstruct_only_when_authoritative_ids_are_missing',
-    )
   })
 
   it('disables authoritative zero-session results without reconstructing', () => {
@@ -83,17 +75,6 @@ describe('AuthoritativeReviewAndCurateButton', () => {
     await waitFor(() => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({ sessionId: 'review-allele' }),
-      )
-    })
-  })
-
-  it('uses reconstruction only when the authoritative field is absent', async () => {
-    render(<AuthoritativeReviewAndCurateButton documentId="legacy-doc" />)
-
-    fireEvent.click(screen.getByRole('button', { name: /review & curate/i }))
-    await waitFor(() => {
-      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
-        expect.objectContaining({ documentId: 'legacy-doc', sessionId: undefined }),
       )
     })
   })
