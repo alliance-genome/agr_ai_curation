@@ -900,15 +900,22 @@ export function useAutosave(
     inProgressRequestRef.current = updateCurationSession({
       session_id: session.session_id,
       status: 'in_progress',
-      current_candidate_id: activeCandidateId,
     })
       .then((response) => {
         sessionStatusRef.current = response.session.status
         if (mountedRef.current) {
           setWorkspace((currentWorkspace) =>
             updateWorkspaceActiveCandidate(
-              replaceWorkspaceSession(currentWorkspace, response.session),
-              response.session.current_candidate_id ?? activeCandidateId ?? null,
+              replaceWorkspaceSession(currentWorkspace, {
+                ...response.session,
+                session_version: Math.max(
+                  currentWorkspace.session.session_version,
+                  response.session.session_version,
+                ),
+              }),
+              currentWorkspace.active_candidate_id ??
+                currentWorkspace.session.current_candidate_id ??
+                null,
             ),
           )
         }
@@ -927,7 +934,7 @@ export function useAutosave(
       })
 
     return inProgressRequestRef.current
-  }, [activeCandidateId, session.session_id, session.status, setWorkspace])
+  }, [session.session_id, session.status, setWorkspace])
 
   const pauseSession = useCallback(
     async (options?: FlushOptions): Promise<boolean> => {
@@ -953,7 +960,6 @@ export function useAutosave(
           {
             session_id: workspace.session.session_id,
             status: 'paused',
-            current_candidate_id: activeCandidateId,
           },
           { keepalive: options?.keepalive },
         )
@@ -961,8 +967,16 @@ export function useAutosave(
         if (options?.updateState !== false && mountedRef.current) {
           setWorkspace((currentWorkspace) =>
             updateWorkspaceActiveCandidate(
-              replaceWorkspaceSession(currentWorkspace, response.session),
-              response.session.current_candidate_id ?? activeCandidateId ?? null,
+              replaceWorkspaceSession(currentWorkspace, {
+                ...response.session,
+                session_version: Math.max(
+                  currentWorkspace.session.session_version,
+                  response.session.session_version,
+                ),
+              }),
+              currentWorkspace.active_candidate_id ??
+                currentWorkspace.session.current_candidate_id ??
+                null,
             ),
           )
         }
@@ -980,7 +994,7 @@ export function useAutosave(
         pauseInFlightRef.current = false
       }
     },
-    [activeCandidateId, setWorkspace, workspace.session.session_id],
+    [setWorkspace, workspace.session.session_id],
   )
 
   const scheduleAutosave = useCallback(

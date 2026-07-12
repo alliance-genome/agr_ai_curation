@@ -11,6 +11,7 @@ import {
   useCurationWorkspaceContext,
 } from './CurationWorkspaceContext'
 import { useAutosave } from './useAutosave'
+import { useSessionHydration } from './useSessionHydration'
 
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
@@ -365,6 +366,8 @@ describe('useAutosave', () => {
     serviceMocks.autosaveCurationCandidateDraft.mockResolvedValue(
       buildSavedWorkspaceResponse(),
     )
+    const initialWorkspace = buildWorkspace('new')
+    delete initialWorkspace.active_candidate_id
 
     const { result } = renderHook(
       () => ({
@@ -372,7 +375,7 @@ describe('useAutosave', () => {
         context: useCurationWorkspaceContext(),
       }),
       {
-        wrapper: createWrapper(buildWorkspace('new')),
+        wrapper: createWrapper(initialWorkspace),
       },
     )
 
@@ -388,7 +391,6 @@ describe('useAutosave', () => {
     expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
       session_id: 'session-1',
       status: 'in_progress',
-      current_candidate_id: 'candidate-1',
     })
 
     await act(async () => {
@@ -415,6 +417,8 @@ describe('useAutosave', () => {
       await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
     })
     expect(result.current.context.activeCandidate?.draft.version).toBe(2)
+    expect(result.current.context.workspace.active_candidate_id).toBe('candidate-1')
+    expect(result.current.context.workspace.session.current_candidate_id).toBe('candidate-1')
     expect(result.current.autosave.isDirty).toBe(false)
     expect(result.current.autosave.warning).toBeNull()
   })
@@ -1058,7 +1062,6 @@ describe('useAutosave', () => {
     expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
       session_id: 'session-1',
       status: 'in_progress',
-      current_candidate_id: 'candidate-1',
     })
 
     act(() => {
@@ -1084,12 +1087,107 @@ describe('useAutosave', () => {
       {
         session_id: 'session-1',
         status: 'paused',
-        current_candidate_id: 'candidate-1',
       },
       {
         keepalive: true,
       },
     ])
+  })
+
+  it('does not let a stale lifecycle response reclaim a newer candidate selection', async () => {
+    const inProgressRequest = createDeferred<{
+      session: CurationReviewSession
+      action_log_entry: null
+    }>()
+    const candidateRequest = createDeferred<{
+      session: CurationReviewSession
+      action_log_entry: null
+    }>()
+    const initialWorkspace = buildWorkspace('new')
+    initialWorkspace.candidates.push({
+      ...initialWorkspace.candidates[0],
+      candidate_id: 'candidate-2',
+      display_label: 'Candidate 2',
+      order: 1,
+      draft: {
+        ...initialWorkspace.candidates[0].draft,
+        draft_id: 'draft-2',
+        candidate_id: 'candidate-2',
+      },
+    })
+
+    serviceMocks.updateCurationSession.mockImplementation((request) => {
+      if (request.status === 'in_progress') {
+        return inProgressRequest.promise
+      }
+      if (request.current_candidate_id === 'candidate-2') {
+        return candidateRequest.promise
+      }
+      throw new Error('Unexpected session mutation')
+    })
+
+    const { result, rerender } = renderHook(
+      ({ routeCandidateId }: { routeCandidateId: string }) => ({
+        autosave: useAutosave({ debounceMs: 60_000 }),
+        hydration: useSessionHydration({ routeCandidateId }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(initialWorkspace),
+        initialProps: { routeCandidateId: 'candidate-1' },
+      },
+    )
+
+    await waitFor(() => expect(result.current.hydration.isHydrated).toBe(true))
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => expect(serviceMocks.updateCurationSession).toHaveBeenCalledTimes(1))
+
+    rerender({ routeCandidateId: 'candidate-2' })
+    await waitFor(() => expect(serviceMocks.updateCurationSession).toHaveBeenCalledTimes(2))
+
+    candidateRequest.resolve({
+      session: {
+        ...buildWorkspace('new').session,
+        current_candidate_id: 'candidate-2',
+        session_version: 2,
+      },
+      action_log_entry: null,
+    })
+    await act(async () => candidateRequest.promise)
+
+    inProgressRequest.resolve({
+      session: {
+        ...buildWorkspace('in_progress').session,
+        current_candidate_id: 'candidate-1',
+      },
+      action_log_entry: null,
+    })
+    await act(async () => inProgressRequest.promise)
+
+    expect(result.current.context.activeCandidateId).toBe('candidate-2')
+    expect(result.current.context.workspace.active_candidate_id).toBe('candidate-2')
+    expect(result.current.context.workspace.session.current_candidate_id).toBe('candidate-2')
+    expect(result.current.context.workspace.session.status).toBe('in_progress')
+    expect(result.current.context.workspace.session.session_version).toBe(2)
+
+    const requests = serviceMocks.updateCurationSession.mock.calls.map(([request]) => request)
+    expect(requests[0]).toEqual({
+      session_id: 'session-1',
+      status: 'in_progress',
+    })
+    expect(requests[1]).toMatchObject({
+      session_id: 'session-1',
+      expected_session_version: 1,
+      current_candidate_id: 'candidate-2',
+      intent_owner: expect.any(String),
+      intent_generation: expect.any(Number),
+    })
   })
 
   it('retries a failed autosave request once before succeeding', async () => {
