@@ -35,7 +35,8 @@ Environment:
   SYMPHONY_BACKEND_TEST_LOCK_ROOT
 
 Compose context:
-  --rootful and --rootless are supported and preserved during explicit repair.
+  Rootful Docker is the Symphony VM default. --rootful and --rootless are
+  supported overrides and are preserved during explicit repair.
   Custom project, project-directory, env-file, profile, and compose-file
   selectors are rejected so locking and cleanup cannot target different stacks.
 
@@ -105,7 +106,7 @@ fi
 
 compose_args=("$@")
 cleanup_context_args=()
-docker_mode="${AI_CURATION_TEST_DOCKER_MODE:-rootless}"
+docker_mode="${AI_CURATION_TEST_DOCKER_MODE:-rootful}"
 context_index=0
 case "${compose_args[0]:-}" in
   --rootful)
@@ -119,6 +120,24 @@ case "${compose_args[0]:-}" in
     context_index=1
     ;;
 esac
+
+case "${docker_mode}" in
+  rootful|rootless)
+    ;;
+  *)
+    echo "AI_CURATION_TEST_DOCKER_MODE must be rootful or rootless, got: ${docker_mode}" >&2
+    exit 2
+    ;;
+esac
+
+# Symphony runs inside an Incus VM whose supported daemon is the system Docker
+# socket. Pass the selected mode explicitly so the delegated general-purpose
+# helper cannot silently apply its separate rootless default.
+if [[ "${context_index}" -eq 0 ]]; then
+  compose_args=("--${docker_mode}" "${compose_args[@]}")
+  cleanup_context_args+=("--${docker_mode}")
+  context_index=1
+fi
 
 # The canonical helper owns the Compose file and project identity. Allowing
 # callers to override either would require a different shared-lock and cleanup

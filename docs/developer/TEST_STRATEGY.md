@@ -32,6 +32,10 @@ container/network collision, `--repair-known-collision` explicitly permits a
 project-scoped `down --remove-orphans` followed by the configured bounded retry.
 Do not opt into repair while a raw Compose command is still active in that
 workspace.
+The Symphony wrapper explicitly selects rootful Docker by default because the
+Incus VM uses the system daemon at `/var/run/docker.sock`; it does not depend on
+the general test helper's rootless default. Set `AI_CURATION_TEST_DOCKER_MODE`
+or pass `--rootless` only in an environment with a working rootless daemon.
 The `--rootful` and `--rootless` selectors are supported. Custom Compose
 project, directory, env-file, profile, and file selectors are rejected because
 they would make lock and cleanup identity ambiguous.

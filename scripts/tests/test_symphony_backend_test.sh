@@ -30,7 +30,7 @@ fi
 
 case "${mode}" in
   pass)
-    printf 'pwd=%s\nargs=%s\n' "${PWD}" "$*" >> "${log}"
+    printf 'pwd=%s\noriginal_args=%s\nargs=%s\n' "${PWD}" "${original_args}" "$*" >> "${log}"
     ;;
   serialize)
     printf 'start:%s\n' "${TEST_LABEL:?}" >> "${log}"
@@ -93,7 +93,31 @@ test_passes_compose_args_from_workspace() {
 
   assert_contains "SYMPHONY_BACKEND_TEST_STATUS=ok" "${output}"
   assert_contains "pwd=${workspace}" "$(cat "${log}")"
+  assert_contains "original_args=--rootful run --rm backend-unit-tests" "$(cat "${log}")"
   assert_contains "args=run --rm backend-unit-tests" "$(cat "${log}")"
+  rm -rf "${temp_dir}"
+}
+
+test_honors_explicit_rootless_environment_mode() {
+  local temp_dir workspace helper log output
+  temp_dir="$(mktemp -d)"
+  workspace="${temp_dir}/workspace"
+  helper="${temp_dir}/compose-helper"
+  log="${temp_dir}/compose.log"
+  mkdir -p "${workspace}"
+  write_compose_stub "${helper}"
+
+  output="$(
+    TEST_COMPOSE_MODE=pass \
+    TEST_COMPOSE_LOG="${log}" \
+    AI_CURATION_TEST_DOCKER_MODE=rootless \
+    SYMPHONY_BACKEND_TEST_COMPOSE_HELPER="${helper}" \
+    SYMPHONY_BACKEND_TEST_LOCK_ROOT="${temp_dir}/locks" \
+      bash "${SCRIPT_PATH}" --workspace-dir "${workspace}" -- run --rm backend-unit-tests 2>&1
+  )"
+
+  assert_contains "SYMPHONY_BACKEND_TEST_STATUS=ok" "${output}"
+  assert_contains "original_args=--rootless run --rm backend-unit-tests" "$(cat "${log}")"
   rm -rf "${temp_dir}"
 }
 
@@ -216,7 +240,7 @@ test_collision_cleanup_is_opt_in_and_bounded() {
   assert_contains "SYMPHONY_BACKEND_TEST_STATUS=repairing_known_collision" "${output}"
   assert_contains "SYMPHONY_BACKEND_TEST_RETRY=1/1" "${output}"
   assert_contains "SYMPHONY_BACKEND_TEST_STATUS=ok" "${output}"
-  expected=$'run-fail:run --rm backend-unit-tests\ndown:down --remove-orphans\nrun-success:run --rm backend-unit-tests'
+  expected=$'run-fail:--rootful run --rm backend-unit-tests\ndown:--rootful down --remove-orphans\nrun-success:--rootful run --rm backend-unit-tests'
   [[ "$(cat "${log}")" == "${expected}" ]] || {
     echo "FAIL: Repair sequence was not fail/down/retry." >&2
     cat "${log}" >&2
@@ -401,6 +425,7 @@ test_same_default_project_serializes_across_workspace_roots() {
 }
 
 test_passes_compose_args_from_workspace
+test_honors_explicit_rootless_environment_mode
 test_serializes_commands_for_the_same_workspace
 test_lock_timeout_is_explicit
 test_collision_cleanup_is_opt_in_and_bounded

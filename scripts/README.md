@@ -386,6 +386,10 @@ confirming no raw Compose command is active in that workspace. The repair runs
 `--rootful` and `--rootless` are preserved during repair. Custom Compose
 project/file/env/profile selectors are rejected so a repair cannot target a
 different stack than the failed command.
+The Symphony wrapper selects `--rootful` by default because Symphony runs in an
+Incus VM backed by the system Docker socket. An explicit selector or
+`AI_CURATION_TEST_DOCKER_MODE` can override that default when a working
+rootless daemon is intentionally provided.
 
 ### utilities/symphony_classify_pr_feedback.sh
 
