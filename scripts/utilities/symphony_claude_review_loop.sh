@@ -39,6 +39,7 @@ Options:
   --inline-json-file PATH   Test fixture override for gh api inline-comment JSON
   --workflow-runs-json-file PATH
                            Test fixture override for gh run list JSON
+  --inspect-only           Read current feedback without polling or posting re-review requests
   --dry-run                 Do not post re-review requests; report what would happen
 EOF
 }
@@ -57,6 +58,7 @@ top_json_file=""
 inline_json_file=""
 workflow_runs_json_file=""
 dry_run=0
+inspect_only=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -114,6 +116,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       dry_run=1
+      shift
+      ;;
+    --inspect-only)
+      inspect_only=1
       shift
       ;;
     -h|--help)
@@ -831,10 +837,34 @@ case "${LOOP_ACTION}" in
     ;;
 
   request_and_wait)
+    if (( inspect_only == 1 )); then
+      echo "CLAUDE_LOOP_STATUS=pending"
+      echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
+      echo "CLAUDE_LOOP_ROUND=${LOOP_ROUND}"
+      echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
+      echo "CLAUDE_LOOP_LATEST_AT=${LOOP_LATEST_FEEDBACK_AT}"
+      echo "CLAUDE_LOOP_WAIT_SINCE=${LOOP_WAIT_SINCE}"
+      echo "CLAUDE_LOOP_PR_URL=${LOOP_PR_URL}"
+      exit 0
+    fi
     post_rereview_request "${LOOP_HEAD_SHA}"
     ;& # fall through to wait
 
   wait)
+    if (( inspect_only == 1 )); then
+      if [[ -n "${LOOP_LATEST_FEEDBACK_AT}" ]]; then
+        echo "CLAUDE_LOOP_STATUS=pending"
+      else
+        echo "CLAUDE_LOOP_STATUS=quiet"
+      fi
+      echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
+      echo "CLAUDE_LOOP_ROUND=${LOOP_ROUND}"
+      echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
+      echo "CLAUDE_LOOP_LATEST_AT=${LOOP_LATEST_FEEDBACK_AT}"
+      echo "CLAUDE_LOOP_WAIT_SINCE=${LOOP_WAIT_SINCE}"
+      echo "CLAUDE_LOOP_PR_URL=${LOOP_PR_URL}"
+      exit 0
+    fi
     set +e
     poll_output="$(poll_for_feedback "${LOOP_WAIT_SINCE}")"
     poll_rc=$?

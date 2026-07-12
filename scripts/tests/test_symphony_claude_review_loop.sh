@@ -149,6 +149,61 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+test_inspect_only_never_posts_rereview() {
+  local temp_dir top_json inline_json output_file bin_dir rc output
+  temp_dir="$(mktemp -d)"
+  top_json="${temp_dir}/top.json"
+  inline_json="${temp_dir}/inline.json"
+  output_file="${temp_dir}/output.txt"
+  bin_dir="${temp_dir}/bin"
+  mkdir -p "${bin_dir}"
+
+  cat > "${top_json}" <<'EOF'
+{
+  "comments": [
+    {
+      "author": {"login": "claude"},
+      "createdAt": "2026-03-21T14:04:04Z",
+      "body": "An earlier review"
+    }
+  ],
+  "reviews": [],
+  "url": "https://github.com/test/repo/pull/99",
+  "headRefOid": "new-head",
+  "commits": [
+    {"oid": "new-head", "committedDate": "2026-03-21T14:10:00Z"}
+  ]
+}
+EOF
+  echo '[]' > "${inline_json}"
+  cat > "${bin_dir}/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "inspect-only unexpectedly invoked gh: $*" >&2
+exit 99
+EOF
+  chmod +x "${bin_dir}/gh"
+
+  set +e
+  PATH="${bin_dir}:${PATH}" bash "${SCRIPT_PATH}" \
+    --repo alliance-genome/agr_ai_curation \
+    --pr 99 \
+    --since "2026-03-21T14:00:00Z" \
+    --wait-seconds 0 \
+    --inspect-only \
+    --top-json-file "${top_json}" \
+    --inline-json-file "${inline_json}" \
+    > "${output_file}"
+  rc=$?
+  set -e
+  output="$(cat "${output_file}")"
+
+  assert_exit_code "0" "${rc}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
+  echo "  PASS: test_inspect_only_never_posts_rereview"
+  rm -rf "${temp_dir}"
+}
+
 # ── Test: In-progress workflow keeps initial review pending ──────────
 
 test_running_workflow_keeps_initial_review_pending() {
@@ -956,6 +1011,7 @@ EOF
 echo "Running symphony_claude_review_loop tests..."
 test_initial_review_detected
 test_no_feedback_quiet
+test_inspect_only_never_posts_rereview
 test_running_workflow_keeps_initial_review_pending
 test_old_feedback_before_since_is_quiet
 test_head_newer_no_markers_advances_round
@@ -973,4 +1029,4 @@ test_report_shows_latest_feedback_only
 test_pr109_scenario_head_after_review
 test_disposition_file_accepted
 
-echo "symphony_claude_review_loop tests passed (18/18)"
+echo "symphony_claude_review_loop tests passed (19/19)"

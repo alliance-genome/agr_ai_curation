@@ -976,6 +976,178 @@ EOF
   assert_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
 }
 
+test_actionable_claude_feedback_stops_pending_checks_and_cancels_exact_head() {
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub
+  local report_file bin_dir cancel_log loop_log output_file output rc
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${temp_dir}/classifier"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  report_file="${temp_dir}/claude-report.md"
+  bin_dir="${temp_dir}/bin"
+  cancel_log="${temp_dir}/cancel.log"
+  loop_log="${temp_dir}/loop.log"
+  output_file="${temp_dir}/out.txt"
+  mkdir -p "${bin_dir}"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":700,"title":"ALL-700: Pending checks","url":"https://example.test/pr/700","headRefName":"all-700"}]
+EOF
+  cat > "${pr_view_json}" <<'EOF'
+{"number":700,"title":"ALL-700: Pending checks","url":"https://example.test/pr/700","headRefName":"all-700","baseRefName":"main","headRefOid":"exact-head","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-07-12T10:00:00Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Unit Tests","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://example.test/checks/unit"}]}
+EOF
+  printf 'Please fix the race.\n' > "${report_file}"
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${loop_log}"
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=actionable_feedback
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=1
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  cat > "${classifier_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo PR_FEEDBACK_CLASSIFIER_STATUS=actionable
+exit 10
+EOF
+  cat > "${workpad_stub}" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  cat > "${state_stub}" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  cat > "${bin_dir}/gh" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1 \$2" == "run list" ]]; then
+  cat <<'JSON'
+[
+  {"databaseId":101,"workflowName":"Unit Tests","status":"in_progress","conclusion":"","headSha":"exact-head","headBranch":"all-700","event":"pull_request","url":"u1"},
+  {"databaseId":102,"workflowName":"Agent PR Gate","status":"queued","conclusion":"","headSha":"exact-head","headBranch":"all-700","event":"pull_request","url":"u2"},
+  {"databaseId":103,"workflowName":"CodeQL","status":"waiting","conclusion":"","headSha":"exact-head","headBranch":"all-700","event":"pull_request","url":"u3"},
+  {"databaseId":104,"workflowName":"Unit Tests","status":"completed","conclusion":"success","headSha":"exact-head","headBranch":"all-700","event":"pull_request","url":"u4"},
+  {"databaseId":105,"workflowName":"Unit Tests","status":"in_progress","conclusion":"","headSha":"other-head","headBranch":"all-700","event":"pull_request","url":"u5"},
+  {"databaseId":106,"workflowName":"Deploy Production","status":"in_progress","conclusion":"","headSha":"exact-head","headBranch":"all-700","event":"pull_request","url":"u6"},
+  {"databaseId":107,"workflowName":"Unit Tests","status":"in_progress","conclusion":"","headSha":"exact-head","headBranch":"main","event":"push","url":"u7"}
+]
+JSON
+  exit 0
+fi
+if [[ "\$1 \$2" == "run cancel" ]]; then
+  echo "\$3" >> "${cancel_log}"
+  exit 0
+fi
+exit 99
+EOF
+  chmod +x "${loop_stub}" "${classifier_stub}" "${workpad_stub}" "${state_stub}" "${bin_dir}/gh"
+
+  set +e
+  PATH="${bin_dir}:${PATH}" \
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-700 \
+      --branch all-700 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-checks-seconds 30 \
+      --check-poll-seconds 1 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}" \
+      > "${output_file}"
+  rc=$?
+  set -e
+  output="$(cat "${output_file}")"
+
+  [[ "${rc}" == "0" ]]
+  assert_contains "READY_FOR_PR_CHECK_STATUS=claude_feedback" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
+  assert_contains "READY_FOR_PR_CI_CANCELLED_COUNT=3" "${output}"
+  assert_contains "--inspect-only" "$(cat "${loop_log}")"
+  [[ "$(sort -n "${cancel_log}" | tr '\n' ' ')" == "101 102 103 " ]]
+}
+
+test_clean_pending_ci_feedback_is_cached_without_bounce() {
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub guard_stub
+  local report_file classifier_log output_file output rc
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${temp_dir}/classifier"
+  guard_stub="${temp_dir}/must-not-bounce"
+  report_file="${temp_dir}/claude-report.md"
+  classifier_log="${temp_dir}/classifier.log"
+  output_file="${temp_dir}/out.txt"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":701,"title":"ALL-701: Pending CI","url":"https://example.test/pr/701","headRefName":"all-701"}]
+EOF
+  cat > "${pr_view_json}" <<'EOF'
+{"number":701,"title":"ALL-701: Pending CI","url":"https://example.test/pr/701","headRefName":"all-701","baseRefName":"main","headRefOid":"head-701","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-07-12T10:00:00Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Unit Tests","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://example.test/checks/unit"}]}
+EOF
+  printf 'Approve/LGTM; merge once CI passes.\n' > "${report_file}"
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=actionable_feedback
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=1
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  cat > "${classifier_stub}" <<EOF
+#!/usr/bin/env bash
+echo called >> "${classifier_log}"
+echo PR_FEEDBACK_CLASSIFIER_STATUS=clean
+echo PR_FEEDBACK_CLASSIFIER_CLASSIFICATION=clean
+echo PR_FEEDBACK_CLASSIFIER_REASON=Pure pending-CI gate language; no implementation work.
+exit 0
+EOF
+  cat > "${guard_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo "unexpected bounce: $*" >&2
+exit 99
+EOF
+  chmod +x "${loop_stub}" "${classifier_stub}" "${guard_stub}"
+
+  set +e
+  SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${guard_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${guard_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-701 \
+      --branch all-701 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-checks-seconds 2 \
+      --check-poll-seconds 1 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}" \
+      > "${output_file}"
+  rc=$?
+  set -e
+  output="$(cat "${output_file}")"
+
+  [[ "${rc}" == "11" ]]
+  assert_contains "READY_FOR_PR_EARLY_CLAUDE_ACTION=clean_review_checks_continue" "${output}"
+  assert_contains "READY_FOR_PR_EARLY_CLAUDE_CLASSIFIER_CACHE=miss" "${output}"
+  assert_contains "READY_FOR_PR_EARLY_CLAUDE_CLASSIFIER_CACHE=hit" "${output}"
+  assert_contains "READY_FOR_PR_CHECK_STATUS=pending" "${output}"
+  [[ "$(wc -l < "${classifier_log}")" == "1" ]]
+}
+
 test_no_pr_skips_lane
 test_existing_pr_is_reported
 test_conflicted_pr_routes_back_to_in_progress
@@ -994,5 +1166,7 @@ test_classifier_error_is_conservative_and_auto_bounces
 test_claude_pending_after_clean_checks_stops_before_human_review
 test_failed_github_check_auto_bounces_to_in_progress
 test_claude_maxed_out_without_report_does_not_abort
+test_actionable_claude_feedback_stops_pending_checks_and_cancels_exact_head
+test_clean_pending_ci_feedback_is_cached_without_bounce
 
 echo "symphony_ready_for_pr tests passed"

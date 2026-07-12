@@ -33,6 +33,8 @@ PYRIGHT_DEPENDENCY_RESOLUTION_RULES = {
     "reportMissingModuleSource",
 }
 PYRIGHT_MISSING_IMPORT_PATTERN = re.compile(r'Import "([^"]+)" could not be resolved')
+TYPESCRIPT_PREP_TIMEOUT_ENV = "AGENT_LSP_TYPESCRIPT_PREP_TIMEOUT_SECONDS"
+TYPESCRIPT_PREP_TIMEOUT_DEFAULT = 300.0
 
 
 def run_command(
@@ -140,7 +142,9 @@ def workspace_lock(cache_dir: Path, timeout: float):
             break
         except FileExistsError:
             if time.monotonic() >= deadline:
-                raise TimeoutError(f"Timed out waiting for LSP workspace lock: {lock_dir}")
+                raise TimeoutError(
+                    f"Timed out waiting for LSP workspace lock: {lock_dir}"
+                )
             time.sleep(0.1)
     try:
         yield
@@ -194,9 +198,106 @@ def detect_languages(root: Path) -> list[str]:
     languages: list[str] = []
     if (root / "backend").is_dir() or any(root.glob("*.py")):
         languages.append("python")
-    if (root / "frontend" / "tsconfig.json").is_file() or (root / "package.json").is_file():
+    if (root / "frontend" / "tsconfig.json").is_file() or (
+        root / "package.json"
+    ).is_file():
         languages.append("typescript")
     return languages
+
+
+def typescript_dependency_state(root: Path) -> dict[str, Any]:
+    frontend = root / "frontend"
+    lockfile = frontend / "package-lock.json"
+    tsserver = frontend / "node_modules" / "typescript" / "lib" / "tsserver.js"
+    if not (frontend / "tsconfig.json").is_file():
+        return {"status": "not_applicable", "reason": "typescript_workspace_missing"}
+    if not lockfile.is_file():
+        return {"status": "unavailable", "reason": "package_lock_missing"}
+    if not shutil.which("npm"):
+        return {"status": "unavailable", "reason": "npm_missing"}
+    if not shutil.which("typescript-language-server"):
+        return {"status": "unavailable", "reason": "language_server_missing"}
+    if not tsserver.is_file():
+        return {"status": "dependencies_missing", "reason": "typescript_not_installed"}
+    return {"status": "ready", "reason": "dependencies_installed"}
+
+
+def typescript_prep_timeout() -> float:
+    raw = os.getenv(
+        TYPESCRIPT_PREP_TIMEOUT_ENV, str(int(TYPESCRIPT_PREP_TIMEOUT_DEFAULT))
+    )
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{TYPESCRIPT_PREP_TIMEOUT_ENV} must be numeric, got {raw!r}"
+        ) from exc
+    if value <= 0:
+        raise RuntimeError(f"{TYPESCRIPT_PREP_TIMEOUT_ENV} must be greater than zero")
+    return value
+
+
+def ensure_typescript_dependencies(root: Path) -> dict[str, Any]:
+    """Lazily install pinned frontend dependencies for TypeScript LSP queries."""
+    root = root.resolve()
+    frontend = root / "frontend"
+    lockfile = frontend / "package-lock.json"
+    dependency_state = typescript_dependency_state(root)
+    if dependency_state["status"] not in {"ready", "dependencies_missing"}:
+        raise RuntimeError(
+            "TypeScript LSP unavailable: "
+            + str(dependency_state.get("reason", "unknown"))
+        )
+
+    lock_digest = file_hash(lockfile)
+    if lock_digest is None:
+        raise RuntimeError("TypeScript LSP unavailable: package_lock_missing")
+    cache_dir = cache_dir_for(root)
+    marker = cache_dir / "typescript-dependencies.json"
+
+    def marker_matches() -> bool:
+        try:
+            payload = json.loads(marker.read_text())
+        except (OSError, json.JSONDecodeError):
+            return False
+        return payload.get("package_lock_sha256") == lock_digest
+
+    if dependency_state["status"] == "ready" and marker_matches():
+        return dependency_state
+
+    with workspace_lock(cache_dir, timeout=typescript_prep_timeout()):
+        current_state = typescript_dependency_state(root)
+        if current_state["status"] == "ready" and marker_matches():
+            return current_state
+
+        completed = run_command(
+            ["npm", "ci"],
+            cwd=frontend,
+            timeout=typescript_prep_timeout(),
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip().splitlines()
+            tail = " | ".join(detail[-3:]) if detail else f"exit {completed.returncode}"
+            raise RuntimeError(f"TypeScript dependency preparation failed: {tail}")
+
+        ready_state = typescript_dependency_state(root)
+        if ready_state["status"] != "ready":
+            raise RuntimeError(
+                "TypeScript dependency preparation completed but TypeScript is still unavailable: "
+                + str(ready_state.get("reason", "unknown"))
+            )
+        marker.write_text(
+            json.dumps(
+                {
+                    "package_lock_sha256": lock_digest,
+                    "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return {**ready_state, "prepared": True, "marker": str(marker)}
 
 
 def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
@@ -221,7 +322,9 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
             "pyright": pyright_version,
             "pyright-langserver": command_available(
                 "pyright-langserver",
-                pyright_version.get("version") if pyright_version.get("available") else None,
+                pyright_version.get("version")
+                if pyright_version.get("available")
+                else None,
             ),
             "ruff": command_version("ruff", ["--version"]),
             "typescript-language-server": command_version(
@@ -229,14 +332,38 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
             ),
         }
 
+        languages = detect_languages(root)
+        language_status: dict[str, Any] = {}
+        if "python" in languages:
+            pyright_available = tool_versions["pyright-langserver"]["available"]
+            language_status["python"] = {
+                "status": "ready" if pyright_available else "unavailable",
+                "reason": (
+                    "language_server_available"
+                    if pyright_available
+                    else "language_server_missing"
+                ),
+            }
+        if "typescript" in languages:
+            language_status["typescript"] = typescript_dependency_state(root)
+        overall_status = (
+            "ready"
+            if all(
+                item.get("status") in {"ready", "not_applicable"}
+                for item in language_status.values()
+            )
+            else "partial"
+        )
+
         state = {
-            "status": "ready",
+            "status": overall_status,
             "reason": "fingerprint_changed" if refreshed else "fingerprint_unchanged",
             "workspace_root": str(root),
             "cache_dir": str(cache_dir),
             "fingerprint_digest": digest,
             "fingerprint": fingerprint,
-            "languages": detect_languages(root),
+            "languages": languages,
+            "language_status": language_status,
             "tool_versions": tool_versions,
             "refreshed": refreshed,
             "updated_at": now,
@@ -285,13 +412,17 @@ class LspClient:
     def send(self, payload: dict[str, Any]) -> None:
         assert self.proc.stdin is not None
         raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self.proc.stdin.write(f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw)
+        self.proc.stdin.write(
+            f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw
+        )
         self.proc.stdin.flush()
 
     def request(self, method: str, params: Any, timeout: float) -> Any:
         self._next_id += 1
         request_id = self._next_id
-        self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        self.send(
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        )
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -359,6 +490,8 @@ def lsp_command_for(path: Path) -> list[str]:
 
 def open_lsp_document(root: Path, path: Path, timeout: float) -> tuple[LspClient, Path]:
     lsp_root = lsp_root_for(root, path)
+    if path.suffix in {".ts", ".tsx", ".js", ".jsx"}:
+        ensure_typescript_dependencies(root)
     client = LspClient(lsp_command_for(path), lsp_root)
     client.request(
         "initialize",
@@ -609,7 +742,9 @@ def render_pyright_actionable_output(
             message = diagnostic.get("message") or ""
             rule = diagnostic.get("rule")
             suffix = f" ({rule})" if rule else ""
-            lines.append(f"  {diagnostic_location(diagnostic)} - {severity}: {message}{suffix}")
+            lines.append(
+                f"  {diagnostic_location(diagnostic)} - {severity}: {message}{suffix}"
+            )
     else:
         lines.append("Pyright actionable diagnostics: none")
 
@@ -631,8 +766,12 @@ def render_pyright_actionable_output(
     return "\n".join(lines) + "\n"
 
 
-def run_pyright_diagnostics(root: Path, py_files: list[str], timeout: float) -> dict[str, Any]:
-    completed = run_command(["pyright", *py_files, "--outputjson"], cwd=root, timeout=timeout)
+def run_pyright_diagnostics(
+    root: Path, py_files: list[str], timeout: float
+) -> dict[str, Any]:
+    completed = run_command(
+        ["pyright", *py_files, "--outputjson"], cwd=root, timeout=timeout
+    )
     command: dict[str, Any] = {
         "name": "pyright",
         "returncode": completed.returncode,
@@ -650,8 +789,7 @@ def run_pyright_diagnostics(root: Path, py_files: list[str], timeout: float) -> 
         return command
 
     dependency_resolution, actionable = classify_pyright_diagnostics(
-        root,
-        [diagnostic for diagnostic in diagnostics if isinstance(diagnostic, dict)]
+        root, [diagnostic for diagnostic in diagnostics if isinstance(diagnostic, dict)]
     )
     actionable_error_count = sum(
         1 for diagnostic in actionable if diagnostic.get("severity") == "error"
@@ -680,7 +818,9 @@ def run_pyright_diagnostics(root: Path, py_files: list[str], timeout: float) -> 
 
 def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, Any]:
     py_files = [name for name in files if Path(name).suffix == ".py"]
-    ts_files = [name for name in files if Path(name).suffix in {".ts", ".tsx", ".js", ".jsx"}]
+    ts_files = [
+        name for name in files if Path(name).suffix in {".ts", ".tsx", ".js", ".jsx"}
+    ]
     commands: list[dict[str, Any]] = []
 
     if py_files and shutil.which("ruff"):
@@ -710,7 +850,9 @@ def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, A
             }
         )
     return {
-        "status": "ok" if all(command["returncode"] == 0 for command in commands) else "failed",
+        "status": "ok"
+        if all(command["returncode"] == 0 for command in commands)
+        else "failed",
         "files": files,
         "commands": commands,
     }
@@ -765,9 +907,15 @@ lane brief helpers. Run `warm` manually only for local smoke testing or recovery
 after a clearly stale or missing LSP state.
 """,
     )
-    parser.add_argument("--root", default=".", help="Workspace root. Default: current directory.")
-    parser.add_argument("--timeout", type=float, default=30.0, help="Command timeout in seconds.")
-    parser.add_argument("--format", choices=("json", "env"), default="json", help="Output format.")
+    parser.add_argument(
+        "--root", default=".", help="Workspace root. Default: current directory."
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=30.0, help="Command timeout in seconds."
+    )
+    parser.add_argument(
+        "--format", choices=("json", "env"), default="json", help="Output format."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser(
@@ -801,7 +949,9 @@ after a clearly stale or missing LSP state.
             ),
         )
         request_parser.add_argument("file", help="File path relative to --root.")
-        request_parser.add_argument("line", type=int, help="Line number, 1-based by default.")
+        request_parser.add_argument(
+            "line", type=int, help="Line number, 1-based by default."
+        )
         request_parser.add_argument(
             "character", type=int, help="Character number, 1-based by default."
         )
@@ -864,11 +1014,18 @@ after a clearly stale or missing LSP state.
             if not child.is_dir():
                 continue
             state_file = child / "state.json"
-            mtime = state_file.stat().st_mtime if state_file.exists() else child.stat().st_mtime
+            mtime = (
+                state_file.stat().st_mtime
+                if state_file.exists()
+                else child.stat().st_mtime
+            )
             if mtime < cutoff:
                 shutil.rmtree(child, ignore_errors=True)
                 removed += 1
-        emit({"status": "ok", "removed": removed, "cache_root": str(DEFAULT_CACHE_ROOT)}, args.format)
+        emit(
+            {"status": "ok", "removed": removed, "cache_root": str(DEFAULT_CACHE_ROOT)},
+            args.format,
+        )
         return 0
 
     if args.command == "diagnostics":
@@ -937,3 +1094,14 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         raise SystemExit(130)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                sort_keys=True,
+            )
+        )
+        raise SystemExit(2)

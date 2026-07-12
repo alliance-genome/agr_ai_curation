@@ -39,7 +39,11 @@ cat <<JSON
   "refreshed": true,
   "workspace_root": "/tmp/example-workspace",
   "cache_dir": "/tmp/example-cache",
-  "languages": ["python", "typescript"]
+  "languages": ["python", "typescript"],
+  "language_status": {
+    "python": {"status": "ready", "reason": "language_server_available"},
+    "typescript": {"status": "dependencies_missing", "reason": "typescript_not_installed"}
+  }
 }
 JSON
 EOF
@@ -55,6 +59,8 @@ EOF
   assert_contains "SYMPHONY_LSP_REASON=fingerprint_changed" "${output}"
   assert_contains "SYMPHONY_LSP_REFRESHED=true" "${output}"
   assert_contains "SYMPHONY_LSP_LANGUAGES=python,typescript" "${output}"
+  assert_contains "SYMPHONY_LSP_TYPESCRIPT_STATUS=dependencies_missing" "${output}"
+  assert_contains "SYMPHONY_LSP_TYPESCRIPT_REASON=typescript_not_installed" "${output}"
 
   echo "  PASS: test_successful_warm"
   rm -rf "${temp_dir}"

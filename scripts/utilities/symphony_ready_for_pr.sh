@@ -188,6 +188,12 @@ CLAUDE_LOOP_HELPER="${SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER:-${SCRIPT_DIR}/sy
 FEEDBACK_CLASSIFIER_HELPER="${SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER:-${SCRIPT_DIR}/symphony_classify_pr_feedback.sh}"
 WORKPAD_HELPER="${SYMPHONY_READY_FOR_PR_WORKPAD_HELPER:-${SCRIPT_DIR}/symphony_linear_workpad.sh}"
 STATE_HELPER="${SYMPHONY_READY_FOR_PR_STATE_HELPER:-${SCRIPT_DIR}/symphony_linear_issue_state.sh}"
+EARLY_CLAUDE_CLASSIFIER_CACHE_DIR="$(mktemp -d /tmp/ready-for-pr-claude-cache-XXXXXX)"
+
+cleanup_ready_for_pr() {
+  rm -rf "${EARLY_CLAUDE_CLASSIFIER_CACHE_DIR}"
+}
+trap cleanup_ready_for_pr EXIT
 
 if [[ ! -x "${FEEDBACK_CLASSIFIER_HELPER}" && -z "${SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER:-}" && -n "${SYMPHONY_LOCAL_SOURCE_ROOT:-}" ]]; then
   source_classifier="${SYMPHONY_LOCAL_SOURCE_ROOT}/scripts/utilities/symphony_classify_pr_feedback.sh"
@@ -427,6 +433,143 @@ classify_claude_report() {
   "${classifier_cmd[@]}"
 }
 
+inspect_current_claude_feedback() {
+  local pr_num="$1"
+  local since_ts="$2"
+  local loop_output loop_rc loop_status report_file classifier_output classifier_rc
+  local cache_key cache_file
+
+  if [[ -z "${repo}" || ! -x "${CLAUDE_LOOP_HELPER}" ]]; then
+    return 0
+  fi
+  if [[ -z "${since_ts}" ]]; then
+    since_ts="$(git show -s --format=%cI HEAD 2>/dev/null || date -Iseconds)"
+  fi
+
+  set +e
+  loop_output="$(bash "${CLAUDE_LOOP_HELPER}" \
+    --repo "${repo}" \
+    --pr "${pr_num}" \
+    --since "${since_ts}" \
+    --author "${review_author}" \
+    --wait-seconds 0 \
+    --poll-seconds "${review_poll_seconds}" \
+    --max-rounds 5 \
+    --inspect-only)"
+  loop_rc=$?
+  set -e
+
+  loop_status="$(extract_kv "CLAUDE_LOOP_STATUS" "${loop_output}")"
+  if (( loop_rc != 10 )) || [[ "${loop_status}" != "actionable_feedback" ]]; then
+    if (( loop_rc != 0 && loop_rc != 10 )); then
+      echo "READY_FOR_PR_EARLY_CLAUDE_WARNING=Inspect-only Claude scan failed with exit code ${loop_rc}; GitHub check polling continues."
+    fi
+    return 0
+  fi
+
+  report_file="$(extract_kv "CLAUDE_LOOP_REPORT_FILE" "${loop_output}")"
+  cache_key="$({
+    printf 'github-check-status=pending\n'
+    cat "${report_file}"
+    if [[ -n "${disposition_file}" && -s "${disposition_file}" ]]; then
+      cat "${disposition_file}"
+    fi
+  } | sha256sum | awk '{print $1}')"
+  cache_file="${EARLY_CLAUDE_CLASSIFIER_CACHE_DIR}/${cache_key}"
+  if [[ -s "${cache_file}" ]]; then
+    classifier_rc="$(head -n 1 "${cache_file}")"
+    classifier_output="$(tail -n +2 "${cache_file}")"
+    echo "READY_FOR_PR_EARLY_CLAUDE_CLASSIFIER_CACHE=hit"
+  else
+    set +e
+    classifier_output="$(classify_claude_report "${report_file}" "pending" 2>&1)"
+    classifier_rc=$?
+    set -e
+    {
+      printf '%s\n' "${classifier_rc}"
+      printf '%s\n' "${classifier_output}"
+    } > "${cache_file}"
+    echo "READY_FOR_PR_EARLY_CLAUDE_CLASSIFIER_CACHE=miss"
+  fi
+  if [[ -n "${classifier_output}" ]]; then
+    printf '%s\n' "${classifier_output}"
+  fi
+  if (( classifier_rc == 0 )); then
+    echo "READY_FOR_PR_EARLY_CLAUDE_ACTION=clean_review_checks_continue"
+    return 0
+  fi
+
+  echo "READY_FOR_PR_EARLY_CLAUDE_STATUS=actionable_feedback"
+  echo "READY_FOR_PR_EARLY_CLAUDE_REPORT_FILE=${report_file}"
+  echo "READY_FOR_PR_EARLY_CLAUDE_ROUND=$(extract_kv "CLAUDE_LOOP_ROUND" "${loop_output}")"
+  echo "READY_FOR_PR_EARLY_CLAUDE_MAX_ROUNDS=$(extract_kv "CLAUDE_LOOP_MAX_ROUNDS" "${loop_output}")"
+  if (( classifier_rc != 10 && classifier_rc != 11 )); then
+    echo "READY_FOR_PR_EARLY_CLAUDE_CLASSIFIER_WARNING=Could not classify Claude report safely; treating it as actionable feedback."
+  fi
+  return 10
+}
+
+cancel_superseded_ci_runs() {
+  local head_sha="$1"
+  local head_branch="$2"
+  local enabled="${SYMPHONY_READY_FOR_PR_CANCEL_SUPERSEDED_CI_ENABLED:-true}"
+  local runs_json run_id workflow_name cancel_output cancel_rc
+
+  case "${enabled,,}" in
+    1|true|yes|on) ;;
+    *)
+      echo "READY_FOR_PR_CI_CANCEL_STATUS=disabled"
+      return 0
+      ;;
+  esac
+  if [[ -z "${repo}" || -z "${head_sha}" || -z "${head_branch}" ]]; then
+    echo "READY_FOR_PR_CI_CANCEL_STATUS=skipped_missing_identity"
+    return 0
+  fi
+
+  set +e
+  runs_json="$(gh run list --repo "${repo}" --commit "${head_sha}" --limit 100 \
+    --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,url 2>&1)"
+  local list_rc=$?
+  set -e
+  if (( list_rc != 0 )); then
+    echo "READY_FOR_PR_CI_CANCEL_STATUS=list_failed"
+    echo "READY_FOR_PR_CI_CANCEL_WARNING=${runs_json//$'\n'/ }"
+    return 0
+  fi
+
+  local cancelled=0 failed=0
+  while IFS=$'\t' read -r run_id workflow_name; do
+    [[ -n "${run_id}" ]] || continue
+    set +e
+    cancel_output="$(gh run cancel "${run_id}" --repo "${repo}" 2>&1)"
+    cancel_rc=$?
+    set -e
+    if (( cancel_rc == 0 )); then
+      echo "READY_FOR_PR_CI_CANCELLED_RUN=${run_id}:${workflow_name}"
+      cancelled=$((cancelled + 1))
+    else
+      echo "READY_FOR_PR_CI_CANCEL_WARNING=${run_id}:${workflow_name}:${cancel_output//$'\n'/ }"
+      failed=$((failed + 1))
+    fi
+  done < <(printf '%s' "${runs_json}" | jq -r --arg sha "${head_sha}" --arg branch "${head_branch}" '
+    .[]
+    | select(.headSha == $sha)
+    | select(.headBranch == $branch)
+    | select(.event == "pull_request")
+    | select(.workflowName == "Unit Tests" or .workflowName == "Agent PR Gate" or .workflowName == "CodeQL")
+    | select((.status | ascii_downcase) == "queued"
+        or (.status | ascii_downcase) == "in_progress"
+        or (.status | ascii_downcase) == "requested"
+        or (.status | ascii_downcase) == "waiting"
+        or (.status | ascii_downcase) == "pending")
+    | [.databaseId, .workflowName] | @tsv')
+
+  echo "READY_FOR_PR_CI_CANCEL_STATUS=complete"
+  echo "READY_FOR_PR_CI_CANCELLED_COUNT=${cancelled}"
+  echo "READY_FOR_PR_CI_CANCEL_FAILED_COUNT=${failed}"
+}
+
 analyze_check_rollup() {
   local rollup_json="$1"
   local failures_file="$2"
@@ -536,6 +679,7 @@ gate_github_checks() {
   local pr_num="$1"
   local current_json="${2:-}"
   local clean_instruction_mode="${3:-final}"
+  local pr_created_at="${4:-}"
   local deadline failures_file pending_file check_output check_rc status total failed_count pending_count now
   local first_fetch=1
 
@@ -589,6 +733,40 @@ INST
         return 10
         ;;
       pending|missing)
+        local early_output early_rc early_report early_round early_max head_sha head_branch
+        set +e
+        early_output="$(inspect_current_claude_feedback "${pr_num}" "${pr_created_at}")"
+        early_rc=$?
+        set -e
+        if [[ -n "${early_output}" ]]; then
+          printf '%s\n' "${early_output}"
+        fi
+        if (( early_rc == 10 )); then
+          rm -f "${failures_file}" "${pending_file}"
+          early_report="$(extract_kv "READY_FOR_PR_EARLY_CLAUDE_REPORT_FILE" "${early_output}")"
+          early_round="$(extract_kv "READY_FOR_PR_EARLY_CLAUDE_ROUND" "${early_output}")"
+          early_max="$(extract_kv "READY_FOR_PR_EARLY_CLAUDE_MAX_ROUNDS" "${early_output}")"
+          head_sha="$(printf '%s' "${current_json}" | jq -r '.headRefOid // ""')"
+          head_branch="$(printf '%s' "${current_json}" | jq -r '.headRefName // ""')"
+          if (( auto_bounce_claude_feedback == 1 )); then
+            if ! auto_bounce_to_in_progress_for_claude "${pr_num}" "${early_report}" "${early_round:-1}" "${early_max:-5}"; then
+              echo "READY_FOR_PR_CHECK_STATUS=claude_feedback_bounce_failed"
+              return 30
+            fi
+            cancel_superseded_ci_runs "${head_sha}" "${head_branch}"
+            echo "READY_FOR_PR_CHECK_STATUS=claude_feedback"
+            cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Claude Code left actionable feedback on PR #${pr_num} while GitHub checks were still running. The helper already wrote PR Handoff, moved the issue to In Progress, and best-effort cancelled eligible CI runs for the exact PR head. Stop this PR lane and address the review.
+INST
+            return 12
+          fi
+          echo "READY_FOR_PR_CHECK_STATUS=claude_feedback"
+          cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Claude Code left actionable feedback on PR #${pr_num} while GitHub checks were still running. Read ${early_report}, write PR Handoff, move the issue to In Progress, and stop waiting for checks.
+INST
+          return 12
+        fi
+
         now="$(date +%s)"
         if (( wait_for_checks_seconds > 0 && now < deadline )); then
           rm -f "${failures_file}" "${pending_file}"
@@ -641,10 +819,14 @@ emit_pr_success_with_claude_check() {
   CLAUDE_REPORT_FILE=""
 
   set +e
-  gate_output="$(gate_github_checks "${pr_num}" "${pr_view_json:-}" "defer_clean_instruction")"
+  gate_output="$(gate_github_checks "${pr_num}" "${pr_view_json:-}" "defer_clean_instruction" "${pr_created_at}")"
   check_rc=$?
   set -e
   printf '%s\n' "${gate_output}"
+
+  if (( check_rc == 12 )); then
+    return 0
+  fi
 
   if (( check_rc == 10 )); then
     check_report="$(extract_kv "READY_FOR_PR_CHECK_FAILURES_FILE" "${gate_output}")"

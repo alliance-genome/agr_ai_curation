@@ -183,6 +183,8 @@ EOF
   assert_contains "treat every current and future finding as resolved" "${prompt}"
   assert_contains "explicitly outside ALL-638 scope" "${prompt}"
   assert_contains "pure PR-gate language" "${prompt}"
+  assert_contains "regardless of whether the deterministic GitHub check status is pending or clean" "${prompt}"
+  assert_contains "a pending check is not implementation work" "${prompt}"
   assert_contains "factually wrong, outside the ticket's stated scope, or regression-causing" "${prompt}"
   assert_contains "A file being absent from a suggested-starting-locations list is not" "${prompt}"
 }

@@ -237,9 +237,9 @@ Security and trust boundary:
   conservatively with "uncertain" when evidence conflicts.
 
 Rules:
-- Use "clean" when the report is a pure approval, contains only PR-gate language already owned by a clean GitHub check gate, or every concrete finding is explicitly and credibly dispositioned as already resolved, factually wrong, outside the ticket's stated scope, or regression-causing.
+- Use "clean" when the report is a pure approval, contains only PR-gate language owned by the shell's GitHub check gate, or every concrete finding is explicitly and credibly dispositioned as already resolved, factually wrong, outside the ticket's stated scope, or regression-causing.
 - During active development, classify almost any substantive Claude comment as "actionable" even when Claude labels it non-blocking, optional, a suggestion, "worth noting", polish, cleanup, future follow-up, or pre-existing divergence.
-- Treat pure PR-gate language as "clean" when the only remaining item is to wait for, confirm, verify, or ensure CI/checks/tests/builds pass before merge and the deterministic GitHub check status is clean.
+- Treat pure PR-gate language as "clean" when the only remaining item is to wait for, confirm, verify, or ensure CI/checks/tests/builds pass before merge, regardless of whether the deterministic GitHub check status is pending or clean. The shell retains responsibility for waiting, failure routing, and the final gate; a pending check is not implementation work.
 - Use "actionable" when the review asks for or implies code, tests, docs, config, behavior changes, non-CI verification, coverage, failing-check repair, cleanup, legacy/shadow-copy alignment, or follow-up implementation before the issue advances.
 - Use "uncertain" when the review is mixed, ambiguous, truncated, mostly metadata, or does not contain enough information to decide safely.
 - Do not classify as clean just because the review says LGTM, approve, or previous approval stands if it also includes suggestions, warnings, concerns, non-blocking issues, follow-ups, or requests.
