@@ -1,7 +1,7 @@
 import { type ComponentProps, StrictMode } from 'react'
 import { ThemeProvider } from '@mui/material/styles'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import theme from '@/theme'
@@ -10,6 +10,11 @@ import {
   DOCUMENT_LOADING_STORAGE_KEY,
   DOCUMENT_LOAD_ERROR_EVENT,
 } from '@/features/documents/documentLoadEvents'
+import { beginChatDocumentIntent } from '@/features/documents/chatDocumentIntent'
+import {
+  dispatchChatDocumentChanged,
+  loadDocumentForChat,
+} from '@/features/documents/pdfUploadFlow'
 import HomePage from './HomePage'
 
 const mockUseAuth = vi.hoisted(() => vi.fn())
@@ -80,7 +85,22 @@ function buildAssistantHistoryDetailUrl(sessionId: string): string {
 
 function LocationProbe() {
   const location = useLocation()
-  return <div data-testid="location-search">{location.search}</div>
+  const navigate = useNavigate()
+  return (
+    <>
+      <div data-testid="location-search">{location.search}</div>
+      <button type="button" onClick={() => navigate('/?session=session-a')}>Restore A</button>
+      <button type="button" onClick={() => navigate('/?session=session-b')}>Restore B</button>
+    </>
+  )
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 type HomeInitialEntry = NonNullable<ComponentProps<typeof MemoryRouter>['initialEntries']>[number]
@@ -260,6 +280,179 @@ describe('HomePage durable session bootstrap', () => {
     window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
   })
 
+  it('keeps the latest history restore across reverse-order completion', async () => {
+    const firstHistory = deferred<Response>()
+    const loadBodies: Array<Record<string, unknown>> = []
+    const pdfDocumentChangedSpy = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+
+    vi.mocked(global.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === buildAssistantHistoryDetailUrl('session-a')) {
+        return firstHistory.promise
+      }
+      if (url === buildAssistantHistoryDetailUrl('session-b')) {
+        return Promise.resolve(jsonResponse({
+          session: {
+            session_id: 'session-b',
+            created_at: '2026-04-20T00:00:00Z',
+            updated_at: '2026-04-20T00:05:00Z',
+            recent_activity_at: '2026-04-20T00:05:00Z',
+          },
+          active_document: { id: 'doc-b', filename: 'b.pdf' },
+          messages: [{
+            message_id: 'message-b',
+            session_id: 'session-b',
+            role: 'assistant',
+            message_type: 'text',
+            content: 'Latest history',
+            created_at: '2026-04-20T00:01:00Z',
+          }],
+          message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+          next_message_cursor: null,
+        }))
+      }
+      if (url === '/api/chat/document/load') {
+        loadBodies.push(JSON.parse(String(init?.body)))
+        return Promise.resolve(jsonResponse({
+          active: true,
+          document: { id: 'doc-b', filename: 'b.pdf' },
+        }))
+      }
+      if (url === '/api/pdf-viewer/documents/doc-b') {
+        return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
+      }
+      if (url === '/api/pdf-viewer/documents/doc-b/url') {
+        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b' }))
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-a')
+    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
+
+    expect(await screen.findByText('session-b')).toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-b')
+    expect(localStorage.getItem(chatStorageKeys.messages)).toContain('Latest history')
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-b')
+    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-b')
+    expect(loadBodies).toHaveLength(1)
+    expect(loadBodies[0]).toMatchObject({ document_id: 'doc-b' })
+
+    firstHistory.resolve(jsonResponse({
+      session: {
+        session_id: 'session-a',
+        created_at: '2026-04-20T00:00:00Z',
+        updated_at: '2026-04-20T00:02:00Z',
+        recent_activity_at: '2026-04-20T00:02:00Z',
+      },
+      active_document: { id: 'doc-a', filename: 'a.pdf' },
+      messages: [],
+      message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+      next_message_cursor: null,
+    }))
+    await act(async () => firstHistory.promise)
+
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-b')
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-b')
+    expect(pdfDocumentChangedSpy).toHaveBeenCalledTimes(1)
+    expect((pdfDocumentChangedSpy.mock.calls[0][0] as CustomEvent).detail.documentId).toBe('doc-b')
+
+    window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+  })
+
+  it('keeps a successful latest restore when an older failed restore finishes clearing last', async () => {
+    const staleDocumentClear = deferred<Response>()
+    const loadBodies: Array<Record<string, unknown>> = []
+    const pdfDocumentChangedSpy = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+
+    vi.mocked(global.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === buildAssistantHistoryDetailUrl('session-a')) {
+        return Promise.resolve(jsonResponse({ detail: 'Chat session not found' }, 404))
+      }
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return staleDocumentClear.promise
+      }
+      if (url === buildAssistantHistoryDetailUrl('session-b')) {
+        return Promise.resolve(jsonResponse({
+          session: {
+            session_id: 'session-b',
+            created_at: '2026-04-20T00:00:00Z',
+            updated_at: '2026-04-20T00:05:00Z',
+            recent_activity_at: '2026-04-20T00:05:00Z',
+          },
+          active_document: { id: 'doc-b', filename: 'b.pdf' },
+          messages: [{
+            message_id: 'message-b',
+            session_id: 'session-b',
+            role: 'assistant',
+            message_type: 'text',
+            content: 'Latest history',
+            created_at: '2026-04-20T00:01:00Z',
+          }],
+          message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+          next_message_cursor: null,
+        }))
+      }
+      if (url === '/api/chat/document/load') {
+        loadBodies.push(JSON.parse(String(init?.body)))
+        return Promise.resolve(jsonResponse({
+          active: true,
+          document: { id: 'doc-b', filename: 'b.pdf' },
+        }))
+      }
+      if (url === '/api/pdf-viewer/documents/doc-b') {
+        return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
+      }
+      if (url === '/api/pdf-viewer/documents/doc-b/url') {
+        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b' }))
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-a')
+
+    await waitFor(() => {
+      expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
+        '/api/chat/document',
+        expect.objectContaining({ method: 'DELETE' }),
+      )
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore B' }))
+
+    expect(await screen.findByText('session-b')).toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-b')
+    expect(localStorage.getItem(chatStorageKeys.messages)).toContain('Latest history')
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-b')
+    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-b')
+    expect(loadBodies).toEqual([expect.objectContaining({ document_id: 'doc-b' })])
+    const staleClearCall = vi.mocked(global.fetch).mock.calls.find(
+      ([url, init]) => String(url) === '/api/chat/document' && init?.method === 'DELETE',
+    )
+    const staleClearHeaders = staleClearCall?.[1]?.headers as Record<string, string>
+    expect(loadBodies[0].intent_owner).toBe(staleClearHeaders['X-Chat-Document-Intent-Owner'])
+    expect(Number(loadBodies[0].intent_generation)).toBeGreaterThan(
+      Number(staleClearHeaders['X-Chat-Document-Intent-Generation']),
+    )
+
+    staleDocumentClear.resolve(jsonResponse({ active: false, document: null }))
+    await act(async () => staleDocumentClear.promise)
+
+    expect(screen.getByText('session-b')).toBeInTheDocument()
+    expect(screen.queryByText('This chat session is unavailable. It may have been deleted.'))
+      .not.toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-b')
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-b')
+    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-b')
+    expect(pdfDocumentChangedSpy).toHaveBeenCalledTimes(1)
+    expect((pdfDocumentChangedSpy.mock.calls[0][0] as CustomEvent).detail.documentId).toBe('doc-b')
+
+    window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+  })
+
   it('loads a Documents tab route-state handoff after Home and Chat are mounted', async () => {
     const chatDocumentChangedSpy = vi.fn()
     window.addEventListener('chat-document-changed', chatDocumentChangedSpy as EventListener)
@@ -286,7 +479,7 @@ describe('HomePage durable session bootstrap', () => {
 
       if (url === '/api/chat/document/load') {
         expect(init?.method).toBe('POST')
-        expect(init?.body).toBe(JSON.stringify({ document_id: 'doc-route' }))
+        expect(JSON.parse(String(init?.body))).toMatchObject({ document_id: 'doc-route' })
         return jsonResponse({
           active: true,
           document: {
@@ -332,6 +525,131 @@ describe('HomePage durable session bootstrap', () => {
     })
 
     window.removeEventListener('chat-document-changed', chatDocumentChangedSpy as EventListener)
+  })
+
+  it('keeps a newer upload document when an older route load resolves last', async () => {
+    actualChatMode.enabled = true
+    const staleRouteLoad = deferred<Response>()
+    const loadBodies: Array<Record<string, unknown>> = []
+    const viewerDocumentChangedSpy = vi.fn()
+    window.addEventListener(
+      'pdf-viewer-document-changed',
+      viewerDocumentChangedSpy as EventListener,
+    )
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        return jsonResponse({
+          session_id: 'route-session',
+          created_at: '2026-05-07T15:00:00Z',
+          updated_at: '2026-05-07T15:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({ active: false, document: null })
+      }
+
+      if (url === '/api/chat/document') {
+        return jsonResponse({ active: false, document: null })
+      }
+
+      if (url === '/api/chat/document/load') {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        loadBodies.push(body)
+        if (body.document_id === 'doc-route') {
+          return staleRouteLoad.promise
+        }
+        if (body.document_id === 'doc-upload') {
+          return jsonResponse({
+            active: true,
+            document: { id: 'doc-upload', filename: 'upload.pdf' },
+          })
+        }
+      }
+
+      if (url === '/api/chat/conversation/reset') {
+        return jsonResponse({ session_id: 'route-session-reset' })
+      }
+
+      if (url === '/api/chat/conversation') {
+        return jsonResponse({
+          is_active: true,
+          memory_stats: { memory_sizes: { short_term: { file_count: 0, size_mb: 0 } } },
+        })
+      }
+
+      if (url === '/health/deep') {
+        return jsonResponse({ services: { weaviate: 'connected', curation_db: 'connected' } })
+      }
+
+      if (url === '/api/pdf-viewer/documents/doc-upload') {
+        return jsonResponse({ filename: 'upload.pdf', page_count: 4 })
+      }
+
+      if (url === '/api/pdf-viewer/documents/doc-upload/url') {
+        return jsonResponse({ viewer_url: '/viewer/doc-upload' })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage({
+      pathname: '/',
+      state: {
+        loadForChatDocument: { id: 'doc-route', filename: 'route.pdf' },
+      },
+    })
+
+    await waitFor(() => {
+      expect(loadBodies).toEqual([
+        expect.objectContaining({ document_id: 'doc-route' }),
+      ])
+    })
+
+    const uploadOperation = beginChatDocumentIntent()
+    const uploadPayload = await loadDocumentForChat('doc-upload', {
+      signal: uploadOperation.signal,
+      intentOwner: uploadOperation.owner,
+      intentGeneration: uploadOperation.generation,
+    })
+    expect(uploadOperation.ownsLatest()).toBe(true)
+    dispatchChatDocumentChanged(uploadPayload)
+
+    expect(await screen.findByText('Active PDF: upload.pdf')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(viewerDocumentChangedSpy).toHaveBeenCalledTimes(1)
+    })
+
+    staleRouteLoad.resolve(jsonResponse({
+      active: true,
+      document: { id: 'doc-route', filename: 'route.pdf' },
+    }))
+    await act(async () => staleRouteLoad.promise)
+
+    expect(loadBodies).toHaveLength(2)
+    expect(loadBodies.map((body) => body.document_id)).toEqual(['doc-route', 'doc-upload'])
+    expect(loadBodies[0].intent_owner).toBe(loadBodies[1].intent_owner)
+    expect(Number(loadBodies[1].intent_generation)).toBeGreaterThan(
+      Number(loadBodies[0].intent_generation),
+    )
+    expect(screen.getByText('Active PDF: upload.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('Active PDF: route.pdf')).not.toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-upload')
+    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-upload')
+    expect(viewerDocumentChangedSpy).toHaveBeenCalledTimes(1)
+    expect((viewerDocumentChangedSpy.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+      documentId: 'doc-upload',
+      viewerUrl: '/viewer/doc-upload',
+    })
+
+    window.removeEventListener(
+      'pdf-viewer-document-changed',
+      viewerDocumentChangedSpy as EventListener,
+    )
   })
 
   it('shows a viewer restore error instead of a stale timeout after route-state backend load succeeds', async () => {

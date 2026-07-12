@@ -22,6 +22,11 @@ import {
   safeSetJson,
 } from '@/lib/browserStorage'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
+import { LatestIntent, type LatestIntentOperation } from '@/lib/latestIntent'
+import {
+  beginChatDocumentIntent,
+  invalidateChatDocumentIntent,
+} from '@/features/documents/chatDocumentIntent'
 import {
   HOME_PDF_VIEWER_OWNER,
 } from '@/components/pdfViewer/pdfEvents'
@@ -149,6 +154,8 @@ function HomePage() {
   const latestCreatedSessionRef = useRef<DurableChatSessionResponse | null>(null)
   const handledRouteDocumentLoadRef = useRef<string | null>(null)
   const documentLoadingTimeoutIdRef = useRef<number | null>(null)
+  const sessionIntentRef = useRef(new LatestIntent())
+  const documentOperationRef = useRef<LatestIntentOperation | null>(null)
   const [isBootstrappingSession, setIsBootstrappingSession] = useState(true)
   const [missingSessionId, setMissingSessionId] = useState<string | null>(null)
   const [sessionBootstrapError, setSessionBootstrapError] = useState<string | null>(null)
@@ -157,6 +164,17 @@ function HomePage() {
   // Document loading overlay state
   const [loadingDocument, setLoadingDocument] = useState(false)
   const [loadingError, setLoadingError] = useState<string | null>(null)
+
+  const beginDocumentOperation = useCallback(() => {
+    const operation = beginChatDocumentIntent()
+    documentOperationRef.current = operation
+    return operation
+  }, [])
+
+  useEffect(() => () => {
+    invalidateChatDocumentIntent(documentOperationRef.current)
+    documentOperationRef.current = null
+  }, [])
 
   // Right panel tab state (persisted)
   const [rightPanelTab, setRightPanelTab] = useState<number>(() => {
@@ -264,7 +282,10 @@ function HomePage() {
     })
   }, [chatStorageKeys])
 
-  const clearDocumentContext = useCallback(async () => {
+  const clearDocumentContext = useCallback(async (operation?: LatestIntentOperation) => {
+    if (operation && !operation.ownsLatest()) {
+      return
+    }
     safeRemoveItem(() => window.sessionStorage, DOCUMENT_LOADING_STORAGE_KEY, {
       owner: 'workflow',
       workflowCritical: true,
@@ -286,9 +307,20 @@ function HomePage() {
       await fetch('/api/chat/document', {
         method: 'DELETE',
         credentials: 'include',
+        signal: operation?.signal,
+        headers: operation
+          ? {
+              'X-Chat-Document-Intent-Owner': operation.owner,
+              'X-Chat-Document-Intent-Generation': String(operation.generation),
+            }
+          : undefined,
       })
     } catch (error) {
       console.warn('Failed to clear chat document context', error)
+    }
+
+    if (operation && !operation.ownsLatest()) {
+      return
     }
 
     window.dispatchEvent(new CustomEvent('chat-document-changed', {
@@ -302,11 +334,15 @@ function HomePage() {
 
   const rehydrateDocumentContext = useCallback(async (
     document: ChatHistoryActiveDocument | null | undefined,
+    operation: LatestIntentOperation,
   ) => {
+    if (!operation.ownsLatest()) {
+      return
+    }
     if (!document) {
       setLoadingDocument(false)
       setLoadingError(null)
-      await clearDocumentContext()
+      await clearDocumentContext(operation)
       return
     }
 
@@ -324,8 +360,12 @@ function HomePage() {
         chatStorageKeys,
         ensureLoadedForChat: true,
         ownerToken: HOME_PDF_VIEWER_OWNER,
+        operation,
       })
     } catch (error) {
+      if (!operation.ownsLatest()) {
+        return
+      }
       console.error('Failed to restore document context for resumed chat', error)
       failDocumentLoad({
         documentId: document.id,
@@ -336,7 +376,7 @@ function HomePage() {
       setLoadingError(
         `Unable to restore ${document.filename ?? 'the active document'} for this chat session.`,
       )
-      await clearDocumentContext()
+      await clearDocumentContext(operation)
     }
   }, [chatStorageKeys, clearDocumentContext])
 
@@ -363,20 +403,17 @@ function HomePage() {
       throw new Error('Chat session response did not include a session ID')
     }
 
-    persistSessionId(nextSessionId)
-    clearPersistedMessages()
-
     const normalizedSession = {
       ...data,
       session_id: nextSessionId,
     }
-    latestCreatedSessionRef.current = normalizedSession
-
     return normalizedSession
-  }, [clearPersistedMessages, persistSessionId])
+  }, [])
 
   // Ensure session exists before operations
-  const ensureSession = useCallback(async (): Promise<string> => {
+  const ensureSession = useCallback(async (
+    operation?: LatestIntentOperation,
+  ): Promise<string> => {
     // Check ref first (in-memory)
     if (sessionIdRef.current) {
       return sessionIdRef.current
@@ -400,7 +437,10 @@ function HomePage() {
     // No existing session - create new one
     if (!sessionInitPromiseRef.current) {
       sessionInitPromiseRef.current = createSession()
-        .then((session) => session.session_id)
+        .then((session) => {
+          latestCreatedSessionRef.current = session
+          return session.session_id
+        })
         .catch((error) => {
           sessionInitPromiseRef.current = null
           throw error
@@ -408,9 +448,13 @@ function HomePage() {
     }
 
     const activeSessionId = await sessionInitPromiseRef.current
+    if (operation && !operation.ownsLatest()) {
+      throw new DOMException('Session initialization superseded', 'AbortError')
+    }
     persistSessionId(activeSessionId)
+    clearPersistedMessages()
     return activeSessionId
-  }, [chatStorageKeys, createSession, persistSessionId])
+  }, [chatStorageKeys, clearPersistedMessages, createSession, persistSessionId])
 
   /**
    * Get current document ID from PDF viewer localStorage session
@@ -448,13 +492,14 @@ function HomePage() {
   }, [ensureSession, executeFlow, getCurrentDocumentId])
 
   useEffect(() => {
-    let cancelled = false
+    if (!user?.uid) {
+      return
+    }
+
+    const operation = sessionIntentRef.current.begin()
+    const documentOperation = beginDocumentOperation()
 
     const bootstrapSession = async () => {
-      if (!user?.uid) {
-        return
-      }
-
       setIsBootstrappingSession(true)
       setMissingSessionId(null)
       setSessionBootstrapError(null)
@@ -465,9 +510,10 @@ function HomePage() {
             sessionId: requestedSessionId,
             chatKind: ASSISTANT_CHAT_HISTORY_KIND,
             messageLimit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+            signal: operation.signal,
           })
 
-          if (cancelled) {
+          if (!operation.ownsLatest()) {
             return
           }
 
@@ -475,9 +521,9 @@ function HomePage() {
             normalizeChatHistoryValue(detail.session.session_id) ?? requestedSessionId
           persistSessionId(activeSessionId)
           persistSessionMessages(activeSessionId, detail)
-          await rehydrateDocumentContext(detail.active_document)
+          await rehydrateDocumentContext(detail.active_document, documentOperation)
 
-          if (!cancelled) {
+          if (operation.ownsLatest()) {
             setIsBootstrappingSession(false)
           }
           return
@@ -494,14 +540,14 @@ function HomePage() {
           : null
         if (storedSessionId) {
           persistSessionId(storedSessionId)
-          if (!cancelled) {
+          if (operation.ownsLatest()) {
             setIsBootstrappingSession(false)
           }
           return
         }
 
-        const activeSessionId = await ensureSession()
-        if (cancelled) {
+        const activeSessionId = await ensureSession(operation)
+        if (!operation.ownsLatest()) {
           return
         }
 
@@ -510,19 +556,24 @@ function HomePage() {
           createdSession?.session_id === activeSessionId
             ? createdSession.active_document
             : null,
+          documentOperation,
         )
 
-        if (!cancelled) {
+        if (operation.ownsLatest()) {
           setIsBootstrappingSession(false)
         }
       } catch (error) {
-        if (cancelled) {
+        if (!operation.ownsLatest()) {
           return
         }
 
         persistSessionId(null)
         clearPersistedMessages()
-        await clearDocumentContext()
+        await clearDocumentContext(documentOperation)
+
+        if (!operation.ownsLatest()) {
+          return
+        }
 
         const errorMessage = error instanceof Error
           ? error.message
@@ -546,10 +597,14 @@ function HomePage() {
     void bootstrapSession()
 
     return () => {
-      cancelled = true
+      if (operation.ownsLatest()) {
+        sessionIntentRef.current.invalidate()
+      }
+      invalidateChatDocumentIntent(documentOperation)
     }
   }, [
     chatStorageKeys,
+    beginDocumentOperation,
     clearDocumentContext,
     clearPersistedMessages,
     ensureSession,
@@ -580,6 +635,7 @@ function HomePage() {
       return
     }
     handledRouteDocumentLoadRef.current = routeLoadKey
+    const operation = beginDocumentOperation()
 
     navigate(
       {
@@ -600,17 +656,21 @@ function HomePage() {
       setLoadingError(null)
 
       try {
-        const payload = await loadDocumentForChat(routeDocument.id)
-        if (handledRouteDocumentLoadRef.current !== routeLoadKey) {
+        const payload = await loadDocumentForChat(routeDocument.id, {
+          signal: operation.signal,
+          intentOwner: operation.owner,
+          intentGeneration: operation.generation,
+        })
+        if (handledRouteDocumentLoadRef.current !== routeLoadKey || !operation.ownsLatest()) {
           return
         }
         window.setTimeout(() => {
-          if (handledRouteDocumentLoadRef.current === routeLoadKey) {
+          if (handledRouteDocumentLoadRef.current === routeLoadKey && operation.ownsLatest()) {
             dispatchChatDocumentChanged(payload)
           }
         }, 0)
       } catch (error) {
-        if (handledRouteDocumentLoadRef.current !== routeLoadKey) {
+        if (handledRouteDocumentLoadRef.current !== routeLoadKey || !operation.ownsLatest()) {
           return
         }
         const message = error instanceof Error
@@ -629,6 +689,7 @@ function HomePage() {
     void loadRouteDocument()
   }, [
     isBootstrappingSession,
+    beginDocumentOperation,
     location.hash,
     location.pathname,
     location.search,
@@ -715,6 +776,8 @@ function HomePage() {
   }, [clearDocumentLoadingTimeout])
 
   const handleStartNewChat = useCallback(async () => {
+    const operation = sessionIntentRef.current.begin()
+    const documentOperation = beginDocumentOperation()
     setIsBootstrappingSession(true)
     setIsStartingNewChat(true)
     setMissingSessionId(null)
@@ -723,13 +786,26 @@ function HomePage() {
 
     try {
       const createdSession = await createSession()
-      await rehydrateDocumentContext(createdSession.active_document)
+      if (!operation.ownsLatest()) {
+        return
+      }
+      persistSessionId(createdSession.session_id)
+      clearPersistedMessages()
+      latestCreatedSessionRef.current = createdSession
+      await rehydrateDocumentContext(createdSession.active_document, documentOperation)
+
+      if (!operation.ownsLatest()) {
+        return
+      }
 
       const nextSearchParams = new URLSearchParams(searchParams)
       nextSearchParams.delete('session')
       setSearchParams(nextSearchParams, { replace: true })
       setIsBootstrappingSession(false)
     } catch (error) {
+      if (!operation.ownsLatest()) {
+        return
+      }
       setSessionBootstrapError(
         error instanceof Error
           ? error.message
@@ -737,9 +813,11 @@ function HomePage() {
       )
       setIsBootstrappingSession(false)
     } finally {
-      setIsStartingNewChat(false)
+      if (operation.ownsLatest()) {
+        setIsStartingNewChat(false)
+      }
     }
-  }, [createSession, rehydrateDocumentContext, searchParams, setSearchParams])
+  }, [beginDocumentOperation, clearPersistedMessages, createSession, persistSessionId, rehydrateDocumentContext, searchParams, setSearchParams])
 
   // Handle session changes from child components (e.g., Chat reset)
   const handleSessionChange = useCallback((newSessionId: string) => {

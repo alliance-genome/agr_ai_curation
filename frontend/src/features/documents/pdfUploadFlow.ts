@@ -82,6 +82,13 @@ interface WaitForProcessingOptions {
   pollingIntervalMs?: number;
 }
 
+interface ResolvedWaitForProcessingOptions {
+  onProgress: (update: UploadProgressUpdate) => void;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  pollingIntervalMs: number;
+}
+
 const createAbortError = (): Error => {
   try {
     return new DOMException('Operation aborted', 'AbortError');
@@ -292,7 +299,7 @@ export const uploadPdfDocument = async (file: File): Promise<string> => {
 
 const pollDocumentProcessing = async (
   documentId: string,
-  options: Required<Pick<WaitForProcessingOptions, 'onProgress' | 'signal' | 'timeoutMs' | 'pollingIntervalMs'>>,
+  options: ResolvedWaitForProcessingOptions,
 ): Promise<UploadProgressUpdate> => {
   const startedAt = Date.now();
 
@@ -332,7 +339,7 @@ const pollDocumentProcessing = async (
 
 const streamDocumentProcessing = async (
   documentId: string,
-  options: Required<Pick<WaitForProcessingOptions, 'onProgress' | 'signal' | 'timeoutMs'>>,
+  options: ResolvedWaitForProcessingOptions,
 ): Promise<UploadProgressUpdate> => {
   return await new Promise<UploadProgressUpdate>((resolve, reject) => {
     const source = new EventSource(`/api/weaviate/documents/${documentId}/progress/stream`);
@@ -437,14 +444,28 @@ export const waitForDocumentProcessing = async (
   return pollDocumentProcessing(documentId, typedOptions);
 };
 
-export const loadDocumentForChat = async (documentId: string): Promise<Record<string, unknown>> => {
+export interface LoadDocumentForChatOptions {
+  signal?: AbortSignal;
+  intentOwner?: string;
+  intentGeneration?: number;
+}
+
+export const loadDocumentForChat = async (
+  documentId: string,
+  options: LoadDocumentForChatOptions = {},
+): Promise<Record<string, unknown>> => {
   const response = await fetch('/api/chat/document/load', {
     method: 'POST',
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ document_id: documentId }),
+    body: JSON.stringify({
+      document_id: documentId,
+      intent_owner: options.intentOwner,
+      intent_generation: options.intentGeneration,
+    }),
+    signal: options.signal,
   });
 
   const payload = await response.json().catch(() => ({}));

@@ -1042,6 +1042,129 @@ def test_patch_review_session_updates_status_and_notes(
     assert refreshed.notes == "Paused for curator follow-up"
 
 
+def test_patch_review_session_rejects_stale_expected_session_version(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import CurationReviewSession
+
+    session_id = seeded_review_sessions["session_alpha_id"]
+    latest_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": 2,
+            "current_candidate_id": seeded_review_sessions["candidate_alpha_id"],
+        },
+    )
+    assert latest_response.status_code == 200, latest_response.text
+    assert latest_response.json()["session"]["session_version"] == 2
+
+    response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "notes": "This stale mutation must not commit",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Session version mismatch: expected 1, found 2"
+    test_db.expire_all()
+    refreshed = test_db.get(CurationReviewSession, UUID(session_id))
+    assert refreshed is not None
+    assert refreshed.notes != "This stale mutation must not commit"
+
+
+def test_patch_review_session_rejects_late_older_candidate_intent(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import CurationReviewSession
+
+    session_id = seeded_review_sessions["session_alpha_id"]
+    older_generation = 1_780_000_000_000_001
+    latest_generation = older_generation + 1
+    latest_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": latest_generation,
+            "current_candidate_id": seeded_review_sessions["candidate_alpha_id"],
+        },
+    )
+    assert latest_response.status_code == 200, latest_response.text
+
+    stale_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": older_generation,
+            "current_candidate_id": None,
+        },
+    )
+    assert stale_response.status_code == 409
+
+    test_db.expire_all()
+    refreshed = test_db.get(CurationReviewSession, UUID(session_id))
+    assert refreshed is not None
+    assert str(refreshed.current_candidate_id) == seeded_review_sessions["candidate_alpha_id"]
+    assert refreshed.current_candidate_intent_owner == "browser-a"
+    assert refreshed.current_candidate_intent_generation == latest_generation
+
+
+def test_newer_candidate_intent_supersedes_first_server_commit(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import CurationReviewSession
+
+    session_id = seeded_review_sessions["session_alpha_id"]
+    first_generation = 1_780_000_000_000_001
+    latest_generation = first_generation + 1
+    first_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": first_generation,
+            "current_candidate_id": None,
+        },
+    )
+    assert first_response.status_code == 200, first_response.text
+    assert first_response.json()["session"]["session_version"] == 2
+
+    latest_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": latest_generation,
+            "current_candidate_id": seeded_review_sessions["candidate_alpha_id"],
+        },
+    )
+    assert latest_response.status_code == 200, latest_response.text
+    assert latest_response.json()["session"]["session_version"] == 3
+
+    test_db.expire_all()
+    refreshed = test_db.get(CurationReviewSession, UUID(session_id))
+    assert refreshed is not None
+    assert str(refreshed.current_candidate_id) == seeded_review_sessions["candidate_alpha_id"]
+    assert refreshed.current_candidate_intent_generation == latest_generation
+
+
 def test_post_candidate_decision_updates_status_and_writes_action_log(
     client: TestClient,
     seeded_review_sessions,

@@ -1917,6 +1917,20 @@ class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):
     """Request contract for patching session status, ownership, or notes."""
 
     session_id: str = Field(description="Session identifier")
+    expected_session_version: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Session version that must still own this mutation",
+    )
+    intent_owner: Optional[str] = Field(
+        default=None,
+        description="Client operation owner for a monotonic latest-intent mutation",
+    )
+    intent_generation: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Monotonic generation within the client operation owner",
+    )
     status: Optional[CurationSessionStatus] = Field(
         default=None,
         description="New session status",
@@ -1930,6 +1944,16 @@ class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):
         default=None,
         description="Candidate to mark as currently active for resume flows",
     )
+
+    @model_validator(mode="after")
+    def validate_latest_intent(self) -> "CurationSessionUpdateRequest":
+        if (self.intent_owner is None) != (self.intent_generation is None):
+            raise ValueError("intent_owner and intent_generation must be provided together")
+        if self.intent_owner is not None and "current_candidate_id" not in self.model_fields_set:
+            raise ValueError("latest-intent fields require current_candidate_id")
+        if self.intent_owner is not None and self.expected_session_version is None:
+            raise ValueError("latest-intent fields require expected_session_version")
+        return self
 
 
 class CurationSessionUpdateResponse(CurationWorkspaceBaseModel):

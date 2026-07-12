@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..lib.chat_history_repository import ChatMessageRecord
 
@@ -12,6 +12,14 @@ from ..lib.chat_history_repository import ChatMessageRecord
 class LoadDocumentRequest(BaseModel):
     """Request payload when selecting a document for chat."""
     document_id: str
+    intent_owner: Optional[str] = None
+    intent_generation: Optional[int] = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_latest_intent(self) -> "LoadDocumentRequest":
+        if (self.intent_owner is None) != (self.intent_generation is None):
+            raise ValueError("intent_owner and intent_generation must be provided together")
+        return self
 
 
 class ActiveDocument(BaseModel):

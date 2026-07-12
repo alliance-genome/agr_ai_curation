@@ -181,13 +181,16 @@ function mockChatFetch(options?: {
 
 function createDeferredResponse() {
   let resolve!: (response: Response) => void
-  const promise = new Promise<Response>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<Response>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise
+    reject = rejectPromise
   })
 
   return {
     promise,
     resolve,
+    reject,
   }
 }
 
@@ -601,6 +604,122 @@ describe('Chat persistence', () => {
       expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toBeNull()
     } finally {
       window.removeEventListener('pdf-viewer-document-changed', listener as EventListener)
+    }
+  })
+
+  it('ignores a superseded PDF unload failure after a newer document change wins', async () => {
+    const unloadResponse = createDeferredResponse()
+    const viewerListener = vi.fn()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    window.addEventListener('pdf-viewer-document-changed', viewerListener as EventListener)
+
+    try {
+      vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+
+        if (url === '/health/deep') {
+          return {
+            ok: true,
+            json: async () => ({
+              services: {
+                weaviate: 'connected',
+                curation_db: 'connected',
+              },
+            }),
+          } as Response
+        }
+
+        if (url === '/api/chat/conversation') {
+          return {
+            ok: true,
+            json: async () => ({ is_active: true }),
+          } as Response
+        }
+
+        if (url === '/api/chat/conversation/reset') {
+          return {
+            ok: true,
+            json: async () => ({ session_id: 'session-doc-b' }),
+          } as Response
+        }
+
+        if (url === '/api/chat/document' && init?.method === 'DELETE') {
+          return unloadResponse.promise
+        }
+
+        if (url === '/api/chat/document') {
+          return {
+            ok: true,
+            json: async () => ({
+              active: true,
+              document: { id: 'doc-a', filename: 'doc-a.pdf' },
+            }),
+          } as Response
+        }
+
+        const documentId = url.match(/^\/api\/pdf-viewer\/documents\/([^/]+)$/)?.[1]
+        if (documentId) {
+          return {
+            ok: true,
+            json: async () => ({ filename: `${documentId}.pdf`, page_count: 7 }),
+          } as Response
+        }
+
+        const viewerDocumentId = url.match(/^\/api\/pdf-viewer\/documents\/([^/]+)\/url$/)?.[1]
+        if (viewerDocumentId) {
+          return {
+            ok: true,
+            json: async () => ({ viewer_url: `/viewer/${viewerDocumentId}` }),
+          } as Response
+        }
+
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response
+      })
+
+      renderChat()
+      expect(await screen.findByText('Active PDF: doc-a.pdf')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Unload PDF' }))
+      expect(await screen.findByRole('button', { name: 'Unloading...' })).toBeDisabled()
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('chat-document-changed', {
+          detail: {
+            active: true,
+            document: { id: 'doc-b', filename: 'doc-b.pdf' },
+          },
+        }))
+      })
+
+      expect(await screen.findByText('Active PDF: doc-b.pdf')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Unload PDF' })).not.toBeDisabled()
+
+      await waitFor(() => {
+        expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('"id":"doc-b"')
+        expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('"documentId":"doc-b"')
+        expect(viewerListener).toHaveBeenCalledWith(expect.objectContaining({
+          detail: expect.objectContaining({ documentId: 'doc-b' }),
+        }))
+      })
+
+      await act(async () => {
+        unloadResponse.reject(new DOMException('Superseded', 'AbortError'))
+        await Promise.resolve()
+      })
+
+      expect(screen.getByText('Active PDF: doc-b.pdf')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Unload PDF' })).not.toBeDisabled()
+      expect(alertSpy).not.toHaveBeenCalled()
+      expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('"id":"doc-b"')
+      expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('"documentId":"doc-b"')
+    } finally {
+      window.removeEventListener('pdf-viewer-document-changed', viewerListener as EventListener)
+      alertSpy.mockRestore()
+      confirmSpy.mockRestore()
     }
   })
 

@@ -23,10 +23,15 @@ import {
   completeDocumentLoad,
   failDocumentLoad,
 } from '@/features/documents/documentLoadEvents'
+import {
+  beginChatDocumentIntent,
+  invalidateChatDocumentIntent,
+} from '@/features/documents/chatDocumentIntent'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
+import type { LatestIntentOperation } from '@/lib/latestIntent'
 import {
   safeGetItem,
   safeRemoveItem,
@@ -147,6 +152,13 @@ export function useChatController({
   const messageStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
   const previousSessionIdRef = useRef<string | null>(propSessionId)
+  const documentOperationRef = useRef<LatestIntentOperation | null>(null)
+
+  const beginDocumentOperation = useCallback(() => {
+    const operation = beginChatDocumentIntent()
+    documentOperationRef.current = operation
+    return operation
+  }, [])
   const normalizedSessionId = normalizeOptionalText(propSessionId)
   const [sessionIdCopied, setSessionIdCopied] = useState(false)
 
@@ -230,13 +242,13 @@ export function useChatController({
 
   const restoreDocumentToPdfViewer = useCallback(async (
     document: ActiveDocument,
-    shouldCommitViewerRestore?: () => boolean,
+    operation: LatestIntentOperation,
   ) => {
     await rehydrateChatDocumentFromSource({
       loadDocument: async () => document,
       chatStorageKeys,
       ownerToken: HOME_PDF_VIEWER_OWNER,
-      shouldCommitViewerRestore,
+      operation,
     })
   }, [chatStorageKeys])
 
@@ -1040,11 +1052,12 @@ export function useChatController({
     }, 30000)
 
     const fetchActiveDocument = async () => {
+      const operation = beginDocumentOperation()
       debug.log('[Chat] fetchActiveDocument called')
       try {
         await rehydrateChatDocumentFromSource({
           loadDocument: async () => {
-            const response = await fetch('/api/chat/document')
+            const response = await fetch('/api/chat/document', { signal: operation.signal })
             if (!response.ok) {
               console.error('[Chat] fetchActiveDocument failed:', response.status)
               throw new Error('Failed to fetch active document')
@@ -1062,9 +1075,9 @@ export function useChatController({
           },
           chatStorageKeys,
           ownerToken: HOME_PDF_VIEWER_OWNER,
-          shouldCommitViewerRestore: () => isActive,
+          operation,
           onDocument: async (activeDocument) => {
-            if (!isActive) {
+            if (!isActive || !operation.ownsLatest()) {
               return false
             }
 
@@ -1076,6 +1089,9 @@ export function useChatController({
             debug.log('[PDF RESTORE] Restoring active document to PDF viewer:', activeDocument.filename)
           },
           onMissingDocument: async () => {
+            if (!isActive || !operation.ownsLatest()) {
+              return
+            }
             // CRITICAL: Check if the event handler has already set a document in localStorage
             // This prevents a race condition where fetchActiveDocument() completes after
             // the user loads a document from DocumentsPage
@@ -1085,16 +1101,15 @@ export function useChatController({
               return
             }
 
-            if (!isActive) {
-              return
-            }
-
             debug.log('[Chat] fetchActiveDocument: No document in localStorage either, clearing state')
             setActiveDocument(null)
             clearStoredActiveDocument()
           },
         })
       } catch (error) {
+        if (!operation.ownsLatest()) {
+          return
+        }
         console.error('[Chat] fetchActiveDocument error:', error)
       }
     }
@@ -1103,15 +1118,18 @@ export function useChatController({
     fetchActiveDocument()
 
     const documentChangeHandler = async (event: Event) => {
+      const operation = beginDocumentOperation()
       debug.log('[Chat] chat-document-changed event received', event)
       const customEvent = event as CustomEvent
       const detail = customEvent.detail || {}
       debug.log('[Chat] Event detail:', detail)
 
+      if (!isActive || !operation.ownsLatest()) {
+        return
+      }
+      setIsUnloadingPDF(false)
+
       if (detail?.active && detail.document) {
-        if (!isActive) {
-          return
-        }
         debug.log('[Chat] Setting active document:', detail.document.filename || detail.document.id)
         setActiveDocument(detail.document)
 
@@ -1121,10 +1139,11 @@ export function useChatController({
           const resetResponse = await fetch('/api/chat/conversation/reset', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: operation.signal,
           })
           if (resetResponse.ok) {
             const resetData = await resetResponse.json()
-            if (!isActive) {
+            if (!isActive || !operation.ownsLatest()) {
               return
             }
             debug.log('[Chat] Conversation reset for new document:', resetData)
@@ -1140,15 +1159,18 @@ export function useChatController({
             dispatchClearHighlights('document-change')
           }
         } catch (resetError) {
+          if (!operation.ownsLatest()) {
+            return
+          }
           console.error('[Chat] Failed to reset conversation for new document:', resetError)
         }
 
         // Load the PDF in the viewer when document changes
         try {
           debug.log('[Chat] Fetching PDF metadata for:', detail.document.id)
-          await restoreDocumentToPdfViewer(detail.document, () => isActive)
+          await restoreDocumentToPdfViewer(detail.document, operation)
 
-          if (isActive) {
+          if (isActive && operation.ownsLatest()) {
             debug.log('[Chat] Loading PDF in viewer after document change:', detail.document.filename)
             completeDocumentLoad({
               documentId: detail.document.id,
@@ -1158,7 +1180,7 @@ export function useChatController({
           }
         } catch (pdfError) {
           console.warn('[Chat] Unable to load PDF viewer after document change:', pdfError)
-          if (isActive) {
+          if (isActive && operation.ownsLatest()) {
             failDocumentLoad({
               documentId: detail.document.id,
               filename: detail.document.filename,
@@ -1167,9 +1189,6 @@ export function useChatController({
           }
         }
       } else {
-        if (!isActive) {
-          return
-        }
         debug.log('[Chat] Clearing active document')
         setActiveDocument(null)
         clearStoredActiveDocument()
@@ -1181,12 +1200,15 @@ export function useChatController({
 
     return () => {
       isActive = false
+      invalidateChatDocumentIntent(documentOperationRef.current)
+      documentOperationRef.current = null
       window.removeEventListener('chat-document-changed', documentChangeHandler)
       clearInterval(interval)
     }
   }, [
     clearStoredActiveDocument,
     clearStoredMessages,
+    beginDocumentOperation,
     getStoredActiveDocument,
     onSessionChange,
     restoreDocumentToPdfViewer,
@@ -1502,11 +1524,21 @@ export function useChatController({
       return
     }
 
+    const operation = beginDocumentOperation()
     setIsUnloadingPDF(true)
     try {
       const response = await fetch('/api/chat/document', {
         method: 'DELETE',
+        signal: operation.signal,
+        headers: {
+          'X-Chat-Document-Intent-Owner': operation.owner,
+          'X-Chat-Document-Intent-Generation': String(operation.generation),
+        },
       })
+
+      if (!operation.ownsLatest()) {
+        return
+      }
 
       if (response.ok) {
         debug.log('PDF unloaded successfully')
@@ -1530,10 +1562,15 @@ export function useChatController({
         alert('Failed to unload PDF. Please try again.')
       }
     } catch (error) {
+      if (!operation.ownsLatest()) {
+        return
+      }
       console.error('Error unloading PDF:', error)
       alert('An error occurred while unloading the PDF.')
     } finally {
-      setIsUnloadingPDF(false)
+      if (operation.ownsLatest()) {
+        setIsUnloadingPDF(false)
+      }
     }
   }
 

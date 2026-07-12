@@ -29,6 +29,7 @@ import { readCurationApiError } from './api'
 
 interface CurationWorkspaceRequestOptions {
   keepalive?: boolean
+  signal?: AbortSignal
 }
 
 export class CurationWorkspaceRequestError extends Error {
@@ -142,6 +143,7 @@ export async function updateCurationSession(
       method: 'PATCH',
       body: JSON.stringify(request),
       keepalive: options.keepalive,
+      signal: options.signal,
     },
   )
 }

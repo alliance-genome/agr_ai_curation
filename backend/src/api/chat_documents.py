@@ -1,6 +1,10 @@
 # ruff: noqa: F403,F405
 """Document selection endpoints for chat."""
 
+from typing import Annotated
+
+from fastapi import Header
+
 from .chat_common import *
 
 
@@ -10,7 +14,15 @@ async def load_document_for_chat(
     user: Dict[str, Any] = get_auth_dependency()
 ) -> DocumentStatusResponse:
     """Select a document for chat interactions."""
-    user_id = user.get("sub")
+    user_id = _require_user_sub(user)
+    if payload.intent_owner is not None and payload.intent_generation is not None:
+        if not document_state.claim_intent(
+            user_id, payload.intent_owner, payload.intent_generation
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document selection was superseded by a newer intent",
+            )
     logger.info(
         "Loading document for chat: %s",
         payload.document_id,
@@ -18,7 +30,7 @@ async def load_document_for_chat(
     )
 
     try:
-        document_detail = await get_document(user["sub"], payload.document_id)
+        document_detail = await get_document(user_id, payload.document_id)
         logger.info(
             "Successfully retrieved document: %s",
             payload.document_id,
@@ -51,11 +63,24 @@ async def load_document_for_chat(
         )
         raise HTTPException(status_code=500, detail="Document summary unavailable")
 
-    document_state.set_document(user['sub'], document_summary)
+    if payload.intent_owner is not None and payload.intent_generation is not None:
+        committed = document_state.set_document_if_current(
+            user_id,
+            document_summary,
+            payload.intent_owner,
+            payload.intent_generation,
+        )
+        if not committed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document selection was superseded by a newer intent",
+            )
+    else:
+        document_state.set_document(user_id, document_summary)
 
     # Invalidate document metadata cache to ensure fresh data for new document
     from src.lib.document_cache import invalidate_cache
-    invalidate_cache(user['sub'], payload.document_id)
+    invalidate_cache(user_id, payload.document_id)
 
     active_document = _build_active_document(document_summary)
     return DocumentStatusResponse(
@@ -68,7 +93,8 @@ async def load_document_for_chat(
 @router.get("/chat/document", response_model=DocumentStatusResponse)
 async def get_loaded_document(user: Dict[str, Any] = get_auth_dependency()) -> DocumentStatusResponse:
     """Return information about the currently loaded document."""
-    document_summary = document_state.get_document(user['sub'])
+    user_id = _require_user_sub(user)
+    document_summary = document_state.get_document(user_id)
     if not document_summary:
         return DocumentStatusResponse(active=False, message="No document selected")
 
@@ -76,14 +102,38 @@ async def get_loaded_document(user: Dict[str, Any] = get_auth_dependency()) -> D
 
 
 @router.delete("/chat/document", response_model=DocumentStatusResponse)
-async def clear_loaded_document(user: Dict[str, Any] = get_auth_dependency()) -> DocumentStatusResponse:
+async def clear_loaded_document(
+    user: Dict[str, Any] = get_auth_dependency(),
+    intent_owner: Annotated[
+        Optional[str], Header(alias="X-Chat-Document-Intent-Owner")
+    ] = None,
+    intent_generation: Annotated[
+        Optional[int], Header(alias="X-Chat-Document-Intent-Generation")
+    ] = None,
+) -> DocumentStatusResponse:
     """Clear the current document selection."""
-    document_summary = document_state.get_document(user['sub'])
+    user_id = _require_user_sub(user)
+    if intent_owner is not None and intent_generation is not None:
+        if not document_state.claim_intent(user_id, intent_owner, intent_generation):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document clear was superseded by a newer intent",
+            )
+    document_summary = document_state.get_document(user_id)
     if not document_summary:
         return DocumentStatusResponse(active=False, message="No document was loaded")
 
     active_document = _build_active_document(document_summary)
-    document_state.clear_document(user['sub'])
+    if intent_owner is not None and intent_generation is not None:
+        if not document_state.clear_document_if_current(
+            user_id, intent_owner, intent_generation
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document clear was superseded by a newer intent",
+            )
+    else:
+        document_state.clear_document(user_id)
     return DocumentStatusResponse(
         active=False,
         document=active_document,
