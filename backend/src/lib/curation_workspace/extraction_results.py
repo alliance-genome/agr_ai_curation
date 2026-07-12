@@ -68,6 +68,61 @@ class InlineExtractionPersistenceResult:
     extraction_result: CurationExtractionResultRecord
 
 
+class ExtractionResultPayloadMismatchError(ValueError):
+    """Raised when one persistence identity is reused for different payloads."""
+
+
+def canonical_extraction_payload_hash(payload: Any) -> str:
+    """Return a deterministic hash for one JSON-compatible extraction payload."""
+
+    serialized = json.dumps(
+        _sanitize_persisted_json_value(payload),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def build_flow_extraction_idempotency_key(
+    *,
+    document_id: str,
+    user_id: str,
+    origin_session_id: str,
+    flow_run_id: str | None,
+    adapter_key: str,
+    agent_key: str,
+    source_kind: Any,
+    candidate_identity: str,
+) -> str:
+    """Build the stable source-scope identity for one FLOW extraction candidate."""
+
+    material = {
+        "document_id": _required_idempotency_text(document_id, "document_id"),
+        "user_id": _required_idempotency_text(user_id, "user_id"),
+        "origin_session_id": _required_idempotency_text(
+            origin_session_id,
+            "origin_session_id",
+        ),
+        "flow_run_id": _optional_idempotency_text(flow_run_id),
+        "adapter_key": _required_idempotency_text(adapter_key, "adapter_key"),
+        "agent_key": _required_idempotency_text(agent_key, "agent_key"),
+        "source_kind": _source_kind_value(source_kind),
+        "candidate_identity": _required_idempotency_text(
+            candidate_identity,
+            "candidate_identity",
+        ),
+    }
+    serialized = json.dumps(
+        material,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return f"flow-extraction:{digest}"
+
+
 def build_safe_agent_key_map(agent_keys: Iterable[str]) -> dict[str, str]:
     """Map tool-safe agent-key segments back to canonical agent keys."""
 
@@ -422,6 +477,105 @@ def persist_extraction_results(
             session.close()
 
 
+def persist_idempotent_extraction_results(
+    requests: Sequence[CurationExtractionPersistenceRequest],
+    *,
+    db: Optional[Session] = None,
+) -> list[CurationExtractionPersistenceResponse]:
+    """Persist keyed envelopes once and return authoritative rows in input order.
+
+    Every request must carry both an idempotency key and a canonical payload
+    hash. Duplicate keys are collapsed before database work. Inserts use
+    savepoints so a concurrent unique-index winner can be reloaded without
+    rolling back unrelated caller-owned transaction work.
+    """
+
+    if not requests:
+        return []
+
+    unique_requests: list[CurationExtractionPersistenceRequest] = []
+    request_by_key: dict[str, CurationExtractionPersistenceRequest] = {}
+    for request in requests:
+        idempotency_key = _required_idempotent_request_field(
+            request.idempotency_key,
+            field_name="idempotency_key",
+        )
+        payload_hash = _validated_idempotent_payload_hash(
+            request,
+            idempotency_key=idempotency_key,
+        )
+        existing_request = request_by_key.get(idempotency_key)
+        if existing_request is not None:
+            _assert_matching_payload_hash(
+                idempotency_key=idempotency_key,
+                requested_payload_hash=payload_hash,
+                authoritative_payload_hash=existing_request.payload_hash,
+            )
+            continue
+        request_by_key[idempotency_key] = request
+        unique_requests.append(request)
+
+    owns_session = db is None
+    session = db or SessionLocal()
+    authoritative_records: list[CurationExtractionResultRecordModel] = []
+
+    try:
+        for request in unique_requests:
+            idempotency_key = _required_idempotent_request_field(
+                request.idempotency_key,
+                field_name="idempotency_key",
+            )
+            payload_hash = _validated_idempotent_payload_hash(
+                request,
+                idempotency_key=idempotency_key,
+            )
+            authoritative = _load_extraction_result_by_idempotency_key(
+                session,
+                idempotency_key,
+            )
+            if authoritative is None:
+                record = _build_extraction_result_record(request)
+                try:
+                    with session.begin_nested():
+                        session.add(record)
+                        session.flush()
+                    authoritative = record
+                except IntegrityError:
+                    authoritative = _load_extraction_result_by_idempotency_key(
+                        session,
+                        idempotency_key,
+                    )
+                    if authoritative is None:
+                        raise
+
+            _assert_matching_payload_hash(
+                idempotency_key=idempotency_key,
+                requested_payload_hash=payload_hash,
+                authoritative_payload_hash=authoritative.payload_hash,
+            )
+            authoritative_records.append(authoritative)
+
+        if owns_session:
+            session.commit()
+
+        for record in authoritative_records:
+            session.refresh(record)
+
+        return [
+            CurationExtractionPersistenceResponse(
+                extraction_result=_record_to_schema(record)
+            )
+            for record in authoritative_records
+        ]
+    except Exception:
+        if owns_session:
+            session.rollback()
+        raise
+    finally:
+        if owns_session:
+            session.close()
+
+
 def list_extraction_results(
     *,
     db: Optional[Session] = None,
@@ -561,13 +715,7 @@ def _validated_inline_domain_envelope_payload(
 
 
 def _canonical_payload_hash(payload: Mapping[str, Any]) -> str:
-    serialized = json.dumps(
-        payload,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return canonical_extraction_payload_hash(payload)
 
 
 def _inline_extraction_idempotency_key(
@@ -616,7 +764,7 @@ def _source_kind_value(source_kind: Any) -> str:
 def _required_idempotency_text(value: Any, field_name: str) -> str:
     text = str(value or "").strip()
     if not text:
-        raise ValueError(f"Inline extraction persistence requires {field_name}.")
+        raise ValueError(f"Extraction persistence requires {field_name}.")
     return text
 
 
@@ -646,6 +794,50 @@ def _load_extraction_result_by_idempotency_key(
         CurationExtractionResultRecordModel.idempotency_key == idempotency_key
     )
     return session.execute(statement).scalars().first()
+
+
+def _required_idempotent_request_field(value: str | None, *, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(
+            f"Idempotent extraction persistence requires {field_name}."
+        )
+    return text
+
+
+def _validated_idempotent_payload_hash(
+    request: CurationExtractionPersistenceRequest,
+    *,
+    idempotency_key: str,
+) -> str:
+    payload_hash = _required_idempotent_request_field(
+        request.payload_hash,
+        field_name="payload_hash",
+    )
+    canonical_hash = canonical_extraction_payload_hash(request.payload_json)
+    if payload_hash != canonical_hash:
+        raise ExtractionResultPayloadMismatchError(
+            "Extraction result payload_hash does not match the canonical payload "
+            f"for key {idempotency_key!r}: supplied {payload_hash!r}, "
+            f"canonical {canonical_hash!r}."
+        )
+    return payload_hash
+
+
+def _assert_matching_payload_hash(
+    *,
+    idempotency_key: str,
+    requested_payload_hash: str,
+    authoritative_payload_hash: str | None,
+) -> None:
+    actual_hash = str(authoritative_payload_hash or "").strip()
+    if actual_hash == requested_payload_hash:
+        return
+    raise ExtractionResultPayloadMismatchError(
+        "Extraction result idempotency payload mismatch "
+        f"for key {idempotency_key!r}: requested {requested_payload_hash!r}, "
+        f"authoritative {actual_hash or '<missing>'!r}."
+    )
 
 
 def _inline_persistence_result(
@@ -775,14 +967,18 @@ def _sanitize_persisted_json_value(value: Any) -> Any:
 
 __all__ = [
     "ExtractionEnvelopeCandidate",
+    "ExtractionResultPayloadMismatchError",
     "InlineExtractionPersistenceResult",
+    "build_flow_extraction_idempotency_key",
     "build_extraction_envelope_candidate",
     "build_extraction_envelope_candidate_with_evidence",
     "build_safe_agent_key_map",
+    "canonical_extraction_payload_hash",
     "get_agent_curation_metadata",
     "list_extraction_results",
     "persist_inline_validated_extraction_result",
     "persist_extraction_result",
     "persist_extraction_results",
+    "persist_idempotent_extraction_results",
     "resolve_agent_key_from_tool_name",
 ]

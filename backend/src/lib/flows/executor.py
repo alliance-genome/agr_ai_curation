@@ -42,8 +42,10 @@ from src.lib.context import (
 from src.lib.curation_workspace import (
     CurationPrepPersistenceContext,
     ExtractionEnvelopeCandidate,
+    build_flow_extraction_idempotency_key,
     build_extraction_envelope_candidate_with_evidence,
-    persist_extraction_results,
+    canonical_extraction_payload_hash,
+    persist_idempotent_extraction_results,
     run_curation_prep,
 )
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
@@ -56,7 +58,6 @@ from src.lib.curation_workspace.domain_envelope_normalization import (
     is_canonical_domain_envelope_payload,
 )
 from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
-from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
@@ -3298,33 +3299,7 @@ def _persist_flow_extraction_candidates(
     if not candidates or not document_id:
         return []
 
-    normalized_flow_run_id = str(flow_run_id or "").strip() or None
-    existing_by_key: dict[str, CurationExtractionResultRecord] = {}
-    if normalized_flow_run_id is not None:
-        existing_results = list_extraction_results(
-            document_id=document_id,
-            flow_run_id=normalized_flow_run_id,
-            origin_session_id=session_id,
-            user_id=user_id,
-            source_kind=CurationExtractionSourceKind.FLOW,
-        )
-        for result in existing_results:
-            key = _flow_record_persistence_key(result)
-            if not key:
-                continue
-            if _is_noncanonical_flow_domain_envelope_source_payload(
-                result.payload_json
-            ):
-                raise ValueError(
-                    "Existing flow extraction result "
-                    f"{result.extraction_result_id} for key {key!r} uses "
-                    "curatable_objects[] instead of canonical DomainEnvelope.extracted_objects[]."
-                )
-            existing_by_key[key] = result
-
-    ordered_records: list[CurationExtractionResultRecord] = []
     requests: list[CurationExtractionPersistenceRequest] = []
-    request_keys: list[str] = []
     for candidate in candidates:
         candidate = _canonicalize_flow_extraction_candidate(
             candidate,
@@ -3335,20 +3310,30 @@ def _persist_flow_extraction_candidates(
             flow_run_id=flow_run_id,
         )
         flow_step_key = _flow_candidate_persistence_key(candidate)
-        if flow_step_key in existing_by_key:
-            ordered_records.append(existing_by_key[flow_step_key])
-            continue
-
         metadata = dict(candidate.metadata)
-        if flow_step_key:
-            metadata["flow_step_key"] = flow_step_key
+        metadata["flow_step_key"] = flow_step_key
+        adapter_key = _resolve_flow_candidate_adapter_key(candidate) or candidate.agent_key
+        payload_hash = canonical_extraction_payload_hash(candidate.payload_json)
+        idempotency_key = build_flow_extraction_idempotency_key(
+            document_id=document_id,
+            user_id=user_id,
+            origin_session_id=session_id,
+            flow_run_id=flow_run_id,
+            adapter_key=adapter_key,
+            agent_key=candidate.agent_key,
+            source_kind=CurationExtractionSourceKind.FLOW,
+            candidate_identity=flow_step_key,
+        )
+        metadata.update(
+            {
+                "idempotency_key": idempotency_key,
+                "payload_hash": payload_hash,
+            }
+        )
         requests.append(
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
-                adapter_key=(
-                    _resolve_flow_candidate_adapter_key(candidate)
-                    or candidate.agent_key
-                ),
+                adapter_key=adapter_key,
                 agent_key=candidate.agent_key,
                 source_kind=CurationExtractionSourceKind.FLOW,
                 origin_session_id=session_id,
@@ -3358,24 +3343,16 @@ def _persist_flow_extraction_candidates(
                 candidate_count=candidate.candidate_count,
                 conversation_summary=candidate.conversation_summary,
                 payload_json=candidate.payload_json,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
                 metadata=metadata,
             )
         )
-        request_keys.append(flow_step_key)
 
-    if requests:
-        responses = persist_extraction_results(requests)
-        persisted_by_key = {
-            key: response.extraction_result
-            for key, response in zip(request_keys, responses)
-        }
-        for candidate in candidates:
-            flow_step_key = _flow_candidate_persistence_key(candidate)
-            if flow_step_key in existing_by_key:
-                continue
-            persisted = persisted_by_key.get(flow_step_key)
-            if persisted is not None:
-                ordered_records.append(persisted)
+    ordered_records = [
+        response.extraction_result
+        for response in persist_idempotent_extraction_results(requests)
+    ]
 
     _materialize_flow_domain_envelope_records(ordered_records)
     return ordered_records
@@ -3404,15 +3381,6 @@ def _is_flow_domain_envelope_source_payload(payload: Any) -> bool:
     if is_canonical_domain_envelope_payload(payload):
         return True
     return isinstance(payload.get("curatable_objects"), list)
-
-
-def _is_noncanonical_flow_domain_envelope_source_payload(payload: Any) -> bool:
-    if not isinstance(payload, Mapping):
-        return False
-    return (
-        _is_flow_domain_envelope_source_payload(payload)
-        and not is_canonical_domain_envelope_payload(payload)
-    )
 
 
 def _flow_extraction_result_ref(
