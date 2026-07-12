@@ -387,10 +387,13 @@ const Toolbar = styled(Box)(({ theme }) => ({
 }))
 
 // Menu trigger button (File, Edit)
-const MenuTrigger = styled(Box)(({ theme }) => ({
+const MenuTrigger = styled('button')(({ theme }) => ({
   display: 'inline-flex',
   alignItems: 'center',
   padding: theme.spacing(0.25, 1),
+  border: 0,
+  background: 'transparent',
+  fontFamily: 'inherit',
   fontSize: '0.8rem',
   fontWeight: 500,
   cursor: 'pointer',
@@ -401,6 +404,10 @@ const MenuTrigger = styled(Box)(({ theme }) => ({
   '&:hover': {
     backgroundColor: alpha(theme.palette.action.hover, 0.8),
     color: theme.palette.text.primary,
+  },
+  '&:focus-visible': {
+    outline: `2px solid ${theme.palette.primary.main}`,
+    outlineOffset: 1,
   },
 }))
 
@@ -493,6 +500,10 @@ const CanvasArea = styled(Box)(({ theme }) => ({
   flex: 1,
   position: 'relative',
   backgroundColor: alpha(theme.palette.background.default, 0.5),
+  '&:focus-visible': {
+    outline: `2px solid ${theme.palette.primary.main}`,
+    outlineOffset: -2,
+  },
   '& .react-flow__attribution': {
     display: 'none',
   },
@@ -1586,7 +1597,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       {/* Unified Toolbar */}
       <Toolbar>
         {/* File Menu */}
-        <MenuTrigger onClick={handleFileMenuOpen}>File</MenuTrigger>
+        <MenuTrigger
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={Boolean(fileMenuAnchor)}
+          onClick={handleFileMenuOpen}
+        >
+          File
+        </MenuTrigger>
         <StyledMenu
           anchorEl={fileMenuAnchor}
           open={Boolean(fileMenuAnchor)}
@@ -1620,7 +1638,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         </StyledMenu>
 
         {/* Edit Menu */}
-        <MenuTrigger onClick={handleEditMenuOpen}>Edit</MenuTrigger>
+        <MenuTrigger
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={Boolean(editMenuAnchor)}
+          onClick={handleEditMenuOpen}
+        >
+          Edit
+        </MenuTrigger>
         <StyledMenu
           anchorEl={editMenuAnchor}
           open={Boolean(editMenuAnchor)}
@@ -1764,7 +1789,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           <Panel defaultSize={72} minSize={60}>
             <CanvasArea
               ref={reactFlowWrapper}
-              tabIndex={-1}
+              role="region"
+              aria-label="Flow canvas"
+              tabIndex={0}
               onMouseDown={() => reactFlowWrapper.current?.focus()}
             >
               {loading ? (
