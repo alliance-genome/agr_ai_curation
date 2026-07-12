@@ -530,11 +530,6 @@ fi
 
 refresh_error="$(symphony_linear_response_error "${refresh_json}")"
 refreshed_state="$(jq -r '.data.issue.state.name // ""' <<< "${refresh_json}")"
-if [[ -z "${refresh_error}" && -z "${refreshed_state}" && -n "${context_json_file}" ]]; then
-  # Test/debug callers historically use mutation-only curl stubs. Preserve that
-  # fixture contract while live calls still require a real refreshed state.
-  refreshed_state="${current_state}"
-fi
 if [[ -n "${refresh_error}" || -z "${refreshed_state}" ]]; then
   payload="$(jq -cn \
     --arg status "error" \

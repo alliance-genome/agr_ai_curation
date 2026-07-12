@@ -383,6 +383,62 @@ def test_preserves_failed_linear_transition_attempt() -> None:
     }
 
 
+def test_reconstructs_immutable_legacy_scripted_lane_output() -> None:
+    """Older durable traces predate structured scripted-lane transitions."""
+    tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="symphony-lane-flow-test-"))
+    run_dir = tmp_path / "issues" / "ALL-591" / "2026-06-14T16-00-00Z-01"
+    run_dir.mkdir(parents=True)
+
+    write_jsonl(
+        run_dir / "trace.ndjson",
+        [
+            {
+                "timestamp": "2026-06-14T16:00:00Z",
+                "issue_identifier": "ALL-591",
+                "issue_state": "Todo",
+                "payload": {"method": "item/started", "params": {}},
+            },
+            {
+                "timestamp": "2026-06-14T16:00:03Z",
+                "issue_identifier": "ALL-591",
+                "issue_state": "Todo",
+                "event": "scripted_lane_completed",
+                "payload": {
+                    "method": "symphony/scripted_lane/completed",
+                    "params": {
+                        "lane_name": "Todo",
+                        "helper": "scripts/utilities/symphony_todo_lane.sh",
+                        "exit_status": 0,
+                        "output": "\n".join(
+                            [
+                                "LINEAR_STATE_STATUS=ok",
+                                "LINEAR_STATE_FROM=Todo",
+                                "LINEAR_STATE_TO=In Progress",
+                                "LINEAR_STATE_TARGET_ID=state-in-progress",
+                            ]
+                        ),
+                    },
+                },
+            },
+        ],
+    )
+
+    payload = run_export(tmp_path / "issues")
+
+    assert payload["issue_flows"][0]["lane_flow"][1] == {
+        "exit_status": 0,
+        "from": "Todo",
+        "helper": "scripts/utilities/symphony_todo_lane.sh",
+        "lane": "Todo",
+        "source": "scripted_lane",
+        "status": "ok",
+        "target_id": "state-in-progress",
+        "timestamp": "2026-06-14T16:00:03Z",
+        "to": "In Progress",
+        "type": "scripted_lane_completed",
+    }
+
+
 def test_preserves_repeated_transitions_without_command_id() -> None:
     tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="symphony-lane-flow-test-"))
     run_dir = tmp_path / "issues" / "ALL-593" / "2026-06-14T19-00-00Z-01"
@@ -438,6 +494,7 @@ def main() -> int:
     test_reconstructs_explicit_linear_transition()
     test_reconstructs_scripted_lane_completion()
     test_reconstructs_scripted_lane_failure()
+    test_reconstructs_immutable_legacy_scripted_lane_output()
     test_corrupt_trace_line_fails_with_path_and_line()
     test_corrupt_session_metadata_fails_with_path()
     test_preserves_failed_linear_transition_attempt()
