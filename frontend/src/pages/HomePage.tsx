@@ -24,6 +24,10 @@ import {
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import { LatestIntent, type LatestIntentOperation } from '@/lib/latestIntent'
 import {
+  beginChatDocumentIntent,
+  invalidateChatDocumentIntent,
+} from '@/features/documents/chatDocumentIntent'
+import {
   HOME_PDF_VIEWER_OWNER,
 } from '@/components/pdfViewer/pdfEvents'
 import {
@@ -150,7 +154,8 @@ function HomePage() {
   const latestCreatedSessionRef = useRef<DurableChatSessionResponse | null>(null)
   const handledRouteDocumentLoadRef = useRef<string | null>(null)
   const documentLoadingTimeoutIdRef = useRef<number | null>(null)
-  const latestIntentRef = useRef(new LatestIntent())
+  const sessionIntentRef = useRef(new LatestIntent())
+  const documentOperationRef = useRef<LatestIntentOperation | null>(null)
   const [isBootstrappingSession, setIsBootstrappingSession] = useState(true)
   const [missingSessionId, setMissingSessionId] = useState<string | null>(null)
   const [sessionBootstrapError, setSessionBootstrapError] = useState<string | null>(null)
@@ -159,6 +164,17 @@ function HomePage() {
   // Document loading overlay state
   const [loadingDocument, setLoadingDocument] = useState(false)
   const [loadingError, setLoadingError] = useState<string | null>(null)
+
+  const beginDocumentOperation = useCallback(() => {
+    const operation = beginChatDocumentIntent()
+    documentOperationRef.current = operation
+    return operation
+  }, [])
+
+  useEffect(() => () => {
+    invalidateChatDocumentIntent(documentOperationRef.current)
+    documentOperationRef.current = null
+  }, [])
 
   // Right panel tab state (persisted)
   const [rightPanelTab, setRightPanelTab] = useState<number>(() => {
@@ -476,13 +492,14 @@ function HomePage() {
   }, [ensureSession, executeFlow, getCurrentDocumentId])
 
   useEffect(() => {
-    const operation = latestIntentRef.current.begin()
+    if (!user?.uid) {
+      return
+    }
+
+    const operation = sessionIntentRef.current.begin()
+    const documentOperation = beginDocumentOperation()
 
     const bootstrapSession = async () => {
-      if (!user?.uid) {
-        return
-      }
-
       setIsBootstrappingSession(true)
       setMissingSessionId(null)
       setSessionBootstrapError(null)
@@ -504,7 +521,7 @@ function HomePage() {
             normalizeChatHistoryValue(detail.session.session_id) ?? requestedSessionId
           persistSessionId(activeSessionId)
           persistSessionMessages(activeSessionId, detail)
-          await rehydrateDocumentContext(detail.active_document, operation)
+          await rehydrateDocumentContext(detail.active_document, documentOperation)
 
           if (operation.ownsLatest()) {
             setIsBootstrappingSession(false)
@@ -539,7 +556,7 @@ function HomePage() {
           createdSession?.session_id === activeSessionId
             ? createdSession.active_document
             : null,
-          operation,
+          documentOperation,
         )
 
         if (operation.ownsLatest()) {
@@ -552,7 +569,7 @@ function HomePage() {
 
         persistSessionId(null)
         clearPersistedMessages()
-        await clearDocumentContext(operation)
+        await clearDocumentContext(documentOperation)
 
         if (!operation.ownsLatest()) {
           return
@@ -581,11 +598,13 @@ function HomePage() {
 
     return () => {
       if (operation.ownsLatest()) {
-        latestIntentRef.current.invalidate()
+        sessionIntentRef.current.invalidate()
       }
+      invalidateChatDocumentIntent(documentOperation)
     }
   }, [
     chatStorageKeys,
+    beginDocumentOperation,
     clearDocumentContext,
     clearPersistedMessages,
     ensureSession,
@@ -616,7 +635,7 @@ function HomePage() {
       return
     }
     handledRouteDocumentLoadRef.current = routeLoadKey
-    const operation = latestIntentRef.current.begin()
+    const operation = beginDocumentOperation()
 
     navigate(
       {
@@ -670,6 +689,7 @@ function HomePage() {
     void loadRouteDocument()
   }, [
     isBootstrappingSession,
+    beginDocumentOperation,
     location.hash,
     location.pathname,
     location.search,
@@ -756,7 +776,8 @@ function HomePage() {
   }, [clearDocumentLoadingTimeout])
 
   const handleStartNewChat = useCallback(async () => {
-    const operation = latestIntentRef.current.begin()
+    const operation = sessionIntentRef.current.begin()
+    const documentOperation = beginDocumentOperation()
     setIsBootstrappingSession(true)
     setIsStartingNewChat(true)
     setMissingSessionId(null)
@@ -771,7 +792,7 @@ function HomePage() {
       persistSessionId(createdSession.session_id)
       clearPersistedMessages()
       latestCreatedSessionRef.current = createdSession
-      await rehydrateDocumentContext(createdSession.active_document, operation)
+      await rehydrateDocumentContext(createdSession.active_document, documentOperation)
 
       if (!operation.ownsLatest()) {
         return
@@ -796,7 +817,7 @@ function HomePage() {
         setIsStartingNewChat(false)
       }
     }
-  }, [clearPersistedMessages, createSession, persistSessionId, rehydrateDocumentContext, searchParams, setSearchParams])
+  }, [beginDocumentOperation, clearPersistedMessages, createSession, persistSessionId, rehydrateDocumentContext, searchParams, setSearchParams])
 
   // Handle session changes from child components (e.g., Chat reset)
   const handleSessionChange = useCallback((newSessionId: string) => {

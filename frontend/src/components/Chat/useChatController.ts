@@ -23,11 +23,15 @@ import {
   completeDocumentLoad,
   failDocumentLoad,
 } from '@/features/documents/documentLoadEvents'
+import {
+  beginChatDocumentIntent,
+  invalidateChatDocumentIntent,
+} from '@/features/documents/chatDocumentIntent'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
-import { LatestIntent, type LatestIntentOperation } from '@/lib/latestIntent'
+import type { LatestIntentOperation } from '@/lib/latestIntent'
 import {
   safeGetItem,
   safeRemoveItem,
@@ -148,7 +152,13 @@ export function useChatController({
   const messageStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
   const previousSessionIdRef = useRef<string | null>(propSessionId)
-  const documentIntentRef = useRef(new LatestIntent())
+  const documentOperationRef = useRef<LatestIntentOperation | null>(null)
+
+  const beginDocumentOperation = useCallback(() => {
+    const operation = beginChatDocumentIntent()
+    documentOperationRef.current = operation
+    return operation
+  }, [])
   const normalizedSessionId = normalizeOptionalText(propSessionId)
   const [sessionIdCopied, setSessionIdCopied] = useState(false)
 
@@ -1042,7 +1052,7 @@ export function useChatController({
     }, 30000)
 
     const fetchActiveDocument = async () => {
-      const operation = documentIntentRef.current.begin()
+      const operation = beginDocumentOperation()
       debug.log('[Chat] fetchActiveDocument called')
       try {
         await rehydrateChatDocumentFromSource({
@@ -1108,7 +1118,7 @@ export function useChatController({
     fetchActiveDocument()
 
     const documentChangeHandler = async (event: Event) => {
-      const operation = documentIntentRef.current.begin()
+      const operation = beginDocumentOperation()
       debug.log('[Chat] chat-document-changed event received', event)
       const customEvent = event as CustomEvent
       const detail = customEvent.detail || {}
@@ -1190,13 +1200,15 @@ export function useChatController({
 
     return () => {
       isActive = false
-      documentIntentRef.current.invalidate()
+      invalidateChatDocumentIntent(documentOperationRef.current)
+      documentOperationRef.current = null
       window.removeEventListener('chat-document-changed', documentChangeHandler)
       clearInterval(interval)
     }
   }, [
     clearStoredActiveDocument,
     clearStoredMessages,
+    beginDocumentOperation,
     getStoredActiveDocument,
     onSessionChange,
     restoreDocumentToPdfViewer,
@@ -1512,7 +1524,7 @@ export function useChatController({
       return
     }
 
-    const operation = documentIntentRef.current.begin()
+    const operation = beginDocumentOperation()
     setIsUnloadingPDF(true)
     try {
       const response = await fetch('/api/chat/document', {

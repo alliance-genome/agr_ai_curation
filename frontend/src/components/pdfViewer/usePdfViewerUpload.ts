@@ -10,7 +10,11 @@ import {
   failDocumentLoad,
   startDocumentLoad,
 } from '@/features/documents/documentLoadEvents'
-import { LatestIntent } from '@/lib/latestIntent'
+import {
+  beginChatDocumentIntent,
+  invalidateChatDocumentIntent,
+} from '@/features/documents/chatDocumentIntent'
+import type { LatestIntentOperation } from '@/lib/latestIntent'
 
 export interface UploadDialogState {
   open: boolean
@@ -28,7 +32,7 @@ interface UsePdfViewerUploadOptions {
 
 export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
   const uploadAbortRef = useRef<AbortController | null>(null)
-  const documentIntentRef = useRef(new LatestIntent())
+  const documentOperationRef = useRef<LatestIntentOperation | null>(null)
   const [uploadInFlight, setUploadInFlight] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [dropError, setDropError] = useState<string | null>(null)
@@ -70,6 +74,7 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
     const file = validation.files[0]
     const controller = new AbortController()
     let startedChatLoad = false
+    let documentOperation: LatestIntentOperation | null = null
     uploadAbortRef.current = controller
     setDropError(null)
     setUploadInFlight(true)
@@ -133,7 +138,8 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
         message: `Loading ${file.name} for chat...`,
       })
       startedChatLoad = true
-      const documentOperation = documentIntentRef.current.begin()
+      documentOperation = beginChatDocumentIntent()
+      documentOperationRef.current = documentOperation
       const payload = await loadDocumentForChat(documentId, {
         signal: documentOperation.signal,
         intentOwner: documentOperation.owner,
@@ -153,7 +159,7 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
         documentId,
       }))
     } catch (uploadError) {
-      if (controller.signal.aborted) {
+      if (controller.signal.aborted || (documentOperation && !documentOperation.ownsLatest())) {
         return
       }
 
@@ -221,7 +227,8 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
     return () => {
       uploadAbortRef.current?.abort()
       uploadAbortRef.current = null
-      documentIntentRef.current.invalidate()
+      invalidateChatDocumentIntent(documentOperationRef.current)
+      documentOperationRef.current = null
     }
   }, [])
 

@@ -10,6 +10,11 @@ import {
   DOCUMENT_LOADING_STORAGE_KEY,
   DOCUMENT_LOAD_ERROR_EVENT,
 } from '@/features/documents/documentLoadEvents'
+import { beginChatDocumentIntent } from '@/features/documents/chatDocumentIntent'
+import {
+  dispatchChatDocumentChanged,
+  loadDocumentForChat,
+} from '@/features/documents/pdfUploadFlow'
 import HomePage from './HomePage'
 
 const mockUseAuth = vi.hoisted(() => vi.fn())
@@ -520,6 +525,131 @@ describe('HomePage durable session bootstrap', () => {
     })
 
     window.removeEventListener('chat-document-changed', chatDocumentChangedSpy as EventListener)
+  })
+
+  it('keeps a newer upload document when an older route load resolves last', async () => {
+    actualChatMode.enabled = true
+    const staleRouteLoad = deferred<Response>()
+    const loadBodies: Array<Record<string, unknown>> = []
+    const viewerDocumentChangedSpy = vi.fn()
+    window.addEventListener(
+      'pdf-viewer-document-changed',
+      viewerDocumentChangedSpy as EventListener,
+    )
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        return jsonResponse({
+          session_id: 'route-session',
+          created_at: '2026-05-07T15:00:00Z',
+          updated_at: '2026-05-07T15:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({ active: false, document: null })
+      }
+
+      if (url === '/api/chat/document') {
+        return jsonResponse({ active: false, document: null })
+      }
+
+      if (url === '/api/chat/document/load') {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        loadBodies.push(body)
+        if (body.document_id === 'doc-route') {
+          return staleRouteLoad.promise
+        }
+        if (body.document_id === 'doc-upload') {
+          return jsonResponse({
+            active: true,
+            document: { id: 'doc-upload', filename: 'upload.pdf' },
+          })
+        }
+      }
+
+      if (url === '/api/chat/conversation/reset') {
+        return jsonResponse({ session_id: 'route-session-reset' })
+      }
+
+      if (url === '/api/chat/conversation') {
+        return jsonResponse({
+          is_active: true,
+          memory_stats: { memory_sizes: { short_term: { file_count: 0, size_mb: 0 } } },
+        })
+      }
+
+      if (url === '/health/deep') {
+        return jsonResponse({ services: { weaviate: 'connected', curation_db: 'connected' } })
+      }
+
+      if (url === '/api/pdf-viewer/documents/doc-upload') {
+        return jsonResponse({ filename: 'upload.pdf', page_count: 4 })
+      }
+
+      if (url === '/api/pdf-viewer/documents/doc-upload/url') {
+        return jsonResponse({ viewer_url: '/viewer/doc-upload' })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage({
+      pathname: '/',
+      state: {
+        loadForChatDocument: { id: 'doc-route', filename: 'route.pdf' },
+      },
+    })
+
+    await waitFor(() => {
+      expect(loadBodies).toEqual([
+        expect.objectContaining({ document_id: 'doc-route' }),
+      ])
+    })
+
+    const uploadOperation = beginChatDocumentIntent()
+    const uploadPayload = await loadDocumentForChat('doc-upload', {
+      signal: uploadOperation.signal,
+      intentOwner: uploadOperation.owner,
+      intentGeneration: uploadOperation.generation,
+    })
+    expect(uploadOperation.ownsLatest()).toBe(true)
+    dispatchChatDocumentChanged(uploadPayload)
+
+    expect(await screen.findByText('Active PDF: upload.pdf')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(viewerDocumentChangedSpy).toHaveBeenCalledTimes(1)
+    })
+
+    staleRouteLoad.resolve(jsonResponse({
+      active: true,
+      document: { id: 'doc-route', filename: 'route.pdf' },
+    }))
+    await act(async () => staleRouteLoad.promise)
+
+    expect(loadBodies).toHaveLength(2)
+    expect(loadBodies.map((body) => body.document_id)).toEqual(['doc-route', 'doc-upload'])
+    expect(loadBodies[0].intent_owner).toBe(loadBodies[1].intent_owner)
+    expect(Number(loadBodies[1].intent_generation)).toBeGreaterThan(
+      Number(loadBodies[0].intent_generation),
+    )
+    expect(screen.getByText('Active PDF: upload.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('Active PDF: route.pdf')).not.toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-upload')
+    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-upload')
+    expect(viewerDocumentChangedSpy).toHaveBeenCalledTimes(1)
+    expect((viewerDocumentChangedSpy.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+      documentId: 'doc-upload',
+      viewerUrl: '/viewer/doc-upload',
+    })
+
+    window.removeEventListener(
+      'pdf-viewer-document-changed',
+      viewerDocumentChangedSpy as EventListener,
+    )
   })
 
   it('shows a viewer restore error instead of a stale timeout after route-state backend load succeeds', async () => {
