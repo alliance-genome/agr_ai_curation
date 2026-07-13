@@ -56,6 +56,8 @@ def _sanitize_batch_stream_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _batch_document_status_event(batch: Any, doc: Any) -> Dict[str, Any]:
+    stored_result_files = getattr(doc, "result_files", None)
+    stored_output_branches = getattr(doc, "output_branches", None)
     return {
         "type": "DOCUMENT_STATUS",
         "batch_id": str(batch.id),
@@ -64,10 +66,41 @@ def _batch_document_status_event(batch: Any, doc: Any) -> Dict[str, Any]:
         "position": doc.position,
         "status": doc.status.value,
         "result_file_path": doc.result_file_path,
+        "result_files": stored_result_files if isinstance(stored_result_files, list) else [],
+        "output_status": getattr(doc, "output_status", None),
+        "output_branches": (
+            stored_output_branches if isinstance(stored_output_branches, list) else []
+        ),
         "review_session_ids": doc.review_session_ids,
         "error_message": doc.error_message,
         "processing_time_ms": doc.processing_time_ms,
     }
+
+
+def _batch_partial_document_count(batch: Any) -> int:
+    """Count completed documents whose configured output branches were partial."""
+
+    return sum(
+        1
+        for doc in (getattr(batch, "documents", None) or [])
+        if getattr(doc, "output_status", None) == "partial"
+    )
+
+
+def _batch_document_result_files(doc: Any) -> list[dict[str, str]]:
+    """Return the authoritative manifest, with a legacy single-file fallback."""
+
+    raw_result_files = getattr(doc, "result_files", None)
+    if isinstance(raw_result_files, list):
+        result_files = [
+            dict(item)
+            for item in raw_result_files
+            if isinstance(item, dict) and item.get("download_url")
+        ]
+        if result_files:
+            return result_files
+    result_file_path = getattr(doc, "result_file_path", None)
+    return [{"download_url": result_file_path}] if result_file_path else []
 
 
 @router.post("", response_model=BatchResponse, status_code=201)
@@ -267,7 +300,7 @@ async def download_batch_zip(
 
     Creates a ZIP archive containing all result files from completed
     documents in the batch. Only includes documents with status=completed
-    and a valid result_file_path.
+    and at least one valid result-file manifest entry.
 
     Reads files directly from disk to avoid authentication issues with
     internal HTTP requests (browser uses cookies, not Authorization headers).
@@ -286,6 +319,7 @@ async def download_batch_zip(
     """
     import io
     import re
+    import tempfile
     import zipfile
     from pathlib import Path
     from ..models.sql.file_output import FileOutput
@@ -300,7 +334,8 @@ async def download_batch_zip(
     # Get completed documents with result files
     completed_docs = [
         doc for doc in batch.documents
-        if doc.status == BatchDocumentStatus.COMPLETED and doc.result_file_path
+        if doc.status == BatchDocumentStatus.COMPLETED
+        and _batch_document_result_files(doc)
     ]
 
     if not completed_docs:
@@ -309,93 +344,110 @@ async def download_batch_zip(
             detail="No completed documents with results to download"
         )
 
-    # Create ZIP in memory
-    zip_buffer = io.BytesIO()
+    # Build on disk so aggregate multi-output batches cannot exhaust application RAM.
+    zip_buffer = tempfile.TemporaryFile(mode="w+b")
     files_added = 0
 
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for doc in completed_docs:
-            try:
-                # Extract file_id from result_file_path URL
-                # Format: /api/files/{file_id}/download
-                match = re.search(r'/api/files/([a-f0-9-]+)/download', doc.result_file_path)
-                if not match:
-                    logger.warning(
-                        "Could not extract file_id from result_file_path: doc_id=%s, path=%s",
-                        doc.document_id, doc.result_file_path
-                    )
-                    continue
-
-                file_id = match.group(1)
-
-                # Look up the FileOutput record to get the actual file path
-                file_output = db.query(FileOutput).filter(
-                    FileOutput.id == file_id
-                ).first()
-
-                if not file_output:
-                    logger.warning(
-                        "FileOutput not found: doc_id=%s, file_id=%s",
-                        doc.document_id, file_id
-                    )
-                    continue
-
-                # Verify the file belongs to this user (security check)
-                curator_id = user.get("sub") or user.get("uid", "unknown")
-                if file_output.curator_id != curator_id:
-                    logger.warning(
-                        "File ownership mismatch: doc_id=%s, file_id=%s, "
-                        "expected_curator=%s, actual_curator=%s",
-                        doc.document_id, file_id, curator_id, file_output.curator_id
-                    )
-                    continue
-
-                # Read file directly from disk with path traversal protection
-                from ..lib.file_outputs.storage import FileOutputStorageService
-                storage = FileOutputStorageService()
-                file_path = Path(file_output.file_path)
-
-                # Validate path is within storage directory (security check)
+            for output_position, result_file in enumerate(
+                _batch_document_result_files(doc),
+                start=1,
+            ):
                 try:
-                    resolved_path = file_path.resolve()
-                    base_path = storage.base_path.resolve()
-                    if not resolved_path.is_relative_to(base_path):
+                    # Format: /api/files/{file_id}/download
+                    result_file_path = result_file["download_url"]
+                    match = re.search(
+                        r'/api/files/([a-f0-9-]+)/download',
+                        result_file_path,
+                    )
+                    if not match:
                         logger.warning(
-                            "Path traversal attempt in batch ZIP: doc_id=%s, path=%s",
-                            doc.document_id, file_output.file_path
+                            "Could not extract file_id from batch result: "
+                            "doc_id=%s, path=%s",
+                            doc.document_id,
+                            result_file_path,
                         )
                         continue
-                except (ValueError, Exception) as e:
-                    logger.warning(
-                        "Invalid file path in batch ZIP: doc_id=%s, path=%s, error=%s",
-                        doc.document_id, file_output.file_path, str(e)
+
+                    file_id = match.group(1)
+
+                    file_output = db.query(FileOutput).filter(
+                        FileOutput.id == file_id
+                    ).first()
+
+                    if not file_output:
+                        logger.warning(
+                            "FileOutput not found: doc_id=%s, file_id=%s",
+                            doc.document_id,
+                            file_id,
+                        )
+                        continue
+
+                    curator_id = user.get("sub") or user.get("uid", "unknown")
+                    if file_output.curator_id != curator_id:
+                        logger.warning(
+                            "File ownership mismatch: doc_id=%s, file_id=%s, "
+                            "expected_curator=%s, actual_curator=%s",
+                            doc.document_id,
+                            file_id,
+                            curator_id,
+                            file_output.curator_id,
+                        )
+                        continue
+
+                    from ..lib.file_outputs.storage import FileOutputStorageService
+
+                    storage = FileOutputStorageService()
+                    file_path = Path(file_output.file_path)
+
+                    try:
+                        resolved_path = file_path.resolve()
+                        base_path = storage.base_path.resolve()
+                        if not resolved_path.is_relative_to(base_path):
+                            logger.warning(
+                                "Path traversal attempt in batch ZIP: "
+                                "doc_id=%s, path=%s",
+                                doc.document_id,
+                                file_output.file_path,
+                            )
+                            continue
+                    except Exception as e:
+                        logger.warning(
+                            "Invalid file path in batch ZIP: doc_id=%s, "
+                            "path=%s, error=%s",
+                            doc.document_id,
+                            file_output.file_path,
+                            str(e),
+                        )
+                        continue
+
+                    if not resolved_path.exists():
+                        logger.warning(
+                            "File not found on disk: doc_id=%s, path=%s",
+                            doc.document_id,
+                            file_output.file_path,
+                        )
+                        continue
+
+                    filename = (
+                        f"{doc.position + 1:03d}_{output_position:02d}_"
+                        f"{file_output.filename}"
                     )
-                    continue
 
-                if not resolved_path.exists():
+                    zip_file.write(resolved_path, arcname=filename)
+                    logger.info("Added to ZIP: %s", filename)
+                    files_added += 1
+
+                except Exception as e:
                     logger.warning(
-                        "File not found on disk: doc_id=%s, path=%s",
-                        doc.document_id, file_output.file_path
+                        "Error reading result file: doc_id=%s, error=%s",
+                        doc.document_id,
+                        str(e),
                     )
-                    continue
-
-                # Read file content
-                file_content = resolved_path.read_bytes()
-
-                # Use original filename with position prefix
-                filename = f"{doc.position + 1:03d}_{file_output.filename}"
-
-                zip_file.writestr(filename, file_content)
-                logger.info("Added to ZIP: %s (%d bytes)", filename, len(file_content))
-                files_added += 1
-
-            except Exception as e:
-                logger.warning(
-                    "Error reading result file: doc_id=%s, error=%s",
-                    doc.document_id, str(e)
-                )
 
     if files_added == 0:
+        zip_buffer.close()
         raise HTTPException(
             status_code=400,
             detail="No downloadable result files available for this batch",
@@ -403,11 +455,17 @@ async def download_batch_zip(
 
     zip_buffer.seek(0)
 
-    # Generate filename with batch info
+    def iter_zip_file():
+        try:
+            for chunk in iter(lambda: zip_buffer.read(io.DEFAULT_BUFFER_SIZE), b""):
+                yield chunk
+        finally:
+            zip_buffer.close()
+
     filename = f"batch_{batch_id}_results.zip"
 
     return StreamingResponse(
-        iter([zip_buffer.getvalue()]),
+        iter_zip_file(),
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
@@ -485,6 +543,7 @@ async def stream_batch_progress(
                     "total_documents": batch.total_documents,
                     "completed_documents": batch.completed_documents,
                     "failed_documents": batch.failed_documents,
+                    "partial_documents": _batch_partial_document_count(batch),
                 }
                 yield f"data: {json.dumps(event)}\n\n"
                 last_completed = batch.completed_documents
@@ -553,6 +612,7 @@ async def stream_batch_progress(
                         "total_documents": batch.total_documents,
                         "completed_documents": batch.completed_documents,
                         "failed_documents": batch.failed_documents,
+                        "partial_documents": _batch_partial_document_count(batch),
                     }
                     yield f"data: {json.dumps(status_event)}\n\n"
                     last_completed = batch.completed_documents
@@ -567,6 +627,7 @@ async def stream_batch_progress(
                         "total_documents": batch.total_documents,
                         "completed_documents": batch.completed_documents,
                         "failed_documents": batch.failed_documents,
+                        "partial_documents": _batch_partial_document_count(batch),
                         "started_at": batch.started_at.isoformat() if batch.started_at else None,
                         "completed_at": batch.completed_at.isoformat() if batch.completed_at else None,
                     }

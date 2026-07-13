@@ -157,6 +157,7 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const hasError = data.hasError
   const isTaskInput = data.agent_id === 'task_input'
+  const isOutputFormatter = Boolean(data.outputBinding)
 
   // For task_input nodes, show task_instructions; for agents, show custom_instructions
   const previewText = isTaskInput
@@ -215,6 +216,22 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
           </StepPreview>
         </Tooltip>
 
+        {isOutputFormatter && (
+          <ValidationSummary>
+            {data.outputBinding?.status === 'bound' ? (
+              <ValidationPill>
+                {data.outputBinding.sourceLabel} → output
+              </ValidationPill>
+            ) : (
+              <ValidationPill sx={{ color: 'error.main', bgcolor: (theme) => alpha(theme.palette.error.main, 0.08) }}>
+                {data.outputBinding?.status === 'multiple'
+                  ? 'Multiple output sources'
+                  : 'Output source required'}
+              </ValidationPill>
+            )}
+          </ValidationSummary>
+        )}
+
         {(envelopeObjectCount > 0 || validationAttachments.length > 0) && (
           <ValidationSummary>
             {envelopeObjectCount > 0 && (
@@ -240,7 +257,7 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
       </NodeContainer>
 
       {/* Output handle (bottom) */}
-      <HandleStyled type="source" position={Position.Bottom} />
+      {!isOutputFormatter && <HandleStyled type="source" position={Position.Bottom} />}
     </>
   )
 }

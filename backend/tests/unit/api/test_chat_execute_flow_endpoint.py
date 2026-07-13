@@ -506,7 +506,7 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert calls["clear"] == ["session-flow-1"]
 
 
-def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transcript(monkeypatch):
+def test_execute_flow_endpoint_suppresses_duplicates_but_preserves_distinct_files(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-file-dedupe")
     flow = SimpleNamespace(
@@ -540,6 +540,17 @@ def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transc
             },
         }
         yield {
+            "type": "FILE_READY",
+            "details": {
+                "file_id": "file-2",
+                "filename": "trace_gene_results.json",
+                "format": "json",
+                "size_bytes": 30,
+                "formatter_node_id": "json-output",
+                "source_node_id": "gene-extraction",
+            },
+        }
+        yield {
             "type": "FLOW_FINISHED",
             "data": {
                 "status": "completed",
@@ -561,8 +572,9 @@ def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transc
     events = asyncio.run(_consume_stream(response))
 
     streamed_file_events = [event for event in events if event["type"] == "FILE_READY"]
-    assert len(streamed_file_events) == 1
+    assert len(streamed_file_events) == 2
     assert streamed_file_events[0]["details"]["size_bytes"] == 10
+    assert streamed_file_events[1]["details"]["file_id"] == "file-2"
 
     repository = calls["repository"]
     assert isinstance(repository, _FakeChatHistoryRepository)
@@ -572,7 +584,7 @@ def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transc
         for message in stored_messages
         if message.message_type == "file_download"
     ]
-    assert len(transcript_file_rows) == 1
+    assert len(transcript_file_rows) == 2
     assert transcript_file_rows[0].payload_json["details"]["size_bytes"] == 10
     summary_message = next(
         message
@@ -580,6 +592,9 @@ def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transc
         if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
     )
     assert "trace_gene_results.csv" in summary_message.payload_json[
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+    ]
+    assert "trace_gene_results.json" in summary_message.payload_json[
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
 
@@ -674,7 +689,17 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-title"}}
         yield {
             "type": "CHAT_OUTPUT_READY",
-            "details": {"output": "Assistant flow answer"},
+            "details": {
+                "output": "Allele branch answer",
+                "formatter_node_id": "allele-chat",
+            },
+        }
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {
+                "output": "Gene branch answer",
+                "formatter_node_id": "gene-chat",
+            },
         }
         yield {
             "type": "FLOW_FINISHED",
@@ -711,8 +736,27 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
         "CHAT_OUTPUT_READY",
+        "CHAT_OUTPUT_READY",
         "FLOW_FINISHED",
     ]
+    repository = calls["repository"]
+    summary_message = next(
+        message
+        for message in repository.messages[("auth-sub", "session-flow-title")]
+        if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    )
+    assistant_message = summary_message.payload_json[
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+    ]
+    assert "Allele branch answer" in assistant_message
+    assert "Gene branch answer" in assistant_message
+    assert [
+        event["details"]["formatter_node_id"]
+        for event in summary_message.payload_json[
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY
+        ]
+        if event["type"] == "CHAT_OUTPUT_READY"
+    ] == ["allele-chat", "gene-chat"]
     assert captured_backfill_calls == [
         ("session-flow-title", "auth-sub", "assistant-aware-flow-title")
     ]

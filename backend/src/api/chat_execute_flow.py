@@ -852,6 +852,8 @@ async def execute_flow_endpoint(
         flow_failure_reason: Optional[str] = None
         run_finished_response = ""
         chat_output_response = ""
+        chat_output_responses: List[str] = []
+        chat_output_identities: set[str] = set()
         agents_used: List[str] = []
         extraction_result_refs: List[Dict[str, Any]] = []
         review_session_ids: List[str] = []
@@ -860,7 +862,7 @@ async def execute_flow_endpoint(
         file_outputs: List[Dict[str, Any]] = []
         transcript_rows: List[ExecuteFlowTranscriptRow] = []
         run_started_event: Optional[Dict[str, Any]] = None
-        chat_output_ready_event: Optional[Dict[str, Any]] = None
+        chat_output_ready_events: List[Dict[str, Any]] = []
         run_error_event: Optional[Dict[str, Any]] = None
         buffered_flow_finished_event: Optional[Dict[str, Any]] = None
 
@@ -928,7 +930,16 @@ async def execute_flow_endpoint(
                         if agent_name
                     ])
                 elif event_type == "CHAT_OUTPUT_READY":
-                    chat_output_response = str(event_details.get("output") or event_data.get("output") or "")
+                    chat_output = str(
+                        event_details.get("output") or event_data.get("output") or ""
+                    ).strip()
+                    chat_output_identity = str(
+                        event_details.get("formatter_node_id") or chat_output
+                    )
+                    if chat_output and chat_output_identity not in chat_output_identities:
+                        chat_output_identities.add(chat_output_identity)
+                        chat_output_responses.append(chat_output)
+                        chat_output_response = "\n\n".join(chat_output_responses)
                 elif event_type == "CREW_START":
                     crew_name = event_details.get("crewDisplayName") or event_details.get("crewName")
                     if crew_name:
@@ -990,7 +1001,11 @@ async def execute_flow_endpoint(
                 if event_type == "RUN_STARTED":
                     run_started_event = dict(flat_event)
                 elif event_type == "CHAT_OUTPUT_READY":
-                    chat_output_ready_event = dict(flat_event)
+                    if not any(
+                        existing.get("details") == flat_event.get("details")
+                        for existing in chat_output_ready_events
+                    ):
+                        chat_output_ready_events.append(dict(flat_event))
                 elif event_type == "RUN_ERROR":
                     raw_message = str(flat_event.get("message") or "").strip()
                     if raw_message:
@@ -1070,7 +1085,7 @@ async def execute_flow_endpoint(
                     terminal_events=[
                         event_payload
                         for event_payload in [
-                            chat_output_ready_event,
+                            *chat_output_ready_events,
                             run_error_event,
                             buffered_flow_finished_event,
                         ]

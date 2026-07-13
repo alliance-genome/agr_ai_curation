@@ -87,12 +87,38 @@ const isValidAuditEventType = (type: string): type is AuditEventType => {
 type BatchStatus = 'setup' | 'running' | 'completed' | 'cancelled';
 type DocumentStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
+interface BatchResultFile {
+  file_id?: string;
+  filename?: string;
+  download_url: string;
+  format?: string;
+  formatter_node_id?: string;
+  source_node_id?: string;
+  formatter_label?: string;
+  source_label?: string;
+  source_extraction_result_ids?: string[];
+  source_keys?: string[];
+  source_envelope_ids?: string[];
+}
+
+interface BatchOutputBranch {
+  source_node_id: string;
+  output_node_id: string;
+  formatter_label?: string;
+  source_label?: string;
+  status: 'completed' | 'missing';
+  failure_reason?: string;
+}
+
 interface BatchDocument {
   id: string;
   document_id: string;
   title: string;
   status: DocumentStatus;
   result_file_path?: string;
+  result_files?: BatchResultFile[];
+  output_status?: 'complete' | 'partial' | 'none' | 'failed';
+  output_branches?: BatchOutputBranch[];
   error_message?: string;
   processing_time_ms?: number;
   trace_id?: string;  // Langfuse trace ID for debugging
@@ -196,7 +222,7 @@ const BatchPage: React.FC = () => {
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
-    severity: 'success' | 'error' | 'info';
+    severity: 'success' | 'error' | 'info' | 'warning';
   }>({ open: false, message: '', severity: 'info' });
 
   // Document actions menu state
@@ -404,6 +430,9 @@ const BatchPage: React.FC = () => {
                     ...d,
                     status: docStatus,
                     result_file_path: data.result_file_path ?? data.data?.result_file_path ?? d.result_file_path,
+                    result_files: data.result_files ?? data.data?.result_files ?? d.result_files,
+                    output_status: data.output_status ?? data.data?.output_status ?? d.output_status,
+                    output_branches: data.output_branches ?? data.data?.output_branches ?? d.output_branches,
                     error_message: data.error_message ?? data.data?.error_message ?? d.error_message,
                     processing_time_ms: data.processing_time_ms ?? data.data?.processing_time_ms ?? d.processing_time_ms,
                     trace_id: data.trace_id ?? data.data?.trace_id ?? d.trace_id,
@@ -419,7 +448,9 @@ const BatchPage: React.FC = () => {
             const status = data.status ?? data.data?.status;
             const completedDocs = data.completed_documents ?? data.data?.completed_documents ?? 0;
             const failedDocs = data.failed_documents ?? data.data?.failed_documents ?? 0;
+            const partialDocs = data.partial_documents ?? data.data?.partial_documents ?? 0;
             const totalDocs = data.total_documents ?? data.data?.total_documents ?? 0;
+            const fullySuccessfulDocs = Math.max(0, completedDocs - partialDocs);
 
             // Add completion audit event
             addAuditEvent({
@@ -429,7 +460,7 @@ const BatchPage: React.FC = () => {
               details: {
                 message: status === 'cancelled'
                   ? 'Batch processing cancelled'
-                  : `Batch completed: ${completedDocs} successful, ${failedDocs} failed`,
+                  : `Batch completed: ${fullySuccessfulDocs} successful, ${partialDocs} partial, ${failedDocs} failed`,
                 totalSteps: totalDocs,
               },
             });
@@ -452,8 +483,14 @@ const BatchPage: React.FC = () => {
             } else if (failedDocs > 0) {
               setSnackbar({
                 open: true,
-                message: `Batch completed: ${completedDocs} succeeded, ${failedDocs} failed`,
+                message: `Batch completed: ${fullySuccessfulDocs} complete, ${partialDocs} partial, ${failedDocs} failed`,
                 severity: 'error',
+              });
+            } else if (partialDocs > 0) {
+              setSnackbar({
+                open: true,
+                message: `Batch completed with partial output: ${fullySuccessfulDocs} complete, ${partialDocs} partial`,
+                severity: 'warning',
               });
             } else {
               setSnackbar({
@@ -550,6 +587,9 @@ const BatchPage: React.FC = () => {
               title: doc.document_title || `Document ${doc.position + 1}`,
               status: doc.status,
               result_file_path: doc.result_file_path,
+              result_files: doc.result_files,
+              output_status: doc.output_status,
+              output_branches: doc.output_branches,
               error_message: doc.error_message,
               processing_time_ms: doc.processing_time_ms,
               trace_id: doc.trace_id,
@@ -667,14 +707,30 @@ const BatchPage: React.FC = () => {
     navigate('/weaviate/documents');
   };
 
-  // Download a single result file
-  const handleDownloadFile = (doc: BatchDocument) => {
-    if (!doc.result_file_path) {
-      console.error('No result file path for document:', doc.document_id);
-      return;
+  const getResultFiles = (doc: BatchDocument): BatchResultFile[] => {
+    if (doc.result_files?.length) {
+      return doc.result_files;
     }
-    // result_file_path is the download URL from the file output tool
-    window.open(doc.result_file_path, '_blank');
+    return doc.result_file_path
+      ? [{ download_url: doc.result_file_path }]
+      : [];
+  };
+
+  const getMissingOutputSummary = (doc: BatchDocument): string => {
+    return (doc.output_branches ?? [])
+      .filter((branch) => branch.status === 'missing')
+      .map((branch) => {
+        const label = branch.formatter_label ?? branch.output_node_id;
+        return branch.failure_reason
+          ? `${label}: ${branch.failure_reason}`
+          : `${label}: no output`;
+      })
+      .join(' · ');
+  };
+
+  // Download one formatter branch result.
+  const handleDownloadFile = (resultFile: BatchResultFile) => {
+    window.open(resultFile.download_url, '_blank');
   };
 
   // Download all results as ZIP
@@ -806,6 +862,9 @@ const BatchPage: React.FC = () => {
           title: doc.document_title || `Document ${doc.position + 1}`,
           status: doc.status,
           result_file_path: doc.result_file_path,
+          result_files: doc.result_files,
+          output_status: doc.output_status,
+          output_branches: doc.output_branches,
           error_message: doc.error_message,
           processing_time_ms: doc.processing_time_ms,
           trace_id: doc.trace_id,
@@ -1179,17 +1238,21 @@ const BatchPage: React.FC = () => {
                   >
                     <MoreVertIcon fontSize="small" />
                   </IconButton>
-                  {doc.status === 'completed' && doc.result_file_path && (
-                    <Tooltip title="Download">
+                  {doc.status === 'completed' && getResultFiles(doc).map((resultFile, index) => (
+                    <Tooltip
+                      key={resultFile.file_id ?? resultFile.download_url}
+                      title={`${resultFile.filename ? `Download ${resultFile.filename}` : `Download result ${index + 1}`}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`}
+                    >
                       <IconButton
                         edge="end"
                         size="small"
-                        onClick={() => handleDownloadFile(doc)}
+                        aria-label={resultFile.filename ? `Download ${resultFile.filename}` : `Download result ${index + 1}`}
+                        onClick={() => handleDownloadFile(resultFile)}
                       >
                         <DownloadIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
-                  )}
+                  ))}
                 </Box>
               }
             >
@@ -1199,7 +1262,13 @@ const BatchPage: React.FC = () => {
               <ListItemText
                 primary={doc.title}
                 secondary={
-                  doc.status === 'failed' ? doc.error_message : undefined
+                  doc.status === 'failed'
+                    ? doc.error_message
+                    : getResultFiles(doc).length
+                      ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${getResultFiles(doc)
+                        .map((resultFile, index) => `${resultFile.filename ?? `Result ${index + 1}`}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
+                        .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}`
+                      : undefined
                 }
                 primaryTypographyProps={{ noWrap: true }}
                 sx={{ pr: 2 }}

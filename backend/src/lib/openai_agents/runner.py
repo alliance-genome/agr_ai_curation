@@ -1584,6 +1584,11 @@ async def _run_agent_with_tracing(
                                             "mime_type": output_data.get("mime_type"),
                                             "download_url": output_data.get("download_url"),
                                             "created_at": output_data.get("created_at"),
+                                            "flow_id": output_data.get("flow_id"),
+                                            "flow_run_id": output_data.get("flow_run_id"),
+                                            "formatter_node_id": output_data.get("formatter_node_id"),
+                                            "source_node_id": output_data.get("source_node_id"),
+                                            "document_id": output_data.get("document_id"),
                                         }
                                     }
                                     write_stream_event(file_ready_event, trace_id=trace_id)

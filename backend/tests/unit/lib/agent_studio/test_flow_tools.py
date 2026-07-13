@@ -105,7 +105,7 @@ def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
 
     assert result["valid"] is True
     assert any("Consider adding 'pdf_extraction'" in s for s in result["suggestions"])
-    assert any("Consider adding 'chat_output'" in s for s in result["suggestions"])
+    assert any("Consider attaching 'chat_output'" in s for s in result["suggestions"])
 
 
 def test_validate_flow_handler_only_mentions_installed_agent_ids(monkeypatch):
@@ -494,6 +494,92 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
     )
 
 
+def test_get_current_flow_handler_explains_output_attachment_binding():
+    handler = flow_tools._get_current_flow_handler()
+    flow_tools.set_current_flow_context(
+        {
+            "flow_name": "Multiple Export Flow",
+            "version": "1.1",
+            "nodes": [
+                {
+                    "id": "task_input_0",
+                    "type": "task_input",
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "Extract alleles and genes.",
+                        "output_key": "task_input",
+                    },
+                },
+                {
+                    "id": "allele_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "allele",
+                        "agent_display_name": "Allele Extraction",
+                        "output_key": "alleles",
+                    },
+                },
+                {
+                    "id": "allele_csv",
+                    "type": "output",
+                    "data": {
+                        "agent_id": "csv_formatter",
+                        "agent_display_name": "Allele CSV",
+                        "output_key": "allele_csv",
+                    },
+                },
+                {
+                    "id": "gene_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "gene",
+                        "agent_display_name": "Gene Extraction",
+                        "output_key": "genes",
+                    },
+                },
+            ],
+            "edges": [
+                {
+                    "id": "control_1",
+                    "source": "task_input_0",
+                    "target": "allele_1",
+                    "role": "control_flow",
+                },
+                {
+                    "id": "output_1",
+                    "source": "allele_1",
+                    "target": "allele_csv",
+                    "role": "output_attachment",
+                },
+                {
+                    "id": "control_2",
+                    "source": "allele_1",
+                    "target": "gene_1",
+                    "role": "control_flow",
+                },
+            ],
+        }
+    )
+
+    result = handler()
+
+    assert result["success"] is True
+    assert [step["node_id"] for step in result["steps"]] == [
+        "allele_1",
+        "allele_csv",
+        "gene_1",
+    ]
+    formatter_step = result["steps"][1]
+    assert formatter_step["output_attachment"]["source_node_id"] == "allele_1"
+    assert formatter_step["output_attachment"]["source_agent_id"] == "allele"
+    assert result["edges"][1]["role"] == "output_attachment"
+    markdown = result["execution_order_markdown"]
+    assert "Formatter output branches" in markdown
+    assert "Multiple formatter branches create multiple independent" in markdown
+    assert "Only projects the result owned by Allele Extraction" in markdown
+
+
 def test_get_current_flow_handler_flags_attachment_only_validator_step(monkeypatch):
     handler = flow_tools._get_current_flow_handler()
     monkeypatch.setattr(
@@ -765,11 +851,25 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     create = flow_tools._create_flow_handler()
 
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 123)
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "gene", "csv_formatter"],
+    )
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
-        {"pdf_extraction": {"name": "PDF Specialist"}, "gene": {"name": "Gene Specialist"}},
+        {
+            "pdf_extraction": {
+                "name": "PDF Specialist",
+                "category": "Extraction",
+            },
+            "gene": {"name": "Gene Specialist", "category": "Validation"},
+            "csv_formatter": {
+                "name": "CSV Formatter",
+                "category": "Output",
+            },
+        },
     )
 
     import src.models.sql as sql_module
@@ -789,6 +889,46 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     assert result["success"] is True
     assert "flow_id" in result
     assert success_db.closed is True
+
+    branch_db = _FakeDB()
+    monkeypatch.setattr(sql_module, "get_db", _gen_db(branch_db))
+    branch_result = create(
+        name="Branched Output Flow",
+        description="Extract and export while retaining the control chain",
+        steps=[
+            {"agent_id": "pdf_extraction", "step_goal": "extract"},
+            {
+                "agent_id": "csv_formatter",
+                "source_step": 1,
+                "output_filename_template": (
+                    "{{input_filename_stem}}-{{timestamp}}.csv"
+                ),
+            },
+            {"agent_id": "gene", "step_goal": "validate"},
+        ],
+    )
+    assert branch_result["success"] is True, branch_result
+    assert branch_db.added.flow_definition["version"] == "1.1"
+    assert [node["type"] for node in branch_db.added.flow_definition["nodes"]] == [
+        "task_input",
+        "agent",
+        "output",
+        "agent",
+    ]
+    assert branch_db.added.flow_definition["edges"][1] == {
+        "id": "output_edge_2",
+        "source": "step_1",
+        "target": "step_2",
+        "role": "output_attachment",
+        "satisfies_binding_id": None,
+        "replaces_attachment_id": None,
+        "condition": None,
+    }
+    assert branch_db.added.flow_definition["edges"][2]["source"] == "step_1"
+    assert branch_db.added.flow_definition["edges"][2]["target"] == "step_3"
+    assert branch_db.added.flow_definition["nodes"][2]["data"][
+        "output_filename_template"
+    ] == "{{input_filename_stem}}-{{timestamp}}.csv"
 
     dup_db = _FakeDB(commit_side_effect=Exception("uq_user_flow_name_active"))
     monkeypatch.setattr(sql_module, "get_db", _gen_db(dup_db))
@@ -961,3 +1101,9 @@ def test_register_flow_tools_registers_five_tools(monkeypatch):
     ]
     assert all(entry["category"] == "flows" for entry in registrations)
     assert all(callable(entry["handler"]) for entry in registrations)
+    create_flow_schema = registrations[0]["input_schema"]
+    step_properties = create_flow_schema["properties"]["steps"]["items"][
+        "properties"
+    ]
+    assert "source_step" in step_properties
+    assert "output_filename_template" in step_properties

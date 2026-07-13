@@ -4,6 +4,14 @@ import { isExtractionAgent, isValidationAgent } from './smartDefaultUtils'
 
 type AgentMetadataLookup = Record<string, AgentMetadata>
 
+const SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS = new Set([
+  'chat_output',
+  'chat_output_formatter',
+  'csv_formatter',
+  'tsv_formatter',
+  'json_formatter',
+])
+
 interface MetadataClassification {
   categoryIncludes?: string[]
   subcategoryIncludes?: string[]
@@ -59,12 +67,8 @@ export const isValidationAgentFromMetadata = (
 
 export const isOutputFormatterAgentFromMetadata = (
   agentId: string,
-  agentMetadata: AgentMetadataLookup
-): boolean =>
-  matchesMetadataClassification(agentId, agentMetadata, {
-    categoryIncludes: ['output'],
-    subcategoryIncludes: ['output', 'format'],
-  })
+  _agentMetadata: AgentMetadataLookup
+): boolean => SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS.has(agentId)
 
 export const resolveOutputFormatterIncludeEvidence = (
   agentId: string,

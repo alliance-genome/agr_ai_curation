@@ -58,10 +58,16 @@ class _ProjectedFileOutputStore:
         file_type: str,
         descriptor: str,
         file_path: str,
+        branch_identity: str | None,
     ) -> Any | None:
         for row in self.rows:
             if str(row.file_path) == str(file_path):
-                return row
+                metadata = row.file_metadata or {}
+                if branch_identity is None or (
+                    isinstance(metadata, dict)
+                    and metadata.get("flow_output_branch_identity") == branch_identity
+                ):
+                    return row
 
         for row in self.rows:
             metadata = row.file_metadata or {}
@@ -73,6 +79,10 @@ class _ProjectedFileOutputStore:
                 and row.file_type == file_type
                 and metadata.get("structured_projection") is True
                 and str(metadata.get("descriptor") or "") == descriptor
+                and (
+                    branch_identity is None
+                    or metadata.get("flow_output_branch_identity") == branch_identity
+                )
             ):
                 return row
         return None
@@ -277,6 +287,88 @@ class TestSaveProjectedFileOutput:
         assert Path(saved_tsv.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
             "symbol\nDeltaGene\n"
         )
+
+    @pytest.mark.asyncio
+    async def test_flow_formatter_branches_with_same_descriptor_do_not_overwrite(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from src.lib.file_outputs import FileOutputStorageService
+        from src.lib.flows.output_projection import (
+            FlowOutputColumnSpec,
+            FlowOutputProjectionResult,
+        )
+        from src.lib.openai_agents.tools import file_output_tools
+        from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
+
+        trace_id = uuid4().hex
+        set_current_trace_id(trace_id)
+        set_current_session_id("session-branch-files")
+        set_current_user_id("curator-branch-files")
+        storage = FileOutputStorageService(base_path=tmp_path)
+        monkeypatch.setattr(file_output_tools, "FileOutputStorageService", lambda: storage)
+        store = _install_projected_file_output_store(monkeypatch, file_output_tools)
+
+        def projection(symbol: str) -> FlowOutputProjectionResult:
+            return FlowOutputProjectionResult(
+                format="csv",
+                row_source="object",
+                columns=[FlowOutputColumnSpec(key="symbol", field_ref="object.payload.symbol")],
+                rows=[{"symbol": symbol}],
+                total_count=1,
+            )
+
+        context = _context_module()
+        context.set_current_flow_output_attachment(
+            {
+                "flow_id": "flow-1",
+                "flow_run_id": "run-1",
+                "formatter_node_id": "formatter_branch_shared_prefix_alleles",
+                "source_node_id": "allele_extract",
+                "formatter_label": "Allele CSV",
+                "source_label": "Allele Extraction",
+                "source_extraction_result_ids": ["result-allele"],
+                "source_keys": ["flow-step:1:allele_extractor"],
+                "source_envelope_ids": ["envelope-allele"],
+                "document_id": "doc-1",
+            }
+        )
+        allele_file = await save_projected_file_output(
+            "csv", projection("wg[1]"), "results", "csv_formatter"
+        )
+        context.set_current_flow_output_attachment(
+            {
+                "flow_id": "flow-1",
+                "flow_run_id": "run-1",
+                "formatter_node_id": "formatter_branch_shared_prefix_genes",
+                "source_node_id": "gene_extract",
+                "document_id": "doc-1",
+            }
+        )
+        gene_file = await save_projected_file_output(
+            "csv", projection("wg"), "results", "csv_formatter"
+        )
+
+        assert allele_file["file_id"] != gene_file["file_id"]
+        assert allele_file["filename"] != gene_file["filename"]
+        assert allele_file["filename"].startswith(f"{trace_id}_results_")
+        assert allele_file["formatter_label"] == "Allele CSV"
+        assert allele_file["source_label"] == "Allele Extraction"
+        assert allele_file["source_extraction_result_ids"] == ["result-allele"]
+        assert allele_file["source_envelope_ids"] == ["envelope-allele"]
+        assert gene_file["filename"].startswith(f"{trace_id}_results_")
+        assert len(store.rows) == 2
+        assert {row.file_metadata["source_node_id"] for row in store.rows} == {
+            "allele_extract",
+            "gene_extract",
+        }
+        assert all(row.file_metadata["projection_summary"]["row_count"] == 1 for row in store.rows)
+        allele_row = next(
+            row for row in store.rows if row.file_metadata["source_node_id"] == "allele_extract"
+        )
+        assert allele_row.file_metadata["source_keys"] == ["flow-step:1:allele_extractor"]
+        assert allele_row.file_metadata["source_envelope_ids"] == ["envelope-allele"]
 
     @pytest.mark.asyncio
     async def test_projected_save_reuses_structured_row_by_trace_descriptor_and_format(

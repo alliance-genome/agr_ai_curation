@@ -254,19 +254,27 @@ export interface ChatMessage {
 
 // Flow definition for context (simplified version for chat)
 export interface FlowContextDefinition {
+  version: '1.0' | '1.1'
   nodes: Array<{
     id: string
+    node_type: 'agent' | 'decision' | 'output' | 'task_input'
     agent_id: string
     agent_display_name: string
     task_instructions?: string  // For task_input nodes
     custom_instructions?: string
+    include_evidence?: boolean
     output_filename_template?: string
+    projection_plan?: Record<string, unknown>
     output_key: string
     validation_attachments?: Array<Record<string, unknown>>
   }>
   edges: Array<{
+    id: string
     source: string
     target: string
+    role?: 'control_flow' | 'output_attachment' | 'validation_attachment'
+    satisfies_binding_id?: string
+    replaces_attachment_id?: string
   }>
 }
 

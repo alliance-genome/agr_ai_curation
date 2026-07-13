@@ -77,7 +77,7 @@ class Batch(Base):
 class BatchDocument(Base):
     """Per-document tracking within a batch.
 
-    Tracks processing status, result file path, and error messages for
+    Tracks processing status, result-file manifests, and error messages for
     each document in the batch. State is saved after each document completes.
     """
     __tablename__ = "batch_documents"
@@ -97,7 +97,13 @@ class BatchDocument(Base):
         Enum(BatchDocumentStatus, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False, default=BatchDocumentStatus.PENDING
     )
+    # Compatibility alias for clients that only understand the first result.
     result_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Authoritative ordered manifest for all formatter branches.
+    result_files: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+    output_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Durable formatter-branch outcomes, including missing branches and reasons.
+    output_branches: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     review_session_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     processing_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

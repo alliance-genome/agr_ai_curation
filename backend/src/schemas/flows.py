@@ -264,7 +264,10 @@ class FlowEdge(BaseModel):
     target: str = Field(..., description="Target node ID")
     role: FlowEdgeRole = Field(
         DEFAULT_FLOW_EDGE_ROLE,
-        description="Edge role: ordinary control flow or validator sidecar attachment",
+        description=(
+            "Edge role: ordinary control flow, formatter output attachment, "
+            "or validator sidecar attachment"
+        ),
     )
     satisfies_binding_id: Optional[str] = Field(
         None,
@@ -300,9 +303,9 @@ class FlowEdge(BaseModel):
                 "validation_attachment edges must name exactly one "
                 "satisfies_binding_id or replaces_attachment_id"
             )
-        if self.role == DEFAULT_FLOW_EDGE_ROLE and identity_count:
+        if self.role != VALIDATION_ATTACHMENT_EDGE_ROLE and identity_count:
             raise ValueError(
-                "control_flow edges cannot include validation attachment metadata"
+                f"{self.role} edges cannot include validation attachment metadata"
             )
         return self
 
@@ -310,7 +313,7 @@ class FlowEdge(BaseModel):
 class FlowDefinition(BaseModel):
     """Complete flow definition stored in JSONB."""
 
-    version: Literal["1.0"] = "1.0"
+    version: Literal["1.0", "1.1"] = "1.0"
     nodes: List[FlowNode] = Field(..., min_length=1, max_length=30)
     edges: List[FlowEdge] = Field(default_factory=list)
     entry_node_id: str = Field(..., description="Starting node ID")

@@ -32,9 +32,12 @@ from uuid import uuid4
 
 from agents import Agent, RunContextWrapper, function_tool
 from src.lib.context import (
+    get_current_flow_output_attachment,
     get_current_run_config,
     get_current_trace_id,
+    reset_current_flow_output_attachment,
     reset_current_output_filename_stem,
+    set_current_flow_output_attachment,
     set_current_output_filename_stem,
     set_current_session_id,
     set_current_user_id,
@@ -97,6 +100,7 @@ from src.lib.flows.output_projection import (
     finalize_output_projection,
 )
 from src.lib.executable_flow_graph import project_executable_flow_graph
+from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
@@ -209,6 +213,18 @@ def _is_output_formatter_entry(entry: Optional[dict[str, Any]]) -> bool:
     return (
         _matches_metadata_classification(category, ["output"])
         or _matches_metadata_classification(subcategory, ["output", "format"])
+    )
+
+
+def _is_extraction_entry(entry: Optional[dict[str, Any]]) -> bool:
+    """Return whether an agent entry represents an extraction step."""
+
+    if not isinstance(entry, dict):
+        return False
+    category = _normalize_metadata_value(entry.get("category"))
+    subcategory = _normalize_metadata_value(entry.get("subcategory"))
+    return _matches_metadata_classification(category, ["extract"]) or (
+        _matches_metadata_classification(subcategory, ["extract"])
     )
 
 
@@ -356,6 +372,40 @@ def _internal_extraction_tool_output_since(
     return payload
 
 
+def _internal_specialist_tool_output_since(
+    cursor: Mapping[str, Any],
+    *,
+    tool_name: str,
+) -> Any | None:
+    """Return the latest private output for one specialist-internal tool call."""
+
+    normalized_tool_name = str(tool_name or "").strip()
+    if not normalized_tool_name:
+        return None
+    sources: list[tuple[Any, int]] = []
+    for events_key, index_key in (
+        ("live_events", "live_index"),
+        ("collected_events", "collected_index"),
+    ):
+        events = cursor.get(events_key)
+        start_index = cursor.get(index_key)
+        if isinstance(events, list) and isinstance(start_index, int):
+            sources.append((events, start_index))
+    for events, start_index in sources:
+        for event in reversed(events[start_index:]):
+            if not isinstance(event, Mapping) or event.get("type") != "TOOL_COMPLETE":
+                continue
+            details = event.get("details") or {}
+            if not isinstance(details, Mapping):
+                continue
+            if str(details.get("toolName") or "").strip() != normalized_tool_name:
+                continue
+            internal = event.get("internal") or {}
+            if isinstance(internal, Mapping) and internal.get("tool_output") is not None:
+                return internal.get("tool_output")
+    return None
+
+
 def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW_CHARS) -> str:
     """Generate a bounded preview string for accumulated flow context."""
 
@@ -364,6 +414,33 @@ def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW
         return text
     overflow = len(text) - max_chars
     return f"{text[:max_chars]}... [truncated {overflow} chars]"
+
+
+def _flow_formatter_failure_reason(completed_step: Mapping[str, Any]) -> str | None:
+    """Return a curator-facing reason when a formatter completed without output."""
+
+    raw_output = completed_step.get("formatter_failure_output")
+    if raw_output is None:
+        raw_output = completed_step.get("output")
+    parsed_output: Any = raw_output
+    if isinstance(raw_output, str):
+        try:
+            parsed_output = json.loads(raw_output)
+        except (TypeError, ValueError):
+            parsed_output = raw_output
+
+    if isinstance(parsed_output, Mapping):
+        if str(parsed_output.get("status") or "") != "cannot_complete":
+            return None
+        reason_parts = [
+            str(parsed_output.get(key) or "").strip()
+            for key in ("reason", "missing_data", "suggested_next_step")
+        ]
+        reason = " ".join(part for part in reason_parts if part)
+        return _truncate_tool_output(reason) if reason else None
+
+    reason = _truncate_tool_output(parsed_output)
+    return reason or None
 
 
 def _build_flow_step_instruction_prefix(
@@ -606,10 +683,26 @@ def _build_terminal_flow_artifact_bundle(
     flow_name: str,
     flow_run_id: str | None = None,
     document_id: str | None = None,
+    source_node_id: str | None = None,
 ) -> FlowOutputArtifactBundle:
     try:
+        scoped_steps = completed_steps
+        if source_node_id:
+            scoped_steps = [
+                step
+                for step in completed_steps
+                if str(step.get("node_id") or "") == source_node_id
+            ]
+            if len(scoped_steps) != 1:
+                raise _flow_terminal_projection_error(
+                    agent_id,
+                    (
+                        f"bound source node '{source_node_id}' produced "
+                        f"{len(scoped_steps)} completed artifacts; expected exactly one"
+                    ),
+                )
         bundle = build_flow_output_artifact_bundle(
-            completed_steps=completed_steps,
+            completed_steps=scoped_steps,
             flow_name=flow_name,
             flow_run_id=flow_run_id,
             document_id=document_id,
@@ -653,6 +746,7 @@ def _build_flow_formatter_runtime_context(
     node_data: Mapping[str, Any],
     resolved_query: str,
     output_filename_descriptor: str | None,
+    source_node_id: str | None,
 ) -> str:
     raw_projection_plan = node_data.get("projection_plan")
     projection_plan = dict(raw_projection_plan) if isinstance(raw_projection_plan, Mapping) else None
@@ -663,6 +757,7 @@ def _build_flow_formatter_runtime_context(
         "flow_name": bundle.flow_name,
         "flow_run_id": bundle.flow_run_id,
         "document_id": bundle.document_id,
+        "source_node_id": source_node_id,
         "artifact_count": len(bundle.artifacts),
         "default_row_source": bundle.default_row_source,
         "row_sources": _flow_formatter_source_counts(bundle),
@@ -684,6 +779,11 @@ def _build_flow_formatter_runtime_context(
         "Do not ask for previous-step prose as input and do not compose file rows yourself. "
         "If configured_projection_plan is present, treat it as the flow owner's requested starting plan: "
         "validate/preview it with the runtime tools, adjust only through saved field refs if needed, then finalize. "
+        "Filename metadata is runtime-owned: filename_hint has already been resolved from the flow template, "
+        "and saved files receive a trace prefix. A timestamp is included only when the configured template "
+        "contains {{timestamp}}. Do not require the input PDF filename or timestamp to appear in artifact rows, "
+        "and do not call "
+        "formatter_cannot_complete merely because those runtime-owned filename values are absent from the bundle. "
         "If the saved bundle cannot support the requested output, call formatter_cannot_complete.\n"
         + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
     )
@@ -704,6 +804,7 @@ def _make_flow_runtime_formatter_tool(
     flow_run_id: str | None,
     document_id: str | None,
     node_data: Mapping[str, Any],
+    source_node_id: str | None = None,
 ):
     @function_tool(
         name_override=tool_name,
@@ -722,6 +823,7 @@ def _make_flow_runtime_formatter_tool(
             flow_name=flow_name,
             flow_run_id=flow_run_id,
             document_id=document_id,
+            source_node_id=source_node_id,
         )
         runtime_contexts = [
             context
@@ -735,6 +837,7 @@ def _make_flow_runtime_formatter_tool(
                     node_data=node_data,
                     resolved_query=query,
                     output_filename_descriptor=output_filename_descriptor or None,
+                    source_node_id=source_node_id,
                 ),
             ]
             if context
@@ -764,10 +867,32 @@ def _make_flow_runtime_formatter_tool(
             tool_name=tool_name,
             run_config=getattr(ctx, "run_config", None),
         )
-        return await streaming_tool.on_invoke_tool(
-            tool_ctx,
-            json.dumps({"query": query}),
+        current_attachment = get_current_flow_output_attachment() or {}
+        source_token = set_current_flow_output_attachment(
+            {
+                **current_attachment,
+                "source_extraction_result_ids": [
+                    artifact.extraction_result_id
+                    for artifact in bundle.artifacts
+                    if artifact.extraction_result_id
+                ],
+                "source_keys": [
+                    artifact.source_key for artifact in bundle.artifacts if artifact.source_key
+                ],
+                "source_envelope_ids": [
+                    artifact.envelope_id
+                    for artifact in bundle.artifacts
+                    if artifact.envelope_id
+                ],
+            }
         )
+        try:
+            return await streaming_tool.on_invoke_tool(
+                tool_ctx,
+                json.dumps({"query": query}),
+            )
+        finally:
+            reset_current_flow_output_attachment(source_token)
 
     return _runtime_formatter_tool
 
@@ -783,6 +908,7 @@ def _make_flow_chat_output_tool(
     flow_run_id: str | None,
     document_id: str | None,
     node_data: Mapping[str, Any],
+    source_node_id: str | None = None,
 ):
     @function_tool(
         name_override=tool_name,
@@ -798,6 +924,7 @@ def _make_flow_chat_output_tool(
             flow_name=flow_name,
             flow_run_id=flow_run_id,
             document_id=document_id,
+            source_node_id=source_node_id,
         )
         raw_plan = node_data.get("projection_plan")
         if isinstance(raw_plan, Mapping):
@@ -2167,6 +2294,75 @@ def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
     return [node_by_id[node_id] for node_id in projection.ordered_executable_node_ids]
 
 
+def _runtime_output_sources_by_node_id(
+    flow: CurationFlow,
+    *,
+    db_user_id: int | None,
+) -> dict[str, str]:
+    """Validate runtime output roles and return formatter→extractor bindings."""
+
+    flow_def = flow.flow_definition or {}
+    projection = project_executable_flow_graph(flow_def)
+    nodes_by_id = {
+        str(node.get("id")): node
+        for node in (flow_def.get("nodes") or [])
+        if node.get("id")
+    }
+    bindings = {
+        attachment.output_node_id: attachment.source_node_id
+        for attachment in projection.output_attachments
+    }
+    errors: list[str] = []
+    for output_node_id, source_node_id in bindings.items():
+        output_node = nodes_by_id.get(output_node_id, {})
+        source_node = nodes_by_id.get(source_node_id, {})
+        output_data = output_node.get("data") or {}
+        source_data = source_node.get("data") or {}
+        output_agent_id = str(
+            (output_data.get("agent_id") or "") if isinstance(output_data, Mapping) else ""
+        )
+        source_agent_id = str(
+            (source_data.get("agent_id") or "") if isinstance(source_data, Mapping) else ""
+        )
+        output_entry = _resolve_flow_agent_entry(
+            output_agent_id,
+            db_user_id=db_user_id,
+        )
+        source_entry = _resolve_flow_agent_entry(
+            source_agent_id,
+            db_user_id=db_user_id,
+        )
+        if (
+            not _is_output_formatter_entry(output_entry)
+            or output_agent_id not in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+        ):
+            errors.append(
+                f"output node '{output_node_id}' agent '{output_agent_id}' is not an output formatter"
+            )
+        if not _is_extraction_entry(source_entry):
+            errors.append(
+                f"source node '{source_node_id}' agent '{source_agent_id}' is not an extraction agent"
+            )
+
+    for node_id in projection.ordered_executable_node_ids:
+        node = nodes_by_id.get(node_id, {})
+        node_data = node.get("data") or {}
+        agent_id = str(
+            (node_data.get("agent_id") or "") if isinstance(node_data, Mapping) else ""
+        )
+        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        if _is_output_formatter_entry(entry) and node_id not in bindings:
+            errors.append(
+                f"legacy formatter node '{node_id}' must be repaired as an output attachment before execution"
+            )
+
+    if errors:
+        raise FlowTerminalOutputProjectionError(
+            "Invalid flow output attachment role(s): " + "; ".join(errors)
+        )
+    return bindings
+
+
 def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
     """Count occurrences of each agent_id in the flow (excluding task_input).
 
@@ -2259,6 +2455,11 @@ def get_all_agent_tools(
         unavailable_steps contains skipped steps with reasons for UI warnings.
     """
     nodes = _get_ordered_executable_nodes(flow)
+    nodes_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
+    output_source_by_node_id = _runtime_output_sources_by_node_id(
+        flow,
+        db_user_id=db_user_id,
+    )
     agent_id_counts = _count_agent_ids(flow)
     all_tools = []
     created_tool_names: Set[str] = set()
@@ -2313,6 +2514,7 @@ def get_all_agent_tools(
         curation_adapter_key: str | None,
         candidate_expected_from: list[str],
         node_data: dict[str, Any],
+        node_id: str,
     ):
         """Enforce strict flow step ordering at runtime."""
 
@@ -2366,6 +2568,32 @@ def get_all_agent_tools(
             # _create_streaming_tool() returns a FunctionTool (not a plain callable).
             # Invoke via on_invoke_tool() so we execute the underlying specialist wrapper.
             output_filename_token = set_current_output_filename_stem(output_filename_descriptor)
+            output_source_node_id = output_source_by_node_id.get(node_id)
+            source_node_data = (
+                nodes_by_id.get(str(output_source_node_id), {}).get("data") or {}
+            )
+            output_attachment_token = (
+                set_current_flow_output_attachment(
+                    {
+                        "flow_id": str(flow.id),
+                        "flow_run_id": str(flow_run_id or ""),
+                        "formatter_node_id": node_id,
+                        "source_node_id": output_source_node_id,
+                        "formatter_label": str(
+                            node_data.get("agent_display_name") or agent_name or node_id
+                        ),
+                        "source_label": str(
+                            source_node_data.get("agent_display_name")
+                            or source_node_data.get("agent_id")
+                            or output_source_node_id
+                            or ""
+                        ),
+                        "document_id": str(document_id or ""),
+                    }
+                )
+                if output_source_node_id
+                else None
+            )
             internal_event_cursor = _capture_internal_extraction_event_cursor()
             specialist_started_at = time.monotonic()
             projected_chat_output: str | None = None
@@ -2394,6 +2622,8 @@ def get_all_agent_tools(
                 else:
                     result = await tool_callable(query=resolved_query)
             finally:
+                if output_attachment_token is not None:
+                    reset_current_flow_output_attachment(output_attachment_token)
                 reset_current_output_filename_stem(output_filename_token)
                 phase_timings_ms["specialist_tool_invoke_ms"] = _elapsed_ms(
                     specialist_started_at
@@ -2413,6 +2643,14 @@ def get_all_agent_tools(
             if not used_internal_extraction_payload:
                 step_result = result
             result_text = _stringify_tool_output(step_result)
+            formatter_failure_output = (
+                _internal_specialist_tool_output_since(
+                    internal_event_cursor,
+                    tool_name="formatter_cannot_complete",
+                )
+                if _flow_file_output_format(agent_id) is not None
+                else None
+            )
             validation_schedule = validation_schedule_from_node_data(node_data)
             validation_schedule_metadata = (
                 {"validation_schedule": validation_schedule}
@@ -2534,11 +2772,17 @@ def get_all_agent_tools(
             }
             completed_step = {
                 "step": step_number,
+                "node_id": node_id,
                 "agent_id": agent_id,
                 "agent_name": agent_name,
                 "tool_name": tool_name,
                 "output": result_text,
                 "output_preview": _truncate_tool_output(result_text),
+                **(
+                    {"formatter_failure_output": formatter_failure_output}
+                    if formatter_failure_output is not None
+                    else {}
+                ),
                 "candidate": candidate,
                 "timing": step_timing,
                 **(
@@ -2615,6 +2859,7 @@ def get_all_agent_tools(
     for node in nodes:
         data = node.get("data", {})
         agent_id = data.get("agent_id")
+        node_id = str(node.get("id") or "")
 
         step_num += 1
 
@@ -2815,6 +3060,7 @@ def get_all_agent_tools(
                     flow_run_id=flow_run_id,
                     document_id=document_id,
                     node_data=data,
+                    source_node_id=output_source_by_node_id.get(node_id),
                 )
             elif output_format == "chat":
                 raw_streaming_tool = _make_flow_chat_output_tool(
@@ -2827,6 +3073,7 @@ def get_all_agent_tools(
                     flow_run_id=flow_run_id,
                     document_id=document_id,
                     node_data=data,
+                    source_node_id=output_source_by_node_id.get(node_id),
                 )
             else:
                 try:
@@ -2888,6 +3135,7 @@ def get_all_agent_tools(
             node_data=data,
             curation_adapter_key=curation_adapter_key,
             candidate_expected_from=candidate_expected_from,
+            node_id=node_id,
         )
 
         logger.info('[Flow Executor] Created streaming tool: %s (%s)', tool_name, specialist_name)
@@ -3779,10 +4027,82 @@ async def execute_flow(
     trace_id: Optional[str] = None
     extraction_persisted = False
     curation_handoff_emitted = False
-    pending_terminal_output_event: Optional[dict[str, Any]] = None
+    pending_output_events: list[dict[str, Any]] = []
     flow_execution_state = supervisor._flow_execution_state
     completed_steps = flow_execution_state["completed_steps"]
     evidence_registry = flow_execution_state["evidence_registry"]
+    flow_projection = project_executable_flow_graph(flow.flow_definition or {})
+    flow_nodes_by_id = {
+        str(node.get("id")): node
+        for node in (flow.flow_definition.get("nodes") or [])
+        if node.get("id")
+    }
+    expected_output_attachments = [
+        {
+            **attachment.to_dict(),
+            "agent_id": str(
+                (
+                    flow_nodes_by_id.get(attachment.output_node_id, {}).get("data")
+                    or {}
+                ).get("agent_id")
+                or ""
+            ),
+            "formatter_label": str(
+                (
+                    flow_nodes_by_id.get(attachment.output_node_id, {}).get("data")
+                    or {}
+                ).get("agent_display_name")
+                or (
+                    flow_nodes_by_id.get(attachment.output_node_id, {}).get("data")
+                    or {}
+                ).get("agent_id")
+                or attachment.output_node_id
+            ),
+            "source_label": str(
+                (
+                    flow_nodes_by_id.get(attachment.source_node_id, {}).get("data")
+                    or {}
+                ).get("agent_display_name")
+                or (
+                    flow_nodes_by_id.get(attachment.source_node_id, {}).get("data")
+                    or {}
+                ).get("agent_id")
+                or attachment.source_node_id
+            ),
+        }
+        for attachment in flow_projection.output_attachments
+    ]
+    output_source_by_node_id = {
+        attachment["output_node_id"]: attachment["source_node_id"]
+        for attachment in expected_output_attachments
+    }
+    output_attachment_by_node_id = {
+        attachment["output_node_id"]: attachment
+        for attachment in expected_output_attachments
+    }
+
+    def _queue_output_event(output_event: dict[str, Any]) -> None:
+        details = output_event.get("details") or {}
+        event_type = str(output_event.get("type") or "")
+        identity = (
+            event_type,
+            str(details.get("formatter_node_id") or ""),
+            str(details.get("file_id") or details.get("output") or ""),
+        )
+        for existing in pending_output_events:
+            existing_details = existing.get("details") or {}
+            existing_identity = (
+                str(existing.get("type") or ""),
+                str(existing_details.get("formatter_node_id") or ""),
+                str(
+                    existing_details.get("file_id")
+                    or existing_details.get("output")
+                    or ""
+                ),
+            )
+            if identity == existing_identity:
+                return
+        pending_output_events.append(output_event)
 
     async for event in run_agent_streamed(
         context_messages=[{"role": "user", "content": prompt}],
@@ -3811,9 +4131,36 @@ async def execute_flow(
         if event_type == "RUN_STARTED" and "trace_id" in event_data:
             trace_id = event_data.get("trace_id")
 
+        if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
+            output_event = dict(event)
+            output_details = dict(output_event.get("details") or {})
+            if event_type == "CHAT_OUTPUT_READY" and not output_details.get(
+                "formatter_node_id"
+            ):
+                chat_step = next(
+                    (
+                        step
+                        for step in reversed(completed_steps)
+                        if str(step.get("agent_id") or "")
+                        in {"chat_output", "chat_output_formatter"}
+                    ),
+                    None,
+                )
+                if chat_step is not None:
+                    formatter_node_id = str(chat_step.get("node_id") or "")
+                    output_details["formatter_node_id"] = formatter_node_id or None
+                    output_details["source_node_id"] = output_source_by_node_id.get(
+                        formatter_node_id
+                    )
+                    attachment = output_attachment_by_node_id.get(formatter_node_id, {})
+                    output_details["formatter_label"] = attachment.get("formatter_label")
+                    output_details["source_label"] = attachment.get("source_label")
+                    output_event["details"] = output_details
+            _queue_output_event(output_event)
+            continue
+
         flow_step_evidence_event: Optional[dict[str, Any]] = None
         flow_validator_audit_events: list[dict[str, Any]] = []
-        projected_chat_ready_event: Optional[dict[str, Any]] = None
         if event_type == "TOOL_COMPLETE":
             details = event.get("details", {}) or {}
             tool_name = str(details.get("toolName") or "").strip()
@@ -3843,73 +4190,29 @@ async def execute_flow(
                 }
                 projected_chat_output = completed_step.get("projected_chat_output")
                 if isinstance(projected_chat_output, str):
-                    projected_chat_ready_event = {
-                        "type": "CHAT_OUTPUT_READY",
-                        "timestamp": _now_iso(),
-                        "details": {
-                            "output": projected_chat_output,
-                            "output_preview": _truncate_tool_output(
-                                projected_chat_output,
-                                max_chars=200,
-                            ),
-                            "output_length": len(projected_chat_output),
-                        },
-                    }
-            if (
-                pending_terminal_output_event is not None
-                and not _missing_required_flow_steps(flow_execution_state)
-            ):
-                yield event
-                for flow_validator_audit_event in flow_validator_audit_events:
-                    yield flow_validator_audit_event
-                if flow_step_evidence_event is not None:
-                    yield flow_step_evidence_event
-                curation_handoff_state = flow_execution_state.get("curation_handoff")
-                if (
-                    not curation_handoff_emitted
-                    and isinstance(curation_handoff_state, Mapping)
-                ):
-                    curation_handoff_emitted = True
-                    yield {
-                        "type": CURATION_HANDOFF_READY_EVENT,
-                        "timestamp": _now_iso(),
-                        "details": {
-                            "review_session_ids": list(
-                                curation_handoff_state.get("review_session_ids") or []
-                            ),
-                            "adapter_keys": list(
-                                curation_handoff_state.get("adapter_keys") or []
-                            ),
-                            "document_id": document_id,
-                        },
-                    }
-                    logger.info(
-                        "[Flow Executor] Curation handoff produced for flow '%s'",
-                        flow.name,
+                    formatter_node_id = str(completed_step.get("node_id") or "")
+                    _queue_output_event(
+                        {
+                            "type": "CHAT_OUTPUT_READY",
+                            "timestamp": _now_iso(),
+                            "details": {
+                                "output": projected_chat_output,
+                                "output_preview": _truncate_tool_output(projected_chat_output),
+                                "output_length": len(projected_chat_output),
+                                "formatter_node_id": formatter_node_id or None,
+                                "source_node_id": output_source_by_node_id.get(
+                                    formatter_node_id
+                                ),
+                                "formatter_label": output_attachment_by_node_id.get(
+                                    formatter_node_id, {}
+                                ).get("formatter_label"),
+                                "source_label": output_attachment_by_node_id.get(
+                                    formatter_node_id, {}
+                                ).get("source_label"),
+                            },
+                        }
                     )
-                event = pending_terminal_output_event
-                event_type = str(event.get("type") or "")
-                event_data = event.get("data", {}) or {}
-                pending_terminal_output_event = None
-                flow_validator_audit_events = []
-                flow_step_evidence_event = None
 
-        if projected_chat_ready_event is not None:
-            yield event
-            for flow_validator_audit_event in flow_validator_audit_events:
-                yield flow_validator_audit_event
-            if flow_step_evidence_event is not None:
-                yield flow_step_evidence_event
-            event = projected_chat_ready_event
-            event_type = "CHAT_OUTPUT_READY"
-            event_data = event.get("data", {}) or {}
-            flow_validator_audit_events = []
-            flow_step_evidence_event = None
-
-        # Terminate flow after output is produced
-        # FILE_READY indicates a file output agent (CSV, TSV, JSON) completed
-        # CHAT_OUTPUT_READY indicates chat output agent completed
-        # This prevents the supervisor from looping back to call agents again
         if event_type == "SPECIALIST_ERROR":
             yield event
             details = event.get("details", {}) or {}
@@ -3970,82 +4273,6 @@ async def execute_flow(
                 },
             }
             break
-        if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
-            missing_steps = _missing_required_flow_steps(flow_execution_state)
-            if missing_steps:
-                pending_terminal_output_event = event
-                logger.info(
-                    "[Flow Executor] Deferring terminal %s for flow '%s' until all "
-                    "required steps complete; missing=%s",
-                    event_type,
-                    flow.name,
-                    missing_steps,
-                )
-                continue
-
-            handoff_failures = _flow_expected_extraction_handoff_failures(completed_steps)
-            if handoff_failures:
-                failure_reason, flow_error_event = (
-                    _flow_expected_extraction_output_error_event(
-                        flow_name=flow.name,
-                        failures=handoff_failures,
-                        completed_steps=completed_steps,
-                    )
-                )
-                flow_status = "failed"
-                yield flow_error_event
-                break
-
-            extraction_candidates = _collect_completed_step_candidates(completed_steps)
-            extraction_output_required = (
-                _flow_extraction_output_expected(completed_steps)
-                or bool(extraction_candidates)
-            )
-            persisted, failure_reason, flow_error_event, persisted_records = (
-                _persist_flow_extraction_candidates_or_build_error(
-                    flow_name=flow.name,
-                    candidates=extraction_candidates,
-                    document_id=document_id,
-                    user_id=str(user_id),
-                    session_id=session_id,
-                    trace_id=trace_id,
-                    flow_run_id=flow_run_id,
-                    extraction_output_required=extraction_output_required,
-                )
-            )
-            if not persisted:
-                _apply_persisted_result_counts_to_handoff_audits(
-                    completed_steps,
-                    persisted_records,
-                    persistence_status="failed",
-                    persistence_error_reason=failure_reason,
-                )
-                flow_status = "failed"
-                if flow_error_event is not None:
-                    flow_error_event = _attach_extraction_handoff_audits_to_flow_error(
-                        flow_error_event,
-                        completed_steps,
-                    )
-                    yield flow_error_event
-                break
-
-            extraction_persisted = True
-            _apply_persisted_result_counts_to_handoff_audits(
-                completed_steps,
-                persisted_records,
-                persistence_status="success",
-            )
-            _merge_persisted_flow_extraction_results(
-                flow_execution_state,
-                persisted_records,
-            )
-            yield event
-            logger.info(
-                "[Flow Executor] %s produced - terminating flow '%s'",
-                "Output file" if event_type == "FILE_READY" else "Chat output",
-                flow.name,
-            )
-            break
         yield event
         for flow_validator_audit_event in flow_validator_audit_events:
             yield flow_validator_audit_event
@@ -4094,10 +4321,13 @@ async def execute_flow(
             flow_status = "failed"
             yield flow_error_event
 
-    if flow_status != "failed" and not extraction_persisted:
+    output_prerequisites_valid = extraction_persisted
+    if not extraction_persisted and (
+        flow_status != "failed" or bool(pending_output_events)
+    ):
         handoff_failures = _flow_expected_extraction_handoff_failures(completed_steps)
         if handoff_failures:
-            failure_reason, flow_error_event = (
+            handoff_failure_reason, flow_error_event = (
                 _flow_expected_extraction_output_error_event(
                     flow_name=flow.name,
                     failures=handoff_failures,
@@ -4105,6 +4335,7 @@ async def execute_flow(
                 )
             )
             flow_status = "failed"
+            failure_reason = handoff_failure_reason
             yield flow_error_event
         else:
             extraction_candidates = _collect_completed_step_candidates(completed_steps)
@@ -4112,7 +4343,7 @@ async def execute_flow(
                 _flow_extraction_output_expected(completed_steps)
                 or bool(extraction_candidates)
             )
-            persisted, failure_reason, flow_error_event, persisted_records = (
+            persisted, persistence_failure_reason, flow_error_event, persisted_records = (
                 _persist_flow_extraction_candidates_or_build_error(
                     flow_name=flow.name,
                     candidates=extraction_candidates,
@@ -4129,9 +4360,10 @@ async def execute_flow(
                     completed_steps,
                     persisted_records,
                     persistence_status="failed",
-                    persistence_error_reason=failure_reason,
+                    persistence_error_reason=persistence_failure_reason,
                 )
                 flow_status = "failed"
+                failure_reason = persistence_failure_reason
                 if flow_error_event is not None:
                     flow_error_event = _attach_extraction_handoff_audits_to_flow_error(
                         flow_error_event,
@@ -4140,6 +4372,7 @@ async def execute_flow(
                     yield flow_error_event
             else:
                 extraction_persisted = True
+                output_prerequisites_valid = True
                 _apply_persisted_result_counts_to_handoff_audits(
                     completed_steps,
                     persisted_records,
@@ -4149,6 +4382,106 @@ async def execute_flow(
                     flow_execution_state,
                     persisted_records,
                 )
+
+    produced_output_events: list[dict[str, Any]] = []
+    if output_prerequisites_valid:
+        produced_output_events = pending_output_events
+        for output_event in produced_output_events:
+            yield output_event
+
+    output_events_by_formatter_node_id = {
+        str((output_event.get("details") or {}).get("formatter_node_id") or ""):
+        output_event
+        for output_event in produced_output_events
+        if str((output_event.get("details") or {}).get("formatter_node_id") or "")
+    }
+    completed_steps_by_node_id = {
+        str(step.get("node_id") or ""): step
+        for step in completed_steps
+        if str(step.get("node_id") or "")
+    }
+
+    def _build_output_branch_outcome(attachment: dict[str, Any]) -> dict[str, Any]:
+        output_node_id = attachment["output_node_id"]
+        output_event = output_events_by_formatter_node_id.get(output_node_id)
+        if output_event is not None:
+            return {
+                **attachment,
+                "status": "completed",
+                "output": {
+                    "type": output_event.get("type"),
+                    **dict(output_event.get("details") or {}),
+                },
+            }
+
+        branch_outcome = {
+            **attachment,
+            "status": "missing",
+            "output": None,
+        }
+        completed_step = completed_steps_by_node_id.get(output_node_id)
+        if output_prerequisites_valid and completed_step is not None:
+            branch_failure_reason = _flow_formatter_failure_reason(completed_step)
+            if branch_failure_reason:
+                branch_outcome["failure_reason"] = branch_failure_reason
+        return branch_outcome
+
+    output_branches = [
+        _build_output_branch_outcome(attachment)
+        for attachment in expected_output_attachments
+    ]
+    missing_output_branches = [
+        branch for branch in output_branches if branch["status"] != "completed"
+    ]
+    if expected_output_attachments and not produced_output_events:
+        output_status = "none"
+        if flow_status != "failed":
+            flow_status = "failed"
+            branch_failure_reasons = [
+                str(branch.get("failure_reason") or "").strip()
+                for branch in missing_output_branches
+                if str(branch.get("failure_reason") or "").strip()
+            ]
+            failure_reason = (
+                f"Formatter could not create an output: {branch_failure_reasons[0]}"
+                if branch_failure_reasons
+                else (
+                    f"Flow '{flow.name}' did not produce an output for any configured "
+                    "formatter attachment."
+                )
+            )
+            yield {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "missing_formatter_outputs",
+                    "message": failure_reason,
+                    "missing_output_node_ids": [
+                        branch["output_node_id"] for branch in missing_output_branches
+                    ],
+                    "output_branches": missing_output_branches,
+                },
+            }
+    elif missing_output_branches or flow_status == "failed":
+        output_status = "partial" if produced_output_events else "none"
+        if missing_output_branches and produced_output_events:
+            yield {
+                "type": "DOMAIN_WARNING",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "partial_formatter_outputs",
+                    "message": (
+                        f"Flow '{flow.name}' produced {len(produced_output_events)} "
+                        "output(s), but one or more formatter branches produced no output."
+                    ),
+                    "missing_output_node_ids": [
+                        branch["output_node_id"] for branch in missing_output_branches
+                    ],
+                    "output_branches": missing_output_branches,
+                },
+            }
+    else:
+        output_status = "complete" if produced_output_events else "none"
 
     # Emit flow-specific completion event
     yield {
@@ -4161,6 +4494,16 @@ async def execute_flow(
             "document_id": document_id,
             "origin_session_id": session_id,
             "status": flow_status,
+            "output_status": output_status,
+            "output_count": len(produced_output_events),
+            "outputs": [
+                {
+                    "type": output_event.get("type"),
+                    **dict(output_event.get("details") or {}),
+                }
+                for output_event in produced_output_events
+            ],
+            "output_branches": output_branches,
             "failure_reason": failure_reason,
             "total_evidence_records": len(evidence_registry.records()),
             "step_evidence_counts": _build_step_evidence_counts(completed_steps),

@@ -329,21 +329,29 @@ function AgentStudioPage() {
   const flowDefinition: FlowContextDefinition | undefined =
     activeTab === 'flows' && flowState
       ? {
+          version: flowState.version,
           nodes: flowState.nodes.map((node) => ({
             id: node.id,
+            node_type: node.type,
             agent_id: node.agent_id,
             agent_display_name: node.agent_display_name,
             task_instructions: node.task_instructions,
             custom_instructions: node.custom_instructions,
+            include_evidence: node.include_evidence,
             output_filename_template: node.output_filename_template,
+            projection_plan: node.projection_plan,
             output_key: node.output_key,
             validation_attachments: node.validation_attachments?.map((attachment) => ({
               ...attachment,
             }) as Record<string, unknown>),
           })),
           edges: flowState.edges.map((edge) => ({
+            id: edge.id,
             source: edge.source,
             target: edge.target,
+            role: edge.role,
+            satisfies_binding_id: edge.satisfies_binding_id,
+            replaces_attachment_id: edge.replaces_attachment_id,
           })),
         }
       : undefined

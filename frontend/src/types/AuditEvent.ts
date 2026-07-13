@@ -295,6 +295,13 @@ export interface FileReadyDetails {
   mime_type?: string    // MIME type
   download_url: string  // API endpoint for download
   created_at?: string   // ISO timestamp
+  formatter_node_id?: string
+  source_node_id?: string
+  formatter_label?: string
+  source_label?: string
+  source_extraction_result_ids?: string[]
+  source_keys?: string[]
+  source_envelope_ids?: string[]
 }
 
 /**

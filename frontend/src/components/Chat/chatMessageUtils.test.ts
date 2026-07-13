@@ -6,6 +6,7 @@ import type { EvidenceRecord } from '@/features/curation/types'
 import {
   buildTurnId,
   loadMessagesFromStorage,
+  mergeFlowChatOutputs,
   sanitizeStoredMessage,
   withMissingEvidenceReviewAndCurateTargets,
 } from './chatMessageUtils'
@@ -24,6 +25,12 @@ describe('chatMessageUtils', () => {
     localStorage.clear()
     vi.restoreAllMocks()
     vi.unstubAllEnvs()
+  })
+
+  it('preserves ordered outputs from multiple chat formatter branches', () => {
+    expect(mergeFlowChatOutputs('Allele summary', 'Gene summary')).toBe(
+      'Allele summary\n\nGene summary'
+    )
   })
 
   it('builds a usable turn ID when crypto.randomUUID is unavailable', () => {

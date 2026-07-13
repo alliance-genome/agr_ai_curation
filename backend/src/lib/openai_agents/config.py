@@ -1175,6 +1175,45 @@ def get_flow_output_projection_preview_limit() -> int:
     )
 
 
+def get_flow_output_branch_descriptor_prefix_chars() -> int:
+    """Readable descriptor characters retained before branch identity. Default 55."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_BRANCH_DESCRIPTOR_PREFIX_CHARS", 55),
+    )
+
+
+def get_flow_output_branch_node_suffix_chars() -> int:
+    """Formatter-node characters retained in branched output filenames. Default 25."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_BRANCH_NODE_SUFFIX_CHARS", 25),
+    )
+
+
+def get_flow_output_branch_identity_hash_chars() -> int:
+    """SHA-256 characters used to distinguish output branches. Default 12."""
+
+    return min(
+        64,
+        max(
+            1,
+            _get_env_int_with_fallback("FLOW_OUTPUT_BRANCH_IDENTITY_HASH_CHARS", 12),
+        ),
+    )
+
+
+def get_flow_output_branch_storage_descriptor_chars() -> int:
+    """Maximum branched storage descriptor length. Default 100."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_BRANCH_STORAGE_DESCRIPTOR_CHARS", 100),
+    )
+
+
 # --- Timeouts ---
 
 def _get_env_optional_nonnegative_float(

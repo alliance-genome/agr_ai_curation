@@ -63,6 +63,7 @@ import {
   humanizeAdapterKey,
   loadMessagesFromStorage,
   mergeTraceIds,
+  mergeFlowChatOutputs,
   shouldShowCurationDbWarning,
   upsertAssistantTurnMessage,
   withEvidenceRecords,
@@ -841,10 +842,14 @@ export function useChatController({
         const outputText = String(parsed.details.output || parsed.details.output_preview || '').trim()
         if (outputText) {
           if (turnId) {
-            assistantBuffersRef.current[turnId] = outputText
+            const combinedOutput = mergeFlowChatOutputs(
+              assistantBuffersRef.current[turnId] ?? '',
+              outputText,
+            )
+            assistantBuffersRef.current[turnId] = combinedOutput
             setMessages((prev) => upsertAssistantTurnMessage(prev, {
               turnId,
-              content: outputText,
+              content: combinedOutput,
               timestamp: messageTimestamp,
               traceId: parsed.trace_id,
               terminalState: null,
@@ -883,6 +888,13 @@ export function useChatController({
           mime_type: parsed.details.mime_type,
           download_url: parsed.details.download_url,
           created_at: parsed.details.created_at,
+          formatter_node_id: parsed.details.formatter_node_id,
+          source_node_id: parsed.details.source_node_id,
+          formatter_label: parsed.details.formatter_label,
+          source_label: parsed.details.source_label,
+          source_extraction_result_ids: parsed.details.source_extraction_result_ids,
+          source_keys: parsed.details.source_keys,
+          source_envelope_ids: parsed.details.source_envelope_ids,
         }
         debug.log('[FILE_READY] File ready for download:', fileData.filename)
 
@@ -892,7 +904,7 @@ export function useChatController({
             role: 'assistant',
             content: `File ready: ${fileData.filename}`,
             timestamp: messageTimestamp,
-            id: `file-${Date.now()}`,
+            id: `file-${fileData.file_id}-${fileData.formatter_node_id ?? 'formatter'}`,
             turnId: turnId ?? undefined,
             type: 'file_download',
             fileData,

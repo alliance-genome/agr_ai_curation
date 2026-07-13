@@ -28,6 +28,7 @@ from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumen
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.user import User
 from src.models.sql.file_output import FileOutput
+from src.models.sql.pdf_document import PDFDocument
 from src.lib.observability.background_tasks import report_background_task_exception
 from .events import get_batch_broadcaster
 
@@ -38,9 +39,16 @@ _BACKEND_ONLY_EVENT_FIELDS = {"internal"}
 class BatchFlowExecutionError(RuntimeError):
     """Raised when a flow emits a terminal failure during batch processing."""
 
-    def __init__(self, message: str, *, sentry_already_reported: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        sentry_already_reported: bool = False,
+        output_branches: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
         super().__init__(message)
         self.sentry_already_reported = sentry_already_reported
+        self.output_branches = list(output_branches or [])
 
 
 def _validate_file_ownership(file_id: str, expected_curator_id: str) -> bool:
@@ -241,17 +249,24 @@ def _process_single_document(
     try:
         # Execute the flow on this document
         # Use asyncio.run() since we're in a sync context
-        result_file_path, review_session_ids = asyncio.run(
+        source_document = db.query(PDFDocument).filter(
+            PDFDocument.id == batch_doc.document_id,
+            PDFDocument.user_id == batch.user_id,
+        ).first()
+        document_name = getattr(source_document, "filename", None)
+
+        result_files, review_session_ids, output_status, output_branches = asyncio.run(
             _execute_flow_for_document(
                 flow=flow,
                 document_id=str(batch_doc.document_id),
+                document_name=document_name,
                 cognito_sub=cognito_sub,
                 batch_id=str(batch.id),
                 db_user_id=batch.user_id,
             )
         )
 
-        if not result_file_path and not review_session_ids:
+        if not result_files and not review_session_ids:
             raise RuntimeError("Flow completed without FILE_READY or curation handoff output")
 
         # Calculate processing time
@@ -259,8 +274,13 @@ def _process_single_document(
 
         # Mark as completed
         batch_doc.status = BatchDocumentStatus.COMPLETED
-        batch_doc.result_file_path = result_file_path
+        batch_doc.result_files = result_files or None
+        batch_doc.result_file_path = (
+            result_files[0]["download_url"] if result_files else None
+        )
         batch_doc.review_session_ids = review_session_ids or None
+        batch_doc.output_status = output_status
+        batch_doc.output_branches = output_branches or None
         batch_doc.processing_time_ms = processing_time_ms
         batch_doc.processed_at = datetime.now(timezone.utc)
         batch.completed_documents += 1
@@ -268,13 +288,19 @@ def _process_single_document(
 
         logger.info(
             "Document completed: batch_id=%s, doc_id=%s, time_ms=%d, result=%s",
-            batch.id, batch_doc.document_id, processing_time_ms, result_file_path
+            batch.id, batch_doc.document_id, processing_time_ms, batch_doc.result_file_path
         )
 
     except Exception as e:
         processing_time_ms = int((time.time() - start_time) * 1000)
         batch_doc.status = BatchDocumentStatus.FAILED
         batch_doc.result_file_path = None
+        batch_doc.result_files = None
+        batch_doc.output_status = "failed"
+        failure_output_branches = getattr(e, "output_branches", None)
+        batch_doc.output_branches = (
+            failure_output_branches if isinstance(failure_output_branches, list) else None
+        )
         batch_doc.review_session_ids = None
         batch_doc.error_message = str(e)[:500]
         batch_doc.processing_time_ms = processing_time_ms
@@ -291,6 +317,9 @@ def _process_single_document(
                 "position": batch_doc.position,
                 "status": BatchDocumentStatus.FAILED.value,
                 "result_file_path": None,
+                "result_files": [],
+                "output_status": "failed",
+                "output_branches": batch_doc.output_branches or [],
                 "review_session_ids": None,
                 "error_message": batch_doc.error_message,
                 "processing_time_ms": processing_time_ms,
@@ -306,7 +335,8 @@ async def _execute_flow_for_document(
     cognito_sub: str,
     batch_id: str,
     db_user_id: Optional[int] = None,
-) -> tuple[Optional[str], list[str]]:
+    document_name: Optional[str] = None,
+) -> tuple[list[dict[str, Any]], list[str], str, list[dict[str, Any]]]:
     """Execute a flow on a single document and extract batch success outputs.
 
     All events from the flow execution are published to the BatchEventBroadcaster
@@ -319,7 +349,7 @@ async def _execute_flow_for_document(
         batch_id: Batch UUID for session tracking
 
     Returns:
-        File path/ID of the generated result file and any review session ids.
+        Generated result-file manifests and any review session ids.
     """
     from src.lib.flows.executor import execute_flow
     from src.lib.context import set_current_user_id, set_current_session_id
@@ -340,8 +370,10 @@ async def _execute_flow_for_document(
         flow.name, document_id, session_id, cognito_sub
     )
 
-    result_file_path = None
+    result_files: list[dict[str, Any]] = []
     review_session_ids: list[str] = []
+    flow_output_status: Optional[str] = None
+    flow_output_branches: list[dict[str, Any]] = []
     flow_failure_message: Optional[str] = None
     flow_failure_already_reported = False
 
@@ -353,7 +385,7 @@ async def _execute_flow_for_document(
             session_id=session_id,
             db_user_id=db_user_id,
             document_id=document_id,
-            document_name=None,  # Will be fetched by DocumentContext
+            document_name=document_name,
             user_query=None,  # Use task_instructions from flow
             active_groups=None,  # Default groups
             flow_run_id=batch_id,
@@ -379,12 +411,29 @@ async def _execute_flow_for_document(
                     # This prevents cross-user file leakage even if event routing has bugs
                     # (defense-in-depth for KANBAN-935 race condition fix)
                     if _validate_file_ownership(file_id, cognito_sub):
-                        result_file_path = download_url
+                        result_file = {
+                            key: file_ready_details[key]
+                            for key in (
+                                "file_id",
+                                "filename",
+                                "download_url",
+                                "format",
+                                "formatter_node_id",
+                                "source_node_id",
+                                "formatter_label",
+                                "source_label",
+                                "source_extraction_result_ids",
+                                "source_keys",
+                                "source_envelope_ids",
+                            )
+                            if file_ready_details.get(key) is not None
+                        }
+                        result_files.append(result_file)
                         enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
                         broadcaster.publish_sync(batch_uuid, enriched_event)
                         logger.info(
                             "Found file output in flow: %s (filename: %s)",
-                            result_file_path,
+                            download_url,
                             file_ready_details.get("filename")
                         )
                     else:
@@ -399,6 +448,24 @@ async def _execute_flow_for_document(
                         download_url
                     )
                 continue
+
+            if event_type == "FLOW_FINISHED":
+                finished_data = event.get("data", {}) or {}
+                raw_output_status = finished_data.get("output_status")
+                if raw_output_status in {"complete", "partial", "none"}:
+                    flow_output_status = raw_output_status
+                raw_output_branches = finished_data.get("output_branches")
+                if isinstance(raw_output_branches, list):
+                    flow_output_branches = [
+                        dict(branch)
+                        for branch in raw_output_branches
+                        if isinstance(branch, dict)
+                    ]
+                if finished_data.get("status") == "failed" and not flow_failure_message:
+                    flow_failure_message = str(
+                        finished_data.get("failure_reason")
+                        or "Flow execution failed."
+                    )
 
             if event_type == "CURATION_HANDOFF_READY":
                 handoff_details: Any = event.get("details")
@@ -473,15 +540,19 @@ async def _execute_flow_for_document(
         raise BatchFlowExecutionError(
             flow_failure_message,
             sentry_already_reported=flow_failure_already_reported,
+            output_branches=flow_output_branches,
         )
 
-    if not result_file_path and not review_session_ids:
+    if not result_files and not review_session_ids:
         logger.warning(
             "No batch success output found from flow '%s' for document %s",
             flow.name, document_id
         )
 
-    return result_file_path, review_session_ids
+    resolved_output_status = flow_output_status or (
+        "complete" if result_files or review_session_ids else "none"
+    )
+    return result_files, review_session_ids, resolved_output_status, flow_output_branches
 
 
 def _enrich_event_for_batch(

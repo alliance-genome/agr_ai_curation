@@ -111,3 +111,37 @@ class TestFlowValidation:
 
         assert result.valid is False
         assert any("Chat Output" in e for e in result.errors)
+
+    def test_v11_mixed_file_and_chat_output_attachments_are_batch_valid(self):
+        flow_definition = {
+            "version": "1.1",
+            "entry_node_id": "pdf",
+            "nodes": [
+                {"id": "pdf", "type": "agent", "data": {"agent_id": "pdf_extraction"}},
+                {"id": "csv", "type": "output", "data": {"agent_id": "csv_formatter"}},
+                {
+                    "id": "chat",
+                    "type": "output",
+                    "data": {"agent_id": "chat_output_formatter"},
+                },
+            ],
+            "edges": [
+                {
+                    "id": "csv-output",
+                    "source": "pdf",
+                    "target": "csv",
+                    "role": "output_attachment",
+                },
+                {
+                    "id": "chat-output",
+                    "source": "pdf",
+                    "target": "chat",
+                    "role": "output_attachment",
+                },
+            ],
+        }
+
+        result = validate_flow_for_batch(flow_definition)
+
+        assert result.valid is True
+        assert result.errors == []

@@ -32,7 +32,7 @@ export interface AgentCategory {
 // ============================================================================
 
 export type NodeType = 'agent' | 'decision' | 'output' | 'task_input'
-export type FlowEdgeRole = 'control_flow' | 'validation_attachment'
+export type FlowEdgeRole = 'control_flow' | 'output_attachment' | 'validation_attachment'
 
 export interface ValidationAttachmentSelection extends ValidationAttachmentOption {
   enabled: boolean
@@ -109,7 +109,7 @@ export interface FlowEdgeDefinition {
 }
 
 export interface FlowDefinition {
-  version: '1.0'
+  version: '1.0' | '1.1'
   nodes: FlowNodeDefinition[]
   edges: FlowEdgeDefinition[]
   entry_node_id: string
@@ -177,10 +177,18 @@ export interface AgentNodeData extends FlowNodeData {
   isSelected?: boolean
   hasError?: boolean
   errorMessage?: string
+  /** Derived from output_attachment edges for display only; never persisted. */
+  outputBinding?: OutputBindingView
 }
 
-/** React Flow node with our custom data (handles both agent and task_input node types) */
-export type AgentNode = Node<AgentNodeData, 'agent' | 'task_input'>
+export interface OutputBindingView {
+  status: 'bound' | 'missing' | 'multiple' | 'incompatible'
+  sourceNodeId?: string
+  sourceLabel?: string
+}
+
+/** React Flow node with our custom data. */
+export type AgentNode = Node<AgentNodeData, 'agent' | 'output' | 'task_input'>
 
 /** React Flow edge with our custom styling */
 export type FlowEdge = Edge<{
@@ -200,18 +208,23 @@ export type FlowEdge = Edge<{
 /** Flow state reported to parent for context sharing */
 export interface FlowState {
   flowName: string
+  version: FlowDefinition['version']
   nodes: Array<{
     id: string
+    type: NodeType
     agent_id: string
     agent_display_name: string
     task_instructions?: string
     custom_instructions?: string
+    include_evidence?: boolean
     output_filename_template?: string
+    projection_plan?: Record<string, unknown>
     output_key: string
     validation_attachments?: ValidationAttachmentSelection[]
     validation_groups?: ValidationAttachmentGroup[]
   }>
   edges: Array<{
+    id: string
     source: string
     target: string
     role?: FlowEdgeRole
@@ -247,6 +260,8 @@ export interface FlowNodeProps {
 export interface NodeEditorProps {
   /** The node being edited */
   node: AgentNode | null
+  /** Current graph-derived formatter binding; never copied into node data on save. */
+  outputBinding?: OutputBindingView
   /** Callback to save changes */
   onSave: (nodeId: string, data: Partial<AgentNodeData>) => void
   /** Callback to close the editor */

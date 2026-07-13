@@ -43,6 +43,25 @@ class FileInfo(BaseModel):
     trace_id: Optional[str] = Field(None, description="Langfuse trace ID")
     session_id: Optional[str] = Field(None, description="Chat session ID")
     curator_id: Optional[str] = Field(None, description="User who requested the file")
+    flow_id: Optional[str] = Field(None, description="Owning flow ID for branched output")
+    flow_run_id: Optional[str] = Field(None, description="Owning flow-run ID")
+    formatter_node_id: Optional[str] = Field(None, description="Formatter graph node ID")
+    source_node_id: Optional[str] = Field(None, description="Bound extraction graph node ID")
+    formatter_label: Optional[str] = Field(None, description="Human-readable formatter label")
+    source_label: Optional[str] = Field(None, description="Human-readable extraction label")
+    source_extraction_result_ids: List[str] = Field(
+        default_factory=list,
+        description="Persisted extraction-result identities used by this output",
+    )
+    source_keys: List[str] = Field(
+        default_factory=list,
+        description="Canonical artifact source keys used by this output",
+    )
+    source_envelope_ids: List[str] = Field(
+        default_factory=list,
+        description="Canonical domain-envelope identities used by this output",
+    )
+    document_id: Optional[str] = Field(None, description="Source document ID")
 
 
 class Citation(BaseModel):

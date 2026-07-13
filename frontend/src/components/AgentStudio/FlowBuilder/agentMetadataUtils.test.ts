@@ -43,16 +43,19 @@ describe('agentMetadataUtils', () => {
     expect(isValidationAgentFromMetadata('custom_output', metadata)).toBe(false)
   })
 
-  it('detects output formatter agents from metadata categories', () => {
-    expect(isOutputFormatterAgentFromMetadata('custom_output', metadata)).toBe(true)
+  it('accepts only output agents with a runtime formatter implementation', () => {
+    expect(isOutputFormatterAgentFromMetadata('csv_formatter', metadata)).toBe(true)
+    expect(isOutputFormatterAgentFromMetadata('chat_output_formatter', metadata)).toBe(true)
+    expect(isOutputFormatterAgentFromMetadata('custom_output', metadata)).toBe(false)
     expect(isOutputFormatterAgentFromMetadata('custom_extractor', metadata)).toBe(false)
     expect(isOutputFormatterAgentFromMetadata('missing_agent', metadata)).toBe(false)
   })
 
   it('defaults include_evidence to true for output formatter agents', () => {
-    expect(resolveOutputFormatterIncludeEvidence('custom_output', metadata, undefined)).toBe(true)
-    expect(resolveOutputFormatterIncludeEvidence('custom_output', metadata, null)).toBe(true)
-    expect(resolveOutputFormatterIncludeEvidence('custom_output', metadata, false)).toBe(false)
+    expect(resolveOutputFormatterIncludeEvidence('csv_formatter', metadata, undefined)).toBe(true)
+    expect(resolveOutputFormatterIncludeEvidence('csv_formatter', metadata, null)).toBe(true)
+    expect(resolveOutputFormatterIncludeEvidence('csv_formatter', metadata, false)).toBe(false)
+    expect(resolveOutputFormatterIncludeEvidence('custom_output', metadata, undefined)).toBeUndefined()
     expect(resolveOutputFormatterIncludeEvidence('custom_extractor', metadata, undefined)).toBeUndefined()
   })
 })

@@ -187,11 +187,22 @@ class TestBatchServiceMocked:
             uuid4(),
             status=BatchDocumentStatus.COMPLETED,
             result_file_path="/path/to/result.json",
+            result_files=[
+                {
+                    "file_id": "file-1",
+                    "download_url": "/path/to/result.json",
+                }
+            ],
+            output_status="partial",
             processing_time_ms=1500,
         )
 
         assert mock_doc.status == BatchDocumentStatus.COMPLETED
         assert mock_doc.result_file_path == "/path/to/result.json"
+        assert mock_doc.result_files == [
+            {"file_id": "file-1", "download_url": "/path/to/result.json"}
+        ]
+        assert mock_doc.output_status == "partial"
         assert mock_doc.processing_time_ms == 1500
         mock_db.commit.assert_called_once()
 

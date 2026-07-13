@@ -3250,7 +3250,14 @@ async def chat_with_opus(
         # Convert Pydantic models to dicts for the context variable
         flow_context = {
             "flow_name": request.context.flow_name or "Untitled Flow",
-            "nodes": [node.model_dump() for node in request.context.flow_definition.nodes],
+            "version": request.context.flow_definition.version,
+            "nodes": [
+                {
+                    **node.model_dump(exclude={"node_type"}),
+                    "type": node.node_type,
+                }
+                for node in request.context.flow_definition.nodes
+            ],
             "edges": [edge.model_dump() for edge in request.context.flow_definition.edges],
             "entry_node_id": None,  # Will be determined by the tool
         }

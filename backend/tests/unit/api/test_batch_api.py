@@ -57,6 +57,18 @@ def test_batch_document_status_event_includes_review_session_ids():
     assert event["review_session_ids"] == ["session-gene"]
 
 
+def test_batch_partial_document_count_is_subset_of_completed_documents():
+    batch = SimpleNamespace(
+        documents=[
+            SimpleNamespace(output_status="complete"),
+            SimpleNamespace(output_status="partial"),
+            SimpleNamespace(output_status="failed"),
+        ]
+    )
+
+    assert batch_api._batch_partial_document_count(batch) == 1
+
+
 def test_batch_create_request_limits_document_ids_to_ten():
     flow_id = uuid4()
     doc_ids = [uuid4() for _ in range(11)]
@@ -323,10 +335,25 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
     file_id = uuid4()
     file_path = tmp_path / "result.csv"
     file_path.write_text("a,b\n1,2\n")
+    second_file_id = uuid4()
+    second_file_path = tmp_path / "result.json"
+    second_file_path.write_text('{"a": 1}\n')
 
     completed_doc = SimpleNamespace(
         status=BatchDocumentStatus.COMPLETED,
         result_file_path=f"/api/files/{file_id}/download",
+        result_files=[
+            {
+                "file_id": str(file_id),
+                "filename": "result.csv",
+                "download_url": f"/api/files/{file_id}/download",
+            },
+            {
+                "file_id": str(second_file_id),
+                "filename": "result.json",
+                "download_url": f"/api/files/{second_file_id}/download",
+            },
+        ],
         document_id=uuid4(),
         position=0,
     )
@@ -335,8 +362,19 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
     file_output = SimpleNamespace(id=file_id, curator_id="u-1", file_path=str(file_path), filename="result.csv")
+    second_file_output = SimpleNamespace(
+        id=second_file_id,
+        curator_id="u-1",
+        file_path=str(second_file_path),
+        filename="result.json",
+    )
+    file_results = iter((file_output, second_file_output))
     db = SimpleNamespace(
-        query=lambda _model: SimpleNamespace(filter=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: file_output))
+        query=lambda _model: SimpleNamespace(
+            filter=lambda *_args, **_kwargs: SimpleNamespace(
+                first=lambda: next(file_results)
+            )
+        )
     )
     monkeypatch.setattr(
         "src.lib.file_outputs.storage.FileOutputStorageService",
@@ -350,6 +388,7 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
     body = await _read_streaming_response(response)
     assert body.startswith(b"PK")
     assert b"result.csv" in body
+    assert b"result.json" in body
 
 
 @pytest.mark.asyncio
