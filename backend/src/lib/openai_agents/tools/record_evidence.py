@@ -46,8 +46,9 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     r"\b(?:Table\.?\s*\d+[A-Za-z0-9-]*)\b",
     re.IGNORECASE,
 )
+_HYPHEN_OR_DASH = r"[-\u2010-\u2014\u2212]"
 _PUNCTUATED_MULTI_REFERENCE_SEPARATOR = (
-    r"(?:,\s*|;\s*|/\s*|&\s*|\+\s*|[-\u2013\u2014]\s*)"
+    rf"(?:,\s*|;\s*|/\s*|&\s*|\+\s*|{_HYPHEN_OR_DASH}\s*)"
 )
 _WORD_MULTI_REFERENCE_SEPARATOR = (
     r"(?:\band\s*(?:/|-)\s*or\s+|\bas\s+well\s+as\s+|\band\s+|"
@@ -63,7 +64,8 @@ _MULTI_REFERENCE_SEPARATOR = (
 # erase an unambiguous locator.
 _FOLLOWING_REFERENCE_TOKEN = (
     r"(?:(?:(?:Figs?\.?|Figures?\.?|Tables?\.?|panels?)\s*)"
-    r"(?:[A-Za-z]|\d+[A-Za-z]?)|(?-i:[A-Zb-z])(?!-)|\d+[A-Za-z]?)\b"
+    rf"(?:[A-Za-z]|\d+[A-Za-z]?)|(?-i:[A-Zb-z])(?!{_HYPHEN_OR_DASH})|"
+    r"\d+[A-Za-z]?)\b"
 )
 _MULTI_REFERENCE_PATTERN = re.compile(
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+[A-Za-z]?\s*"
@@ -83,13 +85,19 @@ _LOWERCASE_A_CONTINUATION_PATTERN = re.compile(
 # the continuation supplies positive grammatical evidence that "a" is an
 # article: a noun phrase followed by an auxiliary/copula, or by a third-person
 # singular predicate with an explicit complement. The required noun cannot be
-# an ``-ly`` adverb, though such modifiers are accepted after an established
-# noun. This avoids treating panel-subject prose such as "a clearly shows" as
-# an article while retaining "a control clearly confirms the result".
+# an ``-ly`` adverb or a degree modifier, though modifiers are accepted around
+# an established noun. This avoids treating panel-subject prose such as
+# "a very clearly shows" as an article while retaining
+# "a control clearly confirms the result".
+_ARTICLE_NON_NOUN_MODIFIER = (
+    r"(?:almost|enough|far|just|least|less|more|most|much|quite|rather|so|"
+    r"somewhat|too|very|well)"
+)
 _ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
     r"^\s+(?:(?!(?:and|or|but|that|which|who|whose|where|when)\b)"
     r"[A-Za-z][A-Za-z0-9'-]*\s+)*?"
     r"(?!(?:[A-Za-z][A-Za-z0-9'-]*ly)\b)"
+    rf"(?!{_ARTICLE_NON_NOUN_MODIFIER}\b)"
     r"(?!(?:and|or|but|that|which|who|whose|where|when)\b)"
     r"[A-Za-z][A-Za-z0-9'-]*\s+"
     r"(?:[A-Za-z][A-Za-z0-9'-]*ly\s+)*(?:"

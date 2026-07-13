@@ -97,6 +97,9 @@ def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -
         "Fig. 1b and a correspond to different genotypes.",
         "Unlike Fig. 1b, a clearly shows the complementary signal.",
         "In contrast to Fig. 1b, a independently confirms the result.",
+        "Unlike Fig. 1b, a very clearly shows the complementary signal.",
+        "In contrast to Fig. 1b, a quite independently confirms the result.",
+        "Unlike Fig. 1b, a more clearly shows the complementary signal.",
         "Figure 1 panels a and b show different expression patterns.",
         "Panels a and b show different expression patterns.",
         "Figure 1 panels a-c show different expression patterns.",
@@ -146,6 +149,8 @@ def test_provider_figure_metadata_does_not_fallback_for_plural_references(
         "Fig. 1A and panel B show different patterns.",
         "Figure 1A versus panel B shows the comparison.",
         "Fig. 1A through C show different patterns.",
+        "Fig. 1A-B show different patterns.",
+        "Fig. 1A–B show different patterns.",
         "Fig. 1A or B show alternative patterns.",
         "Panels A or B show alternative patterns.",
         "Fig. 1A and/or B show alternative patterns.",
@@ -207,6 +212,10 @@ def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
             "Fig. 1b and a control clearly confirms the result.",
             "Fig. 1b",
         ),
+        (
+            "Fig. 1b and a very strong control clearly confirms the result.",
+            "Fig. 1b",
+        ),
     ),
 )
 def test_provider_figure_metadata_preserves_locator_before_lowercase_prose(
@@ -236,6 +245,14 @@ def test_provider_figure_metadata_preserves_locator_before_lowercase_prose(
         (
             "Figure 1 and T-cell abundance is increased.",
             "Figure 1",
+        ),
+        (
+            "Fig. 1A and B‑cell staining confirms the result.",
+            "Fig. 1A",
+        ),
+        (
+            "Fig. 1A and B–cell staining confirms the result.",
+            "Fig. 1A",
         ),
     ),
 )
