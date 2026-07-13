@@ -204,7 +204,8 @@ _SCOPED_MULTI_PANEL_PATTERN = re.compile(
 )
 _LATER_SCOPED_PANEL_PATTERN = re.compile(
     rf"\b{_PANEL_NOUN}\s+{_PANEL_LIST_FIRST_ITEM}(?:\s+|,\s*)"
-    rf"[^.\r\n!?;]*?\b(?:whereas|while|but|and|or)\s+"
+    rf"[^.\r\n!?;]*?\b(?:whereas|while|but|and|or|with|relative\s+to|"
+    rf"in\s+comparison\s+with)\s+"
     rf"{_FIGURE_LIST_FOLLOWING_ITEM}",
     re.IGNORECASE,
 )

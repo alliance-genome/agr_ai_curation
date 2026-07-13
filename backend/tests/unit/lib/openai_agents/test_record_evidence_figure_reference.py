@@ -475,10 +475,15 @@ def test_provider_figure_metadata_uses_unambiguous_structured_fallback(
         "Panels [A and B] show different expression patterns.",
         "Subpanels (A, B) show different expression patterns.",
         "Subfigure [A/B] shows different expression patterns.",
+        "Panels A (left), with B shown at right.",
+        "Panels A with B shown at right.",
+        "Panel A, with B shown at right.",
+        "Panels A relative to B show the contrast.",
+        "Panels A in comparison with B show the contrast.",
     ),
 )
 @pytest.mark.asyncio
-async def test_record_evidence_omits_fallback_for_grouped_panel_lists(
+async def test_record_evidence_omits_fallback_for_ambiguous_panel_lists(
     monkeypatch: pytest.MonkeyPatch,
     chunk_text: str,
 ) -> None:
@@ -498,6 +503,36 @@ async def test_record_evidence_omits_fallback_for_grouped_panel_lists(
         for fragment in result["source_fragments"]
     )
     assert "figure_reference" not in result
+
+
+@pytest.mark.parametrize(
+    "chunk_text",
+    (
+        "Panel A with signal restricted to the wing disc.",
+        "Panel A with B cells showing the expression pattern.",
+    ),
+)
+@pytest.mark.asyncio
+async def test_record_evidence_preserves_fallback_for_non_panel_with_prose(
+    monkeypatch: pytest.MonkeyPatch,
+    chunk_text: str,
+) -> None:
+    chunk = _provider_chunk(chunk_text)
+
+    async def _fake_get_chunk_by_id(**_kwargs: object) -> dict[str, object]:
+        return chunk
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(entity="wg", span_ids=_provider_span_ids(chunk_text))
+
+    assert result["status"] == "verified"
+    assert all(
+        fragment["figure_reference"] == "Figure 1"
+        for fragment in result["source_fragments"]
+    )
+    assert result["figure_reference"] == "Figure 1"
 
 
 def test_provider_figure_metadata_omits_conflicting_structured_fallbacks() -> None:
