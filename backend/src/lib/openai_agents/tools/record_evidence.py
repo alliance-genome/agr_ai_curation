@@ -57,7 +57,8 @@ _WORD_MULTI_REFERENCE_SEPARATOR = (
     r"\balongside\s+)"
 )
 _MULTI_REFERENCE_SEPARATOR = (
-    rf"(?:{_PUNCTUATED_MULTI_REFERENCE_SEPARATOR}|"
+    rf"(?:,\s*{_WORD_MULTI_REFERENCE_SEPARATOR}|"
+    rf"{_PUNCTUATED_MULTI_REFERENCE_SEPARATOR}|"
     rf"{_WORD_MULTI_REFERENCE_SEPARATOR})"
 )
 # An explicit figure/table/panel prefix makes a one-letter token unambiguous.
@@ -99,7 +100,8 @@ _MULTI_REFERENCE_PATTERN = re.compile(
 )
 _LOWERCASE_A_CONTINUATION_PATTERN = re.compile(
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+(?:"
-    rf"[A-Za-z]?\s*{_PUNCTUATED_MULTI_REFERENCE_SEPARATOR}|"
+    rf"[A-Za-z]?\s*(?:,\s*{_WORD_MULTI_REFERENCE_SEPARATOR}|"
+    rf"{_PUNCTUATED_MULTI_REFERENCE_SEPARATOR})|"
     rf"(?-i:[B-Zb-z])\s*{_WORD_MULTI_REFERENCE_SEPARATOR})"
     rf"(?-i:a)\b",
     re.IGNORECASE,
@@ -147,12 +149,13 @@ _ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _PANEL_LIST_TOKEN = r"(?:[A-Za-z]\d*|\d+)"
+_PANEL_NOUN = r"(?:subfigures?|subpanels?|panels?)"
 _PANEL_LIST_FIRST_ITEM = (
     rf"(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
     rf"{_PANEL_LIST_TOKEN}\b)(?:\s*\([^()\r\n]*\))?"
 )
 _PANEL_LIST_FOLLOWING_ITEM = (
-    rf"(?:panels?\s+)?(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
+    rf"(?:{_PANEL_NOUN}\s+)?(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
     rf"{_PANEL_LIST_TOKEN}\b(?!{_HYPHEN_OR_DASH}))"
     r"(?:\s*\([^()\r\n]*\))?"
 )
@@ -160,7 +163,7 @@ _PANEL_LIST_FOLLOWING_ITEM = (
 # _has_ambiguous_lowercase_a_continuation. An explicit or parenthesized token
 # remains unambiguous panel syntax regardless of case.
 _FIGURE_LIST_FOLLOWING_ITEM = (
-    rf"(?:panels?\s+(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
+    rf"(?:{_PANEL_NOUN}\s+(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
     rf"{_PANEL_LIST_TOKEN}\b(?!{_HYPHEN_OR_DASH}))|"
     rf"\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
     rf"(?-i:[A-Z])\d*\b(?!{_HYPHEN_OR_DASH}|"
@@ -169,9 +172,9 @@ _FIGURE_LIST_FOLLOWING_ITEM = (
     rf"\d+\b(?!{_HYPHEN_OR_DASH}))"
     r"(?:\s*\([^()\r\n]*\))?"
 )
-_PANEL_NOUN = r"(?:subpanels?|panels?)"
 _PANEL_SCOPE_QUALIFIER = (
-    r"(?:label(?:l)?ed|denoted|marked|designated|identified\s+as|called|"
+    r"(?:label(?:l)?ed(?:\s+as)?|denoted(?:\s+as)?|marked(?:\s+as)?|"
+    r"designated(?:\s+as)?|identified\s+as|called|"
     r"known\s+as|referred\s+to\s+as)"
 )
 _SCOPED_MULTI_PANEL_PATTERN = re.compile(
@@ -187,7 +190,7 @@ _SCOPED_MULTI_PANEL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _LATER_SCOPED_PANEL_PATTERN = re.compile(
-    rf"\bpanel\s+{_PANEL_LIST_FIRST_ITEM}(?:\s+|,\s*)"
+    rf"\b{_PANEL_NOUN}\s+{_PANEL_LIST_FIRST_ITEM}(?:\s+|,\s*)"
     rf"[^.\r\n!?;]*?\b(?:whereas|while|but|and|or)\s+"
     rf"{_FIGURE_LIST_FOLLOWING_ITEM}",
     re.IGNORECASE,
@@ -197,7 +200,8 @@ _LOCATOR_PANEL_TOKEN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _EXPLICIT_PANEL_TOKEN_PATTERN = re.compile(
-    rf"\bpanels?\s+(?P<panel>[A-Za-z]\d*|\d+)\b(?!{_HYPHEN_OR_DASH})",
+    rf"\b{_PANEL_NOUN}\s+(?P<panel>[A-Za-z]\d*|\d+)\b"
+    rf"(?!{_HYPHEN_OR_DASH})",
     re.IGNORECASE,
 )
 # Env-configurable via RECORD_EVIDENCE_PREVIEW_CHARS (default 300); see config.py.
