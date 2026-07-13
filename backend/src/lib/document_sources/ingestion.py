@@ -14,6 +14,7 @@ from uuid import UUID
 
 from src.lib.document_sources.models import DocumentSourceError
 from src.lib.document_sources.figure_metadata import (
+    apply_provider_figure_page_provenance,
     append_provider_figure_metadata_markdown,
 )
 from src.lib.document_sources.provenance import sanitize_document_source_provenance
@@ -96,6 +97,10 @@ async def ingest_provider_markdown_document(
         from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 
         elements = markdown_to_pipeline_elements(element_markdown)
+        apply_provider_figure_page_provenance(
+            elements,
+            request.provider_figure_metadata,
+        )
         if not elements:
             raise DocumentSourceMarkdownValidationError(
                 "Provider Markdown produced no usable pipeline elements"

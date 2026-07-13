@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -14,11 +15,18 @@ from src.lib.document_sources.ingestion import (
     ingest_provider_markdown_document,
 )
 from src.lib.document_sources.figure_metadata import (
+    apply_provider_figure_page_provenance,
+    append_provider_figure_metadata_markdown,
     normalize_provider_figure_metadata_sidecar,
     render_provider_figure_metadata_appendix,
 )
+from src.lib.openai_agents.evidence_spans import build_evidence_spans
+import src.lib.openai_agents.tools.record_evidence as record_evidence
+from src.lib.pipeline.chunk import chunk_parsed_document
+from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 import src.lib.document_sources.ingestion as ingestion
 from src.models.pipeline import ProcessingStage
+from src.models.strategy import ChunkingStrategy
 
 
 def _source_provenance(**overrides):
@@ -229,6 +237,64 @@ def test_normalize_provider_figure_metadata_sidecar_rejects_empty_payload() -> N
         )
 
 
+def test_normalize_provider_figure_metadata_converts_zero_based_page_once() -> None:
+    entry = normalize_provider_figure_metadata_sidecar(
+        b'{"figure_label":"Figure 1","caption_text":"Legend.","page_index":2}',
+        metadata_artifact_id="figure-meta-1",
+    )
+
+    assert entry["page_index"] == 2
+    assert entry["page_number"] == 3
+
+
+@pytest.mark.parametrize("page_index", [None, -1, True, 2.5, "2", "bad"])
+def test_normalize_provider_figure_metadata_does_not_invent_invalid_page(
+    page_index,
+) -> None:
+    raw = (
+        '{"figure_label":"Figure 1","caption_text":"Legend.","page_index":'
+        + json.dumps(page_index)
+        + "}"
+    ).encode()
+
+    entry = normalize_provider_figure_metadata_sidecar(
+        raw,
+        metadata_artifact_id="figure-meta-invalid-page",
+    )
+
+    assert "page_index" not in entry
+    assert "page_number" not in entry
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page_field", ["", ',"page_index":"bad"'])
+async def test_provider_figure_chunk_does_not_invent_absent_or_malformed_page(
+    page_field,
+) -> None:
+    entry = normalize_provider_figure_metadata_sidecar(
+        (
+            '{"figure_label":"Figure 1","caption_text":"Provider legend."'
+            + page_field
+            + "}"
+        ).encode(),
+        metadata_artifact_id="figure-meta-unknown-page",
+    )
+    markdown = append_provider_figure_metadata_markdown("# Results\n\nText.", [entry])
+    elements = markdown_to_pipeline_elements(markdown)
+    apply_provider_figure_page_provenance(elements, [entry])
+
+    chunks = await chunk_parsed_document(
+        elements,
+        ChunkingStrategy.get_research_strategy(),
+        "doc-unknown-page",
+    )
+    provider_chunk = next(
+        chunk for chunk in chunks if "Provider legend." in chunk.content
+    )
+
+    assert provider_chunk.page_number is None
+
+
 @pytest.mark.asyncio
 async def test_ingest_provider_markdown_document_indexes_provider_figure_metadata(
     monkeypatch,
@@ -261,9 +327,10 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
         return elements, SimpleNamespace(model_dump=lambda: {"sections": []})
 
     async def fake_chunk(elements, strategy, document_id):
-        del strategy, document_id
         captured_elements["chunked"] = elements
-        return [{"chunk_index": 0, "content": "ok", "metadata": {}}]
+        chunks = await chunk_parsed_document(elements, strategy, document_id)
+        captured_elements["chunks"] = chunks
+        return chunks
 
     monkeypatch.setattr(
         "src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy",
@@ -272,6 +339,13 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
     monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", fake_chunk)
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", AsyncMock())
 
+    provider_metadata = normalize_provider_figure_metadata_sidecar(
+        b'{"display_name":"paper_image_001","figure_label":"Figure 1",'
+        b'"caption_text":"Fig. 1A shows wg expression in the wing disc.",'
+        b'"page_index":2}',
+        metadata_artifact_id="110",
+    )
+
     result = await ingest_provider_markdown_document(
         ProviderMarkdownIngestionRequest(
             document_id="doc-1",
@@ -279,14 +353,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
             document_owner_user_id=42,
             markdown="# Results\n\nNative result text.\n",
             source_provenance=_source_provenance(access_scope="Restricted"),
-            provider_figure_metadata=(
-                {
-                    "metadata_artifact_id": "110",
-                    "display_name": "paper_image_001",
-                    "figure_label": "Figure 1",
-                    "caption_text": "Fig. 1A shows wg expression in the wing disc.",
-                },
-            ),
+            provider_figure_metadata=(provider_metadata,),
         ),
         weaviate_client=object(),
     )
@@ -299,6 +366,50 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
     assert "Provider Figure Metadata" in indexed_text
     assert "Provider Figure: Figure 1" in indexed_text
     assert "Fig. 1A shows wg expression in the wing disc." in indexed_text
+
+    provider_elements = [
+        element
+        for element in captured_elements["before_hierarchy"]
+        if "Provider Figure: Figure 1"
+        in element["metadata"].get("section_path", [])
+    ]
+    assert provider_elements
+    assert {element["metadata"]["page_number"] for element in provider_elements} == {3}
+
+    provider_chunk = next(
+        chunk
+        for chunk in captured_elements["chunks"]
+        if "Fig. 1A shows wg expression in the wing disc." in chunk.content
+    )
+    assert provider_chunk.page_number == 3
+
+    stored_chunk = provider_chunk.model_dump()
+    stored_chunk["text"] = stored_chunk.pop("content")
+
+    async def fake_get_chunk_by_id(**_kwargs):
+        return stored_chunk
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "function_tool", lambda fn: fn)
+    span = next(
+        candidate
+        for candidate in build_evidence_spans(
+            chunk_id=provider_chunk.id,
+            chunk_text=provider_chunk.content,
+            page_number=provider_chunk.page_number,
+            section_title=provider_chunk.section_title,
+        )
+        if "wg expression" in candidate.text
+    )
+
+    evidence = await record_evidence.create_record_evidence_tool(
+        "doc-1",
+        "user-1",
+    )(entity="wg", span_ids=[span.span_id])
+
+    assert evidence["status"] == "verified"
+    assert evidence["page"] == 3
+    assert evidence["source_fragments"][0]["page"] == 3
 
 
 @pytest.mark.asyncio
