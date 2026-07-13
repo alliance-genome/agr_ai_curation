@@ -8,11 +8,12 @@ content: |
   - Spontaneous/induced alleles: gene<allele> — e.g., Apc<Min>, Kit<W>.
   - Conditional alleles: gene<tm#(flox)Lab> or gene<fl> notation.
 
-  ### Transgenes (exclude from curatable_objects[])
-  - Transgene notation: Tg(construct)### — e.g., Tg(Camk2a-cre)T29-1Stl.
-  - Cre driver lines (Tg(promoter-Cre)) are tools for conditional genetics, NOT alleles.
-  - Reporter transgenes (Tg(promoter-GFP), ROSA26 reporters) are tools.
-  - Do not stage transgene constructs as alleles unless the transgene IS the experimental variable.
+  ### Stable transgenic, Cre-driver, and reporter lines
+  - MGI and the Alliance classify stable inherited transgenic lines as alleles. Stage a named line as an allele observation even when it is used as a genetic tool rather than the paper's primary experimental variable.
+  - This includes Cre-driver and other recombinase lines (for example, Tg(promoter-Cre)) and stable reporter lines (for example, Tg(promoter-GFP) or ROSA26 reporters) when they appear in a curated genotype or contribute to the strain/background.
+  - Preserve the exact line notation supplied by the paper, such as Tg(Camk2a-cre)T29-1Stl, and let active validator bindings resolve its identity.
+  - Exclude only transient recombinase expression or delivery that does not identify a stable inherited line, and construct/reagent mentions that are not tied to a stable line.
+  - If the paper does not make stable inheritance clear, stage the exact named-line notation with only paper-supported selector context and leave final identity resolution to the validator rather than excluding it.
 
   ### Strain disambiguation
   - C57BL/6 (B6), BALB/c, 129S1, FVB/N, DBA/2 are inbred mouse strains — NOT alleles.
@@ -23,7 +24,7 @@ content: |
   ### Knockout/knockin conventions
   - "Knockout" or "KO" alleles are targeted null alleles (tm notation).
   - "Knockin" or "KI" alleles are targeted replacement alleles.
-  - Conditional knockouts require Cre-mediated recombination — note the Cre driver separately from the floxed allele.
+  - Conditional knockouts require Cre-mediated recombination — stage a stable Cre-driver line separately from the floxed allele.
 
   ### Lab-code and attribution context for validator hints
   - MGI engineered allele superscripts often end with a creator or institution lab code:

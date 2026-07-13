@@ -25,11 +25,12 @@ backend-verified evidence selected from `read_chunk.evidence_spans[].span_id` va
 # AE-05 retrieval before staging
 You retrieved from the document before staging anything.
 
-# AE-06 retained alleles are individual identities, not tools (success criterion)
-Every retained allele is an individual allele/variant identity, not a strain, transgene/reporter, balancer, deficiency, or wild-type reference.
+# AE-06 retained items follow organism-specific classification (success criterion)
+Every retained item is an individual allele/variant identity under the active organism-specific group rules, not an excluded strain, construct/reagent, balancer, deficiency, or wild-type reference.
+Active group-specific rules are authoritative for organism nomenclature and may classify stable inherited transgenic or reporter lines as alleles.
 
-# AE-07 direct experimental support in this paper
-Every retained allele is supported by direct experimental data in this paper (phenotype, genetic cross, complementation, molecular characterization, rescue, or another result-producing assay).
+# AE-07 direct experimental support or an explicit group-specific scope expansion
+Every retained allele is supported by direct experimental data in this paper (phenotype, genetic cross, complementation, molecular characterization, rescue, or another result-producing assay) or by an explicit organism-specific group rule that defines additional curatable experimental-genotype context.
 
 # AE-08 evidence from backend-generated span ids; lookup hits are hints only
 Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values; lookup hits are non-authoritative hints only.
@@ -62,23 +63,25 @@ No invented allele symbols, identifiers, gene associations, taxa, `chunk_id` val
 # AE-30 experimental-support gate
 An allele is "experimentally supported" when this paper uses it in an experiment, such as phenotype analysis, genetic cross, complementation test, molecular characterization, rescue, or another result-producing assay.
 
-# AE-31 background/control/methods/prior-work alleles excluded by leaving them unstaged
-Alleles mentioned only as strain background, controls, methods inventory, or cited from prior work without new data are NOT retained. Do not stage them; simply leave them unstaged.
+# AE-31 background/control/methods/prior-work default and group-rule precedence
+By default, alleles mentioned only as strain background, controls, methods inventory, or cited from prior work without new data are NOT retained.
+An active group-specific rule may explicitly require a stable named allele or line from experimental-genotype/background context; that organism-specific rule takes precedence.
 
 # AE-32 author-year citations signal prior work; mixed sentence -> retain only novel
 Parenthetical author-year citations (e.g., "(Smith et al., 2018)") within a sentence are a strong signal the finding originates from prior work, not this paper.
 When a sentence contains BOTH previously published and novel findings, retain only the novel findings.
 
-# AE-33 methods-only mentions are not findings by themselves
-Entity mentions in methods/protocol descriptions (strain lists, buffer recipes, construct generation) are not findings by themselves.
+# AE-33 methods-only default with group-specific stable-line exception
+Entity mentions in methods/protocol descriptions (strain lists, buffer recipes, construct generation) are not findings by themselves unless an active group-specific rule explicitly treats a stable named line in the experimental genotype/background as curatable.
 
-# AE-34 distinguish alleles from tools; parse composite genotype strings
-Distinguish alleles from strains, transgenes/reporter constructs, balancer chromosomes, chromosomal deficiencies/duplications, and wild-type references.
+# AE-34 distinguish alleles from tools under organism-specific rules; parse composite genotype strings
+Distinguish alleles from strains, construct/reagent-only mentions, balancer chromosomes, chromosomal deficiencies/duplications, and wild-type references.
+Apply the active group-specific rules as the authority for whether stable transgenic, reporter, or driver lines are alleles for that organism.
 Parse composite genotype strings into individual alleles (e.g., "geneA(allele1); geneB(allele2)" -> two separate alleles).
 
 # AE-35 nomenclature principles (HGVS, lab codes, transgenes/balancers as tools)
 HGVS notation (c., p., g. prefixes) is used for human/clinical variant descriptions
-transgene constructs (reporters, drivers) are typically tools, NOT alleles, do not retain unless the transgene IS the experimental variable
+absent a group-specific override, construct/reagent-only transgene mentions and expression drivers are tools rather than alleles
 balancer chromosomes and chromosomal deficiencies/duplications are genetic tools, NOT alleles
 
 # AE-36 common false positives (do not stage); wild-type designations
@@ -91,7 +94,7 @@ Call `record_evidence` only for evidence spans that support a curatable allele o
 Strong allele evidence usually does one or more of the following: names a specific allele/variant and reports its phenotype, penetrance, rescue/complementation behavior, or experimental use as the studied variable
 
 # AE-39 weak/non-curatable allele evidence
-Weak or non-curatable allele evidence: gene-only statements with no specific allele or variant; strain inventory, stock list, or background-genotype text that names the allele without reporting a finding
+Weak or non-curatable allele evidence: gene-only statements with no specific allele or variant; strain inventory, stock list, or background-genotype text that names no stable allele/line required by the active group rules
 
 # AE-40 strong quote examples header (cross-cutting token) + example
 Strong quote examples:
