@@ -2,8 +2,38 @@
 
 import pytest
 
+import src.lib.openai_agents.tools.record_evidence as record_evidence
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
+from src.lib.openai_agents.evidence_spans import build_evidence_spans
 from src.lib.openai_agents.tools.record_evidence import _extract_figure_reference
+
+
+@pytest.fixture(autouse=True)
+def identity_function_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(record_evidence, "function_tool", lambda fn: fn)
+
+
+def _provider_chunk(text: str) -> dict[str, object]:
+    return {
+        "id": "provider-figure-1",
+        "text": text,
+        "page_number": 3,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+        "metadata": {},
+    }
+
+
+def _provider_span_ids(text: str) -> list[str]:
+    return [
+        span.span_id
+        for span in build_evidence_spans(
+            chunk_id="provider-figure-1",
+            chunk_text=text,
+            page_number=3,
+            section_title=PROVIDER_FIGURE_METADATA_SECTION,
+        )
+    ]
 
 
 def test_provider_figure_metadata_prefers_span_locator_over_generated_wrapper() -> None:
@@ -454,3 +484,81 @@ def test_normal_chunk_still_omits_ambiguous_multiple_locators() -> None:
     }
 
     assert _extract_figure_reference(chunk, chunk["text"]) is None
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_multi_span_prefers_span_panel_over_structured_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk_text = (
+        "Fig. 1A shows the pattern. "
+        "The wing disc has restricted expression."
+    )
+    chunk = _provider_chunk(chunk_text)
+    span_ids = _provider_span_ids(chunk_text)
+
+    async def _fake_get_chunk_by_id(**_kwargs: object) -> dict[str, object]:
+        return chunk
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(entity="wg", span_ids=span_ids)
+
+    assert result["status"] == "verified"
+    assert [
+        fragment.get("figure_reference")
+        for fragment in result["source_fragments"]
+    ] == ["Fig. 1A", "Figure 1"]
+    assert result["figure_reference"] == "Fig. 1A"
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_multi_span_omits_conflicting_span_panels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk_text = "Fig. 1A shows one pattern. Fig. 1B shows another pattern."
+    chunk = _provider_chunk(chunk_text)
+    span_ids = _provider_span_ids(chunk_text)
+
+    async def _fake_get_chunk_by_id(**_kwargs: object) -> dict[str, object]:
+        return chunk
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(entity="wg", span_ids=span_ids)
+
+    assert result["status"] == "verified"
+    assert [
+        fragment.get("figure_reference")
+        for fragment in result["source_fragments"]
+    ] == ["Fig. 1A", "Fig. 1B"]
+    assert "figure_reference" not in result
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_multi_span_does_not_replace_ambiguous_span_with_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk_text = (
+        "Fig. 1A,B show different patterns. "
+        "The wing disc has restricted expression."
+    )
+    chunk = _provider_chunk(chunk_text)
+    span_ids = _provider_span_ids(chunk_text)
+
+    async def _fake_get_chunk_by_id(**_kwargs: object) -> dict[str, object]:
+        return chunk
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(entity="wg", span_ids=span_ids)
+
+    assert result["status"] == "verified"
+    assert [
+        fragment.get("figure_reference")
+        for fragment in result["source_fragments"]
+    ] == [None, "Figure 1"]
+    assert "figure_reference" not in result

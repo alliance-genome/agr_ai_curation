@@ -239,6 +239,14 @@ _PRESERVED_METADATA_FIELDS = (
 
 
 @dataclass(frozen=True)
+class _FigureReferenceResolution:
+    reference: str | None
+    is_span_derived: bool = False
+    selected_text_ambiguous: bool = False
+    structured_fallback_ambiguous: bool = False
+
+
+@dataclass(frozen=True)
 class _ResolvedSpanFragment:
     span: EvidenceSpan
     chunk: dict[str, Any]
@@ -247,7 +255,7 @@ class _ResolvedSpanFragment:
     page: int | None
     section: str | None
     subsection: str | None
-    figure_reference: str | None
+    figure_reference: _FigureReferenceResolution
 
     def to_source_fragment(self) -> dict[str, Any]:
         parsed_span = parse_evidence_span_id(self.span.span_id)
@@ -269,8 +277,8 @@ class _ResolvedSpanFragment:
             fragment["section"] = self.section
         if self.subsection:
             fragment["subsection"] = self.subsection
-        if self.figure_reference:
-            fragment["figure_reference"] = self.figure_reference
+        if self.figure_reference.reference:
+            fragment["figure_reference"] = self.figure_reference.reference
         return fragment
 
 
@@ -380,6 +388,14 @@ def _extract_figure_reference(
     chunk_text: str,
     span_text: str | None = None,
 ) -> str | None:
+    return _resolve_figure_reference(chunk, chunk_text, span_text).reference
+
+
+def _resolve_figure_reference(
+    chunk: dict[str, Any],
+    chunk_text: str,
+    span_text: str | None = None,
+) -> _FigureReferenceResolution:
     selected_text = span_text or chunk_text
     if _is_provider_figure_metadata_chunk(chunk):
         selected_text = _strip_provider_figure_metadata_wrapper(selected_text)
@@ -387,21 +403,68 @@ def _extract_figure_reference(
     # Span-derived provenance is authoritative. Ambiguous shorthand must be
     # rejected before regex extraction can collapse it to its first locator.
     if _has_ambiguous_figure_reference(selected_text):
-        return None
+        return _FigureReferenceResolution(
+            reference=None,
+            selected_text_ambiguous=True,
+        )
     span_candidates = _reference_candidates((selected_text,))
     if len(span_candidates) == 1:
-        return span_candidates[0]
+        return _FigureReferenceResolution(
+            reference=span_candidates[0],
+            is_span_derived=True,
+        )
     if span_candidates:
-        return None
+        return _FigureReferenceResolution(
+            reference=None,
+            selected_text_ambiguous=True,
+        )
 
     # Structured provenance is only a fallback when the selected text contains
     # neither a locator nor evidence that it refers to multiple panels.
     structured_sources = _structured_figure_reference_sources(chunk)
     if any(_has_ambiguous_figure_reference(source) for source in structured_sources):
-        return None
+        return _FigureReferenceResolution(
+            reference=None,
+            structured_fallback_ambiguous=True,
+        )
     structured_candidates = _reference_candidates(structured_sources)
     if len(structured_candidates) == 1:
-        return structured_candidates[0]
+        return _FigureReferenceResolution(reference=structured_candidates[0])
+    return _FigureReferenceResolution(
+        reference=None,
+        structured_fallback_ambiguous=bool(structured_candidates),
+    )
+
+
+def _aggregate_figure_reference(
+    resolutions: list[_FigureReferenceResolution],
+) -> str | None:
+    if any(resolution.selected_text_ambiguous for resolution in resolutions):
+        return None
+
+    span_references = _unique_non_empty(
+        [
+            resolution.reference
+            for resolution in resolutions
+            if resolution.is_span_derived
+        ]
+    )
+    if len(span_references) == 1:
+        return span_references[0]
+    if span_references:
+        return None
+
+    if any(resolution.structured_fallback_ambiguous for resolution in resolutions):
+        return None
+    structured_references = _unique_non_empty(
+        [
+            resolution.reference
+            for resolution in resolutions
+            if not resolution.is_span_derived
+        ]
+    )
+    if len(structured_references) == 1:
+        return structured_references[0]
     return None
 
 
@@ -1214,7 +1277,7 @@ def create_record_evidence_tool(
                     page=page,
                     section=section,
                     subsection=subsection,
-                    figure_reference=_extract_figure_reference(
+                    figure_reference=_resolve_figure_reference(
                         chunk,
                         chunk_text,
                         span.text,
@@ -1225,7 +1288,7 @@ def create_record_evidence_tool(
         verified_quote = "\n\n".join(fragment.span.text for fragment in fragments)
         first_fragment = fragments[0]
         chunk_ids = _unique_non_empty([fragment.chunk_id for fragment in fragments])
-        figure_references = _unique_non_empty(
+        figure_reference = _aggregate_figure_reference(
             [fragment.figure_reference for fragment in fragments]
         )
 
@@ -1250,8 +1313,8 @@ def create_record_evidence_tool(
             payload["section"] = first_fragment.section
         if first_fragment.subsection:
             payload["subsection"] = first_fragment.subsection
-        if len(figure_references) == 1:
-            payload["figure_reference"] = figure_references[0]
+        if figure_reference:
+            payload["figure_reference"] = figure_reference
 
         payload["evidence_record_id"] = (
             normalized_evidence_record_id
