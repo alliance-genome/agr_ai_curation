@@ -178,6 +178,18 @@ class DocumentSourceProvider(Protocol):
         """Return whether a conversion response says provider main text exists or is pending."""
         raise NotImplementedError
 
+    def conversion_progress_percentage(self, result: SourceConversionResult) -> int:
+        """Map provider conversion state to local job progress."""
+        raise NotImplementedError
+
+    def conversion_progress_message(self, result: SourceConversionResult) -> str:
+        """Return provider-owned curator-facing conversion progress wording."""
+        raise NotImplementedError
+
+    def conversion_failure_message(self, result: SourceConversionResult) -> str:
+        """Return provider-owned sanitized conversion failure wording."""
+        raise NotImplementedError
+
     async def list_artifacts(
         self,
         reference: SourceReference | str,

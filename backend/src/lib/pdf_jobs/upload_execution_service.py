@@ -15,12 +15,10 @@ from src.lib.document_sources.ingestion import (
     ProviderMarkdownIngestionRequest,
     ingest_provider_markdown_document,
 )
+from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import DocumentSourceProvider
 from src.lib.document_sources.models import (
     SourceArtifact,
-    SourceArtifactFormat,
-    SourceArtifactRole,
-    SourceArtifactStatus,
     SourceConversionResult,
     SourceConversionStatus,
 )
@@ -478,8 +476,12 @@ class UploadExecutionService:
                     curator_token=curator_token,
                 )
                 progress_metadata = _conversion_job_metadata(last_result)
-                progress_percentage = 35 if selected_artifact is not None else _conversion_progress_percentage(last_result)
-                message = _conversion_progress_message(last_result)
+                progress_percentage = (
+                    35
+                    if selected_artifact is not None
+                    else provider.conversion_progress_percentage(last_result)
+                )
+                message = provider.conversion_progress_message(last_result)
                 pdf_job_service.update_progress(
                     job_id=request.job_id,
                     stage="provider_conversion",
@@ -521,7 +523,7 @@ class UploadExecutionService:
                     return
 
                 if last_result.status is SourceConversionStatus.FAILED:
-                    raise RuntimeError(_conversion_failure_message(last_result))
+                    raise RuntimeError(provider.conversion_failure_message(last_result))
                 if last_result.status is SourceConversionStatus.NO_SOURCES:
                     raise RuntimeError("Provider conversion found no convertible source files")
                 if last_result.status is SourceConversionStatus.CONVERTED:
@@ -592,18 +594,23 @@ class UploadExecutionService:
         conversion_result: SourceConversionResult,
         curator_token: str,
     ) -> tuple[SourceArtifact | None, tuple[str, ...]]:
-        if not _conversion_result_has_main_text(
-            conversion_result,
-            provider_id=str(request.source_provenance.get("provider") or ""),
-        ):
+        if not provider.conversion_exposes_main_text(conversion_result):
             return None, ()
         artifacts = await provider.list_artifacts(
             request.reference,
             request_bearer_token=curator_token,
         )
-        selected, ambiguous_count = _select_preferred_main_markdown(
-            artifacts,
-            reference=request.reference,
+        reference_key = str(request.reference or "").strip()
+        reference_artifacts = (
+            artifact
+            for artifact in artifacts
+            if not reference_key
+            or artifact.reference_curie == reference_key
+            or artifact.reference_id == reference_key
+        )
+        selected, ambiguous_count = select_preferred_main_text_artifact(
+            provider,
+            reference_artifacts,
         )
         if ambiguous_count > 1:
             raise RuntimeError("Provider conversion produced multiple equally preferred Markdown artifacts")
@@ -972,81 +979,6 @@ class UploadExecutionService:
         )
 
 
-def _conversion_result_has_main_text(
-    result: SourceConversionResult,
-    *,
-    provider_id: str,
-) -> bool:
-    if provider_id != "abc_literature":
-        return result.status in {
-            SourceConversionStatus.CONVERTED,
-            SourceConversionStatus.RUNNING,
-        } and bool(result.converted_classes or result.per_file_progress)
-
-    if "converted_merged_main" in result.converted_classes:
-        return True
-    for progress in result.per_file_progress:
-        converted = progress.get("converted")
-        if not isinstance(converted, dict):
-            continue
-        if converted.get("file_class") == "converted_merged_main":
-            return True
-    for mod_status in result.per_mod_status:
-        if mod_status.get("main_converted") is True:
-            return True
-    return False
-
-
-def _select_preferred_main_markdown(
-    artifacts: list[SourceArtifact],
-    *,
-    reference: str,
-) -> tuple[SourceArtifact | None, int]:
-    reference_key = str(reference or "").strip()
-    candidates = [
-        artifact
-        for artifact in artifacts
-        if artifact.role is SourceArtifactRole.CONVERTED_TEXT
-        and artifact.artifact_format is SourceArtifactFormat.MARKDOWN
-        and artifact.status in {SourceArtifactStatus.AVAILABLE, SourceArtifactStatus.UNKNOWN}
-        and _is_canonical_main_markdown_artifact(artifact)
-        and (
-            not reference_key
-            or artifact.reference_curie == reference_key
-            or artifact.reference_id == reference_key
-        )
-    ]
-    if not candidates:
-        return None, 0
-    ranked = sorted(
-        ((_main_markdown_sort_key(artifact), artifact) for artifact in candidates),
-        key=lambda item: (
-            item[0],
-            str(item[1].display_name or "").strip().lower(),
-            item[1].artifact_id,
-        ),
-    )
-    best_rank = ranked[0][0]
-    best = [artifact for rank, artifact in ranked if rank == best_rank]
-    if len(best) > 1:
-        return None, len(best)
-    return best[0], 1
-
-
-def _is_canonical_main_markdown_artifact(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    if artifact.provider == "abc_literature":
-        return file_class == "converted_merged_main"
-    return True
-
-
-def _main_markdown_sort_key(artifact: SourceArtifact) -> tuple[int]:
-    display_name = str(artifact.display_name or "").strip().lower()
-    is_nxml = display_name.endswith("_nxml") or display_name.endswith("_nxml.md")
-    is_tei = display_name.endswith("_tei") or display_name.endswith("_tei.md")
-    return (0 if is_nxml else 2 if is_tei else 1,)
-
-
 def _conversion_job_metadata(result: SourceConversionResult) -> dict[str, Any]:
     document_source: dict[str, Any] = {
         "conversion_status": result.status.value,
@@ -1074,64 +1006,6 @@ def _json_safe_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
         else:
             safe[str(key)] = raw_value
     return safe
-
-
-def _conversion_progress_percentage(result: SourceConversionResult) -> int:
-    if result.status is SourceConversionStatus.RUNNING:
-        if "converted_merged_main" in result.converted_classes:
-            return 35
-        return 20
-    if result.status is SourceConversionStatus.CONVERTED:
-        return 35
-    if result.status in {SourceConversionStatus.FAILED, SourceConversionStatus.NO_SOURCES}:
-        return 100
-    return 15
-
-
-def _conversion_progress_message(result: SourceConversionResult) -> str:
-    if "converted_merged_main" in result.converted_classes:
-        return "ABC Literature main text is ready; importing converted Markdown"
-    if result.status is SourceConversionStatus.RUNNING:
-        pending_count = _count_progress_status(result, "pending")
-        if pending_count:
-            return f"ABC Literature conversion running ({pending_count} file{'s' if pending_count != 1 else ''} pending)"
-        return "ABC Literature conversion running"
-    if result.status is SourceConversionStatus.CONVERTED:
-        return "ABC Literature conversion completed; locating converted Markdown"
-    if result.status is SourceConversionStatus.FAILED:
-        return _conversion_failure_message(result)
-    if result.status is SourceConversionStatus.NO_SOURCES:
-        return "ABC Literature found no convertible source files"
-    return "Waiting for ABC Literature conversion status"
-
-
-def _count_progress_status(result: SourceConversionResult, status: str) -> int:
-    return sum(
-        1
-        for progress in result.per_file_progress
-        if str(progress.get("status") or "").strip().lower() == status
-    )
-
-
-def _conversion_failure_message(result: SourceConversionResult) -> str:
-    if result.error_message:
-        return result.error_message
-    failures = []
-    for progress in result.per_file_progress:
-        if str(progress.get("status") or "").strip().lower() != "failed":
-            continue
-        source = progress.get("source")
-        source_name = None
-        if isinstance(source, Mapping):
-            source_name = source.get("display_name")
-        error = progress.get("error")
-        if source_name and error:
-            failures.append(f"{source_name}: {error}")
-        elif error:
-            failures.append(str(error))
-    if failures:
-        return "; ".join(failures)
-    return "ABC Literature conversion failed"
 
 
 def _source_provenance_with_converted_artifact(

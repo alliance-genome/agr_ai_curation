@@ -23,6 +23,7 @@ from src.lib.document_sources.import_selection import (
     provider_metadata_artifacts_for_source,
     source_artifact_is_authorized,
 )
+from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceError,
@@ -327,15 +328,9 @@ async def select_reference_import_candidate(
         source_artifact=source_artifact,
         artifacts=artifacts,
     )
-    ready_artifacts = tuple(
-        artifact
-        for artifact in markdown_artifacts
-        if _converted_artifact_is_ready(artifact)
-        and _provider_is_main_text_artifact(provider, artifact)
-    )
-    selected_artifact, ambiguous_count = _select_preferred_converted_markdown(
+    selected_artifact, ambiguous_count = select_preferred_main_text_artifact(
         provider,
-        ready_artifacts
+        markdown_artifacts,
     )
     if ambiguous_count > 1:
         return _reference_decision(
@@ -368,7 +363,7 @@ async def select_reference_import_candidate(
         )
     if any(
         artifact.status is SourceArtifactStatus.RUNNING
-        and _provider_is_main_text_artifact(provider, artifact)
+        and provider.is_main_text_artifact(artifact)
         for artifact in markdown_artifacts
     ):
         return _reference_decision(
@@ -385,7 +380,7 @@ async def select_reference_import_candidate(
         )
     if any(
         artifact.status is SourceArtifactStatus.FAILED
-        and _provider_is_main_text_artifact(provider, artifact)
+        and provider.is_main_text_artifact(artifact)
         for artifact in markdown_artifacts
     ):
         return _reference_decision(
@@ -410,10 +405,7 @@ async def select_reference_import_candidate(
         )
     if conversion_result is not None:
         conversion_metadata = _reference_conversion_metadata(conversion_result)
-        if _reference_conversion_has_main_text(
-            provider,
-            conversion_result,
-        ):
+        if provider.conversion_exposes_main_text(conversion_result):
             refreshed_artifacts = await provider.list_artifacts(
                 reference,
                 request_bearer_token=request_bearer_token,
@@ -1337,55 +1329,6 @@ def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -
     return not artifact.reference_id and not artifact.reference_curie
 
 
-def _converted_artifact_is_ready(artifact: SourceArtifact) -> bool:
-    return artifact.status in {SourceArtifactStatus.AVAILABLE, SourceArtifactStatus.UNKNOWN}
-
-
-def _select_preferred_converted_markdown(
-    provider: DocumentSourceProvider,
-    artifacts: tuple[SourceArtifact, ...],
-) -> tuple[SourceArtifact | None, int]:
-    if not artifacts:
-        return None, 0
-    ranked = sorted(
-        ((_provider_main_text_sort_key(provider, artifact), artifact) for artifact in artifacts),
-        key=lambda item: (item[0], item[1].artifact_id),
-    )
-    best_rank = ranked[0][0]
-    best = [artifact for rank, artifact in ranked if rank == best_rank]
-    if len(best) > 1:
-        return None, len(best)
-    return best[0], 1
-
-
-def _provider_is_main_text_artifact(
-    provider: DocumentSourceProvider,
-    artifact: SourceArtifact,
-) -> bool:
-    is_main_text_artifact = getattr(provider, "is_main_text_artifact", None)
-    if callable(is_main_text_artifact):
-        typed_is_main_text_artifact = cast(
-            Callable[[SourceArtifact], bool],
-            is_main_text_artifact,
-        )
-        return bool(typed_is_main_text_artifact(artifact))
-    return True
-
-
-def _provider_main_text_sort_key(
-    provider: DocumentSourceProvider,
-    artifact: SourceArtifact,
-) -> tuple[int, ...]:
-    main_text_artifact_sort_key = getattr(provider, "main_text_artifact_sort_key", None)
-    if callable(main_text_artifact_sort_key):
-        typed_main_text_artifact_sort_key = cast(
-            Callable[[SourceArtifact], Iterable[int]],
-            main_text_artifact_sort_key,
-        )
-        return tuple(typed_main_text_artifact_sort_key(artifact))
-    return (0,)
-
-
 async def _request_reference_conversion_if_supported(
     *,
     provider: DocumentSourceProvider,
@@ -1410,26 +1353,6 @@ async def _request_reference_conversion_if_supported(
         return None
 
 
-def _reference_conversion_has_main_text(
-    provider: DocumentSourceProvider,
-    result: SourceConversionResult,
-) -> bool:
-    conversion_exposes_main_text = getattr(provider, "conversion_exposes_main_text", None)
-    if callable(conversion_exposes_main_text):
-        typed_conversion_exposes_main_text = cast(
-            Callable[[SourceConversionResult], bool],
-            conversion_exposes_main_text,
-        )
-        return bool(typed_conversion_exposes_main_text(result))
-    return (
-        result.status in {
-            SourceConversionStatus.CONVERTED,
-            SourceConversionStatus.RUNNING,
-        }
-        and bool(result.converted_classes or result.per_file_progress)
-    )
-
-
 def _select_reference_level_markdown_artifact(
     *,
     provider: DocumentSourceProvider,
@@ -1441,11 +1364,9 @@ def _select_reference_level_markdown_artifact(
         for artifact in artifacts
         if artifact.role is SourceArtifactRole.CONVERTED_TEXT
         and artifact.artifact_format is SourceArtifactFormat.MARKDOWN
-        and artifact.status in {SourceArtifactStatus.AVAILABLE, SourceArtifactStatus.UNKNOWN}
-        and _provider_is_main_text_artifact(provider, artifact)
         and _same_reference(source_artifact, artifact)
     )
-    return _select_preferred_converted_markdown(provider, candidates)
+    return select_preferred_main_text_artifact(provider, candidates)
 
 
 def _reference_conversion_metadata(result: SourceConversionResult) -> dict[str, Any]:

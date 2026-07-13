@@ -19,6 +19,7 @@ from src.lib.document_sources.models import (
     SourceArtifactFormat,
     SourceArtifactRole,
     SourceArtifactStatus,
+    SourceConversionResult,
     SourceConversionStatus,
     SourceReference,
 )
@@ -714,6 +715,21 @@ async def test_request_conversion_delegates_with_safe_defaults() -> None:
     assert result.job_id == "job-1"
     assert result.converted_classes == ("converted_merged_main",)
     assert result.per_file_progress[0]["converted"]["referencefile_id"] == 88
+
+
+def test_conversion_exposes_main_text_from_per_mod_status() -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+    result = SourceConversionResult(
+        provider="abc_literature",
+        status=SourceConversionStatus.RUNNING,
+        per_mod_status=({"mod": "FB", "main_converted": True},),
+    )
+
+    assert provider.conversion_exposes_main_text(result) is True
+    assert provider.conversion_progress_percentage(result) == 35
+    assert provider.conversion_progress_message(result) == (
+        "ABC Literature main text is ready; importing converted Markdown"
+    )
 
 
 @pytest.mark.asyncio

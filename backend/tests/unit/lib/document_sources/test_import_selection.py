@@ -206,7 +206,7 @@ def _fake_conversion_exposes_main_text(
         converted = progress.get("converted")
         if isinstance(converted, dict) and converted.get("file_class") == "converted_merged_main":
             return True
-    return False
+    return any(status.get("main_converted") is True for status in result.per_mod_status)
 
 
 def _source(
@@ -669,6 +669,59 @@ async def test_select_checksum_import_candidate_blocks_ambiguous_post_conversion
     assert decision.selected is None
     assert decision.metadata["conversion_status"] == "converted"
     assert decision.metadata["match_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_select_checksum_import_candidate_accepts_per_mod_only_readiness():
+    source = _source("source-1", provider="abc_literature")
+    markdown = _converted("md-1", "source-1", provider="abc_literature")
+    provider = FakeConversionProvider(
+        [source],
+        conversion_result=SourceConversionResult(
+            provider="abc_literature",
+            status=SourceConversionStatus.RUNNING,
+            reference_curie="AGRKB:101",
+            per_mod_status=({"mod": "FB", "main_converted": True},),
+        ),
+        listed_artifacts=[source, markdown],
+    )
+    provider.provider_id = "abc_literature"
+
+    decision = await select_checksum_import_candidate(
+        provider=provider,
+        checksum="abc123",
+        authorized_group_ids=(),
+    )
+
+    assert decision.status is ChecksumImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.converted_artifact is markdown
+
+
+@pytest.mark.asyncio
+async def test_select_checksum_import_candidate_rejects_explicit_unknown_markdown():
+    provider = FakeChecksumProvider(
+        [
+            _source("source-1"),
+            _converted(
+                "md-unknown",
+                "source-1",
+                status=SourceArtifactStatus.UNKNOWN,
+            ),
+        ]
+    )
+
+    decision = await select_checksum_import_candidate(
+        provider=provider,
+        checksum="abc123",
+        authorized_group_ids=(),
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ChecksumImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.converted_artifact is None
+    assert "No converted Markdown artifact" in decision.message
 
 
 @pytest.mark.asyncio
