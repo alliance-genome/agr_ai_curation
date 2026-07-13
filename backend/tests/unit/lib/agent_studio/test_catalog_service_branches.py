@@ -410,6 +410,8 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     assert catalog_service.get_agent_metadata("task_input")["display_name"] == "Initial Instructions"
     with pytest.raises(ValueError, match="Unknown agent_id"):
         catalog_service.get_agent_metadata("missing")
+    with pytest.raises(ValueError, match="not an active unified agent"):
+        catalog_service.get_active_visible_agent_metadata("gene", db_user_id=7)
 
 
 def test_list_available_agents_filters_invalid_metadata(monkeypatch):

@@ -30,6 +30,7 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
+from src.lib.config.schema_discovery import resolve_output_schema
 
 
 revision: str = "d6e7f8a9b0c1"
@@ -66,11 +67,6 @@ _REVIEWED_SOURCE_AGENT_IDS_BY_FLOW: dict[str, tuple[str, ...]] = {
     "98ccaaf4-7830-4ee0-a3db-7eb31391f9c3": ("allele_extractor",),
     "bc9fb1b3-9df6-4c80-9351-ff488c7e58eb": ("allele_extractor",),
     "ce968487-475f-4c81-bc1c-363707fd33ae": ("allele_extractor",),
-    "d9b35a69-12e2-42d4-9d29-9a5527a5c4ad": (
-        "gene_extractor",
-        "disease_extractor",
-        "phenotype_extractor",
-    ),
     "eae42c19-6dbf-49dc-854d-040dddfd199a": ("allele_extractor",),
     "f5b5a118-92a8-469a-a90c-6f8bb094caba": ("allele_extractor",),
     "f977c37b-9088-420b-8625-b60cdaec0e96": ("allele_extractor",),
@@ -102,10 +98,21 @@ _GO_FORMATTER_SOURCE_AGENT_IDS_BY_FLOW: dict[str, tuple[str, ...]] = {
     ),
     "cc4f402c-6a62-49f2-9b99-ba32522c48e6": (
         "pdf_extraction",
-        "gene_validation",
-        "gene_ontology_lookup",
-        "go_annotations_lookup",
+        "gene",
+        "gene_ontology",
+        "go_annotations",
     ),
+}
+
+_AGENT_ID_REWRITES_BY_FLOW: dict[str, dict[str, str]] = {
+    "cc4f402c-6a62-49f2-9b99-ba32522c48e6": {
+        "gene_validation": "gene",
+        "gene_ontology_lookup": "gene_ontology",
+        "go_annotations_lookup": "go_annotations",
+    },
+    "d3598120-fc98-4d04-ade0-8eddc13341c4": {
+        "gene_validation": "gene",
+    },
 }
 
 _ARCHIVE_FLOW_REASONS: dict[str, str] = {
@@ -115,6 +122,15 @@ _ARCHIVE_FLOW_REASONS: dict[str, str] = {
     "e12c5a24-34f4-4202-8638-bf7e7da5a36b": "chemical_extractor_removed",
     "8846169a-a73a-449d-a025-84b8565d4480": "private_source_agent_inactive",
     "f7b44e55-85b1-407e-a5a2-81f3ba45d405": "private_source_agent_inactive",
+    "b3dc0c4c-910d-4114-9bb0-e11c8ed0498a": "private_source_agent_inactive",
+    "53492ce3-8e95-4da9-b8b0-195685a39016": "release_smoke_agent_inactive",
+    "ae0c4b9b-0051-40cf-ae96-fccff485582a": "release_smoke_agent_inactive",
+    "28d9abca-ca82-4917-964f-4f891cdbc53f": "ontology_mapping_agent_inactive",
+    "bc2c4630-4471-4555-b78f-82436786b090": "ontology_mapping_agent_inactive",
+    "1dff4943-0094-4cda-aefb-c4a253ebd9c0": "ontology_mapping_agent_inactive",
+    "269a86a1-5ef3-4a62-9aa5-5c1416b0af4a": "ontology_mapping_agent_inactive",
+    "d9b35a69-12e2-42d4-9d29-9a5527a5c4ad": "ontology_mapping_agent_inactive",
+    "742b9ef6-284d-4f25-9df0-d7b7bdae2fac": "chemical_extractor_removed",
 }
 
 _DELETE_SMOKE_FLOW_IDS = frozenset(
@@ -133,12 +149,15 @@ _DESTRUCTIVE_PREIMAGE_SHA256_BY_FLOW: dict[str, str] = {
     "f7b44e55-85b1-407e-a5a2-81f3ba45d405": "5e8f8c69d17b9eb4c5f25313fa52a7008bf33bedff879f581eef964a5340457c",
     "5f3fb920-5f19-4d96-8b61-1c3130ecc4dd": "3fa2010d8755296985c9d3d07b018c0b728b7a878b87e40e89d0ec6de430bf99",
     "74b67fdb-7983-4c60-bf66-3497eae17709": "3fa2010d8755296985c9d3d07b018c0b728b7a878b87e40e89d0ec6de430bf99",
-}
-
-_VALIDATION_AGENT_ALIASES_BY_KEY: dict[str, tuple[str, ...]] = {
-    "gene": ("gene_validation",),
-    "gene_ontology": ("gene_ontology_lookup",),
-    "go_annotations": ("go_annotations_lookup",),
+    "28d9abca-ca82-4917-964f-4f891cdbc53f": "9532e0cbfa8985aab145b7ec3c8207f1e856f8727887d99433ba6fc7edfbe2a7",
+    "bc2c4630-4471-4555-b78f-82436786b090": "badb2166763c34b83075766f5986dd5c0e20b8ae1d16b646c956ca9cd6fc892e",
+    "1dff4943-0094-4cda-aefb-c4a253ebd9c0": "12873535a81752fddadb7d9162d2288918f60343ea97c8511fea72af337aa1cd",
+    "269a86a1-5ef3-4a62-9aa5-5c1416b0af4a": "17d3660d47960f42be60cf7d1ccd2be79ada70daeaa30f4bafa905c8bb512934",
+    "b3dc0c4c-910d-4114-9bb0-e11c8ed0498a": "2a669ac29325db3aaadae38b25a70f21689fcb21851dec35938b4a9079f4500a",
+    "53492ce3-8e95-4da9-b8b0-195685a39016": "e1a3daee5e25f6370babdf6404420ad073c028bdabf1f4cce21b76200ee6dd39",
+    "ae0c4b9b-0051-40cf-ae96-fccff485582a": "5373b261e88c90abbaf5ed226bd6832b37233be0e0f472dc8d36d6a02ac7026d",
+    "742b9ef6-284d-4f25-9df0-d7b7bdae2fac": "91aa6becec5155537c8a8d35fba43291e32b3a7cbf53cc48aaf6ef728202da40",
+    "d9b35a69-12e2-42d4-9d29-9a5527a5c4ad": "c430c078ecda1043b438e177a1acd750971a576ae77bc43cf6eac224954c3d34",
 }
 
 
@@ -468,13 +487,29 @@ def _upgrade_reviewed_definition(
     artifact_source_agent_ids: set[str],
     active_agent_ids: set[str] | None = None,
 ) -> tuple[dict[str, Any], str]:
-    if str(definition.get("version") or "1.0") != "1.0":
+    candidate = deepcopy(dict(definition))
+    rewrites = _AGENT_ID_REWRITES_BY_FLOW.get(flow_id, {})
+    rewritten = False
+    for node in candidate.get("nodes", []):
+        if not isinstance(node, Mapping):
+            continue
+        data = node.get("data")
+        if not isinstance(data, dict):
+            continue
+        replacement = rewrites.get(str(data.get("agent_id") or ""))
+        if replacement is not None:
+            data["agent_id"] = replacement
+            rewritten = True
+
+    if str(candidate.get("version") or "1.0") != "1.0":
+        if rewritten and _valid_typed_candidate(candidate):
+            candidate["migration_note"] = "normalized_active_agent_routing_keys"
+            return candidate, "agent_ids_normalized"
         return dict(definition), "already_current"
-    ordered, reason = _linear_path(definition)
-    if ordered is None or not _has_valid_task_input(definition):
+    ordered, reason = _linear_path(candidate)
+    if ordered is None or not _has_valid_task_input(candidate):
         return dict(definition), f"skipped_{reason}"
 
-    candidate = deepcopy(dict(definition))
     if flow_id in _PLAIN_FINAL_OUTPUT_FLOW_IDS:
         remaining_agent_ids = {
             _agent_id(node)
@@ -607,6 +642,7 @@ def _visible_artifact_source_ids_by_user(
         sa.text(
             """
             SELECT agent_key, user_id, visibility, project_id, category,
+                   to_jsonb(agents)->>'subcategory' AS subcategory,
                    output_schema_key
             FROM agents
             WHERE is_active = true
@@ -639,6 +675,15 @@ def _visible_artifact_source_ids_by_user(
     for user_id in user_ids:
         keys: set[str] = set()
         for row in agent_rows:
+            category = str(row["category"] or "").strip().lower()
+            subcategory = str(row["subcategory"] or "").strip().lower()
+            output_schema_key = str(row["output_schema_key"] or "").strip()
+            if (
+                "extract" not in category
+                and "extract" not in subcategory
+                and resolve_output_schema(output_schema_key) is None
+            ):
+                continue
             visibility = str(row["visibility"] or "")
             if visibility == "system":
                 visible_to_user = True
@@ -656,7 +701,6 @@ def _visible_artifact_source_ids_by_user(
                 continue
             agent_key = str(row["agent_key"])
             keys.add(agent_key)
-            keys.update(_VALIDATION_AGENT_ALIASES_BY_KEY.get(agent_key, ()))
         visible[user_id] = keys
     return visible
 
@@ -872,6 +916,39 @@ def _migrate(bind: sa.engine.Connection) -> Counter[str]:
                 ),
             )
             new_is_active = bool(row["is_active"])
+        candidate_agent_ids = {
+            _agent_id(node)
+            for node in new_definition.get("nodes", [])
+            if isinstance(node, Mapping) and _agent_id(node) != "task_input"
+        }
+        runtime_owned_agent_ids = set(_FORMATTER_AGENT_IDS)
+        unavailable_agent_ids = candidate_agent_ids - (
+            active_agent_ids_by_user.get(int(row["user_id"]), set())
+            | runtime_owned_agent_ids
+        )
+        if unavailable_agent_ids:
+            raise RuntimeError(
+                f"Flow {flow_id} retains unavailable agent IDs after migration: "
+                + ", ".join(sorted(unavailable_agent_ids))
+            )
+        nodes_by_id = {
+            str(node.get("id") or ""): node
+            for node in new_definition.get("nodes", [])
+            if isinstance(node, Mapping)
+        }
+        artifact_source_agent_ids = artifact_source_ids_by_user.get(
+            int(row["user_id"]), set()
+        )
+        for edge in new_definition.get("edges", []):
+            if not isinstance(edge, Mapping) or edge.get("role") != "output_attachment":
+                continue
+            source_node = nodes_by_id.get(str(edge.get("source") or ""))
+            source_agent_id = _agent_id(source_node or {})
+            if source_agent_id not in artifact_source_agent_ids:
+                raise RuntimeError(
+                    f"Flow {flow_id} output attachment {edge.get('id')} retains "
+                    f"non-artifact source agent '{source_agent_id}'"
+                )
         counts[reason] += 1
         if new_definition == old_definition:
             if str(old_definition.get("version") or "1.0") != "1.1":

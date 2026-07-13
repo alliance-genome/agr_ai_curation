@@ -59,7 +59,7 @@ export const projectExecutableFlowGraph = (
   nodes: ProjectableNode[],
   edges: ProjectableEdge[],
   declaredEntry: string,
-  flowVersion: '1.0' | '1.1' = '1.1',
+  _flowVersion: '1.1' = '1.1',
 ): ExecutableFlowGraph => {
   const validationAttachmentEdges = edges.filter(edge => edge.role === 'validation_attachment')
   const outputAttachmentEdges = edges.filter(edge => edge.role === 'output_attachment')
@@ -70,7 +70,7 @@ export const projectExecutableFlowGraph = (
   )
   const outputTargets = new Set(outputAttachmentEdges.map(edge => edge.target))
   const crossRoleTargets = [...validationTargets].filter(nodeId => outputTargets.has(nodeId))
-  const detachedOutputIds = flowVersion === '1.1' ? declaredOutputIds : outputTargets
+  const detachedOutputIds = declaredOutputIds
   const controlNodes = nodes.filter(
     node => !validationTargets.has(node.id) && !detachedOutputIds.has(node.id),
   )
@@ -226,14 +226,6 @@ export const projectExecutableFlowGraph = (
   const outputAttachments: ExecutableOutputAttachment[] = []
   const outputAttachmentByTarget = new Map<string, ExecutableOutputAttachment>()
   const outputEdgeBySourceTarget = new Map<string, string>()
-  if (flowVersion !== '1.1' && outputAttachmentEdges.length > 0) {
-    issues.push(issue(
-      'output_attachment_requires_v1_1',
-      "output_attachment edges require flow schema version '1.1'",
-      [],
-      outputAttachmentEdges.map(edge => edge.id),
-    ))
-  }
   outputAttachmentEdges.forEach(edge => {
     const sourceNode = nodeById.get(edge.source)
     const targetNode = nodeById.get(edge.target)
@@ -295,17 +287,15 @@ export const projectExecutableFlowGraph = (
     outputAttachmentByTarget.set(edge.target, attachment)
     outputAttachments.push(attachment)
   })
-  if (flowVersion === '1.1') {
-    declaredOutputIds.forEach(nodeId => {
-      if (!outputAttachmentByTarget.has(nodeId)) {
-        issues.push(issue(
-          'missing_output_binding',
-          `Output node '${nodeId}' must be attached to at least one control-flow extraction node`,
-          [nodeId],
-        ))
-      }
-    })
-  }
+  declaredOutputIds.forEach(nodeId => {
+    if (!outputAttachmentByTarget.has(nodeId)) {
+      issues.push(issue(
+        'missing_output_binding',
+        `Output node '${nodeId}' must be attached to at least one control-flow extraction node`,
+        [nodeId],
+      ))
+    }
+  })
 
   const seenBindings = new Map<string, string>()
   const validationSidecars = validationAttachmentEdges.map(edge => {

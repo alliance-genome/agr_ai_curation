@@ -64,6 +64,7 @@ from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
 from src.lib.curation_workspace.models import DomainEnvelopeModel
+from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     write_domain_envelope_checkpoint,
@@ -110,7 +111,7 @@ from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
-    get_agent_metadata,
+    get_active_visible_agent_metadata as get_agent_metadata,
 )
 from src.lib.openai_agents.config import (
     get_agent_config,
@@ -2162,6 +2163,16 @@ def _resolve_flow_agent_entry(
     except ValueError:
         return None
 
+    category = str(metadata.get("category") or "").strip().lower()
+    subcategory = str(metadata.get("subcategory") or "").strip().lower()
+    output_schema_key = str(metadata.get("output_schema_key") or "").strip()
+    is_extraction = "extract" in category or "extract" in subcategory
+    is_typed_validation = bool(
+        "validation" in category
+        and output_schema_key
+        and resolve_output_schema(output_schema_key) is not None
+    )
+
     return {
         "name": metadata.get("display_name", agent_id),
         "description": metadata.get("description") or "",
@@ -2169,9 +2180,11 @@ def _resolve_flow_agent_entry(
         "subcategory": metadata.get("subcategory") or "",
         "requires_document": metadata.get("requires_document", False),
         "required_params": metadata.get("required_params", []),
-        "output_schema_key": metadata.get("output_schema_key"),
+        "output_schema_key": output_schema_key or None,
         "is_active": metadata.get("is_active", True),
+        "visible": metadata.get("visible", True),
         "visibility": metadata.get("visibility"),
+        "produces_flow_artifacts": is_extraction or is_typed_validation,
         "curation": metadata.get("curation"),
         "supervisor": metadata.get("supervisor") or {},
     }

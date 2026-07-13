@@ -225,6 +225,61 @@ def test_go_formatter_suffix_becomes_two_outputs_from_same_typed_sources():
     ]
 
 
+def test_go_formatter_suffix_normalizes_active_routing_keys():
+    original = _flow(
+        "pdf_extraction",
+        "gene_validation",
+        "gene_ontology_lookup",
+        "go_annotations_lookup",
+        "chat_output",
+        "tsv_formatter",
+    )
+
+    upgraded, reason = migration._upgrade_reviewed_definition(
+        "cc4f402c-6a62-49f2-9b99-ba32522c48e6",
+        original,
+        artifact_source_agent_ids={
+            "pdf_extraction",
+            "gene",
+            "gene_ontology",
+            "go_annotations",
+        },
+    )
+
+    assert reason == "go_formatter_suffix_upgraded"
+    assert [node["data"]["agent_id"] for node in upgraded["nodes"]] == [
+        "task_input",
+        "pdf_extraction",
+        "gene",
+        "gene_ontology",
+        "go_annotations",
+        "chat_output",
+        "tsv_formatter",
+    ]
+
+
+def test_current_flow_normalizes_active_gene_routing_key():
+    original = _flow("gene_extractor", "gene_validation", "tsv_formatter")
+    original["version"] = "1.1"
+    original["nodes"][-1]["type"] = "output"
+    original["edges"][-1]["source"] = "node_0"
+    original["edges"][-1]["role"] = "output_attachment"
+
+    upgraded, reason = migration._upgrade_reviewed_definition(
+        "d3598120-fc98-4d04-ade0-8eddc13341c4",
+        original,
+        artifact_source_agent_ids={"gene_extractor", "gene"},
+    )
+
+    assert reason == "agent_ids_normalized"
+    assert upgraded["nodes"][2]["data"]["agent_id"] == "gene"
+    assert upgraded["migration_note"] == "normalized_active_agent_routing_keys"
+
+
+def test_migration_schema_resolver_rejects_unknown_validation_contract():
+    assert migration.resolve_output_schema("DefinitelyMissingValidatorResult") is None
+
+
 def test_archive_preserves_task_and_records_reason_in_current_schema():
     original = _flow("chemical_extractor", "chemical", "csv_formatter")
 

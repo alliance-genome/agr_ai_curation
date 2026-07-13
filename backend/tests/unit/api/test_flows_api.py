@@ -346,7 +346,7 @@ def test_flow_definition_payload_requires_typed_validation_formatter_sources(
 def test_flow_agent_policy_entry_rejects_unresolvable_validation_schema(monkeypatch):
     monkeypatch.setattr(
         flows,
-        "get_agent_metadata",
+        "get_active_visible_agent_metadata",
         lambda _agent_id, **_kwargs: {
             "display_name": "Broken Validator",
             "category": "Validation",
@@ -573,13 +573,11 @@ def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(
     )
     monkeypatch.setattr(
         flows,
-        "AGENT_REGISTRY",
-        {
-            "allele_validation": {
-                "name": "Allele Validation",
-                "category": "Validation",
-                "supervisor": {"enabled": False},
-            }
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {
+            "name": "Allele Validation",
+            "category": "Validation",
+            "supervisor": {"enabled": False},
         },
     )
 
@@ -626,14 +624,16 @@ def test_flow_definition_payload_allows_attachment_only_validator_sidecar(
     )
     monkeypatch.setattr(
         flows,
-        "AGENT_REGISTRY",
-        {
-            "allele_validation": {
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: (
+            {
                 "name": "Allele Validation",
                 "category": "Validation",
                 "supervisor": {"enabled": False},
             }
-        },
+            if agent_id == "allele_validation"
+            else None
+        ),
     )
 
     result = flows._validated_flow_definition_payload(
@@ -662,13 +662,11 @@ def test_flow_definition_payload_allows_supervisor_enabled_validator_step(
     )
     monkeypatch.setattr(
         flows,
-        "AGENT_REGISTRY",
-        {
-            "ontology_term_validation": {
-                "name": "Ontology Term Validation",
-                "category": "Validation",
-                "supervisor": {"enabled": True},
-            }
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {
+            "name": "Ontology Term Validation",
+            "category": "Validation",
+            "supervisor": {"enabled": True},
         },
     )
 

@@ -268,7 +268,7 @@ export interface ChatMessage {
 
 // Flow definition for context (simplified version for chat)
 export interface FlowContextDefinition {
-  version: '1.0' | '1.1'
+  version: '1.1'
   entry_node_id?: string
   nodes: Array<{
     id: string

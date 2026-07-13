@@ -197,16 +197,6 @@ describe('projectExecutableFlowGraph', () => {
       }),
     ]))
 
-    const legacy = multiOutputAttachmentFlow()
-    expect(projectExecutableFlowGraph(
-      legacy.nodes,
-      legacy.edges,
-      'task',
-      '1.0',
-    ).issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'output_attachment_requires_v1_1' }),
-    ]))
-
     const crossRole = multiOutputAttachmentFlow()
     crossRole.edges.push(edge(
       'validation_output_collision',

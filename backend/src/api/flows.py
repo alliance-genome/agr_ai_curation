@@ -32,7 +32,7 @@ from ..lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
     apply_flow_validation_attachment_defaults,
 )
-from ..lib.agent_studio.catalog_service import AGENT_REGISTRY, get_agent_metadata
+from ..lib.agent_studio.catalog_service import get_active_visible_agent_metadata
 from ..lib.agent_studio.flow_agent_policy import (
     agent_allows_ordinary_flow_step,
     attachment_only_validator_reason,
@@ -129,10 +129,9 @@ def _flow_agent_policy_entry(
         metadata_kwargs["db_user_id"] = db_user_id
 
     try:
-        metadata = get_agent_metadata(agent_id, **metadata_kwargs)
+        metadata = get_active_visible_agent_metadata(agent_id, **metadata_kwargs)
     except ValueError:
-        registry_entry = AGENT_REGISTRY.get(agent_id)
-        metadata = registry_entry if isinstance(registry_entry, dict) else None
+        return None
 
     if not isinstance(metadata, dict):
         return None

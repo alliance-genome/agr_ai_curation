@@ -309,6 +309,30 @@ def test_runtime_output_binding_accepts_only_typed_validation_sources(
             )
 
 
+def test_resolved_flow_agent_entry_rejects_unresolvable_validation_schema(monkeypatch):
+    monkeypatch.setattr(
+        _executor_module(),
+        "get_agent_metadata",
+        lambda _agent_id, **_kwargs: {
+            "display_name": "Broken Validator",
+            "category": "Validation",
+            "output_schema_key": "MissingValidatorResult",
+            "is_active": True,
+        },
+    )
+    monkeypatch.setattr(
+        _executor_module(),
+        "resolve_output_schema",
+        lambda _schema_key: None,
+    )
+
+    entry = _executor_module()._resolve_flow_agent_entry("broken_validator")
+
+    assert entry is not None
+    assert entry["produces_flow_artifacts"] is False
+    assert _executor_module().agent_can_source_output_attachment(entry) is False
+
+
 def test_terminal_formatter_bundle_filters_all_and_only_bound_sources(monkeypatch):
     captured_steps = []
     expected_bundle = SimpleNamespace(

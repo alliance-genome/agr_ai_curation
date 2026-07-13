@@ -2049,7 +2049,12 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     from src.lib.config.agent_loader import get_agent_definition
 
     agent_definition = get_agent_definition(agent_id)
-    db_agent = _get_db_agent_row(agent_id, dict(kwargs))
+    resolved_db_agent = kwargs.pop("_resolved_db_agent", None)
+    db_agent = (
+        resolved_db_agent
+        if resolved_db_agent is not None
+        else _get_db_agent_row(agent_id, dict(kwargs))
+    )
     curation_definition = (
         agent_definition
         if _launchable_curation_metadata_from_definition(agent_definition) is not None
@@ -2149,6 +2154,17 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
         f"Unknown agent_id: {agent_id}. "
         "Agent metadata is only available for unified agents table records."
     )
+
+
+def get_active_visible_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
+    """Return metadata only for an active unified row visible to the caller."""
+
+    db_agent = _get_db_agent_row(agent_id, dict(kwargs))
+    if db_agent is None:
+        raise ValueError(
+            f"Agent '{agent_id}' is not an active unified agent visible to this user."
+        )
+    return get_agent_metadata(agent_id, _resolved_db_agent=db_agent, **kwargs)
 
 
 def list_available_agents(db_user_id: Optional[int] = None) -> List[Dict[str, Any]]:
