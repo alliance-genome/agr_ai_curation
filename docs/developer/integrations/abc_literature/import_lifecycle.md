@@ -91,6 +91,13 @@ ABC conversion response fields are stored under PDF job
 | `no_sources` | Mark failed: `Provider conversion found no convertible source files`. |
 | Multiple equally preferred canonical Markdown artifacts | Mark failed/ambiguous rather than selecting alphabetically. |
 
+ABC normalizes statusless converted artifacts to `AVAILABLE` while mapping an
+explicit unrecognized producer status to `UNKNOWN`. Only normalized
+`AVAILABLE` converted Markdown is importable. Checksum, identifier, and upload
+execution share this rule and the provider's canonical-main selection hooks;
+none of those consumers treats `UNKNOWN` as a ready fallback or embeds
+`converted_merged_main` selection logic.
+
 ABC `conversion_job_id` is not durable enough to drive AI Curation recovery.
 On restart or replay, AI Curation should re-query by reference and local source
 provenance, not by assuming an ABC job ID can be resumed.
@@ -177,6 +184,9 @@ The lifecycle is covered by unit/fake tests rather than live Literature tests:
 - ABC source-only/no converted text does not silently run local PDFX;
 - resolve-only identifier checks do not request conversion;
 - provider conversion running/ready/failure/no-sources/timeout mapping;
+- per-MOD-only main-text readiness across checksum, identifier, and upload paths;
+- statusless ABC normalization and explicit-`UNKNOWN` rejection;
+- non-ABC provider-declared canonical Markdown selection;
 - terminal `converted` with no canonical non-TEI Markdown fails clearly;
 - ambiguous canonical converted Markdown fails/returns ambiguity;
 - `download_file`/provider download failures do not bypass through service auth;

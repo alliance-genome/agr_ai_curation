@@ -8,6 +8,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from src.lib.exceptions import PDFCancellationError
+from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.pdf_jobs import upload_execution_service as service_module
 from src.lib.pdf_jobs.upload_execution_service import (
     JobAwarePipelineTracker,
@@ -73,9 +74,15 @@ class _RaisingTracker(_Tracker):
 
 
 class _Provider:
-    provider_id = "fake_provider"
-
-    def __init__(self, payload=b"# Title\n\nBody"):
+    def __init__(
+        self,
+        payload=b"# Title\n\nBody",
+        *,
+        provider_id="abc_literature",
+        main_file_class="converted_merged_main",
+    ):
+        self.provider_id = provider_id
+        self.main_file_class = main_file_class
         self.payload = payload
         self.payloads = {}
         self.download_errors = {}
@@ -85,6 +92,58 @@ class _Provider:
         self.artifacts = []
         self.conversion_results = []
         self.closed = False
+
+    def conversion_exposes_main_text(self, result):
+        if self.provider_id == "abc_literature":
+            if "converted_merged_main" in result.converted_classes:
+                return True
+            if any(
+                progress.get("converted", {}).get("file_class") == "converted_merged_main"
+                for progress in result.per_file_progress
+                if isinstance(progress.get("converted"), dict)
+            ):
+                return True
+            return any(status.get("main_converted") is True for status in result.per_mod_status)
+        return result.status in {
+            SourceConversionStatus.CONVERTED,
+            SourceConversionStatus.RUNNING,
+        }
+
+    def is_main_text_artifact(self, artifact):
+        return artifact.metadata.get("file_class") == self.main_file_class
+
+    def main_text_artifact_sort_key(self, artifact):
+        display_name = str(artifact.display_name or "").lower()
+        if self.provider_id != "abc_literature":
+            return (int(artifact.metadata.get("provider_rank", 0)),)
+        if "_nxml" in display_name:
+            return (0,)
+        if "_tei" in display_name:
+            return (100,)
+        return (1,)
+
+    def conversion_progress_percentage(self, result):
+        if result.status in {
+            SourceConversionStatus.FAILED,
+            SourceConversionStatus.NO_SOURCES,
+        }:
+            return 100
+        return 35 if self.conversion_exposes_main_text(result) else 20
+
+    def conversion_progress_message(self, result):
+        if self.conversion_exposes_main_text(result):
+            return "ABC Literature main text is ready; importing converted Markdown"
+        return "ABC Literature conversion running"
+
+    def conversion_failure_message(self, result):
+        if result.error_message:
+            return result.error_message
+        failures = [
+            str(progress.get("error"))
+            for progress in result.per_file_progress
+            if progress.get("status") == "failed" and progress.get("error")
+        ]
+        return "; ".join(failures) or "ABC Literature conversion failed"
 
     async def request_conversion(self, reference, *, wait=False, request_bearer_token=None):
         self.conversion_requests.append(
@@ -902,7 +961,7 @@ async def test_execute_provider_markdown_fails_failed_figure_metadata_download(m
     ]
 
 
-def test_select_preferred_main_markdown_accepts_abc_tei_only_artifact():
+def test_select_preferred_main_text_accepts_abc_tei_only_artifact():
     artifact = SourceArtifact(
         provider="abc_literature",
         artifact_id="tei-markdown-1",
@@ -915,16 +974,16 @@ def test_select_preferred_main_markdown_accepts_abc_tei_only_artifact():
         metadata={"file_class": "converted_merged_main", "file_extension": "md"},
     )
 
-    selected, ambiguous_count = service_module._select_preferred_main_markdown(
+    selected, ambiguous_count = select_preferred_main_text_artifact(
+        _Provider(),
         [artifact],
-        reference="AGRKB:101",
     )
 
     assert selected is artifact
     assert ambiguous_count == 1
 
 
-def test_select_preferred_main_markdown_reports_ambiguous_equal_candidates():
+def test_select_preferred_main_text_reports_ambiguous_equal_candidates():
     artifacts = [
         SourceArtifact(
             provider="abc_literature",
@@ -943,13 +1002,115 @@ def test_select_preferred_main_markdown_reports_ambiguous_equal_candidates():
         )
     ]
 
-    selected, ambiguous_count = service_module._select_preferred_main_markdown(
+    selected, ambiguous_count = select_preferred_main_text_artifact(
+        _Provider(),
         artifacts,
-        reference="AGRKB:101",
     )
 
     assert selected is None
     assert ambiguous_count == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_selection_accepts_per_mod_only_readiness():
+    provider = _Provider()
+    artifact = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="markdown-1",
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_curie="AGRKB:101",
+        metadata={"file_class": "converted_merged_main"},
+    )
+    provider.artifacts = [artifact]
+    service = UploadExecutionService(pipeline_tracker=_Tracker())
+
+    selected, metadata_ids = await service._select_converted_main_artifact(
+        provider=provider,
+        request=ProviderConversionExecutionRequest(
+            document_id="doc-1",
+            job_id="job-1",
+            user_id="user-1",
+            owner_user_id=1,
+            filename="paper.pdf",
+            reference="AGRKB:101",
+            source_artifact_id="pdf-1",
+            curator_token="token",
+            source_provenance={"provider": "abc_literature"},
+        ),
+        conversion_result=SourceConversionResult(
+            provider="abc_literature",
+            status=SourceConversionStatus.RUNNING,
+            per_mod_status=({"mod": "FAKE", "main_converted": True},),
+        ),
+        curator_token="token",
+    )
+
+    assert selected is artifact
+    assert metadata_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_upload_selection_uses_non_abc_provider_declared_main_markdown():
+    provider = _Provider(provider_id="other_provider", main_file_class="canonical_article")
+    canonical = SourceArtifact(
+        provider="other_provider",
+        artifact_id="canonical-1",
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="other:101",
+        metadata={"file_class": "canonical_article", "provider_rank": 0},
+    )
+    provider.artifacts = [
+        SourceArtifact(
+            provider="other_provider",
+            artifact_id="abc-named-1",
+            role=SourceArtifactRole.CONVERTED_TEXT,
+            artifact_format=SourceArtifactFormat.MARKDOWN,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_id="other:101",
+            metadata={"file_class": "converted_merged_main", "provider_rank": 10},
+        ),
+        canonical,
+    ]
+    service = UploadExecutionService(pipeline_tracker=_Tracker())
+
+    selected, _ = await service._select_converted_main_artifact(
+        provider=provider,
+        request=ProviderConversionExecutionRequest(
+            document_id="doc-1",
+            job_id="job-1",
+            user_id="user-1",
+            owner_user_id=1,
+            filename="paper.pdf",
+            reference="other:101",
+            source_artifact_id="pdf-1",
+            curator_token="token",
+            source_provenance={"provider": "other_provider"},
+        ),
+        conversion_result=SourceConversionResult(
+            provider="other_provider",
+            status=SourceConversionStatus.CONVERTED,
+        ),
+        curator_token="token",
+    )
+
+    assert selected is canonical
+
+
+def test_upload_selection_rejects_explicit_unknown_artifact():
+    artifact = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="unknown-1",
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.UNKNOWN,
+        metadata={"file_class": "converted_merged_main"},
+    )
+
+    assert select_preferred_main_text_artifact(_Provider(), [artifact]) == (None, 0)
 
 
 @pytest.mark.asyncio

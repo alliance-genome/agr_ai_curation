@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, cast
@@ -19,6 +19,7 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
 )
+from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 
 
 class ChecksumImportDecisionStatus(str, Enum):
@@ -143,15 +144,9 @@ async def select_checksum_import_candidate(
     markdown_artifacts = tuple(
         artifact for artifact in converted_artifacts if _is_converted_markdown(artifact)
     )
-    ready_markdown_artifacts = tuple(
-        artifact
-        for artifact in markdown_artifacts
-        if artifact.status is SourceArtifactStatus.AVAILABLE
-        and _provider_is_main_text_artifact(provider, artifact)
-    )
-    selected_ready_artifact, ambiguous_ready_count = _select_preferred_markdown_artifact(
+    selected_ready_artifact, ambiguous_ready_count = select_preferred_main_text_artifact(
         provider,
-        ready_markdown_artifacts
+        markdown_artifacts,
     )
     if ambiguous_ready_count > 1:
         candidates = tuple(
@@ -159,7 +154,9 @@ async def select_checksum_import_candidate(
                 source_artifact=source_artifact,
                 converted_artifact=artifact,
             )
-            for artifact in ready_markdown_artifacts
+            for artifact in markdown_artifacts
+            if artifact.status is SourceArtifactStatus.AVAILABLE
+            and provider.is_main_text_artifact(artifact)
         )
         return _decision(
             provider=provider.provider_id,
@@ -188,7 +185,7 @@ async def select_checksum_import_candidate(
         )
     if any(
         artifact.status is SourceArtifactStatus.RUNNING
-        and _provider_is_main_text_artifact(provider, artifact)
+        and provider.is_main_text_artifact(artifact)
         for artifact in markdown_artifacts
     ):
         return _decision(
@@ -204,7 +201,7 @@ async def select_checksum_import_candidate(
         )
     if any(
         artifact.status is SourceArtifactStatus.FAILED
-        and _provider_is_main_text_artifact(provider, artifact)
+        and provider.is_main_text_artifact(artifact)
         for artifact in markdown_artifacts
     ):
         return _decision(
@@ -225,10 +222,7 @@ async def select_checksum_import_candidate(
         )
     if conversion_result is not None:
         conversion_metadata = _conversion_metadata(conversion_result)
-        if _conversion_has_usable_main_text(
-            provider,
-            conversion_result,
-        ):
+        if provider.conversion_exposes_main_text(conversion_result):
             refreshed_artifacts = await provider.list_artifacts(
                 _reference_lookup_value(source_artifact),
                 request_bearer_token=request_bearer_token,
@@ -440,26 +434,6 @@ async def _request_conversion_if_supported(
     )
 
 
-def _conversion_has_usable_main_text(
-    provider: DocumentSourceProvider,
-    result: SourceConversionResult,
-) -> bool:
-    conversion_exposes_main_text = getattr(provider, "conversion_exposes_main_text", None)
-    if callable(conversion_exposes_main_text):
-        typed_conversion_exposes_main_text = cast(
-            Callable[[SourceConversionResult], bool],
-            conversion_exposes_main_text,
-        )
-        return bool(typed_conversion_exposes_main_text(result))
-    return (
-        result.status in {
-            SourceConversionStatus.CONVERTED,
-            SourceConversionStatus.RUNNING,
-        }
-        and bool(result.converted_classes or result.per_file_progress)
-    )
-
-
 def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -> bool:
     if source_artifact.reference_id and artifact.reference_id:
         return source_artifact.reference_id == artifact.reference_id
@@ -480,61 +454,10 @@ def _select_reference_markdown_artifact(
         for artifact in artifacts
         if _is_converted_markdown(artifact)
         and _reference_lookup_value(artifact) == reference_key
-        and artifact.status is SourceArtifactStatus.AVAILABLE
-        and _provider_is_main_text_artifact(provider, artifact)
     ]
     if not candidates:
         return None, 0
-    return _select_preferred_markdown_artifact(provider, tuple(candidates))
-
-
-def _select_preferred_markdown_artifact(
-    provider: DocumentSourceProvider,
-    artifacts: tuple[SourceArtifact, ...],
-) -> tuple[SourceArtifact | None, int]:
-    if not artifacts:
-        return None, 0
-    ranked = sorted(
-        ((_provider_main_text_sort_key(provider, artifact), artifact) for artifact in artifacts),
-        key=lambda item: (
-            item[0],
-            str(item[1].display_name or "").strip().lower(),
-            item[1].artifact_id,
-        ),
-    )
-    best_rank = ranked[0][0]
-    best = [artifact for rank, artifact in ranked if rank == best_rank]
-    if len(best) > 1:
-        return None, len(best)
-    return best[0], 1
-
-
-def _provider_is_main_text_artifact(
-    provider: DocumentSourceProvider,
-    artifact: SourceArtifact,
-) -> bool:
-    is_main_text_artifact = getattr(provider, "is_main_text_artifact", None)
-    if callable(is_main_text_artifact):
-        typed_is_main_text_artifact = cast(
-            Callable[[SourceArtifact], bool],
-            is_main_text_artifact,
-        )
-        return bool(typed_is_main_text_artifact(artifact))
-    return True
-
-
-def _provider_main_text_sort_key(
-    provider: DocumentSourceProvider,
-    artifact: SourceArtifact,
-) -> tuple[int, ...]:
-    main_text_artifact_sort_key = getattr(provider, "main_text_artifact_sort_key", None)
-    if callable(main_text_artifact_sort_key):
-        typed_main_text_artifact_sort_key = cast(
-            Callable[[SourceArtifact], Iterable[int]],
-            main_text_artifact_sort_key,
-        )
-        return tuple(typed_main_text_artifact_sort_key(artifact))
-    return (0,)
+    return select_preferred_main_text_artifact(provider, candidates)
 
 
 def _reference_lookup_value(artifact: SourceArtifact) -> str:

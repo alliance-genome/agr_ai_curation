@@ -237,7 +237,57 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 continue
             if converted.get("file_class") == "converted_merged_main":
                 return True
+        for mod_status in result.per_mod_status:
+            if mod_status.get("main_converted") is True:
+                return True
         return False
+
+    def conversion_progress_percentage(self, result: SourceConversionResult) -> int:
+        if result.status is SourceConversionStatus.RUNNING:
+            return 35 if self.conversion_exposes_main_text(result) else 20
+        if result.status is SourceConversionStatus.CONVERTED:
+            return 35
+        if result.status in {
+            SourceConversionStatus.FAILED,
+            SourceConversionStatus.NO_SOURCES,
+        }:
+            return 100
+        return 15
+
+    def conversion_progress_message(self, result: SourceConversionResult) -> str:
+        if self.conversion_exposes_main_text(result):
+            return "ABC Literature main text is ready; importing converted Markdown"
+        if result.status is SourceConversionStatus.RUNNING:
+            pending_count = _count_progress_status(result, "pending")
+            if pending_count:
+                noun = "file" if pending_count == 1 else "files"
+                return f"ABC Literature conversion running ({pending_count} {noun} pending)"
+            return "ABC Literature conversion running"
+        if result.status is SourceConversionStatus.CONVERTED:
+            return "ABC Literature conversion completed; locating converted Markdown"
+        if result.status is SourceConversionStatus.FAILED:
+            return self.conversion_failure_message(result)
+        if result.status is SourceConversionStatus.NO_SOURCES:
+            return "ABC Literature found no convertible source files"
+        return "Waiting for ABC Literature conversion status"
+
+    def conversion_failure_message(self, result: SourceConversionResult) -> str:
+        if result.error_message:
+            return result.error_message
+        failures = []
+        for progress in result.per_file_progress:
+            if str(progress.get("status") or "").strip().lower() != "failed":
+                continue
+            source = progress.get("source")
+            source_name = source.get("display_name") if isinstance(source, Mapping) else None
+            error = progress.get("error")
+            if source_name and error:
+                failures.append(f"{source_name}: {error}")
+            elif error:
+                failures.append(str(error))
+        if failures:
+            return "; ".join(failures)
+        return "ABC Literature conversion failed"
 
     def provider_metadata_artifacts_for_source(
         self,
@@ -567,6 +617,14 @@ def _map_conversion_status(status: str | None) -> SourceConversionStatus:
     if normalized == "no_sources":
         return SourceConversionStatus.NO_SOURCES
     return SourceConversionStatus.UNKNOWN
+
+
+def _count_progress_status(result: SourceConversionResult, status: str) -> int:
+    return sum(
+        1
+        for progress in result.per_file_progress
+        if str(progress.get("status") or "").strip().lower() == status
+    )
 
 
 def _string_tuple(value: object) -> tuple[str, ...]:

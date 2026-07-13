@@ -282,7 +282,7 @@ def _fake_conversion_exposes_main_text(
         converted = progress.get("converted")
         if isinstance(converted, dict) and converted.get("file_class") == "converted_merged_main":
             return True
-    return False
+    return any(status.get("main_converted") is True for status in result.per_mod_status)
 
 
 def _ready_artifacts():
@@ -306,7 +306,7 @@ def _ready_artifacts():
         artifact_id="md-1",
         role=SourceArtifactRole.CONVERTED_TEXT,
         artifact_format=SourceArtifactFormat.MARKDOWN,
-        status=SourceArtifactStatus.UNKNOWN,
+        status=SourceArtifactStatus.AVAILABLE,
         reference_id="ref-123",
         reference_curie="AGRKB:123",
         display_name="provider-paper.md",
@@ -683,6 +683,61 @@ async def test_select_reference_import_candidate_uses_reference_nxml_after_conve
     assert decision.selected is not None
     assert decision.selected.converted_artifact is not None
     assert decision.selected.converted_artifact.artifact_id == "md-nxml"
+
+
+@pytest.mark.asyncio
+async def test_select_reference_import_candidate_accepts_per_mod_only_readiness():
+    source = _source_artifact(artifact_id="pdf-1", provider="abc_literature")
+    markdown = _converted_artifact(
+        artifact_id="md-1",
+        provider="abc_literature",
+        parent_artifact_id=None,
+    )
+    provider = _FakeConversionProvider(
+        artifacts=(source,),
+        post_conversion_artifacts=(source, markdown),
+        conversion_result=SourceConversionResult(
+            provider="abc_literature",
+            status=SourceConversionStatus.RUNNING,
+            per_mod_status=({"mod": "FB", "main_converted": True},),
+        ),
+    )
+    provider.provider_id = "abc_literature"
+
+    decision = await select_reference_import_candidate(
+        provider=provider,
+        identifier="PMID:123",
+        authorized_group_ids=("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.converted_artifact is markdown
+
+
+@pytest.mark.asyncio
+async def test_select_reference_import_candidate_rejects_explicit_unknown_markdown():
+    provider = _FakeProvider(
+        artifacts=(
+            _source_artifact(artifact_id="pdf-1"),
+            _converted_artifact(
+                artifact_id="md-unknown",
+                status=SourceArtifactStatus.UNKNOWN,
+            ),
+        )
+    )
+
+    decision = await select_reference_import_candidate(
+        provider=provider,
+        identifier="PMID:123",
+        authorized_group_ids=("FB",),
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.converted_artifact is None
+    assert "No converted main Markdown artifact" in decision.message
 
 
 @pytest.mark.asyncio

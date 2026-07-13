@@ -70,6 +70,17 @@ ABC exposes provider conversion state through the `conversion_request` response:
 | `status=failed` | Fail locally with sanitized ABC error/progress details. |
 | `status=no_sources` | Fail locally as no convertible provider source files. |
 
+The ABC adapter owns interpretation of all three main-text readiness signals,
+including per-MOD `main_converted=true`. After a ready signal, reusable upload
+and import services re-list artifacts and ask the provider to identify and rank
+its canonical main Markdown; they do not inspect ABC file-class names.
+
+Artifact availability is a separate normalized contract. Statusless converted
+ABC rows are normalized to `AVAILABLE` at the adapter boundary. An explicit
+unrecognized status is normalized to `UNKNOWN` and is not import-ready. All
+reusable consumers require `AVAILABLE`; they must not reinterpret `UNKNOWN` as
+available.
+
 The ABC `job_id` is display/correlation metadata only. AI Curation persists its
 own local job state and recovers by re-querying ABC by reference/source
 provenance rather than treating the ABC job ID as durable.
@@ -97,6 +108,9 @@ endpoint names:
   optional provider capability.
 - `SourceConversionResult` carries provider-neutral status values:
   `converted`, `running`, `failed`, and `no_sources`.
+- Provider hooks own conversion readiness, canonical-main identification, and
+  main-text ranking. Reusable upload/import code applies only the normalized
+  `AVAILABLE` requirement and provider-declared hooks.
 - Provider metadata such as `converted_classes`, `per_file_progress`, and
   `per_mod_status` may be sanitized into local job metadata for UI/debugging.
 - Providers without conversion support can return ready text, PDF-only/source
