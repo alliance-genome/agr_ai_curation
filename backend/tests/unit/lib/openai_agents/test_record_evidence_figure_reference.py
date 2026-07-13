@@ -86,6 +86,10 @@ def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -
     (
         "Fig. 1a,b show different expression patterns.",
         "Fig. 1a and b show different expression patterns.",
+        "Fig. 1b,a show different expression patterns.",
+        "Fig. 1b and a show different expression patterns.",
+        "Fig. 1b & a show different expression patterns.",
+        "Fig. 1b or a show alternative patterns.",
         "Figure 1 panels a and b show different expression patterns.",
         "Panels a and b show different expression patterns.",
         "Figure 1 panels a-c show different expression patterns.",
