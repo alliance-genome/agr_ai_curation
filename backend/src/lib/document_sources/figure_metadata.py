@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
@@ -61,6 +62,7 @@ def normalize_provider_figure_metadata_payload(
     if not any((caption_text, nearby_text, figure_label, figure_number, display_name, filename)):
         return None
 
+    page_index = _zero_based_page_index(payload.get("page_index"))
     entry: dict[str, Any] = {
         "metadata_artifact_id": _clean_text(metadata_artifact_id),
         "display_name": display_name,
@@ -71,7 +73,8 @@ def normalize_provider_figure_metadata_payload(
         "figure_number": figure_number,
         "caption_text": caption_text,
         "nearby_text": nearby_text,
-        "page_index": _primitive(payload.get("page_index")),
+        "page_index": page_index,
+        "page_number": page_index + 1 if page_index is not None else None,
         "bbox": _json_like(payload.get("bbox")),
         "polygon": _json_like(payload.get("polygon")),
         "filename": filename,
@@ -80,6 +83,50 @@ def normalize_provider_figure_metadata_payload(
     if isinstance(image_review, Mapping):
         entry["image_review"] = dict(image_review)
     return {key: value for key, value in entry.items() if value not in (None, "", [])}
+
+
+def apply_provider_figure_page_provenance(
+    elements: Sequence[dict[str, Any]],
+    entries: Sequence[Mapping[str, Any]] | None,
+) -> None:
+    """Attach canonical one-based pages to generated provider figure elements.
+
+    Provider ``page_index`` is zero-based. Normalization converts it once to
+    ``page_number``; this function only carries that canonical value into the
+    project-agnostic element metadata consumed by chunking.
+    """
+
+    pages_by_heading: dict[str, deque[int | None]] = defaultdict(deque)
+    for entry in sorted(
+        (
+            dict(candidate)
+            for candidate in (entries or ())
+            if _entry_has_indexable_content(candidate)
+        ),
+        key=_entry_sort_key,
+    ):
+        pages_by_heading[_entry_heading(entry)].append(
+            _positive_page_number(entry.get("page_number"))
+        )
+
+    active_page: int | None = None
+    for element in elements:
+        metadata = element.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        section_path = metadata.get("section_path")
+        if not isinstance(section_path, list) or not any(
+            is_provider_figure_metadata_section(title) for title in section_path
+        ):
+            continue
+
+        title = element.get("text") if element.get("type") == "Title" else None
+        if is_provider_figure_metadata_section(title):
+            active_page = None
+        elif is_provider_figure_subsection(title):
+            heading_pages = pages_by_heading.get(str(title))
+            active_page = heading_pages.popleft() if heading_pages else None
+        metadata["page_number"] = active_page
 
 
 def append_provider_figure_metadata_markdown(
@@ -234,6 +281,20 @@ def _primitive(value: object) -> object | None:
     if isinstance(value, (bool, int, float)):
         return value
     return None
+
+
+def _zero_based_page_index(value: object) -> int | None:
+    """Validate the provider contract for a zero-based integer page index."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _positive_page_number(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
 
 
 def _clean_text(value: object) -> str | None:

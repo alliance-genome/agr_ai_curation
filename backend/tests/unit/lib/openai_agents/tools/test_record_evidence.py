@@ -29,7 +29,7 @@ def _chunk(
     *,
     chunk_id: str,
     text: str,
-    page_number: int = 3,
+    page_number: int | None = 3,
     section: str = "Results",
     subsection: str | None = "Expression assays",
     doc_items: list[dict[str, object]] | None = None,
@@ -731,3 +731,26 @@ async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_st
     assert result["page"] == 6
     assert result["source_fragments"][0]["page"] == 6
     assert result["section"] == "Results and Discussion"
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_does_not_invent_missing_chunk_page(monkeypatch):
+    chunk_id = "chunk-without-page"
+    chunk_text = "Provider metadata has no usable page provenance."
+    span_id = _span_ids(chunk_id, chunk_text)[0]
+
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return _chunk(
+            chunk_id=chunk_id,
+            text=chunk_text,
+            page_number=None,
+        )
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(entity="figure", span_ids=[span_id])
+
+    assert result["status"] == "verified"
+    assert "page" not in result
+    assert "page" not in result["source_fragments"][0]

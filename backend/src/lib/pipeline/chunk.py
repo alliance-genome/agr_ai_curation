@@ -481,7 +481,7 @@ def _create_document_chunk(
     chunk_id = f"{document_id}_chunk_{chunk_index:04d}"
 
     # Extract page number from elements if available
-    page_number = 1  # Default
+    page_number = None
     if chunk_data.get("elements"):
         for element in chunk_data["elements"]:
             metadata = element.get("metadata", {})
@@ -494,11 +494,11 @@ def _create_document_chunk(
                 if page_number is not None:
                     break
     try:
-        page_number = int(page_number)
-        if page_number <= 0:
-            page_number = 1
-    except (TypeError, ValueError):  # pragma: no cover - fallback path
-        page_number = 1
+        page_number = int(page_number) if page_number is not None else None
+        if page_number is not None and page_number <= 0:
+            page_number = None
+    except (TypeError, ValueError):
+        page_number = None
 
     # Determine element type
     element_type = ElementType.NARRATIVE_TEXT  # Default
@@ -540,8 +540,8 @@ def _create_document_chunk(
                 page = int(page_no)
             except (TypeError, ValueError):
                 page = page_number
-            if page < 1:
-                page = 1
+            if page is None or page < 1:
+                continue
 
             bbox_data = prov.get("bbox") or metadata.get("bbox")
             if not bbox_data:
