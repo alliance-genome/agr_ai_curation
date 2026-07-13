@@ -182,6 +182,14 @@ _PANEL_SCOPE_QUALIFIER = (
     r"designated(?:\s+as)?|identified\s+as|called|"
     r"known\s+as|referred\s+to\s+as)"
 )
+_GROUPED_MULTI_PANEL_PATTERN = re.compile(
+    rf"\b{_PANEL_NOUN}(?:(?:\s+{_PANEL_SCOPE_QUALIFIER})?\s+|,\s*)"
+    rf"(?:\(\s*{_PANEL_LIST_TOKEN}"
+    rf"(?:\s*{_MULTI_REFERENCE_SEPARATOR}{_PANEL_LIST_TOKEN})+\s*\)|"
+    rf"\[\s*{_PANEL_LIST_TOKEN}"
+    rf"(?:\s*{_MULTI_REFERENCE_SEPARATOR}{_PANEL_LIST_TOKEN})+\s*\])",
+    re.IGNORECASE,
+)
 _SCOPED_MULTI_PANEL_PATTERN = re.compile(
     rf"(?:\b{_PANEL_NOUN}(?:(?:\s+{_PANEL_SCOPE_QUALIFIER})?\s+|,\s*)"
     rf"{_PANEL_LIST_FIRST_ITEM}\s*"
@@ -513,6 +521,7 @@ def _has_ambiguous_figure_reference(text: str | None) -> bool:
     return bool(
         _MULTI_REFERENCE_PATTERN.search(text)
         or _has_ambiguous_lowercase_a_continuation(text)
+        or _GROUPED_MULTI_PANEL_PATTERN.search(text)
         or _SCOPED_MULTI_PANEL_PATTERN.search(text)
         or _LATER_SCOPED_PANEL_PATTERN.search(text)
         or _has_distinct_explicit_panel_references(text)

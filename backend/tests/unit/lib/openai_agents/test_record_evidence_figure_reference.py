@@ -466,6 +466,40 @@ def test_provider_figure_metadata_uses_unambiguous_structured_fallback(
     assert _extract_figure_reference(chunk, chunk["text"], chunk["text"]) == "Figure 1"
 
 
+@pytest.mark.parametrize(
+    "chunk_text",
+    (
+        "Panel (A and B) shows different expression patterns.",
+        "Panels (A and B) show different expression patterns.",
+        "Panels (A/B) show different expression patterns.",
+        "Panels [A and B] show different expression patterns.",
+        "Subpanels (A, B) show different expression patterns.",
+        "Subfigure [A/B] shows different expression patterns.",
+    ),
+)
+@pytest.mark.asyncio
+async def test_record_evidence_omits_fallback_for_grouped_panel_lists(
+    monkeypatch: pytest.MonkeyPatch,
+    chunk_text: str,
+) -> None:
+    chunk = _provider_chunk(chunk_text)
+
+    async def _fake_get_chunk_by_id(**_kwargs: object) -> dict[str, object]:
+        return chunk
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(entity="wg", span_ids=_provider_span_ids(chunk_text))
+
+    assert result["status"] == "verified"
+    assert all(
+        "figure_reference" not in fragment
+        for fragment in result["source_fragments"]
+    )
+    assert "figure_reference" not in result
+
+
 def test_provider_figure_metadata_omits_conflicting_structured_fallbacks() -> None:
     chunk = {
         "text": "The wing disc shows a restricted expression pattern.",
