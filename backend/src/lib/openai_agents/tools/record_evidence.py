@@ -68,12 +68,20 @@ _FOLLOWING_REFERENCE_TOKEN = (
     r"\d+[A-Za-z]?)\b"
 )
 _COMPACT_PANEL_TOKEN = rf"[A-Za-z]\d*\b(?!{_HYPHEN_OR_DASH})"
+# Also reject continuations after parenthetical descriptors and compact panel
+# lists enclosed in parentheses/brackets or introduced by a colon.
 _MULTI_REFERENCE_PATTERN = re.compile(
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+(?:"
     rf"[A-Za-z]?\s*{_MULTI_REFERENCE_SEPARATOR}"
     rf"{_FOLLOWING_REFERENCE_TOKEN}|"
+    rf"[A-Za-z]?\s*\([^()\r\n]*\)\s*{_MULTI_REFERENCE_SEPARATOR}"
+    rf"{_FOLLOWING_REFERENCE_TOKEN}|"
     rf"\s*\(\s*{_COMPACT_PANEL_TOKEN}\s*{_MULTI_REFERENCE_SEPARATOR}"
     rf"{_COMPACT_PANEL_TOKEN}\s*\)|"
+    rf"\s*\[\s*{_COMPACT_PANEL_TOKEN}\s*{_MULTI_REFERENCE_SEPARATOR}"
+    rf"{_COMPACT_PANEL_TOKEN}\s*\]|"
+    rf"\s*:\s*{_COMPACT_PANEL_TOKEN}\s*{_MULTI_REFERENCE_SEPARATOR}"
+    rf"{_COMPACT_PANEL_TOKEN}|"
     rf"\s+{_COMPACT_PANEL_TOKEN}\s*{_MULTI_REFERENCE_SEPARATOR}"
     rf"{_COMPACT_PANEL_TOKEN})",
     re.IGNORECASE,
