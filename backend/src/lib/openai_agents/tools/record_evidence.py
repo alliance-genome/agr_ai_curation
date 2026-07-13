@@ -140,6 +140,14 @@ _PROSE_MULTI_PANEL_PATTERN = re.compile(
     rf"(?:{_FOLLOWING_REFERENCE_TOKEN}|(?-i:a)\b)",
     re.IGNORECASE,
 )
+_LOCATOR_PANEL_TOKEN_PATTERN = re.compile(
+    r"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+(?P<panel>[A-Za-z]\d*)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_PANEL_TOKEN_PATTERN = re.compile(
+    rf"\bpanels?\s+(?P<panel>[A-Za-z]\d*|\d+)\b(?!{_HYPHEN_OR_DASH})",
+    re.IGNORECASE,
+)
 # Env-configurable via RECORD_EVIDENCE_PREVIEW_CHARS (default 300); see config.py.
 _PREVIEW_CHARS = get_record_evidence_preview_chars()
 _SPAN_RETRY_INSTRUCTIONS = (
@@ -348,6 +356,7 @@ def _has_ambiguous_figure_reference(text: str | None) -> bool:
         _MULTI_REFERENCE_PATTERN.search(text)
         or _has_ambiguous_lowercase_a_continuation(text)
         or _PROSE_MULTI_PANEL_PATTERN.search(text)
+        or _has_distinct_explicit_panel_references(text)
     )
 
 
@@ -356,6 +365,18 @@ def _has_ambiguous_lowercase_a_continuation(text: str) -> bool:
         not _ARTICLE_AFTER_LOWERCASE_A_PATTERN.match(text[match.end() :])
         for match in _LOWERCASE_A_CONTINUATION_PATTERN.finditer(text)
     )
+
+
+def _has_distinct_explicit_panel_references(text: str) -> bool:
+    panel_tokens = {
+        match.group("panel").casefold()
+        for pattern in (
+            _LOCATOR_PANEL_TOKEN_PATTERN,
+            _EXPLICIT_PANEL_TOKEN_PATTERN,
+        )
+        for match in pattern.finditer(text)
+    }
+    return len(panel_tokens) > 1
 
 
 def _reference_candidates(source_texts: tuple[str | None, ...]) -> list[str]:

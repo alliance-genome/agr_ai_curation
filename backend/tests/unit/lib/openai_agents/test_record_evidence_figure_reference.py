@@ -77,6 +77,30 @@ def test_provider_figure_metadata_omits_shorthand_multi_panel_locators(
     assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
 
 
+@pytest.mark.parametrize(
+    "span_text",
+    (
+        (
+            "Fig. 1A (left), whereas panel B (right) shows the opposite "
+            "pattern."
+        ),
+        "Fig. 1A (left), with panel B shown at right.",
+        "Fig. 1A (left), compared with panel B (right).",
+        "Fig. 1A (left), and panel B (right) show different patterns.",
+    ),
+)
+def test_provider_figure_metadata_omits_later_explicit_panel_in_prose(
+    span_text: str,
+) -> None:
+    chunk = {
+        "text": span_text,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
+
+
 def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -> None:
     chunk = {
         "text": "Panels A and B show different expression patterns.",
@@ -238,6 +262,10 @@ def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
             "Fig. 1b and a further experiment shows the effect.",
             "Fig. 1b",
         ),
+        (
+            "Fig. 1A (left), with panel A enlarged at right.",
+            "Fig. 1A",
+        ),
     ),
 )
 def test_provider_figure_metadata_preserves_locator_before_lowercase_prose(
@@ -274,6 +302,10 @@ def test_provider_figure_metadata_preserves_locator_before_lowercase_prose(
         ),
         (
             "Fig. 1A and B–cell staining confirms the result.",
+            "Fig. 1A",
+        ),
+        (
+            "Fig. 1A contains a panel B-cell marker.",
             "Fig. 1A",
         ),
     ),
