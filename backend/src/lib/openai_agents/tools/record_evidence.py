@@ -71,11 +71,16 @@ _MULTI_REFERENCE_PATTERN = re.compile(
     rf"{_FOLLOWING_REFERENCE_TOKEN}",
     re.IGNORECASE,
 )
+_PANEL_SUBJECT_PREDICATE = (
+    r"(?:are|were|is|was|show(?:s|ed)?|display(?:s|ed)?|depict(?:s|ed)?|"
+    r"demonstrate(?:s|d)?|indicate(?:s|d)?|illustrate(?:s|d)?|"
+    r"reveal(?:s|ed)?|differ(?:s|ed)?)\b"
+)
 _LOWERCASE_A_PANEL_CONTINUATION_PATTERN = re.compile(
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+(?:"
     rf"[A-Za-z]?\s*{_PUNCTUATED_MULTI_REFERENCE_SEPARATOR}|"
     rf"(?-i:[B-Zb-z])\s*{_WORD_MULTI_REFERENCE_SEPARATOR})"
-    rf"(?-i:a)\b",
+    rf"(?-i:a)\b(?=\s*(?:$|[.,;:!?)]|{_PANEL_SUBJECT_PREDICATE}))",
     re.IGNORECASE,
 )
 _PROSE_MULTI_PANEL_PATTERN = re.compile(

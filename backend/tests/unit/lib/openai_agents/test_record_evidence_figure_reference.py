@@ -180,6 +180,22 @@ def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
             "Fig. 1a and a second assay confirms the result.",
             "Fig. 1a",
         ),
+        (
+            "Fig. 1b and a second assay confirms the result.",
+            "Fig. 1b",
+        ),
+        (
+            "Fig. 1b or a replicate from the same experiment supports this.",
+            "Fig. 1b",
+        ),
+        (
+            "Fig. 1b and a model of the pathway are shown.",
+            "Fig. 1b",
+        ),
+        (
+            "Fig. 1b and a control confirms the result.",
+            "Fig. 1b",
+        ),
     ),
 )
 def test_provider_figure_metadata_preserves_locator_before_lowercase_prose(
