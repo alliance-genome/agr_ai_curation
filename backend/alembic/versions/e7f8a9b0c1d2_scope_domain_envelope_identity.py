@@ -35,39 +35,267 @@ def upgrade() -> None:
         sa.Column("source_payload_hash", sa.String(length=64), nullable=True),
     )
 
-    # Repair only associations that are unambiguous. Rows linked to multiple review
-    # states are collision blockers and must be resolved deliberately by an operator.
+    # Legacy extraction reruns could reuse one envelope across several review
+    # sessions. Materialize one complete envelope graph per owner before adding the
+    # composite candidate/envelope ownership constraint. The deterministic clone ID
+    # keeps the repair auditable, while retaining the original ID for the existing
+    # owner (or the lexicographically first legacy owner when it was unscoped).
+    op.execute(
+        """
+        CREATE TEMP TABLE domain_envelope_legacy_owner_map
+        ON COMMIT DROP
+        AS
+        WITH owners AS (
+          SELECT envelope_id AS source_envelope_id,
+                 session_id AS owner_session_id
+          FROM domain_envelopes
+          WHERE session_id IS NOT NULL
+          UNION
+          SELECT envelope_id AS source_envelope_id,
+                 session_id AS owner_session_id
+          FROM curation_candidates
+          WHERE envelope_id IS NOT NULL
+          UNION
+          SELECT envelope_id AS source_envelope_id,
+                 session_id AS owner_session_id
+          FROM validation_snapshots
+          WHERE envelope_id IS NOT NULL
+        )
+        SELECT owner.source_envelope_id,
+               owner.owner_session_id,
+               COALESCE(
+                 envelope.session_id,
+                 (
+                   SELECT min(candidate_owner.owner_session_id::text)::uuid
+                   FROM owners AS candidate_owner
+                   WHERE candidate_owner.source_envelope_id = owner.source_envelope_id
+                 )
+               ) AS canonical_session_id
+        FROM owners AS owner
+        JOIN domain_envelopes AS envelope
+          ON envelope.envelope_id = owner.source_envelope_id
+        """
+    )
     op.execute(
         """
         DO $$
         BEGIN
           IF EXISTS (
             SELECT 1
-            FROM curation_candidates
-            WHERE envelope_id IS NOT NULL
-            GROUP BY envelope_id
-            HAVING count(DISTINCT session_id) > 1
-          ) OR EXISTS (
-            SELECT 1
-            FROM domain_envelopes AS envelope
-            JOIN curation_candidates AS candidate
-              ON candidate.envelope_id = envelope.envelope_id
-            WHERE envelope.session_id IS NOT NULL
-              AND envelope.session_id IS DISTINCT FROM candidate.session_id
+            FROM domain_envelopes
+            WHERE envelope_json->>'envelope_id' IS DISTINCT FROM envelope_id
           ) THEN
             RAISE EXCEPTION
-              'domain envelope scope migration blocked: envelope linked to multiple review sessions';
+              'domain envelope scope migration blocked: row and payload identities differ';
+          END IF;
+          IF EXISTS (
+            SELECT 1
+            FROM domain_envelope_legacy_owner_map AS owner
+            JOIN domain_envelopes AS envelope
+              ON envelope.envelope_id = owner.source_envelope_id
+            JOIN curation_review_sessions AS review_session
+              ON review_session.id = owner.owner_session_id
+            WHERE envelope.document_id IS NOT NULL
+              AND envelope.document_id IS DISTINCT FROM review_session.document_id
+          ) THEN
+            RAISE EXCEPTION
+              'domain envelope scope migration blocked: owner sessions span documents';
+          END IF;
+          IF EXISTS (
+            SELECT 1
+            FROM validation_snapshots AS snapshot
+            JOIN curation_candidates AS candidate
+              ON candidate.id = snapshot.candidate_id
+            WHERE snapshot.envelope_id IS NOT NULL
+              AND snapshot.session_id IS DISTINCT FROM candidate.session_id
+          ) THEN
+            RAISE EXCEPTION
+              'domain envelope scope migration blocked: validation snapshot owner mismatch';
           END IF;
         END $$
         """
     )
     op.execute(
         """
+        CREATE TEMP TABLE domain_envelope_legacy_clone_map
+        ON COMMIT DROP
+        AS
+        SELECT source_envelope_id,
+               owner_session_id,
+               source_envelope_id || ':session:' || owner_session_id::text
+                 AS clone_envelope_id
+        FROM domain_envelope_legacy_owner_map
+        WHERE owner_session_id IS DISTINCT FROM canonical_session_id
+        """
+    )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM domain_envelope_legacy_clone_map AS clone
+            JOIN domain_envelopes AS envelope
+              ON envelope.envelope_id = clone.clone_envelope_id
+          ) THEN
+            RAISE EXCEPTION
+              'domain envelope scope migration blocked: deterministic clone id already exists';
+          END IF;
+        END $$
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO domain_envelopes (
+          envelope_id, revision, project_key, domain_pack_key,
+          domain_pack_version, adapter_key, source_extraction_result_id,
+          source_payload_hash, status, document_id, session_id, flow_run_id,
+          schema_provider, schema_ref_json, object_model_ref_json,
+          model_field_ref_json, envelope_json, created_at, updated_at,
+          checkpointed_at
+        )
+        SELECT clone.clone_envelope_id, envelope.revision, envelope.project_key,
+               envelope.domain_pack_key, envelope.domain_pack_version,
+               NULL, NULL, NULL, envelope.status, envelope.document_id,
+               clone.owner_session_id, envelope.flow_run_id,
+               envelope.schema_provider, envelope.schema_ref_json,
+               envelope.object_model_ref_json, envelope.model_field_ref_json,
+               jsonb_set(
+                 envelope.envelope_json,
+                 '{envelope_id}',
+                 to_jsonb(clone.clone_envelope_id),
+                 true
+               ),
+               envelope.created_at, envelope.updated_at,
+               envelope.checkpointed_at
+        FROM domain_envelope_legacy_clone_map AS clone
+        JOIN domain_envelopes AS envelope
+          ON envelope.envelope_id = clone.source_envelope_id
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO domain_envelope_objects (
+          id, envelope_id, object_id, pending_ref_id, envelope_revision,
+          object_index, object_type, status, validation_state,
+          schema_provider, schema_ref_json, object_model_ref_json,
+          model_field_ref_json, payload_json, object_json, created_at,
+          updated_at
+        )
+        SELECT gen_random_uuid(), clone.clone_envelope_id, child.object_id,
+               child.pending_ref_id, child.envelope_revision,
+               child.object_index, child.object_type, child.status,
+               child.validation_state, child.schema_provider,
+               child.schema_ref_json, child.object_model_ref_json,
+               child.model_field_ref_json, child.payload_json,
+               child.object_json, child.created_at, child.updated_at
+        FROM domain_envelope_legacy_clone_map AS clone
+        JOIN domain_envelope_objects AS child
+          ON child.envelope_id = clone.source_envelope_id
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO domain_envelope_history (
+          envelope_id, event_id, envelope_revision, event_index,
+          event_type, occurred_at, actor_type, actor_id, object_id,
+          field_path, model_field_ref_json, event_json, created_at
+        )
+        SELECT clone.clone_envelope_id, child.event_id,
+               child.envelope_revision, child.event_index, child.event_type,
+               child.occurred_at, child.actor_type, child.actor_id,
+               child.object_id, child.field_path, child.model_field_ref_json,
+               child.event_json, child.created_at
+        FROM domain_envelope_legacy_clone_map AS clone
+        JOIN domain_envelope_history AS child
+          ON child.envelope_id = clone.source_envelope_id
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO domain_envelope_projection_index (
+          id, envelope_id, object_id, envelope_revision, object_type,
+          projection_type, projection_key, projection_status,
+          schema_provider, schema_ref_json, object_model_ref_json,
+          model_field_ref_json, projection_json, created_at, updated_at
+        )
+        SELECT gen_random_uuid(), clone.clone_envelope_id, child.object_id,
+               child.envelope_revision, child.object_type,
+               child.projection_type, child.projection_key,
+               child.projection_status, child.schema_provider,
+               child.schema_ref_json, child.object_model_ref_json,
+               child.model_field_ref_json, child.projection_json,
+               child.created_at, child.updated_at
+        FROM domain_envelope_legacy_clone_map AS clone
+        JOIN domain_envelope_projection_index AS child
+          ON child.envelope_id = clone.source_envelope_id
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO domain_validation_findings (
+          id, envelope_id, finding_id, envelope_revision, finding_index,
+          object_id, field_path, severity, status, code,
+          object_model_ref_json, model_field_ref_json, finding_json,
+          created_at, updated_at
+        )
+        SELECT gen_random_uuid(), clone.clone_envelope_id, child.finding_id,
+               child.envelope_revision, child.finding_index, child.object_id,
+               child.field_path, child.severity, child.status, child.code,
+               child.object_model_ref_json, child.model_field_ref_json,
+               child.finding_json, child.created_at, child.updated_at
+        FROM domain_envelope_legacy_clone_map AS clone
+        JOIN domain_validation_findings AS child
+          ON child.envelope_id = clone.source_envelope_id
+        """
+    )
+    op.execute(
+        """
+        UPDATE curation_candidates AS candidate
+        SET envelope_id = clone.clone_envelope_id
+        FROM domain_envelope_legacy_clone_map AS clone
+        WHERE candidate.envelope_id = clone.source_envelope_id
+          AND candidate.session_id = clone.owner_session_id
+        """
+    )
+    op.execute(
+        """
+        UPDATE validation_snapshots AS snapshot
+        SET envelope_id = clone.clone_envelope_id
+        FROM domain_envelope_legacy_clone_map AS clone
+        WHERE snapshot.envelope_id = clone.source_envelope_id
+          AND snapshot.session_id = clone.owner_session_id
+        """
+    )
+    op.execute(
+        """
+        UPDATE domain_envelopes AS envelope
+        SET session_id = owner.canonical_session_id
+        FROM (
+          SELECT DISTINCT source_envelope_id, canonical_session_id
+          FROM domain_envelope_legacy_owner_map
+        ) AS owner
+        WHERE envelope.envelope_id = owner.source_envelope_id
+        """
+    )
+    op.execute(
+        """
         UPDATE domain_envelopes
-        SET adapter_key = envelope_json->'metadata'->>'source_adapter_key',
-            source_extraction_result_id =
-              envelope_json->'metadata'->>'source_extraction_result_id'
+        SET adapter_key = envelope_json->'metadata'->>'source_adapter_key'
         WHERE envelope_json->'metadata' IS NOT NULL
+        """
+    )
+    op.execute(
+        """
+        UPDATE domain_envelopes AS envelope
+        SET source_extraction_result_id =
+              envelope.envelope_json->'metadata'->>'source_extraction_result_id'
+        WHERE envelope.envelope_json->'metadata' IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM domain_envelope_legacy_clone_map AS clone
+            WHERE clone.clone_envelope_id = envelope.envelope_id
+          )
         """
     )
     op.execute(
@@ -143,6 +371,45 @@ def upgrade() -> None:
                 ),
             },
         )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM curation_candidates AS candidate
+            JOIN domain_envelopes AS envelope
+              ON envelope.envelope_id = candidate.envelope_id
+            WHERE candidate.envelope_id IS NOT NULL
+              AND candidate.session_id IS DISTINCT FROM envelope.session_id
+          ) THEN
+            RAISE EXCEPTION
+              'domain envelope scope migration blocked: candidate owner mismatch remains';
+          END IF;
+          IF EXISTS (
+            SELECT 1
+            FROM validation_snapshots AS snapshot
+            JOIN domain_envelopes AS envelope
+              ON envelope.envelope_id = snapshot.envelope_id
+            WHERE snapshot.envelope_id IS NOT NULL
+              AND snapshot.session_id IS DISTINCT FROM envelope.session_id
+          ) THEN
+            RAISE EXCEPTION
+              'domain envelope scope migration blocked: validation owner mismatch remains';
+          END IF;
+          IF EXISTS (
+            SELECT 1
+            FROM domain_envelopes
+            WHERE source_extraction_result_id IS NOT NULL
+            GROUP BY source_extraction_result_id, adapter_key, domain_pack_key
+            HAVING count(*) > 1
+          ) THEN
+            RAISE EXCEPTION
+              'domain envelope scope migration blocked: duplicate source scope remains';
+          END IF;
+        END $$
+        """
+    )
     op.execute(
         """
         DO $$
