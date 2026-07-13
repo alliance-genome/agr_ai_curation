@@ -169,14 +169,20 @@ _FIGURE_LIST_FOLLOWING_ITEM = (
     rf"\d+\b(?!{_HYPHEN_OR_DASH}))"
     r"(?:\s*\([^()\r\n]*\))?"
 )
+_PANEL_NOUN = r"(?:subpanels?|panels?)"
 _PANEL_SCOPE_QUALIFIER = (
-    r"(?:(?:label(?:l)?ed|denoted|marked|designated|identified\s+as|called)\s+)?"
+    r"(?:label(?:l)?ed|denoted|marked|designated|identified\s+as|called|"
+    r"known\s+as|referred\s+to\s+as)"
 )
 _SCOPED_MULTI_PANEL_PATTERN = re.compile(
-    rf"(?:\bpanels?\s+{_PANEL_SCOPE_QUALIFIER}{_PANEL_LIST_FIRST_ITEM}\s*"
+    rf"(?:\b{_PANEL_NOUN}(?:(?:\s+{_PANEL_SCOPE_QUALIFIER})?\s+|,\s*)"
+    rf"{_PANEL_LIST_FIRST_ITEM}\s*"
     rf"{_MULTI_REFERENCE_SEPARATOR}{_PANEL_LIST_FOLLOWING_ITEM}|"
+    rf"(?<![A-Za-z0-9]){_PANEL_LIST_FIRST_ITEM}\s*"
+    rf"{_MULTI_REFERENCE_SEPARATOR}{_PANEL_LIST_FOLLOWING_ITEM}\s+"
+    rf"{_PANEL_NOUN}\b|"
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+\s*"
-    rf"(?:panels?\s+)?{_PANEL_LIST_FIRST_ITEM}\s*"
+    rf"(?:{_PANEL_NOUN}\s+)?{_PANEL_LIST_FIRST_ITEM}\s*"
     rf"{_MULTI_REFERENCE_SEPARATOR}{_FIGURE_LIST_FOLLOWING_ITEM})",
     re.IGNORECASE,
 )
