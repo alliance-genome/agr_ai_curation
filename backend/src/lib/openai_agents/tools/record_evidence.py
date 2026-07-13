@@ -47,7 +47,8 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _MULTI_REFERENCE_SEPARATOR = (
-    r"(?:,\s*|/\s*|&\s*|\band\s+|\bto\s+|\bthrough\s+|\bversus\s+|"
+    r"(?:,\s*|/\s*|&\s*|\+\s*|\band\s*(?:/|-)\s*or\s+|\band\s+|"
+    r"\bor\s+|\bto\s+|\bthrough\s+|\bversus\s+|\bvs\.?\s+|"
     r"[-\u2013\u2014]\s*)"
 )
 _MULTI_REFERENCE_PATTERN = re.compile(
