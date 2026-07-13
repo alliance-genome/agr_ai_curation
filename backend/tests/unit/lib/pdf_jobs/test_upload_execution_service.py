@@ -666,7 +666,7 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
                         {
                             "display_name": "paper_image_001",
                             "referencefile_id": 109,
-                            "metadata_referencefile_id": 110,
+                            "metadata_referencefile_id": "meta-bogus",
                         }
                     ],
                     "status": "success",
@@ -676,16 +676,23 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
         )
     ]
     provider.payloads = {
-        "109": (
-            b'{"display_name":"paper_image_000","figure_label":"Figure 0",'
-            b'"caption_text":"Fig. 0 shows controls."}'
-        ),
-        "110": (
+        "meta-valid": (
             b'{"display_name":"paper_image_001","figure_label":"Figure 1",'
             b'"caption_text":"Fig. 1A shows wg expression."}'
         ),
     }
     provider.artifacts = [
+        SourceArtifact(
+            provider="fake_provider",
+            artifact_id="source-pdf-1",
+            role=SourceArtifactRole.SOURCE_PDF,
+            artifact_format=SourceArtifactFormat.PDF,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": "main", "file_extension": "pdf"},
+        ),
         SourceArtifact(
             provider="fake_provider",
             artifact_id="markdown-88",
@@ -696,7 +703,22 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
             display_name="paper_nxml.md",
             access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
             metadata={"file_class": "converted_merged_main", "file_extension": "md"},
-        )
+        ),
+        SourceArtifact(
+            provider="fake_provider",
+            artifact_id="meta-valid",
+            role=SourceArtifactRole.PROVIDER_METADATA,
+            artifact_format=SourceArtifactFormat.JSON,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper_image_001",
+            parent_artifact_id="source-pdf-1",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={
+                "file_class": "converted_main_figure_metadata",
+                "file_extension": "json",
+            },
+        ),
     ]
     progress_updates = []
     ingested = []
@@ -764,7 +786,7 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
                 "pdf_artifact_id": "source-pdf-1",
                 "viewer_mode": "local_pdf",
             },
-            figure_metadata_artifact_ids=("109",),
+            figure_metadata_artifact_ids=("meta-valid",),
         )
     )
 
@@ -781,20 +803,13 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
     assert sql_selections == [("doc-conversion", "markdown-88")]
     assert provider.downloads == [
         {"artifact_id": "markdown-88", "request_bearer_token": "curator-token"},
-        {"artifact_id": "109", "request_bearer_token": "curator-token"},
-        {"artifact_id": "110", "request_bearer_token": "curator-token"},
+        {"artifact_id": "meta-valid", "request_bearer_token": "curator-token"},
     ]
     assert len(job_statuses) == 1
     assert ingested[0]["request"].source_provenance["converted_artifact_id"] == "markdown-88"
     assert ingested[0]["request"].provider_figure_metadata == (
         {
-            "metadata_artifact_id": "109",
-            "display_name": "paper_image_000",
-            "figure_label": "Figure 0",
-            "caption_text": "Fig. 0 shows controls.",
-        },
-        {
-            "metadata_artifact_id": "110",
+            "metadata_artifact_id": "meta-valid",
             "display_name": "paper_image_001",
             "figure_label": "Figure 1",
             "caption_text": "Fig. 1A shows wg expression.",

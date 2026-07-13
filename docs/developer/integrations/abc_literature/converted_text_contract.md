@@ -73,7 +73,9 @@ normalized ready Markdown artifacts without requiring ABC's
 - Authorized source PDF with no canonical converted Markdown: request ABC
   conversion when available, using `wait=false` and `overwrite_tei_md=false`.
 - Conversion running: keep the local AI Curation job in a running/waiting state
-  and poll through provider metadata.
+  and poll provider conversion status. Raw progress sidecar IDs are hints only;
+  downloadable figure metadata must be selected from the provider artifact list
+  through the provider metadata-artifact contract.
 - Conversion failed/no sources: fail the provider-backed import with a clear
   provider-conversion status.
 - Multiple equally preferred canonical candidates: treat as ambiguous instead

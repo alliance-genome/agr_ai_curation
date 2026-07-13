@@ -607,15 +607,12 @@ class UploadExecutionService:
         )
         if ambiguous_count > 1:
             raise RuntimeError("Provider conversion produced multiple equally preferred Markdown artifacts")
-        return selected, _dedupe_strings(
-            (
-                *_figure_metadata_artifact_ids_from_conversion_result(conversion_result),
-                *_figure_metadata_artifact_ids_from_artifacts(
-                    provider=provider,
-                    artifacts=artifacts,
-                    source_artifact_id=request.source_artifact_id,
-                ),
-            )
+        # ALL-620 sidecar provenance is canonical only after provider contract
+        # selection; conversion-progress metadata contains unvalidated hints.
+        return selected, _figure_metadata_artifact_ids_from_artifacts(
+            provider=provider,
+            artifacts=artifacts,
+            source_artifact_id=request.source_artifact_id,
         )
 
     async def _execute_provider_markdown_unbounded(
@@ -1232,34 +1229,6 @@ async def _figure_metadata_artifact_ids_for_markdown_request(
             ),
         )
     )
-
-
-def _figure_metadata_artifact_ids_from_conversion_result(
-    result: SourceConversionResult,
-) -> tuple[str, ...]:
-    artifact_ids: list[str] = []
-    for progress in result.per_file_progress:
-        artifact_ids.extend(_metadata_referencefile_ids_from_mapping(progress))
-    for status in result.per_mod_status:
-        artifact_ids.extend(_metadata_referencefile_ids_from_mapping(status))
-    return _dedupe_strings(artifact_ids)
-
-
-def _metadata_referencefile_ids_from_mapping(payload: Mapping[str, Any]) -> list[str]:
-    artifact_ids: list[str] = []
-    value = payload.get("metadata_referencefile_id")
-    normalized = _non_empty_string(value)
-    if normalized is not None:
-        artifact_ids.append(normalized)
-
-    for nested_value in payload.values():
-        if isinstance(nested_value, Mapping):
-            artifact_ids.extend(_metadata_referencefile_ids_from_mapping(nested_value))
-        elif isinstance(nested_value, list | tuple):
-            for item in nested_value:
-                if isinstance(item, Mapping):
-                    artifact_ids.extend(_metadata_referencefile_ids_from_mapping(item))
-    return artifact_ids
 
 
 def _dedupe_strings(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:

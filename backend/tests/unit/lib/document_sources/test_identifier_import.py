@@ -167,6 +167,14 @@ class _FakeProvider:
     def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
         return _fake_conversion_exposes_main_text(result, provider_id=self.provider_id)
 
+    def provider_metadata_artifacts_for_source(self, source_artifact, artifacts):
+        return tuple(
+            artifact
+            for artifact in artifacts
+            if artifact.role is SourceArtifactRole.PROVIDER_METADATA
+            and artifact.reference_curie == source_artifact.reference_curie
+        )
+
 
 class _FakeConversionProvider(_FakeProvider):
     def __init__(
@@ -353,6 +361,23 @@ def _converted_artifact(
         display_name=display_name,
         parent_artifact_id=parent_artifact_id,
         metadata={"file_class": file_class, "file_extension": "md"},
+    )
+
+
+def _provider_metadata_artifact(*, artifact_id="figure-meta-1"):
+    return SourceArtifact(
+        provider="fake_provider",
+        artifact_id=artifact_id,
+        role=SourceArtifactRole.PROVIDER_METADATA,
+        artifact_format=SourceArtifactFormat.JSON,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="ref-123",
+        reference_curie="AGRKB:123",
+        display_name="provider-paper_image_001",
+        metadata={
+            "file_class": "converted_main_figure_metadata",
+            "file_extension": "json",
+        },
     )
 
 
@@ -811,7 +836,8 @@ async def test_select_reference_import_candidate_blocks_ambiguous_main_markdown(
 async def test_identifier_import_service_returns_partial_success_and_dispatches_pdf_backed_import(tmp_path):
     sessions = []
     created_documents = []
-    provider = _FakeProvider()
+    metadata = _provider_metadata_artifact()
+    provider = _FakeProvider(artifacts=(*_ready_artifacts(), metadata))
     dispatch_recorder = _DispatchRecorder()
     jobs = []
 
@@ -871,6 +897,7 @@ async def test_identifier_import_service_returns_partial_success_and_dispatches_
     assert isinstance(provider_request, ProviderMarkdownExecutionRequest)
     assert provider_request.converted_artifact_id == "md-1"
     assert provider_request.curator_token == "curator-token"
+    assert provider_request.figure_metadata_artifact_ids == (metadata.artifact_id,)
     assert provider_request.source_provenance["viewer_mode"] == "local_pdf"
     assert provider.download_calls == [
         {"artifact_id": "pdf-1", "request_bearer_token": "curator-token"}
@@ -1108,8 +1135,9 @@ async def test_identifier_import_service_queues_abc_conversion_when_markdown_is_
     sessions = []
     created_documents = []
     source = _source_artifact(artifact_id="pdf-1")
+    metadata = _provider_metadata_artifact()
     provider = _FakeConversionProvider(
-        artifacts=(source,),
+        artifacts=(source, metadata),
         conversion_result=SourceConversionResult(
             provider="abc_literature",
             status=SourceConversionStatus.RUNNING,
@@ -1127,6 +1155,12 @@ async def test_identifier_import_service_queues_abc_conversion_when_markdown_is_
                         "file_class": "converted_merged_main",
                         "referencefile_id": None,
                     },
+                    "figures": [
+                        {
+                            "display_name": "provider-paper_image_001",
+                            "metadata_referencefile_id": "raw-bogus-meta",
+                        }
+                    ],
                     "status": "pending",
                     "error": None,
                 },
@@ -1187,6 +1221,7 @@ async def test_identifier_import_service_queues_abc_conversion_when_markdown_is_
     assert conversion_request.reference == "AGRKB:123"
     assert conversion_request.source_artifact_id == "pdf-1"
     assert conversion_request.curator_token == "curator-token"
+    assert conversion_request.figure_metadata_artifact_ids == (metadata.artifact_id,)
 
 
 @pytest.mark.asyncio

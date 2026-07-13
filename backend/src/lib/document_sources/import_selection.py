@@ -195,7 +195,10 @@ async def select_checksum_import_candidate(
             provider=provider.provider_id,
             checksum=normalized_checksum,
             status=ChecksumImportDecisionStatus.CONVERSION_RUNNING,
-            selected=ChecksumImportCandidate(source_artifact=source_artifact),
+            selected=ChecksumImportCandidate(
+                source_artifact=source_artifact,
+                provider_metadata_artifacts=provider_metadata_artifacts,
+            ),
             source_artifacts=authorized_sources,
             message="Provider conversion is still running",
         )
@@ -270,7 +273,10 @@ async def select_checksum_import_candidate(
                 provider=provider.provider_id,
                 checksum=normalized_checksum,
                 status=ChecksumImportDecisionStatus.CONVERSION_RUNNING,
-                selected=ChecksumImportCandidate(source_artifact=source_artifact),
+                selected=ChecksumImportCandidate(
+                    source_artifact=source_artifact,
+                    provider_metadata_artifacts=provider_metadata_artifacts,
+                ),
                 source_artifacts=authorized_sources,
                 message="Provider conversion is still running",
                 metadata=conversion_metadata,
