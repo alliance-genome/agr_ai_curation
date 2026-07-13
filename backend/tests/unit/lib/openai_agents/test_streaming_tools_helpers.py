@@ -198,12 +198,95 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
 
 
 @pytest.mark.asyncio
-async def test_run_specialist_records_sentry_error_for_stream_failure(monkeypatch):
+async def test_run_specialist_records_sentry_error_for_stream_creation_failure(monkeypatch):
     sentry_calls = []
+    context_exits = {"conversation": 0, "span": 0}
 
     class FakeSentrySpan:
         def set_data(self, key, value):
             sentry_calls.append(("data", key, value))
+
+    class RecordingContextManager(_FakeContextManager):
+        def __init__(self, kind, value=None):
+            super().__init__(value)
+            self.kind = kind
+
+        def __exit__(self, exc_type, exc, tb):
+            context_exits[self.kind] += 1
+            return None
+
+    def _raise_stream_creation_error(*args, **kwargs):
+        raise ConnectionError("Responses stream could not be created.")
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        _raise_stream_creation_error,
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: RecordingContextManager("conversation"),
+    )
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return RecordingContextManager("span", FakeSentrySpan())
+
+    monkeypatch.setattr(streaming_tools, "gen_ai_invoke_agent_span", _fake_sentry_span)
+
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(ConnectionError, match="Responses stream could not be created"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="summarize findings",
+            specialist_name="Plain Text Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    error_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "specialist_tool_post_stream"
+    )
+    assert error_span[1]["finalization_status"] == "error"
+    assert (
+        error_span[1]["span_data"]["ai_curation.error.detail"]["error_type"]
+        == "ConnectionError"
+    )
+    assert (
+        error_span[1]["span_data"]["ai_curation.error.detail"]["phase"]
+        == "specialist_start_streamed"
+    )
+    assert context_exits == {"conversation": 2, "span": 2}
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_records_sentry_error_for_stream_failure(monkeypatch):
+    sentry_calls = []
+    context_exits = {"conversation": 0, "span": 0}
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
+
+    class RecordingContextManager(_FakeContextManager):
+        def __init__(self, kind, value=None):
+            super().__init__(value)
+            self.kind = kind
+
+        def __exit__(self, exc_type, exc, tb):
+            context_exits[self.kind] += 1
+            return None
 
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
     monkeypatch.setattr(
@@ -214,12 +297,12 @@ async def test_run_specialist_records_sentry_error_for_stream_failure(monkeypatc
     monkeypatch.setattr(
         streaming_tools,
         "gen_ai_conversation_scope",
-        lambda _conversation_id: _FakeContextManager(),
+        lambda _conversation_id: RecordingContextManager("conversation"),
     )
 
     def _fake_sentry_span(**kwargs):
         sentry_calls.append(("span", kwargs))
-        return _FakeContextManager(FakeSentrySpan())
+        return RecordingContextManager("span", FakeSentrySpan())
 
     monkeypatch.setattr(streaming_tools, "gen_ai_invoke_agent_span", _fake_sentry_span)
 
@@ -249,6 +332,7 @@ async def test_run_specialist_records_sentry_error_for_stream_failure(monkeypatc
     assert error_span[1]["span_data"]["ai_curation.error.detail"]["error_type"] == "TimeoutError"
     assert error_span[1]["span_data"]["ai_curation.error.detail"]["phase"] == "specialist_stream"
     assert ("data", "ai_curation.finalization.status", "error") in sentry_calls
+    assert context_exits == {"conversation": 2, "span": 2}
 
 
 @pytest.mark.asyncio
