@@ -52,7 +52,9 @@ _PUNCTUATED_MULTI_REFERENCE_SEPARATOR = (
 )
 _WORD_MULTI_REFERENCE_SEPARATOR = (
     r"(?:\band\s*(?:/|-)\s*or\s+|\bas\s+well\s+as\s+|\band\s+|"
-    r"\bor\s+|\bto\s+|\bthrough\s+|\bversus\s+|\bvs\.?\s+)"
+    r"\bor\s+|\bto\s+|\bthrough\s+|\bversus\s+|\bvs\.?\s+|"
+    r"\b(?:is\s+)?compared\s+with\s+|\btogether\s+with\s+|"
+    r"\balongside\s+)"
 )
 _MULTI_REFERENCE_SEPARATOR = (
     rf"(?:{_PUNCTUATED_MULTI_REFERENCE_SEPARATOR}|"
@@ -167,7 +169,9 @@ _FIGURE_LIST_FOLLOWING_ITEM = (
     rf"\d+\b(?!{_HYPHEN_OR_DASH}))"
     r"(?:\s*\([^()\r\n]*\))?"
 )
-_PANEL_SCOPE_QUALIFIER = r"(?:(?:label(?:l)?ed|denoted)\s+)?"
+_PANEL_SCOPE_QUALIFIER = (
+    r"(?:(?:label(?:l)?ed|denoted|marked|designated|identified\s+as)\s+)?"
+)
 _SCOPED_MULTI_PANEL_PATTERN = re.compile(
     rf"(?:\bpanels?\s+{_PANEL_SCOPE_QUALIFIER}{_PANEL_LIST_FIRST_ITEM}\s*"
     rf"{_MULTI_REFERENCE_SEPARATOR}{_PANEL_LIST_FOLLOWING_ITEM}|"

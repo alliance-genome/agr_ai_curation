@@ -119,6 +119,9 @@ def test_provider_figure_metadata_omits_later_scoped_panel_in_prose() -> None:
         "Panels (A) and (B) show different patterns.",
         "Panels labeled A and B show different patterns.",
         "Panels denoted A and B show different patterns.",
+        "Panels marked A and B show different patterns.",
+        "Panels designated A and B show different patterns.",
+        "Panels identified as A and B show different patterns.",
         "Figure 1(A) and (B) show different patterns.",
         "Figure 1 panel A (left) and B (right) show different patterns.",
         "Panels A (left), B (center), and C (right) show different patterns.",
@@ -236,6 +239,10 @@ def test_provider_figure_metadata_does_not_fallback_for_plural_references(
         "Fig. 1A + B show different patterns.",
         "Fig. 1A; B show different patterns.",
         "Fig. 1A as well as B show different patterns.",
+        "Fig. 1A compared with B shows the difference.",
+        "Fig. 1A is compared with B.",
+        "Fig. 1A together with B shows the difference.",
+        "Fig. 1A alongside B shows the difference.",
         "Fig. 1A and B. Results are shown separately.",
     ),
 )
@@ -365,6 +372,10 @@ def test_provider_figure_metadata_preserves_locator_before_hyphenated_prose(
         "Fig. 1A and B cells were quantified.",
         "Fig. 1A and T cells were quantified.",
         "Fig. 1A and C. elegans embryos were analyzed.",
+        "Fig. 1A compared with B cells shows the difference.",
+        "Fig. 1A is compared with T cells.",
+        "Fig. 1A together with C. elegans embryos supports the result.",
+        "Fig. 1A alongside B cells shows the expression pattern.",
     ),
 )
 def test_provider_figure_metadata_preserves_locator_before_biomedical_prose(
