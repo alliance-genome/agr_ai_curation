@@ -4000,6 +4000,7 @@ async def execute_flow(
     extraction_persisted = False
     curation_handoff_emitted = False
     pending_output_events: list[dict[str, Any]] = []
+    pending_run_finished_event: Optional[dict[str, Any]] = None
     flow_execution_state = supervisor._flow_execution_state
     completed_steps = flow_execution_state["completed_steps"]
     evidence_registry = flow_execution_state["evidence_registry"]
@@ -4311,6 +4312,7 @@ async def execute_flow(
             }
             break
         if event_type == "RUN_FINISHED":
+            pending_run_finished_event = dict(event)
             missing_steps = _missing_consumed_tool_completions()
             if missing_steps:
                 logger.info(
@@ -4528,6 +4530,17 @@ async def execute_flow(
             }
     else:
         output_status = "complete" if produced_output_events else "none"
+
+    # Preserve current main's raw-response fallback for flows without explicit
+    # output attachments. Typed formatter branches are authoritative whenever
+    # they exist and must not be accompanied by the runner's generic response.
+    if (
+        flow_status == "completed"
+        and not expected_output_attachments
+        and not produced_output_events
+        and pending_run_finished_event is not None
+    ):
+        yield pending_run_finished_event
 
     # Emit flow-specific completion event
     yield {

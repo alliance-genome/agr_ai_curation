@@ -55,6 +55,40 @@ def test_completed_outcome_releases_exactly_one_preferred_result_after_persisten
     ]
 
 
+def test_completed_outcome_preserves_multiple_typed_outputs_after_persistence():
+    outcome = FlowRunOutcome()
+    outcome.observe({"type": "RUN_FINISHED", "response": "Raw fallback."})
+    outcome.observe(
+        {
+            "type": "FILE_READY",
+            "details": {"file_id": "file-1", "filename": "alleles.tsv"},
+        }
+    )
+    outcome.observe(
+        {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"formatter_node_id": "chat-1", "output": "Allele answer."},
+        }
+    )
+    outcome.observe(
+        {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"formatter_node_id": "chat-2", "output": "Gene answer."},
+        }
+    )
+    outcome.observe({"type": "FLOW_FINISHED", "status": "completed"})
+
+    assert outcome.final_user_visible_text == "Allele answer.\n\nGene answer."
+    outcome.mark_persisted(transcript=True)
+
+    assert [event["type"] for event in outcome.publishable_terminal_events()] == [
+        "FILE_READY",
+        "CHAT_OUTPUT_READY",
+        "CHAT_OUTPUT_READY",
+        "FLOW_FINISHED",
+    ]
+
+
 def test_persistence_failure_replaces_stale_success_terminal_order():
     outcome = FlowRunOutcome()
     outcome.observe({"type": "CHAT_OUTPUT_READY", "details": {"output": "stale"}})

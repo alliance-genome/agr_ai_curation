@@ -5,16 +5,20 @@ from datetime import datetime, timezone
 import json
 import logging
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from src.api import batch as batch_api
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
 from src.schemas.batch import BatchCreateRequest, BatchResponse, BatchValidationResponse
+
+
+_TEST_REQUEST = cast(Request, object())
 
 
 def _mock_auth(monkeypatch, user_id=11):
@@ -333,7 +337,7 @@ async def test_download_batch_zip_404_when_batch_missing(monkeypatch):
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(uuid4(), request=object(), user={"sub": "u-1"}, db=object())
+        await batch_api.download_batch_zip(uuid4(), request=_TEST_REQUEST, user={"sub": "u-1"}, db=object())
     assert exc.value.status_code == 404
 
 
@@ -345,7 +349,7 @@ async def test_download_batch_zip_400_when_no_completed_docs(monkeypatch):
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(uuid4(), request=object(), user={"sub": "u-1"}, db=object())
+        await batch_api.download_batch_zip(uuid4(), request=_TEST_REQUEST, user={"sub": "u-1"}, db=object())
     assert exc.value.status_code == 400
 
 
@@ -402,7 +406,7 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
         lambda: SimpleNamespace(base_path=tmp_path),
     )
 
-    response = await batch_api.download_batch_zip(batch_id, request=object(), user={"sub": "u-1"}, db=db)
+    response = await batch_api.download_batch_zip(batch_id, request=_TEST_REQUEST, user={"sub": "u-1"}, db=db)
     assert isinstance(response, StreamingResponse)
     assert response.headers["content-disposition"].endswith(f'batch_{batch_id}_results.zip"')
 
@@ -441,7 +445,7 @@ async def test_download_batch_zip_400_when_completed_docs_exist_but_none_downloa
     )
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(batch_id, request=object(), user={"sub": "u-1"}, db=db)
+        await batch_api.download_batch_zip(batch_id, request=_TEST_REQUEST, user={"sub": "u-1"}, db=db)
     assert exc.value.status_code == 400
     assert "No downloadable result files" in exc.value.detail
 
@@ -624,6 +628,9 @@ async def test_stream_batch_progress_replays_completed_document_snapshot_on_reco
             "position": 0,
             "status": "completed",
             "result_file_path": None,
+            "result_files": [],
+            "output_status": None,
+            "output_branches": [],
             "review_session_ids": ["review-gene"],
             **handoff_metadata,
             "error_message": None,

@@ -9,11 +9,7 @@ from typing import Any, Literal
 FlowRunStatus = Literal["running", "completed", "failed"]
 FlowPersistenceStatus = Literal["pending", "succeeded", "failed"]
 
-_SUCCESS_OUTPUT_EVENT_PRIORITY = {
-    "RUN_FINISHED": 1,
-    "FILE_READY": 2,
-    "CHAT_OUTPUT_READY": 3,
-}
+_TYPED_SUCCESS_OUTPUT_EVENTS = {"FILE_READY", "CHAT_OUTPUT_READY"}
 
 
 class FlowRunOutcomeNotDurableError(RuntimeError):
@@ -22,11 +18,12 @@ class FlowRunOutcomeNotDurableError(RuntimeError):
 
 @dataclass
 class FlowRunOutcome:
-    """Reduce runtime events to the one durable, user-visible flow outcome.
+    """Reduce runtime events to the durable, user-visible flow outcome.
 
-    Success output is retained as a candidate until the authoritative
+    Typed success outputs are retained as candidates until the authoritative
     ``FLOW_FINISHED`` event is observed and transcript persistence succeeds.
-    A failed terminal status always discards that candidate.
+    A raw ``RUN_FINISHED`` response is only a fallback when no typed output was
+    produced. A failed terminal status always discards all success candidates.
     """
 
     status: FlowRunStatus = "running"
@@ -34,7 +31,8 @@ class FlowRunOutcome:
     final_user_visible_text: str | None = None
     persistence_status: FlowPersistenceStatus = "pending"
     persistence_result: dict[str, Any] = field(default_factory=dict)
-    _success_output_event: dict[str, Any] | None = None
+    _success_output_events: list[dict[str, Any]] = field(default_factory=list)
+    _run_finished_event: dict[str, Any] | None = None
     _run_error_event: dict[str, Any] | None = None
     _flow_finished_event: dict[str, Any] | None = None
     _replacement_failure_events: list[dict[str, Any]] = field(default_factory=list)
@@ -43,13 +41,23 @@ class FlowRunOutcome:
         """Consume one flattened endpoint event without publishing it."""
 
         event_type = str(event.get("type") or "")
-        if event_type in _SUCCESS_OUTPUT_EVENT_PRIORITY:
-            current_type = str((self._success_output_event or {}).get("type") or "")
-            if _SUCCESS_OUTPUT_EVENT_PRIORITY[event_type] >= _SUCCESS_OUTPUT_EVENT_PRIORITY.get(
-                current_type, 0
-            ):
-                self._success_output_event = dict(event)
+        if event_type == "RUN_FINISHED":
+            self._run_finished_event = dict(event)
+            if not self._success_output_events:
                 self.final_user_visible_text = self._extract_visible_text(event)
+            return
+
+        if event_type in _TYPED_SUCCESS_OUTPUT_EVENTS:
+            candidate = dict(event)
+            identity = self._success_output_identity(candidate)
+            if not any(
+                self._success_output_identity(existing) == identity
+                for existing in self._success_output_events
+            ):
+                self._success_output_events.append(candidate)
+            self.final_user_visible_text = self._combined_visible_text(
+                self._success_output_events
+            )
             return
 
         if event_type == "RUN_ERROR":
@@ -57,7 +65,8 @@ class FlowRunOutcome:
             self._run_error_event = dict(event)
             self.failure_reason = str(event.get("message") or "Flow execution failed.")
             self.final_user_visible_text = None
-            self._success_output_event = None
+            self._success_output_events = []
+            self._run_finished_event = None
             return
 
         if event_type != "FLOW_FINISHED":
@@ -71,7 +80,8 @@ class FlowRunOutcome:
                 event.get("failure_reason") or self.failure_reason or "Flow execution failed."
             )
             self.final_user_visible_text = None
-            self._success_output_event = None
+            self._success_output_events = []
+            self._run_finished_event = None
             self._flow_finished_event["status"] = "failed"
             self._flow_finished_event["failure_reason"] = self.failure_reason
         else:
@@ -89,8 +99,10 @@ class FlowRunOutcome:
             return [dict(event) for event in self._replacement_failure_events]
 
         events: list[dict[str, Any]] = []
-        if self.status == "completed" and self._success_output_event is not None:
-            events.append(dict(self._success_output_event))
+        if self.status == "completed" and self._success_output_events:
+            events.extend(dict(event) for event in self._success_output_events)
+        elif self.status == "completed" and self._run_finished_event is not None:
+            events.append(dict(self._run_finished_event))
         elif self.status == "failed" and self._run_error_event is not None:
             events.append(dict(self._run_error_event))
         if self._flow_finished_event is not None:
@@ -114,7 +126,8 @@ class FlowRunOutcome:
         self.status = "failed"
         self.failure_reason = reason
         self.final_user_visible_text = None
-        self._success_output_event = None
+        self._success_output_events = []
+        self._run_finished_event = None
         self._run_error_event = None
         self._flow_finished_event = None
         self._replacement_failure_events = [dict(event) for event in terminal_events]
@@ -138,3 +151,28 @@ class FlowRunOutcome:
             value = None
         normalized = str(value or "").strip()
         return normalized or None
+
+    @classmethod
+    def _combined_visible_text(cls, events: list[dict[str, Any]]) -> str | None:
+        visible = [
+            text
+            for event in events
+            if (text := cls._extract_visible_text(event)) is not None
+        ]
+        return "\n\n".join(visible) or None
+
+    @staticmethod
+    def _success_output_identity(event: dict[str, Any]) -> tuple[str, str, str]:
+        event_type = str(event.get("type") or "")
+        details = event.get("details")
+        details = details if isinstance(details, dict) else {}
+        formatter_node_id = str(details.get("formatter_node_id") or "")
+        if event_type == "FILE_READY":
+            output_identity = str(
+                details.get("file_id")
+                or f"{details.get('format') or details.get('file_type') or ''}:"
+                f"{details.get('filename') or ''}"
+            )
+        else:
+            output_identity = str(details.get("output") or event.get("output") or "")
+        return event_type, formatter_node_id, output_identity

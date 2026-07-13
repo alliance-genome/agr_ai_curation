@@ -4159,11 +4159,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "src.lib.openai_agents.agents.supervisor_agent._run_streaming_specialist_tool",
             _specialist_result,
         )
-        flow = _make_flow([
-            _task_input_node("Read and format the document."),
-            _agent_node("n1", "gene", step_goal="Extract genes"),
-            _agent_node("n2", "json_formatter", step_goal="Save JSON"),
-        ])
+        flow = _make_output_attachment_flow(
+            [
+                _task_input_node("Read and format the document."),
+                _agent_node("n1", "gene", step_goal="Extract genes"),
+                _agent_node("n2", "json_formatter", step_goal="Save JSON"),
+            ],
+            source_node_id="n1",
+            output_node_id="n2",
+        )
         tools, _, _, execution_state = get_all_agent_tools(
             flow,
             document_id="doc-123",
