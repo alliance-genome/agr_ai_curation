@@ -258,6 +258,26 @@ def normalize_custom_overlay_for_parent(
     )
 
 
+def _normalize_editable_custom_prompt(
+    parent_agent_key: Optional[str],
+    custom_prompt: Optional[str],
+    *,
+    target: str,
+) -> str:
+    """Apply the canonical parent-aware policy for stored editable prompts."""
+    normalization = normalize_custom_overlay_for_parent(
+        parent_agent_key,
+        custom_prompt,
+    )
+    if normalization.status == "needs_review":
+        raise ValueError(
+            normalization.warning
+            or f"{target} contains copied locked/core prompt text."
+        )
+    reject_locked_prompt_markers(normalization.content, target=target)
+    return normalization.content
+
+
 def _read_group_prompt_overrides(agent_obj: Any) -> Dict[str, str]:
     """Read group overrides from either the new or legacy attribute name."""
     raw_overrides = getattr(agent_obj, "group_prompt_overrides", None)
@@ -570,8 +590,11 @@ def create_custom_agent(
             "category": "Custom",
         }
 
-    agent_prompt = str(custom_prompt or "").strip()
-    reject_locked_prompt_markers(agent_prompt, target="Custom agent main prompt")
+    agent_prompt = _normalize_editable_custom_prompt(
+        parent_agent_key,
+        custom_prompt,
+        target="Custom agent main prompt",
+    )
     normalized_group_overrides = normalize_editable_group_prompt_overrides(group_prompt_overrides)
     custom_uuid = uuid.uuid4()
 
@@ -888,8 +911,11 @@ def update_custom_agent(
         next_group_overrides = normalize_editable_group_prompt_overrides(group_prompt_overrides)
     next_custom_prompt = custom_prompt
     if custom_prompt is not None:
-        next_custom_prompt = str(custom_prompt or "").strip()
-        reject_locked_prompt_markers(next_custom_prompt, target="Custom agent main prompt")
+        next_custom_prompt = _normalize_editable_custom_prompt(
+            getattr(custom_agent, "template_source", None),
+            custom_prompt,
+            target="Custom agent main prompt",
+        )
 
     prompt_changed = (
         next_custom_prompt is not None
@@ -1017,6 +1043,14 @@ def revert_custom_agent_to_version(
             f"Version {version} not found for custom agent '{custom_agent.id}'"
         )
 
+    target_custom_prompt = _normalize_editable_custom_prompt(
+        getattr(custom_agent, "template_source", None),
+        target.custom_prompt,
+        target="Custom agent main prompt",
+    )
+    target_group_overrides = normalize_editable_group_prompt_overrides(
+        _read_group_prompt_overrides(target)
+    )
     snapshot_version = _get_next_version(db, custom_agent.id)
     db.add(
         CustomAgentVersion(
@@ -1028,10 +1062,7 @@ def revert_custom_agent_to_version(
         )
     )
 
-    target_group_overrides = normalize_editable_group_prompt_overrides(
-        _read_group_prompt_overrides(target)
-    )
-    custom_agent.custom_prompt = target.custom_prompt
+    custom_agent.custom_prompt = target_custom_prompt
     _write_group_prompt_overrides(custom_agent, target_group_overrides)
     custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
