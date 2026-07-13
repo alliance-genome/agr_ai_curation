@@ -105,6 +105,10 @@ class AgentMetadata(BaseModel):
     category: str
     subcategory: Optional[str] = None
     supervisor_tool: Optional[str] = None
+    output_schema_key: Optional[str] = None
+    is_active: bool = True
+    visible: bool = True
+    produces_flow_artifacts: bool = False
     validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)
     domain_envelope: Optional[Dict[str, Any]] = None
 

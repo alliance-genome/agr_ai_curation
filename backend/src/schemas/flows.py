@@ -312,7 +312,7 @@ class FlowEdge(BaseModel):
 class FlowDefinition(BaseModel):
     """Complete flow definition stored in JSONB."""
 
-    version: Literal["1.0", "1.1"] = "1.0"
+    version: Literal["1.1"] = "1.1"
     task_instructions_default_only: bool = Field(
         False,
         description=(

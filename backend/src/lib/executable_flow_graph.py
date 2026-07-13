@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 from src.lib.flow_edge_roles import (
     CONTROL_FLOW_EDGE_ROLE,
     OUTPUT_ATTACHMENT_EDGE_ROLE,
+    SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
 )
 
@@ -202,7 +203,7 @@ def project_executable_flow_graph(
         str(node.get("id")) for node in nodes if str(node.get("id") or "").strip()
     )
     node_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
-    flow_version = str(flow.get("version") or "1.0")
+    flow_version = str(flow.get("version") or "1.1")
 
     control_edges = [
         edge
@@ -253,6 +254,40 @@ def project_executable_flow_graph(
         node_id: [] for node_id in control_node_ids
     }
     issues: list[ExecutableFlowIssue] = []
+
+    if flow_version != "1.1":
+        issues.append(
+            ExecutableFlowIssue(
+                code="unsupported_flow_version",
+                message=(
+                    f"Flow schema version '{flow_version}' is unsupported; migrate "
+                    "the flow to version '1.1' before execution"
+                ),
+            )
+        )
+
+    for node_id in control_node_ids:
+        node = node_by_id[node_id]
+        node_data = _mapping(node.get("data"))
+        agent_id = str(node_data.get("agent_id") or "")
+        if agent_id not in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS:
+            continue
+        formatter_edge_ids = tuple(
+            str(edge.get("id") or "")
+            for edge in control_edges
+            if node_id in {str(edge.get("source") or ""), str(edge.get("target") or "")}
+        )
+        issues.append(
+            ExecutableFlowIssue(
+                code="formatter_in_control_flow",
+                message=(
+                    f"Formatter node '{node_id}' must be an explicit output node "
+                    "connected only by output_attachment edge(s)"
+                ),
+                node_ids=(node_id,),
+                edge_ids=formatter_edge_ids,
+            )
+        )
 
     for node_id in sorted(cross_role_target_ids):
         issues.append(

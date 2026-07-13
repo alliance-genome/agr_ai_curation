@@ -598,7 +598,7 @@ def _create_flow_handler():
                 last_control_node_id = node_id
 
         flow_definition = {
-            "version": "1.1" if any(_is_output_agent_id(str(step["agent_id"])) for step in steps) else "1.0",
+            "version": "1.1",
             "nodes": nodes,
             "edges": edges,
             "entry_node_id": "task_input_0"  # task_input must be entry node

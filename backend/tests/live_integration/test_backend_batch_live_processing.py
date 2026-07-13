@@ -61,7 +61,7 @@ def _sample_pdf_paths() -> list[Path]:
 
 def _flow_definition() -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -80,7 +80,7 @@ def _flow_definition() -> dict:
             },
             {
                 "id": "pdf_1",
-                "type": "agent",
+                "type": "output",
                 "position": {"x": 280, "y": 0},
                 "data": {
                     "agent_id": "pdf_extraction",
@@ -103,7 +103,12 @@ def _flow_definition() -> dict:
         ],
         "edges": [
             {"id": "edge_1", "source": "task_input_1", "target": "pdf_1"},
-            {"id": "edge_2", "source": "pdf_1", "target": "json_1"},
+            {
+                "id": "edge_2",
+                "source": "pdf_1",
+                "target": "json_1",
+                "role": "output_attachment",
+            },
         ],
     }
 

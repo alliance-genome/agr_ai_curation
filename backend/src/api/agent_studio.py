@@ -82,6 +82,8 @@ from src.lib.observability.background_tasks import (
     report_background_task_exception,
 )
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
+from src.lib.flow_edge_roles import agent_can_source_output_attachment
+from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
     CustomAgentAccessError,
@@ -691,6 +693,17 @@ async def get_registry_metadata(
     validation_attachments_by_agent = validation_attachment_catalog_by_agent(AGENT_REGISTRY)
     domain_envelope_metadata_by_agent = domain_envelope_metadata_catalog_by_agent(AGENT_REGISTRY)
     agents = {}
+
+    def _produces_flow_artifacts(entry: Dict[str, Any]) -> bool:
+        if not agent_can_source_output_attachment(entry):
+            return False
+        category = str(entry.get("category") or "").strip().lower()
+        subcategory = str(entry.get("subcategory") or "").strip().lower()
+        if "extract" in category or "extract" in subcategory:
+            return True
+        output_schema_key = str(entry.get("output_schema_key") or "").strip()
+        return bool(output_schema_key and resolve_output_schema(output_schema_key))
+
     for agent_id, entry in AGENT_REGISTRY.items():
         supervisor = entry.get("supervisor", {})
         # supervisor_tool is only set if supervisor is enabled (default True)
@@ -709,6 +722,10 @@ async def get_registry_metadata(
             category=entry.get("category", "Unknown"),
             subcategory=entry.get("subcategory"),
             supervisor_tool=supervisor_tool,
+            output_schema_key=entry.get("output_schema_key"),
+            is_active=entry.get("is_active", True) is not False,
+            visible=entry.get("visible", True) is not False,
+            produces_flow_artifacts=_produces_flow_artifacts(entry),
             validation_attachments=validation_attachments_by_agent.get(agent_id, []),
             domain_envelope=domain_envelope_metadata_by_agent.get(agent_id),
         )
@@ -733,6 +750,19 @@ async def get_registry_metadata(
                     "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
                 ),
                 supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
+                output_schema_key=getattr(custom, "output_schema_key", None),
+                is_active=bool(getattr(custom, "is_active", True)),
+                visible=True,
+                produces_flow_artifacts=_produces_flow_artifacts(
+                    {
+                        "category": category,
+                        "output_schema_key": getattr(
+                            custom, "output_schema_key", None
+                        ),
+                        "is_active": bool(getattr(custom, "is_active", True)),
+                        "visible": True,
+                    }
+                ),
                 validation_attachments=deepcopy(
                     validation_attachments_by_agent.get(template_metadata_key, [])
                 ),

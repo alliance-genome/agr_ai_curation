@@ -100,7 +100,10 @@ from src.lib.flows.output_projection import (
     finalize_output_projection,
 )
 from src.lib.executable_flow_graph import project_executable_flow_graph
-from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+from src.lib.flow_edge_roles import (
+    SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
+    agent_can_source_output_attachment,
+)
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
@@ -214,18 +217,6 @@ def _is_output_formatter_entry(entry: Optional[dict[str, Any]]) -> bool:
     return (
         _matches_metadata_classification(category, ["output"])
         or _matches_metadata_classification(subcategory, ["output", "format"])
-    )
-
-
-def _is_extraction_entry(entry: Optional[dict[str, Any]]) -> bool:
-    """Return whether an agent entry represents an extraction step."""
-
-    if not isinstance(entry, dict):
-        return False
-    category = _normalize_metadata_value(entry.get("category"))
-    subcategory = _normalize_metadata_value(entry.get("subcategory"))
-    return _matches_metadata_classification(category, ["extract"]) or (
-        _matches_metadata_classification(subcategory, ["extract"])
     )
 
 
@@ -2178,6 +2169,9 @@ def _resolve_flow_agent_entry(
         "subcategory": metadata.get("subcategory") or "",
         "requires_document": metadata.get("requires_document", False),
         "required_params": metadata.get("required_params", []),
+        "output_schema_key": metadata.get("output_schema_key"),
+        "is_active": metadata.get("is_active", True),
+        "visibility": metadata.get("visibility"),
         "curation": metadata.get("curation"),
         "supervisor": metadata.get("supervisor") or {},
     }
@@ -2309,12 +2303,12 @@ def _runtime_output_sources_by_node_id(
                 source_agent_id,
                 db_user_id=db_user_id,
             )
-            if not _is_extraction_entry(source_entry):
+            if not agent_can_source_output_attachment(source_entry):
                 errors.append(
-                    f"source node '{source_node_id}' agent '{source_agent_id}' is not an extraction agent"
+                    f"source node '{source_node_id}' agent '{source_agent_id}' is not "
+                    "an extraction agent or a typed validation agent"
                 )
 
-    flow_version = str(flow_def.get("version") or "1.0")
     for node_id in projection.ordered_executable_node_ids:
         node = nodes_by_id.get(node_id, {})
         node_data = node.get("data") or {}
@@ -2322,13 +2316,10 @@ def _runtime_output_sources_by_node_id(
             (node_data.get("agent_id") or "") if isinstance(node_data, Mapping) else ""
         )
         entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
-        if (
-            flow_version == "1.1"
-            and _is_output_formatter_entry(entry)
-            and node_id not in bindings
-        ):
+        if _is_output_formatter_entry(entry) and node_id not in bindings:
             errors.append(
-                f"legacy formatter node '{node_id}' must be repaired as an output attachment before execution"
+                f"formatter node '{node_id}' must be connected as an output attachment "
+                "before execution"
             )
 
     if errors:

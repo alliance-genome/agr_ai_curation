@@ -42,20 +42,20 @@ def _edge(edge_id: str, source: str, target: str, **extra: object) -> dict:
 
 def _multi_sidecar_flow() -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task",
         "nodes": [
             _node("task", "task_input", node_type="task_input"),
             _node("extract", "gene_extractor"),
             _node("validator_symbol", "custom_validator_symbol"),
             _node("validator_identifier", "custom_validator_identifier"),
-            _node("output", "csv_formatter"),
+            _node("output", "csv_formatter", node_type="output"),
         ],
         "edges": [
             _edge("control_1", "task", "extract"),
             _edge("sidecar_1", "extract", "validator_symbol", role="validation_attachment", satisfies_binding_id="symbol"),
             _edge("sidecar_2", "extract", "validator_identifier", role="validation_attachment", satisfies_binding_id="identifier"),
-            _edge("control_2", "extract", "output"),
+            _edge("output_1", "extract", "output", role="output_attachment"),
         ],
     }
 
@@ -93,37 +93,44 @@ def _multi_output_attachment_flow() -> dict:
 
 
 def _invalid_flow(kind: str) -> dict:
-    flow = _multi_sidecar_flow()
-    flow["nodes"] = flow["nodes"][:2] + flow["nodes"][-1:]
-    flow["edges"] = [
-        _edge("e1", "task", "extract"),
-        _edge("e2", "extract", "output"),
-    ]
+    flow = {
+        "version": "1.1",
+        "entry_node_id": "task",
+        "nodes": [
+            _node("task", "task_input", node_type="task_input"),
+            _node("extract", "gene_extractor"),
+            _node("finish", "curation_prep"),
+        ],
+        "edges": [
+            _edge("e1", "task", "extract"),
+            _edge("e2", "extract", "finish"),
+        ],
+    }
     if kind == "branch":
-        flow["nodes"].append(_node("other", "json_formatter"))
+        flow["nodes"].append(_node("other", "curation_handoff"))
         flow["edges"].append(_edge("e3", "extract", "other"))
     elif kind == "join":
         flow["nodes"].append(_node("other", "gene"))
         flow["edges"] = [
             _edge("e1", "task", "extract"),
             _edge("e2", "task", "other"),
-            _edge("e3", "extract", "output"),
-            _edge("e4", "other", "output"),
+            _edge("e3", "extract", "finish"),
+            _edge("e4", "other", "finish"),
         ]
     elif kind == "cycle":
-        flow["edges"].append(_edge("e3", "output", "extract"))
+        flow["edges"].append(_edge("e3", "finish", "extract"))
     elif kind == "disconnected":
         flow["nodes"].append(_node("orphan", "gene"))
     elif kind == "ambiguous_entry":
-        flow["edges"] = [_edge("e2", "extract", "output")]
+        flow["edges"] = [_edge("e2", "extract", "finish")]
     elif kind == "ambiguous_terminal":
-        flow["nodes"].append(_node("orphan_output", "json_formatter"))
+        flow["nodes"].append(_node("orphan_output", "curation_handoff"))
     return flow
 
 
 def _unavailable_step_flow() -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task",
         "nodes": [
             _node("task", "task_input", node_type="task_input"),
@@ -137,10 +144,10 @@ def test_multi_sidecar_projection_is_identical_across_consumers(monkeypatch):
     flow = _multi_sidecar_flow()
     projection = project_executable_flow_graph(flow)
 
-    assert projection.ordered_control_node_ids == ("task", "extract", "output")
+    assert projection.ordered_control_node_ids == ("task", "extract")
     assert projection.ordered_executable_node_ids == ("extract", "output")
     assert projection.entry_node_ids == ("task",)
-    assert projection.exit_node_ids == ("output",)
+    assert projection.exit_node_ids == ("extract",)
     assert [sidecar.binding_id for sidecar in projection.sidecars_for("extract")] == [
         "symbol",
         "identifier",
@@ -337,8 +344,61 @@ def test_output_attachments_require_flow_schema_v1_1():
     assert "output_attachment_requires_v1_1" in {
         issue.code for issue in projection.issues
     }
-    with pytest.raises(ValidationError, match="output_attachment_requires_v1_1"):
+    with pytest.raises(ValidationError, match="1.1"):
         FlowDefinition.model_validate(flow)
+
+
+def test_raw_v1_0_formatter_free_flow_is_rejected():
+    flow = _unavailable_step_flow()
+    flow["version"] = "1.0"
+
+    projection = project_executable_flow_graph(flow, raise_on_invalid=False)
+
+    assert "unsupported_flow_version" in {
+        issue.code for issue in projection.issues
+    }
+    with pytest.raises(ExecutableFlowTopologyError, match="unsupported_flow_version"):
+        project_executable_flow_graph(flow)
+
+
+def test_raw_missing_version_defaults_to_current_projection():
+    flow = _unavailable_step_flow()
+    flow.pop("version")
+
+    projection = project_executable_flow_graph(flow)
+
+    assert projection.valid is True
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.1"])
+def test_raw_formatter_control_nodes_are_rejected_for_every_flow_version(version):
+    flow = {
+        "version": version,
+        "entry_node_id": "task",
+        "nodes": [
+            _node("task", "task_input", node_type="task_input"),
+            _node("extract", "allele_extractor"),
+            _node("format", "chat_output"),
+        ],
+        "edges": [
+            _edge("control_1", "task", "extract"),
+            _edge("legacy_formatter", "extract", "format"),
+        ],
+    }
+
+    projection = project_executable_flow_graph(flow, raise_on_invalid=False)
+
+    issue = next(
+        issue for issue in projection.issues if issue.code == "formatter_in_control_flow"
+    )
+    assert issue.node_ids == ("format",)
+    assert issue.edge_ids == ("legacy_formatter",)
+    if version == "1.1":
+        with pytest.raises(ValidationError, match="formatter_in_control_flow"):
+            FlowDefinition.model_validate(flow)
+    else:
+        with pytest.raises(ValidationError, match="1.1"):
+            FlowDefinition.model_validate(flow)
 
 
 @pytest.mark.asyncio
@@ -575,7 +635,7 @@ def test_duplicate_sidecar_binding_is_rejected_but_distinct_fanout_is_not_branch
 
 def test_sidecar_target_cannot_also_be_a_control_step():
     flow = _multi_sidecar_flow()
-    flow["edges"].append(_edge("invalid_control", "validator_symbol", "output"))
+    flow["edges"].append(_edge("invalid_control", "validator_symbol", "extract"))
 
     projection = project_executable_flow_graph(flow, raise_on_invalid=False)
     assert "sidecar_in_control_flow" in {issue.code for issue in projection.issues}

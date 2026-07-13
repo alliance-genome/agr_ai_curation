@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 import src.lib.agent_studio.flow_tools as flow_tools
+from src.lib.agent_studio.models import FlowContextDefinition
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +35,13 @@ def test_flow_context_set_get_clear():
     assert flow_tools.get_current_flow_context() is None
     flow_tools.set_current_flow_context({"flow_name": "My Flow", "nodes": []})
     assert flow_tools.get_current_flow_context()["flow_name"] == "My Flow"
+
+
+def test_flow_context_definition_is_v1_1_only():
+    assert FlowContextDefinition().version == "1.1"
+
+    with pytest.raises(ValidationError, match="1.1"):
+        FlowContextDefinition(version="1.0")
     flow_tools.clear_current_flow_context()
     assert flow_tools.get_current_flow_context() is None
 
@@ -424,6 +433,7 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
     flow_tools.set_current_flow_context(
         {
             "flow_name": "Validator Sidecar Flow",
+            "version": "1.1",
             "entry_node_id": "task_input_0",
             "nodes": [
                 {
@@ -456,7 +466,7 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
                 },
                 {
                     "id": "output_1",
-                    "type": "agent",
+                    "type": "output",
                     "data": {
                         "agent_id": "chat_output",
                         "agent_display_name": "Output",
@@ -466,7 +476,11 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
             ],
             "edges": [
                 {"source": "task_input_0", "target": "extract_1"},
-                {"source": "extract_1", "target": "output_1"},
+                {
+                    "source": "extract_1",
+                    "target": "output_1",
+                    "role": "output_attachment",
+                },
                 {
                     "source": "extract_1",
                     "target": "custom_validator_1",
@@ -895,6 +909,7 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     assert result["success"] is True
     assert "flow_id" in result
     assert success_db.closed is True
+    assert success_db.added.flow_definition["version"] == "1.1"
 
     branch_db = _FakeDB()
     monkeypatch.setattr(sql_module, "get_db", _gen_db(branch_db))

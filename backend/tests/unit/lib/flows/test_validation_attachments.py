@@ -27,7 +27,7 @@ def _flow_definition(
     edges=None,
 ) -> FlowDefinition:
     return FlowDefinition(
-        version="1.0",
+        version="1.1",
         nodes=[
             {
                 "id": "task_1",

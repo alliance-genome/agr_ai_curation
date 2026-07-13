@@ -27,6 +27,10 @@ class TestGetRegistryMetadata:
         assert metadata.name == "Test Agent"
         assert metadata.icon == "🧪"
         assert metadata.category == "Validation"
+        assert metadata.output_schema_key is None
+        assert metadata.is_active is True
+        assert metadata.visible is True
+        assert metadata.produces_flow_artifacts is False
 
     def test_agent_metadata_optional_fields(self):
         """AgentMetadata should support optional fields."""
@@ -138,6 +142,25 @@ class TestGetRegistryMetadata:
         assert agent.name is not None
         assert agent.icon is not None
         assert agent.category is not None
+
+    def test_registry_metadata_exposes_server_authoritative_flow_artifact_capability(self):
+        import asyncio
+        from src.api.agent_studio import get_registry_metadata
+
+        result = asyncio.run(get_registry_metadata())
+
+        gene_extractor = result.agents["gene_extractor"]
+        assert gene_extractor.is_active is True
+        assert gene_extractor.visible is True
+        assert gene_extractor.produces_flow_artifacts is True
+
+        gene_validator = result.agents["gene"]
+        assert gene_validator.category == "Validation"
+        assert gene_validator.output_schema_key
+        assert gene_validator.produces_flow_artifacts is True
+
+        task_input = result.agents["task_input"]
+        assert task_input.produces_flow_artifacts is False
 
     def test_get_registry_metadata_includes_supervisor_tool(self):
         """Response should include supervisor_tool for routable agents."""
@@ -262,6 +285,8 @@ class TestGetRegistryMetadata:
             category="Validation",
             name="Doug's Gene Agent",
             icon="🔧",
+            output_schema_key="GeneResultEnvelope",
+            is_active=True,
         )
         monkeypatch.setattr(
             api_module,
@@ -290,6 +315,10 @@ class TestGetRegistryMetadata:
         assert custom_id in result.agents
         assert result.agents[custom_id].name == "Doug's Gene Agent"
         assert result.agents[custom_id].subcategory == "My Custom Agents"
+        assert result.agents[custom_id].output_schema_key == "GeneResultEnvelope"
+        assert result.agents[custom_id].is_active is True
+        assert result.agents[custom_id].visible is True
+        assert result.agents[custom_id].produces_flow_artifacts is True
 
     def test_get_registry_metadata_inherits_template_envelope_for_custom_agent(self, monkeypatch):
         """Custom extraction agents should inherit template envelope authoring metadata."""

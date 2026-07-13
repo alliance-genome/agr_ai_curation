@@ -41,6 +41,7 @@ from ..lib.openai_agents.config import get_flow_list_page_size_default
 from ..lib.flow_edge_roles import (
     OUTPUT_ATTACHMENT_EDGE_ROLE,
     SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
+    agent_can_source_output_attachment,
 )
 from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
@@ -93,8 +94,8 @@ def _validated_flow_definition_payload(
         enforce_agent_references=enforce_agent_references,
     )
     if enforce_agent_step_policy:
-        _validate_flow_agent_step_policy(validated, db_user_id=db_user_id)
         _validate_output_attachment_agent_roles(validated, db_user_id=db_user_id)
+        _validate_flow_agent_step_policy(validated, db_user_id=db_user_id)
     return validated.model_dump()
 
 
@@ -122,10 +123,6 @@ def _flow_agent_policy_entry(
 ) -> dict[str, Any] | None:
     """Return the metadata needed to enforce ordinary-flow-step policy."""
 
-    registry_entry = AGENT_REGISTRY.get(agent_id)
-    if isinstance(registry_entry, dict):
-        return registry_entry
-
     metadata_kwargs: dict[str, Any] = {}
     if db_user_id is not None:
         metadata_kwargs["db_user_id"] = db_user_id
@@ -133,12 +130,16 @@ def _flow_agent_policy_entry(
     try:
         metadata = get_agent_metadata(agent_id, **metadata_kwargs)
     except ValueError:
-        return None
+        registry_entry = AGENT_REGISTRY.get(agent_id)
+        return registry_entry if isinstance(registry_entry, dict) else None
 
     return {
         "name": metadata.get("display_name", agent_id),
         "category": metadata.get("category") or "",
         "subcategory": metadata.get("subcategory") or "",
+        "output_schema_key": metadata.get("output_schema_key"),
+        "is_active": metadata.get("is_active", True),
+        "visibility": metadata.get("visibility"),
         "supervisor": metadata.get("supervisor") or {},
     }
 
@@ -149,22 +150,12 @@ def _is_supported_output_formatter_agent(agent_id: str) -> bool:
     return agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 
 
-def _is_extraction_policy_entry(entry: dict[str, Any] | None) -> bool:
-    """Return whether catalog metadata identifies an extraction agent."""
-
-    if not isinstance(entry, dict):
-        return False
-    category = str(entry.get("category") or "").strip().lower()
-    subcategory = str(entry.get("subcategory") or "").strip().lower()
-    return "extract" in category or "extract" in subcategory
-
-
 def _validate_output_attachment_agent_roles(
     flow_definition: FlowDefinition,
     *,
     db_user_id: int | None,
 ) -> None:
-    """Enforce extractor-to-formatter roles using server-owned catalog metadata."""
+    """Enforce typed-source-to-formatter roles using catalog metadata."""
 
     nodes_by_id = {node.id: node for node in flow_definition.nodes}
     errors: list[str] = []
@@ -178,10 +169,11 @@ def _validate_output_attachment_agent_roles(
             if source is not None and source.data.agent_id != "task_input"
             else None
         )
-        if source is None or not _is_extraction_policy_entry(source_entry):
+        if source is None or not agent_can_source_output_attachment(source_entry):
             source_label = source.data.agent_display_name if source is not None else edge.source
             errors.append(
-                f"output attachment '{edge.id}' source '{source_label}' is not an extraction agent"
+                f"output attachment '{edge.id}' source '{source_label}' is not an "
+                "extraction agent or a typed validation agent"
             )
         if target is None or not _is_supported_output_formatter_agent(
             target.data.agent_id
@@ -197,40 +189,17 @@ def _validate_output_attachment_agent_roles(
         )
 
 
-def _legacy_formatter_control_flow_warnings(
-    flow_definition: FlowDefinition,
-    *,
-    db_user_id: int | None,
-) -> list[FlowValidationWarning]:
-    """Flag v1.0 formatter control steps retained in compatibility mode."""
-
-    if flow_definition.version != "1.0":
-        return []
-
-    control_node_ids = {
-        node_id
-        for edge in flow_definition.edges
-        if edge.role == DEFAULT_FLOW_EDGE_ROLE
-        for node_id in (edge.source, edge.target)
-    }
-    warnings: list[FlowValidationWarning] = []
-    for node in flow_definition.nodes:
-        if node.id not in control_node_ids or node.data.agent_id == "task_input":
-            continue
-        if not _is_supported_output_formatter_agent(node.data.agent_id):
-            continue
-        warnings.append(
-            FlowValidationWarning(
-                type="WARNING",
-                message=(
-                    f"Legacy formatter node '{node.data.agent_display_name}' remains runnable in "
-                    "compatibility mode and can be resaved unchanged. Repair it by removing "
-                    "its ordinary control-flow connection and connecting it directly to exactly "
-                    "one extraction node as an output attachment to use the current flow format."
-                ),
-            )
-        )
-    return warnings
+def _is_output_formatter_policy_entry(
+    agent_id: str,
+    entry: dict[str, Any] | None,
+) -> bool:
+    if agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS:
+        return True
+    if not isinstance(entry, dict):
+        return False
+    category = str(entry.get("category") or "").strip().lower()
+    subcategory = str(entry.get("subcategory") or "").strip().lower()
+    return "output" in category or "output" in subcategory or "format" in subcategory
 
 
 def _validate_flow_agent_step_policy(
@@ -245,6 +214,11 @@ def _validate_flow_agent_step_policy(
         for edge in flow_definition.edges
         if edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
     }
+    output_attachment_sources = {
+        edge.source
+        for edge in flow_definition.edges
+        if edge.role == OUTPUT_ATTACHMENT_EDGE_ROLE
+    }
     control_flow_edges_by_node: dict[str, list[str]] = {}
     for edge in flow_definition.edges:
         if edge.role != DEFAULT_FLOW_EDGE_ROLE:
@@ -258,10 +232,26 @@ def _validate_flow_agent_step_policy(
             continue
 
         entry = _flow_agent_policy_entry(agent_id, db_user_id=db_user_id)
+        control_flow_edge_ids = control_flow_edges_by_node.get(node.id, [])
+        if control_flow_edge_ids and _is_output_formatter_policy_entry(agent_id, entry):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Formatter node '{node.data.agent_display_name}' must be an explicit "
+                    "output node connected only by output_attachment edge(s). Remove "
+                    f"ordinary control-flow edge(s): {', '.join(control_flow_edge_ids)}."
+                ),
+            )
+        if (
+            node.id in output_attachment_sources
+            and agent_can_source_output_attachment(entry)
+        ):
+            # A typed validation result is a supported formatter input even when
+            # the validator is otherwise hidden from ordinary supervisor dispatch.
+            continue
         if entry is None or agent_allows_ordinary_flow_step(agent_id, entry):
             continue
 
-        control_flow_edge_ids = control_flow_edges_by_node.get(node.id, [])
         if node.id in validation_attachment_targets and not control_flow_edge_ids:
             continue
 
@@ -350,12 +340,6 @@ def _flow_to_response(flow: CurationFlow) -> FlowResponse:
         ]
         if missing_references
         else []
-    )
-    validation_warnings.extend(
-        _legacy_formatter_control_flow_warnings(
-            flow_definition,
-            db_user_id=flow.user_id,
-        )
     )
     return FlowResponse(
         id=flow.id,

@@ -23,7 +23,7 @@ flows = importlib.import_module("src.api.flows")
 
 def _flow_definition():
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -50,6 +50,18 @@ def _flow_definition():
         ],
         "edges": [{"id": "e1", "source": "task_input_1", "target": "agent_1"}],
     }
+
+
+def test_create_flow_request_rejects_v1_0_definition():
+    definition = _flow_definition()
+    definition["version"] = "1.0"
+
+    with pytest.raises(ValueError, match="1.1"):
+        CreateFlowRequest(
+            name="Legacy flow",
+            description=None,
+            flow_definition=definition,
+        )
 
 
 def _flow(name="Flow A"):

@@ -187,8 +187,8 @@ def test_ordered_executable_nodes_treats_validation_edges_as_sidecars():
     assert [node["id"] for node in ordered] == ["extract_1", "prep_1"]
 
 
-def test_legacy_v1_formatter_remains_runnable_without_typed_binding(monkeypatch):
-    """v1.0 formatters retain the pre-v1.1 all-completed-artifacts behavior."""
+def test_legacy_v1_formatter_control_graph_is_rejected():
+    """v1.0 formatter control steps are no longer executable."""
 
     flow = _make_flow(
         [
@@ -198,27 +198,15 @@ def test_legacy_v1_formatter_remains_runnable_without_typed_binding(monkeypatch)
         ]
     )
 
-    monkeypatch.setattr(
-        _executor_module(),
-        "_resolve_flow_agent_entry",
-        lambda agent_id, **_kwargs: {
-            "category": "Output" if agent_id == "chat_output" else "Extraction",
-            "subcategory": "Formatter" if agent_id == "chat_output" else "Allele",
-        },
-    )
-
-    ordered = _executor_module()._get_ordered_executable_nodes(flow)
-    bindings = _executor_module()._runtime_output_sources_by_node_id(
-        flow,
-        db_user_id=None,
-    )
-
-    assert [node["id"] for node in ordered] == ["extract_1", "output_1"]
-    assert bindings == {}
+    with pytest.raises(
+        ValueError,
+        match="formatter_in_control_flow",
+    ):
+        _executor_module()._get_ordered_executable_nodes(flow)
 
 
-def test_unbound_v1_1_formatter_remains_fail_closed(monkeypatch):
-    """The legacy exception must never weaken the typed v1.1 contract."""
+def test_unbound_v1_1_formatter_remains_fail_closed():
+    """A v1.1 formatter must be a typed output attachment."""
 
     flow = _make_flow(
         [
@@ -229,23 +217,11 @@ def test_unbound_v1_1_formatter_remains_fail_closed(monkeypatch):
     )
     flow.flow_definition["version"] = "1.1"
 
-    monkeypatch.setattr(
-        _executor_module(),
-        "_resolve_flow_agent_entry",
-        lambda agent_id, **_kwargs: {
-            "category": "Output" if agent_id == "chat_output" else "Extraction",
-            "subcategory": "Formatter" if agent_id == "chat_output" else "Allele",
-        },
-    )
-
     with pytest.raises(
-        _executor_module().FlowTerminalOutputProjectionError,
-        match="must be repaired as an output attachment",
+        ValueError,
+        match="formatter_in_control_flow",
     ):
-        _executor_module()._runtime_output_sources_by_node_id(
-            flow,
-            db_user_id=None,
-        )
+        _executor_module()._get_ordered_executable_nodes(flow)
 
 
 def test_runtime_output_binding_preserves_multiple_strict_sources(monkeypatch):
@@ -275,6 +251,62 @@ def test_runtime_output_binding_preserves_multiple_strict_sources(monkeypatch):
     )
 
     assert bindings == {"output_1": ("extract_1", "extract_2")}
+
+
+@pytest.mark.parametrize(
+    ("category", "output_schema_key", "is_active", "allowed"),
+    [
+        ("Validation", "GOTermResultEnvelope", True, True),
+        ("Validation", None, True, False),
+        ("Validation", "GOTermResultEnvelope", False, False),
+        ("Custom", "GOTermResultEnvelope", True, False),
+        ("General", "GOTermResultEnvelope", True, False),
+    ],
+)
+def test_runtime_output_binding_accepts_only_typed_validation_sources(
+    monkeypatch,
+    category,
+    output_schema_key,
+    is_active,
+    allowed,
+):
+    flow = _make_output_attachment_flow(
+        [
+            _task_input_node(),
+            _agent_node("source_1", "source_agent"),
+            _agent_node("output_1", "csv_formatter"),
+        ],
+        source_node_id="source_1",
+        output_node_id="output_1",
+    )
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "_resolve_flow_agent_entry",
+        lambda agent_id, **_kwargs: {
+            "category": "Output" if agent_id == "csv_formatter" else category,
+            "subcategory": "Formatter" if agent_id == "csv_formatter" else "",
+            "output_schema_key": (
+                None if agent_id == "csv_formatter" else output_schema_key
+            ),
+            "is_active": True if agent_id == "csv_formatter" else is_active,
+        },
+    )
+
+    if allowed:
+        assert _executor_module()._runtime_output_sources_by_node_id(
+            flow,
+            db_user_id=None,
+        ) == {"output_1": ("source_1",)}
+    else:
+        with pytest.raises(
+            _executor_module().FlowTerminalOutputProjectionError,
+            match="typed validation agent",
+        ):
+            _executor_module()._runtime_output_sources_by_node_id(
+                flow,
+                db_user_id=None,
+            )
 
 
 def test_terminal_formatter_bundle_filters_all_and_only_bound_sources(monkeypatch):
@@ -2566,7 +2598,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     "json_formatter": "JSON File Formatter",
                 }.get(agent_id, agent_id),
                 "description": "",
-                "category": "",
+                "category": (
+                    "Output" if agent_id == "json_formatter" else "Extraction"
+                ),
+                "subcategory": (
+                    "Formatter" if agent_id == "json_formatter" else "Document"
+                ),
+                "output_schema_key": None,
+                "is_active": True,
                 "requires_document": agent_id == "pdf_extraction",
                 "tool_name": {
                     "pdf_extraction": "ask_pdf_extraction_specialist",
@@ -2577,7 +2616,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             },
         )
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _agent_node("n1", "pdf_extraction", output_key="pdf_output"),
             _agent_node(
                 "n2",
@@ -2585,7 +2624,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 output_key="final_output",
                 custom_instructions="Save the literal smoke status JSON artifact.",
             ),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
         flow.flow_definition["nodes"][1]["data"]["projection_plan"] = {
             "format": "json",
             "row_source": "artifact",
@@ -2632,95 +2671,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert execution_state["completed_steps"][-1]["agent_id"] == "json_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_legacy_terminal_output_without_binding_uses_compatibility_mode(
-        self, mock_get_agent, mock_streaming
-    ):
-        """Legacy formatter control steps retain their pre-v1.1 runtime path."""
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        formatter_invocations = []
+    @pytest.mark.parametrize(
+        "agent_id",
+        ("csv_formatter", "json_formatter", "chat_output_formatter", "chat_output"),
+    )
+    def test_legacy_terminal_output_without_binding_is_rejected(self, agent_id):
+        flow = _make_flow([_task_input_node(), _agent_node("n1", agent_id)])
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            formatter_invocations.append((agent, tool_name))
-            return MagicMock()
-
-        mock_streaming.side_effect = _make_streaming_tool
-
-        for agent_id in (
-            "csv_formatter",
-            "json_formatter",
-            "chat_output_formatter",
-        ):
-            flow = _make_flow([_agent_node("n1", agent_id)])
-            tools, _, _, _ = get_all_agent_tools(flow, include_unavailable=True)
-            assert len(tools) == 1
-
-        assert formatter_invocations == []
-
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_sue_legacy_allele_flow_invokes_extractor_then_chat_output(
-        self, mock_get_agent, mock_streaming, monkeypatch
-    ):
-        """Sue's v1.0 allele_extractor→chat_output path renders completed artifacts."""
-
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-
-        @function_tool(
-            name_override="ask_allele_extractor_specialist",
-            description_override="Extract alleles",
-        )
-        async def _extractor_tool(query: str) -> str:
-            _ = query
-            return json.dumps(_structured_step_output("sue-allele-result"))
-
-        mock_streaming.return_value = _extractor_tool
-        monkeypatch.setattr(
-            "src.lib.flows.executor.get_agent_metadata",
-            lambda agent_id, **_kwargs: {
-                "agent_id": agent_id,
-                "display_name": {
-                    "allele_extractor": "Allele Extractor",
-                    "chat_output": "Chat Output",
-                }[agent_id],
-                "description": "",
-                "category": "Output" if agent_id == "chat_output" else "Extraction",
-                "subcategory": "Formatter" if agent_id == "chat_output" else "Allele",
-                "requires_document": False,
-                "required_params": [],
-                "curation": None,
-                "supervisor": {},
-            },
-        )
-
-        flow = _make_flow(
-            [
-                _task_input_node(),
-                _agent_node("n1", "allele_extractor"),
-                _agent_node("n2", "chat_output"),
-            ]
-        )
-        tools, _, unavailable, execution_state = get_all_agent_tools(
-            flow,
-            include_unavailable=True,
-        )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-
-        extraction_text = asyncio.run(
-            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
-        )
-        rendered_text = asyncio.run(
-            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "render"}))
-        )
-
-        assert unavailable == []
-        assert "sue-allele-result" in extraction_text
-        assert "sue-allele-result" in rendered_text
-        assert [step["agent_id"] for step in execution_state["completed_steps"]] == [
-            "allele_extractor",
-            "chat_output",
-        ]
+        with pytest.raises(ValueError, match="formatter_in_control_flow"):
+            get_all_agent_tools(flow, include_unavailable=True)
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -4538,26 +4497,29 @@ class TestBuildSupervisorCustomInstructions:
         assert "[has custom instructions]" not in disease_line
 
     def test_step_with_include_evidence_annotated(self):
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
+            _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output", include_evidence=True),
-        ])
+        ], source_node_id="extract", output_node_id="n1")
         result = build_supervisor_instructions(flow)
         assert "[includes evidence in output]" in result
 
     def test_output_formatter_without_flag_defaults_to_include_evidence_annotation(self):
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
+            _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output"),
-        ])
+        ], source_node_id="extract", output_node_id="n1")
         result = build_supervisor_instructions(flow)
         assert "[includes evidence in output]" in result
 
     def test_output_formatter_false_flag_annotated_as_excluding_evidence(self):
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
+            _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output", include_evidence=False),
-        ])
+        ], source_node_id="extract", output_node_id="n1")
         result = build_supervisor_instructions(flow)
         assert "[excludes evidence from output]" in result
 
@@ -5515,13 +5477,14 @@ class TestExecuteFlowTermination:
     ):
         """Direct formatter projection can emit FILE_READY before TOOL_COMPLETE."""
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
             _agent_node("n1", "pdf_extraction", step_goal="Read document"),
             _agent_node("n2", "json_formatter", step_goal="Save JSON"),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
         pdf_step = {
             "step": 1,
+            "node_id": "n1",
             "agent_id": "pdf_extraction",
             "agent_name": "PDF Extraction",
             "tool_name": "ask_pdf_extraction_specialist",
@@ -5532,6 +5495,7 @@ class TestExecuteFlowTermination:
         }
         formatter_step = {
             "step": 2,
+            "node_id": "n2",
             "agent_id": "json_formatter",
             "agent_name": "JSON Formatter",
             "tool_name": "ask_json_formatter_specialist",
@@ -5563,7 +5527,13 @@ class TestExecuteFlowTermination:
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
             yield {
                 "type": "FILE_READY",
-                "details": {"file_path": "smoke.json", "filename": "smoke.json"},
+                "details": {
+                    "file_path": "smoke.json",
+                    "filename": "smoke.json",
+                    "formatter_node_id": "n2",
+                    "source_node_id": "n1",
+                    "source_node_ids": ["n1"],
+                },
             }
             supervisor._flow_execution_state["completed_steps"].append(formatter_step)
             yield {
@@ -6440,6 +6410,7 @@ class TestExecuteFlowTermination:
             _agent_node("n1", "gene", step_goal="Extract genes"),
             _agent_node("n2", "curation_handoff", step_goal="Prepare review sessions"),
         ])
+        flow.flow_definition["version"] = "1.1"
         completed_gene_step = _make_completed_step(
             agent_id="gene",
             agent_name="Gene",

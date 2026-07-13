@@ -205,6 +205,31 @@ _ORDERED_FILTER_OPS = {"gt", "gte", "lt", "lte"}
 _NO_CANONICAL_OBJECT_LIST_WARNING = (
     "No canonical curation object list was found for this artifact."
 )
+_STRUCTURED_VALIDATOR_RESULT_LIST_FIELDS = (
+    "allele_candidates",
+    "gene_candidates",
+    "results",
+    "annotations",
+    "candidates",
+)
+_STRUCTURED_VALIDATOR_REQUIRED_FIELDS = frozenset(
+    {
+        "status",
+        "request_id",
+        "validator_binding_id",
+        "validator_agent",
+        "target",
+        "resolved_values",
+        "resolved_objects",
+        "missing_expected_fields",
+        "candidates",
+        "lookup_attempts",
+        "explanation",
+    }
+)
+_REJECTED_LEGACY_RESULT_LIST_FIELDS = frozenset(
+    {"items", "objects", "curatable_objects"}
+)
 _OBJECT_ATTRIBUTE_FIELD_PREFIX = "object.attribute."
 _ATTRIBUTE_KEY_PATTERN = re.compile(r"[^0-9a-zA-Z]+")
 
@@ -284,6 +309,7 @@ class FlowOutputArtifact(BaseModel):
     artifact_shape: Literal[
         "domain_envelope",
         "domain_envelope_extraction",
+        "structured_result",
         "non_structured",
     ] = "non_structured"
     warnings: list[str] = Field(default_factory=list)
@@ -575,7 +601,17 @@ def _coerce_non_negative_int(value: Any) -> int | None:
 
 
 def _object_id_from_item(item: Mapping[str, Any], index: int) -> str:
-    for key in ("object_id", "id", "curie", "primary_external_id", "external_id", "pending_ref_id"):
+    for key in (
+        "object_id",
+        "id",
+        "curie",
+        "primary_external_id",
+        "external_id",
+        "allele_id",
+        "go_id",
+        "gene_id",
+        "pending_ref_id",
+    ):
         value = _string_value(item.get(key))
         if value:
             return value
@@ -1007,8 +1043,36 @@ def _has_mixed_canonical_and_extractor_objects(payload: Mapping[str, Any]) -> bo
     )
 
 
+def _structured_validator_result_list_field(
+    payload: Mapping[str, Any],
+) -> str | None:
+    """Return the one trusted row-list field declared by a validator result."""
+
+    if not _STRUCTURED_VALIDATOR_REQUIRED_FIELDS.issubset(payload):
+        return None
+    if any(field in payload for field in _REJECTED_LEGACY_RESULT_LIST_FIELDS):
+        return None
+    if payload.get("status") not in {"resolved", "unresolved"}:
+        return None
+    if not isinstance(payload.get("validator_agent"), Mapping) or not isinstance(
+        payload.get("target"), Mapping
+    ):
+        return None
+    for field in _STRUCTURED_VALIDATOR_RESULT_LIST_FIELDS:
+        if field not in payload:
+            continue
+        value = payload.get(field)
+        if not isinstance(value, list) or not all(
+            isinstance(item, Mapping) for item in value
+        ):
+            return None
+        return field
+    return None
+
+
 def _payload_shape(payload: Any) -> Literal[
     "domain_envelope",
+    "structured_result",
     "non_structured",
 ]:
     if isinstance(payload, Mapping):
@@ -1016,6 +1080,8 @@ def _payload_shape(payload: Any) -> Literal[
             return "non_structured"
         if is_canonical_domain_envelope_payload(payload):
             return "domain_envelope"
+        if _structured_validator_result_list_field(payload) is not None:
+            return "structured_result"
     return "non_structured"
 
 
@@ -1027,6 +1093,35 @@ def _payload_object_items(
     warnings: list[str] = []
     if shape == "domain_envelope":
         value = payload.get("extracted_objects")
+    elif shape == "structured_result":
+        list_field = _structured_validator_result_list_field(payload)
+        value = payload.get(list_field) if list_field else None
+        if isinstance(value, list):
+            target = payload.get("target")
+            target_object_type = (
+                str(target.get("object_type") or "")
+                if isinstance(target, Mapping)
+                else ""
+            )
+            inherited_annotation_fields = {
+                key: payload.get(key)
+                for key in ("gene_id", "gene_symbol")
+                if payload.get(key) is not None
+            }
+            items: list[Mapping[str, Any]] = []
+            for item in value:
+                if not isinstance(item, Mapping):
+                    continue
+                normalized = dict(item)
+                normalized.setdefault(
+                    "object_type",
+                    target_object_type or str(list_field or "structured_result"),
+                )
+                if list_field == "annotations":
+                    for key, inherited_value in inherited_annotation_fields.items():
+                        normalized.setdefault(key, inherited_value)
+                items.append(normalized)
+            return items, warnings
     else:
         value = None
     if isinstance(value, list):
@@ -1161,6 +1256,7 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     shape: Literal[
         "domain_envelope",
         "domain_envelope_extraction",
+        "structured_result",
         "non_structured",
     ] = _payload_shape(payload)
     domain_pack_id = ""

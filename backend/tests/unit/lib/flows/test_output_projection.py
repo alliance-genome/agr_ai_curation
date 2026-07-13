@@ -6,6 +6,7 @@ import pytest
 from types import SimpleNamespace
 
 import src.lib.flows.output_projection as output_projection_module
+from src.lib.config import schema_discovery
 from src.lib.flows.output_projection import (
     FlowOutputColumnSpec,
     FlowOutputFilterSpec,
@@ -77,6 +78,43 @@ def _completed_domain_step():
                 ],
             },
         ),
+    }
+
+
+def _typed_validator_result_payload(**schema_fields):
+    return {
+        "status": "resolved",
+        "request_id": "request-output-1",
+        "validator_binding_id": "binding-output-1",
+        "validator_agent": {
+            "package_id": "agr.alliance",
+            "agent_id": "typed_validator",
+        },
+        "target": {
+            "domain_pack_id": "agr.alliance",
+            "object_type": "ValidatedRecord",
+            "object_id": "target-1",
+            "object_role": "validated_reference",
+            "field_path": "payload.identifier",
+            "expected_fields": ["identifier"],
+            "input_values": {"identifier": "target-1"},
+        },
+        "resolved_values": {"identifier": "target-1"},
+        "resolved_objects": [],
+        "missing_expected_fields": [],
+        "candidates": [],
+        "lookup_attempts": [
+            {
+                "provider": "fixture_api",
+                "method": "GET",
+                "query": {"identifier": "target-1"},
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        "curator_message": "Resolved from provider data.",
+        "explanation": "Provider lookup returned one typed result.",
+        **schema_fields,
     }
 
 
@@ -1897,3 +1935,142 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
     assert bundle.rows_for_source("object") == []
     assert bundle.rows_for_source("evidence") == []
     assert any("No canonical curation object rows" in warning for warning in bundle.warnings)
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "schema_fields", "output_format", "expected_id"),
+    [
+        (
+            "AlleleResultEnvelope",
+            {
+                "allele_candidates": [
+                    {
+                        "allele_id": "MGI:3689906",
+                        "symbol": "Pax6<Sey>",
+                        "species": "Mus musculus",
+                    }
+                ]
+            },
+            "csv",
+            "MGI:3689906",
+        ),
+        (
+            "GOTermResultEnvelope",
+            {
+                "results": [
+                    {
+                        "go_id": "GO:0003677",
+                        "name": "DNA binding",
+                        "aspect": "molecular_function",
+                    }
+                ],
+                "query_summary": "Resolved one GO term.",
+                "not_found": [],
+            },
+            "chat",
+            "GO:0003677",
+        ),
+        (
+            "GOAnnotationsResult",
+            {
+                "gene_id": "WB:WBGene00000898",
+                "gene_symbol": "daf-16",
+                "annotations": [
+                    {
+                        "go_id": "GO:0008286",
+                        "go_name": "insulin receptor signaling pathway",
+                        "aspect": "biological_process",
+                        "evidence_code": "IMP",
+                    }
+                ],
+                "manual_count": 1,
+                "automatic_count": 0,
+            },
+            "csv",
+            "GO:0008286",
+        ),
+    ],
+)
+def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
+    schema_name,
+    schema_fields,
+    output_format,
+    expected_id,
+):
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)[schema_name]
+    payload = schema.model_validate(
+        _typed_validator_result_payload(**schema_fields)
+    ).model_dump(mode="json")
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "typed_validator",
+                "agent_name": schema_name,
+                "output": json.dumps(payload),
+            }
+        ],
+        flow_name="Typed validator output",
+        output_format=output_format,
+    )
+
+    assert len(bundle.artifacts) == 1
+    assert bundle.artifacts[0].artifact_shape == "structured_result"
+    assert bundle.default_row_source == "object"
+    assert bundle.rows_for_source("object")
+    assert bundle.rows_for_source("object")[0]["object.object_id"] == expected_id
+
+    plan = default_projection_plan(bundle, output_format=output_format)
+    result = apply_projection_plan(bundle, plan)
+
+    assert result.rows
+    if output_format == "chat":
+        assert result.chat_output
+
+
+def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
+    payload = _typed_validator_result_payload(
+        gene_id="WB:WBGene00000898",
+        gene_symbol="daf-16",
+        annotations=[{"go_id": "GO:0008286", "go_name": "signaling"}],
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[{"step": 1, "agent_id": "go_annotations", "output": payload}],
+        flow_name="GO annotations",
+        output_format="csv",
+    )
+
+    row = bundle.rows_for_source("object")[0]
+    assert row["object.payload.gene_id"] == "WB:WBGene00000898"
+    assert row["object.payload.gene_symbol"] == "daf-16"
+
+
+def test_validator_like_payload_with_legacy_items_remains_non_structured():
+    payload = _typed_validator_result_payload(
+        items=[{"id": "legacy-row"}],
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[{"step": 1, "agent_id": "custom", "output": payload}],
+        flow_name="Rejected legacy rows",
+        output_format="csv",
+    )
+
+    assert bundle.artifacts == []
+    assert bundle.rows_for_source("object") == []
+
+
+def test_raw_result_list_remains_non_structured():
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "custom",
+                "output": json.dumps([{"go_id": "GO:0003677"}]),
+            }
+        ],
+        flow_name="Rejected raw list",
+        output_format="csv",
+    )
+
+    assert bundle.artifacts == []
+    assert bundle.rows_for_source("object") == []

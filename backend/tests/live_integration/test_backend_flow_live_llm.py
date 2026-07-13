@@ -26,7 +26,7 @@ def _require_live_llm_enabled() -> None:
 
 def _flow_definition(agent_id: str, agent_name: str) -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {

@@ -229,7 +229,7 @@ class FlowEdgeContext(BaseModel):
 
 class FlowContextDefinition(BaseModel):
     """Flow definition passed to chat for validation/discussion."""
-    version: str = "1.0"
+    version: Literal["1.1"] = "1.1"
     entry_node_id: Optional[str] = None
     nodes: List[FlowNodeContext] = Field(default_factory=list)
     edges: List[FlowEdgeContext] = Field(default_factory=list)

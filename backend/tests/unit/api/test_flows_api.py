@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from src.schemas.flows import FlowDefinition
 
@@ -117,7 +118,7 @@ def test_verify_flow_ownership_returns_404_for_missing_or_deleted_flow(monkeypat
 
 def _minimal_flow_definition_payload() -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "nodes": [
             {
                 "id": "task_1",
@@ -185,7 +186,7 @@ def test_flow_response_defaults_legacy_saved_edge_roles(monkeypatch):
     assert response.has_critical_issues is False
 
 
-def test_flow_response_loads_legacy_formatter_control_step_with_repair_warning(
+def test_flow_response_rejects_legacy_formatter_control_step(
     monkeypatch,
 ):
     payload = _minimal_flow_definition_payload()
@@ -219,13 +220,8 @@ def test_flow_response_loads_legacy_formatter_control_step_with_repair_warning(
         },
     )
 
-    response = flows._flow_to_response(stored_flow)
-
-    assert response.flow_definition.version == "1.0"
-    assert response.has_critical_issues is False
-    assert len(response.validation_warnings) == 1
-    assert "can be resaved unchanged" in response.validation_warnings[0].message
-    assert "compatibility mode" in response.validation_warnings[0].message
+    with pytest.raises(ValidationError, match="formatter_in_control_flow"):
+        flows._flow_to_response(stored_flow)
 
 
 def _output_attachment_flow_payload() -> dict:
@@ -283,13 +279,68 @@ def test_flow_definition_payload_enforces_output_attachment_agent_roles(monkeypa
     assert saved["edges"][-1]["role"] == "output_attachment"
 
     payload["edges"][-1]["source"] = "task_1"
-    with pytest.raises(HTTPException, match="is not an extraction agent"):
+    with pytest.raises(HTTPException, match="not an extraction agent or a typed validation agent"):
         flows._validated_flow_definition_payload(
             FlowDefinition.model_validate(payload),
             db_user_id=7,
             enforce_agent_references=True,
             enforce_agent_step_policy=True,
         )
+
+
+@pytest.mark.parametrize(
+    ("source_category", "output_schema_key", "is_active", "allowed"),
+    [
+        ("Validation", "AlleleResultEnvelope", True, True),
+        ("Validation", "", True, False),
+        ("Validation", "AlleleResultEnvelope", False, False),
+        ("Custom", "AlleleResultEnvelope", True, False),
+        ("General", "AlleleResultEnvelope", True, False),
+    ],
+)
+def test_flow_definition_payload_requires_typed_validation_formatter_sources(
+    monkeypatch,
+    source_category,
+    output_schema_key,
+    is_active,
+    allowed,
+):
+    payload = _output_attachment_flow_payload()
+
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: {
+            "name": agent_id,
+            "category": (
+                "Output" if agent_id == "csv_formatter" else source_category
+            ),
+            "subcategory": "Formatter" if agent_id == "csv_formatter" else "",
+            "output_schema_key": (
+                None if agent_id == "csv_formatter" else output_schema_key
+            ),
+            "is_active": True if agent_id == "csv_formatter" else is_active,
+            "supervisor": {"enabled": agent_id == "csv_formatter"},
+        },
+    )
+
+    definition = FlowDefinition.model_validate(payload)
+    if allowed:
+        saved = flows._validated_flow_definition_payload(
+            definition,
+            db_user_id=7,
+            enforce_agent_references=True,
+            enforce_agent_step_policy=True,
+        )
+        assert saved["edges"][-1]["role"] == "output_attachment"
+    else:
+        with pytest.raises(HTTPException, match="typed validation agent"):
+            flows._validated_flow_definition_payload(
+                definition,
+                db_user_id=7,
+                enforce_agent_references=True,
+                enforce_agent_step_policy=True,
+            )
 
 
 def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypatch):
@@ -355,7 +406,10 @@ def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypa
     ] == ["extract_1", "extract_2"]
 
     payload["nodes"][-2]["data"]["agent_id"] = "gene_validator"
-    with pytest.raises(HTTPException, match="Gene Extractor.*not an extraction agent"):
+    with pytest.raises(
+        HTTPException,
+        match="Gene Extractor.*not an extraction agent or a typed validation agent",
+    ):
         flows._validated_flow_definition_payload(
             FlowDefinition.model_validate(payload),
             db_user_id=7,

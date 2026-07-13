@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 def _flow_definition(*, agent_id: str, agent_display_name: str, output_key: str = "final_output") -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {

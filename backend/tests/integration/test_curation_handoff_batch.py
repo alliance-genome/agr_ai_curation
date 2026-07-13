@@ -204,7 +204,7 @@ def _flow_definition(adapter_keys: Iterable[str], *, exit_agent_id: str = "curat
     edges.append({"id": f"edge_{previous}_exit", "source": previous, "target": "exit"})
 
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "pdf",
         "nodes": nodes,
         "edges": edges,
