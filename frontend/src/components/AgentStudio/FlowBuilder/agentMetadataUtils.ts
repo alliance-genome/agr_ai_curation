@@ -65,6 +65,23 @@ export const isValidationAgentFromMetadata = (
   })
 }
 
+export const canSourceOutputAttachmentFromMetadata = (
+  agentId: string,
+  agentMetadata: AgentMetadataLookup
+): boolean => {
+  const metadata = agentMetadata[agentId]
+  if (metadata?.is_active === false || metadata?.visible === false) return false
+  if (metadata?.produces_flow_artifacts !== undefined) {
+    return metadata.produces_flow_artifacts
+  }
+  if (isExtractionAgentFromMetadata(agentId, agentMetadata)) return true
+
+  return (
+    isValidationAgentFromMetadata(agentId, agentMetadata)
+    && Boolean(metadata?.output_schema_key?.trim())
+  )
+}
+
 export const isOutputFormatterAgentFromMetadata = (
   agentId: string,
   _agentMetadata: AgentMetadataLookup

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentMetadata } from '@/services/agentStudioService'
 
 import {
+  canSourceOutputAttachmentFromMetadata,
   isExtractionAgentFromMetadata,
   isOutputFormatterAgentFromMetadata,
   isValidationAgentFromMetadata,
@@ -21,12 +22,33 @@ const metadata: Record<string, AgentMetadata> = {
     icon: 'VA',
     category: 'Entity Validation',
     subcategory: 'Data Validation',
+    output_schema_key: 'validated_entities',
+    is_active: true,
+    produces_flow_artifacts: true,
   },
   custom_output: {
     name: 'Custom Output Formatter',
     icon: 'OUT',
     category: 'Output',
     subcategory: 'Formatter',
+  },
+  plain_custom: {
+    name: 'Plain Custom',
+    icon: 'C',
+    category: 'Custom',
+    subcategory: 'My Custom Agents',
+    output_schema_key: 'custom_payload',
+    is_active: true,
+    produces_flow_artifacts: false,
+  },
+  inactive_validator: {
+    name: 'Inactive Validator',
+    icon: 'IV',
+    category: 'Validation',
+    subcategory: 'Data Validation',
+    output_schema_key: 'validated_entities',
+    is_active: false,
+    produces_flow_artifacts: false,
   },
 }
 
@@ -49,6 +71,29 @@ describe('agentMetadataUtils', () => {
     expect(isOutputFormatterAgentFromMetadata('custom_output', metadata)).toBe(false)
     expect(isOutputFormatterAgentFromMetadata('custom_extractor', metadata)).toBe(false)
     expect(isOutputFormatterAgentFromMetadata('missing_agent', metadata)).toBe(false)
+  })
+
+  it('allows extraction and typed active validation agents to source output attachments', () => {
+    expect(canSourceOutputAttachmentFromMetadata('custom_extractor', metadata)).toBe(true)
+    expect(canSourceOutputAttachmentFromMetadata('custom_validator', metadata)).toBe(true)
+    expect(canSourceOutputAttachmentFromMetadata('plain_custom', metadata)).toBe(false)
+    expect(canSourceOutputAttachmentFromMetadata('inactive_validator', metadata)).toBe(false)
+    expect(canSourceOutputAttachmentFromMetadata('missing_agent', metadata)).toBe(false)
+    expect(canSourceOutputAttachmentFromMetadata('custom_validator', {
+      ...metadata,
+      custom_validator: {
+        ...metadata.custom_validator,
+        produces_flow_artifacts: false,
+      },
+    })).toBe(false)
+    expect(canSourceOutputAttachmentFromMetadata('gene', {
+      gene: {
+        name: 'Gene Validator',
+        icon: 'G',
+        category: 'Validation',
+        output_schema_key: null,
+      },
+    })).toBe(false)
   })
 
   it('defaults include_evidence to true for output formatter agents', () => {

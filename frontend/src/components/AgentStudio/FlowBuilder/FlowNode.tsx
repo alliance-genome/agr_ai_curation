@@ -222,7 +222,7 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
               <ValidationPill>
                 {data.outputBinding.sources.length === 1
                   ? `${data.outputBinding.sourceLabel} → output`
-                  : `${data.outputBinding.sources.length} extraction sources → output`}
+                  : `${data.outputBinding.sources.length} sources → output`}
               </ValidationPill>
             ) : (
               <ValidationPill sx={{ color: 'error.main', bgcolor: (theme) => alpha(theme.palette.error.main, 0.08) }}>

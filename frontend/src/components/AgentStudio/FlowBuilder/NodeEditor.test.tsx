@@ -368,7 +368,7 @@ describe('NodeEditor', () => {
           status: 'bound',
           sources: [
             { sourceNodeId: 'genes', sourceLabel: 'Gene Extractor' },
-            { sourceNodeId: 'alleles', sourceLabel: 'Allele Extractor' },
+            { sourceNodeId: 'go_validation', sourceLabel: 'GO Validator' },
           ],
         }}
         onSave={vi.fn()}
@@ -377,8 +377,8 @@ describe('NodeEditor', () => {
     )
 
     expect(screen.getByText(/Configuring one output from/i)).toBeInTheDocument()
-    expect(screen.getByText('2 extractions')).toBeInTheDocument()
-    expect(screen.getByText(/Gene Extractor, Allele Extractor/i)).toBeInTheDocument()
+    expect(screen.getByText('2 source steps')).toBeInTheDocument()
+    expect(screen.getByText(/Gene Extractor, GO Validator/i)).toBeInTheDocument()
     expect(screen.getByText(/one grouped input/i)).toBeInTheDocument()
   })
 })

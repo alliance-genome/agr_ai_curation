@@ -68,7 +68,7 @@ describe('FlowNode', () => {
             status: 'bound',
             sources: [
               { sourceNodeId: 'genes', sourceLabel: 'Gene Extractor' },
-              { sourceNodeId: 'alleles', sourceLabel: 'Allele Extractor' },
+              { sourceNodeId: 'go_validation', sourceLabel: 'GO Validator' },
             ],
           },
         })}
@@ -76,7 +76,7 @@ describe('FlowNode', () => {
       />
     )
 
-    expect(screen.getByText('2 extraction sources → output')).toBeInTheDocument()
+    expect(screen.getByText('2 sources → output')).toBeInTheDocument()
     expect(screen.queryByText('Multiple output sources')).not.toBeInTheDocument()
   })
 

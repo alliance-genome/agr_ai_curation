@@ -183,7 +183,7 @@ function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse 
     validation_warnings: overrides.validation_warnings ?? [],
     has_critical_issues: overrides.has_critical_issues ?? false,
     flow_definition: overrides.flow_definition ?? {
-      version: '1.0' as const,
+      version: '1.1' as const,
       entry_node_id: 'node_0',
       nodes: [
         {
@@ -367,20 +367,17 @@ describe('FlowBuilder', () => {
     ).toBeInTheDocument()
   }, 15000)
 
-  it('surfaces non-critical legacy compatibility warnings when loading a flow', async () => {
+  it('surfaces ordinary non-critical validation warnings when loading a current flow', async () => {
     const user = userEvent.setup()
-    const compatibilityMessage = (
-      "Legacy formatter node 'output_1' remains runnable in compatibility mode, "
-      + 'and can be resaved unchanged.'
-    )
+    const validationMessage = 'Flow has a validator attachment that needs review.'
 
-    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Legacy Flow'))
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Review Flow'))
     serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({
-      name: 'Legacy Flow',
+      name: 'Review Flow',
       validation_warnings: [
         {
           type: 'WARNING',
-          message: compatibilityMessage,
+          message: validationMessage,
         },
       ],
       has_critical_issues: false,
@@ -392,15 +389,16 @@ describe('FlowBuilder', () => {
     await user.click(screen.getByText('File'))
     await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
     const openDialog = await screen.findByRole('dialog', { name: 'Open Flow' })
-    await user.click(within(openDialog).getByText('Legacy Flow'))
+    await user.click(within(openDialog).getByText('Review Flow'))
 
     expect(
-      await screen.findByText(`Flow loaded with validation warning: ${compatibilityMessage}`)
+      await screen.findByText(`Flow loaded with validation warning: ${validationMessage}`)
     ).toBeInTheDocument()
   }, 15000)
 
-  it('loads and resaves a legacy formatter control graph without promoting it to v1.1', async () => {
+  it('rejects a v1.0 flow before mutating or saving builder state', async () => {
     const user = userEvent.setup()
+    const onFlowChange = vi.fn()
     const legacyFlow = buildFlowResponse({
       name: 'AlleleTest3',
       flow_definition: {
@@ -452,11 +450,9 @@ describe('FlowBuilder', () => {
     }
     serviceMocks.listFlows
       .mockResolvedValueOnce(buildFlowListResponse('AlleleTest3'))
-      .mockResolvedValueOnce(buildFlowListResponse('AlleleTest3'))
     serviceMocks.getFlow.mockResolvedValue(legacyFlow)
-    serviceMocks.updateFlow.mockResolvedValue(legacyFlow)
 
-    render(<FlowBuilder />)
+    render(<FlowBuilder onFlowChange={onFlowChange} />)
 
     await screen.findByText('1 step')
     await user.click(screen.getByText('File'))
@@ -465,29 +461,14 @@ describe('FlowBuilder', () => {
       within(await screen.findByRole('dialog', { name: 'Open Flow' })).getByText('AlleleTest3')
     )
     await waitFor(() => expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1'))
-
-    await user.click(screen.getByText('File'))
-    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
-
-    await waitFor(() => {
-      expect(serviceMocks.updateFlow).toHaveBeenCalledWith(
-        'flow-1',
-        expect.objectContaining({
-          flow_definition: expect.objectContaining({
-            version: '1.0',
-            task_instructions_default_only: true,
-            edges: expect.arrayContaining([
-              expect.objectContaining({
-                id: 'edge_2',
-                source: 'node_1',
-                target: 'node_2',
-                role: 'control_flow',
-              }),
-            ]),
-          }),
-        })
-      )
-    })
+    expect(await screen.findByText(
+      "Flow 'AlleleTest3' uses unsupported schema version '1.0'. Upgrade or archive it before editing."
+    )).toBeInTheDocument()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    expect(onFlowChange.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      flowName: 'New Flow',
+      version: '1.1',
+    }))
   }, 15000)
 
   it('loads and resaves distinct extraction sources attached to one formatter', async () => {
@@ -593,12 +574,29 @@ describe('FlowBuilder', () => {
     })
   }, 15000)
 
-  it('connects distinct extraction sources to one formatter and rejects an identical duplicate', async () => {
+  it('groups extraction and typed validation sources without allowing plain custom sources', async () => {
     const onFlowChange = vi.fn()
     agentMetadataMocks.agents = {
-      gene_extractor: { category: 'Extraction', subcategory: 'Gene' },
-      allele_extractor: { category: 'Extraction', subcategory: 'Allele' },
+      go_extractor: {
+        category: 'Extraction',
+        subcategory: 'Gene Ontology',
+        produces_flow_artifacts: true,
+      },
+      go_validator: {
+        category: 'Validation',
+        subcategory: 'Gene Ontology',
+        output_schema_key: 'go_validation_result',
+        is_active: true,
+        produces_flow_artifacts: true,
+      },
       csv_formatter: { category: 'Output', subcategory: 'Formatter' },
+      plain_custom: {
+        category: 'Custom',
+        subcategory: 'My Custom Agents',
+        output_schema_key: 'custom_payload',
+        is_active: true,
+        produces_flow_artifacts: false,
+      },
     }
 
     render(<FlowBuilder onFlowChange={onFlowChange} />)
@@ -623,9 +621,10 @@ describe('FlowBuilder', () => {
       })
     }
 
-    dropAgent('gene_extractor', 'Gene Extractor', 220)
-    dropAgent('allele_extractor', 'Allele Extractor', 340)
+    dropAgent('go_extractor', 'GO Extractor', 220)
+    dropAgent('go_validator', 'GO Validator', 340)
     dropAgent('csv_formatter', 'CSV Formatter', 460)
+    dropAgent('plain_custom', 'Plain Custom Agent', 580)
 
     await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
 
@@ -656,9 +655,21 @@ describe('FlowBuilder', () => {
       reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_3' })
     })
 
-    expect(await screen.findByText('This extraction is already attached to the formatter.'))
+    expect(await screen.findByText('This source step is already attached to the formatter.'))
       .toBeInTheDocument()
-    const latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+    let latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+    expect(latestFlowState?.edges.filter(
+      (edge: { role?: string }) => edge.role === 'output_attachment'
+    )).toHaveLength(2)
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_4', target: 'node_3' })
+    })
+
+    expect(await screen.findByText(
+      'Attach this formatter to an extraction result or to an active validation result with a declared output schema.'
+    )).toBeInTheDocument()
+    latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
     expect(latestFlowState?.edges.filter(
       (edge: { role?: string }) => edge.role === 'output_attachment'
     )).toHaveLength(2)

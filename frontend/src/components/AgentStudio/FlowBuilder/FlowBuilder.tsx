@@ -93,8 +93,8 @@ import type { FlowSummaryResponse } from './types'
 import logger from '@/services/logger'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 import {
+  canSourceOutputAttachmentFromMetadata,
   resolveOutputFormatterIncludeEvidence,
-  isExtractionAgentFromMetadata,
   isOutputFormatterAgentFromMetadata,
   isValidationAgentFromMetadata,
 } from './agentMetadataUtils'
@@ -204,15 +204,12 @@ const nextOutputEdgeId = (existingEdges: FlowEdge[]): string => {
   return candidate
 }
 
-const graphVersionForNodesAndEdges = (
-  _nodes: AgentNode[],
-  edges: FlowEdge[],
-  loadedVersion: FlowDefinition['version']
-): FlowDefinition['version'] => (
-  loadedVersion === '1.1'
-  || edges.some((edge) => edgeRole(edge) === 'output_attachment')
-    ? '1.1'
-    : '1.0'
+const unsupportedFlowVersionMessage = (
+  flowName: string,
+  version: string,
+): string => (
+  `Flow '${flowName}' uses unsupported schema version '${version}'. `
+  + 'Upgrade or archive it before editing.'
 )
 
 export const rebuildValidationGroupsFromEdges = (
@@ -352,7 +349,6 @@ export const rebuildValidationGroupsFromEdges = (
 const computeValidationErrors = (
   currentNodes: AgentNode[],
   currentEdges: FlowEdge[],
-  loadedVersion: FlowDefinition['version'],
 ): Array<{ nodeId: string; message: string }> => {
   const errors: Array<{ nodeId: string; message: string }> = []
 
@@ -366,11 +362,6 @@ const computeValidationErrors = (
   }
 
   if (taskInputNode) {
-    const graphVersion = graphVersionForNodesAndEdges(
-      currentNodes,
-      currentEdges,
-      loadedVersion,
-    )
     const topology = projectExecutableFlowGraph(
       currentNodes.map(node => ({
         id: node.id,
@@ -386,7 +377,7 @@ const computeValidationErrors = (
         replaces_attachment_id: edge.data?.replaces_attachment_id,
       })),
       taskInputNode.id,
-      graphVersion,
+      '1.1',
     )
     topology.issues.forEach(topologyIssue => {
       errors.push({
@@ -608,8 +599,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     (agentId: string): boolean => isValidationAgentFromMetadata(agentId, agentMetadata),
     [agentMetadata]
   )
-  const isExtractionAgentDynamic = useCallback(
-    (agentId: string): boolean => isExtractionAgentFromMetadata(agentId, agentMetadata),
+  const canSourceOutputAttachmentDynamic = useCallback(
+    (agentId: string): boolean => canSourceOutputAttachmentFromMetadata(agentId, agentMetadata),
     [agentMetadata]
   )
   const isOutputFormatterAgentDynamic = useCallback(
@@ -632,7 +623,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // UI state
   const [flowName, setFlowName] = useState('New Flow')
   const [flowDescription, setFlowDescription] = useState('')
-  const [flowVersion, setFlowVersion] = useState<FlowDefinition['version']>('1.1')
   const [taskInstructionsDefaultOnly, setTaskInstructionsDefaultOnly] = useState(false)
   const [selectedNode, setSelectedNode] = useState<AgentNode | null>(null)
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
@@ -726,7 +716,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       }
 
       const incompatibleSource = sources.find(({ node: source }) => (
-        !source || !isExtractionAgentDynamic(source.data.agent_id)
+        !source || !canSourceOutputAttachmentDynamic(source.data.agent_id)
       ))
       if (incompatibleSource) {
         bindings.set(node.id, {
@@ -753,7 +743,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     }
 
     return bindings
-  }, [nodes, edges, isExtractionAgentDynamic, isOutputFormatterAgentDynamic])
+  }, [nodes, edges, canSourceOutputAttachmentDynamic, isOutputFormatterAgentDynamic])
 
   const canvasNodes = useMemo(
     () => (nodes as AgentNode[]).map((node) => {
@@ -799,9 +789,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setLoading(true)
     try {
       const flow = await getFlow(id)
+      if (flow.flow_definition.version !== '1.1') {
+        setSnackbar({
+          message: unsupportedFlowVersionMessage(flow.name, flow.flow_definition.version),
+          severity: 'error',
+        })
+        return
+      }
       setFlowName(flow.name)
       setFlowDescription(flow.description || '')
-      setFlowVersion(flow.flow_definition.version)
       setTaskInstructionsDefaultOnly(flow.flow_definition.task_instructions_default_only === true)
       setCurrentFlowId(flow.id)
 
@@ -916,14 +912,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Report flow state changes to parent (for context sharing with Claude)
   useEffect(() => {
     if (onFlowChange) {
-      const currentVersion = graphVersionForNodesAndEdges(
-        nodes as AgentNode[],
-        edges as FlowEdge[],
-        flowVersion,
-      )
       const flowState: FlowState = {
         flowName,
-        version: currentVersion,
+        version: '1.1',
         entry_node_id: nodes.find(node => node.data.agent_id === 'task_input')?.id,
         nodes: nodes.map((n) => ({
           id: n.id,
@@ -950,7 +941,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       }
       onFlowChange(flowState)
     }
-  }, [nodes, edges, flowName, flowVersion, onFlowChange])
+  }, [nodes, edges, flowName, onFlowChange])
 
   // Update hasError/errorMessage on nodes based on current validation state
   // Called when extractors are added/removed, connections change, or node data updates
@@ -960,7 +951,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       const errors = computeValidationErrors(
         currentNodes as AgentNode[],
         edges as FlowEdge[],
-        flowVersion,
       )
       const errorsByNodeId = new Map(errors.map(e => [e.nodeId, e.message]))
 
@@ -982,7 +972,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         return node
       })
     })
-  }, [setNodes, edges, flowVersion]) // Depends on edge topology and current node data
+  }, [setNodes, edges]) // Depends on edge topology and current node data
 
   // Keep ref in sync for use in loadFlow (which is defined before this callback)
   useEffect(() => {
@@ -1045,7 +1035,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     const validationErrors = computeValidationErrors(
       nodes as AgentNode[],
       edges as FlowEdge[],
-      flowVersion,
     )
     if (validationErrors.length > 0) {
       // Find the first error node and select it
@@ -1066,14 +1055,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       // Convert to API format
       // Entry node is the task_input node (already validated above)
       const entryNodeId = taskInputNode.id
-      const persistedVersion = graphVersionForNodesAndEdges(
-        nodes as AgentNode[],
-        edges as FlowEdge[],
-        flowVersion,
-      )
 
       const flowDefinition: FlowDefinition = {
-        version: persistedVersion,
+        version: '1.1',
         ...(taskInstructionsDefaultOnly ? { task_instructions_default_only: true } : {}),
         nodes: nodes.map((n) => ({
           id: n.id,
@@ -1125,7 +1109,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       // Update flowName state to match saved name
       setFlowName(savedFlow.name)
       setFlowDescription(savedFlow.description || '')
-      setFlowVersion(savedFlow.flow_definition.version)
       setTaskInstructionsDefaultOnly(
         savedFlow.flow_definition.task_instructions_default_only === true
       )
@@ -1153,7 +1136,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setEdges([])
     setFlowName('New Flow')
     setFlowDescription('')
-    setFlowVersion('1.1')
     setTaskInstructionsDefaultOnly(false)
     setCurrentFlowId(null)
     setSelectedNode(null)
@@ -1239,9 +1221,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       }
 
       if (targetNode?.type === 'output') {
-        if (!sourceNode || !isExtractionAgentDynamic(sourceNode.data.agent_id)) {
+        if (!sourceNode || !canSourceOutputAttachmentDynamic(sourceNode.data.agent_id)) {
           setSnackbar({
-            message: 'Attach this formatter directly to the extraction whose result it should format.',
+            message: (
+              'Attach this formatter to an extraction result or to an active validation '
+              + 'result with a declared output schema.'
+            ),
             severity: 'error',
           })
           return
@@ -1253,7 +1238,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         ))
         if (duplicateAttachment) {
           setSnackbar({
-            message: 'This extraction is already attached to the formatter.',
+            message: 'This source step is already attached to the formatter.',
             severity: 'error',
           })
           return
@@ -1301,7 +1286,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       setEdges,
       nodes,
       edges,
-      isExtractionAgentDynamic,
+      canSourceOutputAttachmentDynamic,
       isValidationAgentDynamic,
       addValidationAttachmentEdge,
     ]
@@ -1616,6 +1601,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     try {
       // First fetch the full flow to get its definition
       const fullFlow = await getFlow(editingFlowId)
+      if (fullFlow.flow_definition.version !== '1.1') {
+        throw new Error(unsupportedFlowVersionMessage(
+          fullFlow.name,
+          fullFlow.flow_definition.version,
+        ))
+      }
       // Update with new name
       const updatedFlow = await updateFlow(editingFlowId, {
         name: editingFlowName.trim(),

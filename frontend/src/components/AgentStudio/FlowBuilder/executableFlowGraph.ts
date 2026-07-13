@@ -1,4 +1,5 @@
 import type { FlowEdgeDefinition, FlowNodeDefinition } from './types'
+import { isOutputFormatterAgentFromMetadata } from './agentMetadataUtils'
 
 export interface ExecutableFlowIssue {
   code: string
@@ -58,7 +59,7 @@ export const projectExecutableFlowGraph = (
   nodes: ProjectableNode[],
   edges: ProjectableEdge[],
   declaredEntry: string,
-  flowVersion: '1.0' | '1.1' = '1.0',
+  flowVersion: '1.0' | '1.1' = '1.1',
 ): ExecutableFlowGraph => {
   const validationAttachmentEdges = edges.filter(edge => edge.role === 'validation_attachment')
   const outputAttachmentEdges = edges.filter(edge => edge.role === 'output_attachment')
@@ -78,6 +79,18 @@ export const projectExecutableFlowGraph = (
   const outgoing = new Map(controlIds.map(id => [id, [] as ProjectableEdge[]]))
   const incoming = new Map(controlIds.map(id => [id, [] as ProjectableEdge[]]))
   const issues: ExecutableFlowIssue[] = []
+
+  controlNodes.forEach(node => {
+    if (!isOutputFormatterAgentFromMetadata(node.data.agent_id, {})) return
+    issues.push(issue(
+      'formatter_in_control_flow',
+      `Formatter node '${node.id}' must be an explicit output node connected only by output_attachment edge(s)`,
+      [node.id],
+      controlEdges
+        .filter(edge => edge.source === node.id || edge.target === node.id)
+        .map(edge => edge.id),
+    ))
+  })
 
   crossRoleTargets.sort().forEach(nodeId => {
     issues.push(issue(

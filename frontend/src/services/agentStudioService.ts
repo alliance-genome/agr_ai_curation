@@ -169,6 +169,10 @@ export interface AgentMetadata {
   icon: string
   category: string
   subcategory?: string
+  output_schema_key?: string | null
+  is_active?: boolean
+  visible?: boolean
+  produces_flow_artifacts?: boolean
   supervisor_tool?: string
   validation_attachments?: ValidationAttachmentOption[]
   domain_envelope?: DomainEnvelopeMetadata | null

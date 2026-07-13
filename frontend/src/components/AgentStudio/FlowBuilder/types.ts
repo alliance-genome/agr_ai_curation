@@ -108,14 +108,19 @@ export interface FlowEdgeDefinition {
   condition?: FlowEdgeCondition
 }
 
-export interface FlowDefinition {
-  version: '1.0' | '1.1'
-  /** Migrated compatibility default, omitted whenever the run supplies a user query. */
+interface FlowDefinitionBody {
+  /** Migrated default, omitted whenever the run supplies a user query. */
   task_instructions_default_only?: boolean
   nodes: FlowNodeDefinition[]
   edges: FlowEdgeDefinition[]
   entry_node_id: string
 }
+
+/** Current flow schema accepted for editor mutations and save requests. */
+export type FlowDefinition = FlowDefinitionBody & { version: '1.1' }
+
+/** Read shape permits an explicit stale-version rejection at the editor boundary. */
+export type FlowDefinitionResponse = FlowDefinition | (FlowDefinitionBody & { version: '1.0' })
 
 // ============================================================================
 // API Response Types
@@ -126,7 +131,7 @@ export interface FlowResponse {
   user_id: number
   name: string
   description: string | null
-  flow_definition: FlowDefinition
+  flow_definition: FlowDefinitionResponse
   execution_count: number
   last_executed_at: string | null
   created_at: string

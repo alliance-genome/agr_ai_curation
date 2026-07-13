@@ -788,7 +788,7 @@ function NodeEditor({
                   </>
                 ) : (
                   <>
-                    Configuring one output from <strong>{outputBinding.sources.length} extractions</strong>:{' '}
+                    Configuring one output from <strong>{outputBinding.sources.length} source steps</strong>:{' '}
                     {outputBinding.sources.map((source) => source.sourceLabel).join(', ')}.
                     This formatter receives their results as one grouped input.
                   </>
@@ -797,10 +797,10 @@ function NodeEditor({
             ) : (
               <Alert severity="error" icon={<SchemaIcon fontSize="inherit" />}>
                 {outputBinding?.status === 'duplicate'
-                  ? 'The same extraction is attached to this formatter more than once. Remove the duplicate connection.'
+                  ? 'The same source step is attached to this formatter more than once. Remove the duplicate connection.'
                   : outputBinding?.status === 'incompatible'
-                    ? 'This formatter is connected to an incompatible step. Connect it only to extraction agents.'
-                    : 'This formatter is not configured. Connect at least one extraction agent directly to it.'}
+                    ? 'This formatter is connected to an incompatible step. Connect it only to extraction results or typed validation results.'
+                    : 'This formatter is not configured. Connect at least one extraction result or typed validation result.'}
               </Alert>
             )}
 

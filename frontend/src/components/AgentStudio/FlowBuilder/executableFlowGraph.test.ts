@@ -34,7 +34,7 @@ const multiSidecarFlow = (): {
     node('extract', 'gene_extractor'),
     node('validator_symbol', 'custom_validator_symbol'),
     node('validator_identifier', 'custom_validator_identifier'),
-    node('output', 'csv_formatter'),
+    node('output', 'gene_summary'),
   ],
   edges: [
     edge('control_1', 'task', 'extract'),
@@ -89,7 +89,7 @@ describe('projectExecutableFlowGraph', () => {
 
   it('projects formatter attachments as terminal leaves without control branching', () => {
     const flow = multiOutputAttachmentFlow()
-    const graph = projectExecutableFlowGraph(flow.nodes, flow.edges, 'task', '1.1')
+    const graph = projectExecutableFlowGraph(flow.nodes, flow.edges, 'task')
 
     expect(graph.valid).toBe(true)
     expect(graph.ordered_control_node_ids).toEqual(['task', 'general', 'gene', 'allele'])
@@ -146,6 +146,23 @@ describe('projectExecutableFlowGraph', () => {
       edge_id: 'output_1',
       source_node_id: 'general',
     })
+  })
+
+  it('rejects formatter agents retained as ordinary control-flow steps', () => {
+    const flow = multiSidecarFlow()
+    const formatterNode = flow.nodes.find(candidate => candidate.id === 'output')
+    if (!formatterNode) throw new Error('formatter fixture is missing')
+    formatterNode.data.agent_id = 'csv_formatter'
+    formatterNode.data.agent_display_name = 'CSV Formatter'
+
+    expect(projectExecutableFlowGraph(flow.nodes, flow.edges, 'task', '1.1').issues)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'formatter_in_control_flow',
+          node_ids: ['output'],
+          edge_ids: ['control_2'],
+        }),
+      ]))
   })
 
   it('reports missing, identical duplicate, and legacy output bindings', () => {
