@@ -87,10 +87,9 @@ _LOWERCASE_A_CONTINUATION_PATTERN = re.compile(
 # singular predicate with an explicit complement. Because arbitrary words
 # cannot safely be classified as nouns without a parser, the head must come
 # from this deliberately bounded scientific/common noun vocabulary. Unknown
-# heads remain ambiguous and therefore suppress the locator. Modifiers are
-# accepted before an established head, retaining phrases such as "a very strong
-# control" and "a further experiment" without maintaining an unbounded adverb
-# blacklist.
+# heads remain ambiguous and therefore suppress the locator. Modifiers must
+# likewise come from positive noun-phrase vocabulary; accepting arbitrary words
+# would let a prepositional panel-subject clause reach a later known noun.
 _ARTICLE_NOUN_HEAD_PATTERN = (
     r"(?:analysis|animal|approach|assay|assessment|article|cell|cohort|"
     r"comparison|condition|construct|control|dataset|embryo|experiment|figure|"
@@ -98,10 +97,23 @@ _ARTICLE_NOUN_HEAD_PATTERN = (
     r"organism|panel|pathway|phenotype|protein|replicate|reporter|result|sample|"
     r"signal|strain|study|table|test|tissue|treatment|variant)"
 )
+_ARTICLE_NOUN_MODIFIER_PATTERN = (
+    r"(?:additional|alternative|comparative|different|experimental|further|"
+    r"independent|new|other|primary|second|separate|single|specific|strong|"
+    r"subsequent)"
+)
+_ARTICLE_NOUN_DEGREE_PATTERN = r"(?:especially|highly|particularly|quite|very)"
+_ARTICLE_NOUN_COMPLEMENT_PATTERN = (
+    rf"(?:\s+(?:for|from|in|of|under|with)\s+"
+    rf"(?:(?:a|an|the|this|that|these|those)\s+)?"
+    rf"(?:(?:{_ARTICLE_NOUN_DEGREE_PATTERN}\s+)?"
+    rf"(?:{_ARTICLE_NOUN_MODIFIER_PATTERN}|same)\s+)*"
+    rf"{_ARTICLE_NOUN_HEAD_PATTERN})*"
+)
 _ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
-    r"^\s+(?:(?!(?:and|or|but|that|which|who|whose|where|when)\b)"
-    r"[A-Za-z][A-Za-z0-9'-]*\s+)*?"
-    rf"{_ARTICLE_NOUN_HEAD_PATTERN}\s+"
+    rf"^\s+(?:(?:{_ARTICLE_NOUN_DEGREE_PATTERN}\s+)?"
+    rf"{_ARTICLE_NOUN_MODIFIER_PATTERN}\s+)*"
+    rf"{_ARTICLE_NOUN_HEAD_PATTERN}{_ARTICLE_NOUN_COMPLEMENT_PATTERN}\s+"
     r"(?:[A-Za-z][A-Za-z0-9'-]*ly\s+)*(?:"
     r"(?:am|is|are|was|were|be|been|being|has|have|had|do|does|did|"
     r"can|could|may|might|must|shall|should|will|would)\b|"
