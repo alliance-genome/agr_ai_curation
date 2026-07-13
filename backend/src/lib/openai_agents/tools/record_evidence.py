@@ -85,11 +85,14 @@ _MULTI_REFERENCE_SEPARATOR = (
 # erase an unambiguous locator. A bare uppercase letter can instead begin an
 # abbreviated taxon (``C. elegans``) or a prose noun phrase (``B samples
 # were``). Exclude those domain-neutral grammatical forms without embedding a
-# curation-domain vocabulary in this shared tool.
+# curation-domain vocabulary in this shared tool. Structural panel nouns are
+# never prose evidence because they explicitly scope the token as a panel.
+_PANEL_NOUN = r"(?:subfigures?|subpanels?|panels?)"
 _UPPERCASE_PROSE_SUFFIX = (
     r"(?:\.\s*(?-i:[a-z][A-Za-z-]*)\b|"
-    r"\s+(?-i:[a-z][A-Za-z'-]*s)\b(?=\s*[,.;:!?)\]]|$)|"
-    r"\s+(?-i:[a-z][A-Za-z'-]*)\s+"
+    rf"\s+(?!{_PANEL_NOUN}\b)(?-i:[a-z][A-Za-z'-]*s)\b"
+    r"(?=\s*[,.;:!?)\]]|$)|"
+    rf"\s+(?!{_PANEL_NOUN}\b)(?-i:[a-z][A-Za-z'-]*)\s+"
     r"(?:am|is|are|was|were|be|been|being|has|have|had|do|does|did|"
     r"can|could|may|might|must|shall|should|will|would|"
     r"[A-Za-z][A-Za-z'-]*(?:ed|ing|s))\b)"
@@ -162,7 +165,6 @@ _ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _PANEL_LIST_TOKEN = r"(?:[A-Za-z]\d*|\d+)"
-_PANEL_NOUN = r"(?:subfigures?|subpanels?|panels?)"
 _PANEL_LIST_FIRST_ITEM = (
     rf"(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
     rf"{_PANEL_LIST_TOKEN}\b)(?:\s*\([^()\r\n]*\))?"

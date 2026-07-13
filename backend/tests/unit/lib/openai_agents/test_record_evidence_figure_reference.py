@@ -166,6 +166,8 @@ def test_provider_figure_metadata_omits_later_scoped_panel_in_prose() -> None:
         "The A and B panels show different patterns.",
         "The two panels, A and B, show different patterns.",
         "Figure 1 shows the A and B panels.",
+        "Fig. 1A and B panels were analyzed.",
+        "Figure 1A compared with B panels shows the difference.",
         "Figure 1(A) and (B) show different patterns.",
         "Figure 1 panel A (left) and B (right) show different patterns.",
         "Panels A (left), B (center), and C (right) show different patterns.",
@@ -490,6 +492,8 @@ def test_provider_figure_metadata_uses_unambiguous_structured_fallback(
         "Panel A, with B shown at right.",
         "Panels A relative to B show the contrast.",
         "Panels A in comparison with B show the contrast.",
+        "Fig. 1A and B panels were analyzed.",
+        "Figure 1A compared with B panels shows the difference.",
     ),
 )
 @pytest.mark.asyncio
