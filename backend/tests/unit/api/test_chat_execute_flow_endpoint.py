@@ -508,7 +508,11 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
 
 def test_execute_flow_endpoint_suppresses_duplicates_but_preserves_distinct_files(monkeypatch):
     flow_id = uuid4()
-    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-file-dedupe")
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-file-dedupe",
+        turn_id="turn-flow-file-dedupe",
+    )
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
@@ -518,8 +522,10 @@ def test_execute_flow_endpoint_suppresses_duplicates_but_preserves_distinct_file
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    execute_calls = []
 
     async def _fake_execute_flow(**_kwargs):
+        execute_calls.append(_kwargs["flow_run_id"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-file-dedupe"}}
         yield {
             "type": "FILE_READY",
@@ -571,10 +577,21 @@ def test_execute_flow_endpoint_suppresses_duplicates_but_preserves_distinct_file
 
     events = asyncio.run(_consume_stream(response))
 
+    replay_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    replay_events = asyncio.run(_consume_stream(replay_response))
+
     streamed_file_events = [event for event in events if event["type"] == "FILE_READY"]
     assert len(streamed_file_events) == 2
     assert streamed_file_events[0]["details"]["size_bytes"] == 10
     assert streamed_file_events[1]["details"]["file_id"] == "file-2"
+    assert replay_events == events
+    assert len(execute_calls) == 1
 
     repository = calls["repository"]
     assert isinstance(repository, _FakeChatHistoryRepository)

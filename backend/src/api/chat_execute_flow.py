@@ -437,6 +437,19 @@ def _build_execute_flow_turn_replay(
     if isinstance(run_started_event, dict) and isinstance(run_started_event.get("type"), str):
         replay_events.append(dict(run_started_event))
 
+    raw_terminal_events = summary_payload.get(
+        _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY
+    ) or []
+    terminal_events = (
+        [
+            dict(event)
+            for event in raw_terminal_events
+            if isinstance(event, dict) and isinstance(event.get("type"), str)
+        ]
+        if isinstance(raw_terminal_events, list)
+        else []
+    )
+
     for message in messages:
         if message.message_id == summary_message.message_id:
             continue
@@ -445,15 +458,14 @@ def _build_execute_flow_turn_replay(
         event_type = message.payload_json.get("type")
         if not isinstance(event_type, str) or not event_type.strip():
             continue
+        # FILE_READY events also have first-class ``file_download`` history
+        # rows. The summary retains the same payloads so terminal output order
+        # can be replayed exactly; do not publish those durable copies twice.
+        if any(message.payload_json == event for event in terminal_events):
+            continue
         replay_events.append(dict(message.payload_json))
 
-    terminal_events = summary_payload.get(_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY) or []
-    if isinstance(terminal_events, list):
-        replay_events.extend(
-            dict(event)
-            for event in terminal_events
-            if isinstance(event, dict) and isinstance(event.get("type"), str)
-        )
+    replay_events.extend(terminal_events)
 
     return replay_events, assistant_message
 
