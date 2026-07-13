@@ -51,13 +51,13 @@ _MULTI_REFERENCE_SEPARATOR = (
     r"\bas\s+well\s+as\s+|\band\s+|\bor\s+|\bto\s+|\bthrough\s+|"
     r"\bversus\s+|\bvs\.?\s+|[-\u2013\u2014]\s*)"
 )
-# A bare one-letter continuation must retain panel-label capitalization. An
-# explicit figure/table/panel prefix makes the token unambiguous regardless of
-# case; without one, accepting lowercase letters would mistake prose such as
-# "Fig. 1A and a second assay" for a multi-panel reference.
+# An explicit figure/table/panel prefix makes a one-letter token unambiguous.
+# Bare continuations also admit lowercase b-z, which are not English articles;
+# bare lowercase "a" remains excluded so prose such as "Fig. 1A and a second
+# assay" does not erase the unambiguous locator.
 _FOLLOWING_REFERENCE_TOKEN = (
     r"(?:(?:(?:Figs?\.?|Figures?\.?|Tables?\.?|panels?)\s*)"
-    r"(?:[A-Za-z]|\d+[A-Za-z]?)|(?-i:[A-Z])|\d+[A-Za-z]?)\b"
+    r"(?:[A-Za-z]|\d+[A-Za-z]?)|(?-i:[A-Zb-z])|\d+[A-Za-z]?)\b"
 )
 _MULTI_REFERENCE_PATTERN = re.compile(
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+[A-Za-z]?\s*"
@@ -67,7 +67,7 @@ _MULTI_REFERENCE_PATTERN = re.compile(
 )
 _PROSE_MULTI_PANEL_PATTERN = re.compile(
     rf"\bpanels?\s+(?:[A-Za-z]\d*|\d+)\s*{_MULTI_REFERENCE_SEPARATOR}"
-    rf"{_FOLLOWING_REFERENCE_TOKEN}",
+    rf"(?:{_FOLLOWING_REFERENCE_TOKEN}|(?-i:a)\b)",
     re.IGNORECASE,
 )
 # Env-configurable via RECORD_EVIDENCE_PREVIEW_CHARS (default 300); see config.py.

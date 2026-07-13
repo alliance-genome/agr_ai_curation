@@ -84,6 +84,28 @@ def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -
 @pytest.mark.parametrize(
     "span_text",
     (
+        "Fig. 1a,b show different expression patterns.",
+        "Fig. 1a and b show different expression patterns.",
+        "Figure 1 panels a and b show different expression patterns.",
+        "Panels a and b show different expression patterns.",
+        "Figure 1 panels a-c show different expression patterns.",
+    ),
+)
+def test_provider_figure_metadata_omits_lowercase_multi_panel_locators(
+    span_text: str,
+) -> None:
+    chunk = {
+        "text": span_text,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
+
+
+@pytest.mark.parametrize(
+    "span_text",
+    (
         "Figures 1 and 2 show different results.",
         "Figures 1A and 1B show different expression patterns.",
         "Figs. 1A and 1B show different expression patterns.",
@@ -149,6 +171,10 @@ def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
         (
             "Fig. 1A or a replicate from the same experiment supports this.",
             "Fig. 1A",
+        ),
+        (
+            "Fig. 1a and a second assay confirms the result.",
+            "Fig. 1a",
         ),
     ),
 )
