@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import PromptViewer from './PromptViewer'
@@ -59,6 +59,15 @@ const groupLayer: PromptLayerInfo = {
   hash: 'group-hash',
 }
 
+const betaGroupLayer: PromptLayerInfo = {
+  ...groupLayer,
+  id: 'gene:group_rules:group-beta',
+  title: 'Group beta rules',
+  content: 'GROUP BETA CONTENT',
+  source_ref: 'database:gene:group-beta',
+  hash: 'beta-group-hash',
+}
+
 const agent: PromptInfo = {
   agent_id: 'gene',
   agent_name: 'Gene Agent',
@@ -70,6 +79,11 @@ const agent: PromptInfo = {
     'group-alpha': {
       group_id: 'group-alpha',
       content: 'legacy group alpha rules',
+      source_file: 'database',
+    },
+    'group-beta': {
+      group_id: 'group-beta',
+      content: 'legacy group beta rules',
       source_file: 'database',
     },
   },
@@ -87,6 +101,28 @@ const combined: CombinedPromptResponse = {
     layers: [...layers, groupLayer],
     hash: 'combined-hash',
   },
+}
+
+const betaCombined: CombinedPromptResponse = {
+  agent_id: 'gene',
+  group_id: 'group-beta',
+  combined_prompt: [...layers, betaGroupLayer].map((layer) => layer.content).join('\n\n'),
+  effective_prompt_hash: 'beta-combined-hash',
+  layer_manifest: {
+    agent_id: 'gene',
+    layers: [...layers, betaGroupLayer],
+    hash: 'beta-combined-hash',
+  },
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 describe('PromptViewer', () => {
@@ -143,5 +179,31 @@ describe('PromptViewer', () => {
     expect(screen.queryByText(/EDITABLE BASE CONTENT/)).not.toBeInTheDocument()
     expect(screen.queryByText(/layers shown in runtime order/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Copy prompt' })).toBeDisabled()
+  })
+
+  it('keeps the latest selected group when preview requests resolve out of order', async () => {
+    const alphaRequest = createDeferred<CombinedPromptResponse>()
+    const betaRequest = createDeferred<CombinedPromptResponse>()
+    serviceMocks.fetchCombinedPrompt.mockImplementation((_agentId: string, groupId: string) => (
+      groupId === 'group-alpha' ? alphaRequest.promise : betaRequest.promise
+    ))
+
+    render(<PromptViewer agentId="gene" agentName="Gene Agent" open onClose={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchCombinedPrompt).toHaveBeenCalledWith('gene', 'group-alpha')
+    })
+    fireEvent.mouseDown(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: 'GROUP-BETA' }))
+    await waitFor(() => {
+      expect(serviceMocks.fetchCombinedPrompt).toHaveBeenCalledWith('gene', 'group-beta')
+    })
+
+    await act(async () => betaRequest.resolve(betaCombined))
+    expect(await screen.findByRole('button', { name: 'Group beta rules' })).toBeInTheDocument()
+
+    await act(async () => alphaRequest.resolve(combined))
+    expect(screen.getByRole('button', { name: 'Group beta rules' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Group alpha rules' })).not.toBeInTheDocument()
   })
 })

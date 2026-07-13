@@ -162,10 +162,12 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
   // Load the selected group's canonical effective bundle, including its layers.
   useEffect(() => {
     if (agentId && selectedGroupId && agent?.has_group_rules) {
+      let active = true
       setLoadingCombined(true)
       setCombinedPromptError(null)
       fetchCombinedPrompt(agentId, selectedGroupId)
         .then((result) => {
+          if (!active) return
           setCombinedPrompt(result)
           setViewMode((currentMode) => {
             if (currentMode === 'combined') return currentMode
@@ -176,11 +178,18 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
           })
         })
         .catch((err) => {
+          if (!active) return
           logger.error('Failed to fetch combined prompt', err as Error, { component: 'PromptViewer' })
           setCombinedPrompt(null)
           setCombinedPromptError('Failed to load the selected group prompt layers.')
         })
-        .finally(() => setLoadingCombined(false))
+        .finally(() => {
+          if (active) setLoadingCombined(false)
+        })
+
+      return () => {
+        active = false
+      }
     }
   }, [agentId, selectedGroupId, agent])
 
