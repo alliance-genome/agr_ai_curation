@@ -379,6 +379,7 @@ async def select_reference_import_candidate(
             selected=ReferenceImportCandidate(
                 reference=reference,
                 source_artifact=source_artifact,
+                provider_metadata_artifacts=provider_metadata_artifacts,
             ),
             message="Provider conversion is still running",
         )
@@ -462,6 +463,7 @@ async def select_reference_import_candidate(
                 selected=ReferenceImportCandidate(
                     reference=reference,
                     source_artifact=source_artifact,
+                    provider_metadata_artifacts=provider_metadata_artifacts,
                 ),
                 message="Provider conversion is still running",
                 metadata=conversion_metadata,

@@ -797,10 +797,12 @@ async def test_select_checksum_import_candidate_ignores_non_markdown_statuses(xm
 
 @pytest.mark.asyncio
 async def test_select_checksum_import_candidate_reports_running_conversion():
+    metadata = _provider_metadata("fig-meta-1", provider="fake_provider")
     provider = FakeChecksumProvider(
         [
             _source("source-1"),
             _converted("md-1", "source-1", status=SourceArtifactStatus.RUNNING),
+            metadata,
         ]
     )
 
@@ -813,6 +815,7 @@ async def test_select_checksum_import_candidate_reports_running_conversion():
     assert decision.status is ChecksumImportDecisionStatus.CONVERSION_RUNNING
     assert decision.selected is not None
     assert decision.selected.converted_artifact is None
+    assert decision.selected.provider_metadata_artifacts == (metadata,)
 
 
 @pytest.mark.asyncio
@@ -838,8 +841,9 @@ async def test_select_checksum_import_candidate_reports_failed_conversion():
 @pytest.mark.asyncio
 async def test_select_checksum_import_candidate_requests_conversion_when_supported():
     source = _source("source-1")
+    metadata = _provider_metadata("fig-meta-1", provider="fake_provider")
     provider = FakeConversionProvider(
-        [source],
+        [source, metadata],
         conversion_result=SourceConversionResult(
             provider="fake_provider",
             status=SourceConversionStatus.RUNNING,
@@ -856,6 +860,8 @@ async def test_select_checksum_import_candidate_requests_conversion_when_support
     )
 
     assert decision.status is ChecksumImportDecisionStatus.CONVERSION_RUNNING
+    assert decision.selected is not None
+    assert decision.selected.provider_metadata_artifacts == (metadata,)
     assert decision.metadata == {
         "conversion_status": "running",
         "conversion_job_id": "job-1",
