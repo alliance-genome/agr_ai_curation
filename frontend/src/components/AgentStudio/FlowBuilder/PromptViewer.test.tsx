@@ -126,4 +126,18 @@ describe('PromptViewer', () => {
     )
     expect(screen.getByText('4 layers shown in runtime order')).toBeInTheDocument()
   })
+
+  it('surfaces a selected-group combined prompt failure without rendering partial content', async () => {
+    serviceMocks.fetchCombinedPrompt.mockRejectedValue(new Error('request failed'))
+
+    render(<PromptViewer agentId="gene" agentName="Gene Agent" open onClose={vi.fn()} />)
+
+    expect(await screen.findByText('Failed to load the selected group prompt layers.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Combined' }))
+
+    expect(screen.queryByText(/LOCKED CORE CONTENT/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/EDITABLE BASE CONTENT/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/layers shown in runtime order/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy prompt' })).toBeDisabled()
+  })
 })

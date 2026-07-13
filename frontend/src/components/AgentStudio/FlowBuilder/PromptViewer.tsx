@@ -107,6 +107,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
   const [viewMode, setViewMode] = useState<ViewMode>('combined')
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [combinedPrompt, setCombinedPrompt] = useState<CombinedPromptResponse | null>(null)
+  const [combinedPromptError, setCombinedPromptError] = useState<string | null>(null)
   const [loadingCombined, setLoadingCombined] = useState(false)
   const [copied, setCopied] = useState(false)
 
@@ -121,6 +122,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
       setSelectedGroupId(null)
       setViewMode('combined')
       setCombinedPrompt(null)
+      setCombinedPromptError(null)
 
       try {
         const catalog = await fetchPromptCatalog()
@@ -161,6 +163,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
   useEffect(() => {
     if (agentId && selectedGroupId && agent?.has_group_rules) {
       setLoadingCombined(true)
+      setCombinedPromptError(null)
       fetchCombinedPrompt(agentId, selectedGroupId)
         .then((result) => {
           setCombinedPrompt(result)
@@ -175,6 +178,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
         .catch((err) => {
           logger.error('Failed to fetch combined prompt', err as Error, { component: 'PromptViewer' })
           setCombinedPrompt(null)
+          setCombinedPromptError('Failed to load the selected group prompt layers.')
         })
         .finally(() => setLoadingCombined(false))
     }
@@ -194,6 +198,10 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
 
     if (viewMode === 'combined' && loadingCombined && selectedGroupId) {
       return 'Loading combined prompt...'
+    }
+
+    if (viewMode === 'combined' && combinedPromptError && selectedGroupId) {
+      return ''
     }
 
     if (viewMode === 'combined') {
@@ -220,6 +228,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
   const handleGroupChange = (groupId: string | null) => {
     setSelectedGroupId(groupId)
     setCombinedPrompt(null) // Reset combined prompt when group changes
+    setCombinedPromptError(null)
   }
 
   // Handle view mode change
@@ -242,7 +251,11 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
             </Typography>
           </Box>
           <Tooltip title={copied ? 'Copied!' : 'Copy prompt'}>
-            <IconButton onClick={handleCopy} size="small" disabled={loading || !!error}>
+            <IconButton
+              onClick={handleCopy}
+              size="small"
+              disabled={loading || !!error || (viewMode === 'combined' && !!combinedPromptError)}
+            >
               {copied ? <CheckIcon fontSize="small" color="success" /> : <ContentCopyIcon fontSize="small" />}
             </IconButton>
           </Tooltip>
@@ -284,6 +297,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
               )}
 
               {agent.prompt_layer_error && <Alert severity="warning">{agent.prompt_layer_error}</Alert>}
+              {combinedPromptError && <Alert severity="error">{combinedPromptError}</Alert>}
 
               {/* Layer Controls */}
               <ControlsRow>
@@ -341,7 +355,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
                 </Box>
               )}
 
-              {viewMode === 'combined' && (
+              {viewMode === 'combined' && !combinedPromptError && (
                 <Typography variant="caption" color="text.secondary">
                   {promptLayers.length} layers shown in runtime order
                 </Typography>
