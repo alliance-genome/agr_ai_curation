@@ -95,6 +95,8 @@ def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -
         "Fig. 1b and a provide complementary evidence.",
         "Fig. 1b and a provide evidence that supports the model.",
         "Fig. 1b and a correspond to different genotypes.",
+        "Unlike Fig. 1b, a clearly shows the complementary signal.",
+        "In contrast to Fig. 1b, a independently confirms the result.",
         "Figure 1 panels a and b show different expression patterns.",
         "Panels a and b show different expression patterns.",
         "Figure 1 panels a-c show different expression patterns.",
@@ -201,9 +203,43 @@ def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
             "Fig. 1b and a control confirms the result.",
             "Fig. 1b",
         ),
+        (
+            "Fig. 1b and a control clearly confirms the result.",
+            "Fig. 1b",
+        ),
     ),
 )
 def test_provider_figure_metadata_preserves_locator_before_lowercase_prose(
+    span_text: str,
+    expected: str,
+) -> None:
+    chunk = {
+        "text": span_text,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], span_text) == expected
+
+
+@pytest.mark.parametrize(
+    ("span_text", "expected"),
+    (
+        (
+            "Fig. 1A and B-cell staining confirms the result.",
+            "Fig. 1A",
+        ),
+        (
+            "Fig. 1A and C-terminal staining confirms the result.",
+            "Fig. 1A",
+        ),
+        (
+            "Figure 1 and T-cell abundance is increased.",
+            "Figure 1",
+        ),
+    ),
+)
+def test_provider_figure_metadata_preserves_locator_before_hyphenated_prose(
     span_text: str,
     expected: str,
 ) -> None:
