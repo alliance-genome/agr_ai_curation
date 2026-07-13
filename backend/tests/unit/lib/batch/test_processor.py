@@ -35,6 +35,8 @@ def _build_batch_context() -> tuple[Any, Any, Any]:
         position=0,
         status=BatchDocumentStatus.PENDING,
         result_file_path=None,
+        result_files=None,
+        output_status=None,
         review_session_ids=None,
         processing_time_ms=None,
         processed_at=None,
@@ -88,7 +90,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     published_events = []
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return (None, [])
+        return ([], [], "none", [])
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
     monkeypatch.setattr(
@@ -112,6 +114,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     assert batch.failed_documents == 1
     assert batch.completed_documents == 0
     assert batch_doc.result_file_path is None
+    assert batch_doc.output_status == "failed"
     assert batch_doc.review_session_ids is None
     assert published_events == [
         {
@@ -122,6 +125,9 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
             "position": batch_doc.position,
             "status": BatchDocumentStatus.FAILED.value,
             "result_file_path": None,
+            "result_files": [],
+            "output_status": "failed",
+            "output_branches": [],
             "review_session_ids": None,
             "error_message": "Flow completed without FILE_READY or curation handoff output",
             "processing_time_ms": batch_doc.processing_time_ms,
@@ -186,7 +192,12 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     batch, batch_doc, flow = _build_batch_context()
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return ("/api/weaviate/documents/download/abc123", [])
+        return (
+            [{"download_url": "/api/weaviate/documents/download/abc123"}],
+            [],
+            "partial",
+            [],
+        )
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
 
@@ -202,6 +213,10 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     assert batch.completed_documents == 1
     assert batch.failed_documents == 0
     assert batch_doc.result_file_path == "/api/weaviate/documents/download/abc123"
+    assert batch_doc.result_files == [
+        {"download_url": "/api/weaviate/documents/download/abc123"}
+    ]
+    assert batch_doc.output_status == "partial"
     assert batch_doc.review_session_ids is None
 
 
@@ -210,7 +225,7 @@ def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):
     batch, batch_doc, flow = _build_batch_context()
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return (None, ["session-gene", "session-gene_expression"])
+        return ([], ["session-gene", "session-gene_expression"], "complete", [])
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
 
@@ -591,6 +606,44 @@ def test_execute_flow_for_document_marks_reported_persistence_flow_error(monkeyp
     assert published_events[0]["type"] == "FLOW_ERROR"
 
 
+def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatch):
+    formatter_reason = (
+        "Formatter could not create an output: the bound extraction result does "
+        "not contain the requested source fields."
+    )
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "failed",
+                "output_status": "none",
+                "failure_reason": formatter_reason,
+            },
+        }
+
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(publish_sync=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+
+    with pytest.raises(processor.BatchFlowExecutionError) as exc_info:
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=SimpleNamespace(name="Batch Flow"),
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=str(uuid4()),
+            )
+        )
+
+    assert str(exc_info.value) == formatter_reason
+
+
 def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatch):
     async def _fake_execute_flow(**_kwargs):
         yield {
@@ -620,7 +673,7 @@ def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatc
         )
     )
 
-    assert result == (None, [])
+    assert result == ([], [], "none", [])
     assert published_events == []
 
 
@@ -635,6 +688,21 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
                 "download_url": "/api/weaviate/documents/download/file-1",
                 "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
             },
+        }
+        yield {
+            "type": "FILE_READY",
+            "details": {
+                "download_url": "/api/weaviate/documents/download/file-2",
+                "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0fff2",
+                "filename": "genes.json",
+                "format": "json",
+                "formatter_node_id": "json-output",
+                "source_node_id": "gene-extraction",
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "output_status": "partial"},
         }
 
     monkeypatch.setattr(
@@ -655,11 +723,31 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
             cognito_sub="auth-sub",
             batch_id=batch_id,
             db_user_id=7,
+            document_name="paper.pdf",
         )
     )
 
-    assert result == ("/api/weaviate/documents/download/file-1", [])
+    assert result == (
+        [
+            {
+                "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
+                "download_url": "/api/weaviate/documents/download/file-1",
+            },
+            {
+                "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0fff2",
+                "filename": "genes.json",
+                "download_url": "/api/weaviate/documents/download/file-2",
+                "format": "json",
+                "formatter_node_id": "json-output",
+                "source_node_id": "gene-extraction",
+            },
+        ],
+        [],
+        "partial",
+        [],
+    )
     assert captured["flow_run_id"] == batch_id
+    assert captured["document_name"] == "paper.pdf"
 
 
 def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
@@ -697,7 +785,7 @@ def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
         )
     )
 
-    assert result == (None, ["session-gene", "session-gene_expression"])
+    assert result == ([], ["session-gene", "session-gene_expression"], "complete", [])
     assert len(published_events) == 1
     assert published_events[0]["type"] == "CURATION_HANDOFF_READY"
     assert published_events[0]["batch_id"] == batch_id
@@ -714,6 +802,22 @@ def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypat
             "type": "FLOW_ERROR",
             "details": {"message": "terminal step failed"},
         }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "failed",
+                "output_status": "none",
+                "failure_reason": "terminal step failed",
+                "output_branches": [
+                    {
+                        "source_node_id": "extract",
+                        "output_node_id": "csv",
+                        "status": "missing",
+                        "failure_reason": "source rows cannot be joined",
+                    }
+                ],
+            },
+        }
 
     published_events = []
     monkeypatch.setattr(
@@ -727,7 +831,10 @@ def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypat
     monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
 
-    with pytest.raises(RuntimeError, match="terminal step failed"):
+    with pytest.raises(
+        processor.BatchFlowExecutionError,
+        match="terminal step failed",
+    ) as exc_info:
         asyncio.run(
             processor._execute_flow_for_document(
                 flow=SimpleNamespace(name="Batch Flow"),
@@ -738,9 +845,19 @@ def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypat
             )
         )
 
+    assert exc_info.value.output_branches == [
+        {
+            "source_node_id": "extract",
+            "output_node_id": "csv",
+            "status": "missing",
+            "failure_reason": "source rows cannot be joined",
+        }
+    ]
+
     assert [event["type"] for event in published_events] == [
         "CURATION_HANDOFF_READY",
         "FLOW_ERROR",
+        "FLOW_FINISHED",
     ]
 
 
@@ -777,7 +894,7 @@ def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypat
         )
     )
 
-    assert result == (None, [])
+    assert result == ([], [], "none", [])
     assert published_events == []
 
 
@@ -808,7 +925,7 @@ def test_execute_flow_for_document_ignores_malformed_file_ready_details(monkeypa
         )
     )
 
-    assert result == (None, [])
+    assert result == ([], [], "none", [])
     assert len(published_events) == 1
     assert published_events[0]["type"] == "SUPERVISOR_COMPLETE"
 
@@ -847,7 +964,7 @@ def test_execute_flow_for_document_strips_internal_payload_before_publish(monkey
         )
     )
 
-    assert result == (None, [])
+    assert result == ([], [], "none", [])
     assert len(published_events) == 1
     assert published_events[0]["type"] == "TOOL_COMPLETE"
     assert published_events[0]["batch_id"] == batch_id

@@ -188,7 +188,15 @@ const supplementalGroupOwnerText = (group: ValidationAttachmentGroup) => {
   return parts.length > 0 ? parts.join(' / ') : 'Missing supplemental edge metadata'
 }
 
-function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDomainEnvelope }: NodeEditorProps) {
+function NodeEditor({
+  node,
+  outputBinding,
+  onSave,
+  onClose,
+  onDelete,
+  onViewPrompts,
+  onViewDomainEnvelope,
+}: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   // Form state
@@ -771,6 +779,21 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
           <>
             <Divider />
 
+            {outputBinding?.status === 'bound' ? (
+              <Alert severity="info" icon={<SchemaIcon fontSize="inherit" />}>
+                Configuring output for <strong>{outputBinding.sourceLabel}</strong> extraction.
+                This formatter receives only that extractor's result.
+              </Alert>
+            ) : (
+              <Alert severity="error" icon={<SchemaIcon fontSize="inherit" />}>
+                {outputBinding?.status === 'multiple'
+                  ? 'This formatter has multiple output sources. Remove connections until exactly one extraction agent remains.'
+                  : outputBinding?.status === 'incompatible'
+                    ? 'This formatter is connected to an incompatible step. Reconnect it directly to one extraction agent.'
+                    : 'This formatter is not configured. Connect one extraction agent directly to it.'}
+              </Alert>
+            )}
+
             <Box>
               <FieldLabel>
                 <Typography variant="caption" fontWeight={600}>
@@ -807,7 +830,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
                 <Typography variant="caption" fontWeight={600}>
                   Output Filename Template
                 </Typography>
-                <Tooltip title="Controls the readable filename descriptor for formatter outputs using built-in placeholders. Stored files still keep the trace ID prefix and timestamp suffix.">
+                <Tooltip title="Controls the readable filename descriptor using built-in placeholders. Storage adds a trace ID prefix; include {{timestamp}} here when the filename should contain a timestamp.">
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
                 </Tooltip>
               </FieldLabel>
@@ -832,7 +855,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
                 placeholder="{{input_filename_stem}}.tsv"
                 value={outputFilenameTemplate}
                 onChange={(e) => setOutputFilenameTemplate(e.target.value)}
-                helperText="Applies before sanitization. Example final file: traceid_input_filename_stem_20260410T120000Z.tsv"
+                helperText="Applies before sanitization. Include {{timestamp}} in the template when a timestamp is wanted."
               />
             </Box>
 

@@ -52,19 +52,28 @@ def validate_flow_for_batch(flow_definition: dict) -> BatchValidationResponse:
     if not has_pdf_agent:
         errors.append("Flow must contain a PDF extraction agent (PDF Specialist or Gene Expression Extractor)")
 
-    # Check exit nodes have file output (not chat)
-    for node_id in projection.terminal_node_ids:
-        agent_id = get_node_agent_id(flow_definition, node_id)
-        if agent_id:
-            if has_batch_capability(agent_id, "chat_output"):
-                errors.append("Flow ends with Chat Output - batch requires file output or curation handoff")
-            elif not (
-                has_batch_capability(agent_id, "file_output")
-                or has_batch_capability(agent_id, "curation_handoff")
-            ):
-                errors.append(
-                    "Flow must end with a file output agent (CSV, TSV, or JSON Formatter) "
-                    "or the Curation Handoff agent"
-                )
+    terminal_agent_ids = [
+        agent_id
+        for node_id in projection.terminal_node_ids
+        if (agent_id := get_node_agent_id(flow_definition, node_id))
+    ]
+    has_batch_output = any(
+        has_batch_capability(agent_id, "file_output")
+        or has_batch_capability(agent_id, "curation_handoff")
+        for agent_id in terminal_agent_ids
+    )
+    if not has_batch_output:
+        if any(
+            has_batch_capability(agent_id, "chat_output")
+            for agent_id in terminal_agent_ids
+        ):
+            errors.append(
+                "Flow ends with Chat Output - batch requires file output or curation handoff"
+            )
+        else:
+            errors.append(
+                "Flow must end with a file output agent (CSV, TSV, or JSON Formatter) "
+                "or the Curation Handoff agent"
+            )
 
     return BatchValidationResponse(valid=len(errors) == 0, errors=errors)

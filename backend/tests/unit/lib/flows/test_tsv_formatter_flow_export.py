@@ -23,6 +23,7 @@ def _completed_artifact_step():
     }
     return {
         "step": 1,
+        "node_id": "source_1",
         "agent_id": "gene",
         "agent_name": "Gene Specialist",
         "output_preview": "Saved gene candidates for TP53 and BRCA1.",
@@ -53,6 +54,51 @@ def test_terminal_formatter_bundle_requires_completed_artifacts():
             output_format="csv",
             completed_steps=[],
             flow_name="No Artifacts",
+        )
+
+
+def test_terminal_formatter_bundle_is_scoped_to_exact_bound_source_node():
+    executor = _executor_module()
+    first = _completed_artifact_step()
+    second = _completed_artifact_step()
+    second["step"] = 2
+    second["node_id"] = "source_2"
+    second["agent_id"] = "allele_extractor"
+    second["candidate"] = executor.ExtractionEnvelopeCandidate(
+        agent_key="allele_extractor",
+        payload_json={
+            "domain_pack_id": "allele",
+            "envelope_id": "env-allele-1",
+            "extracted_objects": [
+                {"object_type": "Allele", "payload": {"symbol": "Dmel\\wg[1]"}},
+            ],
+        },
+        candidate_count=1,
+        adapter_key="allele",
+        conversation_summary="Extracted one allele candidate.",
+    )
+
+    bundle = executor._build_terminal_flow_artifact_bundle(
+        agent_id="tsv_formatter",
+        output_format="tsv",
+        completed_steps=[first, second],
+        flow_name="Scoped Output",
+        source_node_id="source_2",
+    )
+
+    assert [artifact.agent_id for artifact in bundle.artifacts] == ["allele_extractor"]
+    assert len(bundle.rows_for_source("object")) == 1
+
+    with pytest.raises(
+        executor.FlowTerminalOutputProjectionError,
+        match="bound source node 'missing' produced 0 completed artifacts",
+    ):
+        executor._build_terminal_flow_artifact_bundle(
+            agent_id="tsv_formatter",
+            output_format="tsv",
+            completed_steps=[first, second],
+            flow_name="Scoped Output",
+            source_node_id="missing",
         )
 
 

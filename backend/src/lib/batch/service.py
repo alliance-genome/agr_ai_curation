@@ -162,6 +162,9 @@ class BatchService:
         batch_doc_id: UUID,
         status: BatchDocumentStatus,
         result_file_path: Optional[str] = None,
+        result_files: Optional[List[dict]] = None,
+        output_status: Optional[str] = None,
+        output_branches: Optional[List[dict]] = None,
         error_message: Optional[str] = None,
         processing_time_ms: Optional[int] = None,
     ) -> None:
@@ -172,6 +175,12 @@ class BatchService:
             batch_doc.status = status
             if result_file_path:
                 batch_doc.result_file_path = result_file_path
+            if result_files is not None:
+                batch_doc.result_files = result_files or None
+            if output_status is not None:
+                batch_doc.output_status = output_status
+            if output_branches is not None:
+                batch_doc.output_branches = output_branches or None
             if error_message:
                 batch_doc.error_message = error_message
             if processing_time_ms is not None:
@@ -484,6 +493,9 @@ class BatchService:
         document_responses = []
         for d in batch.documents:
             handoff_metadata = self.get_document_handoff_metadata(batch, d)
+            stored_result_files = getattr(d, "result_files", None)
+            stored_output_status = getattr(d, "output_status", None)
+            stored_output_branches = getattr(d, "output_branches", None)
             doc_dict = {
                 "id": d.id,
                 "document_id": d.document_id,
@@ -491,6 +503,17 @@ class BatchService:
                 "position": d.position,
                 "status": d.status,
                 "result_file_path": d.result_file_path,
+                "result_files": (
+                    stored_result_files if isinstance(stored_result_files, list) else []
+                ),
+                "output_status": (
+                    stored_output_status
+                    if stored_output_status in {"complete", "partial", "none", "failed"}
+                    else None
+                ),
+                "output_branches": (
+                    stored_output_branches if isinstance(stored_output_branches, list) else []
+                ),
                 "review_session_ids": getattr(d, "review_session_ids", None),
                 **handoff_metadata,
                 "error_message": d.error_message,

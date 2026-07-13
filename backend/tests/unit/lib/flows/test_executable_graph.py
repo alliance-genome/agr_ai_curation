@@ -60,6 +60,38 @@ def _multi_sidecar_flow() -> dict:
     }
 
 
+def _multi_output_attachment_flow() -> dict:
+    return {
+        "version": "1.1",
+        "entry_node_id": "task",
+        "nodes": [
+            _node("task", "task_input", node_type="task_input"),
+            _node("general", "pdf_extraction"),
+            _node("gene", "gene_extractor"),
+            _node("allele", "allele_extractor"),
+            _node("general_csv", "csv_formatter", node_type="output"),
+            _node("allele_tsv", "tsv_formatter", node_type="output"),
+        ],
+        "edges": [
+            _edge("control_1", "task", "general"),
+            _edge("control_2", "general", "gene"),
+            _edge("control_3", "gene", "allele"),
+            _edge(
+                "output_1",
+                "general",
+                "general_csv",
+                role="output_attachment",
+            ),
+            _edge(
+                "output_2",
+                "allele",
+                "allele_tsv",
+                role="output_attachment",
+            ),
+        ],
+    }
+
+
 def _invalid_flow(kind: str) -> dict:
     flow = _multi_sidecar_flow()
     flow["nodes"] = flow["nodes"][:2] + flow["nodes"][-1:]
@@ -154,6 +186,122 @@ def test_multi_sidecar_projection_is_identical_across_consumers(monkeypatch):
         {"batch_capabilities": ["file_output"]},
     )
     assert batch_validation.validate_flow_for_batch(saved).valid is True
+
+
+def test_output_attachments_are_terminal_leaves_not_control_branches():
+    flow = _multi_output_attachment_flow()
+
+    projection = project_executable_flow_graph(flow)
+
+    assert projection.ordered_control_node_ids == (
+        "task",
+        "general",
+        "gene",
+        "allele",
+    )
+    assert projection.ordered_executable_node_ids == (
+        "general",
+        "general_csv",
+        "gene",
+        "allele",
+        "allele_tsv",
+    )
+    assert projection.exit_node_ids == ("allele",)
+    assert projection.terminal_node_ids == ("allele", "general_csv", "allele_tsv")
+    assert [
+        attachment.output_node_id
+        for attachment in projection.outputs_for("general")
+    ] == ["general_csv"]
+    assert [
+        attachment.output_node_id
+        for attachment in projection.outputs_for("allele")
+    ] == ["allele_tsv"]
+    assert not {issue.code for issue in projection.issues} & {
+        "branch",
+        "ambiguous_terminal",
+        "disconnected",
+    }
+
+    saved = FlowDefinition.model_validate(flow).model_dump()
+    assert saved["version"] == "1.1"
+    assert [edge["role"] for edge in saved["edges"][-2:]] == [
+        "output_attachment",
+        "output_attachment",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutator", "expected_code"),
+    [
+        (
+            lambda flow: flow["edges"].append(
+                _edge(
+                    "output_duplicate",
+                    "gene",
+                    "general_csv",
+                    role="output_attachment",
+                )
+            ),
+            "multiple_output_sources",
+        ),
+        (
+            lambda flow: flow["edges"].__setitem__(
+                -1,
+                _edge(
+                    "output_bad_target",
+                    "allele",
+                    "gene",
+                    role="output_attachment",
+                ),
+            ),
+            "invalid_output_target",
+        ),
+        (
+            lambda flow: flow["edges"].__setitem__(
+                -1,
+                _edge("legacy_control", "allele", "allele_tsv"),
+            ),
+            "output_in_control_flow",
+        ),
+        (
+            lambda flow: flow["edges"].pop(),
+            "missing_output_binding",
+        ),
+        (
+            lambda flow: flow["edges"].append(
+                _edge(
+                    "validation_output_collision",
+                    "gene",
+                    "general_csv",
+                    role="validation_attachment",
+                    satisfies_binding_id="collision",
+                )
+            ),
+            "attachment_target_role_conflict",
+        ),
+    ],
+)
+def test_invalid_output_attachment_topologies_are_rejected(mutator, expected_code):
+    flow = _multi_output_attachment_flow()
+    mutator(flow)
+
+    projection = project_executable_flow_graph(flow, raise_on_invalid=False)
+    assert expected_code in {issue.code for issue in projection.issues}
+    with pytest.raises(ValidationError, match=expected_code):
+        FlowDefinition.model_validate(flow)
+
+
+def test_output_attachments_require_flow_schema_v1_1():
+    flow = _multi_output_attachment_flow()
+    flow["version"] = "1.0"
+
+    projection = project_executable_flow_graph(flow, raise_on_invalid=False)
+
+    assert "output_attachment_requires_v1_1" in {
+        issue.code for issue in projection.issues
+    }
+    with pytest.raises(ValidationError, match="output_attachment_requires_v1_1"):
+        FlowDefinition.model_validate(flow)
 
 
 @pytest.mark.asyncio

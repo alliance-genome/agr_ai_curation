@@ -205,23 +205,31 @@ class ChatMessage(BaseModel):
 class FlowNodeContext(BaseModel):
     """Simplified flow node for chat context."""
     id: str
+    node_type: str = "agent"
     agent_id: str
     agent_display_name: str
     task_instructions: Optional[str] = None  # For task_input nodes
     custom_instructions: Optional[str] = None
+    include_evidence: Optional[bool] = None
     output_filename_template: Optional[str] = None
+    projection_plan: Optional[Dict[str, object]] = None
     output_key: str
     validation_attachments: List[Dict[str, object]] = Field(default_factory=list)
 
 
 class FlowEdgeContext(BaseModel):
     """Simplified flow edge for chat context."""
+    id: Optional[str] = None
     source: str
     target: str
+    role: str = "control_flow"
+    satisfies_binding_id: Optional[str] = None
+    replaces_attachment_id: Optional[str] = None
 
 
 class FlowContextDefinition(BaseModel):
     """Flow definition passed to chat for validation/discussion."""
+    version: str = "1.0"
     nodes: List[FlowNodeContext] = Field(default_factory=list)
     edges: List[FlowEdgeContext] = Field(default_factory=list)
 

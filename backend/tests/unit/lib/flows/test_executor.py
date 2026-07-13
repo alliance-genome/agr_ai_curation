@@ -46,6 +46,48 @@ async def execute_flow(*args, **kwargs):
         yield event
 
 
+def test_formatter_failure_reason_prefers_private_cannot_complete_payload():
+    reason = _executor_module()._flow_formatter_failure_reason(
+        {
+            "output": "Generic formatter summary",
+            "formatter_failure_output": json.dumps(
+                {
+                    "status": "cannot_complete",
+                    "reason": "Saved rows do not have a reliable join key.",
+                    "missing_data": "One extraction result must own all requested columns.",
+                    "suggested_next_step": "Attach a formatter to each extractor.",
+                }
+            ),
+        }
+    )
+
+    assert reason == (
+        "Saved rows do not have a reliable join key. "
+        "One extraction result must own all requested columns. "
+        "Attach a formatter to each extractor."
+    )
+
+
+def test_internal_specialist_tool_output_finds_formatter_cannot_complete():
+    events = [
+        {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "formatter_cannot_complete"},
+            "internal": {"tool_output": '{"status":"cannot_complete","reason":"no join"}'},
+        }
+    ]
+
+    assert _executor_module()._internal_specialist_tool_output_since(
+        {
+            "live_events": events,
+            "live_index": 0,
+            "collected_events": [],
+            "collected_index": 0,
+        },
+        tool_name="formatter_cannot_complete",
+    ) == '{"status":"cannot_complete","reason":"no join"}'
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -67,6 +109,45 @@ def _make_flow(nodes):
     }
     flow.name = "Test Flow"
     flow.id = "11111111-1111-1111-1111-111111111111"
+    return flow
+
+
+def _make_output_attachment_flow(nodes, *, source_node_id, output_node_id):
+    """Create a v1.1 flow with one formatter leaf and a continuing control path."""
+
+    flow = _make_flow(nodes)
+    output_node_ids = [output_node_id] if isinstance(output_node_id, str) else list(output_node_id)
+    output_node_id_set = set(output_node_ids)
+    for node in nodes:
+        if node["id"] in output_node_id_set:
+            node["type"] = "output"
+    control_nodes = [node for node in nodes if node["id"] not in output_node_id_set]
+    flow.flow_definition = {
+        "version": "1.1",
+        "nodes": nodes,
+        "edges": [
+            {
+                "id": f"control_{index}",
+                "source": control_nodes[index]["id"],
+                "target": control_nodes[index + 1]["id"],
+                "role": "control_flow",
+            }
+            for index in range(len(control_nodes) - 1)
+        ]
+        + [
+            {
+                "id": f"output_attachment_{index}",
+                "source": source_node_id,
+                "target": attached_output_node_id,
+                "role": "output_attachment",
+            }
+            for index, attached_output_node_id in enumerate(
+                output_node_ids,
+                start=1,
+            )
+        ],
+        "entry_node_id": control_nodes[0]["id"],
+    }
     return flow
 
 
@@ -1110,7 +1191,7 @@ class TestDbUserIdPropagation:
         flow = _make_flow([_agent_node("n1", "gene")])
         get_all_agent_tools(flow, db_user_id=77)
 
-        assert observed == [77]
+        assert observed == [77, 77]
         assert mock_get_agent.call_args.kwargs.get("db_user_id") == 77
 
     @patch("src.lib.flows.executor._create_streaming_tool")
@@ -2145,14 +2226,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         mock_streaming.side_effect = _make_streaming_tool
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _agent_node("n1", "gene", output_key="gene_output"),
             _agent_node(
                 "n2",
                 "csv_formatter",
                 custom_instructions="Use object rows and keep a compact CSV export.",
             ),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
 
         clear_collected_events()
         try:
@@ -2184,6 +2265,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
         runtime_context = "\n".join(formatter_kwargs["additional_runtime_context"])
         assert "FLOW FORMATTER SOURCE BUNDLE" in runtime_context
         assert "compact CSV export" in runtime_context
+        assert "filename_hint has already been resolved" in runtime_context
+        assert "A timestamp is included only when" in runtime_context
         assert execution_state["completed_steps"][-1]["agent_id"] == "csv_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
         assert "extraction_handoff_audit" not in execution_state["completed_steps"][-1]
@@ -2322,20 +2405,16 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_terminal_output_without_artifacts_fails_before_formatter_agent(
+    def test_legacy_terminal_output_without_binding_fails_before_formatter_agent(
         self, mock_get_agent, mock_streaming
     ):
-        """Terminal formatter steps with no artifacts must not call the formatter agent."""
+        """Legacy formatter control steps fail closed before agent construction."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         formatter_invocations = []
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str) -> str:
-                formatter_invocations.append((tool_name, query))
-                raise AssertionError("formatter agent must not run without saved artifacts")
-
-            return _tool
+            formatter_invocations.append((agent, tool_name))
+            raise AssertionError("legacy formatter agent must not be constructed")
 
         mock_streaming.side_effect = _make_streaming_tool
 
@@ -2345,25 +2424,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "chat_output_formatter",
         ):
             flow = _make_flow([_agent_node("n1", agent_id)])
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-
             with pytest.raises(
                 _executor_module().FlowTerminalOutputProjectionError,
-                match="no completed structured artifacts",
+                match="must be repaired as an output attachment",
             ):
-                asyncio.run(
-                    tools[0].on_invoke_tool(
-                        tool_ctx,
-                        json.dumps({"query": "format"}),
-                    )
-                )
-
-            assert execution_state["completed_steps"] == []
-            assert execution_state["next_tool_index"] == 0
+                get_all_agent_tools(flow, include_unavailable=True)
 
         assert formatter_invocations == []
 
@@ -3559,7 +3624,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         mock_streaming.side_effect = _make_streaming_tool
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
             _agent_node("n1", "gene", output_key="gene_output"),
             _agent_node(
@@ -3567,7 +3632,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "csv_formatter",
                 output_filename_template="{{input_filename_stem}}.csv",
             ),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
 
         tools, _ = get_all_agent_tools(flow, document_name="Smith et al. (2024).pdf")
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
@@ -5228,17 +5293,249 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["status"] == "completed"
 
     @pytest.mark.asyncio
+    async def test_preserves_multiple_file_outputs_and_reports_manifest(
+        self, monkeypatch
+    ):
+        flow = _make_output_attachment_flow([
+            _task_input_node(),
+            _agent_node("n1", "pdf_extraction", step_goal="Read document"),
+            _agent_node("n2", "csv_formatter", step_goal="Save CSV"),
+            _agent_node("n3", "json_formatter", step_goal="Save JSON"),
+        ], source_node_id="n1", output_node_id=["n2", "n3"])
+        pdf_step = {
+            "step": 1,
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "PDF specialist completed document access.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        formatter_steps = [
+            {
+                "step": 2,
+                "node_id": "n2",
+                "agent_id": "csv_formatter",
+                "agent_name": "CSV Formatter",
+                "tool_name": "ask_csv_formatter_specialist",
+                "output": '{"file_id": "file-csv"}',
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+            {
+                "step": 3,
+                "node_id": "n3",
+                "agent_id": "json_formatter",
+                "agent_name": "JSON Formatter",
+                "tool_name": "ask_json_formatter_specialist",
+                "output": (
+                    "Unable to create JSON because the bound extraction result "
+                    "does not contain the requested source fields."
+                ),
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+        ]
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_csv_formatter_specialist",
+                "ask_json_formatter_specialist",
+            ],
+        )
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            for formatter_step, file_id, filename, formatter_node_id in zip(
+                formatter_steps,
+                ("file-csv", "file-json"),
+                ("alleles.csv", "alleles.json"),
+                ("n2", "n3"),
+                strict=True,
+            ):
+                yield {
+                    "type": "FILE_READY",
+                    "details": {
+                        "file_id": file_id,
+                        "filename": filename,
+                        "download_url": f"/api/files/{file_id}/download",
+                        "formatter_node_id": formatter_node_id,
+                        "source_node_id": "n1",
+                    },
+                }
+                supervisor._flow_execution_state["completed_steps"].append(
+                    formatter_step
+                )
+                yield {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": formatter_step["tool_name"]},
+                }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        file_events = [event for event in events if event.get("type") == "FILE_READY"]
+        assert [event["details"]["file_id"] for event in file_events] == [
+            "file-csv",
+            "file-json",
+        ]
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["output_status"] == "complete"
+        assert flow_finished["data"]["output_count"] == 2
+        assert [output["file_id"] for output in flow_finished["data"]["outputs"]] == [
+            "file-csv",
+            "file-json",
+        ]
+
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_csv_formatter_specialist",
+                "ask_json_formatter_specialist",
+            ],
+        )
+
+        async def _fake_partial_run(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-2"}}
+            yield {
+                "type": "FILE_READY",
+                "details": {
+                    "file_id": "file-csv-only",
+                    "filename": "alleles.csv",
+                    "download_url": "/api/files/file-csv-only/download",
+                    "formatter_node_id": "n2",
+                    "source_node_id": "n1",
+                },
+            }
+            for formatter_step in formatter_steps:
+                supervisor._flow_execution_state["completed_steps"].append(
+                    formatter_step
+                )
+                yield {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": formatter_step["tool_name"]},
+                }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_partial_run,
+        )
+        partial_events = [
+            event
+            async for event in execute_flow(flow, user_id="u1", session_id="s2")
+        ]
+        partial_finished = next(
+            event for event in partial_events if event.get("type") == "FLOW_FINISHED"
+        )
+        assert partial_finished["data"]["status"] == "completed"
+        assert partial_finished["data"]["output_status"] == "partial"
+        assert partial_finished["data"]["output_count"] == 1
+        assert [
+            branch["status"]
+            for branch in partial_finished["data"]["output_branches"]
+        ] == ["completed", "missing"]
+        assert partial_finished["data"]["output_branches"][1]["failure_reason"] == (
+            "Unable to create JSON because the bound extraction result does not "
+            "contain the requested source fields."
+        )
+        assert any(
+            event.get("details", {}).get("reason") == "partial_formatter_outputs"
+            for event in partial_events
+        )
+        partial_warning = next(
+            event
+            for event in partial_events
+            if event.get("details", {}).get("reason") == "partial_formatter_outputs"
+        )
+        assert partial_warning["details"]["output_branches"][0][
+            "failure_reason"
+        ].startswith("Unable to create JSON")
+
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_csv_formatter_specialist",
+                "ask_json_formatter_specialist",
+            ],
+        )
+
+        async def _fake_cannot_complete_run(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-3"}}
+            for formatter_step in formatter_steps:
+                supervisor._flow_execution_state["completed_steps"].append(
+                    formatter_step
+                )
+                yield {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": formatter_step["tool_name"]},
+                }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_cannot_complete_run,
+        )
+        cannot_complete_events = [
+            event
+            async for event in execute_flow(flow, user_id="u1", session_id="s3")
+        ]
+        formatter_error = next(
+            event
+            for event in cannot_complete_events
+            if event.get("details", {}).get("reason") == "missing_formatter_outputs"
+        )
+        assert formatter_error["details"]["message"].startswith(
+            "Formatter could not create an output: Unable to create JSON"
+        )
+        cannot_complete_finished = next(
+            event
+            for event in cannot_complete_events
+            if event.get("type") == "FLOW_FINISHED"
+        )
+        assert cannot_complete_finished["data"]["status"] == "failed"
+        assert cannot_complete_finished["data"]["failure_reason"].startswith(
+            "Formatter could not create an output: Unable to create JSON"
+        )
+
+    @pytest.mark.asyncio
     async def test_formatter_and_handoff_events_complete_before_terminal_output(
         self, monkeypatch
     ):
         """Future handoff state must not overtake its runner completion event."""
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
             _agent_node("n1", "gene", step_goal="Extract genes"),
-            _agent_node("n2", "chat_output", step_goal="Summarize findings"),
+            _agent_node(
+                "n2",
+                "chat_output_formatter",
+                step_goal="Summarize findings",
+            ),
             _agent_node("n3", "curation_handoff", step_goal="Prepare review sessions"),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
         gene_step = _make_completed_step(
             agent_id="gene",
             agent_name="Gene",
@@ -5249,7 +5546,8 @@ class TestExecuteFlowTermination:
         )
         chat_step = {
             "step": 2,
-            "agent_id": "chat_output",
+            "node_id": "n2",
+            "agent_id": "chat_output_formatter",
             "agent_name": "Chat Output",
             "tool_name": "ask_chat_output_specialist",
             "output": "Found one supported gene.",
@@ -5432,6 +5730,109 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
         assert len(persisted_requests) == 1
         assert persisted_requests[0].agent_key == "gene"
+
+    @pytest.mark.asyncio
+    async def test_preserves_two_production_chat_formatter_branches(
+        self, monkeypatch
+    ):
+        flow = _make_output_attachment_flow(
+            [
+                _task_input_node(),
+                _agent_node("pdf", "pdf_extraction", step_goal="Read document"),
+                _agent_node("chat-a", "chat_output_formatter"),
+                _agent_node("chat-b", "chat_output_formatter"),
+            ],
+            source_node_id="pdf",
+            output_node_id=["chat-a", "chat-b"],
+        )
+        pdf_step = {
+            "step": 1,
+            "node_id": "pdf",
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "Document read.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        chat_steps = [
+            {
+                "step": 2,
+                "node_id": "chat-a",
+                "agent_id": "chat_output_formatter",
+                "agent_name": "Chat Output A",
+                "tool_name": "ask_chat_output_formatter_specialist",
+                "output": "Allele summary",
+                "projected_chat_output": "Allele summary",
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+            {
+                "step": 3,
+                "node_id": "chat-b",
+                "agent_id": "chat_output_formatter",
+                "agent_name": "Chat Output B",
+                "tool_name": "ask_chat_output_formatter_specialist_step_3",
+                "output": "Gene summary",
+                "projected_chat_output": "Gene summary",
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+        ]
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_chat_output_formatter_specialist",
+                "ask_chat_output_formatter_specialist_step_3",
+            ],
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-chat"}}
+            for chat_step in chat_steps:
+                supervisor._flow_execution_state["completed_steps"].append(chat_step)
+                yield {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": chat_step["tool_name"]},
+                }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        chat_events = [
+            event for event in events if event.get("type") == "CHAT_OUTPUT_READY"
+        ]
+        assert [event["details"]["output"] for event in chat_events] == [
+            "Allele summary",
+            "Gene summary",
+        ]
+        assert [event["details"]["formatter_node_id"] for event in chat_events] == [
+            "chat-a",
+            "chat-b",
+        ]
+        flow_finished = next(
+            event for event in events if event.get("type") == "FLOW_FINISHED"
+        )
+        assert flow_finished["data"]["output_status"] == "complete"
+        assert flow_finished["data"]["output_count"] == 2
 
     @pytest.mark.asyncio
     async def test_fails_when_expected_extraction_step_has_no_candidate(self, monkeypatch):

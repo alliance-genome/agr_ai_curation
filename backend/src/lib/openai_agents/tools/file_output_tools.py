@@ -7,6 +7,7 @@ one downloadable file for the session/descriptor/format identity.
 """
 
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -14,7 +15,13 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.lib.flows.output_projection import FlowOutputProjectionResult
-from src.lib.file_outputs.storage import FileOutputStorageService
+from src.lib.file_outputs.storage import FileOutputStorageService, sanitize_output_descriptor
+from src.lib.openai_agents.config import (
+    get_flow_output_branch_descriptor_prefix_chars,
+    get_flow_output_branch_identity_hash_chars,
+    get_flow_output_branch_node_suffix_chars,
+    get_flow_output_branch_storage_descriptor_chars,
+)
 from src.models.sql.database import SessionLocal
 from src.models.sql.file_output import FileOutput
 from ..models import FileInfo
@@ -82,6 +89,7 @@ def _find_existing_projected_file_output(
     file_type: str,
     descriptor: str,
     file_path: str,
+    branch_identity: str | None,
 ) -> FileOutput | None:
     """Find one structured formatter row by canonical session/descriptor/format identity."""
 
@@ -91,7 +99,13 @@ def _find_existing_projected_file_output(
         .one_or_none()
     )
     if file_output is not None:
-        return file_output
+        metadata = file_output.file_metadata or {}
+        if branch_identity is None or (
+            isinstance(metadata, dict)
+            and str(metadata.get("flow_output_branch_identity") or "")
+            == branch_identity
+        ):
+            return file_output
 
     candidates = (
         db.query(FileOutput)
@@ -110,6 +124,11 @@ def _find_existing_projected_file_output(
         if (
             metadata.get("structured_projection") is True
             and str(metadata.get("descriptor") or "") == descriptor
+            and (
+                branch_identity is None
+                or str(metadata.get("flow_output_branch_identity") or "")
+                == branch_identity
+            )
         ):
             return candidate
     return None
@@ -182,6 +201,36 @@ async def save_projected_file_output(
         curator_id,
     )
     descriptor = _resolve_output_descriptor(filename_hint)
+    from src.lib.context import get_current_flow_output_attachment
+
+    flow_output_attachment = get_current_flow_output_attachment() or {}
+    formatter_node_id = str(
+        flow_output_attachment.get("formatter_node_id") or ""
+    ).strip()
+    flow_run_id = str(flow_output_attachment.get("flow_run_id") or "").strip()
+    branch_identity = (
+        f"{flow_run_id or effective_trace_id}:{formatter_node_id}"
+        if formatter_node_id
+        else None
+    )
+    storage_descriptor = descriptor
+    if formatter_node_id:
+        identity_hash = hashlib.sha256(
+            f"{descriptor}\0{branch_identity}".encode("utf-8")
+        ).hexdigest()[:get_flow_output_branch_identity_hash_chars()]
+        descriptor_prefix = sanitize_output_descriptor(
+            descriptor,
+            max_length=get_flow_output_branch_descriptor_prefix_chars(),
+        )
+        node_suffix = sanitize_output_descriptor(
+            formatter_node_id,
+            max_length=get_flow_output_branch_node_suffix_chars(),
+        )
+        storage_descriptor = (
+            f"{descriptor_prefix}_{node_suffix}_{identity_hash}"[
+                :get_flow_output_branch_storage_descriptor_chars()
+            ].strip("_-")
+        )
     content = _projection_content_for_file_type(
         output_format=normalized_format,
         projection=projection,
@@ -193,7 +242,7 @@ async def save_projected_file_output(
         session_id=effective_session_id,
         content=content,
         file_type=normalized_format,  # type: ignore[arg-type]
-        descriptor=descriptor,
+        descriptor=storage_descriptor,
         stable_filename=True,
     )
 
@@ -210,7 +259,33 @@ async def save_projected_file_output(
             file_type=normalized_format,
             descriptor=descriptor,
             file_path=str(file_path),
+            branch_identity=branch_identity,
         )
+        projection_summary = {
+            "format": normalized_format,
+            "row_source": projection.row_source,
+            "row_count": projection.total_count,
+            "column_keys": [column.key for column in projection.columns],
+            "truncated": projection.truncated,
+        }
+        branch_metadata = {
+            key: value
+            for key, value in flow_output_attachment.items()
+            if value
+            and key
+            in {
+                "flow_id",
+                "flow_run_id",
+                "formatter_node_id",
+                "source_node_id",
+                "document_id",
+                "formatter_label",
+                "source_label",
+                "source_extraction_result_ids",
+                "source_keys",
+                "source_envelope_ids",
+            }
+        }
         if file_output is None:
             file_output = FileOutput(
                 filename=full_filename,
@@ -225,6 +300,10 @@ async def save_projected_file_output(
                 file_metadata={
                     "structured_projection": True,
                     "descriptor": descriptor,
+                    "storage_descriptor": storage_descriptor,
+                    "flow_output_branch_identity": branch_identity,
+                    "projection_summary": projection_summary,
+                    **branch_metadata,
                 },
             )
             db.add(file_output)
@@ -244,6 +323,10 @@ async def save_projected_file_output(
                 {
                     "structured_projection": True,
                     "descriptor": descriptor,
+                    "storage_descriptor": storage_descriptor,
+                    "flow_output_branch_identity": branch_identity,
+                    "projection_summary": projection_summary,
+                    **branch_metadata,
                 }
             )
             file_output.file_metadata = metadata
@@ -284,5 +367,19 @@ async def save_projected_file_output(
         trace_id=effective_trace_id,
         session_id=effective_session_id,
         curator_id=effective_curator_id,
+        flow_id=flow_output_attachment.get("flow_id") or None,
+        flow_run_id=flow_output_attachment.get("flow_run_id") or None,
+        formatter_node_id=formatter_node_id or None,
+        source_node_id=flow_output_attachment.get("source_node_id") or None,
+        formatter_label=flow_output_attachment.get("formatter_label") or None,
+        source_label=flow_output_attachment.get("source_label") or None,
+        source_extraction_result_ids=list(
+            flow_output_attachment.get("source_extraction_result_ids") or []
+        ),
+        source_keys=list(flow_output_attachment.get("source_keys") or []),
+        source_envelope_ids=list(
+            flow_output_attachment.get("source_envelope_ids") or []
+        ),
+        document_id=flow_output_attachment.get("document_id") or None,
     )
     return file_info.model_dump(mode="json")

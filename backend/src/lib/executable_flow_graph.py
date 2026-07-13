@@ -1,8 +1,9 @@
 """Canonical projection and validation of executable flow topology.
 
-Only ``control_flow`` edges participate in execution topology. Validator
-attachments are ordered sidecars of their source step and never become entries,
-exits, executable steps, branches, joins, or disconnected control nodes.
+Only ``control_flow`` edges participate in the main execution topology.
+Validator attachments are sidecars of their source step. Output attachments are
+terminal leaves scheduled immediately after their bound source step. Neither
+attachment role creates a control-flow branch, join, entry, or exit.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any, Mapping, Sequence
 
 from src.lib.flow_edge_roles import (
     CONTROL_FLOW_EDGE_ROLE,
+    OUTPUT_ATTACHMENT_EDGE_ROLE,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
 )
 
@@ -44,6 +46,18 @@ class ValidationSidecar:
 
 
 @dataclass(frozen=True)
+class OutputAttachment:
+    """A terminal formatter bound to one control-step extraction result."""
+
+    edge_id: str
+    source_node_id: str
+    output_node_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ExecutableFlowGraph:
     """Canonical executable projection shared by all backend consumers."""
 
@@ -53,6 +67,7 @@ class ExecutableFlowGraph:
     entry_node_ids: tuple[str, ...]
     exit_node_ids: tuple[str, ...]
     terminal_node_ids: tuple[str, ...]
+    output_attachments: tuple[OutputAttachment, ...]
     validation_sidecars: tuple[ValidationSidecar, ...]
     issues: tuple[ExecutableFlowIssue, ...]
 
@@ -67,6 +82,13 @@ class ExecutableFlowGraph:
             if sidecar.source_node_id == source_node_id
         )
 
+    def outputs_for(self, source_node_id: str) -> tuple[OutputAttachment, ...]:
+        return tuple(
+            attachment
+            for attachment in self.output_attachments
+            if attachment.source_node_id == source_node_id
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "valid": self.valid,
@@ -76,6 +98,9 @@ class ExecutableFlowGraph:
             "entry_node_ids": list(self.entry_node_ids),
             "exit_node_ids": list(self.exit_node_ids),
             "terminal_node_ids": list(self.terminal_node_ids),
+            "output_attachments": [
+                attachment.to_dict() for attachment in self.output_attachments
+            ],
             "validation_sidecars": [sidecar.to_dict() for sidecar in self.validation_sidecars],
             "issues": [issue.to_dict() for issue in self.issues],
         }
@@ -144,22 +169,48 @@ def project_executable_flow_graph(
         str(node.get("id")) for node in nodes if str(node.get("id") or "").strip()
     )
     node_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
+    flow_version = str(flow.get("version") or "1.0")
 
     control_edges = [
         edge
         for edge in edges
         if str(edge.get("role") or CONTROL_FLOW_EDGE_ROLE) == CONTROL_FLOW_EDGE_ROLE
     ]
-    attachment_edges = [
+    validation_attachment_edges = [
         edge
         for edge in edges
         if str(edge.get("role") or CONTROL_FLOW_EDGE_ROLE)
         == VALIDATION_ATTACHMENT_EDGE_ROLE
     ]
-    sidecar_target_ids = {
-        str(edge.get("target")) for edge in attachment_edges if edge.get("target")
+    output_attachment_edges = [
+        edge
+        for edge in edges
+        if str(edge.get("role") or CONTROL_FLOW_EDGE_ROLE)
+        == OUTPUT_ATTACHMENT_EDGE_ROLE
+    ]
+    validation_target_ids = {
+        str(edge.get("target"))
+        for edge in validation_attachment_edges
+        if edge.get("target")
     }
-    control_node_ids = tuple(node_id for node_id in node_ids if node_id not in sidecar_target_ids)
+    declared_output_node_ids = {
+        node_id
+        for node_id, node in node_by_id.items()
+        if node.get("type") == "output"
+    }
+    output_target_ids = {
+        str(edge.get("target"))
+        for edge in output_attachment_edges
+        if edge.get("target")
+    }
+    cross_role_target_ids = validation_target_ids & output_target_ids
+    detached_output_node_ids = (
+        declared_output_node_ids if flow_version == "1.1" else output_target_ids
+    )
+    attachment_target_ids = validation_target_ids | detached_output_node_ids
+    control_node_ids = tuple(
+        node_id for node_id in node_ids if node_id not in attachment_target_ids
+    )
     control_node_set = set(control_node_ids)
 
     outgoing: dict[str, list[Mapping[str, Any]]] = {
@@ -170,21 +221,47 @@ def project_executable_flow_graph(
     }
     issues: list[ExecutableFlowIssue] = []
 
+    for node_id in sorted(cross_role_target_ids):
+        issues.append(
+            ExecutableFlowIssue(
+                code="attachment_target_role_conflict",
+                message=(
+                    f"Node '{node_id}' cannot be both an output attachment and a "
+                    "validation attachment target"
+                ),
+                node_ids=(node_id,),
+                edge_ids=tuple(
+                    str(edge.get("id") or "")
+                    for edge in (*output_attachment_edges, *validation_attachment_edges)
+                    if str(edge.get("target") or "") == node_id
+                ),
+            )
+        )
+
     for edge in control_edges:
         source = str(edge.get("source") or "")
         target = str(edge.get("target") or "")
         edge_id = str(edge.get("id") or "")
         if source not in control_node_set or target not in control_node_set:
-            sidecar_ids = tuple(
-                node_id for node_id in (source, target) if node_id in sidecar_target_ids
+            validation_ids = tuple(
+                node_id for node_id in (source, target) if node_id in validation_target_ids
             )
+            output_ids = tuple(
+                node_id for node_id in (source, target) if node_id in detached_output_node_ids
+            )
+            if output_ids:
+                code = "output_in_control_flow"
+                message = "Output nodes cannot participate in control_flow edges"
+                attached_ids = output_ids
+            else:
+                code = "sidecar_in_control_flow"
+                message = "Validation sidecar nodes cannot participate in control_flow edges"
+                attached_ids = validation_ids
             issues.append(
                 ExecutableFlowIssue(
-                    code="sidecar_in_control_flow",
-                    message=(
-                        "Validation sidecar nodes cannot participate in control_flow edges"
-                    ),
-                    node_ids=sidecar_ids,
+                    code=code,
+                    message=message,
+                    node_ids=attached_ids,
                     edge_ids=(edge_id,) if edge_id else (),
                 )
             )
@@ -332,9 +409,101 @@ def project_executable_flow_graph(
             )
         )
 
+    output_attachments: list[OutputAttachment] = []
+    output_edge_ids_by_target: dict[str, str] = {}
+    if flow_version != "1.1" and output_attachment_edges:
+        issues.append(
+            ExecutableFlowIssue(
+                code="output_attachment_requires_v1_1",
+                message="output_attachment edges require flow schema version '1.1'",
+                edge_ids=tuple(
+                    str(edge.get("id") or "") for edge in output_attachment_edges
+                ),
+            )
+        )
+
+    for edge in output_attachment_edges:
+        source = str(edge.get("source") or "")
+        target = str(edge.get("target") or "")
+        edge_id = str(edge.get("id") or "")
+        source_node = node_by_id.get(source, {})
+        target_node = node_by_id.get(target, {})
+        if source not in control_node_set:
+            issues.append(
+                ExecutableFlowIssue(
+                    code="invalid_output_source",
+                    message=(
+                        f"Output attachment '{edge_id}' must originate from a "
+                        "control-flow extraction node"
+                    ),
+                    node_ids=tuple(node_id for node_id in (source, target) if node_id),
+                    edge_ids=(edge_id,) if edge_id else (),
+                )
+            )
+        if target_node.get("type") != "output":
+            issues.append(
+                ExecutableFlowIssue(
+                    code="invalid_output_target",
+                    message=(
+                        f"Output attachment '{edge_id}' must target a node with type 'output'"
+                    ),
+                    node_ids=(target,) if target else (),
+                    edge_ids=(edge_id,) if edge_id else (),
+                )
+            )
+        if source_node.get("type") == "output":
+            issues.append(
+                ExecutableFlowIssue(
+                    code="output_from_output",
+                    message="Output nodes cannot own other output attachments",
+                    node_ids=tuple(node_id for node_id in (source, target) if node_id),
+                    edge_ids=(edge_id,) if edge_id else (),
+                )
+            )
+        prior_edge_id = output_edge_ids_by_target.get(target)
+        if prior_edge_id:
+            issues.append(
+                ExecutableFlowIssue(
+                    code="multiple_output_sources",
+                    message=(
+                        f"Output node '{target}' must be attached to exactly one source"
+                    ),
+                    node_ids=(target,),
+                    edge_ids=(prior_edge_id, edge_id),
+                )
+            )
+        elif target:
+            output_edge_ids_by_target[target] = edge_id
+        output_attachments.append(
+            OutputAttachment(
+                edge_id=edge_id,
+                source_node_id=source,
+                output_node_id=target,
+            )
+        )
+
+    if flow_version == "1.1":
+        missing_output_bindings = tuple(
+            node_id
+            for node_id in node_ids
+            if node_id in declared_output_node_ids
+            and node_id not in output_edge_ids_by_target
+        )
+        for node_id in missing_output_bindings:
+            issues.append(
+                ExecutableFlowIssue(
+                    code="missing_output_binding",
+                    message=(
+                        f"Output node '{node_id}' must be attached to exactly one "
+                        "control-flow extraction node"
+                    ),
+                    node_ids=(node_id,),
+                )
+            )
+
     validation_sidecars: list[ValidationSidecar] = []
     seen_bindings: dict[tuple[str, str], str] = {}
-    for edge in attachment_edges:
+    for edge in validation_attachment_edges:
         source = str(edge.get("source") or "")
         target = str(edge.get("target") or "")
         edge_id = str(edge.get("id") or "")
@@ -368,12 +537,29 @@ def project_executable_flow_graph(
             )
         )
 
-    executable_ids = tuple(
-        node_id
-        for node_id in ordered_control
-        if node_by_id[node_id].get("type", "agent") != "task_input"
-        and _mapping(node_by_id[node_id].get("data")).get("agent_id")
-        not in ("task_input", "supervisor")
+    output_ids_by_source: dict[str, list[str]] = {}
+    for attachment in output_attachments:
+        output_ids_by_source.setdefault(attachment.source_node_id, []).append(
+            attachment.output_node_id
+        )
+
+    executable_ids_list: list[str] = []
+    for node_id in ordered_control:
+        if (
+            node_by_id[node_id].get("type", "agent") != "task_input"
+            and _mapping(node_by_id[node_id].get("data")).get("agent_id")
+            not in ("task_input", "supervisor")
+        ):
+            executable_ids_list.append(node_id)
+        executable_ids_list.extend(output_ids_by_source.get(node_id, ()))
+    executable_ids = tuple(executable_ids_list)
+    terminal_node_ids = tuple(
+        dict.fromkeys(
+            (
+                *exit_node_ids,
+                *(attachment.output_node_id for attachment in output_attachments),
+            )
+        )
     )
     graph = ExecutableFlowGraph(
         control_node_ids=control_node_ids,
@@ -381,7 +567,8 @@ def project_executable_flow_graph(
         ordered_executable_node_ids=executable_ids,
         entry_node_ids=entry_node_ids,
         exit_node_ids=exit_node_ids,
-        terminal_node_ids=exit_node_ids,
+        terminal_node_ids=terminal_node_ids,
+        output_attachments=tuple(output_attachments),
         validation_sidecars=tuple(validation_sidecars),
         issues=tuple(issues),
     )
@@ -394,6 +581,7 @@ __all__ = [
     "ExecutableFlowGraph",
     "ExecutableFlowIssue",
     "ExecutableFlowTopologyError",
+    "OutputAttachment",
     "ValidationSidecar",
     "project_executable_flow_graph",
 ]

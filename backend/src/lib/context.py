@@ -32,6 +32,10 @@ _current_output_filename_stem: ContextVar[Optional[str]] = ContextVar(
     'output_filename_stem',
     default=None,
 )
+_current_flow_output_attachment: ContextVar[Optional[dict[str, Any]]] = ContextVar(
+    'flow_output_attachment',
+    default=None,
+)
 # RunConfig for the current request (carries trace metadata and, on chat paths, the
 # per-request warm websocket provider). Flow helpers may clone it onto step-owned
 # providers so each step has an explicit transport lifecycle.
@@ -119,6 +123,29 @@ def reset_current_output_filename_stem(token: Token[Optional[str]]) -> None:
     _current_output_filename_stem.reset(token)
 
 
+def set_current_flow_output_attachment(
+    attachment: Optional[dict[str, Any]],
+) -> Token[Optional[dict[str, Any]]]:
+    """Set branch identity/provenance for the current flow formatter invocation."""
+
+    return _current_flow_output_attachment.set(dict(attachment) if attachment else None)
+
+
+def get_current_flow_output_attachment() -> Optional[dict[str, Any]]:
+    """Return a copy of the current flow formatter branch metadata."""
+
+    attachment = _current_flow_output_attachment.get()
+    return dict(attachment) if attachment else None
+
+
+def reset_current_flow_output_attachment(
+    token: Token[Optional[dict[str, Any]]],
+) -> None:
+    """Reset flow formatter branch metadata using its ContextVar token."""
+
+    _current_flow_output_attachment.reset(token)
+
+
 def set_current_run_config(run_config: Any) -> Token[Optional[Any]]:
     """Set the current request's RunConfig.
 
@@ -148,4 +175,5 @@ def clear_context() -> None:
     _current_session_id.set(None)
     _current_user_id.set(None)
     _current_output_filename_stem.set(None)
+    _current_flow_output_attachment.set(None)
     _current_run_config.set(None)

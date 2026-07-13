@@ -376,6 +376,22 @@ describe('BatchPage', () => {
                 document_title: 'Alpha paper',
                 position: 1,
                 status: 'completed',
+                result_file_path: '/api/files/file-csv/download',
+                result_files: [
+                  {
+                    file_id: 'file-csv',
+                    filename: 'alleles.csv',
+                    format: 'csv',
+                    download_url: '/api/files/file-csv/download',
+                  },
+                  {
+                    file_id: 'file-json',
+                    filename: 'genes.json',
+                    format: 'json',
+                    download_url: '/api/files/file-json/download',
+                  },
+                ],
+                output_status: 'partial',
                 processing_time_ms: 42,
                 trace_id: 'trace-batch-doc-1',
               },
@@ -392,6 +408,9 @@ describe('BatchPage', () => {
     const evidenceFlowLabels = await screen.findAllByText('Evidence Flow')
     fireEvent.click(evidenceFlowLabels[evidenceFlowLabels.length - 1])
     await screen.findByText('Batch Complete')
+    expect(screen.getByText('Partial output · alleles.csv · genes.json')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download alleles.csv' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download genes.json' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'document actions' }))
     fireEvent.click(await screen.findByText('Provide Feedback'))

@@ -50,6 +50,27 @@ const multiSidecarFlow = (): {
   ],
 })
 
+const multiOutputAttachmentFlow = (): {
+  nodes: FlowNodeDefinition[]
+  edges: FlowEdgeDefinition[]
+} => ({
+  nodes: [
+    node('task', 'task_input', 'task_input'),
+    node('general', 'pdf_extraction'),
+    node('gene', 'gene_extractor'),
+    node('allele', 'allele_extractor'),
+    node('general_csv', 'csv_formatter', 'output'),
+    node('allele_tsv', 'tsv_formatter', 'output'),
+  ],
+  edges: [
+    edge('control_1', 'task', 'general'),
+    edge('control_2', 'general', 'gene'),
+    edge('control_3', 'gene', 'allele'),
+    edge('output_1', 'general', 'general_csv', { role: 'output_attachment' }),
+    edge('output_2', 'allele', 'allele_tsv', { role: 'output_attachment' }),
+  ],
+})
+
 describe('projectExecutableFlowGraph', () => {
   it('keeps distinct validator sidecars outside the sequential control path', () => {
     const flow = multiSidecarFlow()
@@ -64,6 +85,90 @@ describe('projectExecutableFlowGraph', () => {
       'symbol',
       'identifier',
     ])
+  })
+
+  it('projects formatter attachments as terminal leaves without control branching', () => {
+    const flow = multiOutputAttachmentFlow()
+    const graph = projectExecutableFlowGraph(flow.nodes, flow.edges, 'task', '1.1')
+
+    expect(graph.valid).toBe(true)
+    expect(graph.ordered_control_node_ids).toEqual(['task', 'general', 'gene', 'allele'])
+    expect(graph.ordered_executable_node_ids).toEqual([
+      'general',
+      'general_csv',
+      'gene',
+      'allele',
+      'allele_tsv',
+    ])
+    expect(graph.exit_node_ids).toEqual(['allele'])
+    expect(graph.terminal_node_ids).toEqual(['allele', 'general_csv', 'allele_tsv'])
+    expect(graph.output_attachments).toEqual([
+      {
+        edge_id: 'output_1',
+        source_node_id: 'general',
+        output_node_id: 'general_csv',
+      },
+      {
+        edge_id: 'output_2',
+        source_node_id: 'allele',
+        output_node_id: 'allele_tsv',
+      },
+    ])
+  })
+
+  it('reports missing, duplicate, and legacy output bindings', () => {
+    const missing = multiOutputAttachmentFlow()
+    missing.edges.pop()
+    expect(projectExecutableFlowGraph(
+      missing.nodes,
+      missing.edges,
+      'task',
+      '1.1',
+    ).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_output_binding' }),
+    ]))
+
+    const duplicate = multiOutputAttachmentFlow()
+    duplicate.edges.push(edge(
+      'output_duplicate',
+      'gene',
+      'general_csv',
+      { role: 'output_attachment' },
+    ))
+    expect(projectExecutableFlowGraph(
+      duplicate.nodes,
+      duplicate.edges,
+      'task',
+      '1.1',
+    ).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'multiple_output_sources' }),
+    ]))
+
+    const legacy = multiOutputAttachmentFlow()
+    expect(projectExecutableFlowGraph(
+      legacy.nodes,
+      legacy.edges,
+      'task',
+      '1.0',
+    ).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'output_attachment_requires_v1_1' }),
+    ]))
+
+    const crossRole = multiOutputAttachmentFlow()
+    crossRole.edges.push(edge(
+      'validation_output_collision',
+      'general',
+      'general_csv',
+      { role: 'validation_attachment' },
+    ))
+    expect(projectExecutableFlowGraph(
+      crossRole.nodes,
+      crossRole.edges,
+      'task',
+      '1.1',
+    ).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'attachment_target_role_conflict' }),
+    ]))
   })
 
   it('reports the same stable branch, terminal, and disconnected reasons', () => {

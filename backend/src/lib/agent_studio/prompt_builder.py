@@ -758,7 +758,7 @@ This tool returns:
 1. **Initial Instructions** (REQUIRED FIRST STEP) - Define the curation task
 2. **Extraction/Verification agents** - Process the document
 3. **Automatic validation** - Domain-pack metadata and curator selections schedule active validators through runtime dispatch after extraction
-4. **Output agent** (if exporting data) - Shape runtime-owned projections as CSV, TSV, JSON, or chat
+4. **Output branches** (if exporting data) - Attach each CSV, TSV, JSON, or chat formatter directly to exactly one extraction node
 
 Each step receives the flow task, loaded document context, selected agent, and
 that node's custom instructions. Do not recommend custom input templates or
@@ -774,6 +774,10 @@ prompts.
 **When exporting to file (CSV/TSV/JSON):**
 - The Initial Instructions should define WHAT data to collect
 - Domain envelopes define the semantic objects; review rows and files are projections from those objects
+- Every formatter is a terminal output branch bound to one extraction result; it does not merge data from multiple extractors
+- Multiple formatters may attach to one extractor, and a flow may attach formatters to different extractors; each branch produces its own independent artifact
+- The ordinary control-flow chain may continue after an output branch. Do not describe an output attachment as passing data into the next extraction step
+- Filename metadata is runtime-owned. Use output_filename_template with built-ins such as {{input_filename_stem}} and {{timestamp}}; do not require document names or timestamps to exist as extraction fields
 - The formatter agent (chat_output, csv_formatter, tsv_formatter, json_formatter) should define HOW to present projected data
 - Formatter custom instructions should specify column headers, row source, filters, sorting, grouping, and omitted fields when needed
 - The runtime owns extraction, projection, serialization, file saving, and chat rendering; do not recommend model-authored file contents
@@ -783,7 +787,7 @@ prompts.
 2. **PDF Extraction**: Extract relevant sections
 3. **Allele Extraction**: Produce domain-envelope allele objects with field paths and schema/provider refs
 4. **Automatic Validation**: Scheduled validators write findings and lookup attempts back into the envelope
-5. **CSV Formatter**: "Export with columns: parent_gene, allele_id, phenotype"
+5. **CSV Formatter branch attached to Allele Extraction**: "Export with columns: parent_gene, allele_id, phenotype"
 </flow_design_guidance>
 
 <output_format>

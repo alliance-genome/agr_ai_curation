@@ -26,6 +26,13 @@ export interface FileInfo {
   mime_type?: string
   download_url: string
   created_at?: string
+  formatter_node_id?: string
+  source_node_id?: string
+  formatter_label?: string
+  source_label?: string
+  source_extraction_result_ids?: string[]
+  source_keys?: string[]
+  source_envelope_ids?: string[]
 }
 
 interface FileDownloadCardProps {
@@ -213,6 +220,15 @@ function FileDownloadCard({
                   </Typography>
                 )}
               </Box>
+              {(file.formatter_label || file.source_label) && (
+                <Typography
+                  variant="caption"
+                  sx={{ color: 'text.secondary', display: 'block', mt: 0.25 }}
+                >
+                  {file.formatter_label ?? 'Formatter'}
+                  {file.source_label ? ` · from ${file.source_label}` : ''}
+                </Typography>
+              )}
             </Box>
 
             {/* Download button */}

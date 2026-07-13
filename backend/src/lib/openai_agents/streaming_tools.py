@@ -5152,6 +5152,11 @@ async def run_specialist_with_events(
                                             "mime_type": output_data.get("mime_type"),
                                             "download_url": output_data.get("download_url"),
                                             "created_at": output_data.get("created_at"),
+                                            "flow_id": output_data.get("flow_id"),
+                                            "flow_run_id": output_data.get("flow_run_id"),
+                                            "formatter_node_id": output_data.get("formatter_node_id"),
+                                            "source_node_id": output_data.get("source_node_id"),
+                                            "document_id": output_data.get("document_id"),
                                         }
                                     })
                             except (json.JSONDecodeError, TypeError, AttributeError) as e:

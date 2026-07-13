@@ -18,6 +18,14 @@ import type {
   RescueState,
 } from './types'
 
+export function mergeFlowChatOutputs(existing: string, nextOutput: string): string {
+  const normalizedExisting = existing.trim()
+  const normalizedNext = nextOutput.trim()
+  if (!normalizedExisting) return normalizedNext
+  if (!normalizedNext) return normalizedExisting
+  return `${normalizedExisting}\n\n${normalizedNext}`
+}
+
 export function withUpdatedReviewAndCurateSessionId(
   messages: Message[],
   messageId: string,

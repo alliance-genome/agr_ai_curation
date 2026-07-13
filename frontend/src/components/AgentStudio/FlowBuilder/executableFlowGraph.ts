@@ -15,6 +15,12 @@ export interface ExecutableValidationSidecar {
   replaces_attachment_id?: string
 }
 
+export interface ExecutableOutputAttachment {
+  edge_id: string
+  source_node_id: string
+  output_node_id: string
+}
+
 export interface ExecutableFlowGraph {
   valid: boolean
   control_node_ids: string[]
@@ -23,6 +29,7 @@ export interface ExecutableFlowGraph {
   entry_node_ids: string[]
   exit_node_ids: string[]
   terminal_node_ids: string[]
+  output_attachments: ExecutableOutputAttachment[]
   validation_sidecars: ExecutableValidationSidecar[]
   issues: ExecutableFlowIssue[]
 }
@@ -45,23 +52,48 @@ export const projectExecutableFlowGraph = (
   nodes: ProjectableNode[],
   edges: ProjectableEdge[],
   declaredEntry: string,
+  flowVersion: '1.0' | '1.1' = '1.0',
 ): ExecutableFlowGraph => {
-  const attachmentEdges = edges.filter(edge => edge.role === 'validation_attachment')
+  const validationAttachmentEdges = edges.filter(edge => edge.role === 'validation_attachment')
+  const outputAttachmentEdges = edges.filter(edge => edge.role === 'output_attachment')
   const controlEdges = edges.filter(edge => (edge.role ?? 'control_flow') === 'control_flow')
-  const sidecarTargets = new Set(attachmentEdges.map(edge => edge.target))
-  const controlNodes = nodes.filter(node => !sidecarTargets.has(node.id))
+  const validationTargets = new Set(validationAttachmentEdges.map(edge => edge.target))
+  const declaredOutputIds = new Set(
+    nodes.filter(node => node.type === 'output').map(node => node.id),
+  )
+  const outputTargets = new Set(outputAttachmentEdges.map(edge => edge.target))
+  const crossRoleTargets = [...validationTargets].filter(nodeId => outputTargets.has(nodeId))
+  const detachedOutputIds = flowVersion === '1.1' ? declaredOutputIds : outputTargets
+  const controlNodes = nodes.filter(
+    node => !validationTargets.has(node.id) && !detachedOutputIds.has(node.id),
+  )
   const controlIds = controlNodes.map(node => node.id)
   const controlSet = new Set(controlIds)
   const outgoing = new Map(controlIds.map(id => [id, [] as ProjectableEdge[]]))
   const incoming = new Map(controlIds.map(id => [id, [] as ProjectableEdge[]]))
   const issues: ExecutableFlowIssue[] = []
 
+  crossRoleTargets.sort().forEach(nodeId => {
+    issues.push(issue(
+      'attachment_target_role_conflict',
+      `Node '${nodeId}' cannot be both an output attachment and a validation attachment target`,
+      [nodeId],
+      [...outputAttachmentEdges, ...validationAttachmentEdges]
+        .filter(edge => edge.target === nodeId)
+        .map(edge => edge.id),
+    ))
+  })
+
   controlEdges.forEach(edge => {
     if (!controlSet.has(edge.source) || !controlSet.has(edge.target)) {
+      const outputIds = [edge.source, edge.target].filter(id => detachedOutputIds.has(id))
+      const validationIds = [edge.source, edge.target].filter(id => validationTargets.has(id))
       issues.push(issue(
-        'sidecar_in_control_flow',
-        'Validation sidecar nodes cannot participate in control_flow edges',
-        [edge.source, edge.target].filter(id => sidecarTargets.has(id)),
+        outputIds.length > 0 ? 'output_in_control_flow' : 'sidecar_in_control_flow',
+        outputIds.length > 0
+          ? 'Output nodes cannot participate in control_flow edges'
+          : 'Validation sidecar nodes cannot participate in control_flow edges',
+        outputIds.length > 0 ? outputIds : validationIds,
         [edge.id],
       ))
       return
@@ -172,8 +204,74 @@ export const projectExecutableFlowGraph = (
   }
 
   const nodeById = new Map(nodes.map(node => [node.id, node]))
+  const outputAttachments: ExecutableOutputAttachment[] = []
+  const outputEdgeByTarget = new Map<string, string>()
+  if (flowVersion !== '1.1' && outputAttachmentEdges.length > 0) {
+    issues.push(issue(
+      'output_attachment_requires_v1_1',
+      "output_attachment edges require flow schema version '1.1'",
+      [],
+      outputAttachmentEdges.map(edge => edge.id),
+    ))
+  }
+  outputAttachmentEdges.forEach(edge => {
+    const sourceNode = nodeById.get(edge.source)
+    const targetNode = nodeById.get(edge.target)
+    if (!controlSet.has(edge.source)) {
+      issues.push(issue(
+        'invalid_output_source',
+        `Output attachment '${edge.id}' must originate from a control-flow extraction node`,
+        [edge.source, edge.target].filter(Boolean),
+        [edge.id],
+      ))
+    }
+    if (targetNode?.type !== 'output') {
+      issues.push(issue(
+        'invalid_output_target',
+        `Output attachment '${edge.id}' must target a node with type 'output'`,
+        [edge.target],
+        [edge.id],
+      ))
+    }
+    if (sourceNode?.type === 'output') {
+      issues.push(issue(
+        'output_from_output',
+        'Output nodes cannot own other output attachments',
+        [edge.source, edge.target],
+        [edge.id],
+      ))
+    }
+    const priorEdge = outputEdgeByTarget.get(edge.target)
+    if (priorEdge) {
+      issues.push(issue(
+        'multiple_output_sources',
+        `Output node '${edge.target}' must be attached to exactly one source`,
+        [edge.target],
+        [priorEdge, edge.id],
+      ))
+    } else {
+      outputEdgeByTarget.set(edge.target, edge.id)
+    }
+    outputAttachments.push({
+      edge_id: edge.id,
+      source_node_id: edge.source,
+      output_node_id: edge.target,
+    })
+  })
+  if (flowVersion === '1.1') {
+    declaredOutputIds.forEach(nodeId => {
+      if (!outputEdgeByTarget.has(nodeId)) {
+        issues.push(issue(
+          'missing_output_binding',
+          `Output node '${nodeId}' must be attached to exactly one control-flow extraction node`,
+          [nodeId],
+        ))
+      }
+    })
+  }
+
   const seenBindings = new Map<string, string>()
-  const validationSidecars = attachmentEdges.map(edge => {
+  const validationSidecars = validationAttachmentEdges.map(edge => {
     const replacedAttachmentId = edge.replaces_attachment_id ?? ''
     const bindingId = edge.satisfies_binding_id
       ?? nodeById.get(edge.source)?.data.validation_attachments?.find(
@@ -201,12 +299,25 @@ export const projectExecutableFlowGraph = (
     }
   })
 
-  const executable = ordered.filter(nodeId => {
+  const outputIdsBySource = new Map<string, string[]>()
+  outputAttachments.forEach(attachment => {
+    const outputIds = outputIdsBySource.get(attachment.source_node_id) ?? []
+    outputIds.push(attachment.output_node_id)
+    outputIdsBySource.set(attachment.source_node_id, outputIds)
+  })
+  const executable = ordered.flatMap(nodeId => {
     const node = nodeById.get(nodeId)
-    return node?.type !== 'task_input'
+    const controlStep = node?.type !== 'task_input'
       && node?.data.agent_id !== 'task_input'
       && node?.data.agent_id !== 'supervisor'
+      ? [nodeId]
+      : []
+    return [...controlStep, ...(outputIdsBySource.get(nodeId) ?? [])]
   })
+  const terminals = Array.from(new Set([
+    ...exits,
+    ...outputAttachments.map(attachment => attachment.output_node_id),
+  ]))
 
   return {
     valid: issues.length === 0,
@@ -215,7 +326,8 @@ export const projectExecutableFlowGraph = (
     ordered_executable_node_ids: executable,
     entry_node_ids: entries,
     exit_node_ids: exits,
-    terminal_node_ids: exits,
+    terminal_node_ids: terminals,
+    output_attachments: outputAttachments,
     validation_sidecars: validationSidecars,
     issues,
   }
