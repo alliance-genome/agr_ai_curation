@@ -67,10 +67,15 @@ _FOLLOWING_REFERENCE_TOKEN = (
     rf"(?:[A-Za-z]|\d+[A-Za-z]?)|(?-i:[A-Zb-z])(?!{_HYPHEN_OR_DASH})|"
     r"\d+[A-Za-z]?)\b"
 )
+_COMPACT_PANEL_TOKEN = rf"[A-Za-z]\d*\b(?!{_HYPHEN_OR_DASH})"
 _MULTI_REFERENCE_PATTERN = re.compile(
-    rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+[A-Za-z]?\s*"
-    rf"{_MULTI_REFERENCE_SEPARATOR}"
-    rf"{_FOLLOWING_REFERENCE_TOKEN}",
+    rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+(?:"
+    rf"[A-Za-z]?\s*{_MULTI_REFERENCE_SEPARATOR}"
+    rf"{_FOLLOWING_REFERENCE_TOKEN}|"
+    rf"\s*\(\s*{_COMPACT_PANEL_TOKEN}\s*{_MULTI_REFERENCE_SEPARATOR}"
+    rf"{_COMPACT_PANEL_TOKEN}\s*\)|"
+    rf"\s+{_COMPACT_PANEL_TOKEN}\s*{_MULTI_REFERENCE_SEPARATOR}"
+    rf"{_COMPACT_PANEL_TOKEN})",
     re.IGNORECASE,
 )
 _LOWERCASE_A_CONTINUATION_PATTERN = re.compile(

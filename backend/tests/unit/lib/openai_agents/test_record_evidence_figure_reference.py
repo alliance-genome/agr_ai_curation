@@ -55,6 +55,9 @@ def test_provider_figure_metadata_keeps_multi_panel_ambiguity() -> None:
     (
         "Fig. 1A,B show different expression patterns.",
         "Fig. 1A and B show different expression patterns.",
+        "Fig. 1(A,B) shows different expression patterns.",
+        "Figure 1(A and B) shows different expression patterns.",
+        "Fig. 1 A,B show different expression patterns.",
         "Figure 1 panels A and B show different expression patterns.",
         "Figure 1 panels A-C show different expression patterns.",
     ),
