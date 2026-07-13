@@ -4687,16 +4687,23 @@ async def run_specialist_with_events(
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
         )
         phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
-        _record_sentry_post_stream_outcome(
-            status=sentry_stream_finalization_status,
-            error_detail={
-                "message": str(exc),
-                "error_type": type(exc).__name__,
-                "phase": "specialist_start_streamed",
-            },
-        )
-        sentry_span_context_manager.__exit__(None, None, None)
-        conversation_context_manager.__exit__(None, None, None)
+        try:
+            _record_sentry_post_stream_outcome(
+                status=sentry_stream_finalization_status,
+                error_detail={
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "phase": "specialist_start_streamed",
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record %s specialist stream-creation outcome",
+                specialist_name,
+            )
+        finally:
+            sentry_span_context_manager.__exit__(None, None, None)
+            conversation_context_manager.__exit__(None, None, None)
         raise
     phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
     write_extraction_trace_event(
