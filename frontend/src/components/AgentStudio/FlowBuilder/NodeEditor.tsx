@@ -781,16 +781,26 @@ function NodeEditor({
 
             {outputBinding?.status === 'bound' ? (
               <Alert severity="info" icon={<SchemaIcon fontSize="inherit" />}>
-                Configuring output for <strong>{outputBinding.sourceLabel}</strong> extraction.
-                This formatter receives only that extractor's result.
+                {outputBinding.sources.length === 1 ? (
+                  <>
+                    Configuring output for <strong>{outputBinding.sourceLabel}</strong> extraction.
+                    This formatter receives only that extractor&apos;s result.
+                  </>
+                ) : (
+                  <>
+                    Configuring one output from <strong>{outputBinding.sources.length} extractions</strong>:{' '}
+                    {outputBinding.sources.map((source) => source.sourceLabel).join(', ')}.
+                    This formatter receives their results as one grouped input.
+                  </>
+                )}
               </Alert>
             ) : (
               <Alert severity="error" icon={<SchemaIcon fontSize="inherit" />}>
-                {outputBinding?.status === 'multiple'
-                  ? 'This formatter has multiple output sources. Remove connections until exactly one extraction agent remains.'
+                {outputBinding?.status === 'duplicate'
+                  ? 'The same extraction is attached to this formatter more than once. Remove the duplicate connection.'
                   : outputBinding?.status === 'incompatible'
-                    ? 'This formatter is connected to an incompatible step. Reconnect it directly to one extraction agent.'
-                    : 'This formatter is not configured. Connect one extraction agent directly to it.'}
+                    ? 'This formatter is connected to an incompatible step. Connect it only to extraction agents.'
+                    : 'This formatter is not configured. Connect at least one extraction agent directly to it.'}
               </Alert>
             )}
 

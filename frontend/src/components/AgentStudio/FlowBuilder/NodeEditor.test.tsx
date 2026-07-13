@@ -346,4 +346,39 @@ describe('NodeEditor', () => {
     expect(screen.getByText('Validation Steering Prompt (Optional)')).toBeInTheDocument()
     expect(screen.getByText(/Custom validation agents attach to extraction steps/i)).toBeInTheDocument()
   })
+
+  it('describes multiple formatter sources as one grouped input', () => {
+    metadataMocks.agents = {
+      csv_formatter: {
+        name: 'CSV Formatter',
+        icon: 'CSV',
+        category: 'Output',
+        subcategory: 'Formatter',
+      },
+    }
+
+    render(
+      <NodeEditor
+        node={buildNode({
+          agent_id: 'csv_formatter',
+          agent_display_name: 'CSV Formatter',
+          validation_attachments: undefined,
+        })}
+        outputBinding={{
+          status: 'bound',
+          sources: [
+            { sourceNodeId: 'genes', sourceLabel: 'Gene Extractor' },
+            { sourceNodeId: 'alleles', sourceLabel: 'Allele Extractor' },
+          ],
+        }}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText(/Configuring one output from/i)).toBeInTheDocument()
+    expect(screen.getByText('2 extractions')).toBeInTheDocument()
+    expect(screen.getByText(/Gene Extractor, Allele Extractor/i)).toBeInTheDocument()
+    expect(screen.getByText(/one grouped input/i)).toBeInTheDocument()
+  })
 })

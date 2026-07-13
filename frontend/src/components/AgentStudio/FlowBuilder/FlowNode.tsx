@@ -220,12 +220,14 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
           <ValidationSummary>
             {data.outputBinding?.status === 'bound' ? (
               <ValidationPill>
-                {data.outputBinding.sourceLabel} → output
+                {data.outputBinding.sources.length === 1
+                  ? `${data.outputBinding.sourceLabel} → output`
+                  : `${data.outputBinding.sources.length} extraction sources → output`}
               </ValidationPill>
             ) : (
               <ValidationPill sx={{ color: 'error.main', bgcolor: (theme) => alpha(theme.palette.error.main, 0.08) }}>
-                {data.outputBinding?.status === 'multiple'
-                  ? 'Multiple output sources'
+                {data.outputBinding?.status === 'duplicate'
+                  ? 'Duplicate output source'
                   : 'Output source required'}
               </ValidationPill>
             )}

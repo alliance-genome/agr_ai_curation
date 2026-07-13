@@ -490,6 +490,180 @@ describe('FlowBuilder', () => {
     })
   }, 15000)
 
+  it('loads and resaves distinct extraction sources attached to one formatter', async () => {
+    const user = userEvent.setup()
+    const multiSourceFlow = buildFlowResponse({
+      name: 'Combined Curation Export',
+      flow_definition: {
+        version: '1.1',
+        entry_node_id: 'task',
+        nodes: [
+          {
+            id: 'task',
+            type: 'task_input',
+            position: { x: 0, y: 0 },
+            data: {
+              agent_id: 'task_input',
+              agent_display_name: 'Initial Instructions',
+              task_instructions: 'Extract genes and alleles',
+              output_key: 'task_input',
+            },
+          },
+          {
+            id: 'genes',
+            type: 'agent',
+            position: { x: 250, y: 0 },
+            data: {
+              agent_id: 'gene_extractor',
+              agent_display_name: 'Gene Extractor',
+              output_key: 'genes',
+            },
+          },
+          {
+            id: 'alleles',
+            type: 'agent',
+            position: { x: 500, y: 0 },
+            data: {
+              agent_id: 'allele_extractor',
+              agent_display_name: 'Allele Extractor',
+              output_key: 'alleles',
+            },
+          },
+          {
+            id: 'combined_csv',
+            type: 'output',
+            position: { x: 500, y: 200 },
+            data: {
+              agent_id: 'csv_formatter',
+              agent_display_name: 'CSV Formatter',
+              output_key: 'combined_csv',
+            },
+          },
+        ],
+        edges: [
+          { id: 'control_1', source: 'task', target: 'genes', role: 'control_flow' },
+          { id: 'control_2', source: 'genes', target: 'alleles', role: 'control_flow' },
+          { id: 'output_1', source: 'genes', target: 'combined_csv', role: 'output_attachment' },
+          { id: 'output_2', source: 'alleles', target: 'combined_csv', role: 'output_attachment' },
+        ],
+      },
+    })
+    agentMetadataMocks.agents = {
+      gene_extractor: { category: 'Extraction', subcategory: 'Gene' },
+      allele_extractor: { category: 'Extraction', subcategory: 'Allele' },
+      csv_formatter: { category: 'Output', subcategory: 'Formatter' },
+    }
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Combined Curation Export'))
+    serviceMocks.getFlow.mockResolvedValue(multiSourceFlow)
+    serviceMocks.updateFlow.mockResolvedValue(multiSourceFlow)
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    await user.click(
+      within(await screen.findByRole('dialog', { name: 'Open Flow' }))
+        .getByText('Combined Curation Export')
+    )
+    await waitFor(() => expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1'))
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+
+    await waitFor(() => {
+      const updatePayload = serviceMocks.updateFlow.mock.calls[0]?.[1]
+      expect(updatePayload?.flow_definition).toEqual(expect.objectContaining({
+        version: '1.1',
+        edges: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'output_1',
+            source: 'genes',
+            target: 'combined_csv',
+            role: 'output_attachment',
+          }),
+          expect.objectContaining({
+            id: 'output_2',
+            source: 'alleles',
+            target: 'combined_csv',
+            role: 'output_attachment',
+          }),
+        ]),
+      }))
+    })
+  }, 15000)
+
+  it('connects distinct extraction sources to one formatter and rejects an identical duplicate', async () => {
+    const onFlowChange = vi.fn()
+    agentMetadataMocks.agents = {
+      gene_extractor: { category: 'Extraction', subcategory: 'Gene' },
+      allele_extractor: { category: 'Extraction', subcategory: 'Allele' },
+      csv_formatter: { category: 'Output', subcategory: 'Formatter' },
+    }
+
+    render(<FlowBuilder onFlowChange={onFlowChange} />)
+    await screen.findByText('1 step')
+
+    const dropAgent = (agentId: string, agentName: string, y: number) => {
+      fireEvent.drop(screen.getByTestId('react-flow'), {
+        clientX: 320,
+        clientY: y,
+        dataTransfer: {
+          getData: vi.fn((format: string) => (
+            format === 'application/reactflow'
+              ? JSON.stringify({
+                  type: 'agent',
+                  agentId,
+                  agentName,
+                  agentDescription: agentName,
+                })
+              : ''
+          )),
+        },
+      })
+    }
+
+    dropAgent('gene_extractor', 'Gene Extractor', 220)
+    dropAgent('allele_extractor', 'Allele Extractor', 340)
+    dropAgent('csv_formatter', 'CSV Formatter', 460)
+
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
+    })
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_2' })
+    })
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_3' })
+    })
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_2', target: 'node_3' })
+    })
+
+    await waitFor(() => {
+      const latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+      expect(latestFlowState?.edges.filter(
+        (edge: { role?: string }) => edge.role === 'output_attachment'
+      )).toEqual([
+        expect.objectContaining({ source: 'node_1', target: 'node_3' }),
+        expect.objectContaining({ source: 'node_2', target: 'node_3' }),
+      ])
+    })
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_3' })
+    })
+
+    expect(await screen.findByText('This extraction is already attached to the formatter.'))
+      .toBeInTheDocument()
+    const latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+    expect(latestFlowState?.edges.filter(
+      (edge: { role?: string }) => edge.role === 'output_attachment'
+    )).toHaveLength(2)
+  }, 15000)
+
   it('disables file action save shortcuts when there are no flow nodes', async () => {
     const user = userEvent.setup()
 

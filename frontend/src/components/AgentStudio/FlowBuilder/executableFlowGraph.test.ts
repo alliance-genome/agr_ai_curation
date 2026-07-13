@@ -104,19 +104,51 @@ describe('projectExecutableFlowGraph', () => {
     expect(graph.terminal_node_ids).toEqual(['allele', 'general_csv', 'allele_tsv'])
     expect(graph.output_attachments).toEqual([
       {
+        output_node_id: 'general_csv',
+        sources: [{ edge_id: 'output_1', source_node_id: 'general' }],
         edge_id: 'output_1',
         source_node_id: 'general',
-        output_node_id: 'general_csv',
       },
       {
+        output_node_id: 'allele_tsv',
+        sources: [{ edge_id: 'output_2', source_node_id: 'allele' }],
         edge_id: 'output_2',
         source_node_id: 'allele',
-        output_node_id: 'allele_tsv',
       },
     ])
   })
 
-  it('reports missing, duplicate, and legacy output bindings', () => {
+  it('groups distinct sources for one formatter and schedules the formatter once', () => {
+    const flow = multiOutputAttachmentFlow()
+    flow.edges.push(edge(
+      'output_3',
+      'gene',
+      'general_csv',
+      { role: 'output_attachment' },
+    ))
+
+    const graph = projectExecutableFlowGraph(flow.nodes, flow.edges, 'task', '1.1')
+
+    expect(graph.valid).toBe(true)
+    expect(graph.ordered_executable_node_ids).toEqual([
+      'general',
+      'gene',
+      'allele',
+      'general_csv',
+      'allele_tsv',
+    ])
+    expect(graph.output_attachments[0]).toEqual({
+      output_node_id: 'general_csv',
+      sources: [
+        { edge_id: 'output_1', source_node_id: 'general' },
+        { edge_id: 'output_3', source_node_id: 'gene' },
+      ],
+      edge_id: 'output_1',
+      source_node_id: 'general',
+    })
+  })
+
+  it('reports missing, identical duplicate, and legacy output bindings', () => {
     const missing = multiOutputAttachmentFlow()
     missing.edges.pop()
     expect(projectExecutableFlowGraph(
@@ -131,7 +163,7 @@ describe('projectExecutableFlowGraph', () => {
     const duplicate = multiOutputAttachmentFlow()
     duplicate.edges.push(edge(
       'output_duplicate',
-      'gene',
+      'general',
       'general_csv',
       { role: 'output_attachment' },
     ))
@@ -141,7 +173,11 @@ describe('projectExecutableFlowGraph', () => {
       'task',
       '1.1',
     ).issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'multiple_output_sources' }),
+      expect.objectContaining({
+        code: 'duplicate_output_source',
+        node_ids: ['general', 'general_csv'],
+        edge_ids: ['output_1', 'output_duplicate'],
+      }),
     ]))
 
     const legacy = multiOutputAttachmentFlow()

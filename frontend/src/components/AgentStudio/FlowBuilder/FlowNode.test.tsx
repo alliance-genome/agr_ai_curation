@@ -58,6 +58,48 @@ describe('FlowNode', () => {
     expect(screen.queryByText(/^v\d+$/)).not.toBeInTheDocument()
   })
 
+  it('renders multiple formatter sources as one grouped output binding', () => {
+    render(
+      <FlowNode
+        data={buildNodeData({
+          agent_id: 'csv_formatter',
+          agent_display_name: 'CSV Formatter',
+          outputBinding: {
+            status: 'bound',
+            sources: [
+              { sourceNodeId: 'genes', sourceLabel: 'Gene Extractor' },
+              { sourceNodeId: 'alleles', sourceLabel: 'Allele Extractor' },
+            ],
+          },
+        })}
+        selected={false}
+      />
+    )
+
+    expect(screen.getByText('2 extraction sources → output')).toBeInTheDocument()
+    expect(screen.queryByText('Multiple output sources')).not.toBeInTheDocument()
+  })
+
+  it('preserves the formatter label for a single output source', () => {
+    render(
+      <FlowNode
+        data={buildNodeData({
+          agent_id: 'csv_formatter',
+          agent_display_name: 'CSV Formatter',
+          outputBinding: {
+            status: 'bound',
+            sources: [{ sourceNodeId: 'genes', sourceLabel: 'Gene Extractor' }],
+            sourceNodeId: 'genes',
+            sourceLabel: 'Gene Extractor',
+          },
+        })}
+        selected={false}
+      />
+    )
+
+    expect(screen.getByText('Gene Extractor → output')).toBeInTheDocument()
+  })
+
   it('renders validation attachment state counts distinctly', () => {
     agentMetadataMocks.agents = {
       gene_summary: {

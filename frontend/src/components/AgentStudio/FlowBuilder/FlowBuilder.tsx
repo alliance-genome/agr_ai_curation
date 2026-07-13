@@ -689,6 +689,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     const bindings = new Map<string, OutputBindingView>()
     const flowNodes = nodes as AgentNode[]
     const flowEdges = edges as FlowEdge[]
+    const flowNodeById = new Map(flowNodes.map((node) => [node.id, node]))
 
     for (const node of flowNodes) {
       if (node.type !== 'output' && !isOutputFormatterAgentDynamic(node.data.agent_id)) continue
@@ -697,28 +698,57 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         (edge) => edge.target === node.id && edgeRole(edge) === 'output_attachment'
       )
       if (attachmentEdges.length === 0) {
-        bindings.set(node.id, { status: 'missing' })
-        continue
-      }
-      if (attachmentEdges.length > 1) {
-        bindings.set(node.id, { status: 'multiple' })
+        bindings.set(node.id, { status: 'missing', sources: [] })
         continue
       }
 
-      const source = flowNodes.find((candidate) => candidate.id === attachmentEdges[0].source)
-      if (!source || !isExtractionAgentDynamic(source.data.agent_id)) {
+      const sourceTargetKeys = new Set<string>()
+      const hasDuplicateSource = attachmentEdges.some((edge) => {
+        const key = `${edge.source}\u0000${edge.target}`
+        if (sourceTargetKeys.has(key)) return true
+        sourceTargetKeys.add(key)
+        return false
+      })
+      const sources = attachmentEdges.map((edge) => {
+        const source = flowNodeById.get(edge.source)
+        return {
+          node: source,
+          sourceNodeId: edge.source,
+          sourceLabel: source?.data.agent_display_name ?? edge.source,
+        }
+      })
+      if (hasDuplicateSource) {
         bindings.set(node.id, {
-          status: 'incompatible',
-          sourceNodeId: source?.id,
-          sourceLabel: source?.data.agent_display_name,
+          status: 'duplicate',
+          sources: sources.map(({ sourceNodeId, sourceLabel }) => ({ sourceNodeId, sourceLabel })),
         })
         continue
       }
 
+      const incompatibleSource = sources.find(({ node: source }) => (
+        !source || !isExtractionAgentDynamic(source.data.agent_id)
+      ))
+      if (incompatibleSource) {
+        bindings.set(node.id, {
+          status: 'incompatible',
+          sources: sources.map(({ sourceNodeId, sourceLabel }) => ({ sourceNodeId, sourceLabel })),
+        })
+        continue
+      }
+
+      const sourceViews = sources.map(({ sourceNodeId, sourceLabel }) => ({
+        sourceNodeId,
+        sourceLabel,
+      }))
       bindings.set(node.id, {
         status: 'bound',
-        sourceNodeId: source.id,
-        sourceLabel: source.data.agent_display_name,
+        sources: sourceViews,
+        ...(sourceViews.length === 1
+          ? {
+              sourceNodeId: sourceViews[0].sourceNodeId,
+              sourceLabel: sourceViews[0].sourceLabel,
+            }
+          : {}),
       })
     }
 
@@ -1216,12 +1246,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           })
           return
         }
-        const alreadyBound = (edges as FlowEdge[]).some((edge) => (
-          edgeRole(edge) === 'output_attachment' && edge.target === targetNode.id
+        const duplicateAttachment = (edges as FlowEdge[]).some((edge) => (
+          edgeRole(edge) === 'output_attachment'
+          && edge.source === sourceNode.id
+          && edge.target === targetNode.id
         ))
-        if (alreadyBound) {
+        if (duplicateAttachment) {
           setSnackbar({
-            message: 'This formatter already has an output source. Remove that attachment before choosing another.',
+            message: 'This extraction is already attached to the formatter.',
             severity: 'error',
           })
           return

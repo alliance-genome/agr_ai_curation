@@ -184,8 +184,14 @@ export interface AgentNodeData extends FlowNodeData {
 }
 
 export interface OutputBindingView {
-  status: 'bound' | 'missing' | 'multiple' | 'incompatible'
+  status: 'bound' | 'missing' | 'duplicate' | 'incompatible'
+  sources: Array<{
+    sourceNodeId: string
+    sourceLabel: string
+  }>
+  /** Compatibility alias populated only for a single-source binding. */
   sourceNodeId?: string
+  /** Compatibility alias populated only for a single-source binding. */
   sourceLabel?: string
 }
 

@@ -16,9 +16,15 @@ export interface ExecutableValidationSidecar {
 }
 
 export interface ExecutableOutputAttachment {
-  edge_id: string
-  source_node_id: string
   output_node_id: string
+  sources: Array<{
+    edge_id: string
+    source_node_id: string
+  }>
+  /** Compatibility alias for the first ordered source. */
+  edge_id: string
+  /** Compatibility alias for the first ordered source. */
+  source_node_id: string
 }
 
 export interface ExecutableFlowGraph {
@@ -205,7 +211,8 @@ export const projectExecutableFlowGraph = (
 
   const nodeById = new Map(nodes.map(node => [node.id, node]))
   const outputAttachments: ExecutableOutputAttachment[] = []
-  const outputEdgeByTarget = new Map<string, string>()
+  const outputAttachmentByTarget = new Map<string, ExecutableOutputAttachment>()
+  const outputEdgeBySourceTarget = new Map<string, string>()
   if (flowVersion !== '1.1' && outputAttachmentEdges.length > 0) {
     issues.push(issue(
       'output_attachment_requires_v1_1',
@@ -241,29 +248,46 @@ export const projectExecutableFlowGraph = (
         [edge.id],
       ))
     }
-    const priorEdge = outputEdgeByTarget.get(edge.target)
+    const sourceTargetKey = `${edge.source}\u0000${edge.target}`
+    const priorEdge = outputEdgeBySourceTarget.get(sourceTargetKey)
     if (priorEdge) {
       issues.push(issue(
-        'multiple_output_sources',
-        `Output node '${edge.target}' must be attached to exactly one source`,
-        [edge.target],
+        'duplicate_output_source',
+        `Output node '${edge.target}' has duplicate attachments from source '${edge.source}'`,
+        [edge.source, edge.target].filter(Boolean),
         [priorEdge, edge.id],
       ))
-    } else {
-      outputEdgeByTarget.set(edge.target, edge.id)
+      return
     }
-    outputAttachments.push({
+    outputEdgeBySourceTarget.set(sourceTargetKey, edge.id)
+
+    const existingAttachment = outputAttachmentByTarget.get(edge.target)
+    if (existingAttachment) {
+      existingAttachment.sources.push({
+        edge_id: edge.id,
+        source_node_id: edge.source,
+      })
+      return
+    }
+
+    const attachment: ExecutableOutputAttachment = {
+      output_node_id: edge.target,
+      sources: [{
+        edge_id: edge.id,
+        source_node_id: edge.source,
+      }],
       edge_id: edge.id,
       source_node_id: edge.source,
-      output_node_id: edge.target,
-    })
+    }
+    outputAttachmentByTarget.set(edge.target, attachment)
+    outputAttachments.push(attachment)
   })
   if (flowVersion === '1.1') {
     declaredOutputIds.forEach(nodeId => {
-      if (!outputEdgeByTarget.has(nodeId)) {
+      if (!outputAttachmentByTarget.has(nodeId)) {
         issues.push(issue(
           'missing_output_binding',
-          `Output node '${nodeId}' must be attached to exactly one control-flow extraction node`,
+          `Output node '${nodeId}' must be attached to at least one control-flow extraction node`,
           [nodeId],
         ))
       }
