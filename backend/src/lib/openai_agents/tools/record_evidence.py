@@ -71,16 +71,28 @@ _MULTI_REFERENCE_PATTERN = re.compile(
     rf"{_FOLLOWING_REFERENCE_TOKEN}",
     re.IGNORECASE,
 )
-_PANEL_SUBJECT_PREDICATE = (
-    r"(?:are|were|is|was|show(?:s|ed)?|display(?:s|ed)?|depict(?:s|ed)?|"
-    r"demonstrate(?:s|d)?|indicate(?:s|d)?|illustrate(?:s|d)?|"
-    r"reveal(?:s|ed)?|differ(?:s|ed)?)\b"
-)
-_LOWERCASE_A_PANEL_CONTINUATION_PATTERN = re.compile(
+_LOWERCASE_A_CONTINUATION_PATTERN = re.compile(
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+(?:"
     rf"[A-Za-z]?\s*{_PUNCTUATED_MULTI_REFERENCE_SEPARATOR}|"
     rf"(?-i:[B-Zb-z])\s*{_WORD_MULTI_REFERENCE_SEPARATOR})"
-    rf"(?-i:a)\b(?=\s*(?:$|[.,;:!?)]|{_PANEL_SUBJECT_PREDICATE}))",
+    rf"(?-i:a)\b",
+    re.IGNORECASE,
+)
+# A word-separated lowercase "a" is a panel by default because recording the
+# preceding locator would invent specificity. Preserve the locator only when
+# the continuation supplies positive grammatical evidence that "a" is an
+# article: a noun phrase followed by an auxiliary/copula, or by a third-person
+# singular predicate with an explicit complement. This avoids an open-ended
+# lexical verb allowlist while retaining ordinary prose such as "a control
+# confirms the result".
+_ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
+    r"^\s+(?:(?!(?:and|or|but|that|which|who|whose|where|when)\b)"
+    r"[A-Za-z][A-Za-z0-9'-]*\s+)+?(?:"
+    r"(?:am|is|are|was|were|be|been|being|has|have|had|do|does|did|"
+    r"can|could|may|might|must|shall|should|will|would)\b|"
+    r"[A-Za-z][A-Za-z'-]*s\b(?=\s+(?:a|an|the|this|that|these|those|"
+    r"it|them|us|him|her|me|you)\b)"
+    r")",
     re.IGNORECASE,
 )
 _PROSE_MULTI_PANEL_PATTERN = re.compile(
@@ -294,8 +306,15 @@ def _has_ambiguous_figure_reference(text: str | None) -> bool:
         return False
     return bool(
         _MULTI_REFERENCE_PATTERN.search(text)
-        or _LOWERCASE_A_PANEL_CONTINUATION_PATTERN.search(text)
+        or _has_ambiguous_lowercase_a_continuation(text)
         or _PROSE_MULTI_PANEL_PATTERN.search(text)
+    )
+
+
+def _has_ambiguous_lowercase_a_continuation(text: str) -> bool:
+    return any(
+        not _ARTICLE_AFTER_LOWERCASE_A_PATTERN.match(text[match.end() :])
+        for match in _LOWERCASE_A_CONTINUATION_PATTERN.finditer(text)
     )
 
 
