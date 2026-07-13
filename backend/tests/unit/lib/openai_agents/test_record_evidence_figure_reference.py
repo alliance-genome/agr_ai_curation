@@ -104,6 +104,27 @@ def test_provider_figure_metadata_does_not_fallback_for_plural_references(
 
 
 @pytest.mark.parametrize(
+    "span_text",
+    (
+        "Fig. 1A & B show different patterns.",
+        "Figures 1 & 2 show different results.",
+        "Panel A and panel B show different patterns.",
+        "Fig. 1A to C show different patterns.",
+    ),
+)
+def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
+    span_text: str,
+) -> None:
+    chunk = {
+        "text": span_text,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
+
+
+@pytest.mark.parametrize(
     "structured_fields",
     (
         {"subsection": "Provider Figure: Figure 1"},

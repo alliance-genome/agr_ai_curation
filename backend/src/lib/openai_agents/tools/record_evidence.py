@@ -46,16 +46,19 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     r"\b(?:Table\.?\s*\d+[A-Za-z0-9-]*)\b",
     re.IGNORECASE,
 )
+_MULTI_REFERENCE_SEPARATOR = (
+    r"(?:,\s*|/\s*|&\s*|\band\s+|\bto\s+|[-\u2013\u2014]\s*)"
+)
 _MULTI_REFERENCE_PATTERN = re.compile(
-    r"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+[A-Za-z]?\s*"
-    r"(?:,\s*|/\s*|\band\s+|[-\u2013\u2014]\s*)"
+    rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+[A-Za-z]?\s*"
+    rf"{_MULTI_REFERENCE_SEPARATOR}"
     r"(?:(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*)?"
     r"(?:[A-Za-z]|\d+[A-Za-z]?)\b",
     re.IGNORECASE,
 )
 _PROSE_MULTI_PANEL_PATTERN = re.compile(
-    r"\bpanels?\s+(?:[A-Za-z]\d*|\d+)\s*"
-    r"(?:,\s*|/\s*|\band\s+|[-\u2013\u2014]\s*)"
+    rf"\bpanels?\s+(?:[A-Za-z]\d*|\d+)\s*{_MULTI_REFERENCE_SEPARATOR}"
+    r"(?:panels?\s+)?"
     r"(?:[A-Za-z]\d*|\d+)\b",
     re.IGNORECASE,
 )
