@@ -37,6 +37,7 @@ from ..lib.agent_studio.flow_agent_policy import (
     agent_allows_ordinary_flow_step,
     attachment_only_validator_reason,
 )
+from ..lib.config.schema_discovery import resolve_output_schema
 from ..lib.openai_agents.config import get_flow_list_page_size_default
 from ..lib.flow_edge_roles import (
     OUTPUT_ATTACHMENT_EDGE_ROLE,
@@ -131,15 +132,32 @@ def _flow_agent_policy_entry(
         metadata = get_agent_metadata(agent_id, **metadata_kwargs)
     except ValueError:
         registry_entry = AGENT_REGISTRY.get(agent_id)
-        return registry_entry if isinstance(registry_entry, dict) else None
+        metadata = registry_entry if isinstance(registry_entry, dict) else None
+
+    if not isinstance(metadata, dict):
+        return None
+
+    category = str(metadata.get("category") or "").strip().lower()
+    subcategory = str(metadata.get("subcategory") or "").strip().lower()
+    output_schema_key = str(
+        metadata.get("output_schema_key") or metadata.get("output_schema") or ""
+    ).strip()
+    is_extraction = "extract" in category or "extract" in subcategory
+    is_typed_validation = bool(
+        "validation" in category
+        and output_schema_key
+        and resolve_output_schema(output_schema_key) is not None
+    )
 
     return {
         "name": metadata.get("display_name", agent_id),
         "category": metadata.get("category") or "",
         "subcategory": metadata.get("subcategory") or "",
-        "output_schema_key": metadata.get("output_schema_key"),
+        "output_schema_key": output_schema_key or None,
         "is_active": metadata.get("is_active", True),
+        "visible": metadata.get("visible", True),
         "visibility": metadata.get("visibility"),
+        "produces_flow_artifacts": is_extraction or is_typed_validation,
         "supervisor": metadata.get("supervisor") or {},
     }
 

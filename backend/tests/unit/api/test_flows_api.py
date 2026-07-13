@@ -343,6 +343,26 @@ def test_flow_definition_payload_requires_typed_validation_formatter_sources(
             )
 
 
+def test_flow_agent_policy_entry_rejects_unresolvable_validation_schema(monkeypatch):
+    monkeypatch.setattr(
+        flows,
+        "get_agent_metadata",
+        lambda _agent_id, **_kwargs: {
+            "display_name": "Broken Validator",
+            "category": "Validation",
+            "output_schema_key": "MissingValidatorResult",
+            "is_active": True,
+        },
+    )
+    monkeypatch.setattr(flows, "resolve_output_schema", lambda _schema_key: None)
+
+    entry = flows._flow_agent_policy_entry("broken_validator", db_user_id=7)
+
+    assert entry is not None
+    assert entry["produces_flow_artifacts"] is False
+    assert flows.agent_can_source_output_attachment(entry) is False
+
+
 def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypatch):
     payload = _output_attachment_flow_payload()
     payload["nodes"].insert(

@@ -38,6 +38,8 @@ def agent_can_source_output_attachment(
         return False
     if entry.get("is_active") is False or entry.get("visible") is False:
         return False
+    if "produces_flow_artifacts" in entry:
+        return entry.get("produces_flow_artifacts") is True
 
     category = str(entry.get("category") or "").strip().lower()
     subcategory = str(entry.get("subcategory") or "").strip().lower()
