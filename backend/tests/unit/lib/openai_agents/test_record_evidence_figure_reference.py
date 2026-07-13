@@ -100,6 +100,10 @@ def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -
         "Unlike Fig. 1b, a very clearly shows the complementary signal.",
         "In contrast to Fig. 1b, a quite independently confirms the result.",
         "Unlike Fig. 1b, a more clearly shows the complementary signal.",
+        "Unlike Fig. 1b, a also shows the complementary signal.",
+        "In contrast to Fig. 1b, a again confirms the result.",
+        "Unlike Fig. 1b, a better illustrates the contrast.",
+        "Fig. 1b and a still shows the complementary signal.",
         "Figure 1 panels a and b show different expression patterns.",
         "Panels a and b show different expression patterns.",
         "Figure 1 panels a-c show different expression patterns.",
@@ -214,6 +218,10 @@ def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
         ),
         (
             "Fig. 1b and a very strong control clearly confirms the result.",
+            "Fig. 1b",
+        ),
+        (
+            "Fig. 1b and a further experiment shows the effect.",
             "Fig. 1b",
         ),
     ),

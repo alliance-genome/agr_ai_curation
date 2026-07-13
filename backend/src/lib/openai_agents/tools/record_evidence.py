@@ -85,19 +85,23 @@ _LOWERCASE_A_CONTINUATION_PATTERN = re.compile(
 # the continuation supplies positive grammatical evidence that "a" is an
 # article: a noun phrase followed by an auxiliary/copula, or by a third-person
 # singular predicate with an explicit complement. The required noun cannot be
-# an ``-ly`` adverb or a degree modifier, though modifiers are accepted around
-# an established noun. This avoids treating panel-subject prose such as
-# "a very clearly shows" as an article while retaining
+# an ``-ly`` adverb, degree modifier, or irregular adverb, though modifiers are
+# accepted before an established noun. This avoids treating panel-subject prose
+# such as "a very clearly shows" or "a also shows" as an article while retaining
 # "a control clearly confirms the result".
-_ARTICLE_NON_NOUN_MODIFIER = (
-    r"(?:almost|enough|far|just|least|less|more|most|much|quite|rather|so|"
-    r"somewhat|too|very|well)"
+_ARTICLE_NON_NOUN_WORD = (
+    r"(?:again|ahead|alike|almost|already|also|apart|around|away|back|backwards?|"
+    r"better|else|enough|even|ever|far|farther|first|forth|forwards?|further|"
+    r"hard|here|home|instead|just|late|later|least|less|more|most|much|near|"
+    r"never|next|now|often|once|only|otherwise|perhaps|quite|rather|seldom|"
+    r"since|so|somewhat|soon|still|straight|then|there|together|too|very|well|"
+    r"yet)"
 )
 _ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
     r"^\s+(?:(?!(?:and|or|but|that|which|who|whose|where|when)\b)"
     r"[A-Za-z][A-Za-z0-9'-]*\s+)*?"
     r"(?!(?:[A-Za-z][A-Za-z0-9'-]*ly)\b)"
-    rf"(?!{_ARTICLE_NON_NOUN_MODIFIER}\b)"
+    rf"(?!{_ARTICLE_NON_NOUN_WORD}\b)"
     r"(?!(?:and|or|but|that|which|who|whose|where|when)\b)"
     r"[A-Za-z][A-Za-z0-9'-]*\s+"
     r"(?:[A-Za-z][A-Za-z0-9'-]*ly\s+)*(?:"
