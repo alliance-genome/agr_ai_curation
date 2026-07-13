@@ -1544,6 +1544,8 @@ Claude is responding...
         title="Submit Feedback to Developers?"
         titleIcon={<AutoAwesomeIcon color="primary" />}
         width="sm"
+        moveControlLabel="Move feedback popup"
+        closeControlLabel="Close feedback popup"
         actions={!submissionSent && (
           <>
             <Button

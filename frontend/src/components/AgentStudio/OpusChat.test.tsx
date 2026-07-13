@@ -354,6 +354,8 @@ describe('OpusChat', () => {
     const dialog = screen.getByRole('dialog', { name: 'Submit Feedback to Developers?' })
     expect(dialog).toHaveAttribute('aria-modal', 'false')
     expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Move feedback popup' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close feedback popup' })).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText(/add any additional comments/i), {
       target: { value: 'Please include the prior trace context.' },

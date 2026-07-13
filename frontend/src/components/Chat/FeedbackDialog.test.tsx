@@ -100,4 +100,81 @@ describe('FeedbackDialog', () => {
       'I need to inspect the chat while writing this.'
     )
   })
+
+  it('uses feedback-specific labels for its move and close controls', () => {
+    render(
+      <FeedbackDialog
+        open
+        onClose={vi.fn()}
+        sessionId="session-1"
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: 'Move feedback popup' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close feedback popup' })).toBeInTheDocument()
+  })
+
+  it('ignores the close control while feedback submission is in flight, then allows it after submission', async () => {
+    let resolveSubmit!: () => void
+    const onClose = vi.fn()
+    const onSubmit = vi.fn(() => new Promise<void>((resolve) => {
+      resolveSubmit = resolve
+    }))
+
+    render(
+      <FeedbackDialog
+        open
+        onClose={onClose}
+        sessionId="session-1"
+        onSubmit={onSubmit}
+      />
+    )
+
+    fireEvent.change(screen.getByPlaceholderText(/enter your detailed feedback here/i), {
+      target: { value: 'Pending feedback' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /send/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close feedback popup' }))
+
+    expect(onClose).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveSubmit()
+      await Promise.resolve()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Close feedback popup' }))
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores Escape while feedback submission is in flight', async () => {
+    let resolveSubmit!: () => void
+    const onClose = vi.fn()
+    const onSubmit = vi.fn(() => new Promise<void>((resolve) => {
+      resolveSubmit = resolve
+    }))
+
+    render(
+      <FeedbackDialog
+        open
+        onClose={onClose}
+        sessionId="session-1"
+        onSubmit={onSubmit}
+      />
+    )
+
+    fireEvent.change(screen.getByPlaceholderText(/enter your detailed feedback here/i), {
+      target: { value: 'Pending feedback' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /send/i }))
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(onClose).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveSubmit()
+      await Promise.resolve()
+    })
+  })
 })
