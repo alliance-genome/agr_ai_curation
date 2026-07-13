@@ -15,7 +15,7 @@ from src.lib.config.groups_loader import (
 )
 from src.lib.document_sources.models import DocumentSourceConfigError
 from src.lib.document_sources.registry import (
-    get_configured_document_source_provider,
+    get_configured_document_source_dev_mode_static_curator_token,
 )
 
 
@@ -91,16 +91,12 @@ def _extract_curator_token(
 
 
 def _extract_dev_mode_static_curator_token() -> str | None:
-    """Allow provider-owned dev-auth demos to use a server-side curator token."""
+    """Allow configured dev-auth demos to use a server-side curator token."""
 
     try:
-        provider = get_configured_document_source_provider()
+        token = get_configured_document_source_dev_mode_static_curator_token()
     except DocumentSourceConfigError:
         return None
-    hook = getattr(provider, "dev_mode_static_curator_token", None)
-    if not callable(hook):
-        return None
-    token = hook()
     if not isinstance(token, str):
         return None
     return token.strip() or None

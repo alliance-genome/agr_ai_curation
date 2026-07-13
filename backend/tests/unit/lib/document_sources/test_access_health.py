@@ -78,12 +78,9 @@ def test_build_document_source_request_context_uses_real_cookie_in_dev_mode(
     request = request_with_cookies({"auth_token": "dev-cookie-token"})
     monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
 
-    def raise_config_error():
-        raise DocumentSourceConfigError("local_pdf has no external provider")
-
     monkeypatch.setattr(
-        "src.lib.document_sources.access.get_configured_document_source_provider",
-        raise_config_error,
+        "src.lib.document_sources.access.get_configured_document_source_dev_mode_static_curator_token",
+        lambda: pytest.fail("static token lookup must not run when a cookie token exists"),
     )
 
     context = build_document_source_request_context(
@@ -105,13 +102,9 @@ def test_build_document_source_request_context_uses_static_abc_token_in_dev_mode
     request = request_with_cookies({})
     monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
 
-    class ProviderWithDevToken:
-        def dev_mode_static_curator_token(self) -> str:
-            return " static-dev-token "
-
     monkeypatch.setattr(
-        "src.lib.document_sources.access.get_configured_document_source_provider",
-        lambda: ProviderWithDevToken(),
+        "src.lib.document_sources.access.get_configured_document_source_dev_mode_static_curator_token",
+        lambda: " static-dev-token ",
     )
 
     context = build_document_source_request_context(
@@ -126,6 +119,73 @@ def test_build_document_source_request_context_uses_static_abc_token_in_dev_mode
     assert context.curator_token == "static-dev-token"
     assert context.has_curator_token is True
     assert "static-dev-token" not in repr(context)
+
+
+def test_repeated_dev_static_token_lookup_does_not_construct_provider(
+    monkeypatch,
+) -> None:
+    request = request_with_cookies({})
+    constructed = []
+
+    class ClosableProvider:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    def construct_provider() -> ClosableProvider:
+        provider = ClosableProvider()
+        constructed.append(provider)
+        return provider
+
+    monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
+    monkeypatch.setattr(
+        "src.lib.document_sources.registry.get_document_source_provider",
+        lambda: "abc_literature",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
+        lambda: "static_bearer",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
+        lambda: " repeated-dev-token ",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.ABCLiteratureDocumentSourceProvider.from_env",
+        construct_provider,
+    )
+
+    contexts = [
+        build_document_source_request_context(
+            request=request,  # type: ignore[arg-type]
+            user_claims={"sub": "dev-user-123"},
+        )
+        for _ in range(3)
+    ]
+
+    assert [context.curator_token for context in contexts] == [
+        "repeated-dev-token",
+        "repeated-dev-token",
+        "repeated-dev-token",
+    ]
+    assert constructed == []
+
+
+def test_non_dev_request_does_not_read_static_token_configuration(monkeypatch) -> None:
+    monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: False)
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.get_configured_document_source_dev_mode_static_curator_token",
+        lambda: pytest.fail("production authentication must not read a dev token"),
+    )
+
+    context = build_document_source_request_context(
+        request=request_with_cookies({}),  # type: ignore[arg-type]
+        user_claims={"sub": "production-user-123"},
+    )
+
+    assert context.curator_token is None
 
 
 def test_build_document_source_request_context_accepts_comma_group_string() -> None:

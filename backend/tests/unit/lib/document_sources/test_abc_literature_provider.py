@@ -24,6 +24,7 @@ from src.lib.document_sources.models import (
 )
 from src.lib.document_sources.providers.abc_literature import (
     ABCLiteratureDocumentSourceProvider,
+    get_dev_mode_static_curator_token,
 )
 from src.lib.document_sources.registry import get_configured_document_source_provider
 from src.lib.literature.client import ABCLiteratureHTTPError
@@ -297,7 +298,6 @@ async def test_reference_import_uses_actual_abc_main_pdf_precedence() -> None:
     assert decision.selected.converted_artifact.artifact_id == "5020781"
 
 def test_dev_mode_static_curator_token_uses_static_bearer_config(monkeypatch) -> None:
-    provider = provider_from_fake(FakeABCLiteratureClient())
     monkeypatch.setattr(
         "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
         lambda: "static_bearer",
@@ -307,11 +307,10 @@ def test_dev_mode_static_curator_token_uses_static_bearer_config(monkeypatch) ->
         lambda: " abc-dev-token ",
     )
 
-    assert provider.dev_mode_static_curator_token() == "abc-dev-token"
+    assert get_dev_mode_static_curator_token() == "abc-dev-token"
 
 
 def test_dev_mode_static_curator_token_ignores_non_static_auth_mode(monkeypatch) -> None:
-    provider = provider_from_fake(FakeABCLiteratureClient())
     monkeypatch.setattr(
         "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
         lambda: "passthrough",
@@ -321,7 +320,7 @@ def test_dev_mode_static_curator_token_ignores_non_static_auth_mode(monkeypatch)
         lambda: "abc-dev-token",
     )
 
-    assert provider.dev_mode_static_curator_token() is None
+    assert get_dev_mode_static_curator_token() is None
 
 
 @pytest.mark.asyncio

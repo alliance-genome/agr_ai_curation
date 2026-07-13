@@ -14,6 +14,29 @@ LOCAL_PDF_PROVIDER_ID = "local_pdf"
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
 
 
+def get_configured_document_source_dev_mode_static_curator_token(
+    provider_id: str | None = None,
+) -> str | None:
+    """Read configured dev-auth token state without constructing a provider."""
+
+    selected_provider_id = (
+        provider_id or get_document_source_provider()
+    ).strip().lower()
+    if selected_provider_id == ABC_LITERATURE_PROVIDER_ID:
+        from src.lib.document_sources.providers.abc_literature import (
+            get_dev_mode_static_curator_token,
+        )
+
+        return get_dev_mode_static_curator_token()
+
+    if selected_provider_id == LOCAL_PDF_PROVIDER_ID:
+        return None
+
+    raise DocumentSourceConfigError(
+        f"Unsupported DOCUMENT_SOURCE_PROVIDER: {selected_provider_id}"
+    )
+
+
 def get_configured_document_source_provider(
     provider_id: str | None = None,
 ) -> DocumentSourceProvider:
