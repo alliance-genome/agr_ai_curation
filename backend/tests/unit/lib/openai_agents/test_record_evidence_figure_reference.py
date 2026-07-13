@@ -357,6 +357,14 @@ def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
             "Fig. 1b",
         ),
         (
+            "Fig. 1b and a questionnaire is shown.",
+            "Fig. 1b",
+        ),
+        (
+            "Fig. 1b and a survey confirms the result.",
+            "Fig. 1b",
+        ),
+        (
             "Fig. 1A (left), with panel A enlarged at right.",
             "Fig. 1A",
         ),
@@ -428,9 +436,11 @@ def test_provider_figure_metadata_preserves_locator_before_hyphenated_prose(
         "Fig. 1A is compared with T cells.",
         "Fig. 1A together with C. elegans embryos supports the result.",
         "Fig. 1A alongside B cells shows the expression pattern.",
+        "Fig. 1A and B samples were analyzed.",
+        "Fig. 1A compared with T cohorts shows the difference.",
     ),
 )
-def test_provider_figure_metadata_preserves_locator_before_biomedical_prose(
+def test_provider_figure_metadata_preserves_locator_before_uppercase_prose(
     span_text: str,
 ) -> None:
     chunk = {

@@ -1,4 +1,17 @@
-"""Span-backed evidence-recording tool for document extraction agents."""
+"""Span-backed evidence-recording tool for document extraction agents.
+
+Figure-locator regex families intentionally fail closed when one string cannot
+represent every referenced panel:
+
+* ``_MULTI_REFERENCE_PATTERN`` catches locator-led shorthand (``Fig. 1A,B``).
+* ``_GROUPED_MULTI_PANEL_PATTERN`` catches grouped lists (``Panels (A/B)``).
+* ``_SCOPED_MULTI_PANEL_PATTERN`` catches panel-noun lists (``Panels A and B``).
+* ``_LATER_SCOPED_PANEL_PATTERN`` catches prose continuations
+  (``Panel A, with B shown``).
+* ``_ARTICLE_AFTER_LOWERCASE_A_PATTERN`` preserves a preceding locator only
+  when the lowercase ``a`` has domain-neutral grammatical evidence of being an
+  article rather than a panel token.
+"""
 
 from __future__ import annotations
 
@@ -69,14 +82,21 @@ _MULTI_REFERENCE_SEPARATOR = (
 # An explicit figure/table/panel prefix makes a one-letter token unambiguous.
 # Bare continuations also admit lowercase b-z, which are not English articles;
 # lowercase "a" is handled contextually below so an English article does not
-# erase an unambiguous locator. A bare uppercase letter can instead begin a
-# biomedical noun or abbreviated taxon, so exclude those positive prose forms.
-_BIOMEDICAL_UPPERCASE_PROSE_SUFFIX = (
-    r"(?:\.\s*(?-i:[a-z][A-Za-z-]*)\b|\s+(?:cells?|lymphocytes?)\b)"
+# erase an unambiguous locator. A bare uppercase letter can instead begin an
+# abbreviated taxon (``C. elegans``) or a prose noun phrase (``B samples
+# were``). Exclude those domain-neutral grammatical forms without embedding a
+# curation-domain vocabulary in this shared tool.
+_UPPERCASE_PROSE_SUFFIX = (
+    r"(?:\.\s*(?-i:[a-z][A-Za-z-]*)\b|"
+    r"\s+(?-i:[a-z][A-Za-z'-]*s)\b(?=\s*[,.;:!?)\]]|$)|"
+    r"\s+(?-i:[a-z][A-Za-z'-]*)\s+"
+    r"(?:am|is|are|was|were|be|been|being|has|have|had|do|does|did|"
+    r"can|could|may|might|must|shall|should|will|would|"
+    r"[A-Za-z][A-Za-z'-]*(?:ed|ing|s))\b)"
 )
 _BARE_NONARTICLE_REFERENCE_TOKEN = (
     rf"(?:(?-i:[A-Z])\b(?!{_HYPHEN_OR_DASH}|"
-    rf"{_BIOMEDICAL_UPPERCASE_PROSE_SUFFIX})|"
+    rf"{_UPPERCASE_PROSE_SUFFIX})|"
     rf"(?-i:[b-z])\b(?!{_HYPHEN_OR_DASH}))"
 )
 _FOLLOWING_REFERENCE_TOKEN = (
@@ -113,38 +133,26 @@ _LOWERCASE_A_CONTINUATION_PATTERN = re.compile(
 )
 # A word-separated lowercase "a" is a panel by default because recording the
 # preceding locator would invent specificity. Preserve the locator only when
-# the continuation supplies positive grammatical evidence that "a" is an
-# article: a noun phrase followed by an auxiliary/copula, or by a third-person
-# singular predicate with an explicit complement. Because arbitrary words
-# cannot safely be classified as nouns without a parser, the head must come
-# from this deliberately bounded scientific/common noun vocabulary. Unknown
-# heads remain ambiguous and therefore suppress the locator. Modifiers must
-# likewise come from positive noun-phrase vocabulary; accepting arbitrary words
-# would let a prepositional panel-subject clause reach a later known noun.
-_ARTICLE_NOUN_HEAD_PATTERN = (
-    r"(?:analysis|animal|approach|assay|assessment|article|cell|cohort|"
-    r"comparison|condition|construct|control|dataset|embryo|experiment|figure|"
-    r"gene|group|line|marker|measurement|method|model|mouse|observation|"
-    r"organism|panel|pathway|phenotype|protein|replicate|reporter|result|sample|"
-    r"signal|strain|study|table|test|tissue|treatment|variant)"
+# the continuation supplies positive, domain-neutral grammatical evidence that
+# ``a`` is an article: a noun phrase followed by an auxiliary/copula, or by a
+# third-person singular predicate with an explicit complement. Leading
+# prepositions and adverb-only continuations stay ambiguous. The pattern does
+# not try to classify domain nouns; unknown vocabulary remains usable only when
+# the surrounding grammar establishes an article phrase.
+_ARTICLE_WORD_PATTERN = r"[A-Za-z][A-Za-z0-9'-]*"
+_ARTICLE_LEADING_PREPOSITION_PATTERN = (
+    r"(?:as|at|by|for|from|in|of|on|to|under|with)"
 )
-_ARTICLE_NOUN_MODIFIER_PATTERN = (
-    r"(?:additional|alternative|comparative|different|experimental|further|"
-    r"independent|new|other|primary|second|separate|single|specific|strong|"
-    r"subsequent)"
-)
-_ARTICLE_NOUN_DEGREE_PATTERN = r"(?:especially|highly|particularly|quite|very)"
-_ARTICLE_NOUN_COMPLEMENT_PATTERN = (
-    rf"(?:\s+(?:for|from|in|of|under|with)\s+"
-    rf"(?:(?:a|an|the|this|that|these|those)\s+)?"
-    rf"(?:(?:{_ARTICLE_NOUN_DEGREE_PATTERN}\s+)?"
-    rf"(?:{_ARTICLE_NOUN_MODIFIER_PATTERN}|same)\s+)*"
-    rf"{_ARTICLE_NOUN_HEAD_PATTERN})*"
+_ARTICLE_NON_NOUN_HEAD_PATTERN = (
+    r"(?:again|also|always|better|especially|highly|indeed|maybe|more|"
+    r"particularly|quite|still|therefore|thus|very|"
+    r"[A-Za-z][A-Za-z0-9'-]*ly)"
 )
 _ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
-    rf"^\s+(?:(?:{_ARTICLE_NOUN_DEGREE_PATTERN}\s+)?"
-    rf"{_ARTICLE_NOUN_MODIFIER_PATTERN}\s+)*"
-    rf"{_ARTICLE_NOUN_HEAD_PATTERN}{_ARTICLE_NOUN_COMPLEMENT_PATTERN}\s+"
+    rf"^\s+(?!{_ARTICLE_LEADING_PREPOSITION_PATTERN}\b)"
+    r"(?![^.\r\n!?;]*\b(?:that|which|who)\b)"
+    rf"(?:{_ARTICLE_WORD_PATTERN}\s+)*"
+    rf"(?!{_ARTICLE_NON_NOUN_HEAD_PATTERN}\b){_ARTICLE_WORD_PATTERN}\s+"
     r"(?:[A-Za-z][A-Za-z0-9'-]*ly\s+)*(?:"
     r"(?:am|is|are|was|were|be|been|being|has|have|had|do|does|did|"
     r"can|could|may|might|must|shall|should|will|would)\b|"
@@ -172,7 +180,7 @@ _FIGURE_LIST_FOLLOWING_ITEM = (
     rf"{_PANEL_LIST_TOKEN}\b(?!{_HYPHEN_OR_DASH}))|"
     rf"\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
     rf"(?-i:[A-Z])\d*\b(?!{_HYPHEN_OR_DASH}|"
-    rf"{_BIOMEDICAL_UPPERCASE_PROSE_SUFFIX})|"
+    rf"{_UPPERCASE_PROSE_SUFFIX})|"
     rf"(?-i:[b-z])\d*\b(?!{_HYPHEN_OR_DASH})|"
     rf"\d+\b(?!{_HYPHEN_OR_DASH}))"
     r"(?:\s*\([^()\r\n]*\))?"
