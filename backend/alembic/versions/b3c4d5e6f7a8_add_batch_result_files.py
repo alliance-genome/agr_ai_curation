@@ -59,6 +59,7 @@ def upgrade() -> None:
         )
         WHERE result_file_path IS NOT NULL
           AND result_file_path <> ''
+          AND result_files IS NULL
         """
     )
 
@@ -86,6 +87,7 @@ def upgrade() -> None:
         SET output_status = 'complete'
         WHERE result_file_path IS NOT NULL
           AND result_file_path <> ''
+          AND output_status IS NULL
         """
     )
 
