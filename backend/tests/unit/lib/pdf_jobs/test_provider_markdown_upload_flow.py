@@ -191,6 +191,13 @@ class _FakeDocumentSourceProvider:
             message="ok",
         )
 
+    def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
+        return artifact.metadata.get("file_class") == "semantic_text"
+
+    def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+        _ = artifact
+        return (0,)
+
 
 @pytest.mark.asyncio
 async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(

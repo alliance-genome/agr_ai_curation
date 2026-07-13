@@ -1042,7 +1042,7 @@ async def test_upload_selection_accepts_per_mod_only_readiness():
         conversion_result=SourceConversionResult(
             provider="abc_literature",
             status=SourceConversionStatus.RUNNING,
-            per_mod_status=({"mod": "FB", "main_converted": True},),
+            per_mod_status=({"mod": "FAKE", "main_converted": True},),
         ),
         curator_token="token",
     )
