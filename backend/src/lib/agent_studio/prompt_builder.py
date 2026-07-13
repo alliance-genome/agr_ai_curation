@@ -14,21 +14,33 @@ from src.lib.prompts.assembly import PromptLayerBundle
 def format_prompt_layers_for_opus(bundle: PromptLayerBundle, *, group_id: Optional[str]) -> str:
     """Render an effective prompt bundle with its inspection metadata and runtime order."""
 
+    separator = "\n\n"
+    combined_prompt = bundle.render(separator=separator)
     layer_blocks = []
+    content_offset = 0
     for order, layer in enumerate(bundle.layers, 1):
-        layer_blocks.append(f"""<prompt_layer order="{order}" kind="{layer.kind}" editable="{str(layer.editable).lower()}" locked="{str(layer.locked).lower()}">
+        if layer.content:
+            content_start = str(content_offset)
+            content_offset += len(layer.content)
+            content_end = str(content_offset)
+            content_offset += len(separator)
+        else:
+            content_start = "omitted"
+            content_end = "omitted"
+
+        layer_blocks.append(f"""<prompt_layer order="{order}" kind="{layer.kind}" editable="{str(layer.editable).lower()}" locked="{str(layer.locked).lower()}" content_start="{content_start}" content_end="{content_end}">
 <title>{layer.title}</title>
 <provenance>{layer.provenance}</provenance>
 <source_ref>{layer.source_ref}</source_ref>
-<content>
-{layer.content}
-</content>
 </prompt_layer>""")
 
     selected_group = group_id or "none"
     return f"""### Effective Prompt Layers
 
-The curator is inspecting the canonical prompt layers below in runtime order.
+The curator is inspecting the canonical prompt layers below in runtime order. Each
+non-empty layer identifies its zero-based, end-exclusive character span in the
+combined runtime prompt. Empty layers are marked omitted. Separator characters
+between layers are not owned by either layer.
 
 <prompt_layers agent="{bundle.agent_id}" selected_group="{selected_group}">
 {chr(10).join(layer_blocks)}
@@ -37,7 +49,7 @@ The curator is inspecting the canonical prompt layers below in runtime order.
 ### Ordered Combined Runtime Prompt
 
 <combined_prompt agent="{bundle.agent_id}" selected_group="{selected_group}">
-{bundle.render()}
+{combined_prompt}
 </combined_prompt>"""
 
 

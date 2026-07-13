@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 from src.lib.agent_studio.models import ChatContext
@@ -77,5 +78,32 @@ def test_selected_agent_context_uses_canonical_group_prompt_layers_in_runtime_or
     assert prompt.index("LOCKED CORE") < prompt.index("GENERATED GUIDANCE")
     assert prompt.index("GENERATED GUIDANCE") < prompt.index("EDITABLE BASE")
     assert prompt.index("EDITABLE BASE") < prompt.index("GROUP ALPHA RULES")
+    assert prompt.count("LOCKED CORE") == 1
+    assert prompt.count("GENERATED GUIDANCE") == 1
+    assert prompt.count("EDITABLE BASE") == 1
+    assert prompt.count("GROUP ALPHA RULES") == 1
+
+    combined_match = re.search(
+        r'<combined_prompt agent="gene" selected_group="group-alpha">\n(.*?)\n</combined_prompt>',
+        prompt,
+        re.DOTALL,
+    )
+    assert combined_match is not None
+    combined_prompt = combined_match.group(1)
+    assert combined_prompt == bundle.render()
+
+    expected_offset = 0
+    for layer in layers:
+        layer_match = re.search(
+            rf'<prompt_layer order="\d+" kind="{layer.kind}"[^>]* '
+            rf'content_start="(\d+)" content_end="(\d+)">',
+            prompt,
+        )
+        assert layer_match is not None
+        content_start, content_end = map(int, layer_match.groups())
+        assert content_start == expected_offset
+        assert combined_prompt[content_start:content_end] == layer.content
+        expected_offset = content_end + len("\n\n")
+
     assert "LEGACY BASE ONLY" not in prompt
     assert "LEGACY GROUP ONLY" not in prompt
