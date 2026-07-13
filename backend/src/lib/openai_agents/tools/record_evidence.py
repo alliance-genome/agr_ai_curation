@@ -47,12 +47,13 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _MULTI_REFERENCE_SEPARATOR = (
-    r"(?:,\s*|/\s*|&\s*|\band\s+|\bto\s+|[-\u2013\u2014]\s*)"
+    r"(?:,\s*|/\s*|&\s*|\band\s+|\bto\s+|\bthrough\s+|\bversus\s+|"
+    r"[-\u2013\u2014]\s*)"
 )
 _MULTI_REFERENCE_PATTERN = re.compile(
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+[A-Za-z]?\s*"
     rf"{_MULTI_REFERENCE_SEPARATOR}"
-    r"(?:(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*)?"
+    r"(?:(?:Figs?\.?|Figures?\.?|Tables?\.?|panels?)\s*)?"
     r"(?:[A-Za-z]|\d+[A-Za-z]?)\b",
     re.IGNORECASE,
 )

@@ -110,6 +110,9 @@ def test_provider_figure_metadata_does_not_fallback_for_plural_references(
         "Figures 1 & 2 show different results.",
         "Panel A and panel B show different patterns.",
         "Fig. 1A to C show different patterns.",
+        "Fig. 1A and panel B show different patterns.",
+        "Figure 1A versus panel B shows the comparison.",
+        "Fig. 1A through C show different patterns.",
     ),
 )
 def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
