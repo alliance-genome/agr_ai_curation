@@ -135,9 +135,33 @@ _ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
     r")",
     re.IGNORECASE,
 )
-_PROSE_MULTI_PANEL_PATTERN = re.compile(
-    rf"\bpanels?\s+(?:[A-Za-z]\d*|\d+)\s*{_MULTI_REFERENCE_SEPARATOR}"
-    rf"(?:{_FOLLOWING_REFERENCE_TOKEN}|(?-i:a)\b)",
+_PANEL_LIST_TOKEN = r"(?:[A-Za-z]\d*|\d+)"
+_PANEL_LIST_FIRST_ITEM = (
+    rf"(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
+    rf"{_PANEL_LIST_TOKEN}\b)(?:\s*\([^()\r\n]*\))?"
+)
+_PANEL_LIST_FOLLOWING_ITEM = (
+    rf"(?:panels?\s+)?(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
+    rf"{_PANEL_LIST_TOKEN}\b(?!{_HYPHEN_OR_DASH}))"
+    r"(?:\s*\([^()\r\n]*\))?"
+)
+# A figure-scoped bare lowercase "a" may be an article, so leave that case to
+# _has_ambiguous_lowercase_a_continuation. An explicit or parenthesized token
+# remains unambiguous panel syntax regardless of case.
+_FIGURE_LIST_FOLLOWING_ITEM = (
+    rf"(?:panels?\s+(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
+    rf"{_PANEL_LIST_TOKEN}\b(?!{_HYPHEN_OR_DASH}))|"
+    rf"\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
+    rf"(?-i:[A-Zb-z])\d*\b(?!{_HYPHEN_OR_DASH})|"
+    rf"\d+\b(?!{_HYPHEN_OR_DASH}))"
+    r"(?:\s*\([^()\r\n]*\))?"
+)
+_SCOPED_MULTI_PANEL_PATTERN = re.compile(
+    rf"(?:\bpanels?\s+{_PANEL_LIST_FIRST_ITEM}\s*"
+    rf"{_MULTI_REFERENCE_SEPARATOR}{_PANEL_LIST_FOLLOWING_ITEM}|"
+    rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+\s*"
+    rf"(?:panels?\s+)?{_PANEL_LIST_FIRST_ITEM}\s*"
+    rf"{_MULTI_REFERENCE_SEPARATOR}{_FIGURE_LIST_FOLLOWING_ITEM})",
     re.IGNORECASE,
 )
 _LOCATOR_PANEL_TOKEN_PATTERN = re.compile(
@@ -355,7 +379,7 @@ def _has_ambiguous_figure_reference(text: str | None) -> bool:
     return bool(
         _MULTI_REFERENCE_PATTERN.search(text)
         or _has_ambiguous_lowercase_a_continuation(text)
-        or _PROSE_MULTI_PANEL_PATTERN.search(text)
+        or _SCOPED_MULTI_PANEL_PATTERN.search(text)
         or _has_distinct_explicit_panel_references(text)
     )
 

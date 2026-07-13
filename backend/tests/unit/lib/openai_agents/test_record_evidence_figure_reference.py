@@ -101,6 +101,28 @@ def test_provider_figure_metadata_omits_later_explicit_panel_in_prose(
     assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
 
 
+@pytest.mark.parametrize(
+    "span_text",
+    (
+        "Panels A (left) and B (right) show different patterns.",
+        "Panels (A) and (B) show different patterns.",
+        "Figure 1(A) and (B) show different patterns.",
+        "Figure 1 panel A (left) and B (right) show different patterns.",
+        "Panels A (left), B (center), and C (right) show different patterns.",
+    ),
+)
+def test_provider_figure_metadata_omits_described_panel_lists(
+    span_text: str,
+) -> None:
+    chunk = {
+        "text": span_text,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
+
+
 def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -> None:
     chunk = {
         "text": "Panels A and B show different expression patterns.",
