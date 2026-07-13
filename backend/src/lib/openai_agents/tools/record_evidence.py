@@ -46,9 +46,10 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     r"\b(?:Table\.?\s*\d+[A-Za-z0-9-]*)\b",
     re.IGNORECASE,
 )
-_SHORTHAND_MULTI_REFERENCE_PATTERN = re.compile(
-    r"\b(?:Fig(?:ure)?\.?|Table\.?)\s*\d+[A-Za-z]?\s*"
+_MULTI_REFERENCE_PATTERN = re.compile(
+    r"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+[A-Za-z]?\s*"
     r"(?:,\s*|/\s*|\band\s+|[-\u2013\u2014]\s*)"
+    r"(?:(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*)?"
     r"(?:[A-Za-z]|\d+[A-Za-z]?)\b",
     re.IGNORECASE,
 )
@@ -263,7 +264,7 @@ def _has_ambiguous_figure_reference(text: str | None) -> bool:
     if not text:
         return False
     return bool(
-        _SHORTHAND_MULTI_REFERENCE_PATTERN.search(text)
+        _MULTI_REFERENCE_PATTERN.search(text)
         or _PROSE_MULTI_PANEL_PATTERN.search(text)
     )
 

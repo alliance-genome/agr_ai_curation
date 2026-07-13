@@ -82,6 +82,28 @@ def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -
 
 
 @pytest.mark.parametrize(
+    "span_text",
+    (
+        "Figures 1 and 2 show different results.",
+        "Figures 1A and 1B show different expression patterns.",
+        "Figs. 1A and 1B show different expression patterns.",
+        "Figures 1 and Figure 2 show different results.",
+        "Tables 1 and 2 summarize different results.",
+    ),
+)
+def test_provider_figure_metadata_does_not_fallback_for_plural_references(
+    span_text: str,
+) -> None:
+    chunk = {
+        "text": span_text,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
+
+
+@pytest.mark.parametrize(
     "structured_fields",
     (
         {"subsection": "Provider Figure: Figure 1"},
