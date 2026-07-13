@@ -46,6 +46,11 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     r"\b(?:Table\.?\s*\d+[A-Za-z0-9-]*)\b",
     re.IGNORECASE,
 )
+_REFERENCE_PARTS_PATTERN = re.compile(
+    r"\s*(?P<kind>fig(?:ure)?\.?|table\.?)\s*"
+    r"(?P<number>\d+)(?P<detail>[A-Za-z0-9-]*)\s*",
+    re.IGNORECASE,
+)
 _HYPHEN_OR_DASH = r"[-\u2010-\u2014\u2212]"
 _PUNCTUATED_MULTI_REFERENCE_SEPARATOR = (
     rf"(?:,\s*|;\s*|/\s*|&\s*|\+\s*|{_HYPHEN_OR_DASH}\s*)"
@@ -441,6 +446,8 @@ def _aggregate_figure_reference(
 ) -> str | None:
     if any(resolution.selected_text_ambiguous for resolution in resolutions):
         return None
+    if any(resolution.structured_fallback_ambiguous for resolution in resolutions):
+        return None
 
     span_references = _unique_non_empty(
         [
@@ -449,13 +456,6 @@ def _aggregate_figure_reference(
             if resolution.is_span_derived
         ]
     )
-    if len(span_references) == 1:
-        return span_references[0]
-    if span_references:
-        return None
-
-    if any(resolution.structured_fallback_ambiguous for resolution in resolutions):
-        return None
     structured_references = _unique_non_empty(
         [
             resolution.reference
@@ -463,9 +463,48 @@ def _aggregate_figure_reference(
             if not resolution.is_span_derived
         ]
     )
+    if len(span_references) == 1:
+        span_reference = span_references[0]
+        # A specific span locator may represent the record only when every
+        # other fragment's structured provenance matches or encompasses it.
+        if all(
+            _is_compatible_structured_fallback(span_reference, structured_reference)
+            for structured_reference in structured_references
+        ):
+            return span_reference
+        return None
+    if span_references:
+        return None
+
     if len(structured_references) == 1:
         return structured_references[0]
     return None
+
+
+def _is_compatible_structured_fallback(
+    span_reference: str,
+    structured_reference: str,
+) -> bool:
+    span_parts = _reference_parts(span_reference)
+    structured_parts = _reference_parts(structured_reference)
+    if span_parts is None or structured_parts is None:
+        return False
+
+    if span_parts[:2] != structured_parts[:2]:
+        return False
+
+    span_detail = span_parts[2]
+    structured_detail = structured_parts[2]
+    return not span_detail or structured_detail in ("", span_detail)
+
+
+def _reference_parts(reference: str) -> tuple[str, str, str] | None:
+    match = _REFERENCE_PARTS_PATTERN.fullmatch(reference)
+    if match is None:
+        return None
+
+    kind = "table" if match.group("kind").casefold().startswith("table") else "figure"
+    return kind, match.group("number"), match.group("detail").casefold()
 
 
 def _has_ambiguous_figure_reference(text: str | None) -> bool:

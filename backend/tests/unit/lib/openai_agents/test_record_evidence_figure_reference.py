@@ -514,6 +514,46 @@ async def test_record_evidence_multi_span_prefers_span_panel_over_structured_fal
 
 
 @pytest.mark.asyncio
+async def test_record_evidence_multi_span_omits_panel_for_incompatible_structured_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    figure_1_text = "Fig. 1A shows the first pattern."
+    figure_2_text = "The wing disc has restricted expression."
+    chunks = {
+        "provider-figure-1": _provider_chunk(figure_1_text),
+        "provider-figure-2": {
+            **_provider_chunk(figure_2_text),
+            "id": "provider-figure-2",
+            "subsection": "Provider Figure: Figure 2",
+        },
+    }
+    span_ids = [
+        build_evidence_spans(
+            chunk_id=chunk_id,
+            chunk_text=chunk["text"],
+            page_number=chunk["page_number"],
+            section_title=chunk["parent_section"],
+        )[0].span_id
+        for chunk_id, chunk in chunks.items()
+    ]
+
+    async def _fake_get_chunk_by_id(**kwargs: object) -> dict[str, object]:
+        return chunks[str(kwargs["chunk_id"])]
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(entity="wg", span_ids=span_ids)
+
+    assert result["status"] == "verified"
+    assert [
+        fragment.get("figure_reference")
+        for fragment in result["source_fragments"]
+    ] == ["Fig. 1A", "Figure 2"]
+    assert "figure_reference" not in result
+
+
+@pytest.mark.asyncio
 async def test_record_evidence_multi_span_omits_conflicting_span_panels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
