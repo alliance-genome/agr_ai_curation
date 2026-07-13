@@ -23,6 +23,25 @@ from src.models.sql.pdf_document import PDFDocument as PdfDocumentModel
 logger = logging.getLogger(__name__)
 
 
+def _effective_list_processing_status(sql_status: Any, weaviate_status: Any) -> str:
+    """Prefer durable terminal state over a stale status in either store."""
+
+    durable_status = str(sql_status or "").strip().lower()
+    indexed_status = str(weaviate_status or "pending").strip().lower()
+    active_statuses = {"processing", "parsing", "chunking", "embedding", "storing"}
+    if durable_status == "failed":
+        return durable_status
+    if indexed_status in active_statuses:
+        return indexed_status
+    if durable_status in active_statuses:
+        return durable_status
+    if durable_status in {"completed", "failed"}:
+        return durable_status
+    if indexed_status in {"completed", "failed"}:
+        return indexed_status
+    return durable_status or indexed_status
+
+
 async def async_list_documents(
     user_id: str,
     filter_obj: Any,
@@ -223,13 +242,21 @@ async def async_list_documents(
 
                 pg_doc = pg_doc_map[doc_id]
                 doc_props = obj.properties
+                # PostgreSQL is authoritative for provider-ingestion failures
+                # and display metadata. Prefer either store's terminal state so
+                # a stale Weaviate "pending" value cannot strand a failed row.
+                processing_status = _effective_list_processing_status(
+                    pg_doc.status,
+                    doc_props.get("processingStatus"),
+                )
 
                 # Map to contract Document schema (document_endpoints.yaml)
                 doc = {
                     "document_id": doc_id,  # Contract field name
                     "user_id": user_id,  # Required by contract
                     "filename": doc_props.get("filename"),
-                    "status": doc_props.get("processingStatus", "pending").upper(),  # Contract requires uppercase enum
+                    "title": pg_doc.title,
+                    "status": processing_status.upper(),  # Contract requires uppercase enum
                     "upload_timestamp": pg_doc.upload_timestamp.isoformat() if pg_doc.upload_timestamp else doc_props.get("creationDate"),
                     "processing_started_at": None,  # TODO: track in PostgreSQL
                     "processing_completed_at": None,  # TODO: track in PostgreSQL
@@ -237,7 +264,7 @@ async def async_list_documents(
                     "weaviate_tenant": tenant_name,  # Required by contract
                     "chunk_count": doc_props.get("chunkCount"),
                     "embedding_status": doc_props.get("embeddingStatus", "pending"),  # Frontend expects this field
-                    "error_message": None,  # TODO: track processing errors
+                    "error_message": pg_doc.error_message,
                     "source_provenance": build_document_source_provenance(pg_doc),
                 }
                 documents.append(doc)

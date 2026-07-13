@@ -62,6 +62,7 @@ from .evidence_summary import (
 from .event_types import (
     INTERNAL_EXTRACTION_RESULT_EVENT_TYPE as _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
 )
+from .models import file_ready_event_details
 from .extraction_manifest import (
     ExtractionManifestError,
     build_and_render_extraction_manifest,
@@ -5144,20 +5145,7 @@ async def run_specialist_with_events(
                                     add_specialist_event({
                                         "type": "FILE_READY",
                                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                                        "details": {
-                                            "file_id": output_data.get("file_id"),
-                                            "filename": output_data.get("filename"),
-                                            "format": output_data.get("format"),
-                                            "size_bytes": output_data.get("size_bytes"),
-                                            "mime_type": output_data.get("mime_type"),
-                                            "download_url": output_data.get("download_url"),
-                                            "created_at": output_data.get("created_at"),
-                                            "flow_id": output_data.get("flow_id"),
-                                            "flow_run_id": output_data.get("flow_run_id"),
-                                            "formatter_node_id": output_data.get("formatter_node_id"),
-                                            "source_node_id": output_data.get("source_node_id"),
-                                            "document_id": output_data.get("document_id"),
-                                        }
+                                        "details": file_ready_event_details(output_data),
                                     })
                             except (json.JSONDecodeError, TypeError, AttributeError) as e:
                                 # Not JSON or not FileInfo - this is normal for most tools

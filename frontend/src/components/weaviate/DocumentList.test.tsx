@@ -260,6 +260,37 @@ describe('DocumentList', () => {
     expect(screen.getByText('doc3.pdf')).toBeInTheDocument();
   });
 
+  it('shows durable failed processing state and error instead of stale pending embedding state', () => {
+    const failedDocument = createTestDocument({
+      id: 'failed-provider-document',
+      filename: 'provider-paper.pdf',
+      processingStatus: 'failed',
+      embeddingStatus: 'pending',
+      errorMessage: 'S07: line 170: Table has no separator line',
+    });
+
+    render(<DocumentList {...defaultProps} documents={[failedDocument]} totalCount={1} />);
+
+    expect(screen.getByText('failed')).toBeInTheDocument();
+    expect(screen.queryByText('pending')).not.toBeInTheDocument();
+    expect(screen.getByText('S07: line 170: Table has no separator line')).toBeInTheDocument();
+    const deleteButton = screen.getByTestId('DeleteIcon').closest('button');
+    expect(deleteButton).not.toBeDisabled();
+  });
+
+  it('keeps an embedding failure visible after document processing completed', () => {
+    const failedEmbeddingDocument = createTestDocument({
+      id: 'failed-embedding-document',
+      processingStatus: 'completed',
+      embeddingStatus: 'failed',
+    });
+
+    render(<DocumentList {...defaultProps} documents={[failedEmbeddingDocument]} totalCount={1} />);
+
+    expect(screen.getByText('failed')).toBeInTheDocument();
+    expect(screen.queryByText('completed')).not.toBeInTheDocument();
+  });
+
   it('displays provider provenance in the source column', () => {
     const docs = [
       createTestDocument({

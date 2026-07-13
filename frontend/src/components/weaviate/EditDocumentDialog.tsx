@@ -17,6 +17,7 @@ interface EditDocumentDialogProps {
   open: boolean;
   documentId: string;
   currentTitle: string | null;
+  originalFilename: string | null;
   onClose: () => void;
   onSave: (documentId: string, title: string) => Promise<void>;
 }
@@ -25,6 +26,7 @@ const EditDocumentDialog: React.FC<EditDocumentDialogProps> = ({
   open,
   documentId,
   currentTitle,
+  originalFilename,
   onClose,
   onSave,
 }) => {
@@ -58,7 +60,7 @@ const EditDocumentDialog: React.FC<EditDocumentDialogProps> = ({
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>
         <Box display="flex" alignItems="center" justifyContent="space-between">
-          Edit Document
+          Edit display title
           <IconButton onClick={onClose} size="small" aria-label="close">
             <Close fontSize="small" />
           </IconButton>
@@ -71,16 +73,18 @@ const EditDocumentDialog: React.FC<EditDocumentDialogProps> = ({
           </Alert>
         )}
         <TextField
-          autoFocus
           margin="dense"
           id="document-title"
-          label="Title"
+          label="Display title"
           type="text"
           fullWidth
           variant="outlined"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           inputProps={{ maxLength: 255 }}
+          helperText={originalFilename
+            ? `Original filename remains ${originalFilename}`
+            : 'The original filename will not be changed.'}
           disabled={saving}
           sx={{ mt: 1 }}
         />

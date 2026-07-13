@@ -67,6 +67,10 @@ type ImportStatus =
 type ImportMode = 'identifiers' | 'upload';
 type PendingAction = 'resolve' | 'import' | null;
 type UploadStatus = 'idle' | 'uploading' | 'complete' | 'error';
+type IdentifierFeedback = {
+  severity: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+};
 
 interface LiteratureImportResult {
   identifier: string;
@@ -330,6 +334,7 @@ const AddLiteraturePage: React.FC = () => {
   const [identifiers, setIdentifiers] = React.useState('');
   const [results, setResults] = React.useState<LiteratureImportResult[]>([]);
   const [pendingAction, setPendingAction] = React.useState<PendingAction>(null);
+  const [identifierFeedback, setIdentifierFeedback] = React.useState<IdentifierFeedback | null>(null);
   const [uploadStatus, setUploadStatus] = React.useState<UploadStatus>('idle');
   const [uploadMessage, setUploadMessage] = React.useState<string | null>(null);
   const [jobs, setJobs] = React.useState<PdfProcessingJob[]>([]);
@@ -463,23 +468,34 @@ const AddLiteraturePage: React.FC = () => {
     const requestVersion = identifierRequestVersionRef.current + 1;
     identifierRequestVersionRef.current = requestVersion;
     setPendingAction('resolve');
+    setIdentifierFeedback({ severity: 'info', message: 'Resolving identifiers…' });
     resolveSourceIdentifiers(identifiers)
       .then((payload) => {
         if (identifierRequestVersionRef.current !== requestVersion) {
           return;
         }
-        setResults(payload.results?.map(resultFromApiResult) ?? []);
+        const nextResults = payload.results?.map(resultFromApiResult) ?? [];
+        setResults(nextResults);
+        const unresolvedCount = nextResults.filter((result) => result.status !== 'resolved').length;
+        setIdentifierFeedback({
+          severity: nextResults.length > 0 && unresolvedCount === 0 ? 'success' : 'warning',
+          message: nextResults.length === 0
+            ? 'No identifiers were returned. Check the identifier format and try again.'
+            : `Resolved ${nextResults.length - unresolvedCount} of ${nextResults.length} identifier${nextResults.length === 1 ? '' : 's'}. Review Identifier Results below; no imports were started.`,
+        });
       })
       .catch((error) => {
         if (identifierRequestVersionRef.current !== requestVersion) {
           return;
         }
+        const message = error instanceof Error ? error.message : 'Failed to resolve source identifiers.';
         setResults([{
           identifier: identifiers,
           normalizedIdentifier: null,
           status: 'provider_unavailable',
-          message: error instanceof Error ? error.message : 'Failed to resolve source identifiers.',
+          message,
         }]);
+        setIdentifierFeedback({ severity: 'error', message });
       })
       .finally(() => {
         if (identifierRequestVersionRef.current !== requestVersion) {
@@ -493,19 +509,22 @@ const AddLiteraturePage: React.FC = () => {
     const requestVersion = identifierRequestVersionRef.current + 1;
     identifierRequestVersionRef.current = requestVersion;
     setPendingAction('import');
+    setIdentifierFeedback({ severity: 'info', message: 'Resolving identifiers and starting import jobs…' });
     importSourceIdentifiers(identifiers)
       .then((payload) => {
         if (identifierRequestVersionRef.current !== requestVersion) {
           return;
         }
-        setResults(payload.results?.map(resultFromApiResult) ?? []);
-        if ((payload.imported_count ?? 0) > 0) {
-          emitGlobalToast({
-            message: 'Identifier imports are processing in the background. You can safely navigate away.',
-            severity: 'info',
-            autoHideDurationMs: 6000,
-            anchorOrigin: { vertical: 'bottom', horizontal: 'left' },
-          });
+        const nextResults = payload.results?.map(resultFromApiResult) ?? [];
+        const importedCount = payload.imported_count ?? 0;
+        setResults(nextResults);
+        setIdentifierFeedback({
+          severity: importedCount > 0 ? 'success' : 'warning',
+          message: importedCount > 0
+            ? `Started ${importedCount} import job${importedCount === 1 ? '' : 's'}. Progress remains visible in PDF Jobs below.`
+            : 'No import jobs were started. Review Identifier Results below for details.',
+        });
+        if (importedCount > 0) {
           void refreshJobs(true);
         }
       })
@@ -513,12 +532,14 @@ const AddLiteraturePage: React.FC = () => {
         if (identifierRequestVersionRef.current !== requestVersion) {
           return;
         }
+        const message = error instanceof Error ? error.message : 'Failed to import source identifiers.';
         setResults([{
           identifier: identifiers,
           normalizedIdentifier: null,
           status: 'provider_unavailable',
-          message: error instanceof Error ? error.message : 'Failed to import source identifiers.',
+          message,
         }]);
+        setIdentifierFeedback({ severity: 'error', message });
       })
       .finally(() => {
         if (identifierRequestVersionRef.current !== requestVersion) {
@@ -532,6 +553,7 @@ const AddLiteraturePage: React.FC = () => {
     setIdentifiers('');
     setResults([]);
     setPendingAction(null);
+    setIdentifierFeedback(null);
     identifierRequestVersionRef.current += 1;
     setUploadStatus('idle');
     setUploadMessage(null);
@@ -541,6 +563,8 @@ const AddLiteraturePage: React.FC = () => {
     setMode(nextMode);
     identifierRequestVersionRef.current += 1;
     setPendingAction(null);
+    setIdentifierFeedback(null);
+    setResults([]);
   }, []);
 
   const handleViewDocument = React.useCallback(
@@ -557,6 +581,7 @@ const AddLiteraturePage: React.FC = () => {
     (event: React.ChangeEvent<HTMLInputElement>) => {
       setIdentifiers(event.target.value);
       setResults([]);
+      setIdentifierFeedback(null);
       identifierRequestVersionRef.current += 1;
       setPendingAction(null);
     },
@@ -749,15 +774,21 @@ AGRKB:101000000055784`}
                   <Button variant="outlined" startIcon={<RefreshIcon />} onClick={handleReset} disabled={isWorking}>
                     Reset
                   </Button>
-                  {isWorking && (
-                    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 180 }}>
-                      <LinearProgress sx={{ width: 96 }} />
-                      <Typography variant="body2" color="text.secondary">
-                        {pendingAction === 'resolve' ? 'Resolving identifiers' : 'Starting import jobs'}
-                      </Typography>
-                    </Stack>
-                  )}
                 </Stack>
+                {identifierFeedback && (
+                  <Alert
+                    severity={identifierFeedback.severity}
+                    role="status"
+                    aria-live="polite"
+                    icon={isWorking ? false : undefined}
+                    sx={{ borderRadius: 1 }}
+                  >
+                    <Stack spacing={0.75}>
+                      <Typography variant="body2">{identifierFeedback.message}</Typography>
+                      {isWorking && <LinearProgress aria-label="Identifier request progress" />}
+                    </Stack>
+                  </Alert>
+                )}
                 <Alert severity="info" sx={{ borderRadius: 1 }}>
                   Resolve is a dry run. Resolve and Import starts PDF-backed jobs that continue in the background and remain visible in PDF Jobs.
                 </Alert>
@@ -823,13 +854,11 @@ AGRKB:101000000055784`}
           </Stack>
         </Paper>
 
-        <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
-
         <Paper variant="outlined" sx={{ borderRadius: 1, overflow: 'hidden' }}>
           <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Box>
               <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                Import Results
+                {mode === 'identifiers' ? 'Identifier Results' : 'Upload Results'}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 PDF-backed source retrievals and upload jobs land in the Library.
@@ -960,6 +989,8 @@ AGRKB:101000000055784`}
             </Table>
           </TableContainer>
         </Paper>
+
+        <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
       </Stack>
     </Box>
   );

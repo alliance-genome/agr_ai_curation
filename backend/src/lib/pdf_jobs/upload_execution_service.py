@@ -689,7 +689,7 @@ class UploadExecutionService:
             if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                 raise PDFCancellationError("Processing cancelled by user request")
             connection = get_connection()
-            await self._provider_markdown_ingestion(
+            ingestion_result = await self._provider_markdown_ingestion(
                 ProviderMarkdownIngestionRequest(
                     document_id=request.document_id,
                     user_id=request.user_id,
@@ -701,6 +701,16 @@ class UploadExecutionService:
                 ),
                 weaviate_client=connection,
             )
+            validation_warnings = list(
+                getattr(ingestion_result, "validation_warnings", None) or []
+            )
+            if validation_warnings:
+                pdf_job_service.update_progress(
+                    job_id=request.job_id,
+                    metadata={
+                        "provider_markdown_validation_warnings": validation_warnings,
+                    },
+                )
             if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                 raise PDFCancellationError("Processing cancelled by user request")
             try:

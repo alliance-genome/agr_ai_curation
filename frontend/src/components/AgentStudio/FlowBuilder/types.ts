@@ -209,6 +209,7 @@ export type FlowEdge = Edge<{
 export interface FlowState {
   flowName: string
   version: FlowDefinition['version']
+  entry_node_id?: string
   nodes: Array<{
     id: string
     type: NodeType

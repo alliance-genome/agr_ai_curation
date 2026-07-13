@@ -1015,6 +1015,7 @@ describe('FlowBuilder', () => {
     await waitFor(() => {
       const calls = onFlowChange.mock.calls
       const latestFlowState = calls[calls.length - 1]?.[0]
+      expect(latestFlowState?.entry_node_id).toBe('node_0')
       expect(latestFlowState?.edges).toEqual(expect.arrayContaining([
         expect.objectContaining({
           source: 'node_1',

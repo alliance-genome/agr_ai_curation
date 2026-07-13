@@ -56,7 +56,7 @@ def _flow_definition(*, agent_id: str, agent_display_name: str, output_key: str 
 
 def _sample_pdf_projection_flow_definition() -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -83,7 +83,7 @@ def _sample_pdf_projection_flow_definition() -> dict:
             },
             {
                 "id": "agent_2",
-                "type": "agent",
+                "type": "output",
                 "position": {"x": 520, "y": 0},
                 "data": {
                     "agent_id": "json_formatter",
@@ -123,7 +123,12 @@ def _sample_pdf_projection_flow_definition() -> dict:
         ],
         "edges": [
             {"id": "edge_1", "source": "task_input_1", "target": "agent_1"},
-            {"id": "edge_2", "source": "agent_1", "target": "agent_2"},
+            {
+                "id": "edge_2",
+                "source": "agent_1",
+                "target": "agent_2",
+                "role": "output_attachment",
+            },
         ],
     }
 
@@ -278,8 +283,8 @@ def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClien
         "name": flow_name,
         "description": "integration lifecycle test",
         "flow_definition": _flow_definition(
-            agent_id="chat_output",
-            agent_display_name="Chat Output Agent",
+            agent_id="orthologs",
+            agent_display_name="Ortholog Lookup",
         ),
     }
     create_resp = client.post("/api/flows", json=create_payload)
@@ -291,8 +296,8 @@ def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClien
     update_payload = {
         "description": "integration lifecycle test (updated)",
         "flow_definition": _flow_definition(
-            agent_id="chat_output",
-            agent_display_name="Chat Output Agent",
+            agent_id="orthologs",
+            agent_display_name="Ortholog Lookup",
             output_key="final_output_updated",
         ),
     }
@@ -346,8 +351,8 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
             "name": flow_name,
             "description": "integration durable replay test",
             "flow_definition": _flow_definition(
-                agent_id="chat_output",
-                agent_display_name="Chat Output Agent",
+                agent_id="orthologs",
+                agent_display_name="Ortholog Lookup",
             ),
         },
     )
@@ -553,6 +558,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
         execution_state["completed_steps"].append(
             {
                 "step": 1,
+                "node_id": "agent_1",
                 "agent_id": "gene_extractor",
                 "agent_name": "Gene Extractor",
                 "tool_name": ordered_tool_names[0],
@@ -589,6 +595,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
         execution_state["completed_steps"].append(
             {
                 "step": 2,
+                "node_id": "agent_2",
                 "agent_id": "json_formatter",
                 "agent_name": "JSON File Formatter",
                 "tool_name": ordered_tool_names[1],
@@ -603,7 +610,16 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
             "type": "TOOL_COMPLETE",
             "details": {"toolName": ordered_tool_names[1]},
         }
-        yield {"type": "FILE_READY", "details": file_info}
+        yield {
+            "type": "FILE_READY",
+            "details": {
+                **file_info,
+                "formatter_node_id": "agent_2",
+                "source_node_id": "agent_1",
+                "formatter_label": "JSON File Formatter",
+                "source_label": "Gene Extractor",
+            },
+        }
 
     execute_payload = {
         "flow_id": flow_id,

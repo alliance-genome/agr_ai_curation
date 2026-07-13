@@ -73,6 +73,23 @@ def test_chat_context_model_round_trips_session_id():
     assert context.model_dump(exclude_none=True)["session_id"] == "assistant-session-123"
 
 
+def test_chat_context_model_round_trips_flow_entry_node_id():
+    context = api_module.ChatContext.model_validate(
+        {
+            "active_tab": "flows",
+            "flow_definition": {
+                "version": "1.1",
+                "entry_node_id": "task_input_0",
+                "nodes": [],
+                "edges": [],
+            },
+        }
+    )
+
+    assert context.flow_definition is not None
+    assert context.flow_definition.entry_node_id == "task_input_0"
+
+
 def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     contract_client,
     chat_contract_auth_headers,
@@ -90,7 +107,11 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)
-    monkeypatch.setattr(api_module, "set_current_flow_context", lambda _context: None)
+    monkeypatch.setattr(
+        api_module,
+        "set_current_flow_context",
+        lambda flow_context: captured.setdefault("flow_context", flow_context),
+    )
     monkeypatch.setattr(api_module, "clear_current_flow_context", lambda: None)
     monkeypatch.setattr(
         api_module,
@@ -157,6 +178,36 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
             "context": {
                 "trace_id": "trace-123",
                 "session_id": "assistant-session-123",
+                "active_tab": "flows",
+                "flow_name": "Entry Context Flow",
+                "flow_definition": {
+                    "version": "1.1",
+                    "nodes": [
+                        {
+                            "id": "task_input_0",
+                            "node_type": "task_input",
+                            "agent_id": "task_input",
+                            "agent_display_name": "Initial Instructions",
+                            "task_instructions": "Extract alleles.",
+                            "output_key": "task_input",
+                        },
+                        {
+                            "id": "allele_1",
+                            "node_type": "agent",
+                            "agent_id": "allele_extractor",
+                            "agent_display_name": "Allele Extractor",
+                            "output_key": "alleles",
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "id": "control_1",
+                            "source": "task_input_0",
+                            "target": "allele_1",
+                            "role": "control_flow",
+                        }
+                    ],
+                },
             },
         },
     ) as response:
@@ -171,6 +222,7 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     ] == ["TEXT_DELTA", "DONE"]
     assert all(event["session_id"] == CONTEXT_SESSION_ID for event in events)
     assert captured["request_context_session_id"] == "assistant-session-123"
+    assert captured["flow_context"]["entry_node_id"] == "task_input_0"
     assert captured.get("assistant_trace_id") == "trace-123", {
         "events": events,
         "captured": captured,

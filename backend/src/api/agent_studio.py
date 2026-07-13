@@ -3248,6 +3248,14 @@ async def chat_with_opus(
     # Set flow context if user is on Flows tab (for get_current_flow tool)
     if request.context and request.context.active_tab == 'flows' and request.context.flow_definition:
         # Convert Pydantic models to dicts for the context variable
+        task_input_node_id = next(
+            (
+                node.id
+                for node in request.context.flow_definition.nodes
+                if node.node_type == "task_input" or node.agent_id == "task_input"
+            ),
+            None,
+        )
         flow_context = {
             "flow_name": request.context.flow_name or "Untitled Flow",
             "version": request.context.flow_definition.version,
@@ -3259,7 +3267,10 @@ async def chat_with_opus(
                 for node in request.context.flow_definition.nodes
             ],
             "edges": [edge.model_dump() for edge in request.context.flow_definition.edges],
-            "entry_node_id": None,  # Will be determined by the tool
+            "entry_node_id": (
+                request.context.flow_definition.entry_node_id
+                or task_input_node_id
+            ),
         }
         set_current_flow_context(flow_context)
         logger.debug('Set flow context: %s', flow_context.get('flow_name'))

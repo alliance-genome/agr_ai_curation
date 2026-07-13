@@ -330,6 +330,7 @@ function AgentStudioPage() {
     activeTab === 'flows' && flowState
       ? {
           version: flowState.version,
+          entry_node_id: flowState.entry_node_id,
           nodes: flowState.nodes.map((node) => ({
             id: node.id,
             node_type: node.type,

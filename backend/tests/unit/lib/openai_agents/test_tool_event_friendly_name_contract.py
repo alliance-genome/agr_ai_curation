@@ -871,7 +871,10 @@ async def test_runner_emits_reasoning_file_ready_chat_output_and_handoff_events(
 
     file_output = (
         '{"file_id":"f-1","download_url":"/api/files/f-1/download","filename":"results.csv",'
-        '"format":"csv","size_bytes":12,"mime_type":"text/csv"}'
+        '"format":"csv","size_bytes":12,"mime_type":"text/csv",'
+        '"formatter_label":"Allele CSV","source_label":"Allele Extractor",'
+        '"source_extraction_result_ids":["extract-1"],"source_keys":["allele"],'
+        '"source_envelope_ids":["envelope-1"]}'
     )
     fake_events = [
         _raw_response_stream_event(_FakeTextDelta("Hello ")),
@@ -928,6 +931,12 @@ async def test_runner_emits_reasoning_file_ready_chat_output_and_handoff_events(
     assert "AGENT_THINKING" in event_types
     assert "CHAT_OUTPUT_READY" in event_types
     assert "FILE_READY" in event_types
+    file_ready = next(event for event in emitted_events if event.get("type") == "FILE_READY")
+    assert file_ready["details"]["formatter_label"] == "Allele CSV"
+    assert file_ready["details"]["source_label"] == "Allele Extractor"
+    assert file_ready["details"]["source_extraction_result_ids"] == ["extract-1"]
+    assert file_ready["details"]["source_keys"] == ["allele"]
+    assert file_ready["details"]["source_envelope_ids"] == ["envelope-1"]
     assert "HANDOFF_START" in event_types
     assert "CREW_START" in event_types
     assert "STRUCTURED_RESULT" in event_types
@@ -1801,7 +1810,10 @@ async def test_specialist_emits_file_ready_for_fileinfo_output(monkeypatch):
     fake_events = [
         _tool_call_stream_event("finalize_and_save"),
         _tool_output_stream_event(
-            '{"file_id":"f1","download_url":"/api/files/f1/download","filename":"out.csv","format":"csv"}'
+            '{"file_id":"f1","download_url":"/api/files/f1/download","filename":"out.csv",'
+            '"format":"csv","formatter_label":"Allele CSV","source_label":"Allele Extractor",'
+            '"source_extraction_result_ids":["extract-1"],"source_keys":["allele"],'
+            '"source_envelope_ids":["envelope-1"]}'
         ),
     ]
     captured_events = []
@@ -1834,6 +1846,11 @@ async def test_specialist_emits_file_ready_for_fileinfo_output(monkeypatch):
     file_ready = [e for e in captured_events if e.get("type") == "FILE_READY"]
     assert len(file_ready) == 1
     assert file_ready[0]["details"]["filename"] == "out.csv"
+    assert file_ready[0]["details"]["formatter_label"] == "Allele CSV"
+    assert file_ready[0]["details"]["source_label"] == "Allele Extractor"
+    assert file_ready[0]["details"]["source_extraction_result_ids"] == ["extract-1"]
+    assert file_ready[0]["details"]["source_keys"] == ["allele"]
+    assert file_ready[0]["details"]["source_envelope_ids"] == ["envelope-1"]
 
 
 @pytest.mark.asyncio

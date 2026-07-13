@@ -68,6 +68,9 @@ async def test_async_list_documents_normalises_results():
 
     mock_db_doc = SimpleNamespace(
         id=mock_uuid,
+        title=None,
+        status="completed",
+        error_message=None,
         upload_timestamp=datetime(2024, 1, 1),
         file_size=2048,
         source_provider="abc_literature",
@@ -285,6 +288,9 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
 
     mock_pg_doc = SimpleNamespace(
         id=owned_uuid,
+        title=None,
+        status="pending",
+        error_message=None,
         upload_timestamp=None,
         file_size=5120,
         source_provider=None,
@@ -369,6 +375,9 @@ async def test_async_list_documents_applies_date_filters():
     mock_db_user = SimpleNamespace(id=42)
     mock_pg_doc = SimpleNamespace(
         id=mock_uuid,
+        title=None,
+        status="pending",
+        error_message=None,
         upload_timestamp=None,
         file_size=5120,
         source_provider=None,

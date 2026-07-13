@@ -62,6 +62,19 @@ def test_canonical_processing_status_uses_active_pipeline_when_no_durable_job():
     assert status == "chunking"
 
 
+def test_canonical_processing_status_does_not_let_old_completed_job_hide_reprocess():
+    old_job = SimpleNamespace(status=PdfJobStatus.COMPLETED.value)
+
+    status = documents._canonical_processing_status(
+        sql_processing_status="completed",
+        weaviate_processing_status="processing",
+        pipeline_status=None,
+        job=old_job,
+    )
+
+    assert status == "processing"
+
+
 def test_select_progress_snapshot_prefers_terminal_job_over_active_pipeline():
     pipeline_status = SimpleNamespace(current_stage=ProcessingStage.EMBEDDING)
     job = SimpleNamespace(

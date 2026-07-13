@@ -29,6 +29,38 @@ from src.models.pipeline import ProcessingStage
 from src.models.strategy import ChunkingStrategy
 
 
+def test_provider_markdown_structural_findings_are_non_blocking_warnings() -> None:
+    warnings = ingestion._validate_provider_markdown(
+        "## Methods\n\nText.\n\n# First title\n\n# Second title\n\n"
+        "| allele | source |\n| a1 | paper |\n"
+    )
+
+    assert any(message.startswith("S01:") for message in warnings)
+    assert any(message.startswith("S02:") for message in warnings)
+    assert any(message.startswith("S07:") for message in warnings)
+
+
+def test_provider_markdown_unknown_validation_error_remains_blocking(monkeypatch) -> None:
+    import agr_abc_document_parsers
+
+    unknown_issue = SimpleNamespace(
+        rule_id="S99",
+        line=12,
+        message="Unsafe future structural condition",
+    )
+    monkeypatch.setattr(
+        agr_abc_document_parsers,
+        "validate_markdown",
+        lambda _markdown: SimpleNamespace(errors=[unknown_issue], warnings=[]),
+    )
+
+    with pytest.raises(
+        DocumentSourceMarkdownValidationError,
+        match="S99: line 12: Unsafe future structural condition",
+    ):
+        ingestion._validate_provider_markdown("# Title\n")
+
+
 def _source_provenance(**overrides):
     payload = {
         "provider": "abc_literature",

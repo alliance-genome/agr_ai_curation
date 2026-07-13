@@ -114,6 +114,7 @@ export interface DocumentSummary {
   lastAccessedDate: string | null;
   processingStatus: string | null;
   embeddingStatus: string | null;
+  errorMessage?: string | null;
   chunkCount: number | null;
   vectorCount: number | null;
   metadata?: Record<string, unknown> | null;

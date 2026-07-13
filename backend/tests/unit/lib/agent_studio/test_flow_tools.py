@@ -500,6 +500,7 @@ def test_get_current_flow_handler_explains_output_attachment_binding():
         {
             "flow_name": "Multiple Export Flow",
             "version": "1.1",
+            "entry_node_id": "task_input_0",
             "nodes": [
                 {
                     "id": "task_input_0",
@@ -515,7 +516,7 @@ def test_get_current_flow_handler_explains_output_attachment_binding():
                     "id": "allele_1",
                     "type": "agent",
                     "data": {
-                        "agent_id": "allele",
+                        "agent_id": "allele_extractor",
                         "agent_display_name": "Allele Extraction",
                         "output_key": "alleles",
                     },
@@ -533,7 +534,7 @@ def test_get_current_flow_handler_explains_output_attachment_binding():
                     "id": "gene_1",
                     "type": "agent",
                     "data": {
-                        "agent_id": "gene",
+                        "agent_id": "gene_extractor",
                         "agent_display_name": "Gene Extraction",
                         "output_key": "genes",
                     },
@@ -572,8 +573,13 @@ def test_get_current_flow_handler_explains_output_attachment_binding():
     ]
     formatter_step = result["steps"][1]
     assert formatter_step["output_attachment"]["source_node_id"] == "allele_1"
-    assert formatter_step["output_attachment"]["source_agent_id"] == "allele"
+    assert formatter_step["output_attachment"]["source_agent_id"] == "allele_extractor"
     assert result["edges"][1]["role"] == "output_attachment"
+    assert result["has_critical_issues"] is False
+    assert not any(
+        issue["code"] == "entry_mismatch"
+        for issue in result["executable_graph"]["issues"]
+    )
     markdown = result["execution_order_markdown"]
     assert "Formatter output branches" in markdown
     assert "Multiple formatter branches create multiple independent" in markdown
