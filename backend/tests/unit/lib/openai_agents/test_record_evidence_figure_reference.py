@@ -119,6 +119,8 @@ def test_provider_figure_metadata_does_not_fallback_for_plural_references(
         "Fig. 1A and-or B show alternative patterns.",
         "Fig. 1A vs. B shows the comparison.",
         "Fig. 1A + B show different patterns.",
+        "Fig. 1A; B show different patterns.",
+        "Fig. 1A as well as B show different patterns.",
     ),
 )
 def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
@@ -131,6 +133,36 @@ def test_provider_figure_metadata_does_not_fallback_for_ambiguous_separators(
     }
 
     assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
+
+
+@pytest.mark.parametrize(
+    ("span_text", "expected"),
+    (
+        (
+            "Fig. 1A and a second assay confirms the result.",
+            "Fig. 1A",
+        ),
+        (
+            "Figure 1 and a model of the pathway are shown.",
+            "Figure 1",
+        ),
+        (
+            "Fig. 1A or a replicate from the same experiment supports this.",
+            "Fig. 1A",
+        ),
+    ),
+)
+def test_provider_figure_metadata_preserves_locator_before_lowercase_prose(
+    span_text: str,
+    expected: str,
+) -> None:
+    chunk = {
+        "text": span_text,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], span_text) == expected
 
 
 @pytest.mark.parametrize(
