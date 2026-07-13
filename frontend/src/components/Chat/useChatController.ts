@@ -143,6 +143,10 @@ export function useChatController({
   const sessionIdCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastProgressUpdateRef = useRef<number>(0)
   const assistantBuffersRef = useRef<Record<string, string>>({})
+  const flowChatOutputsRef = useRef<Record<string, {
+    content: string
+    identities: Set<string>
+  }>>({})
   const activeTurnIdRef = useRef<string | null>(null)
   const rescuedTurnIdsRef = useRef<Set<string>>(new Set())
   const latestMessagesRef = useRef<Message[]>(messages)
@@ -266,6 +270,7 @@ export function useChatController({
   const invalidateTurnRuntimeState = useCallback(() => {
     sessionStateVersionRef.current += 1
     assistantBuffersRef.current = {}
+    flowChatOutputsRef.current = {}
     activeTurnIdRef.current = null
     rescuedTurnIdsRef.current = new Set()
   }, [])
@@ -854,10 +859,24 @@ export function useChatController({
         const outputText = String(parsed.details.output || parsed.details.output_preview || '').trim()
         if (outputText) {
           if (turnId) {
-            const combinedOutput = mergeFlowChatOutputs(
-              assistantBuffersRef.current[turnId] ?? '',
-              outputText,
-            )
+            const formatterNodeId = String(parsed.details.formatter_node_id || '').trim()
+            const outputIdentity = formatterNodeId
+              ? `${formatterNodeId}:${outputText}`
+              : `output:${outputText}`
+            const existingOutputs = flowChatOutputsRef.current[turnId]
+            if (existingOutputs?.identities.has(outputIdentity)) {
+              return
+            }
+            const combinedOutput = existingOutputs
+              ? mergeFlowChatOutputs(existingOutputs.content, outputText)
+              : outputText
+            flowChatOutputsRef.current[turnId] = {
+              content: combinedOutput,
+              identities: new Set([
+                ...(existingOutputs?.identities ?? []),
+                outputIdentity,
+              ]),
+            }
             assistantBuffersRef.current[turnId] = combinedOutput
             setMessages((prev) => upsertAssistantTurnMessage(prev, {
               turnId,
@@ -1601,6 +1620,7 @@ export function useChatController({
     activeTurnIdRef.current = turnId
     rescuedTurnIdsRef.current.delete(turnId)
     assistantBuffersRef.current[turnId] = ''
+    delete flowChatOutputsRef.current[turnId]
 
     const userMessage: Message = {
       role: 'user',
@@ -1650,6 +1670,7 @@ export function useChatController({
     activeTurnIdRef.current = turnId
     rescuedTurnIdsRef.current.delete(turnId)
     assistantBuffersRef.current[turnId] = ''
+    delete flowChatOutputsRef.current[turnId]
 
     const userMessage: Message = {
       role: 'user',

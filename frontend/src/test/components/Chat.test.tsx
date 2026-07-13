@@ -325,6 +325,63 @@ describe('Chat persistence', () => {
     expect(markEventsProcessed).toHaveBeenCalledWith(4, 2)
   })
 
+  it('replaces streamed supervisor prose with ordered typed flow chat outputs', async () => {
+    const { container } = renderChat({
+      sessionId: 'session-1',
+      eventStreamVersion: 5,
+      processedEventCount: 0,
+      events: [
+        {
+          type: 'RUN_STARTED',
+          session_id: 'session-1',
+          turn_id: 'turn-flow-1',
+        },
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          turn_id: 'turn-flow-1',
+          content: 'Raw supervisor prose that is not the flow result.',
+        },
+        {
+          type: 'CHAT_OUTPUT_READY',
+          session_id: 'session-1',
+          turn_id: 'turn-flow-1',
+          details: {
+            formatter_node_id: 'allele-chat',
+            output: 'Allele branch answer.',
+          },
+        },
+        {
+          type: 'CHAT_OUTPUT_READY',
+          session_id: 'session-1',
+          turn_id: 'turn-flow-1',
+          details: {
+            formatter_node_id: 'allele-chat',
+            output: 'Allele branch answer.',
+          },
+        },
+        {
+          type: 'CHAT_OUTPUT_READY',
+          session_id: 'session-1',
+          turn_id: 'turn-flow-1',
+          details: {
+            formatter_node_id: 'gene-chat',
+            output: 'Gene branch answer.',
+          },
+        },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(container.querySelector('.message-content')).toHaveTextContent(
+        'Allele branch answer. Gene branch answer.',
+      )
+    })
+    const renderedOutput = container.querySelector('.message-content')?.textContent ?? ''
+    expect(renderedOutput).not.toContain('Raw supervisor prose that is not the flow result.')
+    expect(renderedOutput.match(/Allele branch answer\./g)).toHaveLength(1)
+  })
+
   it('does not delete stored messages when session id mismatches', () => {
     localStorage.setItem(chatStorageKeys.sessionId, 'session-2')
     localStorage.setItem(
