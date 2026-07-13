@@ -84,26 +84,24 @@ _LOWERCASE_A_CONTINUATION_PATTERN = re.compile(
 # preceding locator would invent specificity. Preserve the locator only when
 # the continuation supplies positive grammatical evidence that "a" is an
 # article: a noun phrase followed by an auxiliary/copula, or by a third-person
-# singular predicate with an explicit complement. The required noun cannot be
-# an ``-ly`` adverb, degree modifier, or irregular adverb, though modifiers are
-# accepted before an established noun. This avoids treating panel-subject prose
-# such as "a very clearly shows" or "a also shows" as an article while retaining
-# "a control clearly confirms the result".
-_ARTICLE_NON_NOUN_WORD = (
-    r"(?:again|ahead|alike|almost|already|also|apart|around|away|back|backwards?|"
-    r"better|else|enough|even|ever|far|farther|first|forth|forwards?|further|"
-    r"hard|here|home|instead|just|late|later|least|less|more|most|much|near|"
-    r"never|next|now|often|once|only|otherwise|perhaps|quite|rather|seldom|"
-    r"since|so|somewhat|soon|still|straight|then|there|together|too|very|well|"
-    r"yet)"
+# singular predicate with an explicit complement. Because arbitrary words
+# cannot safely be classified as nouns without a parser, the head must come
+# from this deliberately bounded scientific/common noun vocabulary. Unknown
+# heads remain ambiguous and therefore suppress the locator. Modifiers are
+# accepted before an established head, retaining phrases such as "a very strong
+# control" and "a further experiment" without maintaining an unbounded adverb
+# blacklist.
+_ARTICLE_NOUN_HEAD_PATTERN = (
+    r"(?:analysis|animal|approach|assay|assessment|article|cell|cohort|"
+    r"comparison|condition|construct|control|dataset|embryo|experiment|figure|"
+    r"gene|group|line|marker|measurement|method|model|mouse|observation|"
+    r"organism|panel|pathway|phenotype|protein|replicate|reporter|result|sample|"
+    r"signal|strain|study|table|test|tissue|treatment|variant)"
 )
 _ARTICLE_AFTER_LOWERCASE_A_PATTERN = re.compile(
     r"^\s+(?:(?!(?:and|or|but|that|which|who|whose|where|when)\b)"
     r"[A-Za-z][A-Za-z0-9'-]*\s+)*?"
-    r"(?!(?:[A-Za-z][A-Za-z0-9'-]*ly)\b)"
-    rf"(?!{_ARTICLE_NON_NOUN_WORD}\b)"
-    r"(?!(?:and|or|but|that|which|who|whose|where|when)\b)"
-    r"[A-Za-z][A-Za-z0-9'-]*\s+"
+    rf"{_ARTICLE_NOUN_HEAD_PATTERN}\s+"
     r"(?:[A-Za-z][A-Za-z0-9'-]*ly\s+)*(?:"
     r"(?:am|is|are|was|were|be|been|being|has|have|had|do|does|did|"
     r"can|could|may|might|must|shall|should|will|would)\b|"
