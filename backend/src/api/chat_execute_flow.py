@@ -1074,7 +1074,7 @@ async def execute_flow_endpoint(
                     review_session_ids=review_session_ids,
                     adapter_keys=adapter_keys,
                     domain_warning_count=domain_warning_count,
-                    file_outputs=file_outputs,
+                    file_outputs=file_outputs if outcome.status == "completed" else [],
                     failure_reason=outcome.failure_reason,
                 )
                 summary_row = _build_execute_flow_summary_row(
@@ -1231,7 +1231,7 @@ async def execute_flow_endpoint(
                 review_session_ids=review_session_ids,
                 adapter_keys=adapter_keys,
                 domain_warning_count=domain_warning_count,
-                file_outputs=file_outputs,
+                file_outputs=file_outputs if outcome.status == "completed" else [],
                 failure_reason=outcome.failure_reason,
             )
             failure_summary_row = _build_execute_flow_summary_row(

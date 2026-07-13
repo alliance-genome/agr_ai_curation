@@ -638,6 +638,15 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
         execute_calls.append(_kwargs["flow_run_id"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stale-success"}}
         yield {
+            "type": "FILE_READY",
+            "details": {
+                "file_id": "stale-file",
+                "filename": "stale-result.tsv",
+                "format": "tsv",
+                "download_url": "/api/files/stale-file/download",
+            },
+        }
+        yield {
             "type": "RUN_FINISHED",
             "data": {"response": "The model declared completion prematurely."},
         }
@@ -706,6 +715,13 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
     assert "declared completion prematurely" not in summary.payload_json[
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ].lower()
+    assert "stale-result.tsv" not in summary.payload_json[
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+    ]
+    assert "- File refs: none recorded" in summary.payload_json[
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+    ]
+    assert not any(message.message_type == "file_download" for message in stored_messages)
 
 
 
