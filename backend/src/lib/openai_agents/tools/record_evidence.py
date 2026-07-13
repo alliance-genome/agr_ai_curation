@@ -61,11 +61,20 @@ _MULTI_REFERENCE_SEPARATOR = (
 # An explicit figure/table/panel prefix makes a one-letter token unambiguous.
 # Bare continuations also admit lowercase b-z, which are not English articles;
 # lowercase "a" is handled contextually below so an English article does not
-# erase an unambiguous locator.
+# erase an unambiguous locator. A bare uppercase letter can instead begin a
+# biomedical noun or abbreviated taxon, so exclude those positive prose forms.
+_BIOMEDICAL_UPPERCASE_PROSE_SUFFIX = (
+    r"(?:\.\s*(?-i:[a-z][A-Za-z-]*)\b|\s+(?:cells?|lymphocytes?)\b)"
+)
+_BARE_NONARTICLE_REFERENCE_TOKEN = (
+    rf"(?:(?-i:[A-Z])\b(?!{_HYPHEN_OR_DASH}|"
+    rf"{_BIOMEDICAL_UPPERCASE_PROSE_SUFFIX})|"
+    rf"(?-i:[b-z])\b(?!{_HYPHEN_OR_DASH}))"
+)
 _FOLLOWING_REFERENCE_TOKEN = (
     r"(?:(?:(?:Figs?\.?|Figures?\.?|Tables?\.?|panels?)\s*)"
-    rf"(?:[A-Za-z]|\d+[A-Za-z]?)|(?-i:[A-Zb-z])(?!{_HYPHEN_OR_DASH})|"
-    r"\d+[A-Za-z]?)\b"
+    rf"(?:[A-Za-z]|\d+[A-Za-z]?)\b|{_BARE_NONARTICLE_REFERENCE_TOKEN}|"
+    r"\d+[A-Za-z]?\b)"
 )
 _COMPACT_PANEL_TOKEN = rf"[A-Za-z]\d*\b(?!{_HYPHEN_OR_DASH})"
 # Also reject continuations after parenthetical descriptors and compact panel
@@ -152,16 +161,25 @@ _FIGURE_LIST_FOLLOWING_ITEM = (
     rf"(?:panels?\s+(?:\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
     rf"{_PANEL_LIST_TOKEN}\b(?!{_HYPHEN_OR_DASH}))|"
     rf"\(\s*{_PANEL_LIST_TOKEN}\s*\)|"
-    rf"(?-i:[A-Zb-z])\d*\b(?!{_HYPHEN_OR_DASH})|"
+    rf"(?-i:[A-Z])\d*\b(?!{_HYPHEN_OR_DASH}|"
+    rf"{_BIOMEDICAL_UPPERCASE_PROSE_SUFFIX})|"
+    rf"(?-i:[b-z])\d*\b(?!{_HYPHEN_OR_DASH})|"
     rf"\d+\b(?!{_HYPHEN_OR_DASH}))"
     r"(?:\s*\([^()\r\n]*\))?"
 )
+_PANEL_SCOPE_QUALIFIER = r"(?:(?:label(?:l)?ed|denoted)\s+)?"
 _SCOPED_MULTI_PANEL_PATTERN = re.compile(
-    rf"(?:\bpanels?\s+{_PANEL_LIST_FIRST_ITEM}\s*"
+    rf"(?:\bpanels?\s+{_PANEL_SCOPE_QUALIFIER}{_PANEL_LIST_FIRST_ITEM}\s*"
     rf"{_MULTI_REFERENCE_SEPARATOR}{_PANEL_LIST_FOLLOWING_ITEM}|"
     rf"\b(?:Figs?\.?|Figures?\.?|Tables?\.?)\s*\d+\s*"
     rf"(?:panels?\s+)?{_PANEL_LIST_FIRST_ITEM}\s*"
     rf"{_MULTI_REFERENCE_SEPARATOR}{_FIGURE_LIST_FOLLOWING_ITEM})",
+    re.IGNORECASE,
+)
+_LATER_SCOPED_PANEL_PATTERN = re.compile(
+    rf"\bpanel\s+{_PANEL_LIST_FIRST_ITEM}(?:\s+|,\s*)"
+    rf"[^.\r\n!?;]*?\b(?:whereas|while|but|and|or)\s+"
+    rf"{_FIGURE_LIST_FOLLOWING_ITEM}",
     re.IGNORECASE,
 )
 _LOCATOR_PANEL_TOKEN_PATTERN = re.compile(
@@ -380,6 +398,7 @@ def _has_ambiguous_figure_reference(text: str | None) -> bool:
         _MULTI_REFERENCE_PATTERN.search(text)
         or _has_ambiguous_lowercase_a_continuation(text)
         or _SCOPED_MULTI_PANEL_PATTERN.search(text)
+        or _LATER_SCOPED_PANEL_PATTERN.search(text)
         or _has_distinct_explicit_panel_references(text)
     )
 
