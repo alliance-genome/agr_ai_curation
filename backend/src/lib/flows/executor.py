@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Set, cast
+from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Sequence, Set, cast
 from uuid import uuid4
 
 from agents import Agent, RunContextWrapper, function_tool
@@ -688,22 +688,42 @@ def _build_terminal_flow_artifact_bundle(
     flow_name: str,
     flow_run_id: str | None = None,
     document_id: str | None = None,
-    source_node_id: str | None = None,
+    source_node_ids: Sequence[str] | None = None,
 ) -> FlowOutputArtifactBundle:
     try:
         scoped_steps = completed_steps
-        if source_node_id:
+        normalized_source_node_ids = tuple(
+            dict.fromkeys(
+                str(source_node_id).strip()
+                for source_node_id in (source_node_ids or ())
+                if str(source_node_id).strip()
+            )
+        )
+        if normalized_source_node_ids:
+            source_node_id_set = set(normalized_source_node_ids)
             scoped_steps = [
                 step
                 for step in completed_steps
-                if str(step.get("node_id") or "") == source_node_id
+                if str(step.get("node_id") or "") in source_node_id_set
             ]
-            if len(scoped_steps) != 1:
+            completed_source_node_ids = [
+                str(step.get("node_id") or "") for step in scoped_steps
+            ]
+            missing_source_node_ids = [
+                source_node_id
+                for source_node_id in normalized_source_node_ids
+                if completed_source_node_ids.count(source_node_id) != 1
+            ]
+            if missing_source_node_ids:
                 raise _flow_terminal_projection_error(
                     agent_id,
                     (
-                        f"bound source node '{source_node_id}' produced "
-                        f"{len(scoped_steps)} completed artifacts; expected exactly one"
+                        "each bound source node must produce exactly one completed "
+                        "artifact; invalid source node(s): "
+                        + ", ".join(
+                            f"'{source_node_id}' ({completed_source_node_ids.count(source_node_id)})"
+                            for source_node_id in missing_source_node_ids
+                        )
                     ),
                 )
         bundle = build_flow_output_artifact_bundle(
@@ -713,6 +733,17 @@ def _build_terminal_flow_artifact_bundle(
             document_id=document_id,
             output_format=output_format,  # type: ignore[arg-type]
         )
+        if normalized_source_node_ids and len(bundle.artifacts) != len(
+            normalized_source_node_ids
+        ):
+            raise _flow_terminal_projection_error(
+                agent_id,
+                (
+                    f"{len(normalized_source_node_ids)} bound source node(s) produced "
+                    f"{len(bundle.artifacts)} structured artifact(s); expected one "
+                    "artifact per bound source"
+                ),
+            )
         if not bundle.artifacts:
             raise _flow_terminal_projection_error(
                 agent_id,
@@ -751,7 +782,7 @@ def _build_flow_formatter_runtime_context(
     node_data: Mapping[str, Any],
     resolved_query: str,
     output_filename_descriptor: str | None,
-    source_node_id: str | None,
+    source_node_ids: Sequence[str] | None,
 ) -> str:
     raw_projection_plan = node_data.get("projection_plan")
     projection_plan = dict(raw_projection_plan) if isinstance(raw_projection_plan, Mapping) else None
@@ -762,7 +793,8 @@ def _build_flow_formatter_runtime_context(
         "flow_name": bundle.flow_name,
         "flow_run_id": bundle.flow_run_id,
         "document_id": bundle.document_id,
-        "source_node_id": source_node_id,
+        "source_node_id": source_node_ids[0] if source_node_ids else None,
+        "source_node_ids": list(source_node_ids or ()),
         "artifact_count": len(bundle.artifacts),
         "default_row_source": bundle.default_row_source,
         "row_sources": _flow_formatter_source_counts(bundle),
@@ -809,7 +841,7 @@ def _make_flow_runtime_formatter_tool(
     flow_run_id: str | None,
     document_id: str | None,
     node_data: Mapping[str, Any],
-    source_node_id: str | None = None,
+    source_node_ids: Sequence[str] | None = None,
 ):
     @function_tool(
         name_override=tool_name,
@@ -829,7 +861,7 @@ def _make_flow_runtime_formatter_tool(
             flow_name=flow_name,
             flow_run_id=flow_run_id,
             document_id=document_id,
-            source_node_id=source_node_id,
+            source_node_ids=source_node_ids,
         )
         runtime_contexts = [
             context
@@ -843,7 +875,7 @@ def _make_flow_runtime_formatter_tool(
                     node_data=node_data,
                     resolved_query=query,
                     output_filename_descriptor=output_filename_descriptor or None,
-                    source_node_id=source_node_id,
+                    source_node_ids=source_node_ids,
                 ),
             ]
             if context
@@ -915,7 +947,7 @@ def _make_flow_chat_output_tool(
     flow_run_id: str | None,
     document_id: str | None,
     node_data: Mapping[str, Any],
-    source_node_id: str | None = None,
+    source_node_ids: Sequence[str] | None = None,
 ):
     @function_tool(
         name_override=tool_name,
@@ -932,7 +964,7 @@ def _make_flow_chat_output_tool(
             flow_name=flow_name,
             flow_run_id=flow_run_id,
             document_id=document_id,
-            source_node_id=source_node_id,
+            source_node_ids=source_node_ids,
         )
         raw_plan = node_data.get("projection_plan")
         if isinstance(raw_plan, Mapping):
@@ -2233,8 +2265,8 @@ def _runtime_output_sources_by_node_id(
     flow: CurationFlow,
     *,
     db_user_id: int | None,
-) -> dict[str, str]:
-    """Validate runtime output roles and return formatter→extractor bindings."""
+) -> dict[str, tuple[str, ...]]:
+    """Validate runtime output roles and return formatter→extractors bindings."""
 
     flow_def = flow.flow_definition or {}
     projection = project_executable_flow_graph(flow_def)
@@ -2244,27 +2276,18 @@ def _runtime_output_sources_by_node_id(
         if node.get("id")
     }
     bindings = {
-        attachment.output_node_id: attachment.source_node_id
+        attachment.output_node_id: attachment.source_node_ids
         for attachment in projection.output_attachments
     }
     errors: list[str] = []
-    for output_node_id, source_node_id in bindings.items():
+    for output_node_id, source_node_ids in bindings.items():
         output_node = nodes_by_id.get(output_node_id, {})
-        source_node = nodes_by_id.get(source_node_id, {})
         output_data = output_node.get("data") or {}
-        source_data = source_node.get("data") or {}
         output_agent_id = str(
             (output_data.get("agent_id") or "") if isinstance(output_data, Mapping) else ""
         )
-        source_agent_id = str(
-            (source_data.get("agent_id") or "") if isinstance(source_data, Mapping) else ""
-        )
         output_entry = _resolve_flow_agent_entry(
             output_agent_id,
-            db_user_id=db_user_id,
-        )
-        source_entry = _resolve_flow_agent_entry(
-            source_agent_id,
             db_user_id=db_user_id,
         )
         if (
@@ -2274,10 +2297,22 @@ def _runtime_output_sources_by_node_id(
             errors.append(
                 f"output node '{output_node_id}' agent '{output_agent_id}' is not an output formatter"
             )
-        if not _is_extraction_entry(source_entry):
-            errors.append(
-                f"source node '{source_node_id}' agent '{source_agent_id}' is not an extraction agent"
+        for source_node_id in source_node_ids:
+            source_node = nodes_by_id.get(source_node_id, {})
+            source_data = source_node.get("data") or {}
+            source_agent_id = str(
+                (source_data.get("agent_id") or "")
+                if isinstance(source_data, Mapping)
+                else ""
             )
+            source_entry = _resolve_flow_agent_entry(
+                source_agent_id,
+                db_user_id=db_user_id,
+            )
+            if not _is_extraction_entry(source_entry):
+                errors.append(
+                    f"source node '{source_node_id}' agent '{source_agent_id}' is not an extraction agent"
+                )
 
     flow_version = str(flow_def.get("version") or "1.0")
     for node_id in projection.ordered_executable_node_ids:
@@ -2493,30 +2528,40 @@ def get_all_agent_tools(
             # _create_streaming_tool() returns a FunctionTool (not a plain callable).
             # Invoke via on_invoke_tool() so we execute the underlying specialist wrapper.
             output_filename_token = set_current_output_filename_stem(output_filename_descriptor)
-            output_source_node_id = output_source_by_node_id.get(node_id)
-            source_node_data = (
-                nodes_by_id.get(str(output_source_node_id), {}).get("data") or {}
-            )
+            output_source_node_ids = output_source_by_node_id.get(node_id, ())
+            source_node_labels = [
+                str(
+                    (nodes_by_id.get(source_node_id, {}).get("data") or {}).get(
+                        "agent_display_name"
+                    )
+                    or (nodes_by_id.get(source_node_id, {}).get("data") or {}).get(
+                        "agent_id"
+                    )
+                    or source_node_id
+                )
+                for source_node_id in output_source_node_ids
+            ]
             output_attachment_token = (
                 set_current_flow_output_attachment(
                     {
                         "flow_id": str(flow.id),
                         "flow_run_id": str(flow_run_id or ""),
                         "formatter_node_id": node_id,
-                        "source_node_id": output_source_node_id,
+                        "source_node_id": (
+                            output_source_node_ids[0] if output_source_node_ids else None
+                        ),
+                        "source_node_ids": list(output_source_node_ids),
                         "formatter_label": str(
                             node_data.get("agent_display_name") or agent_name or node_id
                         ),
-                        "source_label": str(
-                            source_node_data.get("agent_display_name")
-                            or source_node_data.get("agent_id")
-                            or output_source_node_id
-                            or ""
+                        "source_label": (
+                            source_node_labels[0] if source_node_labels else None
                         ),
+                        "source_labels": source_node_labels,
                         "document_id": str(document_id or ""),
                     }
                 )
-                if output_source_node_id
+                if output_source_node_ids
                 else None
             )
             internal_event_cursor = _capture_internal_extraction_event_cursor()
@@ -3080,7 +3125,7 @@ def get_all_agent_tools(
                     flow_run_id=flow_run_id,
                     document_id=document_id,
                     node_data=data,
-                    source_node_id=output_source_by_node_id.get(node_id),
+                    source_node_ids=output_source_by_node_id.get(node_id),
                 )
             elif output_format == "chat":
                 raw_streaming_tool = _make_flow_chat_output_tool(
@@ -3093,7 +3138,7 @@ def get_all_agent_tools(
                     flow_run_id=flow_run_id,
                     document_id=document_id,
                     node_data=data,
-                    source_node_id=output_source_by_node_id.get(node_id),
+                    source_node_ids=output_source_by_node_id.get(node_id),
                 )
             else:
                 try:
@@ -4069,22 +4114,28 @@ async def execute_flow(
                 ).get("agent_id")
                 or attachment.output_node_id
             ),
-            "source_label": str(
-                (
-                    flow_nodes_by_id.get(attachment.source_node_id, {}).get("data")
-                    or {}
-                ).get("agent_display_name")
-                or (
-                    flow_nodes_by_id.get(attachment.source_node_id, {}).get("data")
-                    or {}
-                ).get("agent_id")
-                or attachment.source_node_id
-            ),
+            "source_node_ids": list(attachment.source_node_ids),
+            "source_labels": [
+                str(
+                    (
+                        flow_nodes_by_id.get(source_node_id, {}).get("data") or {}
+                    ).get("agent_display_name")
+                    or (
+                        flow_nodes_by_id.get(source_node_id, {}).get("data") or {}
+                    ).get("agent_id")
+                    or source_node_id
+                )
+                for source_node_id in attachment.source_node_ids
+            ],
         }
         for attachment in flow_projection.output_attachments
     ]
+    for attachment in expected_output_attachments:
+        attachment["source_label"] = (
+            attachment["source_labels"][0] if attachment["source_labels"] else ""
+        )
     output_source_by_node_id = {
-        attachment["output_node_id"]: attachment["source_node_id"]
+        attachment["output_node_id"]: tuple(attachment["source_node_ids"])
         for attachment in expected_output_attachments
     }
     output_attachment_by_node_id = {
@@ -4160,12 +4211,17 @@ async def execute_flow(
                 if chat_step is not None:
                     formatter_node_id = str(chat_step.get("node_id") or "")
                     output_details["formatter_node_id"] = formatter_node_id or None
-                    output_details["source_node_id"] = output_source_by_node_id.get(
-                        formatter_node_id
-                    )
                     attachment = output_attachment_by_node_id.get(formatter_node_id, {})
+                    source_node_ids = list(
+                        output_source_by_node_id.get(formatter_node_id, ())
+                    )
+                    output_details["source_node_id"] = (
+                        source_node_ids[0] if source_node_ids else None
+                    )
+                    output_details["source_node_ids"] = source_node_ids
                     output_details["formatter_label"] = attachment.get("formatter_label")
                     output_details["source_label"] = attachment.get("source_label")
+                    output_details["source_labels"] = attachment.get("source_labels", [])
                     output_event["details"] = output_details
             _queue_output_event(output_event)
             missing_steps = _missing_consumed_tool_completions()
@@ -4228,8 +4284,11 @@ async def execute_flow(
                                 "output_preview": _truncate_tool_output(projected_chat_output),
                                 "output_length": len(projected_chat_output),
                                 "formatter_node_id": formatter_node_id or None,
-                                "source_node_id": output_source_by_node_id.get(
-                                    formatter_node_id
+                                "source_node_id": (
+                                    output_source_by_node_id.get(formatter_node_id, (None,))[0]
+                                ),
+                                "source_node_ids": list(
+                                    output_source_by_node_id.get(formatter_node_id, ())
                                 ),
                                 "formatter_label": output_attachment_by_node_id.get(
                                     formatter_node_id, {}
@@ -4237,6 +4296,9 @@ async def execute_flow(
                                 "source_label": output_attachment_by_node_id.get(
                                     formatter_node_id, {}
                                 ).get("source_label"),
+                                "source_labels": output_attachment_by_node_id.get(
+                                    formatter_node_id, {}
+                                ).get("source_labels", []),
                             },
                         }
                     )

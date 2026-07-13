@@ -230,6 +230,43 @@ def test_output_attachments_are_terminal_leaves_not_control_branches():
     ]
 
 
+def test_output_attachment_groups_multiple_ordered_sources_for_one_formatter():
+    flow = _multi_output_attachment_flow()
+    flow["edges"].insert(
+        -1,
+        _edge(
+            "output_gene_general_csv",
+            "gene",
+            "general_csv",
+            role="output_attachment",
+        ),
+    )
+
+    projection = project_executable_flow_graph(flow)
+
+    assert projection.ordered_executable_node_ids.count("general_csv") == 1
+    assert len(projection.output_attachments) == 2
+    general_csv = next(
+        attachment
+        for attachment in projection.output_attachments
+        if attachment.output_node_id == "general_csv"
+    )
+    assert general_csv.source_node_ids == ("general", "gene")
+    assert general_csv.to_dict() == {
+        "edge_id": "output_1",
+        "source_node_id": "general",
+        "output_node_id": "general_csv",
+        "sources": [
+            {"edge_id": "output_1", "source_node_id": "general"},
+            {
+                "edge_id": "output_gene_general_csv",
+                "source_node_id": "gene",
+            },
+        ],
+    }
+    assert projection.outputs_for("gene") == (general_csv,)
+
+
 @pytest.mark.parametrize(
     ("mutator", "expected_code"),
     [
@@ -237,12 +274,12 @@ def test_output_attachments_are_terminal_leaves_not_control_branches():
             lambda flow: flow["edges"].append(
                 _edge(
                     "output_duplicate",
-                    "gene",
+                    "general",
                     "general_csv",
                     role="output_attachment",
                 )
             ),
-            "multiple_output_sources",
+            "duplicate_output_source",
         ),
         (
             lambda flow: flow["edges"].__setitem__(

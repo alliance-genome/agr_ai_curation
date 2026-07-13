@@ -46,9 +46,23 @@ class FileInfo(BaseModel):
     flow_id: Optional[str] = Field(None, description="Owning flow ID for branched output")
     flow_run_id: Optional[str] = Field(None, description="Owning flow-run ID")
     formatter_node_id: Optional[str] = Field(None, description="Formatter graph node ID")
-    source_node_id: Optional[str] = Field(None, description="Bound extraction graph node ID")
+    source_node_id: Optional[str] = Field(
+        None,
+        description="First bound extraction graph node ID (single-source compatibility)",
+    )
+    source_node_ids: List[str] = Field(
+        default_factory=list,
+        description="Ordered extraction graph node IDs bound to this formatter",
+    )
     formatter_label: Optional[str] = Field(None, description="Human-readable formatter label")
-    source_label: Optional[str] = Field(None, description="Human-readable extraction label")
+    source_label: Optional[str] = Field(
+        None,
+        description="First human-readable extraction label (single-source compatibility)",
+    )
+    source_labels: List[str] = Field(
+        default_factory=list,
+        description="Ordered human-readable labels for bound extraction sources",
+    )
     source_extraction_result_ids: List[str] = Field(
         default_factory=list,
         description="Persisted extraction-result identities used by this output",
@@ -76,8 +90,10 @@ _FILE_READY_EVENT_DETAIL_FIELDS = (
     "flow_run_id",
     "formatter_node_id",
     "source_node_id",
+    "source_node_ids",
     "formatter_label",
     "source_label",
+    "source_labels",
     "source_extraction_result_ids",
     "source_keys",
     "source_envelope_ids",

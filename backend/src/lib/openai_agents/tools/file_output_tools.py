@@ -278,9 +278,11 @@ async def save_projected_file_output(
                 "flow_run_id",
                 "formatter_node_id",
                 "source_node_id",
+                "source_node_ids",
                 "document_id",
                 "formatter_label",
                 "source_label",
+                "source_labels",
                 "source_extraction_result_ids",
                 "source_keys",
                 "source_envelope_ids",
@@ -371,8 +373,10 @@ async def save_projected_file_output(
         flow_run_id=flow_output_attachment.get("flow_run_id") or None,
         formatter_node_id=formatter_node_id or None,
         source_node_id=flow_output_attachment.get("source_node_id") or None,
+        source_node_ids=list(flow_output_attachment.get("source_node_ids") or []),
         formatter_label=flow_output_attachment.get("formatter_label") or None,
         source_label=flow_output_attachment.get("source_label") or None,
+        source_labels=list(flow_output_attachment.get("source_labels") or []),
         source_extraction_result_ids=list(
             flow_output_attachment.get("source_extraction_result_ids") or []
         ),

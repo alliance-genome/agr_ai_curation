@@ -326,8 +326,10 @@ class TestSaveProjectedFileOutput:
                 "flow_run_id": "run-1",
                 "formatter_node_id": "formatter_branch_shared_prefix_alleles",
                 "source_node_id": "allele_extract",
+                "source_node_ids": ["allele_extract", "gene_extract"],
                 "formatter_label": "Allele CSV",
                 "source_label": "Allele Extraction",
+                "source_labels": ["Allele Extraction", "Gene Extraction"],
                 "source_extraction_result_ids": ["result-allele"],
                 "source_keys": ["flow-step:1:allele_extractor"],
                 "source_envelope_ids": ["envelope-allele"],
@@ -355,6 +357,8 @@ class TestSaveProjectedFileOutput:
         assert allele_file["filename"].startswith(f"{trace_id}_results_")
         assert allele_file["formatter_label"] == "Allele CSV"
         assert allele_file["source_label"] == "Allele Extraction"
+        assert allele_file["source_node_ids"] == ["allele_extract", "gene_extract"]
+        assert allele_file["source_labels"] == ["Allele Extraction", "Gene Extraction"]
         assert allele_file["source_extraction_result_ids"] == ["result-allele"]
         assert allele_file["source_envelope_ids"] == ["envelope-allele"]
         assert gene_file["filename"].startswith(f"{trace_id}_results_")
@@ -369,6 +373,10 @@ class TestSaveProjectedFileOutput:
         )
         assert allele_row.file_metadata["source_keys"] == ["flow-step:1:allele_extractor"]
         assert allele_row.file_metadata["source_envelope_ids"] == ["envelope-allele"]
+        assert allele_row.file_metadata["source_node_ids"] == [
+            "allele_extract",
+            "gene_extract",
+        ]
 
     @pytest.mark.asyncio
     async def test_projected_save_reuses_structured_row_by_trace_descriptor_and_format(

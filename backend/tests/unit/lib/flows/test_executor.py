@@ -116,12 +116,20 @@ def _make_output_attachment_flow(nodes, *, source_node_id, output_node_id):
     """Create a v1.1 flow with one formatter leaf and a continuing control path."""
 
     flow = _make_flow(nodes)
+    source_node_ids = (
+        [source_node_id] if isinstance(source_node_id, str) else list(source_node_id)
+    )
     output_node_ids = [output_node_id] if isinstance(output_node_id, str) else list(output_node_id)
     output_node_id_set = set(output_node_ids)
     for node in nodes:
         if node["id"] in output_node_id_set:
             node["type"] = "output"
     control_nodes = [node for node in nodes if node["id"] not in output_node_id_set]
+    attachment_pairs = (
+        [(source_node_ids[0], attached_output_node_id) for attached_output_node_id in output_node_ids]
+        if len(source_node_ids) == 1
+        else [(attached_source_node_id, output_node_ids[0]) for attached_source_node_id in source_node_ids]
+    )
     flow.flow_definition = {
         "version": "1.1",
         "nodes": nodes,
@@ -137,13 +145,12 @@ def _make_output_attachment_flow(nodes, *, source_node_id, output_node_id):
         + [
             {
                 "id": f"output_attachment_{index}",
-                "source": source_node_id,
+                "source": attached_source_node_id,
                 "target": attached_output_node_id,
                 "role": "output_attachment",
             }
-            for index, attached_output_node_id in enumerate(
-                output_node_ids,
-                start=1,
+            for index, (attached_source_node_id, attached_output_node_id) in enumerate(
+                attachment_pairs, start=1
             )
         ],
         "entry_node_id": control_nodes[0]["id"],
@@ -238,6 +245,119 @@ def test_unbound_v1_1_formatter_remains_fail_closed(monkeypatch):
         _executor_module()._runtime_output_sources_by_node_id(
             flow,
             db_user_id=None,
+        )
+
+
+def test_runtime_output_binding_preserves_multiple_strict_sources(monkeypatch):
+    flow = _make_output_attachment_flow(
+        [
+            _task_input_node(),
+            _agent_node("extract_1", "allele_extractor"),
+            _agent_node("extract_2", "gene_extractor"),
+            _agent_node("output_1", "csv_formatter"),
+        ],
+        source_node_id=["extract_1", "extract_2"],
+        output_node_id="output_1",
+    )
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "_resolve_flow_agent_entry",
+        lambda agent_id, **_kwargs: {
+            "category": "Output" if agent_id == "csv_formatter" else "Extraction",
+            "subcategory": "Formatter" if agent_id == "csv_formatter" else "Domain",
+        },
+    )
+
+    bindings = _executor_module()._runtime_output_sources_by_node_id(
+        flow,
+        db_user_id=None,
+    )
+
+    assert bindings == {"output_1": ("extract_1", "extract_2")}
+
+
+def test_terminal_formatter_bundle_filters_all_and_only_bound_sources(monkeypatch):
+    captured_steps = []
+    expected_bundle = SimpleNamespace(
+        artifacts=[SimpleNamespace(), SimpleNamespace()]
+    )
+
+    def _build_bundle(*, completed_steps, **_kwargs):
+        captured_steps.extend(completed_steps)
+        return expected_bundle
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "build_flow_output_artifact_bundle",
+        _build_bundle,
+    )
+    completed_steps = [
+        {"node_id": "extract_1"},
+        {"node_id": "unbound_extract"},
+        {"node_id": "extract_2"},
+        {"node_id": "output_1"},
+    ]
+
+    bundle = _executor_module()._build_terminal_flow_artifact_bundle(
+        agent_id="csv_formatter",
+        output_format="csv",
+        completed_steps=completed_steps,
+        flow_name="Multi-source flow",
+        source_node_ids=("extract_1", "extract_2"),
+    )
+
+    assert bundle is expected_bundle
+    assert [step["node_id"] for step in captured_steps] == [
+        "extract_1",
+        "extract_2",
+    ]
+
+
+def test_terminal_formatter_bundle_fails_closed_when_any_bound_source_is_missing(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        _executor_module(),
+        "build_flow_output_artifact_bundle",
+        lambda **_kwargs: SimpleNamespace(artifacts=[SimpleNamespace()]),
+    )
+
+    with pytest.raises(
+        _executor_module().FlowTerminalOutputProjectionError,
+        match=r"invalid source node\(s\): 'extract_2' \(0\)",
+    ):
+        _executor_module()._build_terminal_flow_artifact_bundle(
+            agent_id="csv_formatter",
+            output_format="csv",
+            completed_steps=[{"node_id": "extract_1"}],
+            flow_name="Multi-source flow",
+            source_node_ids=("extract_1", "extract_2"),
+        )
+
+
+def test_terminal_formatter_bundle_fails_closed_when_a_source_has_no_artifact(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        _executor_module(),
+        "build_flow_output_artifact_bundle",
+        lambda **_kwargs: SimpleNamespace(artifacts=[SimpleNamespace()]),
+    )
+
+    with pytest.raises(
+        _executor_module().FlowTerminalOutputProjectionError,
+        match="expected one artifact per bound source",
+    ):
+        _executor_module()._build_terminal_flow_artifact_bundle(
+            agent_id="csv_formatter",
+            output_format="csv",
+            completed_steps=[
+                {"node_id": "extract_1"},
+                {"node_id": "extract_2"},
+            ],
+            flow_name="Multi-source flow",
+            source_node_ids=("extract_1", "extract_2"),
         )
 
 

@@ -46,15 +46,48 @@ class ValidationSidecar:
 
 
 @dataclass(frozen=True)
-class OutputAttachment:
-    """A terminal formatter bound to one control-step extraction result."""
+class OutputAttachmentSource:
+    """One ordered extraction source in a terminal formatter binding."""
 
     edge_id: str
     source_node_id: str
-    output_node_id: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class OutputAttachment:
+    """One terminal formatter bound to one or more extraction results."""
+
+    output_node_id: str
+    sources: tuple[OutputAttachmentSource, ...]
+
+    @property
+    def edge_id(self) -> str:
+        """Return the first edge ID for single-source consumer compatibility."""
+
+        return self.sources[0].edge_id if self.sources else ""
+
+    @property
+    def source_node_id(self) -> str:
+        """Return the first source ID for single-source consumer compatibility."""
+
+        return self.sources[0].source_node_id if self.sources else ""
+
+    @property
+    def source_node_ids(self) -> tuple[str, ...]:
+        return tuple(source.source_node_id for source in self.sources)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            # Keep the legacy singular aliases stable for existing one-source
+            # API/event consumers. ``sources`` is the graph-native authority.
+            "edge_id": self.edge_id,
+            "source_node_id": self.source_node_id,
+            "output_node_id": self.output_node_id,
+            "sources": [source.to_dict() for source in self.sources],
+        }
 
 
 @dataclass(frozen=True)
@@ -86,7 +119,7 @@ class ExecutableFlowGraph:
         return tuple(
             attachment
             for attachment in self.output_attachments
-            if attachment.source_node_id == source_node_id
+            if source_node_id in attachment.source_node_ids
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -410,7 +443,7 @@ def project_executable_flow_graph(
         )
 
     output_attachments: list[OutputAttachment] = []
-    output_edge_ids_by_target: dict[str, str] = {}
+    output_sources_by_target: dict[str, list[OutputAttachmentSource]] = {}
     if flow_version != "1.1" and output_attachment_edges:
         issues.append(
             ExecutableFlowIssue(
@@ -460,25 +493,40 @@ def project_executable_flow_graph(
                     edge_ids=(edge_id,) if edge_id else (),
                 )
             )
-        prior_edge_id = output_edge_ids_by_target.get(target)
-        if prior_edge_id:
+        target_sources = output_sources_by_target.setdefault(target, [])
+        prior_source = next(
+            (
+                candidate
+                for candidate in target_sources
+                if candidate.source_node_id == source
+            ),
+            None,
+        )
+        if prior_source is not None:
             issues.append(
                 ExecutableFlowIssue(
-                    code="multiple_output_sources",
+                    code="duplicate_output_source",
                     message=(
-                        f"Output node '{target}' must be attached to exactly one source"
+                        f"Output node '{target}' has duplicate attachments from "
+                        f"source '{source}'"
                     ),
-                    node_ids=(target,),
-                    edge_ids=(prior_edge_id, edge_id),
+                    node_ids=tuple(node_id for node_id in (source, target) if node_id),
+                    edge_ids=(prior_source.edge_id, edge_id),
                 )
             )
         elif target:
-            output_edge_ids_by_target[target] = edge_id
+            target_sources.append(
+                OutputAttachmentSource(
+                    edge_id=edge_id,
+                    source_node_id=source,
+                )
+            )
+
+    for target, sources in output_sources_by_target.items():
         output_attachments.append(
             OutputAttachment(
-                edge_id=edge_id,
-                source_node_id=source,
                 output_node_id=target,
+                sources=tuple(sources),
             )
         )
 
@@ -487,14 +535,14 @@ def project_executable_flow_graph(
             node_id
             for node_id in node_ids
             if node_id in declared_output_node_ids
-            and node_id not in output_edge_ids_by_target
+            and node_id not in output_sources_by_target
         )
         for node_id in missing_output_bindings:
             issues.append(
                 ExecutableFlowIssue(
                     code="missing_output_binding",
                     message=(
-                        f"Output node '{node_id}' must be attached to exactly one "
+                        f"Output node '{node_id}' must be attached to at least one "
                         "control-flow extraction node"
                     ),
                     node_ids=(node_id,),
@@ -579,6 +627,7 @@ __all__ = [
     "ExecutableFlowIssue",
     "ExecutableFlowTopologyError",
     "OutputAttachment",
+    "OutputAttachmentSource",
     "ValidationSidecar",
     "project_executable_flow_graph",
 ]

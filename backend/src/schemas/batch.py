@@ -25,8 +25,10 @@ class BatchResultFile(BaseModel):
     format: Optional[str] = None
     formatter_node_id: Optional[str] = None
     source_node_id: Optional[str] = None
+    source_node_ids: List[str] = Field(default_factory=list)
     formatter_label: Optional[str] = None
     source_label: Optional[str] = None
+    source_labels: List[str] = Field(default_factory=list)
     source_extraction_result_ids: List[str] = Field(default_factory=list)
     source_keys: List[str] = Field(default_factory=list)
     source_envelope_ids: List[str] = Field(default_factory=list)
@@ -36,11 +38,14 @@ class BatchOutputBranch(BaseModel):
     """Durable outcome for one configured output attachment."""
 
     edge_id: Optional[str] = None
+    sources: List[Dict[str, str]] = Field(default_factory=list)
     source_node_id: str
+    source_node_ids: List[str] = Field(default_factory=list)
     output_node_id: str
     agent_id: Optional[str] = None
     formatter_label: Optional[str] = None
     source_label: Optional[str] = None
+    source_labels: List[str] = Field(default_factory=list)
     status: Literal["completed", "missing"]
     output: Optional[dict[str, Any]] = None
     failure_reason: Optional[str] = None

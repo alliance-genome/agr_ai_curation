@@ -292,6 +292,78 @@ def test_flow_definition_payload_enforces_output_attachment_agent_roles(monkeypa
         )
 
 
+def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypatch):
+    payload = _output_attachment_flow_payload()
+    payload["nodes"].insert(
+        -1,
+        {
+            "id": "extract_2",
+            "type": "agent",
+            "position": {"x": 200, "y": 100},
+            "data": {
+                "agent_id": "gene_extractor",
+                "agent_display_name": "Gene Extractor",
+                "output_key": "gene_output",
+            },
+        },
+    )
+    payload["edges"].insert(
+        -1,
+        {
+            "id": "control_extract_2",
+            "source": "extract_1",
+            "target": "extract_2",
+            "role": "control_flow",
+        },
+    )
+    payload["edges"].append(
+        {
+            "id": "output_edge_2",
+            "source": "extract_2",
+            "target": "output_1",
+            "role": "output_attachment",
+        }
+    )
+
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: {
+            "name": agent_id,
+            "category": (
+                "Output"
+                if agent_id == "csv_formatter"
+                else "Extraction"
+                if agent_id in {"allele_extractor", "gene_extractor"}
+                else "Input"
+            ),
+            "supervisor": {"enabled": True},
+        },
+    )
+
+    saved = flows._validated_flow_definition_payload(
+        FlowDefinition.model_validate(payload),
+        db_user_id=7,
+        enforce_agent_references=True,
+        enforce_agent_step_policy=True,
+    )
+
+    assert [
+        edge["source"]
+        for edge in saved["edges"]
+        if edge["role"] == "output_attachment"
+    ] == ["extract_1", "extract_2"]
+
+    payload["nodes"][-2]["data"]["agent_id"] = "gene_validator"
+    with pytest.raises(HTTPException, match="Gene Extractor.*not an extraction agent"):
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload),
+            db_user_id=7,
+            enforce_agent_references=True,
+            enforce_agent_step_policy=True,
+        )
+
+
 def test_flow_definition_payload_rejects_non_formatter_output_target(monkeypatch):
     payload = _output_attachment_flow_payload()
     payload["nodes"][-1]["data"].update(
