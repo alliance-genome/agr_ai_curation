@@ -185,7 +185,7 @@ function AgentDetailsPanel({
     if (agent && selectedGroupId && agent.has_group_rules) {
       setLoadingCombined(true)
       fetchCombinedPrompt(agent.agent_id, selectedGroupId)
-        .then(setCombinedPrompt)
+        .then((result) => setCombinedPrompt(result.combined_prompt))
         .catch((err) => {
           console.error('Failed to fetch combined prompt:', err)
           setCombinedPrompt(null)

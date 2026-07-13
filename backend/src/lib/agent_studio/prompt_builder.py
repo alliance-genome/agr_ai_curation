@@ -8,6 +8,49 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from src.lib.agent_studio.models import ChatContext
 from src.lib.agent_studio.trace_agent_metadata import get_trace_agent_patterns
+from src.lib.prompts.assembly import PromptLayerBundle
+
+
+def format_prompt_layers_for_opus(bundle: PromptLayerBundle, *, group_id: Optional[str]) -> str:
+    """Render an effective prompt bundle with its inspection metadata and runtime order."""
+
+    separator = "\n\n"
+    combined_prompt = bundle.render(separator=separator)
+    layer_blocks = []
+    content_offset = 0
+    for order, layer in enumerate(bundle.layers, 1):
+        if layer.content:
+            content_start = str(content_offset)
+            content_offset += len(layer.content)
+            content_end = str(content_offset)
+            content_offset += len(separator)
+        else:
+            content_start = "omitted"
+            content_end = "omitted"
+
+        layer_blocks.append(f"""<prompt_layer order="{order}" kind="{layer.kind}" editable="{str(layer.editable).lower()}" locked="{str(layer.locked).lower()}" content_start="{content_start}" content_end="{content_end}">
+<title>{layer.title}</title>
+<provenance>{layer.provenance}</provenance>
+<source_ref>{layer.source_ref}</source_ref>
+</prompt_layer>""")
+
+    selected_group = group_id or "none"
+    return f"""### Effective Prompt Layers
+
+The curator is inspecting the canonical prompt layers below in runtime order. Each
+non-empty layer identifies its zero-based, end-exclusive character span in the
+combined runtime prompt. Empty layers are marked omitted. Separator characters
+between layers are not owned by either layer.
+
+<prompt_layers agent="{bundle.agent_id}" selected_group="{selected_group}">
+{chr(10).join(layer_blocks)}
+</prompt_layers>
+
+### Ordered Combined Runtime Prompt
+
+<combined_prompt agent="{bundle.agent_id}" selected_group="{selected_group}">
+{combined_prompt}
+</combined_prompt>"""
 
 
 def list_anthropic_catalog_models(
@@ -633,36 +676,24 @@ The curator is viewing the **{agent.agent_name}** agent.
 
 **Has group-specific rules:** {'Yes' if agent.has_group_rules else 'No'}""")
 
-                # Include the prompt content based on view mode
-                if context.selected_group_id and context.selected_group_id in agent.group_rules:
-                    group_rule = agent.group_rules[context.selected_group_id]
+                selected_group_id = (
+                    context.selected_group_id
+                    if context.selected_group_id in agent.group_rules
+                    else None
+                )
+                bundle = service.get_effective_prompt_bundle(
+                    context.selected_agent_id,
+                    group_id=selected_group_id,
+                )
+                if bundle is not None:
+                    additions.append(
+                        format_prompt_layers_for_opus(bundle, group_id=selected_group_id)
+                    )
+
+                if agent.has_group_rules:
+                    available_groups = list(agent.group_rules.keys())
                     additions.append(f"""
-### Currently Viewing: {context.selected_group_id}-Specific Rules
-
-The curator is looking at the group-specific rules for {context.selected_group_id}. Here are those rules:
-
-<group_rules group="{context.selected_group_id}">
-{group_rule.content}
-</group_rules>
-
-And here is the base prompt that these rules extend:
-
-<base_prompt agent="{agent.agent_id}">
-{agent.base_prompt}
-</base_prompt>""")
-                else:
-                    # Just viewing the base prompt
-                    additions.append(f"""
-### Currently Viewing: Base Prompt
-
-<base_prompt agent="{agent.agent_id}">
-{agent.base_prompt}
-</base_prompt>""")
-
-                    if agent.has_group_rules:
-                        available_groups = list(agent.group_rules.keys())
-                        additions.append(f"""
-This agent has group-specific rules available for: {', '.join(available_groups)}. The curator can select a group to see how the base prompt is customized.""")
+This agent has group-specific rules available for: {', '.join(available_groups)}. The selected group is {selected_group_id or 'None'}.""")
 
         if context.trace_id:
             # Provide lightweight trace context with tool usage instructions

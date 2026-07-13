@@ -69,6 +69,20 @@ export interface PromptLayerInfo {
   hash: string
 }
 
+export interface PromptLayerManifest {
+  agent_id: string
+  layers: PromptLayerInfo[]
+  hash: string
+}
+
+export interface CombinedPromptResponse {
+  agent_id: string
+  group_id: string
+  combined_prompt: string
+  effective_prompt_hash: string
+  layer_manifest: PromptLayerManifest
+}
+
 // Individual agent prompt information
 export interface PromptInfo {
   agent_id: string
