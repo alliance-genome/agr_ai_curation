@@ -46,6 +46,18 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     r"\b(?:Table\.?\s*\d+[A-Za-z0-9-]*)\b",
     re.IGNORECASE,
 )
+_SHORTHAND_MULTI_REFERENCE_PATTERN = re.compile(
+    r"\b(?:Fig(?:ure)?\.?|Table\.?)\s*\d+[A-Za-z]?\s*"
+    r"(?:,\s*|/\s*|\band\s+|[-\u2013\u2014]\s*)"
+    r"(?:[A-Za-z]|\d+[A-Za-z]?)\b",
+    re.IGNORECASE,
+)
+_PROSE_MULTI_PANEL_PATTERN = re.compile(
+    r"\bpanels?\s+(?:[A-Za-z]\d*|\d+)\s*"
+    r"(?:,\s*|/\s*|\band\s+|[-\u2013\u2014]\s*)"
+    r"(?:[A-Za-z]\d*|\d+)\b",
+    re.IGNORECASE,
+)
 # Env-configurable via RECORD_EVIDENCE_PREVIEW_CHARS (default 300); see config.py.
 _PREVIEW_CHARS = get_record_evidence_preview_chars()
 _SPAN_RETRY_INSTRUCTIONS = (
@@ -222,25 +234,42 @@ def _extract_figure_reference(
     chunk_text: str,
     span_text: str | None = None,
 ) -> str | None:
-    metadata = _metadata_dict(chunk)
-    candidates: list[str | None] = [
-        _first_non_empty(
-            metadata.get("figure_reference"),
-            metadata.get("figureReference"),
-        ),
-    ]
-
+    selected_text = span_text or chunk_text
     if _is_provider_figure_metadata_chunk(chunk):
-        source_texts = (
-            _strip_provider_figure_metadata_wrapper(span_text or chunk_text),
-        )
-    else:
-        source_texts = (
-            span_text or chunk_text,
-            _resolve_chunk_section(chunk),
-            _resolve_chunk_subsection(chunk),
-        )
+        selected_text = _strip_provider_figure_metadata_wrapper(selected_text)
 
+    # Span-derived provenance is authoritative. Ambiguous shorthand must be
+    # rejected before regex extraction can collapse it to its first locator.
+    if _has_ambiguous_figure_reference(selected_text):
+        return None
+    span_candidates = _reference_candidates((selected_text,))
+    if len(span_candidates) == 1:
+        return span_candidates[0]
+    if span_candidates:
+        return None
+
+    # Structured provenance is only a fallback when the selected text contains
+    # neither a locator nor evidence that it refers to multiple panels.
+    structured_sources = _structured_figure_reference_sources(chunk)
+    if any(_has_ambiguous_figure_reference(source) for source in structured_sources):
+        return None
+    structured_candidates = _reference_candidates(structured_sources)
+    if len(structured_candidates) == 1:
+        return structured_candidates[0]
+    return None
+
+
+def _has_ambiguous_figure_reference(text: str | None) -> bool:
+    if not text:
+        return False
+    return bool(
+        _SHORTHAND_MULTI_REFERENCE_PATTERN.search(text)
+        or _PROSE_MULTI_PANEL_PATTERN.search(text)
+    )
+
+
+def _reference_candidates(source_texts: tuple[str | None, ...]) -> list[str]:
+    candidates: list[str] = []
     for source_text in source_texts:
         if not source_text:
             continue
@@ -250,20 +279,53 @@ def _extract_figure_reference(
     unique_candidates: list[str] = []
     seen: set[str] = set()
     for candidate in candidates:
-        normalized = re.sub(r"\s+", " ", str(candidate or "").strip())
-        if not normalized:
-            continue
-        normalized_key = normalized.lower()
+        normalized = re.sub(r"\s+", " ", candidate.strip())
+        normalized_key = re.sub(
+            r"^fig(?:ure)?\.?",
+            "figure",
+            normalized.lower(),
+        ).replace(" ", "")
         if normalized_key in seen:
             continue
         seen.add(normalized_key)
         unique_candidates.append(normalized)
+    return unique_candidates
 
-    # If a chunk clearly contains multiple figure/table references, avoid choosing
-    # one so downstream anchors do not inherit ambiguous provenance.
-    if len(unique_candidates) == 1:
-        return unique_candidates[0]
-    return None
+
+def _structured_figure_reference_sources(
+    chunk: dict[str, Any],
+) -> tuple[str | None, ...]:
+    metadata = _metadata_dict(chunk)
+    sources: list[str | None] = [
+        _first_non_empty(
+            chunk.get("figure_reference"),
+            chunk.get("figureReference"),
+        ),
+        _first_non_empty(
+            metadata.get("figure_reference"),
+            metadata.get("figureReference"),
+        ),
+    ]
+
+    if _is_provider_figure_metadata_chunk(chunk):
+        sources.append(_resolve_chunk_subsection(chunk))
+        sources.extend(
+            _first_non_empty(chunk.get(key), metadata.get(key))
+            for key in ("figure_label", "figureLabel")
+        )
+        for key in ("figure_number", "figureNumber"):
+            number = _first_non_empty(chunk.get(key), metadata.get(key))
+            if number and not _FIGURE_REFERENCE_PATTERN.search(number):
+                number = f"Figure {number}"
+            sources.append(number)
+    else:
+        sources.extend(
+            (
+                _resolve_chunk_section(chunk),
+                _resolve_chunk_subsection(chunk),
+            )
+        )
+    return tuple(sources)
 
 
 def _is_provider_figure_metadata_chunk(chunk: dict[str, Any]) -> bool:

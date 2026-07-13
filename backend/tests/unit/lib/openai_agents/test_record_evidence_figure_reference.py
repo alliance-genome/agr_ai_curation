@@ -1,5 +1,7 @@
 """Tests for record_evidence figure locator extraction."""
 
+import pytest
+
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
 from src.lib.openai_agents.tools.record_evidence import _extract_figure_reference
 
@@ -46,6 +48,72 @@ def test_provider_figure_metadata_keeps_multi_panel_ambiguity() -> None:
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "span_text",
+    (
+        "Fig. 1A,B show different expression patterns.",
+        "Fig. 1A and B show different expression patterns.",
+        "Figure 1 panels A and B show different expression patterns.",
+        "Figure 1 panels A-C show different expression patterns.",
+    ),
+)
+def test_provider_figure_metadata_omits_shorthand_multi_panel_locators(
+    span_text: str,
+) -> None:
+    chunk = {
+        "text": span_text,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], span_text) is None
+
+
+def test_provider_figure_metadata_does_not_fallback_when_span_is_multi_panel() -> None:
+    chunk = {
+        "text": "Panels A and B show different expression patterns.",
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], chunk["text"]) is None
+
+
+@pytest.mark.parametrize(
+    "structured_fields",
+    (
+        {"subsection": "Provider Figure: Figure 1"},
+        {"metadata": {"figure_label": "Figure 1"}},
+        {"figure_number": "1"},
+        {
+            "subsection": "Provider Figure: Figure 1",
+            "metadata": {"figure_label": "Fig. 1", "figure_number": "1"},
+        },
+    ),
+)
+def test_provider_figure_metadata_uses_unambiguous_structured_fallback(
+    structured_fields: dict[str, object],
+) -> None:
+    chunk = {
+        "text": "The wing disc shows a restricted expression pattern.",
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        **structured_fields,
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], chunk["text"]) == "Figure 1"
+
+
+def test_provider_figure_metadata_omits_conflicting_structured_fallbacks() -> None:
+    chunk = {
+        "text": "The wing disc shows a restricted expression pattern.",
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": "Provider Figure: Figure 1",
+        "metadata": {"figure_label": "Figure 2"},
+    }
+
+    assert _extract_figure_reference(chunk, chunk["text"], chunk["text"]) is None
 
 
 def test_normal_chunk_still_omits_ambiguous_multiple_locators() -> None:
