@@ -4,6 +4,7 @@
 
 import type {
   PromptCatalog,
+  CombinedPromptResponse,
   PromptPreviewResponse,
   CustomAgent,
   CustomAgentVersion,
@@ -232,7 +233,7 @@ export async function refreshPromptCatalog(): Promise<PromptCatalog> {
 export async function fetchCombinedPrompt(
   agentId: string,
   groupId: string
-): Promise<string> {
+): Promise<CombinedPromptResponse> {
   const response = await fetch(`${BASE_URL}/catalog/combined`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -241,8 +242,7 @@ export async function fetchCombinedPrompt(
   if (!response.ok) {
     throw new Error(`Failed to fetch combined prompt: ${response.status}`)
   }
-  const data = await response.json()
-  return data.combined_prompt
+  return response.json()
 }
 
 /**

@@ -1,8 +1,8 @@
 /**
  * PromptViewer Component
  *
- * Slide-over panel that displays base prompts and group-specific prompts
- * for an agent. Covers the flow canvas when open.
+ * Slide-over panel that displays the canonical ordered prompt layers for an
+ * agent. Covers the flow canvas when open.
  */
 
 import { useState, useEffect } from 'react'
@@ -28,7 +28,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import CheckIcon from '@mui/icons-material/Check'
 
-import type { PromptInfo } from '@/types/promptExplorer'
+import type { CombinedPromptResponse, PromptInfo, PromptLayerInfo } from '@/types/promptExplorer'
 import { fetchPromptCatalog, fetchCombinedPrompt } from '@/services/agentStudioService'
 import logger from '@/services/logger'
 
@@ -84,7 +84,7 @@ const ControlsRow = styled(Box)(({ theme }) => ({
   flexWrap: 'wrap',
 }))
 
-type ViewMode = 'base' | 'group' | 'combined'
+type ViewMode = string | 'combined'
 
 interface PromptViewerProps {
   /** Agent ID to display prompts for */
@@ -104,9 +104,9 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
   const [error, setError] = useState<string | null>(null)
 
   // UI state
-  const [viewMode, setViewMode] = useState<ViewMode>('base')
+  const [viewMode, setViewMode] = useState<ViewMode>('combined')
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
-  const [combinedPrompt, setCombinedPrompt] = useState<string | null>(null)
+  const [combinedPrompt, setCombinedPrompt] = useState<CombinedPromptResponse | null>(null)
   const [loadingCombined, setLoadingCombined] = useState(false)
   const [copied, setCopied] = useState(false)
 
@@ -119,7 +119,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
       setError(null)
       setAgent(null)
       setSelectedGroupId(null)
-      setViewMode('base')
+      setViewMode('combined')
       setCombinedPrompt(null)
 
       try {
@@ -136,6 +136,8 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
 
         if (foundAgent) {
           setAgent(foundAgent)
+          const firstLayer = foundAgent.prompt_layers?.[0]
+          setViewMode(firstLayer?.id || 'combined')
           // Auto-select first group if available
           if (foundAgent.has_group_rules && Object.keys(foundAgent.group_rules).length > 0) {
             const firstGroup = Object.keys(foundAgent.group_rules)[0]
@@ -155,41 +157,51 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
     loadAgent()
   }, [open, agentId])
 
-  // Load combined prompt when needed
+  // Load the selected group's canonical effective bundle, including its layers.
   useEffect(() => {
-    if (viewMode === 'combined' && agentId && selectedGroupId && agent?.has_group_rules) {
+    if (agentId && selectedGroupId && agent?.has_group_rules) {
       setLoadingCombined(true)
       fetchCombinedPrompt(agentId, selectedGroupId)
-        .then(setCombinedPrompt)
+        .then((result) => {
+          setCombinedPrompt(result)
+          setViewMode((currentMode) => {
+            if (currentMode === 'combined') return currentMode
+            const selectedKind = agent.prompt_layers?.find((layer) => layer.id === currentMode)?.kind
+            return result.layer_manifest.layers.find((layer) => layer.kind === selectedKind)?.id
+              || result.layer_manifest.layers[0]?.id
+              || 'combined'
+          })
+        })
         .catch((err) => {
           logger.error('Failed to fetch combined prompt', err as Error, { component: 'PromptViewer' })
           setCombinedPrompt(null)
         })
         .finally(() => setLoadingCombined(false))
     }
-  }, [viewMode, agentId, selectedGroupId, agent])
+  }, [agentId, selectedGroupId, agent])
+
+  const promptLayers: PromptLayerInfo[] = selectedGroupId && combinedPrompt
+    ? combinedPrompt.layer_manifest.layers
+    : agent?.prompt_layers || []
+
+  const selectedLayer = promptLayers.find((layer) => layer.id === viewMode)
 
   // Get prompt content based on view mode
   const getDisplayContent = (): string => {
-    if (!agent) return ''
-
-    if (viewMode === 'base') {
-      return agent.base_prompt
+    if (selectedLayer) {
+      return selectedLayer.content
     }
 
-    if (viewMode === 'group' && selectedGroupId && agent.group_rules[selectedGroupId]) {
-      return agent.group_rules[selectedGroupId].content
-    }
-
-    if (viewMode === 'combined' && combinedPrompt) {
-      return combinedPrompt
-    }
-
-    if (viewMode === 'combined' && loadingCombined) {
+    if (viewMode === 'combined' && loadingCombined && selectedGroupId) {
       return 'Loading combined prompt...'
     }
 
-    return agent.base_prompt
+    if (viewMode === 'combined') {
+      return combinedPrompt?.combined_prompt
+        || promptLayers.map((layer) => layer.content).filter(Boolean).join('\n\n')
+    }
+
+    return ''
   }
 
   // Copy prompt to clipboard
@@ -208,9 +220,6 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
   const handleGroupChange = (groupId: string | null) => {
     setSelectedGroupId(groupId)
     setCombinedPrompt(null) // Reset combined prompt when group changes
-    if (!groupId) {
-      setViewMode('base')
-    }
   }
 
   // Handle view mode change
@@ -229,7 +238,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
               {agentName} Prompts
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              View the base prompt and group-specific instructions
+              Inspect prompt layers in combined runtime order
             </Typography>
           </Box>
           <Tooltip title={copied ? 'Copied!' : 'Copy prompt'}>
@@ -274,7 +283,9 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
                 </Box>
               )}
 
-              {/* View Controls */}
+              {agent.prompt_layer_error && <Alert severity="warning">{agent.prompt_layer_error}</Alert>}
+
+              {/* Layer Controls */}
               <ControlsRow>
                 <ToggleButtonGroup
                   value={viewMode}
@@ -282,13 +293,12 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
                   onChange={handleViewModeChange}
                   size="small"
                 >
-                  <ToggleButton value="base">Base Prompt</ToggleButton>
-                  <ToggleButton value="group" disabled={!selectedGroupId || !agent.has_group_rules}>
-                    Group Rules
-                  </ToggleButton>
-                  <ToggleButton value="combined" disabled={!selectedGroupId || !agent.has_group_rules}>
-                    Combined
-                  </ToggleButton>
+                  {promptLayers.map((layer) => (
+                    <ToggleButton key={layer.id} value={layer.id}>
+                      {layer.title}
+                    </ToggleButton>
+                  ))}
+                  <ToggleButton value="combined">Combined</ToggleButton>
                 </ToggleButtonGroup>
 
                 {agent.has_group_rules && Object.keys(agent.group_rules).length > 0 && (
@@ -314,6 +324,32 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
                   </Typography>
                 )}
               </ControlsRow>
+
+              {selectedLayer && (
+                <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <Chip label={selectedLayer.kind.replaceAll('_', ' ')} size="small" />
+                  <Chip
+                    label={selectedLayer.editable && !selectedLayer.locked ? 'Editable' : 'Read only'}
+                    size="small"
+                    color={selectedLayer.editable && !selectedLayer.locked ? 'success' : 'default'}
+                    variant="outlined"
+                  />
+                  {selectedLayer.locked && <Chip label="Locked" size="small" variant="outlined" />}
+                  <Typography variant="caption" color="text.secondary">
+                    Owner: {selectedLayer.provenance} • Source: {selectedLayer.source_ref}
+                  </Typography>
+                </Box>
+              )}
+
+              {viewMode === 'combined' && (
+                <Typography variant="caption" color="text.secondary">
+                  {promptLayers.length} layers shown in runtime order
+                </Typography>
+              )}
+
+              {promptLayers.length === 0 && !agent.prompt_layer_error && (
+                <Alert severity="warning">No canonical prompt layers are available for this agent.</Alert>
+              )}
 
               {/* Prompt Content */}
               <PromptContent elevation={0}>
