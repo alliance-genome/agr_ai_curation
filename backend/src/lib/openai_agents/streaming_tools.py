@@ -4608,6 +4608,8 @@ async def run_specialist_with_events(
     conversation_context_manager.__enter__()
     sentry_span = sentry_span_context_manager.__enter__()
     sentry_stream_finalization_status = "stream_finished"
+    total_event_count = 0
+    event_type_counts: dict = {}
 
     def _record_sentry_post_stream_outcome(
         *,
@@ -4680,9 +4682,28 @@ async def run_specialist_with_events(
             max_turns=max_turns,
             run_config=effective_config
         )
-    except BaseException:
-        sentry_span_context_manager.__exit__(None, None, None)
-        conversation_context_manager.__exit__(None, None, None)
+    except BaseException as exc:
+        sentry_stream_finalization_status = (
+            "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
+        )
+        phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
+        try:
+            _record_sentry_post_stream_outcome(
+                status=sentry_stream_finalization_status,
+                error_detail={
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "phase": "specialist_start_streamed",
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record %s specialist stream-creation outcome",
+                specialist_name,
+            )
+        finally:
+            sentry_span_context_manager.__exit__(None, None, None)
+            conversation_context_manager.__exit__(None, None, None)
         raise
     phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
     write_extraction_trace_event(
@@ -4692,8 +4713,6 @@ async def run_specialist_with_events(
     )
 
     # Event tracking for debugging
-    total_event_count = 0
-    event_type_counts: dict = {}
     is_generating = False  # Track if we've emitted AGENT_GENERATING
     reasoning_summary_chunks: List[str] = []
 
