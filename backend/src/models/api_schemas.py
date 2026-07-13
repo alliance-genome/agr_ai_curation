@@ -291,6 +291,7 @@ class DocumentResponse(BaseModel):
     job_id: Optional[str] = Field(None, description="Background processing job ID")
     user_id: int = Field(..., description="Owner user ID from PostgreSQL users table")
     filename: str = Field(..., description="Original filename")
+    title: Optional[str] = Field(None, description="User-defined display title")
     status: str = Field(..., description="Processing status (PENDING, PROCESSING, COMPLETED, FAILED)")
     upload_timestamp: datetime = Field(..., description="When document was uploaded")
     processing_started_at: Optional[datetime] = Field(None, description="When processing began")

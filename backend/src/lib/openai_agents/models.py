@@ -3,7 +3,7 @@ Shared Pydantic models for OpenAI Agents structured outputs.
 """
 
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Mapping, Optional
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
@@ -62,6 +62,33 @@ class FileInfo(BaseModel):
         description="Canonical domain-envelope identities used by this output",
     )
     document_id: Optional[str] = Field(None, description="Source document ID")
+
+
+_FILE_READY_EVENT_DETAIL_FIELDS = (
+    "file_id",
+    "filename",
+    "format",
+    "size_bytes",
+    "mime_type",
+    "download_url",
+    "created_at",
+    "flow_id",
+    "flow_run_id",
+    "formatter_node_id",
+    "source_node_id",
+    "formatter_label",
+    "source_label",
+    "source_extraction_result_ids",
+    "source_keys",
+    "source_envelope_ids",
+    "document_id",
+)
+
+
+def file_ready_event_details(file_info: Mapping[str, Any]) -> dict[str, Any]:
+    """Project safe FileInfo fields into the shared FILE_READY contract."""
+
+    return {field: file_info.get(field) for field in _FILE_READY_EVENT_DETAIL_FIELDS}
 
 
 class Citation(BaseModel):

@@ -131,10 +131,32 @@ def _canonical_processing_status(
 ) -> str:
     """Resolve effective processing status using durable job precedence."""
     raw_sql_status = str(sql_processing_status or "").strip()
-    fallback_status = _normalize_processing_status(
-        raw_sql_status if raw_sql_status else weaviate_processing_status
-    )
+    sql_status = _normalize_processing_status(raw_sql_status)
+    indexed_status = _normalize_processing_status(weaviate_processing_status)
+    fallback_status = sql_status if raw_sql_status else indexed_status
 
+    if job and job.status in _ACTIVE_PDF_JOB_STATUSES:
+        return _PDF_JOB_STATUS_TO_PROCESSING_STATUS.get(job.status, fallback_status)
+    if job and job.status in {
+        PdfJobStatus.FAILED.value,
+        PdfJobStatus.CANCELLED.value,
+    }:
+        return _PDF_JOB_STATUS_TO_PROCESSING_STATUS.get(job.status, fallback_status)
+    if pipeline_status and _is_pipeline_status_active(pipeline_status):
+        return _effective_processing_status(fallback_status, pipeline_status)
+    active_statuses = {
+        ProcessingStatus.PROCESSING.value,
+        ProcessingStatus.PARSING.value,
+        ProcessingStatus.CHUNKING.value,
+        ProcessingStatus.EMBEDDING.value,
+        ProcessingStatus.STORING.value,
+    }
+    # A reprocess can update the indexed state before the SQL worker reaches
+    # its first stage. Do not let an older completed job mask that current work.
+    if indexed_status in active_statuses:
+        return indexed_status
+    if sql_status in active_statuses:
+        return sql_status
     if job:
         return _PDF_JOB_STATUS_TO_PROCESSING_STATUS.get(job.status, fallback_status)
     if pipeline_status:
@@ -1063,14 +1085,27 @@ async def get_document_endpoint(
             job_id=latest_job.job_id if latest_job else None,
             user_id=db_user.id,
             filename=pg_doc.filename,
-            status=doc_data.get("processing_status", "pending").upper(),  # Contract requires uppercase enum
+            title=getattr(pg_doc, "title", None),
+            status=_canonical_processing_status(
+                sql_processing_status=getattr(pg_doc, "status", None),
+                weaviate_processing_status=doc_data.get(
+                    "processing_status",
+                    doc_data.get("processingStatus"),
+                ),
+                pipeline_status=None,
+                job=latest_job,
+            ).upper(),
             upload_timestamp=pg_doc.upload_timestamp,
             processing_started_at=None,  # TODO: track in PostgreSQL
             processing_completed_at=None,  # TODO: track in PostgreSQL
             file_size_bytes=pg_doc.file_size,
             weaviate_tenant=tenant_name,
             chunk_count=doc_data.get("chunk_count"),
-            error_message=None,  # TODO: track processing errors
+            error_message=(
+                latest_job.error_message
+                if latest_job and latest_job.error_message
+                else getattr(pg_doc, "error_message", None)
+            ),
             source_provenance=(
                 DocumentSourceProvenance(**source_provenance)
                 if source_provenance
@@ -1386,6 +1421,7 @@ async def upload_document_endpoint(
             job_id=intake_result.job_id,
             user_id=intake_result.user_id,
             filename=intake_result.filename,
+            title=None,
             status=intake_result.status,
             upload_timestamp=intake_result.upload_timestamp,
             processing_started_at=intake_result.processing_started_at,

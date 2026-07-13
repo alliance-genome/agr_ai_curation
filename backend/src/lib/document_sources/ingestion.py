@@ -25,6 +25,13 @@ from src.models.strategy import ChunkingStrategy
 logger = logging.getLogger(__name__)
 
 
+# These provider schema findings describe recoverable document structure. The
+# modern Markdown parser can still produce useful pipeline elements, so retain
+# the diagnostics without rejecting the entire document. Unknown/future
+# validator errors remain blocking by default.
+_NON_BLOCKING_PROVIDER_MARKDOWN_RULES = frozenset({"S01", "S02", "S07"})
+
+
 class DocumentSourceIngestionError(DocumentSourceError):
     """Raised when provider-backed Markdown cannot be ingested safely."""
 
@@ -210,12 +217,31 @@ def _validate_provider_markdown(markdown: str) -> list[str]:
 
     result = validate_markdown(markdown)
     errors = getattr(result, "errors", None) or []
-    if errors:
+    non_blocking_errors = [
+        error
+        for error in errors
+        if str(getattr(error, "rule_id", "")).strip()
+        in _NON_BLOCKING_PROVIDER_MARKDOWN_RULES
+    ]
+    blocking_errors = [error for error in errors if error not in non_blocking_errors]
+    if blocking_errors:
+        diagnostics = "; ".join(
+            _validation_issue_message(error) for error in blocking_errors
+        )
         raise DocumentSourceMarkdownValidationError(
-            "Provider Markdown failed schema validation"
+            f"Provider Markdown failed schema validation: {diagnostics}"
         )
     warnings = getattr(result, "warnings", None) or []
-    return [_validation_issue_message(warning) for warning in warnings]
+    diagnostics = [
+        _validation_issue_message(issue)
+        for issue in [*non_blocking_errors, *warnings]
+    ]
+    if non_blocking_errors:
+        logger.warning(
+            "Provider Markdown has recoverable schema findings: %s",
+            "; ".join(diagnostics),
+        )
+    return diagnostics
 
 
 def _strip_markdown_image_assets(markdown: str) -> str:

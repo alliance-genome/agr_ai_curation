@@ -201,6 +201,7 @@ const DocumentsPage: React.FC = () => {
             doc.embedding_status ?? doc.embeddingStatus,
             'pending',
           ) as DocumentSummary['embeddingStatus'],
+          errorMessage: readNullableString(doc.error_message ?? doc.errorMessage),
           chunkCount: typeof doc.chunk_count === 'number' ? doc.chunk_count : (typeof doc.chunkCount === 'number' ? doc.chunkCount : 0),
           vectorCount: typeof doc.vector_count === 'number' ? doc.vector_count : (typeof doc.vectorCount === 'number' ? doc.vectorCount : 0),
           sourceProvenance: normalizeDocumentSourceProvenance(
@@ -311,6 +312,20 @@ const DocumentsPage: React.FC = () => {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.detail || 'Failed to update title');
     }
+    const payload = (await response.json()) as { title?: string | null };
+    const savedTitle = payload.title ?? null;
+    setDocuments((previousDocuments) => previousDocuments.map((document) => (
+      document.id === documentId
+        ? { ...document, title: savedTitle }
+        : document
+    )));
+    setSnackbar({
+      open: true,
+      message: savedTitle
+        ? 'Display title updated. The original filename was not changed.'
+        : 'Display title cleared. The original filename was not changed.',
+      severity: 'success',
+    });
   }, []);
 
   const handleFilterChange = React.useCallback((newFilters: DocumentFilter) => {

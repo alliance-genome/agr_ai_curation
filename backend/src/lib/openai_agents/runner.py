@@ -84,7 +84,7 @@ from .extraction_builder_workspace import (
     stage_extraction_payload,
 )
 from .guardrails import enforce_uncited_negative_guardrail
-from .models import Answer
+from .models import Answer, file_ready_event_details
 from .evidence_summary import (
     build_record_evidence_summary_record,
     extract_evidence_records_from_structured_result,
@@ -1576,20 +1576,7 @@ async def _run_agent_with_tracing(
                                     file_ready_event = {
                                         "type": "FILE_READY",
                                         "timestamp": _now_iso(),
-                                        "details": {
-                                            "file_id": output_data.get("file_id"),
-                                            "filename": output_data.get("filename"),
-                                            "format": output_data.get("format"),
-                                            "size_bytes": output_data.get("size_bytes"),
-                                            "mime_type": output_data.get("mime_type"),
-                                            "download_url": output_data.get("download_url"),
-                                            "created_at": output_data.get("created_at"),
-                                            "flow_id": output_data.get("flow_id"),
-                                            "flow_run_id": output_data.get("flow_run_id"),
-                                            "formatter_node_id": output_data.get("formatter_node_id"),
-                                            "source_node_id": output_data.get("source_node_id"),
-                                            "document_id": output_data.get("document_id"),
-                                        }
+                                        "details": file_ready_event_details(output_data),
                                     }
                                     write_stream_event(file_ready_event, trace_id=trace_id)
                                     yield file_ready_event

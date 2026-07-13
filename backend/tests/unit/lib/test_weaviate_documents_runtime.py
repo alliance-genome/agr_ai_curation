@@ -29,6 +29,25 @@ class _DocumentsModuleProxy:
 documents = _DocumentsModuleProxy()
 
 
+@pytest.mark.parametrize(
+    ("sql_status", "weaviate_status", "expected"),
+    [
+        ("failed", "pending", "failed"),
+        ("failed", "processing", "failed"),
+        ("completed", "processing", "processing"),
+        ("processing", "completed", "processing"),
+        ("processing", "pending", "processing"),
+        ("pending", "processing", "processing"),
+    ],
+)
+def test_effective_list_processing_status_prefers_terminal_state(
+    sql_status,
+    weaviate_status,
+    expected,
+):
+    assert documents._effective_list_processing_status(sql_status, weaviate_status) == expected
+
+
 def _event_loop_with_sync_executor():
     loop = MagicMock()
     loop.run_in_executor.side_effect = lambda _executor, func: asyncio.sleep(0, result=func())

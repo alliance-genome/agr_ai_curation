@@ -108,6 +108,7 @@ describe('AddLiteraturePage', () => {
     expect(screen.getByRole('button', { name: 'Resolve' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Resolve and Import' })).toBeDisabled();
     expect(screen.getByText('PDF Jobs')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Identifier Results' })).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Literature import results' })).toBeInTheDocument();
     expect(screen.getByText('No import results yet.')).toBeInTheDocument();
     expect(screen.queryByText(/Successful source retrievals/i)).not.toBeInTheDocument();
@@ -141,6 +142,9 @@ describe('AddLiteraturePage', () => {
     await user.click(screen.getByRole('button', { name: 'Resolve' }));
 
     expect(await screen.findByText('Ready to import.')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Resolved 1 of 1 identifier. Review Identifier Results below; no imports were started.',
+    );
     expect(screen.getByText('Resolved')).toBeInTheDocument();
     expect(screen.getByText('FBrf0223182.pdf')).toBeInTheDocument();
     expect(screen.getByText('PDF 4040596 / MD 4672234')).toBeInTheDocument();
@@ -150,6 +154,15 @@ describe('AddLiteraturePage', () => {
       body: JSON.stringify({ identifiers: 'PMID:23970418' }),
     }));
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('places identifier results before background PDF jobs without moving focus', () => {
+    render(<AddLiteraturePage />);
+
+    const resultsHeading = screen.getByRole('heading', { name: 'Identifier Results' });
+    const jobsHeading = screen.getByRole('heading', { name: 'PDF Jobs' });
+    expect(resultsHeading.compareDocumentPosition(jobsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.activeElement).not.toBe(resultsHeading);
   });
 
   it('labels provider source-only results without implying converted Markdown is pending', async () => {

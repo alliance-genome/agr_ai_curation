@@ -99,6 +99,33 @@ const compareTextValues = (left: unknown, right: unknown): number => {
   });
 };
 
+const ACTIVE_DOCUMENT_STATUSES = new Set([
+  'processing',
+  'parsing',
+  'chunking',
+  'embedding',
+  'storing',
+]);
+
+export const documentDisplayStatus = (document: DocumentSummary): string => {
+  const processingStatus = String(document.processingStatus || '').toLowerCase();
+  const embeddingStatus = String(document.embeddingStatus || '').toLowerCase();
+
+  if (processingStatus === 'failed') {
+    return 'failed';
+  }
+  if (ACTIVE_DOCUMENT_STATUSES.has(processingStatus)) {
+    return processingStatus;
+  }
+  if (embeddingStatus === 'failed' || embeddingStatus === 'partial') {
+    return embeddingStatus;
+  }
+  if (ACTIVE_DOCUMENT_STATUSES.has(embeddingStatus)) {
+    return embeddingStatus;
+  }
+  return processingStatus || embeddingStatus || 'pending';
+};
+
 const compareNumberValues = (left: unknown, right: unknown): number => {
   const toComparableNumber = (value: unknown): number | null => {
     if (value === null || value === undefined) {
@@ -265,8 +292,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const isDocumentBusy = (doc: DocumentSummary): boolean => {
     const processingStatus = String(doc.processingStatus || '').toLowerCase();
     const embeddingStatus = String(doc.embeddingStatus || '').toLowerCase();
-    const activeProcessingStatuses = new Set(['processing', 'parsing', 'chunking', 'embedding', 'storing']);
-    return activeProcessingStatuses.has(processingStatus) || embeddingStatus === 'processing';
+    return ACTIVE_DOCUMENT_STATUSES.has(processingStatus) || embeddingStatus === 'processing';
   };
 
   const formatFileSize = (bytes: number | null | undefined): string => {
@@ -539,19 +565,32 @@ const DocumentList: React.FC<DocumentListProps> = ({
       },
     },
     {
-      field: 'embeddingStatus',
+      field: 'processingStatus',
       headerName: 'Status',
-      width: 120,
+      width: 220,
       sortable: false,
-      filterable: true,
-      renderCell: (params: GridRenderCellParams) => (
-        <Chip
-          label={params.value}
-          size="small"
-          color={getStatusColor(params.value as string)}
-          variant={params.value === 'processing' ? 'outlined' : 'filled'}
-        />
-      ),
+      filterable: false,
+      renderCell: (params: GridRenderCellParams<DocumentSummary>) => {
+        const status = documentDisplayStatus(params.row);
+        return (
+          <Stack spacing={0.25} sx={{ minWidth: 0, py: 0.5 }}>
+            <Chip
+              label={status}
+              size="small"
+              color={getStatusColor(status)}
+              variant={status === 'processing' ? 'outlined' : 'filled'}
+              sx={{ alignSelf: 'flex-start' }}
+            />
+            {params.row.errorMessage && (
+              <Tooltip title={params.row.errorMessage}>
+                <Typography variant="caption" color="error" noWrap>
+                  {params.row.errorMessage}
+                </Typography>
+              </Tooltip>
+            )}
+          </Stack>
+        );
+      },
     },
     {
       field: 'vectorCount',
@@ -629,7 +668,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
               </span>
             </Tooltip>
             {onTitleUpdate && (
-              <Tooltip title="Edit Title">
+              <Tooltip title="Edit display title">
                 <IconButton
                   size="small"
                   onClick={() => {
@@ -906,6 +945,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
           open={editDialogOpen}
           documentId={editDocument?.id ?? ''}
           currentTitle={editDocument?.title ?? null}
+          originalFilename={editDocument?.filename ?? null}
           onClose={() => {
             setEditDialogOpen(false);
             setEditDocument(null);

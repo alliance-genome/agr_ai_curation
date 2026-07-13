@@ -699,6 +699,7 @@ async def test_upload_document_endpoint_happy_path(monkeypatch):
 
     assert response.user_id == 99
     assert response.filename == "paper.pdf"
+    assert response.title is None
     assert response.status == "PENDING"
     assert response.weaviate_tenant == "tenant-user-1"
     assert captured["background_tasks"] is background_tasks

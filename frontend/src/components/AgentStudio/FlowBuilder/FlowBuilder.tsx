@@ -878,6 +878,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       const flowState: FlowState = {
         flowName,
         version: currentVersion,
+        entry_node_id: nodes.find(node => node.data.agent_id === 'task_input')?.id,
         nodes: nodes.map((n) => ({
           id: n.id,
           type: (n.type ?? 'agent') as NodeType,

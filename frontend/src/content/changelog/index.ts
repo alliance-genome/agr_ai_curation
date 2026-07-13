@@ -1,7 +1,7 @@
 import type { ChangelogEntry } from './types';
 
 const entryModules = import.meta.glob<{ default: ChangelogEntry }>('./entries/*.ts', { eager: true });
-const POPUP_CHANGELOG_ENTRY_ID = '2026-07-11-v0.8.10';
+const POPUP_CHANGELOG_ENTRY_ID = '2026-07-13-v0.8.11';
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = Object.values(entryModules)
   .map((module) => module.default)
