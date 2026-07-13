@@ -28,6 +28,7 @@ SESSION_ID = UUID("00000000-0000-0000-0000-000000006697")
 OTHER_SESSION_ID = UUID("00000000-0000-0000-0000-000000016697")
 ENVELOPE_ID = "scope-migration-envelope-697"
 CLONE_ENVELOPE_ID = f"{ENVELOPE_ID}:session:{OTHER_SESSION_ID}"
+SECOND_ENVELOPE_ID = f"{ENVELOPE_ID}-second"
 
 
 @pytest.fixture
@@ -57,23 +58,18 @@ def legacy_schema():
 
 def _cleanup_rows() -> None:
     with engine.begin() as connection:
-        envelope_params = {
-            "envelope_id": ENVELOPE_ID,
-            "clone_envelope_id": CLONE_ENVELOPE_ID,
-        }
+        envelope_params = {"envelope_prefix": f"{ENVELOPE_ID}%"}
         connection.execute(
             text(
                 "DELETE FROM validation_snapshots "
-                "WHERE envelope_id = :envelope_id "
-                "OR envelope_id = :clone_envelope_id"
+                "WHERE envelope_id LIKE :envelope_prefix"
             ),
             envelope_params,
         )
         connection.execute(
             text(
                 "DELETE FROM curation_candidates "
-                "WHERE envelope_id = :envelope_id "
-                "OR envelope_id = :clone_envelope_id"
+                "WHERE envelope_id LIKE :envelope_prefix"
             ),
             envelope_params,
         )
@@ -86,16 +82,14 @@ def _cleanup_rows() -> None:
             connection.execute(
                 text(
                     f"DELETE FROM {table_name} "
-                    "WHERE envelope_id = :envelope_id "
-                    "OR envelope_id = :clone_envelope_id"
+                    "WHERE envelope_id LIKE :envelope_prefix"
                 ),
                 envelope_params,
             )
         connection.execute(
             text(
                 "DELETE FROM domain_envelopes "
-                "WHERE envelope_id = :envelope_id "
-                "OR envelope_id = :clone_envelope_id"
+                "WHERE envelope_id LIKE :envelope_prefix"
             ),
             envelope_params,
         )
@@ -150,9 +144,11 @@ def _seed_legacy_envelope(
     *,
     document_id: UUID | None,
     metadata: dict[str, object],
+    envelope_id: str = ENVELOPE_ID,
+    session_id: UUID | None = None,
 ) -> None:
     envelope_json = {
-        "envelope_id": ENVELOPE_ID,
+        "envelope_id": envelope_id,
         "domain_pack_id": "gene",
         "domain_pack_version": "0.1.0",
         "status": "extracted",
@@ -170,13 +166,14 @@ def _seed_legacy_envelope(
                   status, document_id, session_id, envelope_json
                 ) VALUES (
                   :envelope_id, 'agr', 'gene', '0.1.0', 'extracted',
-                  :document_id, NULL, CAST(:envelope_json AS jsonb)
+                  :document_id, :session_id, CAST(:envelope_json AS jsonb)
                 )
                 """
             ),
             {
-                "envelope_id": ENVELOPE_ID,
+                "envelope_id": envelope_id,
                 "document_id": document_id,
+                "session_id": session_id,
                 "envelope_json": json.dumps(envelope_json),
             },
         )
@@ -368,6 +365,53 @@ def test_scope_migration_rejects_unbound_legacy_envelope(legacy_schema):
     engine.dispose()
     with pytest.raises(DBAPIError, match="null or unbound row requires explicit repair"):
         command.upgrade(legacy_schema, SCOPED_REVISION)
+
+
+def test_scope_migration_retains_session_owner_for_duplicate_legacy_sources(
+    legacy_schema,
+):
+    _seed_document_and_sessions()
+    shared_metadata = {
+        "source_adapter_key": "gene",
+        "source_extraction_result_id": "shared-extract-697",
+    }
+    _seed_legacy_envelope(
+        document_id=DOCUMENT_ID,
+        metadata=shared_metadata,
+        session_id=SESSION_ID,
+    )
+    _seed_legacy_envelope(
+        document_id=DOCUMENT_ID,
+        metadata=shared_metadata,
+        envelope_id=SECOND_ENVELOPE_ID,
+        session_id=SESSION_ID,
+    )
+
+    engine.dispose()
+    command.upgrade(legacy_schema, SCOPED_REVISION)
+
+    with engine.connect() as connection:
+        repaired = connection.execute(
+            text(
+                """
+                SELECT envelope_id, session_id, source_extraction_result_id,
+                       source_payload_hash
+                FROM domain_envelopes
+                WHERE envelope_id = :envelope_id
+                   OR envelope_id = :second_envelope_id
+                ORDER BY envelope_id
+                """
+            ),
+            {
+                "envelope_id": ENVELOPE_ID,
+                "second_envelope_id": SECOND_ENVELOPE_ID,
+            },
+        ).mappings().all()
+
+    assert len(repaired) == 2
+    assert all(row["session_id"] == SESSION_ID for row in repaired)
+    assert all(row["source_extraction_result_id"] is None for row in repaired)
+    assert all(row["source_payload_hash"] for row in repaired)
 
 
 def test_scope_migration_splits_cross_session_legacy_collision(legacy_schema):

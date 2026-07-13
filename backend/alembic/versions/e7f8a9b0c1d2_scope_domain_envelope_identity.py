@@ -350,6 +350,30 @@ def upgrade() -> None:
           AND envelope.document_id IS NULL
         """
     )
+    # A legacy extraction could materialize several envelopes in one session. The
+    # new source-scope index represents only the one-envelope form, so retain the
+    # session owner and clear the redundant derived source column on those rows.
+    # Source provenance remains in envelope_json and curation_candidates. Any
+    # duplicate that has no session owner remains below as a fail-closed blocker.
+    op.execute(
+        """
+        WITH duplicate_source_scopes AS (
+          SELECT source_extraction_result_id, adapter_key, domain_pack_key
+          FROM domain_envelopes
+          WHERE source_extraction_result_id IS NOT NULL
+          GROUP BY source_extraction_result_id, adapter_key, domain_pack_key
+          HAVING count(*) > 1
+        )
+        UPDATE domain_envelopes AS envelope
+        SET source_extraction_result_id = NULL
+        FROM duplicate_source_scopes AS duplicate
+        WHERE envelope.source_extraction_result_id =
+                duplicate.source_extraction_result_id
+          AND envelope.adapter_key = duplicate.adapter_key
+          AND envelope.domain_pack_key = duplicate.domain_pack_key
+          AND envelope.session_id IS NOT NULL
+        """
+    )
     connection = op.get_bind()
     legacy_envelopes = connection.execute(
         sa.text("SELECT envelope_id, envelope_json FROM domain_envelopes")
