@@ -97,7 +97,7 @@ def _extract_dev_mode_static_curator_token() -> str | None:
         token = get_configured_document_source_dev_mode_static_curator_token()
     except DocumentSourceConfigError:
         return None
-    if not isinstance(token, str):
+    if token is None:
         return None
     return token.strip() or None
 

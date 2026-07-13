@@ -26,7 +26,10 @@ from src.lib.document_sources.providers.abc_literature import (
     ABCLiteratureDocumentSourceProvider,
     get_dev_mode_static_curator_token,
 )
-from src.lib.document_sources.registry import get_configured_document_source_provider
+from src.lib.document_sources.registry import (
+    get_configured_document_source_dev_mode_static_curator_token,
+    get_configured_document_source_provider,
+)
 from src.lib.literature.client import ABCLiteratureHTTPError
 
 
@@ -753,6 +756,18 @@ async def test_request_conversion_wraps_abc_client_errors() -> None:
 def test_registry_rejects_local_pdf_as_external_provider() -> None:
     with pytest.raises(DocumentSourceConfigError, match="local_pdf is handled"):
         get_configured_document_source_provider("local_pdf")
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        get_configured_document_source_dev_mode_static_curator_token,
+        get_configured_document_source_provider,
+    ],
+)
+def test_registry_rejects_unknown_provider(lookup) -> None:
+    with pytest.raises(DocumentSourceConfigError, match="unsupported_provider"):
+        lookup("unsupported_provider")
 
 
 def test_registry_normalizes_abc_config_errors(monkeypatch: pytest.MonkeyPatch) -> None:
