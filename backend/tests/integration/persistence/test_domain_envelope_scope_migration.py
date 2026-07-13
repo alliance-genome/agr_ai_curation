@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from src.lib.domain_envelope_payload_hash import canonical_domain_envelope_payload_hash
 from src.lib.domain_envelopes.persistence import domain_envelope_payload_hash
 from src.models.sql.database import engine
 from src.schemas.domain_envelope import DomainEnvelope
@@ -281,6 +282,22 @@ def _seed_legacy_envelope_graph(*, snapshot_candidate_id: UUID) -> None:
         )
 
 
+def _use_legacy_objects_payload_key() -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE domain_envelopes
+                SET envelope_json =
+                  (envelope_json - 'extracted_objects')
+                  || jsonb_build_object('objects', envelope_json->'extracted_objects')
+                WHERE envelope_id = :envelope_id
+                """
+            ),
+            {"envelope_id": ENVELOPE_ID},
+        )
+
+
 def test_scope_migration_repairs_unambiguous_owner_and_enforces_constraints(
     legacy_schema,
 ):
@@ -362,6 +379,7 @@ def test_scope_migration_splits_cross_session_legacy_collision(legacy_schema):
             "source_extraction_result_id": "extract-697",
         },
     )
+    _use_legacy_objects_payload_key()
     canonical_candidate_id = UUID("00000000-0000-0000-0000-000000046697")
     clone_candidate_id = UUID("00000000-0000-0000-0000-000000056697")
     _seed_candidate(
@@ -447,8 +465,8 @@ def test_scope_migration_splits_cross_session_legacy_collision(legacy_schema):
     assert by_id[CLONE_ENVELOPE_ID]["source_extraction_result_id"] is None
     for envelope_id, envelope in by_id.items():
         assert envelope["envelope_json"]["envelope_id"] == envelope_id
-        assert envelope["source_payload_hash"] == domain_envelope_payload_hash(
-            DomainEnvelope.model_validate(envelope["envelope_json"])
+        assert envelope["source_payload_hash"] == canonical_domain_envelope_payload_hash(
+            envelope["envelope_json"]
         )
     assert candidate_owners == {
         SESSION_ID: ENVELOPE_ID,

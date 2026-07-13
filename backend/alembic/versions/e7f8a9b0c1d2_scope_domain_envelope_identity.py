@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from typing import Union
 
 from alembic import op
+from pydantic import ValidationError
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -354,6 +355,16 @@ def upgrade() -> None:
         sa.text("SELECT envelope_id, envelope_json FROM domain_envelopes")
     ).mappings()
     for legacy_envelope in legacy_envelopes:
+        envelope_payload = legacy_envelope["envelope_json"]
+        try:
+            hash_payload = DomainEnvelope.model_validate(envelope_payload).model_dump(
+                mode="json"
+            )
+        except ValidationError:
+            # Earlier persisted envelopes used keys such as ``objects`` that are no
+            # longer accepted by the strict runtime model. Preserve and hash those
+            # payloads exactly instead of blocking a schema-only ownership upgrade.
+            hash_payload = envelope_payload
         connection.execute(
             sa.text(
                 """
@@ -365,9 +376,7 @@ def upgrade() -> None:
             {
                 "envelope_id": legacy_envelope["envelope_id"],
                 "source_payload_hash": canonical_domain_envelope_payload_hash(
-                    DomainEnvelope.model_validate(
-                        legacy_envelope["envelope_json"]
-                    ).model_dump(mode="json")
+                    hash_payload
                 ),
             },
         )
