@@ -163,6 +163,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/domain_packs/test_validation_registry_metadata.py"),
     Path("backend/tests/unit/lib/feedback/test_service.py"),
     Path("backend/tests/unit/lib/flows/test_executor.py"),
+    Path("backend/tests/unit/lib/flows/test_output_projection.py"),
     Path("backend/tests/unit/lib/literature/test_client.py"),
     Path("backend/tests/unit/lib/openai_agents/test_streaming_tools_retry_paths.py"),
     Path("backend/tests/unit/lib/pdf_jobs/test_upload_intake_service.py"),

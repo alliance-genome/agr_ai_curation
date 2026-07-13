@@ -83,7 +83,7 @@ def test_terminal_formatter_bundle_is_scoped_to_exact_bound_source_node():
         output_format="tsv",
         completed_steps=[first, second],
         flow_name="Scoped Output",
-        source_node_id="source_2",
+        source_node_ids=("source_2",),
     )
 
     assert [artifact.agent_id for artifact in bundle.artifacts] == ["allele_extractor"]
@@ -91,14 +91,14 @@ def test_terminal_formatter_bundle_is_scoped_to_exact_bound_source_node():
 
     with pytest.raises(
         executor.FlowTerminalOutputProjectionError,
-        match="bound source node 'missing' produced 0 completed artifacts",
+        match="invalid source node\\(s\\): 'missing' \\(0\\)",
     ):
         executor._build_terminal_flow_artifact_bundle(
             agent_id="tsv_formatter",
             output_format="tsv",
             completed_steps=[first, second],
             flow_name="Scoped Output",
-            source_node_id="missing",
+            source_node_ids=("missing",),
         )
 
 
