@@ -48,14 +48,14 @@ const layers: PromptLayerInfo[] = [
 ]
 
 const groupLayer: PromptLayerInfo = {
-  id: 'gene:group_rules:WB',
+  id: 'gene:group_rules:group-alpha',
   kind: 'group_rules',
-  title: 'WB group rules',
-  content: 'WB GROUP CONTENT',
+  title: 'Group alpha rules',
+  content: 'GROUP ALPHA CONTENT',
   provenance: 'prompt_template:group',
   editable: true,
   locked: false,
-  source_ref: 'database:gene:WB',
+  source_ref: 'database:gene:group-alpha',
   hash: 'group-hash',
 }
 
@@ -67,7 +67,11 @@ const agent: PromptInfo = {
   source_file: 'database',
   has_group_rules: true,
   group_rules: {
-    WB: { group_id: 'WB', content: 'legacy WB rules', source_file: 'database' },
+    'group-alpha': {
+      group_id: 'group-alpha',
+      content: 'legacy group alpha rules',
+      source_file: 'database',
+    },
   },
   prompt_layers: layers,
   tools: ['gene_lookup'],
@@ -75,7 +79,7 @@ const agent: PromptInfo = {
 
 const combined: CombinedPromptResponse = {
   agent_id: 'gene',
-  group_id: 'WB',
+  group_id: 'group-alpha',
   combined_prompt: [...layers, groupLayer].map((layer) => layer.content).join('\n\n'),
   effective_prompt_hash: 'combined-hash',
   layer_manifest: {
@@ -91,7 +95,7 @@ describe('PromptViewer', () => {
     serviceMocks.fetchPromptCatalog.mockResolvedValue({
       categories: [{ category: 'Validation', agents: [agent] }],
       total_agents: 1,
-      available_groups: ['WB'],
+      available_groups: ['group-alpha'],
       last_updated: '2026-07-13T00:00:00Z',
     })
     serviceMocks.fetchCombinedPrompt.mockResolvedValue(combined)
@@ -101,10 +105,10 @@ describe('PromptViewer', () => {
     render(<PromptViewer agentId="gene" agentName="Gene Agent" open onClose={vi.fn()} />)
 
     await waitFor(() => {
-      expect(serviceMocks.fetchCombinedPrompt).toHaveBeenCalledWith('gene', 'WB')
+      expect(serviceMocks.fetchCombinedPrompt).toHaveBeenCalledWith('gene', 'group-alpha')
     })
 
-    expect(await screen.findByRole('button', { name: 'WB group rules' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Group alpha rules' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Generated tool guidance' }))
 
     expect(screen.getByText('GENERATED TOOL CONTENT')).toBeInTheDocument()
@@ -117,12 +121,12 @@ describe('PromptViewer', () => {
   it('renders the combined prompt in the manifest runtime order', async () => {
     render(<PromptViewer agentId="gene" agentName="Gene Agent" open onClose={vi.fn()} />)
 
-    await screen.findByRole('button', { name: 'WB group rules' })
+    await screen.findByRole('button', { name: 'Group alpha rules' })
     fireEvent.click(screen.getByRole('button', { name: 'Combined' }))
 
     const content = screen.getByText(/LOCKED CORE CONTENT/)
     expect(content).toHaveTextContent(
-      'LOCKED CORE CONTENT GENERATED TOOL CONTENT EDITABLE BASE CONTENT WB GROUP CONTENT'
+      'LOCKED CORE CONTENT GENERATED TOOL CONTENT EDITABLE BASE CONTENT GROUP ALPHA CONTENT'
     )
     expect(screen.getByText('4 layers shown in runtime order')).toBeInTheDocument()
   })
