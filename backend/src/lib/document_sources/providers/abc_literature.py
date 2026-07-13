@@ -46,6 +46,15 @@ _ARTIFACT_STATUS_KEYS = (
 )
 
 
+def get_dev_mode_static_curator_token() -> str | None:
+    """Return the configured static bearer only for the explicit ABC dev mode."""
+
+    if get_abc_literature_auth_mode().strip().lower() != "static_bearer":
+        return None
+    token = (get_abc_literature_bearer_token() or "").strip()
+    return token or None
+
+
 class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
     """Map ABC Literature REST payloads into provider-neutral source objects."""
 
@@ -229,14 +238,6 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             if converted.get("file_class") == "converted_merged_main":
                 return True
         return False
-
-    def dev_mode_static_curator_token(self) -> str | None:
-        """Return the configured static bearer only for the explicit ABC dev mode."""
-
-        if get_abc_literature_auth_mode().strip().lower() != "static_bearer":
-            return None
-        token = (get_abc_literature_bearer_token() or "").strip()
-        return token or None
 
     def provider_metadata_artifacts_for_source(
         self,

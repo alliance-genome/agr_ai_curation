@@ -178,10 +178,6 @@ class DocumentSourceProvider(Protocol):
         """Return whether a conversion response says provider main text exists or is pending."""
         raise NotImplementedError
 
-    def dev_mode_static_curator_token(self) -> str | None:
-        """Return a server-side curator token for explicit dev-auth modes, if supported."""
-        raise NotImplementedError
-
     async def list_artifacts(
         self,
         reference: SourceReference | str,
