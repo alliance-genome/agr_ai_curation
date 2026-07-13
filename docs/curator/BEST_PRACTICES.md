@@ -147,12 +147,14 @@ The task input is the starting point for your flow. Write clear, specific task d
 | **TSV** | Bioinformatics pipelines, AGR data submission |
 | **JSON** | API integration, preserving complex nested data |
 
-### Choosing Your Output Agent
+### Choosing Your Output Agents
 
-A flow terminates when it reaches an output agent, so **use one output agent per flow**. If you want to review results in chat before exporting:
-
-1. First, build your flow with **Chat Output** at the end to review results
-2. Once satisfied, swap Chat Output for a **File Formatter** (CSV, TSV, or JSON) to generate the downloadable file
+Output agents attach to the extraction or validation steps whose saved artifacts
+they should format; they are not control-flow steps. A flow can attach multiple
+outputs to the same source, so you can keep **Chat Output** for review while also
+adding CSV, TSV, or JSON output for download. Each output must have at least one
+source attachment, and one output can combine compatible artifacts from multiple
+source steps.
 
 ### Flow Naming
 

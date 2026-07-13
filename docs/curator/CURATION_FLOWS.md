@@ -245,11 +245,11 @@ Understanding how flows run helps you build effective workflows:
 1. **Initial Instructions** provide the starting task description and context
 2. A supervisor agent receives all steps and executes them **sequentially** in the order defined by your connections
 3. Each step runs with the flow task, document context, selected agent, and node custom instructions; prior step artifacts stay saved separately for review/export lookup
-4. When an output step projects completed artifacts into a final result (e.g., a downloadable CSV/TSV/JSON file, or Chat Output displays a result), the flow **terminates**
+4. Output agents are attached to one or more structured extraction or validation steps. Each output agent runs once after all of its selected sources complete
 5. Custom instructions for each step are applied with highest priority, overriding the agent's default behavior for that step (see [How Prompts Layer Together](#how-prompts-layer-together) above)
 6. Domain-pack extraction steps save envelope objects and schedule automatic validation according to the node's validation attachments
 
-**Important:** Because the flow terminates when it reaches an output agent, place your output agent at the end of the chain. Only one output agent will produce results per flow run.
+**Important:** Output agents are branches, not ordinary steps in the sequential chain. Connect each output directly to every structured source it should include. A flow may produce more than one result—for example, a chat summary and a TSV file—from the same completed sources.
 
 ## Running a Flow
 
@@ -265,11 +265,11 @@ The flow executes and results appear based on your output agent (chat message or
 
 ## Output Options
 
-Flows can output results in different ways. Choose the output agent that fits
-your needs. Output agents project the structured artifacts produced by earlier
-flow steps; their custom instructions can shape presentation, such as column
-names, column order, filters, sorting, or whether to show object, evidence, or
-validation rows.
+Flows can output results in different ways. Choose one or more output agents
+that fit your needs. An output agent can combine several explicitly connected
+structured extraction or validation results and runs once per flow. Its custom
+instructions can shape presentation, such as column names, column order,
+filters, sorting, or whether to show object, evidence, or validation rows.
 
 ### Chat Output Agent
 

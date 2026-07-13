@@ -96,6 +96,7 @@ def _make_flow(nodes):
     """Create a mock CurationFlow with the given nodes list."""
     flow = MagicMock()
     flow.flow_definition = {
+        "version": "1.1",
         "nodes": nodes,
         "edges": [
             {
@@ -162,6 +163,7 @@ def test_ordered_executable_nodes_treats_validation_edges_as_sidecars():
     """Validation attachment targets should not become ordinary flow steps."""
     flow = MagicMock()
     flow.flow_definition = {
+        "version": "1.1",
         "nodes": [
             _task_input_node(),
             _agent_node("extract_1", "gene_extractor", output_key="extract_output"),
@@ -197,6 +199,7 @@ def test_legacy_v1_formatter_control_graph_is_rejected():
             _agent_node("output_1", "chat_output"),
         ]
     )
+    flow.flow_definition["version"] = "1.0"
 
     with pytest.raises(
         ValueError,

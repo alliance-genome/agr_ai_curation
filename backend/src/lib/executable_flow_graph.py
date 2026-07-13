@@ -203,7 +203,7 @@ def project_executable_flow_graph(
         str(node.get("id")) for node in nodes if str(node.get("id") or "").strip()
     )
     node_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
-    flow_version = str(flow.get("version") or "1.1")
+    flow_version = str(flow.get("version") or "")
 
     control_edges = [
         edge
@@ -238,9 +238,7 @@ def project_executable_flow_graph(
         if edge.get("target")
     }
     cross_role_target_ids = validation_target_ids & output_target_ids
-    detached_output_node_ids = (
-        declared_output_node_ids if flow_version == "1.1" else output_target_ids
-    )
+    detached_output_node_ids = declared_output_node_ids
     attachment_target_ids = validation_target_ids | detached_output_node_ids
     control_node_ids = tuple(
         node_id for node_id in node_ids if node_id not in attachment_target_ids
@@ -479,17 +477,6 @@ def project_executable_flow_graph(
 
     output_attachments: list[OutputAttachment] = []
     output_sources_by_target: dict[str, list[OutputAttachmentSource]] = {}
-    if flow_version != "1.1" and output_attachment_edges:
-        issues.append(
-            ExecutableFlowIssue(
-                code="output_attachment_requires_v1_1",
-                message="output_attachment edges require flow schema version '1.1'",
-                edge_ids=tuple(
-                    str(edge.get("id") or "") for edge in output_attachment_edges
-                ),
-            )
-        )
-
     for edge in output_attachment_edges:
         source = str(edge.get("source") or "")
         target = str(edge.get("target") or "")
@@ -565,24 +552,23 @@ def project_executable_flow_graph(
             )
         )
 
-    if flow_version == "1.1":
-        missing_output_bindings = tuple(
-            node_id
-            for node_id in node_ids
-            if node_id in declared_output_node_ids
-            and node_id not in output_sources_by_target
-        )
-        for node_id in missing_output_bindings:
-            issues.append(
-                ExecutableFlowIssue(
-                    code="missing_output_binding",
-                    message=(
-                        f"Output node '{node_id}' must be attached to at least one "
-                        "control-flow extraction node"
-                    ),
-                    node_ids=(node_id,),
-                )
+    missing_output_bindings = tuple(
+        node_id
+        for node_id in node_ids
+        if node_id in declared_output_node_ids
+        and node_id not in output_sources_by_target
+    )
+    for node_id in missing_output_bindings:
+        issues.append(
+            ExecutableFlowIssue(
+                code="missing_output_binding",
+                message=(
+                    f"Output node '{node_id}' must be attached to at least one "
+                    "control-flow extraction node"
+                ),
+                node_ids=(node_id,),
             )
+        )
 
     validation_sidecars: list[ValidationSidecar] = []
     seen_bindings: dict[tuple[str, str], str] = {}

@@ -28,7 +28,7 @@ import json
 from typing import Any
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import op  # pyright: ignore[reportAttributeAccessIssue]
 from sqlalchemy.dialects.postgresql import JSONB
 from src.lib.config.schema_discovery import resolve_output_schema
 
@@ -921,10 +921,8 @@ def _migrate(bind: sa.engine.Connection) -> Counter[str]:
             for node in new_definition.get("nodes", [])
             if isinstance(node, Mapping) and _agent_id(node) != "task_input"
         }
-        runtime_owned_agent_ids = set(_FORMATTER_AGENT_IDS)
-        unavailable_agent_ids = candidate_agent_ids - (
-            active_agent_ids_by_user.get(int(row["user_id"]), set())
-            | runtime_owned_agent_ids
+        unavailable_agent_ids = candidate_agent_ids - active_agent_ids_by_user.get(
+            int(row["user_id"]), set()
         )
         if unavailable_agent_ids:
             raise RuntimeError(

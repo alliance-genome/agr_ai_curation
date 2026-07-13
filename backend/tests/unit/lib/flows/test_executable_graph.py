@@ -335,15 +335,13 @@ def test_invalid_output_attachment_topologies_are_rejected(mutator, expected_cod
         FlowDefinition.model_validate(flow)
 
 
-def test_output_attachments_require_flow_schema_v1_1():
+def test_output_attachments_on_v1_0_are_rejected_as_unsupported():
     flow = _multi_output_attachment_flow()
     flow["version"] = "1.0"
 
     projection = project_executable_flow_graph(flow, raise_on_invalid=False)
 
-    assert "output_attachment_requires_v1_1" in {
-        issue.code for issue in projection.issues
-    }
+    assert "unsupported_flow_version" in {issue.code for issue in projection.issues}
     with pytest.raises(ValidationError, match="1.1"):
         FlowDefinition.model_validate(flow)
 
@@ -361,13 +359,17 @@ def test_raw_v1_0_formatter_free_flow_is_rejected():
         project_executable_flow_graph(flow)
 
 
-def test_raw_missing_version_defaults_to_current_projection():
+def test_raw_missing_version_is_rejected():
     flow = _unavailable_step_flow()
     flow.pop("version")
 
-    projection = project_executable_flow_graph(flow)
+    projection = project_executable_flow_graph(flow, raise_on_invalid=False)
 
-    assert projection.valid is True
+    assert "unsupported_flow_version" in {
+        issue.code for issue in projection.issues
+    }
+    with pytest.raises(ExecutableFlowTopologyError, match="unsupported_flow_version"):
+        project_executable_flow_graph(flow)
 
 
 @pytest.mark.parametrize("version", ["1.0", "1.1"])
@@ -466,7 +468,8 @@ async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
     created = await flows_api.create_flow(
         request=CreateFlowRequest(
             name="Topology parity",
-            flow_definition=_multi_sidecar_flow(),
+            description="Exercise API and executor topology parity.",
+            flow_definition=FlowDefinition.model_validate(_multi_sidecar_flow()),
         ),
         user={"sub": "curator-1"},
         db=db,
