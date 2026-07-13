@@ -182,7 +182,7 @@ function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse 
     updated_at: overrides.updated_at ?? '2026-04-03T00:00:00Z',
     validation_warnings: overrides.validation_warnings ?? [],
     has_critical_issues: overrides.has_critical_issues ?? false,
-    flow_definition: {
+    flow_definition: overrides.flow_definition ?? {
       version: '1.0' as const,
       entry_node_id: 'node_0',
       nodes: [
@@ -365,6 +365,129 @@ describe('FlowBuilder', () => {
         `Flow loaded with validation issue: ${staleReferenceMessage} ${schemaWarningMessage}`
       )
     ).toBeInTheDocument()
+  }, 15000)
+
+  it('surfaces non-critical legacy compatibility warnings when loading a flow', async () => {
+    const user = userEvent.setup()
+    const compatibilityMessage = (
+      "Legacy formatter node 'output_1' remains runnable in compatibility mode, "
+      + 'and can be resaved unchanged.'
+    )
+
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Legacy Flow'))
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({
+      name: 'Legacy Flow',
+      validation_warnings: [
+        {
+          type: 'WARNING',
+          message: compatibilityMessage,
+        },
+      ],
+      has_critical_issues: false,
+    }))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    const openDialog = await screen.findByRole('dialog', { name: 'Open Flow' })
+    await user.click(within(openDialog).getByText('Legacy Flow'))
+
+    expect(
+      await screen.findByText(`Flow loaded with validation warning: ${compatibilityMessage}`)
+    ).toBeInTheDocument()
+  }, 15000)
+
+  it('loads and resaves a legacy formatter control graph without promoting it to v1.1', async () => {
+    const user = userEvent.setup()
+    const legacyFlow = buildFlowResponse({
+      name: 'AlleleTest3',
+      flow_definition: {
+        version: '1.0',
+        task_instructions_default_only: true,
+        entry_node_id: 'task',
+        nodes: [
+          {
+            id: 'task',
+            type: 'task_input',
+            position: { x: 0, y: 0 },
+            data: {
+              agent_id: 'task_input',
+              agent_display_name: 'Initial Instructions',
+              task_instructions: "Run flow 'AlleleTest3'",
+              output_key: 'task_input',
+            },
+          },
+          {
+            id: 'node_1',
+            type: 'agent',
+            position: { x: 250, y: 0 },
+            data: {
+              agent_id: 'allele_extractor',
+              agent_display_name: 'Allele Extractor',
+              output_key: 'alleles',
+            },
+          },
+          {
+            id: 'node_2',
+            type: 'agent',
+            position: { x: 500, y: 0 },
+            data: {
+              agent_id: 'chat_output',
+              agent_display_name: 'Chat Output',
+              output_key: 'chat_output',
+            },
+          },
+        ],
+        edges: [
+          { id: 'edge_1', source: 'task', target: 'node_1', role: 'control_flow' },
+          { id: 'edge_2', source: 'node_1', target: 'node_2', role: 'control_flow' },
+        ],
+      },
+    })
+    agentMetadataMocks.agents = {
+      allele_extractor: { category: 'Extraction', subcategory: 'Allele' },
+      chat_output: { category: 'Output', subcategory: 'Formatter' },
+    }
+    serviceMocks.listFlows
+      .mockResolvedValueOnce(buildFlowListResponse('AlleleTest3'))
+      .mockResolvedValueOnce(buildFlowListResponse('AlleleTest3'))
+    serviceMocks.getFlow.mockResolvedValue(legacyFlow)
+    serviceMocks.updateFlow.mockResolvedValue(legacyFlow)
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    await user.click(
+      within(await screen.findByRole('dialog', { name: 'Open Flow' })).getByText('AlleleTest3')
+    )
+    await waitFor(() => expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1'))
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+
+    await waitFor(() => {
+      expect(serviceMocks.updateFlow).toHaveBeenCalledWith(
+        'flow-1',
+        expect.objectContaining({
+          flow_definition: expect.objectContaining({
+            version: '1.0',
+            task_instructions_default_only: true,
+            edges: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'edge_2',
+                source: 'node_1',
+                target: 'node_2',
+                role: 'control_flow',
+              }),
+            ]),
+          }),
+        })
+      )
+    })
   }, 15000)
 
   it('disables file action save shortcuts when there are no flow nodes', async () => {

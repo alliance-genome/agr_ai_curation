@@ -27,7 +27,7 @@ class CurationFlow(Base):
     Each flow belongs to a single user (soft reference, no FK constraint).
 
     The flow_definition JSONB stores:
-    - version: Schema version (currently "1.0")
+    - version: Schema version ("1.0" legacy compatibility or current "1.1")
     - nodes: List of FlowNode objects with agent config
     - edges: List of FlowEdge objects connecting nodes
     - entry_node_id: ID of the starting node

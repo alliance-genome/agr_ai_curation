@@ -492,7 +492,7 @@ def _build_flow_conversation_summary(
 ) -> str:
     """Choose the best available summary string for flow persistence and prep context."""
 
-    for candidate in (user_query, get_task_instructions(flow)):
+    for candidate in (user_query, _get_authored_task_instructions(flow)):
         text = str(candidate or "").strip()
         if text:
             return text
@@ -617,7 +617,11 @@ def _build_flow_step_query(
     """
 
     sections: list[str] = []
-    _append_flow_query_section(sections, "Flow task", get_task_instructions(flow))
+    _append_flow_query_section(
+        sections,
+        "Flow task",
+        _get_authored_task_instructions(flow),
+    )
     _append_flow_query_section(sections, "Curator run request", user_query)
 
     document_bits = []
@@ -2201,6 +2205,20 @@ def get_task_instructions(flow: CurationFlow) -> Optional[str]:
     return None
 
 
+def _task_instructions_are_default_only(flow: CurationFlow) -> bool:
+    """Return whether a migrated Task Input is only a no-query fallback."""
+
+    return flow.flow_definition.get("task_instructions_default_only") is True
+
+
+def _get_authored_task_instructions(flow: CurationFlow) -> Optional[str]:
+    """Return curator-authored instructions, excluding migrated runtime defaults."""
+
+    if _task_instructions_are_default_only(flow):
+        return None
+    return get_task_instructions(flow)
+
+
 def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
     """Return executable nodes from the canonical sequential projection."""
 
@@ -2261,6 +2279,7 @@ def _runtime_output_sources_by_node_id(
                 f"source node '{source_node_id}' agent '{source_agent_id}' is not an extraction agent"
             )
 
+    flow_version = str(flow_def.get("version") or "1.0")
     for node_id in projection.ordered_executable_node_ids:
         node = nodes_by_id.get(node_id, {})
         node_data = node.get("data") or {}
@@ -2268,7 +2287,11 @@ def _runtime_output_sources_by_node_id(
             (node_data.get("agent_id") or "") if isinstance(node_data, Mapping) else ""
         )
         entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
-        if _is_output_formatter_entry(entry) and node_id not in bindings:
+        if (
+            flow_version == "1.1"
+            and _is_output_formatter_entry(entry)
+            and node_id not in bindings
+        ):
             errors.append(
                 f"legacy formatter node '{node_id}' must be repaired as an output attachment before execution"
             )
@@ -3315,7 +3338,9 @@ def build_flow_prompt(
 
     # Extract task_instructions from task_input node (if present)
     task_instructions = get_task_instructions(flow)
-    if task_instructions:
+    if task_instructions and not (
+        user_query and _task_instructions_are_default_only(flow)
+    ):
         prompt_parts.append(f"Task Instructions:\n{task_instructions}")
 
     # NOTE: Don't add document_id to prompt - PDF agent's tools already have document context

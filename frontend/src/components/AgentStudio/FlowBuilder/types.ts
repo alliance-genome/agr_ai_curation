@@ -110,6 +110,8 @@ export interface FlowEdgeDefinition {
 
 export interface FlowDefinition {
   version: '1.0' | '1.1'
+  /** Migrated compatibility default, omitted whenever the run supplies a user query. */
+  task_instructions_default_only?: boolean
   nodes: FlowNodeDefinition[]
   edges: FlowEdgeDefinition[]
   entry_node_id: string

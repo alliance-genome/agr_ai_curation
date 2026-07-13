@@ -2,7 +2,7 @@
 
 Only ``control_flow`` edges participate in the main execution topology.
 Validator attachments are sidecars of their source step. Output attachments are
-terminal leaves scheduled immediately after their bound source step. Neither
+terminal leaves scheduled after the ordinary control path. Neither
 attachment role creates a control-flow branch, join, entry, or exit.
 """
 
@@ -537,21 +537,18 @@ def project_executable_flow_graph(
             )
         )
 
-    output_ids_by_source: dict[str, list[str]] = {}
-    for attachment in output_attachments:
-        output_ids_by_source.setdefault(attachment.source_node_id, []).append(
-            attachment.output_node_id
-        )
-
-    executable_ids_list: list[str] = []
-    for node_id in ordered_control:
+    executable_ids_list = [
+        node_id
+        for node_id in ordered_control
         if (
             node_by_id[node_id].get("type", "agent") != "task_input"
             and _mapping(node_by_id[node_id].get("data")).get("agent_id")
             not in ("task_input", "supervisor")
-        ):
-            executable_ids_list.append(node_id)
-        executable_ids_list.extend(output_ids_by_source.get(node_id, ()))
+        )
+    ]
+    executable_ids_list.extend(
+        attachment.output_node_id for attachment in output_attachments
+    )
     executable_ids = tuple(executable_ids_list)
     terminal_node_ids = tuple(
         dict.fromkeys(

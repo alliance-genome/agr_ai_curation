@@ -202,7 +202,7 @@ def _legacy_formatter_control_flow_warnings(
     *,
     db_user_id: int | None,
 ) -> list[FlowValidationWarning]:
-    """Flag v1.0 formatter control steps for explicit Studio repair."""
+    """Flag v1.0 formatter control steps retained in compatibility mode."""
 
     if flow_definition.version != "1.0":
         return []
@@ -221,12 +221,12 @@ def _legacy_formatter_control_flow_warnings(
             continue
         warnings.append(
             FlowValidationWarning(
-                type="CRITICAL",
+                type="WARNING",
                 message=(
-                    f"Legacy formatter node '{node.data.agent_display_name}' must be repaired before "
-                    "saving or running: remove its ordinary control-flow connection and connect it "
-                    "directly to exactly one extraction node as an output attachment. The source "
-                    "will not be inferred automatically."
+                    f"Legacy formatter node '{node.data.agent_display_name}' remains runnable in "
+                    "compatibility mode and can be resaved unchanged. Repair it by removing "
+                    "its ordinary control-flow connection and connecting it directly to exactly "
+                    "one extraction node as an output attachment to use the current flow format."
                 ),
             )
         )
@@ -368,7 +368,9 @@ def _flow_to_response(flow: CurationFlow) -> FlowResponse:
         created_at=flow.created_at,
         updated_at=flow.updated_at,
         validation_warnings=validation_warnings,
-        has_critical_issues=bool(validation_warnings),
+        has_critical_issues=any(
+            warning.type == "CRITICAL" for warning in validation_warnings
+        ),
     )
 
 

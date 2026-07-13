@@ -201,9 +201,9 @@ def test_output_attachments_are_terminal_leaves_not_control_branches():
     )
     assert projection.ordered_executable_node_ids == (
         "general",
-        "general_csv",
         "gene",
         "allele",
+        "general_csv",
         "allele_tsv",
     )
     assert projection.exit_node_ids == ("allele",)

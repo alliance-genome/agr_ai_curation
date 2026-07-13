@@ -95,9 +95,9 @@ describe('projectExecutableFlowGraph', () => {
     expect(graph.ordered_control_node_ids).toEqual(['task', 'general', 'gene', 'allele'])
     expect(graph.ordered_executable_node_ids).toEqual([
       'general',
-      'general_csv',
       'gene',
       'allele',
+      'general_csv',
       'allele_tsv',
     ])
     expect(graph.exit_node_ids).toEqual(['allele'])

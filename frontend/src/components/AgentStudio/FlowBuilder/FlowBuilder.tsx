@@ -205,12 +205,11 @@ const nextOutputEdgeId = (existingEdges: FlowEdge[]): string => {
 }
 
 const graphVersionForNodesAndEdges = (
-  nodes: AgentNode[],
+  _nodes: AgentNode[],
   edges: FlowEdge[],
   loadedVersion: FlowDefinition['version']
 ): FlowDefinition['version'] => (
   loadedVersion === '1.1'
-  || nodes.some((node) => node.type === 'output')
   || edges.some((edge) => edgeRole(edge) === 'output_attachment')
     ? '1.1'
     : '1.0'
@@ -634,11 +633,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   const [flowName, setFlowName] = useState('New Flow')
   const [flowDescription, setFlowDescription] = useState('')
   const [flowVersion, setFlowVersion] = useState<FlowDefinition['version']>('1.1')
+  const [taskInstructionsDefaultOnly, setTaskInstructionsDefaultOnly] = useState(false)
   const [selectedNode, setSelectedNode] = useState<AgentNode | null>(null)
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [snackbar, setSnackbar] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
+  const [snackbar, setSnackbar] = useState<{
+    message: string
+    severity: 'success' | 'warning' | 'error'
+  } | null>(null)
 
   // Prompt viewer state
   const [promptViewerOpen, setPromptViewerOpen] = useState(false)
@@ -769,6 +772,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       setFlowName(flow.name)
       setFlowDescription(flow.description || '')
       setFlowVersion(flow.flow_definition.version)
+      setTaskInstructionsDefaultOnly(flow.flow_definition.task_instructions_default_only === true)
       setCurrentFlowId(flow.id)
 
       // Convert flow definition to React Flow format
@@ -800,11 +804,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
       setNodes(flowNodes)
       setEdges(flowEdges)
-      if (flow.has_critical_issues && flow.validation_warnings?.length) {
+      if (flow.validation_warnings?.length) {
         const warningMessages = flow.validation_warnings.map((warning) => warning.message).join(' ')
+        const hasCriticalWarning = flow.has_critical_issues
         setSnackbar({
-          message: `Flow loaded with validation issue: ${warningMessages}`,
-          severity: 'error',
+          message: `Flow loaded with validation ${hasCriticalWarning ? 'issue' : 'warning'}: ${warningMessages}`,
+          severity: hasCriticalWarning ? 'error' : 'warning',
         })
       }
 
@@ -1039,6 +1044,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
       const flowDefinition: FlowDefinition = {
         version: persistedVersion,
+        ...(taskInstructionsDefaultOnly ? { task_instructions_default_only: true } : {}),
         nodes: nodes.map((n) => ({
           id: n.id,
           type: n.data.agent_id === 'task_input'
@@ -1090,6 +1096,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       setFlowName(savedFlow.name)
       setFlowDescription(savedFlow.description || '')
       setFlowVersion(savedFlow.flow_definition.version)
+      setTaskInstructionsDefaultOnly(
+        savedFlow.flow_definition.task_instructions_default_only === true
+      )
       notifyFlowListInvalidated({
         flowId: savedFlow.id,
         reason: flowMutationReason,
@@ -1115,6 +1124,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setFlowName('New Flow')
     setFlowDescription('')
     setFlowVersion('1.1')
+    setTaskInstructionsDefaultOnly(false)
     setCurrentFlowId(null)
     setSelectedNode(null)
     nodeIdRef.current = 1  // Start from 1 since node_0 is used
@@ -2017,6 +2027,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                   node={selectedEditorNode}
                   onSave={handleNodeDataUpdate}
                   onClose={() => setSelectedNode(null)}
+                  onTaskInstructionsAuthored={() => setTaskInstructionsDefaultOnly(false)}
                   onDelete={handleDeleteNode}
                 />
               ) : selectedEditorNode ? (

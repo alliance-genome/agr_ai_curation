@@ -299,21 +299,14 @@ export const projectExecutableFlowGraph = (
     }
   })
 
-  const outputIdsBySource = new Map<string, string[]>()
-  outputAttachments.forEach(attachment => {
-    const outputIds = outputIdsBySource.get(attachment.source_node_id) ?? []
-    outputIds.push(attachment.output_node_id)
-    outputIdsBySource.set(attachment.source_node_id, outputIds)
-  })
   const executable = ordered.flatMap(nodeId => {
     const node = nodeById.get(nodeId)
-    const controlStep = node?.type !== 'task_input'
+    return node?.type !== 'task_input'
       && node?.data.agent_id !== 'task_input'
       && node?.data.agent_id !== 'supervisor'
       ? [nodeId]
       : []
-    return [...controlStep, ...(outputIdsBySource.get(nodeId) ?? [])]
-  })
+  }).concat(outputAttachments.map(attachment => attachment.output_node_id))
   const terminals = Array.from(new Set([
     ...exits,
     ...outputAttachments.map(attachment => attachment.output_node_id),

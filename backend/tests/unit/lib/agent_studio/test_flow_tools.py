@@ -568,10 +568,10 @@ def test_get_current_flow_handler_explains_output_attachment_binding():
     assert result["success"] is True
     assert [step["node_id"] for step in result["steps"]] == [
         "allele_1",
-        "allele_csv",
         "gene_1",
+        "allele_csv",
     ]
-    formatter_step = result["steps"][1]
+    formatter_step = result["steps"][2]
     assert formatter_step["output_attachment"]["source_node_id"] == "allele_1"
     assert formatter_step["output_attachment"]["source_agent_id"] == "allele_extractor"
     assert result["edges"][1]["role"] == "output_attachment"

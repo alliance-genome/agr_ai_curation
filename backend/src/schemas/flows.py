@@ -134,7 +134,6 @@ class FlowNodeData(BaseModel):
         max_length=5000,
         description="Curator's task/request that initiates the flow (required for task_input nodes)"
     )
-
     # Step configuration (for agent nodes)
     step_goal: Optional[str] = Field(
         None,
@@ -314,6 +313,13 @@ class FlowDefinition(BaseModel):
     """Complete flow definition stored in JSONB."""
 
     version: Literal["1.0", "1.1"] = "1.0"
+    task_instructions_default_only: bool = Field(
+        False,
+        description=(
+            "Compatibility marker for migrated flows: use the generated Task Input "
+            "only when the run does not supply a user query."
+        ),
+    )
     nodes: List[FlowNode] = Field(..., min_length=1, max_length=30)
     edges: List[FlowEdge] = Field(default_factory=list)
     entry_node_id: str = Field(..., description="Starting node ID")

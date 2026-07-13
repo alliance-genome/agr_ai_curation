@@ -180,6 +180,115 @@ def test_ordered_executable_nodes_treats_validation_edges_as_sidecars():
     assert [node["id"] for node in ordered] == ["extract_1", "prep_1"]
 
 
+def test_legacy_v1_formatter_remains_runnable_without_typed_binding(monkeypatch):
+    """v1.0 formatters retain the pre-v1.1 all-completed-artifacts behavior."""
+
+    flow = _make_flow(
+        [
+            _task_input_node(),
+            _agent_node("extract_1", "allele_extractor"),
+            _agent_node("output_1", "chat_output"),
+        ]
+    )
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "_resolve_flow_agent_entry",
+        lambda agent_id, **_kwargs: {
+            "category": "Output" if agent_id == "chat_output" else "Extraction",
+            "subcategory": "Formatter" if agent_id == "chat_output" else "Allele",
+        },
+    )
+
+    ordered = _executor_module()._get_ordered_executable_nodes(flow)
+    bindings = _executor_module()._runtime_output_sources_by_node_id(
+        flow,
+        db_user_id=None,
+    )
+
+    assert [node["id"] for node in ordered] == ["extract_1", "output_1"]
+    assert bindings == {}
+
+
+def test_unbound_v1_1_formatter_remains_fail_closed(monkeypatch):
+    """The legacy exception must never weaken the typed v1.1 contract."""
+
+    flow = _make_flow(
+        [
+            _task_input_node(),
+            _agent_node("extract_1", "allele_extractor"),
+            _agent_node("output_1", "chat_output"),
+        ]
+    )
+    flow.flow_definition["version"] = "1.1"
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "_resolve_flow_agent_entry",
+        lambda agent_id, **_kwargs: {
+            "category": "Output" if agent_id == "chat_output" else "Extraction",
+            "subcategory": "Formatter" if agent_id == "chat_output" else "Allele",
+        },
+    )
+
+    with pytest.raises(
+        _executor_module().FlowTerminalOutputProjectionError,
+        match="must be repaired as an output attachment",
+    ):
+        _executor_module()._runtime_output_sources_by_node_id(
+            flow,
+            db_user_id=None,
+        )
+
+
+def test_migrated_default_task_instruction_preserves_legacy_user_query_behavior():
+    """The synthetic Task Input must not augment runs that already have a query."""
+
+    task = _task_input_node()
+    task["data"]["task_instructions"] = "Execute the 'Test Flow' curation workflow."
+    flow = _make_flow([task, _agent_node("extract_1", "gene")])
+    flow.flow_definition["task_instructions_default_only"] = True
+
+    with_query = _executor_module().build_flow_prompt(
+        flow,
+        user_query="Curate only the selected paper.",
+    )
+    without_query = _executor_module().build_flow_prompt(flow)
+    step_query = _executor_module()._build_flow_step_query(
+        flow=flow,
+        node_data=flow.flow_definition["nodes"][1]["data"],
+        step_number=1,
+        agent_name="Gene Specialist",
+        user_query="Curate only the selected paper.",
+        document_id=None,
+        document_name=None,
+    )
+    step_query_without_request = _executor_module()._build_flow_step_query(
+        flow=flow,
+        node_data=flow.flow_definition["nodes"][1]["data"],
+        step_number=1,
+        agent_name="Gene Specialist",
+        user_query=None,
+        document_id=None,
+        document_name=None,
+    )
+
+    assert "User Query: Curate only the selected paper." in with_query
+    assert "Task Instructions:" not in with_query
+    assert "Task Instructions:" in without_query
+    assert "Execute the 'Test Flow' curation workflow." in without_query
+    assert "Curator run request:\nCurate only the selected paper." in step_query
+    assert "Execute the 'Test Flow' curation workflow." not in step_query
+    assert "Execute the 'Test Flow' curation workflow." not in step_query_without_request
+    assert _executor_module()._build_flow_conversation_summary(
+        flow,
+        "Curate only the selected paper.",
+    ) == "Curate only the selected paper."
+    assert _executor_module()._build_flow_conversation_summary(flow, None) == (
+        "Run flow 'Test Flow'"
+    )
+
+
 def test_validation_groups_from_node_data_rejects_unexpected_group_type():
     """Malformed validation group values should fail instead of being ignored."""
     with pytest.raises(ValueError, match="Unexpected validation group type: str"):
@@ -2405,16 +2514,16 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_legacy_terminal_output_without_binding_fails_before_formatter_agent(
+    def test_legacy_terminal_output_without_binding_uses_compatibility_mode(
         self, mock_get_agent, mock_streaming
     ):
-        """Legacy formatter control steps fail closed before agent construction."""
+        """Legacy formatter control steps retain their pre-v1.1 runtime path."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         formatter_invocations = []
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             formatter_invocations.append((agent, tool_name))
-            raise AssertionError("legacy formatter agent must not be constructed")
+            return MagicMock()
 
         mock_streaming.side_effect = _make_streaming_tool
 
@@ -2424,13 +2533,74 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "chat_output_formatter",
         ):
             flow = _make_flow([_agent_node("n1", agent_id)])
-            with pytest.raises(
-                _executor_module().FlowTerminalOutputProjectionError,
-                match="must be repaired as an output attachment",
-            ):
-                get_all_agent_tools(flow, include_unavailable=True)
+            tools, _, _, _ = get_all_agent_tools(flow, include_unavailable=True)
+            assert len(tools) == 1
 
         assert formatter_invocations == []
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_sue_legacy_allele_flow_invokes_extractor_then_chat_output(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Sue's v1.0 allele_extractor→chat_output path renders completed artifacts."""
+
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        @function_tool(
+            name_override="ask_allele_extractor_specialist",
+            description_override="Extract alleles",
+        )
+        async def _extractor_tool(query: str) -> str:
+            _ = query
+            return json.dumps(_structured_step_output("sue-allele-result"))
+
+        mock_streaming.return_value = _extractor_tool
+        monkeypatch.setattr(
+            "src.lib.flows.executor.get_agent_metadata",
+            lambda agent_id, **_kwargs: {
+                "agent_id": agent_id,
+                "display_name": {
+                    "allele_extractor": "Allele Extractor",
+                    "chat_output": "Chat Output",
+                }[agent_id],
+                "description": "",
+                "category": "Output" if agent_id == "chat_output" else "Extraction",
+                "subcategory": "Formatter" if agent_id == "chat_output" else "Allele",
+                "requires_document": False,
+                "required_params": [],
+                "curation": None,
+                "supervisor": {},
+            },
+        )
+
+        flow = _make_flow(
+            [
+                _task_input_node(),
+                _agent_node("n1", "allele_extractor"),
+                _agent_node("n2", "chat_output"),
+            ]
+        )
+        tools, _, unavailable, execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        extraction_text = asyncio.run(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
+        )
+        rendered_text = asyncio.run(
+            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "render"}))
+        )
+
+        assert unavailable == []
+        assert "sue-allele-result" in extraction_text
+        assert "sue-allele-result" in rendered_text
+        assert [step["agent_id"] for step in execution_state["completed_steps"]] == [
+            "allele_extractor",
+            "chat_output",
+        ]
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")

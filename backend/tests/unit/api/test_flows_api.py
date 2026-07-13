@@ -222,10 +222,10 @@ def test_flow_response_loads_legacy_formatter_control_step_with_repair_warning(
     response = flows._flow_to_response(stored_flow)
 
     assert response.flow_definition.version == "1.0"
-    assert response.has_critical_issues is True
+    assert response.has_critical_issues is False
     assert len(response.validation_warnings) == 1
-    assert "must be repaired" in response.validation_warnings[0].message
-    assert "will not be inferred automatically" in response.validation_warnings[0].message
+    assert "can be resaved unchanged" in response.validation_warnings[0].message
+    assert "compatibility mode" in response.validation_warnings[0].message
 
 
 def _output_attachment_flow_payload() -> dict:
