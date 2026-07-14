@@ -83,6 +83,7 @@ function completedRunEvent(overrides: Partial<SSEEvent> = {}): SSEEvent {
       result_ref: 'extraction-result:extract-1',
       extraction_result_id: 'extract-1',
       adapter_key: 'gene',
+      candidate_count: 20,
     }],
     review_session_ids: ['curation-session-1'],
     status: 'completed',
@@ -164,12 +165,44 @@ describe('CurationFlows', () => {
     })
   })
 
-  it('disables review when the authoritative completion contains zero sessions', async () => {
+  it('bootstraps review for a completed extraction-only flow with durable scope', async () => {
+    const user = userEvent.setup()
+
+    // Regression guard for curator feedback c6d51567: extraction-only flows have
+    // zero review_session_ids by design, but their persisted extraction ref is
+    // sufficient to prepare the session through the scoped bootstrap endpoint.
     renderComponent([completedRunEvent({ review_session_ids: [] })])
 
     const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
+    expect(reviewButton).toBeEnabled()
+    await user.click(reviewButton)
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'document-123',
+          flowRunId: 'flow-run-123',
+          originSessionId: 'session-123',
+          adapterKeys: ['gene'],
+          sessionId: undefined,
+        }),
+      )
+    })
+  })
+
+  it('keeps zero-session review disabled when the extraction ref is not curatable', async () => {
+    // Keep this negative case beside the c6d51567 regression test: an empty
+    // extraction must never gain bootstrap eligibility merely because a flow completed.
+    renderComponent([completedRunEvent({
+      review_session_ids: [],
+      extraction_result_ids: [],
+      extraction_result_refs: [],
+    })])
+
+    const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
     expect(reviewButton).toBeDisabled()
-    expect(screen.getByText(/completed without prepared review sessions/i)).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(/complete, unambiguous extraction scope/i)
+    expect(openCurationWorkspaceMock).not.toHaveBeenCalled()
   })
 
   it('preserves extraction identities and offers each authoritative session for multi-adapter runs', async () => {
@@ -217,9 +250,7 @@ describe('CurationFlows', () => {
 
     const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
     expect(reviewButton).toBeDisabled()
-    expect(
-      screen.getByText(/completed without prepared review sessions/i),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(/complete, unambiguous extraction scope/i)
     expect(openCurationWorkspaceMock).not.toHaveBeenCalled()
   })
 

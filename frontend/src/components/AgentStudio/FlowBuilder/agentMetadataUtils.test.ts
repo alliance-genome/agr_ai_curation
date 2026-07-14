@@ -5,6 +5,7 @@ import type { AgentMetadata } from '@/services/agentStudioService'
 import {
   canSourceOutputAttachmentFromMetadata,
   isExtractionAgentFromMetadata,
+  isFileOutputFormatterAgentFromMetadata,
   isOutputFormatterAgentFromMetadata,
   isValidationAgentFromMetadata,
   resolveOutputFormatterIncludeEvidence,
@@ -71,6 +72,14 @@ describe('agentMetadataUtils', () => {
     expect(isOutputFormatterAgentFromMetadata('custom_output', metadata)).toBe(false)
     expect(isOutputFormatterAgentFromMetadata('custom_extractor', metadata)).toBe(false)
     expect(isOutputFormatterAgentFromMetadata('missing_agent', metadata)).toBe(false)
+  })
+
+  it('limits file naming controls to CSV, TSV, and JSON formatters', () => {
+    expect(isFileOutputFormatterAgentFromMetadata('csv_formatter', metadata)).toBe(true)
+    expect(isFileOutputFormatterAgentFromMetadata('tsv_formatter', metadata)).toBe(true)
+    expect(isFileOutputFormatterAgentFromMetadata('json_formatter', metadata)).toBe(true)
+    expect(isFileOutputFormatterAgentFromMetadata('chat_output_formatter', metadata)).toBe(false)
+    expect(isFileOutputFormatterAgentFromMetadata('custom_output', metadata)).toBe(false)
   })
 
   it('allows extraction and typed active validation agents to source output attachments', () => {

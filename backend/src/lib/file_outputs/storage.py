@@ -238,9 +238,9 @@ class FileOutputStorageService:
     def _generate_stable_filename(
         self, trace_id: str, descriptor: str, file_type: str
     ) -> str:
-        """Generate a deterministic per-run output filename."""
+        """Generate a deterministic per-run filename with its readable key first."""
 
-        return f"{trace_id}_{descriptor}.{file_type}"
+        return f"{descriptor}_{trace_id}.{file_type}"
 
     def _get_output_directory(self, session_id: str) -> Path:
         """Get output directory for a session, organized by date.
@@ -300,7 +300,7 @@ class FileOutputStorageService:
             file_type: One of 'csv', 'tsv', 'json'
             descriptor: Human-readable descriptor (e.g., 'gene_results')
             stable_filename: When true, use a deterministic
-                outputs/structured/{trace_id}/{trace_id}_{descriptor}.{ext} path
+                outputs/structured/{trace_id}/{descriptor}_{trace_id}.{ext} path
                 and replace any existing file at that path. Intended for
                 idempotent per-run structured exports.
 

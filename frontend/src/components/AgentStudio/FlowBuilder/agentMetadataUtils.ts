@@ -12,6 +12,12 @@ const SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS = new Set([
   'json_formatter',
 ])
 
+const FILE_OUTPUT_FORMATTER_AGENT_IDS = new Set([
+  'csv_formatter',
+  'tsv_formatter',
+  'json_formatter',
+])
+
 interface MetadataClassification {
   categoryIncludes?: string[]
   subcategoryIncludes?: string[]
@@ -86,6 +92,11 @@ export const isOutputFormatterAgentFromMetadata = (
   agentId: string,
   _agentMetadata: AgentMetadataLookup
 ): boolean => SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS.has(agentId)
+
+export const isFileOutputFormatterAgentFromMetadata = (
+  agentId: string,
+  _agentMetadata: AgentMetadataLookup
+): boolean => FILE_OUTPUT_FORMATTER_AGENT_IDS.has(agentId)
 
 export const resolveOutputFormatterIncludeEvidence = (
   agentId: string,

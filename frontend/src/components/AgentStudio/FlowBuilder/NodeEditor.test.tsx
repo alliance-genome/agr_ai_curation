@@ -381,4 +381,108 @@ describe('NodeEditor', () => {
     expect(screen.getByText(/Gene Extractor, GO Validator/i)).toBeInTheDocument()
     expect(screen.getByText(/one grouped input/i)).toBeInTheDocument()
   })
+
+  it('uses the source PDF stem for deterministic file formatter names', () => {
+    metadataMocks.agents = {
+      csv_formatter: {
+        name: 'CSV Formatter',
+        icon: 'CSV',
+        category: 'Output',
+        subcategory: 'Formatter',
+      },
+    }
+    const onSave = vi.fn()
+
+    render(
+      <NodeEditor
+        node={buildNode({
+          agent_id: 'csv_formatter',
+          agent_display_name: 'CSV Formatter',
+          output_filename_template: '{{input_filename_stem}}',
+          validation_attachments: undefined,
+        })}
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('radio', { name: 'Source PDF filename (recommended)' })).toBeChecked()
+    expect(screen.getByText('<PDF-name>_<node>_<hash>_<trace-id>.csv')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onSave).toHaveBeenCalledWith('node_1', expect.objectContaining({
+      output_filename_template: '{{input_filename_stem}}',
+    }))
+  })
+
+  it('persists an explicit custom filename prefix', () => {
+    metadataMocks.agents = {
+      tsv_formatter: {
+        name: 'TSV Formatter',
+        icon: 'TSV',
+        category: 'Output',
+        subcategory: 'Formatter',
+      },
+    }
+    const onSave = vi.fn()
+
+    render(
+      <NodeEditor
+        node={buildNode({
+          agent_id: 'tsv_formatter',
+          agent_display_name: 'TSV Formatter',
+          output_filename_template: 'old_{{input_filename_stem}}',
+          validation_attachments: undefined,
+        })}
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('radio', { name: 'Custom filename prefix' })).toBeChecked()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Custom filename prefix' }), {
+      target: { value: 'study_{{input_filename_stem}}' },
+    })
+    expect(screen.getByText('study_{{input_filename_stem}}_<node>_<hash>_<trace-id>.tsv'))
+      .toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onSave).toHaveBeenCalledWith('node_1', expect.objectContaining({
+      output_filename_template: 'study_{{input_filename_stem}}',
+    }))
+  })
+
+  it('preserves formatter-decided naming for legacy flows without a template', () => {
+    metadataMocks.agents = {
+      json_formatter: {
+        name: 'JSON Formatter',
+        icon: 'JSON',
+        category: 'Output',
+        subcategory: 'Formatter',
+      },
+    }
+    const onSave = vi.fn()
+
+    render(
+      <NodeEditor
+        node={buildNode({
+          agent_id: 'json_formatter',
+          agent_display_name: 'JSON Formatter',
+          output_filename_template: undefined,
+          validation_attachments: undefined,
+        })}
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    )
+
+    // Existing flows may have filename instructions embedded in their prompt.
+    // Editing one must not silently replace that contract with the new default.
+    expect(screen.getByRole('radio', { name: 'Formatter decides (existing behavior)' })).toBeChecked()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onSave).toHaveBeenCalledWith('node_1', expect.objectContaining({
+      output_filename_template: undefined,
+    }))
+  })
 })

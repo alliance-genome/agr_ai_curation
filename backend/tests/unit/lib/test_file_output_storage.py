@@ -378,11 +378,13 @@ class TestSaveOutput:
         )
 
         assert first_path == second_path
-        assert first_path.name == f"{valid_trace_id}_gene_results.csv"
+        # Gillian sorts batches by paper/descriptor. Keeping that readable value
+        # first is the contract; a trace-ID-first regression buries the only useful key.
+        assert first_path.name == f"gene_results_{valid_trace_id}.csv"
         assert first_hash != second_hash
         assert first_size != second_size
         assert second_path.read_text(encoding="utf-8") == second_content
-        assert list(second_path.parent.glob(f"{valid_trace_id}_gene_results*.csv")) == [
+        assert list(second_path.parent.glob(f"gene_results_{valid_trace_id}*.csv")) == [
             second_path
         ]
 

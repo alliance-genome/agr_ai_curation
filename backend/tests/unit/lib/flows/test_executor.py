@@ -2554,6 +2554,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert "FLOW FORMATTER SOURCE BUNDLE" in runtime_context
         assert "compact CSV export" in runtime_context
         assert "filename_hint has already been resolved" in runtime_context
+        assert "trace identifier suffix" in runtime_context
+        assert "trace prefix" not in runtime_context
         assert "A timestamp is included only when" in runtime_context
         assert execution_state["completed_steps"][-1]["agent_id"] == "csv_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text

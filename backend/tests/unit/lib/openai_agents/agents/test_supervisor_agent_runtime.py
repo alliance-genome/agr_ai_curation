@@ -526,7 +526,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
 
     def _metadata(agent_key):
         if agent_key == "gene-extractor":
-            return {"requires_document": True}
+            return {"requires_document": True, "category": "Extraction"}
         raise RuntimeError("metadata failure")
 
     monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_agent_metadata", _metadata)
@@ -545,6 +545,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
     assert specs[0]["group_rules_enabled"] is True
     assert specs[0]["batchable"] is True
     assert specs[0]["batching_entity"] == "gene"
+    assert specs[0]["category"] == "Extraction"
 
 
 def test_create_dynamic_specialist_tools_skips_document_required_tools_without_document(monkeypatch):
@@ -622,6 +623,55 @@ def test_create_dynamic_specialist_tools_passes_document_and_group_context(monke
     assert captured["kwargs"]["abstract"] == "abstract text"
     assert captured["kwargs"]["active_groups"] == ["WB"]
     assert tools == ["wrapped::ask_gene_expression_specialist::Gene Expression"]
+
+
+def test_dynamic_tools_limit_current_request_to_extraction_specialists(monkeypatch):
+    wrapped = {}
+
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key, **_kwargs: SimpleNamespace(name=agent_key),
+    )
+
+    def _capture_streaming_tool(**kwargs):
+        wrapped[kwargs["tool_name"]] = kwargs["authoritative_user_request"]
+        return kwargs["tool_name"]
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_streaming_tool",
+        _capture_streaming_tool,
+    )
+
+    request = "Use only curator-supplied tumor terms."
+    tools = supervisor_agent._create_dynamic_specialist_tools(
+        tool_specs=[
+            {
+                "tool_name": "ask_pdf_extraction_specialist",
+                "agent_key": "pdf_extraction",
+                "description": "Extract from the PDF",
+                "requires_document": False,
+                "category": "Extraction",
+            },
+            {
+                "tool_name": "ask_gene_validation_specialist",
+                "agent_key": "gene_validation",
+                "description": "Validate a gene",
+                "requires_document": False,
+                "category": "Validation",
+            },
+        ],
+        authoritative_user_request=request,
+    )
+
+    # Regression guard: forwarding every long chat prompt to unrelated lookup or
+    # validation agents would broaden scope and waste their isolated context window.
+    assert tools == [
+        "ask_pdf_extraction_specialist",
+        "ask_gene_validation_specialist",
+    ]
+    assert wrapped["ask_pdf_extraction_specialist"] == request
+    assert wrapped["ask_gene_validation_specialist"] is None
 
 
 def test_create_dynamic_specialist_tools_continues_after_agent_construction_failure(monkeypatch):
@@ -889,6 +939,7 @@ async def test_dynamic_formatter_specialist_binds_bundle_at_call_time(monkeypatc
             }
         ],
         formatter_bundle=None,
+        authoritative_user_request="Use only the supplied tumor vocabulary.",
     )
 
     assert [getattr(tool, "name", "") for tool in tools] == [
@@ -910,6 +961,11 @@ async def test_dynamic_formatter_specialist_binds_bundle_at_call_time(monkeypatc
     assert captured_run["tool_name"] == "ask_csv_formatter_specialist"
     assert captured_run["specialist_name"] == "CSV File Formatter"
     assert captured_run["query"] == "Create a CSV"
+    # The formatter needs the same exact vocabulary as the extractor; otherwise it
+    # can reject or remap source objects using only a supervisor-authored summary.
+    assert captured_run["authoritative_user_request"] == (
+        "Use only the supplied tumor vocabulary."
+    )
     assert captured_run["ctx"].run_config == "run-config"
 
 
@@ -1401,12 +1457,16 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
         user_id="user-2",
         hierarchy={"sections": [{"name": "Introduction"}, {"name": "Methods"}]},
         enable_guardrails=True,
+        current_user_request="Use this exact controlled vocabulary.",
     )
 
     assert "DOCUMENT CONTEXT: A PDF document is loaded." in created.instructions
     assert "RUNTIME TOOL DESCRIPTIONS ARE AUTHORITATIVE" in created.instructions
     assert created.input_guardrails == ["safety"]
     assert captured_dynamic["sections"] == ["Introduction", "Methods"]
+    assert captured_dynamic["authoritative_user_request"] == (
+        "Use this exact controlled vocabulary."
+    )
 
 
 def test_create_supervisor_agent_applies_model_overrides(monkeypatch):

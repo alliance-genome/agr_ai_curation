@@ -262,11 +262,11 @@ class TestSaveProjectedFileOutput:
 
         assert first["file_id"] == second["file_id"]
         assert first["filename"] == second["filename"]
-        assert first["filename"] == f"{trace_id}_gene_results.csv"
+        assert first["filename"] == f"gene_results_{trace_id}.csv"
         assert third["file_id"] != first["file_id"]
-        assert third["filename"] == f"{trace_id}_other_gene_results.csv"
+        assert third["filename"] == f"other_gene_results_{trace_id}.csv"
         assert fourth["file_id"] != first["file_id"]
-        assert fourth["filename"] == f"{trace_id}_gene_results.tsv"
+        assert fourth["filename"] == f"gene_results_{trace_id}.tsv"
 
         rows = sorted(store.rows, key=lambda row: row.filename)
         assert len(rows) == 3
@@ -354,14 +354,18 @@ class TestSaveProjectedFileOutput:
 
         assert allele_file["file_id"] != gene_file["file_id"]
         assert allele_file["filename"] != gene_file["filename"]
-        assert allele_file["filename"].startswith(f"{trace_id}_results_")
+        # Flow branches retain their node/hash discriminator, but the readable
+        # descriptor must lead so files from the same paper sort together.
+        assert allele_file["filename"].startswith("results_")
+        assert allele_file["filename"].endswith(f"_{trace_id}.csv")
         assert allele_file["formatter_label"] == "Allele CSV"
         assert allele_file["source_label"] == "Allele Extraction"
         assert allele_file["source_node_ids"] == ["allele_extract", "gene_extract"]
         assert allele_file["source_labels"] == ["Allele Extraction", "Gene Extraction"]
         assert allele_file["source_extraction_result_ids"] == ["result-allele"]
         assert allele_file["source_envelope_ids"] == ["envelope-allele"]
-        assert gene_file["filename"].startswith(f"{trace_id}_results_")
+        assert gene_file["filename"].startswith("results_")
+        assert gene_file["filename"].endswith(f"_{trace_id}.csv")
         assert len(store.rows) == 2
         assert {row.file_metadata["source_node_id"] for row in store.rows} == {
             "allele_extract",
@@ -449,7 +453,7 @@ class TestSaveProjectedFileOutput:
         )
 
         assert result["file_id"] == stale_id
-        assert result["filename"] == f"{trace_id}_gene_results.csv"
+        assert result["filename"] == f"gene_results_{trace_id}.csv"
         assert len(store.rows) == 1
         saved = store.rows[0]
         assert str(saved.id) == stale_id
@@ -521,7 +525,7 @@ class TestSaveProjectedFileOutput:
 
         assert first["file_id"] == second["file_id"]
         assert second["trace_id"] == second_trace_id
-        assert second["filename"] == f"{second_trace_id}_gene_results.csv"
+        assert second["filename"] == f"gene_results_{second_trace_id}.csv"
         assert len(store.rows) == 1
         saved = store.rows[0]
         assert saved.trace_id == second_trace_id
@@ -607,7 +611,7 @@ class TestSaveProjectedFileOutput:
             "grouped_gene_results",
             "json_formatter",
         )
-        assert result["filename"] == f"{trace_id}_grouped_gene_results.json"
+        assert result["filename"] == f"grouped_gene_results_{trace_id}.json"
         assert result["format"] == "json"
 
         assert len(store.rows) == 1

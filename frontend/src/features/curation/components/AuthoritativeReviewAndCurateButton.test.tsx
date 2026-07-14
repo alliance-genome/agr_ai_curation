@@ -42,6 +42,32 @@ describe('AuthoritativeReviewAndCurateButton', () => {
     expect(openCurationWorkspaceMock).not.toHaveBeenCalled()
   })
 
+  it('allows an explicitly validated zero-session flow to bootstrap', async () => {
+    render(
+      <AuthoritativeReviewAndCurateButton
+        authoritativeReviewSessionIds={[]}
+        allowBootstrapWithoutSession={true}
+        documentId="doc-1"
+        flowRunId="flow-run-1"
+        originSessionId="chat-session-1"
+        adapterKeys={['allele']}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /review & curate/i }))
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: undefined,
+          documentId: 'doc-1',
+          flowRunId: 'flow-run-1',
+          originSessionId: 'chat-session-1',
+          adapterKeys: ['allele'],
+        }),
+      )
+    })
+  })
+
   it('opens the sole authoritative session directly', async () => {
     render(
       <AuthoritativeReviewAndCurateButton

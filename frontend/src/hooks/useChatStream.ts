@@ -12,7 +12,7 @@
  * Note: Uses POST fetch with ReadableStream, NOT EventSource API
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback, useSyncExternalStore } from 'react'
 import { debug } from '@/utils/env'
 
 export interface SSEEvent {
@@ -115,7 +115,6 @@ interface SharedChatStreamState {
 interface ActiveStreamRun {
   runId: number
   controller: AbortController
-  ownerToken: symbol
   sessionId: string
 }
 
@@ -129,12 +128,20 @@ let sharedState: SharedChatStreamState = {
 }
 let nextRunId = 0
 let activeStreamRun: ActiveStreamRun | null = null
-let retainedEventOwnerToken: symbol | null = null
 let retainedEventSessionId: string | null = null
 
 function emitSharedState(nextState: Partial<SharedChatStreamState>) {
   sharedState = { ...sharedState, ...nextState }
   sharedListeners.forEach((listener) => listener())
+}
+
+function subscribeSharedState(listener: () => void): () => void {
+  sharedListeners.add(listener)
+  return () => sharedListeners.delete(listener)
+}
+
+function getSharedStateSnapshot(): SharedChatStreamState {
+  return sharedState
 }
 
 function updateSharedEvents(updater: (events: SSEEvent[]) => SSEEvent[]) {
@@ -166,11 +173,10 @@ function emitChatRunTerminal(detail: ChatRunTerminalEventDetail) {
 }
 
 function startStreamRun(
-  ownerToken: symbol,
   sessionId: string,
 ): ActiveStreamRun | null {
-  // Restart policy: reject starts while an owner is active. A user stop releases
-  // that owner synchronously, so a replacement need not wait for stale work to settle.
+  // Restart policy: reject starts while a run is active. A user stop releases
+  // that run synchronously, so a replacement need not wait for stale work to settle.
   if (activeStreamRun) {
     return null
   }
@@ -178,7 +184,6 @@ function startStreamRun(
   const run = {
     runId: ++nextRunId,
     controller: new AbortController(),
-    ownerToken,
     sessionId,
   }
   activeStreamRun = run
@@ -190,7 +195,6 @@ function replaceRunEvents(
   run: ActiveStreamRun,
   events: SSEEvent[],
 ) {
-  retainedEventOwnerToken = run.ownerToken
   retainedEventSessionId = run.sessionId
   replaceSharedEvents(events)
 }
@@ -212,22 +216,14 @@ function releaseStreamRun(
   return true
 }
 
-function cleanupOwnedStream(ownerToken: symbol, sessionId?: string | null) {
+function cleanupStreamSession(sessionId: string) {
   const run = activeStreamRun
-  if (
-    run
-    && run.ownerToken === ownerToken
-    && (sessionId === undefined || run.sessionId === sessionId)
-  ) {
+  if (run?.sessionId === sessionId) {
     run.controller.abort()
     releaseStreamRun(run)
   }
 
-  if (
-    retainedEventOwnerToken === ownerToken
-    && (sessionId === undefined || retainedEventSessionId === sessionId)
-  ) {
-    retainedEventOwnerToken = null
+  if (retainedEventSessionId === sessionId) {
     retainedEventSessionId = null
     replaceSharedEvents([])
     emitSharedState({ error: null })
@@ -237,35 +233,34 @@ function cleanupOwnedStream(ownerToken: symbol, sessionId?: string | null) {
 /**
  * Hook for managing chat SSE stream
  *
- * The hook instance owns its stream; unmounting it aborts the run instead of
- * preserving it across remounts.
+ * The durable chat session owns its stream. Route unmounts leave the request
+ * alive so Home can observe the same run after navigation; selecting a different
+ * session still aborts and clears the prior session before it can leak state.
  *
- * @param activeSessionId Session whose owned stream should be cleaned up when it changes.
+ * @param activeSessionId Session whose stream state should be observed.
  * @returns Stream state and control functions
  */
 export function useChatStream(activeSessionId?: string | null): UseChatStreamReturn {
-  const [snapshot, setSnapshot] = useState<SharedChatStreamState>(sharedState)
-  const ownerToken = useRef(Symbol('chat-stream-owner')).current
-
-  useEffect(() => {
-    const listener = () => setSnapshot(sharedState)
-    sharedListeners.add(listener)
-    return () => {
-      sharedListeners.delete(listener)
-      cleanupOwnedStream(ownerToken)
-    }
-  }, [ownerToken])
+  // The request may finish between a route remount's render and subscription.
+  // React's external-store contract rechecks the snapshot across that window.
+  const snapshot = useSyncExternalStore(
+    subscribeSharedState,
+    getSharedStateSnapshot,
+    getSharedStateSnapshot,
+  )
 
   useEffect(() => {
     if (!activeSessionId) {
       return
     }
 
-    return () => cleanupOwnedStream(ownerToken, activeSessionId)
-  }, [activeSessionId, ownerToken])
+    const priorSessionId = activeStreamRun?.sessionId ?? retainedEventSessionId
+    if (priorSessionId && priorSessionId !== activeSessionId) {
+      cleanupStreamSession(priorSessionId)
+    }
+  }, [activeSessionId])
 
   const clearEvents = useCallback(() => {
-    retainedEventOwnerToken = null
     retainedEventSessionId = null
     replaceSharedEvents([])
     emitSharedState({ error: null })
@@ -333,7 +328,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
       return
     }
 
-    const run = startStreamRun(ownerToken, sessionId)
+    const run = startStreamRun(sessionId)
     if (!run) {
       console.warn('Cannot start a new chat message while another stream is active')
       return
@@ -450,7 +445,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
     } finally {
       releaseStreamRun(run)
     }
-  }, [ownerToken])
+  }, [])
 
   /**
    * Execute a curation flow with SSE streaming
@@ -470,7 +465,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
     }
 
     const turnId = options?.turnId ?? buildClientTurnId()
-    const run = startStreamRun(ownerToken, sessionId)
+    const run = startStreamRun(sessionId)
     if (!run) {
       console.warn('Cannot start a new flow execution while another stream is active')
       return
@@ -575,7 +570,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
     } finally {
       releaseStreamRun(run)
     }
-  }, [ownerToken])
+  }, [])
 
   return {
     events: snapshot.events,

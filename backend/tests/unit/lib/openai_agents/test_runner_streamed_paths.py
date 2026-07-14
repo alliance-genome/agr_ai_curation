@@ -387,6 +387,9 @@ async def test_run_agent_streamed_passes_model_overrides_to_supervisor_builder(m
     assert captured["supervisor_kwargs"]["specialist_temperature_override"] == 0.0
     assert captured["supervisor_kwargs"]["reasoning_override"] == "minimal"
     assert captured["supervisor_kwargs"]["specialist_reasoning_override"] == "minimal"
+    # The runner owns the full current-turn message. Passing it explicitly prevents
+    # isolated specialists from seeing only a lossy supervisor-authored summary.
+    assert captured["supervisor_kwargs"]["current_user_request"] == "hello"
 
 
 @pytest.mark.asyncio

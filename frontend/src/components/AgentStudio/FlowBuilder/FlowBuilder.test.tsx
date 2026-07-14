@@ -626,6 +626,16 @@ describe('FlowBuilder', () => {
     dropAgent('csv_formatter', 'CSV Formatter', 460)
     dropAgent('plain_custom', 'Plain Custom Agent', 580)
 
+    await waitFor(() => {
+      const latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+      const csvNode = latestFlowState?.nodes.find(
+        (node: { agent_id: string }) => node.agent_id === 'csv_formatter'
+      )
+      // New file formatters must start with a deterministic paper-derived name;
+      // otherwise batch exports immediately regress to trace-ID-first sorting.
+      expect(csvNode?.output_filename_template).toBe('{{input_filename_stem}}')
+    })
+
     await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
 
     React.act(() => {
