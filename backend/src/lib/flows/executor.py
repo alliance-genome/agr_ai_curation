@@ -809,7 +809,7 @@ def _build_flow_formatter_runtime_context(
         "If configured_projection_plan is present, treat it as the flow owner's requested starting plan: "
         "validate/preview it with the runtime tools, adjust only through saved field refs if needed, then finalize. "
         "Filename metadata is runtime-owned: filename_hint has already been resolved from the flow template, "
-        "and saved files receive a trace prefix. A timestamp is included only when the configured template "
+        "and saved files retain a trace identifier suffix. A timestamp is included only when the configured template "
         "contains {{timestamp}}. Do not require the input PDF filename or timestamp to appear in artifact rows, "
         "and do not call "
         "formatter_cannot_complete merely because those runtime-owned filename values are absent from the bundle. "

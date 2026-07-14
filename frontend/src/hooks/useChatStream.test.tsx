@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { useLayoutEffect } from 'react'
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CHAT_RUN_TERMINAL_EVENT, useChatStream } from './useChatStream'
@@ -23,7 +24,7 @@ describe('useChatStream shared lifecycle', () => {
     vi.restoreAllMocks()
   })
 
-  it('cleans up only the unmounted hook owner and ignores its later events', async () => {
+  it('keeps the active session stream observable across route unmounts', async () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
     const streamSignals: AbortSignal[] = []
     const encoder = new TextEncoder()
@@ -51,27 +52,100 @@ describe('useChatStream shared lifecycle', () => {
       expect(first.result.current.isLoading).toBe(true)
     })
 
+    act(() => {
+      first.result.current.markEventsProcessed(
+        first.result.current.eventStreamVersion,
+        first.result.current.events.length,
+      )
+    })
+    expect(first.result.current.processedEventCount).toBe(1)
+
     first.unmount()
-    expect(streamSignals[0].aborted).toBe(true)
+    // Debbie's regression was Home -> Documents -> Home: route cleanup must not
+    // abort a durable session run or erase the italic progress state while away.
+    expect(streamSignals[0].aborted).toBe(false)
 
     act(() => {
       streamController?.enqueue(encoder.encode(
         'data: {"type":"TEXT_MESSAGE_CONTENT","session_id":"session-1","turn_id":"turn-1","content":"hi"}\n\n',
       ))
-      streamController?.close()
-    })
-    await act(async () => {
-      await firstRun
     })
 
     const second = renderHook(() => useChatStream('session-1'))
 
-    expect(second.result.current.isLoading).toBe(false)
-    expect(second.result.current.processedEventCount).toBe(0)
-    expect(second.result.current.events).toEqual([])
+    expect(second.result.current.isLoading).toBe(true)
+    expect(second.result.current.processedEventCount).toBe(1)
+    await waitFor(() => {
+      expect(second.result.current.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          content: 'hi',
+        }),
+      ]))
+    })
 
     expect(global.fetch).toHaveBeenCalledTimes(1)
+
+    act(() => streamController?.close())
+    await act(async () => {
+      await firstRun
+    })
+    expect(second.result.current.isLoading).toBe(false)
+
+    second.result.current.clearEvents()
     second.unmount()
+  })
+
+  it('rechecks terminal state when a run stops during remount subscription', async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const streamSignals: AbortSignal[] = []
+
+    vi.mocked(global.fetch).mockImplementation((input, init) => {
+      if (input === '/api/chat/stop') {
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      streamSignals.push(init?.signal as AbortSignal)
+      return Promise.resolve(new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller
+          },
+        }),
+        { status: 200 },
+      ))
+    })
+
+    const first = renderHook(() => useChatStream('session-race'))
+    let firstRun!: Promise<void>
+    act(() => {
+      firstRun = first.result.current.sendMessage('hello', 'session-race')
+    })
+    await waitFor(() => expect(first.result.current.isLoading).toBe(true))
+    first.unmount()
+
+    function StopDuringRemount() {
+      const stream = useChatStream('session-race')
+      useLayoutEffect(() => {
+        // This synchronous store update lands after render but before passive
+        // subscriptions. useSyncExternalStore must still expose the terminal state.
+        void stream.stopStream('session-race')
+      }, [stream.stopStream])
+      return <div data-testid="race-loading">{String(stream.isLoading)}</div>
+    }
+
+    const remount = render(<StopDuringRemount />)
+    await waitFor(() => expect(screen.getByTestId('race-loading')).toHaveTextContent('false'))
+    expect(streamSignals[0].aborted).toBe(true)
+
+    act(() => streamController?.close())
+    await firstRun
+    remount.unmount()
+
+    const cleanup = renderHook(() => useChatStream('session-race'))
+    act(() => cleanup.result.current.clearEvents())
+    cleanup.unmount()
   })
 
   it('cancels the owned run and retained events when the session changes', async () => {
@@ -134,10 +208,16 @@ describe('useChatStream shared lifecycle', () => {
       expect.objectContaining({ turn_id: 'turn-2' }),
     ])
 
-    unmount()
+    // Explicitly stop the replacement run so this test does not leave a
+    // session-owned request alive; ordinary component unmount is non-terminal.
+    await act(async () => {
+      await result.current.stopStream('session-2')
+    })
     expect(streamSignals[1].aborted).toBe(true)
     act(() => streamControllers[1].close())
     await secondRun
+    result.current.clearEvents()
+    unmount()
   })
 
   it('sends a stable client turn id for flow execution', async () => {

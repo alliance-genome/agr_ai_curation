@@ -94,6 +94,7 @@ import logger from '@/services/logger'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 import {
   canSourceOutputAttachmentFromMetadata,
+  isFileOutputFormatterAgentFromMetadata,
   resolveOutputFormatterIncludeEvidence,
   isOutputFormatterAgentFromMetadata,
   isValidationAgentFromMetadata,
@@ -1375,6 +1376,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             include_evidence: isTaskInput
               ? undefined
               : resolveOutputFormatterIncludeEvidence(agentId, agentMetadata),
+            output_filename_template: isFileOutputFormatterAgentFromMetadata(agentId, agentMetadata)
+              ? '{{input_filename_stem}}'
+              : undefined,
             output_key: isTaskInput ? 'task_input' : `${agentId.replace(/-/g, '_')}_output`,
             validation_attachments: validationAttachments.length > 0
               ? validationAttachments

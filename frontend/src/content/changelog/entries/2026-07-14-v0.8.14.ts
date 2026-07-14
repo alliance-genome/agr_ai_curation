@@ -22,10 +22,19 @@ const entry: ChangelogEntry = {
       ],
     },
     {
+      heading: 'Chat & File Exports',
+      bullets: [
+        'Active chat and flow runs now remain visible and continue streaming when you move from Home to another section and return.',
+        'New CSV, TSV, and JSON flow steps default to readable filenames based on the source PDF, with explicit source, custom-prefix, and existing formatter-controlled choices.',
+        'Structured export filenames now begin with their readable paper or custom descriptor so files from batch runs sort together, while retaining trace and branch identifiers for uniqueness.',
+      ],
+    },
+    {
       heading: 'Under The Hood',
       bullets: [
         'Added regression coverage for extraction-only flow completion and the corresponding zero-extraction safety case.',
         'Added regression coverage proving that long controlled vocabularies reach isolated specialists without truncation.',
+        'Added regression coverage for cross-page stream survival and descriptor-first structured output naming.',
       ],
     },
   ],
