@@ -2543,7 +2543,11 @@ def require_batch_plumbing_payload(payloads: Dict[str, Any], *, output_format: s
         ),
     )
     filename_pattern = re.compile(
-        rf"^\d{{3}}_[0-9a-f]+_.+_{re.escape(output_format)}\.{re.escape(output_format)}$",
+        (
+            rf"^\d{{3}}_\d{{2}}_[0-9a-f]{{32}}_"
+            rf"batch_release_smoke_result_{re.escape(output_format)}_"
+            rf"{re.escape(output_format)}_1_[0-9a-f]+\.{re.escape(output_format)}$"
+        ),
         re.IGNORECASE,
     )
     require(
