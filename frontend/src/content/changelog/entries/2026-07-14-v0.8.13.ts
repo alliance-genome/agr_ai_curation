@@ -1,9 +1,9 @@
 import type { ChangelogEntry } from '../types';
 
 const entry: ChangelogEntry = {
-  id: '2026-07-13-v0.8.13',
+  id: '2026-07-14-v0.8.13',
   version: '0.8.13',
-  date: 'July 13, 2026',
+  date: 'July 14, 2026',
   title: 'Complete Saved Flow Upgrade',
   sections: [
     {

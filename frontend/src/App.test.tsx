@@ -371,7 +371,7 @@ describe('AppContent global notifications', () => {
   });
 
   it('uses the v0.8.13 complete saved-flow upgrade notes for the changelog popup', () => {
-    expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-07-13-v0.8.13');
+    expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-07-14-v0.8.13');
     expect(POPUP_CHANGELOG_ENTRY?.version).toBe('0.8.13');
   });
 
