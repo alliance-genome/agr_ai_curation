@@ -1682,7 +1682,7 @@ def create_custom_agent(
 
 def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -1733,7 +1733,7 @@ def build_batch_plumbing_flow_definition(output_format: str = "json") -> Dict[st
     formatter_agent_id, formatter_display_name, formatter_label = formatter_by_format[output_format]
     filename_stem = f"batch_release_smoke_result_{output_format}"
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -1772,7 +1772,7 @@ def build_batch_plumbing_flow_definition(output_format: str = "json") -> Dict[st
             },
             {
                 "id": f"{output_format}_1",
-                "type": "agent",
+                "type": "output",
                 "position": {"x": 560, "y": 0},
                 "data": {
                     "agent_id": formatter_agent_id,
@@ -1818,14 +1818,19 @@ def build_batch_plumbing_flow_definition(output_format: str = "json") -> Dict[st
         ],
         "edges": [
             {"id": "edge_1", "source": "task_input_1", "target": "pdf_1"},
-            {"id": "edge_2", "source": "pdf_1", "target": f"{output_format}_1"},
+            {
+                "id": "edge_2",
+                "source": "pdf_1",
+                "target": f"{output_format}_1",
+                "role": "output_attachment",
+            },
         ],
     }
 
 
 def build_batch_extraction_flow_definition() -> Dict[str, Any]:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -1862,7 +1867,7 @@ def build_batch_extraction_flow_definition() -> Dict[str, Any]:
             },
             {
                 "id": "json_1",
-                "type": "agent",
+                "type": "output",
                 "position": {"x": 560, "y": 0},
                 "data": {
                     "agent_id": "json_formatter",
@@ -1902,7 +1907,12 @@ def build_batch_extraction_flow_definition() -> Dict[str, Any]:
         ],
         "edges": [
             {"id": "edge_1", "source": "task_input_1", "target": "gene_1"},
-            {"id": "edge_2", "source": "gene_1", "target": "json_1"},
+            {
+                "id": "edge_2",
+                "source": "gene_1",
+                "target": "json_1",
+                "role": "output_attachment",
+            },
         ],
     }
 

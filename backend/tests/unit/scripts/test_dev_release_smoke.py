@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from src.schemas.flows import FlowDefinition
+
 
 def _load_smoke_module():
     repo_root = Path(__file__).resolve().parents[4]
@@ -305,6 +307,10 @@ def test_batch_plumbing_flow_projects_canonical_object_rows():
     formatter_goal = nodes["json_1"]["data"]["step_goal"]
     projection_plan = nodes["json_1"]["data"]["projection_plan"]
 
+    assert flow["version"] == "1.1"
+    assert nodes["json_1"]["type"] == "output"
+    assert flow["edges"][-1]["role"] == "output_attachment"
+    FlowDefinition.model_validate(flow)
     assert "record_evidence" in pdf_goal
     assert "exactly one curatable item" in pdf_goal
     assert "evidence_record_id" in pdf_goal
@@ -381,6 +387,10 @@ def test_batch_extraction_flow_preserves_real_extraction_requirements():
     formatter_goal = nodes["json_1"]["data"]["step_goal"]
     projection_plan = nodes["json_1"]["data"]["projection_plan"]
 
+    assert flow["version"] == "1.1"
+    assert nodes["json_1"]["type"] == "output"
+    assert flow["edges"][-1]["role"] == "output_attachment"
+    FlowDefinition.model_validate(flow)
     assert "crb/Crumbs" in task_instructions
     assert "record_evidence" in task_instructions
     assert "Do not extract any other genes" in task_instructions
@@ -1145,6 +1155,8 @@ def test_build_flow_definition_keeps_release_smoke_flow_narrow():
     task_instructions = flow_definition["nodes"][0]["data"]["task_instructions"]
     step_goal = flow_definition["nodes"][1]["data"]["step_goal"]
 
+    assert flow_definition["version"] == "1.1"
+    FlowDefinition.model_validate(flow_definition)
     assert "exactly one" in smoke.DEFAULT_FLOW_QUERY
     assert "crb/Crumbs" in smoke.DEFAULT_FLOW_QUERY
     assert "evidence record" in smoke.DEFAULT_FLOW_QUERY
