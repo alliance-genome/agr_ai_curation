@@ -10,6 +10,7 @@ type AuthoritativeReviewAndCurateButtonProps = Omit<
   'sessionId'
 > & {
   authoritativeReviewSessionIds: string[]
+  allowBootstrapWithoutSession?: boolean
   disabledReason?: string
 }
 
@@ -22,6 +23,7 @@ function sessionChoiceLabel(sessionId: string, adapterKey: string | undefined, i
 
 export default function AuthoritativeReviewAndCurateButton({
   authoritativeReviewSessionIds,
+  allowBootstrapWithoutSession = false,
   adapterKeys,
   disabledReason,
   disabled = false,
@@ -37,7 +39,8 @@ export default function AuthoritativeReviewAndCurateButton({
 
   const sessionIds = authoritativeReviewSessionIds
   if (sessionIds.length <= 1) {
-    const effectiveLabel = sessionIds.length === 0 && disabledReason
+    const sessionlessLaunchDisabled = sessionIds.length === 0 && !allowBootstrapWithoutSession
+    const effectiveLabel = sessionlessLaunchDisabled && disabledReason
       ? `${label} unavailable: ${disabledReason}`
       : label
     return (
@@ -45,7 +48,9 @@ export default function AuthoritativeReviewAndCurateButton({
         {...launchTarget}
         sessionId={sessionIds[0]}
         adapterKeys={adapterKeys}
-        disabled={disabled || sessionIds.length === 0}
+        // Extraction-only flows intentionally have no prepared session yet. Their
+        // caller must explicitly validate the durable bootstrap scope before opting in.
+        disabled={disabled || sessionlessLaunchDisabled}
         iconOnly={iconOnly}
         label={effectiveLabel}
         size={size}
