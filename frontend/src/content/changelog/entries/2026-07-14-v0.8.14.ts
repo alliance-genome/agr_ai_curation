@@ -4,7 +4,7 @@ const entry: ChangelogEntry = {
   id: '2026-07-14-v0.8.14',
   version: '0.8.14',
   date: 'July 14, 2026',
-  title: 'Review & Curate Flow Hotfix',
+  title: 'Curation & Extraction Hotfix',
   sections: [
     {
       heading: 'Flow Review',
@@ -15,9 +15,17 @@ const entry: ChangelogEntry = {
       ],
     },
     {
+      heading: 'Controlled Vocabulary Extraction',
+      bullets: [
+        'PDF extraction and file-formatting specialists now receive the complete current request, preserving curator-supplied vocabularies, exclusions, and output rules instead of relying on a shortened handoff.',
+        'Long controlled-vocabulary prompts remain intact when routed to PDF extraction and file-export specialists.',
+      ],
+    },
+    {
       heading: 'Under The Hood',
       bullets: [
         'Added regression coverage for extraction-only flow completion and the corresponding zero-extraction safety case.',
+        'Added regression coverage proving that long controlled vocabularies reach isolated specialists without truncation.',
       ],
     },
   ],

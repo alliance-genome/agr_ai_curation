@@ -2139,6 +2139,7 @@ async def run_agent_streamed(
             specialist_model_override=specialist_model,
             specialist_temperature_override=specialist_temperature,
             specialist_reasoning_override=specialist_reasoning,
+            current_user_request=user_message,
         )
         agent_name = agent.name
         agent_for_prompt_commit = agent
