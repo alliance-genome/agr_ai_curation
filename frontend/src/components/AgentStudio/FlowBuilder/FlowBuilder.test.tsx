@@ -26,6 +26,8 @@ const reactFlowMocks = vi.hoisted(() => ({
   fitView: vi.fn(),
   screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
   onConnect: undefined as undefined | ((connection: { source: string; target: string }) => void),
+  nodes: [] as Array<{ id?: string; type?: string }>,
+  edges: [] as Array<{ source?: string; target?: string; animated?: boolean; data?: { role?: string } }>,
 }))
 
 vi.mock('@/services/agentStudioService', () => ({
@@ -89,6 +91,8 @@ vi.mock('reactflow', async () => {
       onDrop,
       onDragOver,
       onConnect,
+      nodes = [],
+      edges = [],
     }: {
       children?: React.ReactNode
       onInit?: (instance: {
@@ -98,7 +102,11 @@ vi.mock('reactflow', async () => {
       onDrop?: (event: React.DragEvent<HTMLDivElement>) => void
       onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void
       onConnect?: (connection: { source: string; target: string }) => void
+      nodes?: Array<{ id?: string; type?: string }>
+      edges?: Array<{ source?: string; target?: string; animated?: boolean; data?: { role?: string } }>
     }) => {
+      reactFlowMocks.nodes = nodes
+      reactFlowMocks.edges = edges
       react.useEffect(() => {
         onInit?.({
           fitView: reactFlowMocks.fitView,
@@ -114,6 +122,13 @@ vi.mock('reactflow', async () => {
 
       return (
         <div data-testid="react-flow" onDrop={onDrop} onDragOver={onDragOver}>
+          {nodes.filter((node) => node.type === 'output').map((node) => (
+            <div
+              className="react-flow__node-output selectable"
+              data-testid={`react-flow-output-wrapper-${node.id}`}
+              key={node.id}
+            />
+          ))}
           {children}
         </div>
       )
@@ -253,6 +268,8 @@ describe('FlowBuilder', () => {
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
     reactFlowMocks.onConnect = undefined
+    reactFlowMocks.nodes = []
+    reactFlowMocks.edges = []
     agentMetadataMocks.agents = {}
   })
 
@@ -549,6 +566,25 @@ describe('FlowBuilder', () => {
     )
     await waitFor(() => expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1'))
 
+    await waitFor(() => {
+      // Output attachments carry data just like sequential edges, so they must
+      // retain the same animated affordance after a saved flow is reloaded.
+      const outputEdges = reactFlowMocks.edges.filter(
+        (edge) => edge.data?.role === 'output_attachment'
+      )
+      expect(outputEdges).toHaveLength(2)
+      expect(outputEdges.every((edge) => edge.animated === true)).toBe(true)
+    })
+
+    const outputWrapper = screen.getByTestId('react-flow-output-wrapper-combined_csv')
+    const outputWrapperStyle = getComputedStyle(outputWrapper)
+    // React Flow's default output type adds a white card around our real node;
+    // these assertions protect the scoped reset that keeps all agents aligned.
+    expect(outputWrapperStyle.padding).toBe('0px')
+    expect(outputWrapperStyle.width).toBe('auto')
+    expect(outputWrapperStyle.borderStyle).toBe('none')
+    expect(outputWrapperStyle.backgroundColor).toBe('rgba(0, 0, 0, 0)')
+
     await user.click(screen.getByText('File'))
     await user.click(within(await screen.findByRole('menu')).getByText('Save'))
 
@@ -660,6 +696,15 @@ describe('FlowBuilder', () => {
         expect.objectContaining({ source: 'node_2', target: 'node_3' }),
       ])
     })
+
+    // Newly connected formatter edges must match the reloaded-flow path above;
+    // this was previously hardcoded to false and regressed independently.
+    expect(reactFlowMocks.edges.filter(
+      (edge) => edge.data?.role === 'output_attachment'
+    )).toEqual([
+      expect.objectContaining({ source: 'node_1', target: 'node_3', animated: true }),
+      expect.objectContaining({ source: 'node_2', target: 'node_3', animated: true }),
+    ])
 
     React.act(() => {
       reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_3' })

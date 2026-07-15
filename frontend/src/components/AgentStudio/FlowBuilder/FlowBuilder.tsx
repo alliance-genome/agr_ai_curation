@@ -180,6 +180,9 @@ const activeValidationBindingOptions = (
 const edgeRole = (edge: FlowEdge): FlowEdgeRole =>
   edge.data?.role ?? 'control_flow'
 
+const isAnimatedEdgeRole = (role: FlowEdgeRole): boolean =>
+  role !== 'validation_attachment'
+
 const validationEdgeLabel = (binding: ValidationAttachmentSelection): string =>
   binding.target_label || binding.label
 
@@ -532,6 +535,21 @@ const CanvasArea = styled(Box)(({ theme }) => ({
   '& .react-flow__attribution': {
     display: 'none',
   },
+  // React Flow applies a second white card around nodes registered as `output`.
+  // FlowNode owns the visible surface, so keep the library wrapper layout-only.
+  '& .react-flow__node-output': {
+    padding: 0,
+    borderRadius: 0,
+    width: 'auto',
+    fontSize: 'inherit',
+    color: 'inherit',
+    textAlign: 'initial',
+    border: 'none',
+    backgroundColor: 'transparent',
+  },
+  '& .react-flow__node-output.selectable:hover, & .react-flow__node-output.selectable.selected, & .react-flow__node-output.selectable:focus, & .react-flow__node-output.selectable:focus-visible': {
+    boxShadow: 'none',
+  },
 }))
 
 const SidePanel = styled(Box)(({ theme }) => ({
@@ -821,7 +839,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         source: e.source,
         target: e.target,
         type: 'deletable',
-        animated: (e.role ?? 'control_flow') === 'control_flow',
+        animated: isAnimatedEdgeRole(e.role ?? 'control_flow'),
         data: {
           role: e.role ?? 'control_flow',
           satisfies_binding_id: e.satisfies_binding_id,
@@ -1252,7 +1270,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             source: sourceNode.id,
             target: targetNode.id,
             type: 'deletable',
-            animated: false,
+            // This is still a terminal attachment semantically; motion simply
+            // keeps the visible data path consistent with the rest of the flow.
+            animated: isAnimatedEdgeRole('output_attachment'),
             data: { role: 'output_attachment' },
           } as FlowEdge,
         ])
@@ -1278,7 +1298,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
       setEdges((eds) => addEdge({
         ...params,
-        animated: true,
+        animated: isAnimatedEdgeRole('control_flow'),
         type: 'deletable',
         data: { role: 'control_flow' },
       } as FlowEdge, eds))
