@@ -1977,6 +1977,81 @@ class TestConnectionDefinitionDataclass:
         assert disabled_conn.required is False
         assert disabled_conn.active is False
 
+    def test_from_yaml_with_env_controlled_active_flag(self, monkeypatch):
+        """Optional connections may be present but inactive until enabled."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        data = {
+            "required": False,
+            "active": "${TEST_CONNECTION_ENABLED:-false}",
+        }
+
+        disabled_conn = ConnectionDefinition.from_yaml("external_db", data)
+        assert disabled_conn.required is False
+        assert disabled_conn.active is False
+
+        monkeypatch.setenv("TEST_CONNECTION_ENABLED", "true")
+        enabled_conn = ConnectionDefinition.from_yaml("external_db", data)
+        assert enabled_conn.required is False
+        assert enabled_conn.active is True
+
+    def test_conditional_required_flag_overrides_inactive_flag(self, monkeypatch):
+        """A connection required in this environment must be health-checked."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        monkeypatch.setenv("TEST_PROVIDER", "external")
+        conn = ConnectionDefinition.from_yaml(
+            "external_db",
+            {
+                "required": False,
+                "active": False,
+                "required_when": {
+                    "env": "TEST_PROVIDER",
+                    "equals": "external",
+                },
+            },
+        )
+
+        assert conn.required is True
+        assert conn.active is True
+
+    def test_from_yaml_with_env_controlled_timeout(self, monkeypatch):
+        """Health timeouts accept positive env-substituted integer values."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        monkeypatch.setenv("TEST_CONNECTION_TIMEOUT_SECONDS", "17")
+        conn = ConnectionDefinition.from_yaml(
+            "external_db",
+            {
+                "timeout_seconds": "${TEST_CONNECTION_TIMEOUT_SECONDS:-10}",
+            },
+        )
+
+        assert conn.timeout_seconds == 17
+
+    def test_from_yaml_uses_env_controlled_default_timeout(self, monkeypatch):
+        """The default health timeout remains tunable without editing config."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        monkeypatch.setenv("CONNECTION_HEALTH_TIMEOUT_SECONDS", "23")
+
+        conn = ConnectionDefinition.from_yaml("external_db", {})
+
+        assert conn.timeout_seconds == 23
+
+    @pytest.mark.parametrize("value", ["0", "-1", "not-an-integer"])
+    def test_from_yaml_rejects_invalid_timeout(self, value):
+        """Health timeouts fail config loading rather than silently misbehaving."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        with pytest.raises(
+            ValueError, match="timeout_seconds must be a positive integer"
+        ):
+            ConnectionDefinition.from_yaml(
+                "external_db",
+                {"timeout_seconds": value},
+            )
+
 
 class TestHealthCheckDataclass:
     """Tests for HealthCheck dataclass."""

@@ -51,6 +51,14 @@ def _get_default_connections_path() -> Path:
     return resolved_path
 
 
+def _get_connections_overlay_path() -> Optional[Path]:
+    """Return the optional deployment-specific connections overlay path."""
+    configured_path = os.getenv("CONNECTIONS_CONFIG_OVERLAY_PATH", "").strip()
+    if not configured_path:
+        return None
+    return Path(_substitute_env_vars(configured_path)).expanduser()
+
+
 def _substitute_env_vars(value: str) -> str:
     """Substitute ${VAR:-default} patterns with environment variable values.
 
@@ -87,6 +95,61 @@ def _parse_boolean_value(value: Any, field_name: str) -> bool:
     raise ValueError(f"{field_name} must be a boolean value")
 
 
+def _parse_positive_int_value(value: Any, field_name: str) -> int:
+    """Parse a positive integer field, allowing env-substituted strings."""
+    substituted = _substitute_env_vars(value) if isinstance(value, str) else value
+    try:
+        parsed = int(substituted)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return parsed
+
+
+def _get_default_connection_timeout_seconds() -> int:
+    """Return the env-configurable default connection health timeout."""
+    return _parse_positive_int_value(
+        os.getenv("CONNECTION_HEALTH_TIMEOUT_SECONDS", "10"),
+        "CONNECTION_HEALTH_TIMEOUT_SECONDS",
+    )
+
+
+def _resolve_connection_timeout_seconds(data: Dict[str, Any]) -> int:
+    """Resolve a service timeout or the env-configurable default."""
+    if "timeout_seconds" in data:
+        return _parse_positive_int_value(data["timeout_seconds"], "timeout_seconds")
+    return _get_default_connection_timeout_seconds()
+
+
+def _deep_merge_mappings(
+    base: Dict[str, Any],
+    overlay: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Recursively merge a deployment overlay without mutating either input."""
+    merged = dict(base)
+    for key, overlay_value in overlay.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(overlay_value, dict):
+            merged[key] = _deep_merge_mappings(base_value, overlay_value)
+        else:
+            merged[key] = overlay_value
+    return merged
+
+
+def _load_yaml_mapping(path: Path, config_label: str) -> Dict[str, Any]:
+    """Load one YAML mapping with clear failures for invalid overlays."""
+    if not path.exists():
+        raise FileNotFoundError(f"{config_label} not found: {path}")
+    with open(path, "r") as config_file:
+        loaded = yaml.safe_load(config_file)
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{config_label} must contain a YAML mapping: {path}")
+    return loaded
+
+
 def _required_when_matches(data: Dict[str, Any]) -> Optional[bool]:
     """Return whether a conditional service predicate matches, if present."""
     required_when = data.get("required_when")
@@ -116,11 +179,13 @@ def _resolve_required_flag(data: Dict[str, Any]) -> bool:
 
 def _resolve_active_flag(data: Dict[str, Any]) -> bool:
     """Resolve whether a connection should be actively health-checked."""
-    required = _parse_boolean_value(data.get("required", False), "required")
+    required = _resolve_required_flag(data)
     required_when_matches = _required_when_matches(data)
 
     if required:
         return True
+    if "active" in data:
+        return _parse_boolean_value(data["active"], "active")
     if required_when_matches is None:
         return True
     return required_when_matches
@@ -304,7 +369,9 @@ class ConnectionDefinition:
     health_check: HealthCheck = field(default_factory=HealthCheck)
     required: bool = False
     active: bool = True
-    timeout_seconds: int = 10
+    timeout_seconds: int = field(
+        default_factory=_get_default_connection_timeout_seconds
+    )
     credentials: Optional[CredentialsConfig] = None
     is_healthy: Optional[bool] = None
     last_error: Optional[str] = None
@@ -336,7 +403,7 @@ class ConnectionDefinition:
             health_check=HealthCheck.from_yaml(data.get("health_check")),
             required=_resolve_required_flag(data),
             active=_resolve_active_flag(data),
-            timeout_seconds=data.get("timeout_seconds", 10),
+            timeout_seconds=_resolve_connection_timeout_seconds(data),
             credentials=CredentialsConfig.from_yaml(data.get("credentials")),
         )
 
@@ -349,6 +416,7 @@ _initialized: bool = False
 def load_connections(
     connections_path: Optional[Path] = None,
     force_reload: bool = False,
+    overlay_path: Optional[Path] = None,
 ) -> Dict[str, ConnectionDefinition]:
     """
     Load connection definitions from connections.yaml.
@@ -359,6 +427,8 @@ def load_connections(
     Args:
         connections_path: Path to connections.yaml (default: config/connections.yaml)
         force_reload: Force reload even if already initialized
+        overlay_path: Optional deployment-specific YAML merged over the base.
+            When omitted, CONNECTIONS_CONFIG_OVERLAY_PATH is used if set.
 
     Returns:
         Dictionary mapping service_id to ConnectionDefinition
@@ -377,13 +447,20 @@ def load_connections(
         if connections_path is None:
             connections_path = _get_default_connections_path()
 
-        if not connections_path.exists():
-            raise FileNotFoundError(f"Connections configuration not found: {connections_path}")
-
         logger.info('Loading connection definitions from: %s', connections_path)
 
-        with open(connections_path, "r") as f:
-            data = yaml.safe_load(f)
+        data = _load_yaml_mapping(connections_path, "Connections configuration")
+        effective_overlay_path = overlay_path or _get_connections_overlay_path()
+        if effective_overlay_path is not None:
+            logger.info(
+                "Applying connection definitions overlay from: %s",
+                effective_overlay_path,
+            )
+            overlay = _load_yaml_mapping(
+                effective_overlay_path,
+                "Connections configuration overlay",
+            )
+            data = _deep_merge_mappings(data, overlay)
 
         if not data or "services" not in data:
             logger.warning('No services defined in %s', connections_path)
@@ -664,16 +741,21 @@ async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optiona
 async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[bool], Optional[str]]:
     """Check Postgres health via connection test.
 
-    For services with credentials config but no URL (e.g., curation_db using AWS
-    Secrets Manager), resolves the effective URL via CurationConnectionResolver.
+    For services with credentials config but no URL, resolves the effective URL
+    via the service-specific PostgreSQL connection resolver.
     """
     url = conn.url
 
-    # If no URL but credentials are configured, try the curation resolver
+    # If no URL but credentials are configured, resolve it without coupling
+    # generic PostgreSQL services to the AGR curation client.
     if not url and conn.credentials:
         try:
-            from src.lib.database.curation_resolver import get_curation_resolver
-            url = get_curation_resolver().get_connection_url()
+            from src.lib.database.postgres_connection_resolver import (
+                get_postgres_connection_resolver,
+            )
+            url = get_postgres_connection_resolver(
+                conn.service_id
+            ).get_connection_url()
         except ImportError:
             pass
 
