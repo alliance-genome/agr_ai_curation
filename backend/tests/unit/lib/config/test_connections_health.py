@@ -281,21 +281,26 @@ class TestCheckPostgresHealth:
 
         mock_resolver = MagicMock()
         mock_resolver.get_connection_url.return_value = None
+        resolver_factory = MagicMock(return_value=mock_resolver)
         monkeypatch.setattr(
-            "src.lib.database.curation_resolver.get_curation_resolver",
-            lambda: mock_resolver,
+            "src.lib.database.postgres_connection_resolver.get_postgres_connection_resolver",
+            resolver_factory,
         )
 
         is_healthy, error = await _check_postgres_health(conn)
 
+        resolver_factory.assert_called_once_with("curation_db")
         assert is_healthy is None
         assert error is None
 
     @pytest.mark.asyncio
-    async def test_generic_postgres_service_uses_its_own_resolver(self, monkeypatch):
-        """Non-curation services resolve AWS-backed URLs by service ID."""
+    @pytest.mark.parametrize("service_id", ["curation_db", "external_production_db"])
+    async def test_postgres_service_uses_its_own_resolver(
+        self, monkeypatch, service_id
+    ):
+        """All PostgreSQL services resolve AWS-backed URLs by service ID."""
         conn = ConnectionDefinition(
-            service_id="external_production_db",
+            service_id=service_id,
             description="Deployment-owned production database",
             url="",
             required=False,
@@ -324,7 +329,7 @@ class TestCheckPostgresHealth:
         with patch.dict(sys.modules, {"asyncpg": mock_asyncpg}):
             is_healthy, error = await _check_postgres_health(conn)
 
-        resolver_factory.assert_called_once_with("external_production_db")
+        resolver_factory.assert_called_once_with(service_id)
         mock_asyncpg.connect.assert_awaited_once_with(
             "postgres://127.0.0.1:15432/exampledb",
             timeout=5,

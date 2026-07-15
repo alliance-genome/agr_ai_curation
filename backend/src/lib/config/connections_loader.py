@@ -750,16 +750,12 @@ async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[b
     # generic PostgreSQL services to the AGR curation client.
     if not url and conn.credentials:
         try:
-            if conn.service_id == "curation_db":
-                from src.lib.database.curation_resolver import get_curation_resolver
-                url = get_curation_resolver().get_connection_url()
-            else:
-                from src.lib.database.postgres_connection_resolver import (
-                    get_postgres_connection_resolver,
-                )
-                url = get_postgres_connection_resolver(
-                    conn.service_id
-                ).get_connection_url()
+            from src.lib.database.postgres_connection_resolver import (
+                get_postgres_connection_resolver,
+            )
+            url = get_postgres_connection_resolver(
+                conn.service_id
+            ).get_connection_url()
         except ImportError:
             pass
 
