@@ -18,6 +18,7 @@ def _reset_loader_state(monkeypatch):
         "AGR_RUNTIME_CONFIG_DIR",
         "GROUPS_CONFIG_PATH",
         "CONNECTIONS_CONFIG_PATH",
+        "CONNECTIONS_CONFIG_OVERLAY_PATH",
     ):
         monkeypatch.delenv(variable, raising=False)
     yield
@@ -100,3 +101,43 @@ def test_load_connections_prefers_explicit_env_path(monkeypatch, tmp_path: Path)
 
     assert set(connections) == {"weaviate"}
     assert connections_loader._get_default_connections_path() == explicit_path
+
+
+def test_load_connections_deep_merges_deployment_overlay(monkeypatch, tmp_path: Path):
+    base_path = tmp_path / "runtime" / "config" / "connections.yaml"
+    _write_connections_yaml(base_path)
+    overlay_path = tmp_path / "private" / "connections.overlay.yaml"
+    overlay_path.parent.mkdir(parents=True)
+    overlay_path.write_text(
+        "services:\n"
+        "  weaviate:\n"
+        "    url: http://custom-weaviate:9090\n"
+        "  external_reporting_db:\n"
+        "    description: Deployment-owned reporting database\n"
+        "    url: ${EXTERNAL_REPORTING_DB_URL:-}\n"
+        "    required: false\n"
+        "    active: false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CONNECTIONS_CONFIG_PATH", str(base_path))
+    monkeypatch.setenv("CONNECTIONS_CONFIG_OVERLAY_PATH", str(overlay_path))
+
+    connections = connections_loader.load_connections(force_reload=True)
+
+    assert set(connections) == {"weaviate", "external_reporting_db"}
+    assert connections["weaviate"].url == "http://custom-weaviate:9090"
+    assert connections["weaviate"].description == "Vector database"
+    assert connections["weaviate"].required is True
+    assert connections["external_reporting_db"].active is False
+
+
+def test_load_connections_rejects_missing_configured_overlay(
+    monkeypatch, tmp_path: Path
+):
+    base_path = tmp_path / "connections.yaml"
+    _write_connections_yaml(base_path)
+    missing_overlay = tmp_path / "missing.overlay.yaml"
+    monkeypatch.setenv("CONNECTIONS_CONFIG_OVERLAY_PATH", str(missing_overlay))
+
+    with pytest.raises(FileNotFoundError, match="Connections configuration overlay"):
+        connections_loader.load_connections(base_path, force_reload=True)

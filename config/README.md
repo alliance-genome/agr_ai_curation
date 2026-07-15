@@ -150,6 +150,12 @@ databases:
 
 Supports environment variable substitution using `${VAR}` or `${VAR:-default}` syntax.
 
+Deployments may keep organization-specific services outside this repository by
+setting `CONNECTIONS_CONFIG_OVERLAY_PATH` to a YAML file with the same shape.
+The overlay is deep-merged over the base file, so it can add services or replace
+only selected nested fields. Secret values should still come from environment
+variables or a secret manager rather than the overlay itself.
+
 ### providers.yaml
 
 Defines deployment override entries for LLM runtime providers used by agent execution.
