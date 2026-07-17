@@ -2,11 +2,13 @@
 
 import asyncio
 from datetime import datetime, timezone
+import io
 import json
 import logging
 from types import SimpleNamespace
 from typing import cast
 from uuid import uuid4
+import zipfile
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException, Request
@@ -412,8 +414,95 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
 
     body = await _read_streaming_response(response)
     assert body.startswith(b"PK")
-    assert b"result.csv" in body
-    assert b"result.json" in body
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        assert archive.namelist() == ["result.csv", "result.json"]
+
+
+@pytest.mark.asyncio
+async def test_download_batch_zip_preserves_custom_filenames_for_multiple_documents(monkeypatch, tmp_path):
+    _mock_auth(monkeypatch, user_id=8)
+    batch_id = uuid4()
+    filenames = [
+        "J-101_AI_tool_results.csv",
+        "J-102_AI_tool_results.csv",
+        "J-103_AI_tool_results.csv",
+        "J-101_AI_tool_results.csv",
+    ]
+    expected_zip_names = [
+        "J-101_AI_tool_results.csv",
+        "J-102_AI_tool_results.csv",
+        "J-103_AI_tool_results.csv",
+        "J-101_AI_tool_results_2.csv",
+    ]
+    file_outputs = []
+    documents = []
+
+    for position, filename in enumerate(filenames):
+        file_id = uuid4()
+        file_path = tmp_path / filename
+        file_path.write_text("gene,value\nexample,1\n")
+        file_outputs.append(
+            SimpleNamespace(
+                id=file_id,
+                curator_id="u-1",
+                file_path=str(file_path),
+                filename=filename,
+            )
+        )
+        documents.append(
+            SimpleNamespace(
+                status=BatchDocumentStatus.COMPLETED,
+                result_file_path=f"/api/files/{file_id}/download",
+                result_files=[
+                    {
+                        "file_id": str(file_id),
+                        "filename": filename,
+                        "download_url": f"/api/files/{file_id}/download",
+                    }
+                ],
+                document_id=uuid4(),
+                position=position,
+            )
+        )
+
+    batch = SimpleNamespace(id=batch_id, documents=documents)
+    service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
+    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+
+    file_results = iter(file_outputs)
+    db = SimpleNamespace(
+        query=lambda _model: SimpleNamespace(
+            filter=lambda *_args, **_kwargs: SimpleNamespace(
+                first=lambda: next(file_results)
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "src.lib.file_outputs.storage.FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=tmp_path),
+    )
+
+    response = await batch_api.download_batch_zip(
+        batch_id,
+        request=_TEST_REQUEST,
+        user={"sub": "u-1"},
+        db=db,
+    )
+    body = await _read_streaming_response(response)
+
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        assert archive.namelist() == expected_zip_names
+
+
+def test_unique_zip_member_name_only_suffixes_collisions():
+    used_names: set[str] = set()
+
+    assert batch_api._unique_zip_member_name("results.csv", used_names) == "results.csv"
+    assert batch_api._unique_zip_member_name("results.csv", used_names) == "results_2.csv"
+    assert batch_api._unique_zip_member_name("RESULTS.CSV", used_names) == "RESULTS_3.CSV"
+    assert batch_api._unique_zip_member_name("../folder/safe.csv", used_names) == "safe.csv"
+    assert batch_api._unique_zip_member_name(r"..\folder\safe.csv", used_names) == "safe_2.csv"
+    assert batch_api._unique_zip_member_name("unsafe\x00\n.csv", used_names) == "unsafe.csv"
 
 
 @pytest.mark.asyncio
