@@ -10,7 +10,9 @@ Batch ownership is enforced - users can only access their own batches.
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any, Dict
+import unicodedata
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -106,6 +108,29 @@ def _batch_document_result_files(doc: Any) -> list[dict[str, str]]:
             return result_files
     result_file_path = getattr(doc, "result_file_path", None)
     return [{"download_url": result_file_path}] if result_file_path else []
+
+
+def _unique_zip_member_name(filename: str, used_names: set[str]) -> str:
+    """Preserve the download filename, suffixing only genuine ZIP collisions."""
+
+    without_control_characters = "".join(
+        character
+        for character in filename
+        if unicodedata.category(character) != "Cc"
+    )
+    original = Path(without_control_characters.replace("\\", "/")).name
+    if original in {"", ".", ".."}:
+        original = "result"
+
+    candidate = original
+    duplicate_number = 2
+    while candidate.casefold() in used_names:
+        path = Path(original)
+        candidate = f"{path.stem}_{duplicate_number}{path.suffix}"
+        duplicate_number += 1
+
+    used_names.add(candidate.casefold())
+    return candidate
 
 
 @router.post("", response_model=BatchResponse, status_code=201)
@@ -326,7 +351,6 @@ async def download_batch_zip(
     import re
     import tempfile
     import zipfile
-    from pathlib import Path
     from ..models.sql.file_output import FileOutput
 
     db_user = provision_user(db, principal_from_claims(user))
@@ -352,13 +376,11 @@ async def download_batch_zip(
     # Build on disk so aggregate multi-output batches cannot exhaust application RAM.
     zip_buffer = tempfile.TemporaryFile(mode="w+b")
     files_added = 0
+    used_filenames: set[str] = set()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for doc in completed_docs:
-            for output_position, result_file in enumerate(
-                _batch_document_result_files(doc),
-                start=1,
-            ):
+            for result_file in _batch_document_result_files(doc):
                 try:
                     # Format: /api/files/{file_id}/download
                     result_file_path = result_file["download_url"]
@@ -435,9 +457,9 @@ async def download_batch_zip(
                         )
                         continue
 
-                    filename = (
-                        f"{doc.position + 1:03d}_{output_position:02d}_"
-                        f"{file_output.filename}"
+                    filename = _unique_zip_member_name(
+                        file_output.filename,
+                        used_filenames,
                     )
 
                     zip_file.write(resolved_path, arcname=filename)
