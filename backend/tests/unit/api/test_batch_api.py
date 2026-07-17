@@ -2,11 +2,13 @@
 
 import asyncio
 from datetime import datetime, timezone
+import io
 import json
 import logging
 from types import SimpleNamespace
 from typing import cast
 from uuid import uuid4
+import zipfile
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException, Request
@@ -354,7 +356,7 @@ async def test_download_batch_zip_400_when_no_completed_docs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_path):
+async def test_download_batch_zip_preserves_single_document_filenames(monkeypatch, tmp_path):
     _mock_auth(monkeypatch, user_id=8)
     batch_id = uuid4()
     file_id = uuid4()
@@ -412,8 +414,129 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
 
     body = await _read_streaming_response(response)
     assert body.startswith(b"PK")
-    assert b"result.csv" in body
-    assert b"result.json" in body
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        assert archive.namelist() == ["result.csv", "result.json"]
+
+
+async def _download_zip_member_names(monkeypatch, tmp_path, filenames_by_document):
+    _mock_auth(monkeypatch, user_id=8)
+    batch_id = uuid4()
+    documents = []
+    file_outputs = []
+
+    for document_position, filenames in enumerate(filenames_by_document):
+        result_files = []
+        for output_position, filename in enumerate(filenames):
+            file_id = uuid4()
+            file_path = tmp_path / f"stored-{document_position}-{output_position}.txt"
+            file_path.write_text(filename)
+            result_files.append(
+                {
+                    "file_id": str(file_id),
+                    "filename": filename,
+                    "download_url": f"/api/files/{file_id}/download",
+                }
+            )
+            file_outputs.append(
+                SimpleNamespace(
+                    id=file_id,
+                    curator_id="u-1",
+                    file_path=str(file_path),
+                    filename=filename,
+                )
+            )
+
+        documents.append(
+            SimpleNamespace(
+                status=BatchDocumentStatus.COMPLETED,
+                result_file_path=result_files[0]["download_url"],
+                result_files=result_files,
+                document_id=uuid4(),
+                position=document_position,
+            )
+        )
+
+    batch = SimpleNamespace(id=batch_id, documents=documents)
+    monkeypatch.setattr(
+        batch_api,
+        "BatchService",
+        lambda _db: SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch),
+    )
+    file_output_results = iter(file_outputs)
+    db = SimpleNamespace(
+        query=lambda _model: SimpleNamespace(
+            filter=lambda *_args, **_kwargs: SimpleNamespace(
+                first=lambda: next(file_output_results)
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "src.lib.file_outputs.storage.FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=tmp_path),
+    )
+
+    response = await batch_api.download_batch_zip(
+        batch_id,
+        request=_TEST_REQUEST,
+        user={"sub": "u-1"},
+        db=db,
+    )
+    body = await _read_streaming_response(response)
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        return archive.namelist()
+
+
+@pytest.mark.asyncio
+async def test_download_batch_zip_preserves_multi_document_filenames(monkeypatch, tmp_path):
+    member_names = await _download_zip_member_names(
+        monkeypatch,
+        tmp_path,
+        [["first-result.csv"], ["second-result.json"]],
+    )
+
+    assert member_names == ["first-result.csv", "second-result.json"]
+
+
+@pytest.mark.asyncio
+async def test_download_batch_zip_suffixes_duplicate_member_names(monkeypatch, tmp_path):
+    member_names = await _download_zip_member_names(
+        monkeypatch,
+        tmp_path,
+        [["result.csv", "result.csv"], ["result.csv"]],
+    )
+
+    assert member_names == ["result.csv", "result_2.csv", "result_3.csv"]
+
+
+@pytest.mark.asyncio
+async def test_download_batch_zip_sanitizes_unsafe_member_names(monkeypatch, tmp_path):
+    member_names = await _download_zip_member_names(
+        monkeypatch,
+        tmp_path,
+        [[
+            "../../escape.csv",
+            r"..\..\escape.csv",
+            "/absolute/nested/report.csv",
+            r"C:\temp\windows.tsv",
+            "line\nbreak.json",
+            "report\u0085.csv",
+            "..",
+            "\x00",
+            "\u0085",
+        ]],
+    )
+
+    assert member_names == [
+        "escape.csv",
+        "escape_2.csv",
+        "report.csv",
+        "windows.tsv",
+        "line_break.json",
+        "report_.csv",
+        "output",
+        "output_2",
+        "output_3",
+    ]
 
 
 @pytest.mark.asyncio

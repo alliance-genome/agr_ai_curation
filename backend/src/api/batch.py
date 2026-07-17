@@ -10,6 +10,8 @@ Batch ownership is enforced - users can only access their own batches.
 import asyncio
 import json
 import logging
+import re
+import unicodedata
 from typing import Any, Dict
 from uuid import UUID
 
@@ -106,6 +108,44 @@ def _batch_document_result_files(doc: Any) -> list[dict[str, str]]:
             return result_files
     result_file_path = getattr(doc, "result_file_path", None)
     return [{"download_url": result_file_path}] if result_file_path else []
+
+
+def _safe_batch_zip_member_name(filename: str) -> str:
+    """Return a path-free archive member name for a stored output filename."""
+
+    basename = filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    basename = re.sub(r"^[A-Za-z]:", "", basename)
+    basename_without_controls = "".join(
+        character
+        for character in basename
+        if unicodedata.category(character) != "Cc"
+    )
+    if basename_without_controls in {"", ".", ".."}:
+        return "output"
+    return "".join(
+        "_" if unicodedata.category(character) == "Cc" else character
+        for character in basename
+    )
+
+
+def _unique_batch_zip_member_name(filename: str, used_names: set[str]) -> str:
+    """Add a deterministic numeric suffix when an archive name is already used."""
+
+    if filename not in used_names:
+        return filename
+
+    extension_index = filename.rfind(".")
+    if extension_index > 0:
+        stem = filename[:extension_index]
+        extension = filename[extension_index:]
+    else:
+        stem = filename
+        extension = ""
+
+    suffix = 2
+    while f"{stem}_{suffix}{extension}" in used_names:
+        suffix += 1
+    return f"{stem}_{suffix}{extension}"
 
 
 @router.post("", response_model=BatchResponse, status_code=201)
@@ -323,7 +363,6 @@ async def download_batch_zip(
         400: If batch has no completed documents
     """
     import io
-    import re
     import tempfile
     import zipfile
     from pathlib import Path
@@ -352,13 +391,11 @@ async def download_batch_zip(
     # Build on disk so aggregate multi-output batches cannot exhaust application RAM.
     zip_buffer = tempfile.TemporaryFile(mode="w+b")
     files_added = 0
+    used_member_names: set[str] = set()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for doc in completed_docs:
-            for output_position, result_file in enumerate(
-                _batch_document_result_files(doc),
-                start=1,
-            ):
+            for result_file in _batch_document_result_files(doc):
                 try:
                     # Format: /api/files/{file_id}/download
                     result_file_path = result_file["download_url"]
@@ -435,12 +472,13 @@ async def download_batch_zip(
                         )
                         continue
 
-                    filename = (
-                        f"{doc.position + 1:03d}_{output_position:02d}_"
-                        f"{file_output.filename}"
+                    filename = _unique_batch_zip_member_name(
+                        _safe_batch_zip_member_name(file_output.filename),
+                        used_member_names,
                     )
 
                     zip_file.write(resolved_path, arcname=filename)
+                    used_member_names.add(filename)
                     logger.info("Added to ZIP: %s", filename)
                     files_added += 1
 
