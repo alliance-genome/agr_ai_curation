@@ -582,6 +582,7 @@ async def test_default_upload_handler_rejects_real_101_page_pdf_before_session(
 async def test_intake_upload_duplicate_keeps_existing_and_cleans_new_artifacts(tmp_path):
     existing = SimpleNamespace(
         id=uuid4(),
+        filename="8385804.pdf",
         upload_timestamp=datetime(2026, 1, 3, 13, 0, tzinfo=timezone.utc),
     )
     session = _FakeSession(execute_row=existing)
@@ -613,6 +614,9 @@ async def test_intake_upload_duplicate_keeps_existing_and_cleans_new_artifacts(t
         )
 
     assert exc.value.detail["error"] == "duplicate_file"
+    assert exc.value.detail["existing_document_id"] == str(existing.id)
+    assert exc.value.detail["existing_filename"] == "8385804.pdf"
+    assert 'as "8385804.pdf"' in exc.value.detail["suggestion"]
     assert session.deleted == []
     assert create_job_calls == []
     assert dispatch.calls == []
@@ -1058,6 +1062,7 @@ async def test_intake_upload_enabled_provider_ready_requires_curator_token(tmp_p
 async def test_intake_upload_enabled_provider_duplicate_short_circuits_before_lookup(tmp_path):
     existing = SimpleNamespace(
         id=uuid4(),
+        filename="8385804.pdf",
         upload_timestamp=datetime(2026, 1, 3, 13, 0, tzinfo=timezone.utc),
     )
     session = _FakeSession(execute_row=existing)
@@ -1152,10 +1157,29 @@ async def test_intake_upload_phantom_duplicate_is_deleted_and_intake_continues(t
 
 @pytest.mark.asyncio
 async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_error(tmp_path):
-    session = _FakeSession(
-        fail_commit_on_call=1,
-        commit_error=IntegrityError("insert", {"id": "doc"}, Exception("duplicate key")),
+    existing = SimpleNamespace(
+        id=uuid4(),
+        filename="8385804.pdf",
+        upload_timestamp=datetime(2026, 1, 3, 13, 0, tzinfo=timezone.utc),
     )
+
+    class _ConcurrentDuplicateSession(_FakeSession):
+        def __init__(self):
+            super().__init__(
+                fail_commit_on_call=1,
+                commit_error=IntegrityError(
+                    "insert",
+                    {"id": "doc"},
+                    Exception("duplicate key"),
+                ),
+            )
+            self.execute_calls = 0
+
+        def execute(self, *_args, **_kwargs):
+            self.execute_calls += 1
+            return _ExecuteResult(None if self.execute_calls == 1 else existing)
+
+    session = _ConcurrentDuplicateSession()
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
@@ -1189,6 +1213,8 @@ async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_e
         )
 
     assert exc.value.detail["error"] == "duplicate_file"
+    assert exc.value.detail["existing_document_id"] == str(existing.id)
+    assert exc.value.detail["existing_filename"] == "8385804.pdf"
     assert create_document_calls and create_document_calls[0][0] == "user-1"
     assert len(delete_document_calls) == 1
     assert session.rollbacks == 1

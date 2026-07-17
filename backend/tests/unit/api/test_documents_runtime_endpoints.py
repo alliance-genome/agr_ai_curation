@@ -795,6 +795,7 @@ async def test_upload_document_endpoint_maps_duplicate_error_to_409(monkeypatch)
                 "error": "duplicate_file",
                 "message": "already uploaded",
                 "existing_document_id": "doc-1",
+                "existing_filename": "8385804.pdf",
             }
         )
 
@@ -811,6 +812,8 @@ async def test_upload_document_endpoint_maps_duplicate_error_to_409(monkeypatch)
     detail = cast(dict[str, Any], exc.value.detail)
     assert isinstance(detail, dict)
     assert detail["error"] == "duplicate_file"
+    assert detail["existing_document_id"] == "doc-1"
+    assert detail["existing_filename"] == "8385804.pdf"
 
 
 @pytest.mark.asyncio
