@@ -519,8 +519,10 @@ async def test_download_batch_zip_sanitizes_unsafe_member_names(monkeypatch, tmp
             "/absolute/nested/report.csv",
             r"C:\temp\windows.tsv",
             "line\nbreak.json",
+            "report\u0085.csv",
             "..",
             "\x00",
+            "\u0085",
         ]],
     )
 
@@ -530,8 +532,10 @@ async def test_download_batch_zip_sanitizes_unsafe_member_names(monkeypatch, tmp
         "report.csv",
         "windows.tsv",
         "line_break.json",
+        "report_.csv",
         "output",
         "output_2",
+        "output_3",
     ]
 
 

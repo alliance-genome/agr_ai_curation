@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+import unicodedata
 from typing import Any, Dict
 from uuid import UUID
 
@@ -114,10 +115,17 @@ def _safe_batch_zip_member_name(filename: str) -> str:
 
     basename = filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
     basename = re.sub(r"^[A-Za-z]:", "", basename)
-    if re.sub(r"[\x00-\x1f\x7f]", "", basename) in {"", ".", ".."}:
+    basename_without_controls = "".join(
+        character
+        for character in basename
+        if unicodedata.category(character) != "Cc"
+    )
+    if basename_without_controls in {"", ".", ".."}:
         return "output"
-    basename = re.sub(r"[\x00-\x1f\x7f]", "_", basename)
-    return basename
+    return "".join(
+        "_" if unicodedata.category(character) == "Cc" else character
+        for character in basename
+    )
 
 
 def _unique_batch_zip_member_name(filename: str, used_names: set[str]) -> str:
