@@ -28,6 +28,8 @@ const STAGE_PROGRESS_FALLBACK: Record<string, number> = {
 const SSE_CONNECT_TIMEOUT_MS = 5000;
 
 interface UploadErrorDetail {
+  existing_document_id?: string;
+  existing_filename?: string;
   uploaded_at?: string;
   suggestion?: string;
   message?: string;
@@ -173,7 +175,10 @@ const parseDuplicateUploadMessage = (detail: UploadErrorDetail): string => {
   const uploadDate = detail.uploaded_at
     ? new Date(detail.uploaded_at).toLocaleDateString()
     : 'previously';
-  const suggestion = detail.suggestion || 'Delete the existing document and try again.';
+  const existingFilename = detail.existing_filename?.trim();
+  const suggestion = existingFilename
+    ? `The existing document is in Documents as "${existingFilename}". Search for that filename to load it.`
+    : detail.suggestion || 'The existing document is still available in Documents.';
   return `This file was already uploaded ${uploadDate}. ${suggestion}`;
 };
 

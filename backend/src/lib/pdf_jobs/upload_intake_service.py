@@ -322,21 +322,7 @@ class UploadIntakeService:
 
             if existing:
                 self._cleanup_saved_file_artifacts(saved_path)
-                raise UploadIntakeDuplicateError(
-                    {
-                        "error": "duplicate_file",
-                        "message": (
-                            "This file has already been uploaded on "
-                            f"{existing.upload_timestamp.strftime('%B %d, %Y at %I:%M %p')}"
-                        ),
-                        "existing_document_id": str(existing.id),
-                        "uploaded_at": existing.upload_timestamp.isoformat(),
-                        "suggestion": (
-                            "The existing document is still available in Documents. Search by filename "
-                            "to load it instead of deleting and re-uploading it."
-                        ),
-                    }
-                )
+                raise UploadIntakeDuplicateError(self._duplicate_detail(existing))
 
             provider_import_plan: ProviderChecksumImportPlan | None = None
             if self._document_source_import_enabled():
@@ -420,6 +406,23 @@ class UploadIntakeService:
                     pdf_file_size_limit_message(file_size_bytes)
                 ) from integrity_error
             if self._is_duplicate_integrity_error(integrity_error, constraint_name):
+                existing_after_conflict = (
+                    session.execute(
+                        select(ViewerPDFDocument).where(
+                            ViewerPDFDocument.user_id == db_user.id,
+                            or_(
+                                ViewerPDFDocument.file_hash == scoped_file_hash,
+                                ViewerPDFDocument.file_hash == raw_checksum,
+                            ),
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if existing_after_conflict:
+                    raise UploadIntakeDuplicateError(
+                        self._duplicate_detail(existing_after_conflict)
+                    ) from integrity_error
                 raise UploadIntakeDuplicateError(
                     {
                         "error": "duplicate_file",
@@ -854,6 +857,23 @@ class UploadIntakeService:
     def _cleanup_saved_file_artifacts(saved_path: Path) -> None:
         if saved_path.exists():
             shutil.rmtree(saved_path.parent, ignore_errors=True)
+
+    @staticmethod
+    def _duplicate_detail(existing: ViewerPDFDocument) -> Dict[str, Any]:
+        return {
+            "error": "duplicate_file",
+            "message": (
+                "This file has already been uploaded on "
+                f"{existing.upload_timestamp.strftime('%B %d, %Y at %I:%M %p')}"
+            ),
+            "existing_document_id": str(existing.id),
+            "existing_filename": existing.filename,
+            "uploaded_at": existing.upload_timestamp.isoformat(),
+            "suggestion": (
+                f'The existing document is available in Documents as "{existing.filename}". '
+                "Search for that filename to load it."
+            ),
+        }
 
     @staticmethod
     def _validate_pdf_filename(filename: Optional[str]) -> None:

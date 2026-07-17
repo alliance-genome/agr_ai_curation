@@ -57,7 +57,7 @@ curl http://localhost:8000/weaviate/health
 # 1) Upload a PDF (multipart)
 curl -X POST http://localhost:8000/weaviate/documents/upload \
   -F file=@sample_fly_publication.pdf
-# If duplicate: response includes existing_document_id to reuse.
+# If duplicate: response includes existing_document_id and existing_filename to locate and reuse.
 
 # 2) Check status (optional)
 DOC=1379822b-95c7-4dae-b67b-cd30532b598b   # replace with your doc_id

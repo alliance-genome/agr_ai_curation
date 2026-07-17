@@ -379,6 +379,7 @@ class TestDocumentsUploadEndpoint:
                     "error": "duplicate_file",
                     "message": "already uploaded",
                     "existing_document_id": "doc-existing",
+                    "existing_filename": "8385804.pdf",
                 }
             )
 
@@ -395,6 +396,7 @@ class TestDocumentsUploadEndpoint:
             data = response.json()
             assert data["detail"]["error"] == "duplicate_file"
             assert data["detail"]["existing_document_id"] == "doc-existing"
+            assert data["detail"]["existing_filename"] == "8385804.pdf"
         finally:
             app.dependency_overrides.clear()
 
