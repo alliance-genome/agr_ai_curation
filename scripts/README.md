@@ -34,7 +34,6 @@ scripts/
 └── utilities/
     ├── check_services.sh               # Health check all Docker services
     ├── cleanup_orphaned_pdf_records.py # Clean PostgreSQL records missing from Weaviate
-    ├── find_unused_files.py            # Static import analysis (AST-based)
     ├── pdfjs_find_probe.mjs            # Inspect raw PDF text, real PDF.js find internals, and whitespace-boundary drift
     ├── pdfjs_quote_benchmark.mjs       # Sample realistic quote-like passages from chunks and benchmark them against PDF.js
     ├── pdfjs_native_verifier_benchmark.py # Benchmark the frontend's native-highlight verifier against the 100-quote corpus
@@ -51,9 +50,7 @@ scripts/
     ├── symphony_rebuild_incus_vm.sh    # Rebuild the Symphony Incus VM shell from the tracked cloud-init source
     ├── symphony_ruff_tool_version.sh   # Shared pinned version/checksums for the VM-baked ruff install
     ├── symphony_sync_codex_auth_to_vm.sh # Sync host ~/.codex/auth.json into the Symphony Incus VM when it changes
-    ├── symphony_vm_shell_shortcuts.sh  # Sourceable Codex helper functions (`co`, `comain`, `cor`) for Symphony VM shells
-    ├── validate_unused_files.py        # Multi-tool unused file detection
-    └── generate_coverage.sh            # Generate coverage data for validation
+    └── symphony_vm_shell_shortcuts.sh  # Sourceable Codex helper functions (`co`, `comain`, `cor`) for Symphony VM shells
 ```
 
 ### Symphony Production Loki Access
@@ -997,50 +994,6 @@ It accepts the same overrides as `abc_literature_ready_upload_smoke.py`, plus:
 Evidence output:
 
 - `file_outputs/temp/abc_literature_identifier_import_smoke_<timestamp>.json`
-
-## Code Analysis Utilities
-
-### utilities/find_unused_files.py
-
-Static import analysis using Python AST. Traces imports starting from `backend/main.py` to find files that are never imported.
-
-```bash
-docker compose exec backend python scripts/utilities/find_unused_files.py
-```
-
-**Output:** List of potentially unused files with summary statistics.
-
-**Caveat:** May flag dynamically imported files (e.g., via `importlib`) as unused.
-
-### utilities/validate_unused_files.py
-
-Multi-tool validation that layers 4 analysis techniques:
-
-1. **Static Import Tracing** - AST-based (same as find_unused_files.py)
-2. **Runtime Coverage Analysis** - Shows which files actually execute
-3. **Test Collection** - Finds orphaned test files
-4. **Config File Usage** - Grep-based search for references
-
-```bash
-# First, generate coverage data
-./scripts/utilities/generate_coverage.sh
-
-# Then run validation
-docker compose exec backend python scripts/utilities/validate_unused_files.py
-```
-
-**Confidence Levels:**
-- **HIGH** - Not imported AND 0% coverage (safe to remove)
-- **MEDIUM** - Not imported but HAS coverage (may be dynamic imports)
-- **LOW COVERAGE** - Imported but mostly dead code (<20% coverage)
-
-### utilities/generate_coverage.sh
-
-Generates pytest coverage data for use with validate_unused_files.py.
-
-```bash
-./scripts/utilities/generate_coverage.sh
-```
 
 ### utilities/check_services.sh
 
