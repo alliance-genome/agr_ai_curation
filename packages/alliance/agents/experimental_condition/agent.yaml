@@ -27,7 +27,10 @@ supervisor_routing:
   batchable: true
   batching_instructions: >
     When validating multiple experimental conditions, combine them into one
-    request with one target per condition and preserve each component's field
+    request with one target per condition. Within that request, collect all
+    present ontology CURIE components across the targets and resolve them with
+    the bulk `agr_curation_query` `get_ontology_terms` method before falling
+    back to any per-component lookup. Preserve each target's component field
     path, expected result field, and lower-level validator/tool evidence.
 
 tools:

@@ -650,6 +650,107 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     assert callable_option.label == "Gene assertion data check"
 
 
+def test_validator_binding_operational_limits_accept_env_backed_ints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("FIXTURE_VALIDATOR_MAX_TOOL_CALLS", "16")
+    metadata_text = _validation_pack_text().replace(
+        "        validator_agent:\n"
+        "          package_id: org.validators\n"
+        "          agent_id: shared_validator\n"
+        "        applies_to:\n"
+        "          domain_pack_id: fixture.validation\n"
+        "          object_types:\n"
+        "            - GeneAssertion\n"
+        "          object_roles:\n"
+        "            - curatable_unit\n"
+        "          field_paths:\n"
+        "            - gene.identifier\n"
+        "          field_types:\n"
+        "            - string\n",
+        "        validator_agent:\n"
+        "          package_id: org.validators\n"
+        "          agent_id: shared_validator\n"
+        "        max_tool_calls: ${FIXTURE_VALIDATOR_MAX_TOOL_CALLS:-8}\n"
+        "        applies_to:\n"
+        "          domain_pack_id: fixture.validation\n"
+        "          object_types:\n"
+        "            - GeneAssertion\n"
+        "          object_roles:\n"
+        "            - curatable_unit\n"
+        "          field_paths:\n"
+        "            - gene.identifier\n"
+        "          field_types:\n"
+        "            - string\n"
+        "        batch:\n"
+        "          enabled: true\n"
+        "          family: fixture_identifier_prefix\n"
+        "          max_size: ${FIXTURE_VALIDATOR_BATCH_MAX_SIZE:-4}\n",
+        1,
+    )
+    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
+
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    binding = next(
+        binding
+        for binding in registry.bindings
+        if binding.binding_id == "fixture.identifier_prefix"
+    )
+    assert binding.max_tool_calls == 16
+    assert binding.batch_enabled is True
+    assert binding.batch_family == "fixture_identifier_prefix"
+    assert binding.batch_max_size == 4
+
+
+def test_validator_binding_operational_limits_treat_empty_env_as_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("FIXTURE_VALIDATOR_MAX_TOOL_CALLS", "")
+    metadata_text = _validation_pack_text().replace(
+        "        validator_agent:\n"
+        "          package_id: org.validators\n"
+        "          agent_id: shared_validator\n"
+        "        applies_to:\n"
+        "          domain_pack_id: fixture.validation\n"
+        "          object_types:\n"
+        "            - GeneAssertion\n"
+        "          object_roles:\n"
+        "            - curatable_unit\n"
+        "          field_paths:\n"
+        "            - gene.identifier\n"
+        "          field_types:\n"
+        "            - string\n",
+        "        validator_agent:\n"
+        "          package_id: org.validators\n"
+        "          agent_id: shared_validator\n"
+        "        max_tool_calls: ${FIXTURE_VALIDATOR_MAX_TOOL_CALLS:-8}\n"
+        "        applies_to:\n"
+        "          domain_pack_id: fixture.validation\n"
+        "          object_types:\n"
+        "            - GeneAssertion\n"
+        "          object_roles:\n"
+        "            - curatable_unit\n"
+        "          field_paths:\n"
+        "            - gene.identifier\n"
+        "          field_types:\n"
+        "            - string\n",
+        1,
+    )
+    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
+
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    binding = next(
+        binding
+        for binding in registry.bindings
+        if binding.binding_id == "fixture.identifier_prefix"
+    )
+    assert binding.max_tool_calls == 8
+
+
 def test_registry_rejects_conflicting_status_and_state_metadata(tmp_path: Path):
     metadata_text = _validation_pack_text().replace(
         "validator_id: fixture.shape\n        display_name: Fixture envelope shape\n        description:",

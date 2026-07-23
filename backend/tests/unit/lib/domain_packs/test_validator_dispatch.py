@@ -2249,7 +2249,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
 
     monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
 
-    binding = cast(Any, SimpleNamespace(max_tool_calls=4))
+    binding = cast(Any, SimpleNamespace(max_tool_calls=16))
     run_package_scoped_validator_agent(request, binding=binding)
 
     runtime_agent = captured["agent"]
@@ -2269,7 +2269,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert "input_selectors" not in runtime_payload
     assert "evidence" not in runtime_payload
     assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
-    assert captured["kwargs"]["max_turns"] == 6
+    assert captured["kwargs"]["max_turns"] == 18
     assert captured_preflight["provider"] == "anthropic"
     assert captured_preflight["model"] == "validator-model"
     assert ("conversation", request.request_id) in sentry_calls
