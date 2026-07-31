@@ -7,7 +7,6 @@ from uuid import uuid4
 
 import pytest
 from fastapi import BackgroundTasks
-
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.identifier_import import (
     IdentifierImportService,
@@ -16,10 +15,8 @@ from src.lib.document_sources.identifier_import import (
     parse_source_identifier_batch,
     select_reference_import_candidate,
 )
-from src.lib.document_sources.providers.abc_literature import (
-    ABCLiteratureDocumentSourceProvider,
-)
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
     DocumentSourceHealth,
     SourceAccessPolicy,
     SourceAccessScope,
@@ -30,6 +27,9 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
     SourceReference,
+)
+from src.lib.document_sources.providers.abc_literature import (
+    ABCLiteratureDocumentSourceProvider,
 )
 from src.lib.pdf_jobs.upload_execution_service import (
     ProviderConversionExecutionRequest,
@@ -103,6 +103,7 @@ class _FakeProvider:
 
     def __init__(self, *, artifacts=None):
         self.artifacts = artifacts
+        self.download_error: Exception | None = None
         self.closed = False
         self.resolve_reference_calls = []
         self.download_calls = []
@@ -142,6 +143,8 @@ class _FakeProvider:
         self.download_calls.append(
             {"artifact_id": artifact_id, "request_bearer_token": request_bearer_token}
         )
+        if getattr(self, "download_error", None):
+            raise self.download_error
         return b"%PDF-1.7 fake provider pdf"
 
     async def health(self) -> DocumentSourceHealth:
@@ -954,11 +957,55 @@ async def test_identifier_import_service_returns_partial_success_and_dispatches_
     assert provider_request.curator_token == "curator-token"
     assert provider_request.figure_metadata_artifact_ids == (metadata.artifact_id,)
     assert provider_request.source_provenance["viewer_mode"] == "local_pdf"
+    assert provider_request.file_path == tmp_path / added_records[0].file_path
     assert provider.download_calls == [
         {"artifact_id": "pdf-1", "request_bearer_token": "curator-token"}
     ]
     assert provider.resolve_reference_calls[0]["request_bearer_token"] == "curator-token"
     assert provider.list_artifact_calls[0]["request_bearer_token"] == "curator-token"
+
+
+@pytest.mark.asyncio
+async def test_identifier_import_reports_source_pdf_download_access_denied(tmp_path):
+    sessions = []
+    provider = _FakeProvider()
+    provider.download_error = DocumentSourceAccessDenied(
+        "Document-source artifact access was denied"
+    )
+    dispatch_recorder = _DispatchRecorder()
+
+    service = IdentifierImportService(
+        upload_execution_service=dispatch_recorder,
+        session_factory=lambda: _FakeSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provider_factory=lambda: provider,
+        create_document_fn=lambda *_args, **_kwargs: None,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="unused"),
+        get_document_fn=lambda *_args, **_kwargs: None,
+        delete_document_fn=lambda *_args, **_kwargs: None,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+
+    result = await service.import_identifiers(
+        background_tasks=BackgroundTasks(),
+        identifiers="PMID:123",
+        user={"sub": "user-1"},
+        document_source_context=DocumentSourceRequestContext(
+            provider_groups=("FBStaff",),
+            authorized_group_ids=("FB",),
+            curator_token="curator-token",
+        ),
+    )
+
+    assert result.error_count == 1
+    assert result.results[0].status == "error"
+    assert result.results[0].error_code == "document_source_access_denied"
+    assert dispatch_recorder.provider_markdown_calls == []
+    assert dispatch_recorder.provider_conversion_calls == []
+    assert dispatch_recorder.upload_calls == []
 
 
 @pytest.mark.asyncio

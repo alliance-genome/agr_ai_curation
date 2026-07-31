@@ -1,23 +1,27 @@
 """Runtime service for upload execution orchestration."""
 
+# Runtime/provider boundaries deliberately catch failures to persist terminal state.
+# ruff: noqa: BLE001
+
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any
 
 from fastapi import BackgroundTasks
-
 from src.lib.document_sources.ingestion import (
     DocumentSourceIngestionError,
     ProviderMarkdownIngestionRequest,
     ingest_provider_markdown_document,
 )
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
-from src.lib.document_sources.models import DocumentSourceProvider
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
+    DocumentSourceProvider,
     SourceArtifact,
     SourceConversionResult,
     SourceConversionStatus,
@@ -34,11 +38,12 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator
 from src.lib.pipeline.tracker import PipelineTracker
-from src.lib.weaviate_helpers import get_connection
 from src.lib.weaviate_client.documents import update_document_status
+from src.lib.weaviate_helpers import get_connection
 from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus
+from src.services.processing_status_policy import TERMINAL_PDF_JOB_STATUSES
 
 from . import service as pdf_job_service
 
@@ -53,7 +58,11 @@ _NON_PENDING_JOB_STATUSES = {
 }
 
 
-def normalize_pipeline_result(result: Any) -> tuple[bool, bool, Optional[str]]:
+class _ProviderMainMarkdownAccessDenied(DocumentSourceAccessDenied):
+    """Internal signal that only the selected main Markdown was forbidden."""
+
+
+def normalize_pipeline_result(result: Any) -> tuple[bool, bool, str | None]:
     """Normalize pipeline result payloads across object and legacy dict shapes."""
     if isinstance(result, dict):
         status = str(result.get("status", "")).strip().lower()
@@ -88,8 +97,8 @@ class JobAwarePipelineTracker:
         self,
         document_id: str,
         stage: ProcessingStage,
-        progress_percentage: Optional[int] = None,
-        message: Optional[str] = None,
+        progress_percentage: int | None = None,
+        message: str | None = None,
     ):
         stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage)
 
@@ -140,7 +149,7 @@ class JobAwarePipelineTracker:
     async def get_pipeline_status(self, document_id: str):
         return await self.base_tracker.get_pipeline_status(document_id)
 
-    async def handle_pipeline_failure(self, document_id: str, error: Exception, stage: Optional[ProcessingStage] = None):
+    async def handle_pipeline_failure(self, document_id: str, error: Exception, stage: ProcessingStage | None = None):
         result = await self.base_tracker.handle_pipeline_failure(document_id, error, stage)
         stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage or ProcessingStage.FAILED.value)
         pdf_job_service.mark_failed(
@@ -174,6 +183,7 @@ class ProviderMarkdownExecutionRequest:
     curator_token: str = field(repr=False)
     source_provenance: Mapping[str, Any]
     figure_metadata_artifact_ids: tuple[str, ...] = ()
+    file_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +200,7 @@ class ProviderConversionExecutionRequest:
     curator_token: str = field(repr=False)
     source_provenance: Mapping[str, Any]
     figure_metadata_artifact_ids: tuple[str, ...] = ()
+    file_path: Path | None = None
 
 
 class UploadExecutionService:
@@ -199,7 +210,7 @@ class UploadExecutionService:
         self,
         *,
         pipeline_tracker: PipelineTracker,
-        orchestrator_factory: Optional[Callable[[Any, Any], DocumentPipelineOrchestrator]] = None,
+        orchestrator_factory: Callable[[Any, Any], DocumentPipelineOrchestrator] | None = None,
         document_source_provider_factory: Callable[[], DocumentSourceProvider] = get_configured_document_source_provider,
         provider_markdown_ingestion_fn: Callable[..., Any] = ingest_provider_markdown_document,
     ) -> None:
@@ -270,11 +281,25 @@ class UploadExecutionService:
 
     async def execute_upload(self, request: UploadExecutionRequest) -> None:
         """Run upload orchestration and persist durable job transitions."""
+        await self._execute_upload_unbounded(request)
+
+    async def _execute_upload_unbounded(
+        self,
+        request: UploadExecutionRequest,
+        *,
+        skip_replay_guard: bool = False,
+    ) -> None:
+        """Run local PDF processing, optionally continuing an existing provider job."""
         if pdf_job_service.is_cancel_requested(job_id=request.job_id):
             await self._handle_pre_start_cancellation(request)
             return
 
-        existing_job = pdf_job_service.get_job_by_id(job_id=request.job_id, reconcile_stale=False)
+        existing_job = None
+        if not skip_replay_guard:
+            existing_job = pdf_job_service.get_job_by_id(
+                job_id=request.job_id,
+                reconcile_stale=False,
+            )
         if existing_job and existing_job.status in _NON_PENDING_JOB_STATUSES:
             logger.info(
                 "Skipping replayed upload execution for job %s with durable status %s",
@@ -321,7 +346,7 @@ class UploadExecutionService:
                 error_message=error_message,
             )
         except Exception as exc:
-            logger.error("Error processing document %s: %s", request.document_id, exc, exc_info=True)
+            logger.exception("Error processing document %s", request.document_id)
             if not isinstance(exc, PDFCancellationError):
                 self._report_execution_failure(
                     exc,
@@ -338,10 +363,13 @@ class UploadExecutionService:
                     status_err,
                 )
             if isinstance(exc, PDFCancellationError):
-                pdf_job_service.mark_cancelled(job_id=request.job_id, reason=str(exc))
+                await self._mark_cancelled_and_sync_tracker(
+                    request,
+                    reason=str(exc),
+                )
             else:
-                pdf_job_service.mark_failed(
-                    job_id=request.job_id,
+                await self._mark_failed_and_sync_tracker(
+                    request,
                     message=str(exc),
                     stage=ProcessingStage.FAILED.value,
                 )
@@ -353,6 +381,12 @@ class UploadExecutionService:
             await asyncio.wait_for(
                 self._execute_provider_markdown_unbounded(request),
                 timeout=timeout_seconds,
+            )
+        except _ProviderMainMarkdownAccessDenied as exc:
+            await self._continue_with_local_pdf_after_provider_access_denied(
+                request,
+                exc,
+                task_name="pdf_jobs.execute_provider_markdown",
             )
         except asyncio.TimeoutError:
             timeout_error = RuntimeError(
@@ -382,8 +416,8 @@ class UploadExecutionService:
                     status_err,
                 )
             await self._sync_provider_markdown_sql_failure(request, timeout_error)
-            pdf_job_service.mark_failed(
-                job_id=request.job_id,
+            await self._mark_failed_and_sync_tracker(
+                request,
                 message=str(timeout_error),
                 stage=ProcessingStage.FAILED.value,
             )
@@ -395,6 +429,12 @@ class UploadExecutionService:
             await asyncio.wait_for(
                 self._execute_provider_conversion_unbounded(request),
                 timeout=timeout_seconds,
+            )
+        except _ProviderMainMarkdownAccessDenied as exc:
+            await self._continue_with_local_pdf_after_provider_access_denied(
+                request,
+                exc,
+                task_name="pdf_jobs.execute_provider_conversion",
             )
         except asyncio.TimeoutError:
             timeout_error = RuntimeError(
@@ -424,8 +464,8 @@ class UploadExecutionService:
                     status_err,
                 )
             await self._sync_provider_conversion_sql_failure(request, timeout_error)
-            pdf_job_service.mark_failed(
-                job_id=request.job_id,
+            await self._mark_failed_and_sync_tracker(
+                request,
                 message=str(timeout_error),
                 stage=ProcessingStage.FAILED.value,
             )
@@ -517,6 +557,7 @@ class UploadExecutionService:
                             curator_token=curator_token,
                             source_provenance=source_provenance,
                             figure_metadata_artifact_ids=figure_metadata_artifact_ids,
+                            file_path=request.file_path,
                         ),
                         skip_replay_guard=True,
                     )
@@ -530,12 +571,12 @@ class UploadExecutionService:
                     raise RuntimeError("Provider conversion completed without canonical converted Markdown")
 
                 await asyncio.sleep(poll_interval_seconds)
+        except _ProviderMainMarkdownAccessDenied:
+            raise
         except Exception as exc:
-            logger.error(
-                "Error waiting for provider conversion document %s: %s",
+            logger.exception(
+                "Error waiting for provider conversion document %s",
                 request.document_id,
-                exc,
-                exc_info=True,
             )
             if not isinstance(exc, PDFCancellationError):
                 self._report_execution_failure(
@@ -557,7 +598,10 @@ class UploadExecutionService:
                     status_err,
                 )
             if isinstance(exc, PDFCancellationError):
-                pdf_job_service.mark_cancelled(job_id=request.job_id, reason=str(exc))
+                await self._mark_cancelled_and_sync_tracker(
+                    request,
+                    reason=str(exc),
+                )
             else:
                 failure_metadata = (
                     _conversion_job_metadata(last_result)
@@ -571,8 +615,8 @@ class UploadExecutionService:
                     metadata=failure_metadata,
                 )
                 await self._sync_provider_conversion_sql_failure(request, exc)
-                pdf_job_service.mark_failed(
-                    job_id=request.job_id,
+                await self._mark_failed_and_sync_tracker(
+                    request,
                     message=str(exc),
                     stage=ProcessingStage.FAILED.value,
                 )
@@ -661,10 +705,16 @@ class UploadExecutionService:
                 status=PdfJobStatus.RUNNING.value,
             )
             provider = self._document_source_provider_factory()
-            markdown_bytes = await provider.download_artifact(
-                request.converted_artifact_id,
-                request_bearer_token=curator_token,
-            )
+            try:
+                markdown_bytes = await provider.download_artifact(
+                    request.converted_artifact_id,
+                    request_bearer_token=curator_token,
+                )
+            except DocumentSourceAccessDenied as exc:
+                # The same-job local-PDF continuation bypasses replay protection.
+                # Keep this signal before every ingestion side effect so the bypass
+                # can never repeat partially completed provider ingestion.
+                raise _ProviderMainMarkdownAccessDenied(str(exc)) from exc
             if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                 raise PDFCancellationError("Processing cancelled by user request")
             markdown = markdown_bytes.decode("utf-8")
@@ -713,26 +763,16 @@ class UploadExecutionService:
                 )
             if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                 raise PDFCancellationError("Processing cancelled by user request")
-            try:
-                await self.pipeline_tracker.track_pipeline_progress(
-                    request.document_id,
-                    ProcessingStage.COMPLETED,
-                    progress_percentage=100,
-                    message="Processing completed",
-                )
-            except Exception as tracker_err:
-                logger.warning(
-                    "Failed to sync in-memory tracker for completed provider Markdown document=%s: %s",
-                    request.document_id,
-                    tracker_err,
-                )
-            pdf_job_service.mark_completed(job_id=request.job_id, message="Processing completed")
+            await self._mark_completed_and_sync_tracker(
+                request,
+                message="Processing completed",
+            )
+        except _ProviderMainMarkdownAccessDenied:
+            raise
         except Exception as exc:
-            logger.error(
-                "Error ingesting provider Markdown document %s: %s",
+            logger.exception(
+                "Error ingesting provider Markdown document %s",
                 request.document_id,
-                exc,
-                exc_info=True,
             )
             if not isinstance(exc, PDFCancellationError):
                 self._report_execution_failure(
@@ -754,11 +794,14 @@ class UploadExecutionService:
                     status_err,
                 )
             if isinstance(exc, PDFCancellationError):
-                pdf_job_service.mark_cancelled(job_id=request.job_id, reason=str(exc))
+                await self._mark_cancelled_and_sync_tracker(
+                    request,
+                    reason=str(exc),
+                )
             else:
                 await self._sync_provider_markdown_sql_failure(request, exc)
-                pdf_job_service.mark_failed(
-                    job_id=request.job_id,
+                await self._mark_failed_and_sync_tracker(
+                    request,
                     message=str(exc),
                     stage=ProcessingStage.FAILED.value,
                 )
@@ -771,6 +814,245 @@ class UploadExecutionService:
                         "Best-effort document-source provider cleanup failed: %s",
                         cleanup_err,
                     )
+
+    async def _continue_with_local_pdf_after_provider_access_denied(
+        self,
+        request: ProviderMarkdownExecutionRequest
+        | ProviderConversionExecutionRequest,
+        exc: DocumentSourceAccessDenied,
+        *,
+        task_name: str,
+    ) -> None:
+        """Use the curator-owned PDF when converted provider text is forbidden."""
+        file_path = request.file_path
+        if file_path is None or not file_path.is_file():
+            logger.error(
+                "Provider text access denied for document %s, but no local PDF is available",
+                request.document_id,
+            )
+            self._report_execution_failure(
+                exc,
+                task_name=task_name,
+                request=request,
+                failure_stage="provider_markdown_access",
+            )
+            try:
+                await update_document_status(
+                    request.document_id,
+                    request.user_id,
+                    ProcessingStatus.FAILED.value,
+                )
+            except Exception as status_err:
+                logger.warning(
+                    "Failed to sync document status after provider access denial document=%s: %s",
+                    request.document_id,
+                    status_err,
+                )
+            if isinstance(request, ProviderMarkdownExecutionRequest):
+                await self._sync_provider_markdown_sql_failure(request, exc)
+            else:
+                await self._sync_provider_conversion_sql_failure(request, exc)
+            await self._mark_failed_and_sync_tracker(
+                request,
+                message=str(exc),
+                stage=ProcessingStage.FAILED.value,
+            )
+            return
+
+        logger.warning(
+            "Provider converted Markdown access denied for document %s; continuing with local PDF",
+            request.document_id,
+        )
+        try:
+            await self._sync_provider_source_import_failure(request)
+        except Exception as sync_err:
+            logger.exception(
+                "Cannot continue with local PDF after provider access denial because source-import state could not be persisted document=%s",
+                request.document_id,
+            )
+            self._report_execution_failure(
+                sync_err,
+                task_name=task_name,
+                request=request,
+                failure_stage="provider_source_import_sync",
+            )
+            try:
+                await update_document_status(
+                    request.document_id,
+                    request.user_id,
+                    ProcessingStatus.FAILED.value,
+                )
+            except Exception as status_err:
+                logger.warning(
+                    "Failed to sync document status after provider source-import persistence failure document=%s: %s",
+                    request.document_id,
+                    status_err,
+                )
+            await self._mark_failed_and_sync_tracker(
+                request,
+                message="Provider source-import state could not be persisted",
+                stage=ProcessingStage.FAILED.value,
+            )
+            return
+        pdf_job_service.update_progress(
+            job_id=request.job_id,
+            stage=ProcessingStage.UPLOAD.value,
+            progress_percentage=10,
+            message="Converted Markdown unavailable; processing uploaded PDF",
+            status=PdfJobStatus.RUNNING.value,
+            metadata={
+                "document_source": {
+                    "converted_markdown_status": "access_denied",
+                    "text_source": "local_pdf",
+                }
+            },
+        )
+        await self._execute_upload_unbounded(
+            UploadExecutionRequest(
+                document_id=request.document_id,
+                job_id=request.job_id,
+                user_id=request.user_id,
+                file_path=file_path,
+            ),
+            skip_replay_guard=True,
+        )
+
+    async def _sync_provider_source_import_failure(
+        self,
+        request: ProviderMarkdownExecutionRequest
+        | ProviderConversionExecutionRequest,
+    ) -> None:
+        """Mark only provider-text import failed before local-PDF continuation."""
+        from uuid import UUID
+
+        from sqlalchemy import select
+        from src.models.sql.database import SessionLocal
+        from src.models.sql.pdf_document import PDFDocument as ViewerPDFDocument
+
+        session = SessionLocal()
+        try:
+            document = session.execute(
+                select(ViewerPDFDocument).where(
+                    ViewerPDFDocument.id == UUID(str(request.document_id)),
+                    ViewerPDFDocument.user_id == request.owner_user_id,
+                )
+            ).scalar_one_or_none()
+            if document is None:
+                raise RuntimeError(
+                    "Cannot persist provider source-import failure for missing document"
+                )
+            document.source_import_status = "failed"
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    async def _mark_completed_and_sync_tracker(
+        self,
+        request: UploadExecutionRequest
+        | ProviderMarkdownExecutionRequest
+        | ProviderConversionExecutionRequest,
+        *,
+        message: str,
+    ) -> None:
+        stored_job = pdf_job_service.mark_completed(
+            job_id=request.job_id,
+            message=message,
+        )
+        await self._sync_tracker_from_terminal_job(
+            request,
+            stored_job=stored_job,
+        )
+
+    async def _mark_failed_and_sync_tracker(
+        self,
+        request: UploadExecutionRequest
+        | ProviderMarkdownExecutionRequest
+        | ProviderConversionExecutionRequest,
+        *,
+        message: str,
+        stage: str,
+    ) -> None:
+        stored_job = pdf_job_service.mark_failed(
+            job_id=request.job_id,
+            message=message,
+            stage=stage,
+        )
+        await self._sync_tracker_from_terminal_job(
+            request,
+            stored_job=stored_job,
+        )
+
+    async def _mark_cancelled_and_sync_tracker(
+        self,
+        request: UploadExecutionRequest
+        | ProviderMarkdownExecutionRequest
+        | ProviderConversionExecutionRequest,
+        *,
+        reason: str,
+    ) -> None:
+        stored_job = pdf_job_service.mark_cancelled(
+            job_id=request.job_id,
+            reason=reason,
+        )
+        await self._sync_tracker_from_terminal_job(
+            request,
+            stored_job=stored_job,
+        )
+
+    async def _sync_tracker_from_terminal_job(
+        self,
+        request: UploadExecutionRequest
+        | ProviderMarkdownExecutionRequest
+        | ProviderConversionExecutionRequest,
+        *,
+        stored_job: Any,
+    ) -> None:
+        """Mirror the durable first-terminal winner into the in-memory tracker."""
+        if stored_job is None:
+            logger.error(
+                "Cannot sync in-memory tracker because durable job is missing document=%s job=%s",
+                request.document_id,
+                request.job_id,
+            )
+            return
+
+        durable_status = str(stored_job.status).strip().lower()
+        if durable_status not in TERMINAL_PDF_JOB_STATUSES:
+            logger.error(
+                "Cannot sync in-memory tracker from non-terminal durable job document=%s job=%s status=%s",
+                request.document_id,
+                request.job_id,
+                durable_status,
+            )
+            return
+        durable_message = (
+            getattr(stored_job, "message", None)
+            or getattr(stored_job, "error_message", None)
+        )
+        tracker_stage = (
+            ProcessingStage.COMPLETED
+            if durable_status == PdfJobStatus.COMPLETED.value
+            else ProcessingStage.FAILED
+        )
+        try:
+            await self.pipeline_tracker.track_pipeline_progress(
+                request.document_id,
+                tracker_stage,
+                progress_percentage=(
+                    100 if tracker_stage is ProcessingStage.COMPLETED else None
+                ),
+                message=durable_message,
+            )
+        except Exception as tracker_err:
+            logger.warning(
+                "Failed to sync in-memory tracker from terminal job document=%s status=%s: %s",
+                request.document_id,
+                durable_status,
+                tracker_err,
+            )
 
     async def _sync_provider_markdown_sql_failure(
         self,
@@ -846,7 +1128,6 @@ class UploadExecutionService:
             from uuid import UUID
 
             from sqlalchemy import select
-
             from src.models.sql.database import SessionLocal
             from src.models.sql.pdf_document import PDFDocument as ViewerPDFDocument
 
@@ -899,8 +1180,8 @@ class UploadExecutionService:
         request: UploadExecutionRequest | ProviderMarkdownExecutionRequest | ProviderConversionExecutionRequest,
     ) -> None:
         cancellation_message = "Cancelled before processing started"
-        pdf_job_service.mark_cancelled(
-            job_id=request.job_id,
+        await self._mark_cancelled_and_sync_tracker(
+            request,
             reason=cancellation_message,
         )
 
@@ -913,77 +1194,30 @@ class UploadExecutionService:
                 status_err,
             )
 
-        try:
-            await self.pipeline_tracker.track_pipeline_progress(
-                request.document_id,
-                ProcessingStage.FAILED,
-                message=cancellation_message,
-            )
-        except Exception as tracker_err:
-            logger.warning(
-                "Failed to update in-memory tracker for pre-start cancellation document=%s: %s",
-                request.document_id,
-                tracker_err,
-            )
-
     async def _finalize_pipeline_result(
         self,
         *,
         request: UploadExecutionRequest,
         success: bool,
         cancelled: bool,
-        error_message: Optional[str],
+        error_message: str | None,
     ) -> None:
         if cancelled:
-            try:
-                await self.pipeline_tracker.track_pipeline_progress(
-                    request.document_id,
-                    ProcessingStage.FAILED,
-                    message=error_message or "Cancelled by user",
-                )
-            except Exception as tracker_err:
-                logger.warning(
-                    "Failed to sync in-memory tracker for cancelled document=%s: %s",
-                    request.document_id,
-                    tracker_err,
-                )
-            pdf_job_service.mark_cancelled(
-                job_id=request.job_id,
+            await self._mark_cancelled_and_sync_tracker(
+                request,
                 reason=error_message or "Cancelled by user",
             )
             return
 
         if success:
-            try:
-                await self.pipeline_tracker.track_pipeline_progress(
-                    request.document_id,
-                    ProcessingStage.COMPLETED,
-                    progress_percentage=100,
-                    message="Processing completed",
-                )
-            except Exception as tracker_err:
-                logger.warning(
-                    "Failed to sync in-memory tracker for completed document=%s: %s",
-                    request.document_id,
-                    tracker_err,
-                )
-            pdf_job_service.mark_completed(job_id=request.job_id, message="Processing completed")
+            await self._mark_completed_and_sync_tracker(
+                request,
+                message="Processing completed",
+            )
             return
 
-        try:
-            await self.pipeline_tracker.track_pipeline_progress(
-                request.document_id,
-                ProcessingStage.FAILED,
-                message=error_message or "Processing failed",
-            )
-        except Exception as tracker_err:
-            logger.warning(
-                "Failed to sync in-memory tracker for failed document=%s: %s",
-                request.document_id,
-                tracker_err,
-            )
-        pdf_job_service.mark_failed(
-            job_id=request.job_id,
+        await self._mark_failed_and_sync_tracker(
+            request,
             message=error_message or "Processing failed",
             stage=ProcessingStage.FAILED.value,
         )

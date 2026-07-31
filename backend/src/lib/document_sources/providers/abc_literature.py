@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, TypeGuard
+from typing import Any, Self, TypeGuard
 
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
     DocumentSourceError,
     DocumentSourceHealth,
     DocumentSourceProvider,
@@ -30,7 +31,6 @@ from src.lib.openai_agents.config import (
     get_abc_literature_auth_mode,
     get_abc_literature_bearer_token,
 )
-
 
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
 
@@ -64,10 +64,10 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         self._client = client
 
     @classmethod
-    def from_env(cls) -> "ABCLiteratureDocumentSourceProvider":
+    def from_env(cls) -> ABCLiteratureDocumentSourceProvider:
         return cls(ABCLiteratureClient(ABCLiteratureClientConfig.from_env()))
 
-    async def __aenter__(self) -> "ABCLiteratureDocumentSourceProvider":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> None:
@@ -158,6 +158,11 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
     def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
         file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
         return file_class == "converted_merged_main"
+
+    def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:
+        """Keep checksum-matched supplements tied to their exact uploaded bytes."""
+
+        return _artifact_file_class(source_artifact) == "supplement"
 
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
         file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
@@ -435,6 +440,14 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 artifact_id,
                 request_bearer_token=request_bearer_token,
             )
+        except ABCLiteratureHTTPError as exc:
+            if exc.status_code == 403:
+                raise DocumentSourceAccessDenied(
+                    "Document-source artifact access was denied"
+                ) from exc
+            raise DocumentSourceError(
+                "ABC Literature artifact download failed"
+            ) from exc
         except ABCLiteratureClientError as exc:
             raise DocumentSourceError("ABC Literature artifact download failed") from exc
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
+from typing import Self
 
+import pytest
 from src.lib.document_sources.import_selection import (
     ChecksumImportDecisionStatus,
     provider_metadata_artifacts_for_source,
@@ -46,7 +47,7 @@ class FakeChecksumProvider:
         )
         return self.artifacts
 
-    async def __aenter__(self) -> "FakeChecksumProvider":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> None:
@@ -158,6 +159,16 @@ class FakeConversionProvider(FakeChecksumProvider):
         return self.listed_artifacts
 
 
+class FakeSupplementChecksumProvider(FakeChecksumProvider):
+    provider_id = "abc_literature"
+
+    def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:
+        return (
+            str(source_artifact.metadata.get("file_class") or "").strip().lower()
+            == "supplement"
+        )
+
+
 def _fake_is_main_text_artifact(
     artifact: SourceArtifact,
     *,
@@ -216,6 +227,7 @@ def _source(
     scope: SourceAccessScope = SourceAccessScope.GLOBAL,
     mods: tuple[str, ...] = (),
     reference_curie: str = "AGRKB:101",
+    file_class: str | None = None,
 ) -> SourceArtifact:
     return SourceArtifact(
         provider=provider,
@@ -228,6 +240,7 @@ def _source(
         display_name=f"{artifact_id}.pdf",
         md5sum="abc123",
         access_policy=SourceAccessPolicy(scope=scope, mods=mods),
+        metadata={"file_class": file_class} if file_class else {},
     )
 
 
@@ -295,6 +308,42 @@ def test_provider_metadata_artifacts_for_source_filters_by_class_and_display_pre
         source_artifact=source,
         artifacts=[source, supplement_metadata, main_metadata],
     ) == (main_metadata,)
+
+
+@pytest.mark.asyncio
+async def test_checksum_matched_abc_supplement_uses_exact_local_pdf():
+    source = _source(
+        "supplement-1",
+        provider="abc_literature",
+        file_class="supplement",
+    )
+    misleading_main_text = _converted(
+        "main-markdown-1",
+        source.artifact_id,
+        provider="abc_literature",
+    )
+    provider = FakeSupplementChecksumProvider([source, misleading_main_text])
+
+    decision = await select_checksum_import_candidate(
+        provider=provider,
+        checksum="abc123",
+        authorized_group_ids=("FB",),
+        allow_conversion_request=True,
+    )
+
+    assert decision.status is ChecksumImportDecisionStatus.LOCAL_PDF_REQUIRED
+    assert decision.is_ready is False
+    assert decision.selected is not None
+    assert decision.selected.source_artifact is source
+    assert decision.selected.converted_artifact is None
+    assert decision.selected.provider_metadata_artifacts == ()
+    assert decision.metadata == {
+        "text_source": "local_pdf",
+        "source_file_class": "supplement",
+    }
+    assert provider.calls == [
+        {"checksum": "abc123", "request_bearer_token": None},
+    ]
 
 
 def test_provider_metadata_artifacts_for_source_prefers_exact_png_sidecar_match():

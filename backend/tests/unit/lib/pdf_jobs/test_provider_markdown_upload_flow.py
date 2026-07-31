@@ -9,9 +9,8 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-from fastapi import BackgroundTasks, UploadFile
-
 import src.lib.document_sources.ingestion as ingestion_module
+from fastapi import BackgroundTasks, UploadFile
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.models import (
     DocumentSourceHealth,
@@ -114,7 +113,6 @@ class _Tracker:
                 "message": message,
             }
         )
-        return None
 
 
 class _FakeDocumentSourceProvider:
@@ -340,7 +338,11 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     monkeypatch.setattr(
         execution_module.pdf_job_service,
         "mark_completed",
-        lambda **kwargs: completed_events.append(kwargs),
+        lambda **kwargs: completed_events.append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.COMPLETED.value,
+            message=kwargs["message"],
+        ),
     )
     monkeypatch.setattr(
         execution_module.pdf_job_service,
@@ -463,13 +465,14 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     assert (tmp_path / record.file_path).exists()
     assert len(background_tasks.tasks) == 1
     task = background_tasks.tasks[0]
-    assert getattr(task.func, "__observability_original_task__") == execution_service.execute_provider_markdown
-    assert getattr(task.func, "__observability_task_name__") == "pdf_jobs.execute_provider_markdown"
+    assert task.func.__observability_original_task__ == execution_service.execute_provider_markdown
+    assert task.func.__observability_task_name__ == "pdf_jobs.execute_provider_markdown"
     queued_request = cast(ProviderMarkdownExecutionRequest, task.args[0])
     assert queued_request.document_id == result.document_id
     assert queued_request.converted_artifact_id == "markdown-55"
     assert queued_request.curator_token == "curator-token"
     assert queued_request.source_provenance["provider"] == "mock_literature"
+    assert queued_request.file_path == tmp_path / record.file_path
 
     await task.func(*task.args, **task.kwargs)
 

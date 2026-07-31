@@ -89,6 +89,11 @@ Important constraints:
   reference.
 - No direct local PDFX fallback for known ABC papers that are waiting on
   provider conversion unless a later ticket explicitly scopes a fallback.
+- A curator-uploaded PDF already saved by AI Curation may use local PDFX when
+  the selected canonical Markdown download is authoritatively denied. This is
+  an explicit source-selection branch after provider conversion, not a pending
+  conversion fallback; it must keep the same document/job and record the
+  provider-text import as failed.
 
 ## Access And Provenance
 

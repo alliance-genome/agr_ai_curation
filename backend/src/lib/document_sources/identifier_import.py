@@ -1,5 +1,8 @@
 """Import provider documents by curator-supplied source identifiers."""
 
+# Provider and cleanup boundaries deliberately catch third-party failures.
+# ruff: noqa: BLE001
+
 from __future__ import annotations
 
 import hashlib
@@ -7,15 +10,15 @@ import logging
 import re
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, cast
+from typing import Any, cast
 
 from fastapi import BackgroundTasks
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
-
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
 from src.lib.document_sources.access import DocumentSourceRequestContext
@@ -25,6 +28,7 @@ from src.lib.document_sources.import_selection import (
 )
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
     DocumentSourceConfigError,
     DocumentSourceError,
     DocumentSourceProvider,
@@ -53,7 +57,11 @@ from src.lib.pdf_jobs.upload_execution_service import (
 )
 from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES, pdf_file_size_limit_message
 from src.lib.storage_permissions import ensure_writable_directory
-from src.lib.weaviate_client.documents import create_document, delete_document, get_document
+from src.lib.weaviate_client.documents import (
+    create_document,
+    delete_document,
+    get_document,
+)
 from src.lib.weaviate_helpers import get_tenant_name
 from src.models.document import (
     DocumentMetadata,
@@ -877,6 +885,19 @@ class IdentifierImportService:
                 curator_token=curator_token,
                 wait_for_conversion=wait_for_conversion,
             )
+        except DocumentSourceAccessDenied as exc:
+            logger.warning(
+                "Document-source PDF access denied for %s: %s",
+                normalized.normalized,
+                exc,
+            )
+            return IdentifierImportItemResult(
+                identifier=normalized.original,
+                normalized_identifier=normalized.normalized,
+                status="error",
+                error_code="document_source_access_denied",
+                message="Access to the document-source PDF was denied.",
+            )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
             logger.warning(
                 "Document-source identifier import failed for %s: %s",
@@ -933,7 +954,7 @@ class IdentifierImportService:
         )
         file_size_bytes = saved_path.stat().st_size
         raw_checksum = hashlib.sha256(source_pdf_bytes).hexdigest()
-        scoped_file_hash = hashlib.sha256(f"{db_user.id}:{raw_checksum}".encode("utf-8")).hexdigest()
+        scoped_file_hash = hashlib.sha256(f"{db_user.id}:{raw_checksum}".encode()).hexdigest()
         created_weaviate_document = False
 
         document = PDFDocument(
@@ -1059,6 +1080,7 @@ class IdentifierImportService:
                             artifact.artifact_id
                             for artifact in decision.selected.provider_metadata_artifacts
                         ),
+                        file_path=saved_path,
                     ),
                 )
             elif wait_for_conversion:
@@ -1078,6 +1100,7 @@ class IdentifierImportService:
                             artifact.artifact_id
                             for artifact in decision.selected.provider_metadata_artifacts
                         ),
+                        file_path=saved_path,
                     ),
                 )
             else:

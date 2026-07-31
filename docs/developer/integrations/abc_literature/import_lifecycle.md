@@ -36,6 +36,7 @@ provider preflight before any durable provider-backed import work is queued.
 | Provider decision | HTTP/API behavior | Local job behavior |
 | --- | --- | --- |
 | `no_match` | Continue ordinary local PDF processing for the uploaded file. | Normal local PDF job. |
+| `local_pdf_required` for a checksum-matched `file_class=supplement` source | Continue ordinary local PDF processing for the exact uploaded file; do not attach reference-main provenance. | Normal local PDF job. |
 | `no_source_artifact` | Stop with `document_source_no_source_artifact`. | No provider job. |
 | `access_denied` | Stop with `document_source_access_denied`. | No provider job. |
 | `ambiguous_match` | Stop with `document_source_ambiguous_match`. | No provider job. |
@@ -44,8 +45,9 @@ provider preflight before any durable provider-backed import work is queued.
 | `conversion_failed` | Stop with `document_source_conversion_failed`. | No provider job. |
 | `no_converted_text` | Stop with `document_source_no_converted_text`. | No provider job. |
 
-Known ABC papers without usable converted Markdown do not fall back to local
-PDFX extraction. Unknown/no-MD5-match PDFs keep the ordinary local PDF path.
+Known ABC main papers without usable converted Markdown do not fall back to
+local PDFX extraction. Unknown/no-MD5-match PDFs and checksum-matched
+supplements keep the ordinary local PDF path.
 
 ## Identifier Import Preflight
 

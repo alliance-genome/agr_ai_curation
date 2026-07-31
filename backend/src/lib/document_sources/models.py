@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
 
 class DocumentSourceError(RuntimeError):
@@ -14,6 +14,10 @@ class DocumentSourceError(RuntimeError):
 
 class DocumentSourceConfigError(DocumentSourceError):
     """Raised when document-source provider configuration is invalid."""
+
+
+class DocumentSourceAccessDenied(DocumentSourceError):
+    """Raised when the provider denies access to a requested source artifact."""
 
 
 class SourceAccessScope(str, Enum):
@@ -141,7 +145,7 @@ class DocumentSourceProvider(Protocol):
 
     provider_id: str
 
-    async def __aenter__(self) -> "DocumentSourceProvider":
+    async def __aenter__(self) -> Self:
         """Enter a provider context."""
         raise NotImplementedError
 

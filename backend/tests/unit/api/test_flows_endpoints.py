@@ -1,24 +1,44 @@
 """Unit tests for flow CRUD endpoint handlers."""
 
-from datetime import datetime, timezone
-import inspect
 import importlib
+import inspect
 import logging
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
-
+from src.lib import http_errors
 from src.schemas.flows import (
     CreateFlowRequest,
     FlowValidationAttachmentSelection,
     UpdateFlowRequest,
 )
-from src.lib import http_errors
 
 flows = importlib.import_module("src.api.flows")
+
+
+@pytest.fixture(autouse=True)
+def _available_flow_agent_policy(monkeypatch):
+    """Keep CRUD tests independent of the runtime agent catalog and database."""
+
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: {
+            "name": agent_id,
+            "category": "Extraction",
+            "subcategory": "",
+            "output_schema_key": None,
+            "is_active": True,
+            "visible": True,
+            "visibility": None,
+            "produces_flow_artifacts": True,
+            "supervisor": {},
+        },
+    )
 
 
 def _flow_definition():

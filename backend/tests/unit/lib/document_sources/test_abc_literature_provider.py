@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from src.lib.document_sources.identifier_import import (
     ReferenceImportDecisionStatus,
     select_reference_import_candidate,
 )
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
     DocumentSourceConfigError,
     DocumentSourceError,
     SourceAccessPolicy,
@@ -46,6 +46,7 @@ class FakeABCLiteratureClient:
         self.conversion_payload: dict[str, Any] = {}
         self.conversion_error: Exception | None = None
         self.download_payload = b"artifact-bytes"
+        self.download_error: Exception | None = None
         self.closed = False
 
     async def lookup_external_curie(
@@ -150,6 +151,8 @@ class FakeABCLiteratureClient:
                 },
             )
         )
+        if self.download_error:
+            raise self.download_error
         return self.download_payload
 
     async def request_referencefile_conversion(
@@ -185,6 +188,24 @@ def provider_from_fake(
     fake_client: FakeABCLiteratureClient,
 ) -> ABCLiteratureDocumentSourceProvider:
     return ABCLiteratureDocumentSourceProvider(fake_client)  # type: ignore[arg-type]
+
+
+def test_checksum_match_uses_local_pdf_only_for_supplements() -> None:
+    provider = ABCLiteratureDocumentSourceProvider(client=None)  # type: ignore[arg-type]
+
+    def _source(file_class: str) -> SourceArtifact:
+        return SourceArtifact(
+            provider="abc_literature",
+            artifact_id=f"{file_class}-1",
+            role=SourceArtifactRole.SOURCE_PDF,
+            artifact_format=SourceArtifactFormat.PDF,
+            status=SourceArtifactStatus.AVAILABLE,
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": file_class},
+        )
+
+    assert provider.checksum_match_uses_local_pdf(_source("supplement")) is True
+    assert provider.checksum_match_uses_local_pdf(_source("main")) is False
 
 
 def test_reference_source_artifact_sort_key_prefers_curator_mod_over_global() -> None:
@@ -673,6 +694,42 @@ async def test_download_artifact_passes_request_bearer_token() -> None:
             {"artifact_id": "55", "request_bearer_token": "curator-token"},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_download_artifact_maps_forbidden_response_to_access_denied() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.download_error = ABCLiteratureHTTPError(
+        "ABC Literature request failed",
+        status_code=403,
+        endpoint="/reference/referencefile/download/55",
+    )
+    provider = provider_from_fake(fake_client)
+
+    with pytest.raises(DocumentSourceAccessDenied):
+        await provider.download_artifact(
+            "55",
+            request_bearer_token="curator-token",
+        )
+
+
+@pytest.mark.asyncio
+async def test_download_artifact_keeps_non_forbidden_http_error_generic() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.download_error = ABCLiteratureHTTPError(
+        "ABC Literature request failed",
+        status_code=500,
+        endpoint="/reference/referencefile/download/55",
+    )
+    provider = provider_from_fake(fake_client)
+
+    with pytest.raises(DocumentSourceError) as exc_info:
+        await provider.download_artifact(
+            "55",
+            request_bearer_token="curator-token",
+        )
+
+    assert not isinstance(exc_info.value, DocumentSourceAccessDenied)
 
 
 @pytest.mark.asyncio
