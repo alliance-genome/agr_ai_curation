@@ -26,6 +26,7 @@ class ChecksumImportDecisionStatus(str, Enum):
     """Decision categories for provider checksum lookup results."""
 
     READY = "ready"
+    LOCAL_PDF_REQUIRED = "local_pdf_required"
     NO_MATCH = "no_match"
     NO_SOURCE_ARTIFACT = "no_source_artifact"
     ACCESS_DENIED = "access_denied"
@@ -132,20 +133,14 @@ async def select_checksum_import_candidate(
         )
 
     source_artifact = authorized_source_list[0]
-    provider_metadata_artifacts = provider_metadata_artifacts_for_source(
-        provider=provider,
-        source_artifact=source_artifact,
-        artifacts=artifacts,
-    )
     if _checksum_match_uses_local_pdf(provider, source_artifact):
         source_only_candidate = ChecksumImportCandidate(
             source_artifact=source_artifact,
-            provider_metadata_artifacts=provider_metadata_artifacts,
         )
         return _decision(
             provider=provider.provider_id,
             checksum=normalized_checksum,
-            status=ChecksumImportDecisionStatus.READY,
+            status=ChecksumImportDecisionStatus.LOCAL_PDF_REQUIRED,
             selected=source_only_candidate,
             candidates=(source_only_candidate,),
             source_artifacts=authorized_sources,
@@ -159,6 +154,11 @@ async def select_checksum_import_candidate(
                 ).strip(),
             },
         )
+    provider_metadata_artifacts = provider_metadata_artifacts_for_source(
+        provider=provider,
+        source_artifact=source_artifact,
+        artifacts=artifacts,
+    )
     converted_artifacts = _converted_artifacts_for_source(
         source_artifact=source_artifact,
         artifacts=artifacts,

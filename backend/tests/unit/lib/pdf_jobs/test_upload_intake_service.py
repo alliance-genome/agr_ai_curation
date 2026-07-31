@@ -723,7 +723,7 @@ async def test_intake_checksum_matched_supplement_processes_exact_uploaded_pdf(t
         selector_calls.append(kwargs)
         candidate = ChecksumImportCandidate(source_artifact=source_artifact)
         return ChecksumImportDecision(
-            status=ChecksumImportDecisionStatus.READY,
+            status=ChecksumImportDecisionStatus.LOCAL_PDF_REQUIRED,
             provider="abc_literature",
             checksum=kwargs["checksum"],
             selected=candidate,

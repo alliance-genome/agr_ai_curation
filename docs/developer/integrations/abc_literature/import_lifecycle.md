@@ -36,7 +36,7 @@ provider preflight before any durable provider-backed import work is queued.
 | Provider decision | HTTP/API behavior | Local job behavior |
 | --- | --- | --- |
 | `no_match` | Continue ordinary local PDF processing for the uploaded file. | Normal local PDF job. |
-| `ready` for a checksum-matched `file_class=supplement` source | Continue ordinary local PDF processing for the exact uploaded file; do not attach reference-main provenance. | Normal local PDF job. |
+| `local_pdf_required` for a checksum-matched `file_class=supplement` source | Continue ordinary local PDF processing for the exact uploaded file; do not attach reference-main provenance. | Normal local PDF job. |
 | `no_source_artifact` | Stop with `document_source_no_source_artifact`. | No provider job. |
 | `access_denied` | Stop with `document_source_access_denied`. | No provider job. |
 | `ambiguous_match` | Stop with `document_source_ambiguous_match`. | No provider job. |

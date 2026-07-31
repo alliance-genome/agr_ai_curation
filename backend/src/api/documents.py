@@ -143,8 +143,6 @@ def _extract_document_processing_status(doc_payload: dict[str, Any]) -> str:
 def _as_utc_datetime(value: Any) -> datetime | None:
     if not isinstance(value, datetime):
         return None
-    if value.tzinfo is None:
-        return value.astimezone(timezone.utc)
     return value.astimezone(timezone.utc)
 
 

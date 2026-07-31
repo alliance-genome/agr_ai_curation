@@ -331,10 +331,12 @@ async def test_checksum_matched_abc_supplement_uses_exact_local_pdf():
         allow_conversion_request=True,
     )
 
-    assert decision.status is ChecksumImportDecisionStatus.READY
+    assert decision.status is ChecksumImportDecisionStatus.LOCAL_PDF_REQUIRED
+    assert decision.is_ready is False
     assert decision.selected is not None
     assert decision.selected.source_artifact is source
     assert decision.selected.converted_artifact is None
+    assert decision.selected.provider_metadata_artifacts == ()
     assert decision.metadata == {
         "text_source": "local_pdf",
         "source_file_class": "supplement",

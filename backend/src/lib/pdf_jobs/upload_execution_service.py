@@ -56,6 +56,8 @@ _NON_PENDING_JOB_STATUSES = {
     PdfJobStatus.FAILED.value,
     PdfJobStatus.CANCELLED.value,
 }
+
+
 class _ProviderMainMarkdownAccessDenied(DocumentSourceAccessDenied):
     """Internal signal that only the selected main Markdown was forbidden."""
 
