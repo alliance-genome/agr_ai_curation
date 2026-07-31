@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
+from typing import Self
 
+import pytest
 from src.lib.document_sources.import_selection import (
     ChecksumImportDecisionStatus,
     provider_metadata_artifacts_for_source,
@@ -46,7 +47,7 @@ class FakeChecksumProvider:
         )
         return self.artifacts
 
-    async def __aenter__(self) -> "FakeChecksumProvider":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> None:

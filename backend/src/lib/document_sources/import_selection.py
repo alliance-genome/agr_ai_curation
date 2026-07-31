@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, cast
 
+from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceError,
     DocumentSourceProvider,
@@ -19,7 +20,6 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
 )
-from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 
 
 class ChecksumImportDecisionStatus(str, Enum):

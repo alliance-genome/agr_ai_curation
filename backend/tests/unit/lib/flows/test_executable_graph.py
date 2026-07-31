@@ -1,7 +1,7 @@
 """Consumer-parity coverage for canonical executable flow topology."""
 
-from datetime import datetime, timezone
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
@@ -9,15 +9,14 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
-
 from src.api import flows as flows_api
 from src.lib.agent_studio import flow_tools
 from src.lib.batch import validation as batch_validation
-from src.lib.flows import executor
 from src.lib.executable_flow_graph import (
     ExecutableFlowTopologyError,
     project_executable_flow_graph,
 )
+from src.lib.flows import executor
 from src.models.sql import CurationFlow
 from src.schemas.flows import CreateFlowRequest, FlowDefinition
 
