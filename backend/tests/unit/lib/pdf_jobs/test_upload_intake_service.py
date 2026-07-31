@@ -45,6 +45,12 @@ from src.lib.pipeline.upload import UploadError
 FAKE_UPLOAD_MD5 = "f87357c6cdc4f067" + "e19f42aebabc6fb7"
 
 
+def test_provider_decision_error_fields_cover_every_status():
+    assert set(upload_intake_module._CHECKSUM_DECISION_ERROR_FIELDS) == set(
+        ChecksumImportDecisionStatus
+    )
+
+
 class _ExecuteResult:
     def __init__(self, row):
         self._row = row

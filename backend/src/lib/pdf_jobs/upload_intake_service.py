@@ -135,6 +135,12 @@ _CHECKSUM_DECISION_ERROR_FIELDS: dict[
         "The source document conversion failed.",
         "Contact support with the uploaded paper details.",
     ),
+    ChecksumImportDecisionStatus.LOCAL_PDF_REQUIRED: (
+        503,
+        "document_source_local_pdf_import_unavailable",
+        "The uploaded PDF must be processed locally, but no local import candidate was selected.",
+        "Try uploading the PDF again or contact support.",
+    ),
     ChecksumImportDecisionStatus.READY: (
         503,
         "document_source_ready_import_unavailable",
