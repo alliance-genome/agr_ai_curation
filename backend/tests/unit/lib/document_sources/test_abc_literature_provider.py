@@ -190,6 +190,24 @@ def provider_from_fake(
     return ABCLiteratureDocumentSourceProvider(fake_client)  # type: ignore[arg-type]
 
 
+def test_checksum_match_uses_local_pdf_only_for_supplements() -> None:
+    provider = ABCLiteratureDocumentSourceProvider(client=None)  # type: ignore[arg-type]
+
+    def _source(file_class: str) -> SourceArtifact:
+        return SourceArtifact(
+            provider="abc_literature",
+            artifact_id=f"{file_class}-1",
+            role=SourceArtifactRole.SOURCE_PDF,
+            artifact_format=SourceArtifactFormat.PDF,
+            status=SourceArtifactStatus.AVAILABLE,
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": file_class},
+        )
+
+    assert provider.checksum_match_uses_local_pdf(_source("supplement")) is True
+    assert provider.checksum_match_uses_local_pdf(_source("main")) is False
+
+
 def test_reference_source_artifact_sort_key_prefers_curator_mod_over_global() -> None:
     provider = provider_from_fake(FakeABCLiteratureClient())
     mod_pdf = SourceArtifact(

@@ -602,6 +602,14 @@ class UploadIntakeService:
         if decision.selected is None:
             self._cleanup_saved_file_artifacts(saved_path)
             raise self._provider_decision_error(decision)
+        if decision.metadata.get("text_source") == "local_pdf":
+            logger.info(
+                "Document-source checksum match requires exact uploaded PDF bytes; "
+                "continuing with local PDF processing provider=%s source_artifact=%s",
+                decision.provider,
+                decision.selected.source_artifact.artifact_id,
+            )
+            return None
         if (
             decision.provider == "abc_literature"
             and decision.selected.converted_artifact is None

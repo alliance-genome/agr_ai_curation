@@ -43,6 +43,7 @@ from src.lib.weaviate_helpers import get_connection
 from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus
+from src.services.processing_status_policy import TERMINAL_PDF_JOB_STATUSES
 
 from . import service as pdf_job_service
 
@@ -55,13 +56,6 @@ _NON_PENDING_JOB_STATUSES = {
     PdfJobStatus.FAILED.value,
     PdfJobStatus.CANCELLED.value,
 }
-_TERMINAL_JOB_STATUSES = {
-    PdfJobStatus.COMPLETED.value,
-    PdfJobStatus.FAILED.value,
-    PdfJobStatus.CANCELLED.value,
-}
-
-
 class _ProviderMainMarkdownAccessDenied(DocumentSourceAccessDenied):
     """Internal signal that only the selected main Markdown was forbidden."""
 
@@ -907,7 +901,7 @@ class UploadExecutionService:
             metadata={
                 "document_source": {
                     "converted_markdown_status": "access_denied",
-                    "fallback": "local_pdf",
+                    "text_source": "local_pdf",
                 }
             },
         )
@@ -1024,7 +1018,7 @@ class UploadExecutionService:
             return
 
         durable_status = str(stored_job.status).strip().lower()
-        if durable_status not in _TERMINAL_JOB_STATUSES:
+        if durable_status not in TERMINAL_PDF_JOB_STATUSES:
             logger.error(
                 "Cannot sync in-memory tracker from non-terminal durable job document=%s job=%s status=%s",
                 request.document_id,

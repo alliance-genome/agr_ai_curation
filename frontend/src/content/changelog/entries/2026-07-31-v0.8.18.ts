@@ -9,7 +9,7 @@ const entry: ChangelogEntry = {
     {
       heading: 'Documents',
       bullets: [
-        'Literature imports now fall back to the uploaded PDF when converted text cannot be accessed.',
+        'Literature imports now continue with the curator-uploaded PDF when converted text cannot be accessed.',
         'Failed uploads can be deleted and retried instead of remaining blocked by stale processing status.',
       ],
     },

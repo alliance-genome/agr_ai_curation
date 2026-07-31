@@ -144,7 +144,7 @@ def _as_utc_datetime(value: Any) -> datetime | None:
     if not isinstance(value, datetime):
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
     return value.astimezone(timezone.utc)
 
 

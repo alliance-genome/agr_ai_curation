@@ -38,7 +38,8 @@ or another reference-level source rather than from the matched PDF bytes.
 | --- | --- |
 | No ABC MD5 match | Keep ordinary local PDF processing available. |
 | One authorized ABC MD5 match with canonical Markdown | Retain the PDF for viewer/download, import provider Markdown, and persist ABC provenance. |
-| One authorized ABC MD5 match without canonical Markdown | Request/poll ABC conversion, then import provider Markdown once main text is available. Do not silently run local PDFX for the known ABC paper. |
+| One authorized ABC main-PDF MD5 match without canonical Markdown | Request/poll ABC conversion, then import provider Markdown once main text is available. Do not silently run local PDFX for the known ABC main paper. |
+| One authorized ABC supplement MD5 match | Process the exact curator-uploaded supplement with local PDFX. Do not substitute reference-main converted Markdown. |
 | Multiple accessible ABC source matches | Stop as ambiguous and ask for a more specific identifier/import path. |
 | Source match inaccessible | Stop as access denied. Do not retry through a service-token bypass. |
 
@@ -152,7 +153,8 @@ Required local coverage:
 - Identifier resolve-only does not request conversion.
 - Identifier import can dispatch provider-conversion polling instead of local
   PDFX when the provider reports conversion running.
-- Known ABC source-only cases do not silently fall back to local PDFX.
+- Known ABC main source-only cases do not silently fall back to local PDFX;
+  checksum-matched supplements deliberately use the exact local upload.
 
 Live/dev-publish evidence should add a safe conversion-needed fixture when one
 exists, but that evidence is not required to establish the implementation

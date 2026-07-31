@@ -456,6 +456,11 @@ async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
     )
     monkeypatch.setattr(
         flows_api,
+        "_validate_output_attachment_agent_roles",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        flows_api,
         "_validate_flow_agent_step_policy",
         lambda *_args, **_kwargs: None,
     )

@@ -69,6 +69,10 @@ normalized ready Markdown artifacts without requiring ABC's
 
 - No provider checksum/reference match: keep local upload fallback only for
   unknown/no-match PDFs.
+- Checksum match whose source PDF has `file_class=supplement`: process the exact
+  curator-uploaded PDF locally. Never substitute reference-level
+  `converted_merged_main`, because it represents the main paper rather than the
+  uploaded supplement.
 - Inaccessible source PDF: do not download or ingest converted text.
 - Authorized source PDF with no canonical converted Markdown: request ABC
   conversion when available, using `wait=false` and `overwrite_tei_md=false`.
@@ -87,7 +91,7 @@ normalized ready Markdown artifacts without requiring ABC's
   normal local pipeline on the same document/job. A source-PDF denial during
   identifier import remains an item-level failure with no document/job.
 
-Known ABC papers should not silently fall back to local PDFX while canonical
+Known ABC main papers should not silently fall back to local PDFX while canonical
 provider conversion is pending. The explicit saved-PDF branch above applies
 only to an authoritative access denial for selected canonical Markdown, not to
 pending conversion, ambiguous selection, or another provider failure.

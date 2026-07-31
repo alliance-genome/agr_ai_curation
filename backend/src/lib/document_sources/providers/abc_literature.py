@@ -159,6 +159,11 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
         return file_class == "converted_merged_main"
 
+    def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:
+        """Keep checksum-matched supplements tied to their exact uploaded bytes."""
+
+        return _artifact_file_class(source_artifact) == "supplement"
+
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
         file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
         display_name = str(artifact.display_name or "").strip().lower()

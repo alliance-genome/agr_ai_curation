@@ -700,6 +700,89 @@ async def test_intake_upload_enabled_provider_no_match_falls_back_to_local_pdf_p
 
 
 @pytest.mark.asyncio
+async def test_intake_checksum_matched_supplement_processes_exact_uploaded_pdf(tmp_path):
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+    provider = _FakeDocumentSourceProvider()
+    selector_calls = []
+    source_artifact = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="5006666",
+        role=SourceArtifactRole.SOURCE_PDF,
+        artifact_format=SourceArtifactFormat.PDF,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="101000001296197",
+        reference_curie="AGRKB:101000001296197",
+        display_name="FBrf0265453_supplement.pdf",
+        md5sum="e6d1d1f9f937451923edb6cb53b51047",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+        metadata={"file_class": "supplement"},
+    )
+
+    async def _selector(**kwargs):
+        selector_calls.append(kwargs)
+        candidate = ChecksumImportCandidate(source_artifact=source_artifact)
+        return ChecksumImportDecision(
+            status=ChecksumImportDecisionStatus.READY,
+            provider="abc_literature",
+            checksum=kwargs["checksum"],
+            selected=candidate,
+            candidates=(candidate,),
+            source_artifacts=(source_artifact,),
+            metadata={
+                "text_source": "local_pdf",
+                "source_file_class": "supplement",
+            },
+        )
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(
+            storage_path=storage_path,
+            checksum="sha256-source",
+        ),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+        document_source_import_enabled_fn=lambda: True,
+        document_source_provider_factory=lambda: provider,
+        checksum_import_selector=_selector,
+    )
+
+    result = await service.intake_upload(
+        background_tasks=BackgroundTasks(),
+        file=UploadFile(
+            filename="supplement_for_gm85531.pdf",
+            file=BytesIO(b"%PDF-1.7"),
+        ),
+        user={"sub": "user-1"},
+        document_source_context=DocumentSourceRequestContext(
+            provider_groups=("FBStaff",),
+            authorized_group_ids=("FB",),
+            curator_token="curator-token",
+        ),
+    )
+
+    assert result.job_id == "job-1"
+    assert selector_calls[0]["checksum"] == FAKE_UPLOAD_MD5
+    assert len(dispatch.calls) == 1
+    assert dispatch.calls[0]["request"].file_path.name == "supplement_for_gm85531.pdf"
+    assert dispatch.provider_markdown_calls == []
+    assert dispatch.provider_conversion_calls == []
+    assert len(session.added) == 1
+    record = session.added[0]
+    assert record.source_provider is None
+    assert record.viewer_mode is None
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_intake_upload_enabled_provider_ready_dispatches_markdown_import(tmp_path):
     session = _FakeSession()
     dispatch = _DispatchRecorder()
