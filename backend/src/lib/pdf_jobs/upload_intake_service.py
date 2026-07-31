@@ -7,29 +7,32 @@ The intake output contract is `UploadIntakeResult`, which includes:
 - ownership and tenant metadata used by the upload response
 """
 
+# Provider and cross-store cleanup boundaries deliberately catch failures.
+# ruff: noqa: BLE001
+
 from __future__ import annotations
 
 import hashlib
 import logging
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any
 
 from fastapi import BackgroundTasks, UploadFile
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.import_selection import (
-    ChecksumImportDecision,
     ChecksumImportCandidate,
+    ChecksumImportDecision,
     ChecksumImportDecisionStatus,
     select_checksum_import_candidate,
 )
@@ -53,23 +56,28 @@ from src.lib.openai_agents.config import (
     get_document_source_provider,
     get_pdf_upload_max_page_count,
 )
-from src.lib.pdf_limits import (
-    MAX_PDF_FILE_SIZE_BYTES,
-    pdf_file_size_limit_message,
-)
 from src.lib.pdf_jobs.upload_execution_service import (
     ProviderConversionExecutionRequest,
     ProviderMarkdownExecutionRequest,
     UploadExecutionRequest,
     UploadExecutionService,
 )
+from src.lib.pdf_limits import (
+    MAX_PDF_FILE_SIZE_BYTES,
+    pdf_file_size_limit_message,
+)
 from src.lib.pipeline.upload import PDFUploadHandler, UploadError, generate_checksum
 from src.lib.storage_permissions import ensure_writable_directory
-from src.lib.weaviate_client.documents import create_document, delete_document, get_document
+from src.lib.weaviate_client.documents import (
+    create_document,
+    delete_document,
+    get_document,
+)
 from src.lib.weaviate_helpers import get_tenant_name
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument as ViewerPDFDocument
 from src.services.user_service import principal_from_claims, provision_user
+
 from . import service as pdf_job_service
 
 logger = logging.getLogger(__name__)
@@ -144,7 +152,7 @@ class ProviderChecksumImportPlan:
     checksum: str
     source_artifact: SourceArtifact
     converted_artifact: SourceArtifact | None
-    source_provenance: Dict[str, Any]
+    source_provenance: dict[str, Any]
     curator_token: str = field(repr=False)
     wait_for_conversion: bool = False
     figure_metadata_artifact_ids: tuple[str, ...] = ()
@@ -161,7 +169,7 @@ class UploadIntakeValidationError(ValueError):
 class UploadIntakeDuplicateError(Exception):
     """Raised when upload intake detects a duplicate document."""
 
-    def __init__(self, detail: Dict[str, Any]):
+    def __init__(self, detail: dict[str, Any]):
         super().__init__("duplicate upload")
         self.detail = detail
 
@@ -169,7 +177,7 @@ class UploadIntakeDuplicateError(Exception):
 class UploadIntakeProviderDecisionError(Exception):
     """Raised when provider-backed upload intake cannot continue locally."""
 
-    def __init__(self, *, status_code: int, detail: Dict[str, Any]):
+    def __init__(self, *, status_code: int, detail: dict[str, Any]):
         super().__init__(str(detail.get("message") or "provider import unavailable"))
         self.status_code = status_code
         self.detail = detail
@@ -185,12 +193,12 @@ class UploadIntakeResult:
     filename: str
     status: str
     upload_timestamp: datetime
-    processing_started_at: Optional[datetime]
-    processing_completed_at: Optional[datetime]
+    processing_started_at: datetime | None
+    processing_completed_at: datetime | None
     file_size_bytes: int
     weaviate_tenant: str
-    chunk_count: Optional[int]
-    error_message: Optional[str]
+    chunk_count: int | None
+    error_message: str | None
 
 
 def external_document_source_import_enabled() -> bool:
@@ -220,8 +228,8 @@ class UploadIntakeService:
         upload_execution_service: UploadExecutionService,
         session_factory: Callable[[], Session] = SessionLocal,
         storage_path_provider: Callable[[], Path] = get_pdf_storage_path,
-        upload_handler_factory: Optional[Callable[[Path], PDFUploadHandler]] = None,
-        principal_from_claims_fn: Callable[[Dict[str, Any]], Any] = principal_from_claims,
+        upload_handler_factory: Callable[[Path], PDFUploadHandler] | None = None,
+        principal_from_claims_fn: Callable[[dict[str, Any]], Any] = principal_from_claims,
         provision_user_fn: Callable[[Session, Any], Any] = provision_user,
         create_document_fn: Callable[[str, Any], Any] = create_document,
         get_document_fn: Callable[[str, str], Any] = get_document,
@@ -265,7 +273,7 @@ class UploadIntakeService:
         *,
         background_tasks: BackgroundTasks,
         file: UploadFile,
-        user: Dict[str, Any],
+        user: dict[str, Any],
         document_source_context: DocumentSourceRequestContext | None = None,
     ) -> UploadIntakeResult:
         """Execute upload intake choreography and return response-ready output."""
@@ -297,7 +305,7 @@ class UploadIntakeService:
             db_user = self._provision_user(session, self._principal_from_claims(user))
 
             raw_checksum = document.metadata.checksum
-            scoped_file_hash = hashlib.sha256(f"{db_user.id}:{raw_checksum}".encode("utf-8")).hexdigest()
+            scoped_file_hash = hashlib.sha256(f"{db_user.id}:{raw_checksum}".encode()).hexdigest()
 
             existing = (
                 session.execute(
@@ -690,7 +698,7 @@ class UploadIntakeService:
         provider: str,
         checksum: str,
         selected: ChecksumImportCandidate,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         source_artifact = selected.source_artifact
         converted_artifact = selected.converted_artifact
         raw_provenance = {
@@ -747,7 +755,7 @@ class UploadIntakeService:
         status_code, error, message, suggestion = _provider_decision_error_fields(
             decision.status
         )
-        detail: Dict[str, Any] = {
+        detail: dict[str, Any] = {
             "error": error,
             "message": message,
             "provider": decision.provider,
@@ -806,7 +814,7 @@ class UploadIntakeService:
         session: Session,
         existing: ViewerPDFDocument,
         user_sub: str,
-    ) -> Optional[ViewerPDFDocument]:
+    ) -> ViewerPDFDocument | None:
         try:
             existing_weaviate_doc = await self._get_document(user_sub, str(existing.id))
             if existing_weaviate_doc:
@@ -861,7 +869,7 @@ class UploadIntakeService:
             shutil.rmtree(saved_path.parent, ignore_errors=True)
 
     @staticmethod
-    def _duplicate_detail(existing: ViewerPDFDocument) -> Dict[str, Any]:
+    def _duplicate_detail(existing: ViewerPDFDocument) -> dict[str, Any]:
         return {
             "error": "duplicate_file",
             "message": (
@@ -878,7 +886,7 @@ class UploadIntakeService:
         }
 
     @staticmethod
-    def _validate_pdf_filename(filename: Optional[str]) -> None:
+    def _validate_pdf_filename(filename: str | None) -> None:
         if not filename or not filename.lower().endswith(".pdf"):
             raise UploadIntakeValidationError(f"File must be a PDF. Got: {filename}")
 
@@ -917,7 +925,7 @@ class UploadIntakeService:
         )
 
     @staticmethod
-    def _extract_integrity_constraint_name(error: IntegrityError) -> Optional[str]:
+    def _extract_integrity_constraint_name(error: IntegrityError) -> str | None:
         diag = getattr(getattr(error, "orig", None), "diag", None)
         constraint_name = getattr(diag, "constraint_name", None)
         if isinstance(constraint_name, str) and constraint_name.strip():
@@ -936,7 +944,7 @@ class UploadIntakeService:
     @staticmethod
     def _is_duplicate_integrity_error(
         error: IntegrityError,
-        constraint_name: Optional[str],
+        constraint_name: str | None,
     ) -> bool:
         if constraint_name in _PDF_DOCUMENT_DUPLICATE_CONSTRAINTS:
             return True
@@ -955,7 +963,7 @@ def _provider_decision_error_fields(
     return _CHECKSUM_DECISION_ERROR_FIELDS[status]
 
 
-def _provider_reference_from_provenance(source_provenance: Dict[str, Any]) -> str:
+def _provider_reference_from_provenance(source_provenance: dict[str, Any]) -> str:
     reference = (
         source_provenance.get("reference_curie")
         or source_provenance.get("reference_id")

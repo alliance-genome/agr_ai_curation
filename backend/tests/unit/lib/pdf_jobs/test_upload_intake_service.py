@@ -12,7 +12,6 @@ import pytest
 from fastapi import BackgroundTasks, UploadFile
 from pypdf import PdfWriter
 from sqlalchemy.exc import IntegrityError
-
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.import_selection import (
     ChecksumImportCandidate,
@@ -30,16 +29,16 @@ from src.lib.document_sources.models import (
     SourceReference,
 )
 from src.lib.pdf_jobs import upload_intake_service as upload_intake_module
-from src.lib.pdf_limits import (
-    MAX_PDF_FILE_SIZE_BYTES,
-    MAX_PDF_FILE_SIZE_MB,
-    pdf_file_size_limit_message,
-)
 from src.lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeProviderDecisionError,
     UploadIntakeService,
     UploadIntakeValidationError,
+)
+from src.lib.pdf_limits import (
+    MAX_PDF_FILE_SIZE_BYTES,
+    MAX_PDF_FILE_SIZE_MB,
+    pdf_file_size_limit_message,
 )
 from src.lib.pipeline.upload import UploadError
 

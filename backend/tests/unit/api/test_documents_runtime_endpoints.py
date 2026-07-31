@@ -1,8 +1,8 @@
 """Runtime unit tests for core document endpoints."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-import logging
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
@@ -10,15 +10,14 @@ from uuid import uuid4
 import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
 from fastapi.testclient import TestClient
-
 from src.api import documents
+from src.lib.pdf_jobs.upload_execution_service import normalize_pipeline_result
 from src.lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeProviderDecisionError,
     UploadIntakeResult,
     UploadIntakeValidationError,
 )
-from src.lib.pdf_jobs.upload_execution_service import normalize_pipeline_result
 from src.models.document import ProcessingStatus
 from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.schemas.documents import DocumentUpdateRequest
@@ -376,7 +375,9 @@ async def test_delete_document_endpoint_allows_reconciled_stale_pdf_job(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_delete_document_endpoint_blocks_active_weaviate_status_when_job_terminal(monkeypatch):
+async def test_delete_document_endpoint_allows_stale_active_weaviate_status_when_job_terminal(
+    monkeypatch,
+):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
     snapshot_session = _FakeSession(execute_doc=None)
@@ -391,15 +392,21 @@ async def test_delete_document_endpoint_blocks_active_weaviate_status_when_job_t
         lambda **_kwargs: SimpleNamespace(status="failed", current_stage="failed"),
     )
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(
+        documents,
+        "delete_document",
+        lambda *_args, **_kwargs: _async_value(
+            {"success": True, "chunks_deleted": 0}
+        ),
+    )
 
-    with pytest.raises(HTTPException) as exc:
-        await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+    result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
 
-    assert exc.value.status_code == 409
+    assert result.success is True
 
 
 @pytest.mark.asyncio
-async def test_delete_document_endpoint_allows_old_dispatch_upload_tracker_after_terminal_job(
+async def test_delete_document_endpoint_allows_old_active_tracker_after_terminal_job(
     monkeypatch,
 ):
     doc_id = str(uuid4())
@@ -443,7 +450,7 @@ async def test_delete_document_endpoint_allows_old_dispatch_upload_tracker_after
     )
     stale_pipeline = PipelineStatus(
         document_id=doc_id,
-        current_stage=ProcessingStage.UPLOAD,
+        current_stage=ProcessingStage.PARSING,
         started_at=now - timedelta(minutes=1),
         updated_at=now - timedelta(seconds=30),
         progress_percentage=10,

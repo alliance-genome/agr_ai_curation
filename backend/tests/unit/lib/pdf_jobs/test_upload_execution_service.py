@@ -6,17 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import BackgroundTasks
-
-from src.lib.exceptions import PDFCancellationError
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
-from src.lib.pdf_jobs import upload_execution_service as service_module
-from src.lib.pdf_jobs.upload_execution_service import (
-    JobAwarePipelineTracker,
-    ProviderConversionExecutionRequest,
-    ProviderMarkdownExecutionRequest,
-    UploadExecutionRequest,
-    UploadExecutionService,
-)
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     SourceAccessPolicy,
@@ -27,6 +17,15 @@ from src.lib.document_sources.models import (
     SourceArtifactStatus,
     SourceConversionResult,
     SourceConversionStatus,
+)
+from src.lib.exceptions import PDFCancellationError
+from src.lib.pdf_jobs import upload_execution_service as service_module
+from src.lib.pdf_jobs.upload_execution_service import (
+    JobAwarePipelineTracker,
+    ProviderConversionExecutionRequest,
+    ProviderMarkdownExecutionRequest,
+    UploadExecutionRequest,
+    UploadExecutionService,
 )
 from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
@@ -46,7 +45,6 @@ class _Tracker:
                 "message": message,
             }
         )
-        return None
 
 
 class _Orchestrator:
@@ -250,9 +248,33 @@ async def test_execute_upload_marks_completed_for_success(monkeypatch):
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "set_process_id", lambda **_kwargs: None)
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", lambda **kwargs: events["completed"].append(kwargs))
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: events["failed"].append(kwargs))
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **kwargs: events["cancelled"].append(kwargs))
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: events["completed"].append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.COMPLETED.value,
+            message=kwargs["message"],
+        ),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: events["failed"].append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.FAILED.value,
+            message=kwargs["message"],
+        ),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_cancelled",
+        lambda **kwargs: events["cancelled"].append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.CANCELLED.value,
+            message=kwargs["reason"],
+        ),
+    )
 
     await service.execute_upload(
         UploadExecutionRequest(
@@ -285,7 +307,15 @@ async def test_execute_upload_marks_failed_for_failure_result(monkeypatch):
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "set_process_id", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", lambda **kwargs: events["completed"].append(kwargs))
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: events["failed"].append(kwargs))
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: events["failed"].append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.FAILED.value,
+            message=kwargs["message"],
+        ),
+    )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **kwargs: events["cancelled"].append(kwargs))
 
     await service.execute_upload(
@@ -318,7 +348,15 @@ async def test_execute_upload_handles_pre_start_cancellation(monkeypatch):
         status_updates.append((document_id, user_id, status))
 
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: True)
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **kwargs: events["cancelled"].append(kwargs))
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_cancelled",
+        lambda **kwargs: events["cancelled"].append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.CANCELLED.value,
+            message=kwargs["reason"],
+        ),
+    )
     monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
 
     await service.execute_upload(
@@ -452,8 +490,8 @@ async def test_dispatch_upload_execution_tracks_upload_and_queues_task():
     assert tracker.calls[-1]["document_id"] == "doc-dispatch"
     assert tracker.calls[-1]["stage"] == ProcessingStage.UPLOAD
     assert len(background_tasks.tasks) == 1
-    assert getattr(background_tasks.tasks[0].func, "__observability_original_task__") == service.execute_upload
-    assert getattr(background_tasks.tasks[0].func, "__observability_task_name__") == "pdf_jobs.execute_upload"
+    assert background_tasks.tasks[0].func.__observability_original_task__ == service.execute_upload
+    assert background_tasks.tasks[0].func.__observability_task_name__ == "pdf_jobs.execute_upload"
     assert background_tasks.tasks[0].args == (request,)
 
 
@@ -556,7 +594,14 @@ async def test_execute_provider_markdown_passes_downloaded_figure_metadata_to_in
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: SimpleNamespace(
+            status=PdfJobStatus.COMPLETED.value,
+            message=kwargs["message"],
+        ),
+    )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
 
@@ -654,7 +699,14 @@ async def test_execute_provider_markdown_discovers_figure_metadata_from_source_p
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: SimpleNamespace(
+            status=PdfJobStatus.COMPLETED.value,
+            message=kwargs["message"],
+        ),
+    )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
 
@@ -930,7 +982,11 @@ async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_met
     monkeypatch.setattr(
         service_module.pdf_job_service,
         "mark_failed",
-        lambda **kwargs: failed_events.append(kwargs),
+        lambda **kwargs: failed_events.append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.FAILED.value,
+            message=kwargs["message"],
+        ),
     )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
     file_path = tmp_path / "paper.pdf"
@@ -1596,7 +1652,11 @@ async def test_execute_provider_markdown_syncs_sql_failure_when_download_fails(m
     monkeypatch.setattr(
         service_module.pdf_job_service,
         "mark_failed",
-        lambda **kwargs: failed_events.append(kwargs),
+        lambda **kwargs: failed_events.append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.FAILED.value,
+            message=kwargs["message"],
+        ),
     )
     monkeypatch.setattr(service_module, "update_document_status", lambda *_args, **_kwargs: _async_value(None))
     monkeypatch.setattr(
@@ -1647,8 +1707,8 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
     failed_events = []
     source_import_failures = []
 
-    async def _sync_source_import_failure(self, request, exc):
-        source_import_failures.append((request.document_id, str(exc)))
+    async def _sync_source_import_failure(self, request):
+        source_import_failures.append(request.document_id)
 
     service = UploadExecutionService(
         pipeline_tracker=tracker,
@@ -1700,9 +1760,7 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
         )
     )
 
-    assert source_import_failures == [
-        ("doc-provider", "Document-source artifact access was denied")
-    ]
+    assert source_import_failures == ["doc-provider"]
     assert completed_events[-1] == {
         "job_id": "job-provider",
         "message": "Processing completed",
@@ -1710,6 +1768,92 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
     assert failed_events == []
     assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
     assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_fails_when_local_pdf_source_state_cannot_persist(
+    monkeypatch,
+    tmp_path,
+):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.download_errors["markdown-1"] = DocumentSourceAccessDenied(
+        "Document-source artifact access was denied"
+    )
+    orchestrator_calls = []
+    failed_events = []
+
+    class _RecordingOrchestrator:
+        async def process_pdf_document(self, **_kwargs):
+            orchestrator_calls.append("called")
+            return {"success": True}
+
+    async def _raise_source_import_failure(self, request):
+        raise RuntimeError("database unavailable")
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        orchestrator_factory=lambda _connection, _tracker: _RecordingOrchestrator(),
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=lambda *_args, **_kwargs: None,
+    )
+
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.FAILED.value,
+            message=kwargs["message"],
+        ),
+    )
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_source_import_failure",
+        _raise_source_import_failure,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "update_document_status",
+        lambda *_args, **_kwargs: _async_value(None),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "report_background_task_exception",
+        lambda *_args, **_kwargs: None,
+    )
+
+    file_path = tmp_path / "paper.pdf"
+    file_path.write_bytes(b"%PDF-1.7 local upload")
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "abc_literature",
+                "access_scope": "global",
+            },
+            file_path=file_path,
+        )
+    )
+
+    assert orchestrator_calls == []
+    assert failed_events == [
+        {
+            "job_id": "job-provider",
+            "message": "Provider source-import state could not be persisted",
+            "stage": ProcessingStage.FAILED.value,
+        }
+    ]
+    assert tracker.calls[-1]["stage"] == ProcessingStage.FAILED
 
 
 @pytest.mark.asyncio
@@ -1859,6 +2003,34 @@ async def test_terminal_tracker_uses_durable_first_terminal_winner(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_terminal_tracker_does_not_invent_state_when_durable_job_is_missing(
+    monkeypatch,
+    caplog,
+):
+    tracker = _Tracker()
+    service = UploadExecutionService(pipeline_tracker=tracker)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **_kwargs: None,
+    )
+
+    await service._mark_failed_and_sync_tracker(
+        UploadExecutionRequest(
+            document_id="doc-missing-job",
+            job_id="job-missing",
+            user_id="user-provider",
+            file_path=Path("/tmp/not-used.pdf"),
+        ),
+        message="Processing failed",
+        stage=ProcessingStage.FAILED.value,
+    )
+
+    assert tracker.calls == []
+    assert "durable job is missing" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch):
     job_id = "00000000-0000-0000-0000-000000000003"
     tracker = _Tracker()
@@ -1880,7 +2052,15 @@ async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch)
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "set_process_id", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: events["failed"].append(kwargs))
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **kwargs: events["cancelled"].append(kwargs))
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_cancelled",
+        lambda **kwargs: events["cancelled"].append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.CANCELLED.value,
+            message=kwargs["reason"],
+        ),
+    )
     monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     monkeypatch.setattr(
         service_module,
@@ -1941,7 +2121,15 @@ async def test_execute_upload_marks_cancelled_when_orchestrator_returns_cancelle
     monkeypatch.setattr(service_module.pdf_job_service, "set_process_id", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", lambda **kwargs: events["completed"].append(kwargs))
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: events["failed"].append(kwargs))
-    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **kwargs: events["cancelled"].append(kwargs))
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_cancelled",
+        lambda **kwargs: events["cancelled"].append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.CANCELLED.value,
+            message=kwargs["reason"],
+        ),
+    )
 
     await service.execute_upload(
         UploadExecutionRequest(

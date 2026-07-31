@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from src.lib.document_sources.identifier_import import (
     ReferenceImportDecisionStatus,
     select_reference_import_candidate,

@@ -4,52 +4,37 @@ Task: T026 - Add Security() dependency injection to document endpoints
 All endpoints now require valid AWS Cognito JWT token via Security(auth.get_user).
 """
 
-from fastapi import APIRouter, HTTPException, Query, Path, UploadFile, File, BackgroundTasks, Request
-from fastapi.responses import StreamingResponse, FileResponse
-from typing import Dict, Any
-from typing import Optional, List
-from datetime import datetime, timezone
-from pathlib import Path as FilePath
-import logging
+# FastAPI parameter factories and boundary-level cleanup catches are intentional.
+# ruff: noqa: B008, BLE001
+
 import asyncio
+import base64
 import json
-import uuid
+import logging
 import os
 import shutil
 import time
-import base64
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path as FilePath
+from typing import Any
 
 import httpx
-
-from .auth import get_auth_dependency
-
-from ..services.user_service import principal_from_claims, provision_user
-from ..services.document_access import require_owned_document
-from ..lib.weaviate_helpers import get_tenant_name
-
-from ..models.api_schemas import (
-    DocumentListResponse,
-    DocumentFilter,
-    SortBy,
-    SortOrder,
-    OperationResult,
-    DocumentSourceProvenance,
-    DocumentSourceIdentifierImportRequest,
-    DocumentSourceIdentifierImportResponse,
-    DocumentResponse
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    UploadFile,
 )
-from ..models.document import EmbeddingStatus, ProcessingStatus
-from ..models.pipeline import ProcessingStage
-from ..lib.weaviate_client.documents import (
-    async_list_documents as list_documents,
-    get_document,
-    delete_document,
-)
-from ..lib.pipeline.tracker import PipelineTracker
-from ..lib.pdf_jobs import service as pdf_job_service
-from ..lib.pdf_jobs.upload_execution_service import (
-    UploadExecutionService,
-)
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..config import get_pdf_storage_path
 from ..lib.document_cleanup import cleanup_document_curation_dependencies
 from ..lib.document_sources.access import build_document_source_request_context
 from ..lib.document_sources.identifier_import import (
@@ -58,6 +43,10 @@ from ..lib.document_sources.identifier_import import (
 )
 from ..lib.document_sources.provenance import build_document_source_provenance
 from ..lib.http_errors import log_exception, raise_sanitized_http_exception
+from ..lib.pdf_jobs import service as pdf_job_service
+from ..lib.pdf_jobs.upload_execution_service import (
+    UploadExecutionService,
+)
 from ..lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeProviderDecisionError,
@@ -65,26 +54,64 @@ from ..lib.pdf_jobs.upload_intake_service import (
     UploadIntakeValidationError,
     external_document_source_import_enabled,
 )
-from ..services.processing_status_policy import (
-    ACTIVE_PDF_JOB_STATUSES as _ACTIVE_PDF_JOB_STATUSES,
-    ACTIVE_PROCESSING_STATUSES as _ACTIVE_PROCESSING_STATUSES,
-    PDF_JOB_STATUS_TO_PROCESSING_STATUS as _PDF_JOB_STATUS_TO_PROCESSING_STATUS,
-    PIPELINE_STAGE_TO_PROCESSING_STATUS as _PIPELINE_STAGE_TO_PROCESSING_STATUS,
-    TERMINAL_PDF_JOB_STATUSES as _TERMINAL_PDF_JOB_STATUSES,
-    is_pipeline_status_active as _is_pipeline_status_active,
-    is_pipeline_status_terminal as _is_pipeline_status_terminal,
-    normalize_processing_status as _normalize_processing_status,
-    pipeline_stage_value as _pipeline_stage_value,
-    processing_status_for_pipeline_stage,
+from ..lib.pipeline.tracker import PipelineTracker
+from ..lib.weaviate_client.documents import (
+    async_list_documents as list_documents,
 )
-from ..config import get_pdf_storage_path
+from ..lib.weaviate_client.documents import (
+    delete_document,
+    get_document,
+)
+from ..lib.weaviate_helpers import get_tenant_name
+from ..models.api_schemas import (
+    DocumentFilter,
+    DocumentListResponse,
+    DocumentResponse,
+    DocumentSourceIdentifierImportRequest,
+    DocumentSourceIdentifierImportResponse,
+    DocumentSourceProvenance,
+    OperationResult,
+    SortBy,
+    SortOrder,
+)
+from ..models.document import EmbeddingStatus, ProcessingStatus
 from ..models.sql.database import SessionLocal
 from ..models.sql.pdf_document import PDFDocument as ViewerPDFDocument
 from ..models.sql.pdf_processing_job import PdfJobStatus
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from ..schemas.documents import DocumentUpdateRequest, DocumentUpdateResponse
+from ..services.document_access import require_owned_document
+from ..services.processing_status_policy import (
+    ACTIVE_PDF_JOB_STATUSES as _ACTIVE_PDF_JOB_STATUSES,
+)
+from ..services.processing_status_policy import (
+    ACTIVE_PROCESSING_STATUSES as _ACTIVE_PROCESSING_STATUSES,
+)
+from ..services.processing_status_policy import (
+    PDF_JOB_STATUS_TO_PROCESSING_STATUS as _PDF_JOB_STATUS_TO_PROCESSING_STATUS,
+)
+from ..services.processing_status_policy import (
+    PIPELINE_STAGE_TO_PROCESSING_STATUS as _PIPELINE_STAGE_TO_PROCESSING_STATUS,
+)
+from ..services.processing_status_policy import (
+    TERMINAL_PDF_JOB_STATUSES as _TERMINAL_PDF_JOB_STATUSES,
+)
+from ..services.processing_status_policy import (
+    is_pipeline_status_active as _is_pipeline_status_active,
+)
+from ..services.processing_status_policy import (
+    is_pipeline_status_terminal as _is_pipeline_status_terminal,
+)
+from ..services.processing_status_policy import (
+    normalize_processing_status as _normalize_processing_status,
+)
+from ..services.processing_status_policy import (
+    pipeline_stage_value as _pipeline_stage_value,
+)
+from ..services.processing_status_policy import (
+    processing_status_for_pipeline_stage,
+)
+from ..services.user_service import principal_from_claims, provision_user
+from .auth import get_auth_dependency
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
@@ -93,7 +120,7 @@ upload_execution_service = UploadExecutionService(pipeline_tracker=pipeline_trac
 upload_intake_service = UploadIntakeService(upload_execution_service=upload_execution_service)
 identifier_import_service = IdentifierImportService(upload_execution_service=upload_execution_service)
 
-_pdf_extraction_service_token: Optional[str] = None
+_pdf_extraction_service_token: str | None = None
 _pdf_extraction_service_token_expires_at: float = 0.0
 
 
@@ -107,7 +134,7 @@ def _effective_processing_status(raw_document_status: Any, pipeline_status: Any)
     return _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, effective)
 
 
-def _extract_document_processing_status(doc_payload: Dict[str, Any]) -> str:
+def _extract_document_processing_status(doc_payload: dict[str, Any]) -> str:
     """Extract and normalize processing status from mixed payload key styles."""
     raw_status = doc_payload.get("processing_status", doc_payload.get("processingStatus"))
     return _normalize_processing_status(raw_status)
@@ -121,17 +148,17 @@ def _as_utc_datetime(value: Any) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def _is_stale_dispatch_upload_tracker(
+def _is_stale_pipeline_tracker(
     *,
     pipeline_status: Any,
     latest_job: Any,
 ) -> bool:
-    """Return whether a dispatch-time upload tracker predates a terminal job."""
+    """Return whether an active in-memory tracker predates a terminal job."""
     if (
         not pipeline_status
         or not latest_job
         or latest_job.status not in _TERMINAL_PDF_JOB_STATUSES
-        or _pipeline_stage_value(pipeline_status) != ProcessingStage.UPLOAD.value
+        or not _is_pipeline_status_active(pipeline_status)
     ):
         return False
 
@@ -149,7 +176,7 @@ def _is_stale_dispatch_upload_tracker(
     )
 
 
-def _pipeline_status_payload_with_job_precedence(*, pipeline_status: Any, job: Any) -> Optional[Dict[str, Any]]:
+def _pipeline_status_payload_with_job_precedence(*, pipeline_status: Any, job: Any) -> dict[str, Any] | None:
     """Build status payload with durable-job precedence over stale tracker terminals."""
     if job:
         if job.status in _ACTIVE_PDF_JOB_STATUSES and pipeline_status and _is_pipeline_status_active(pipeline_status):
@@ -202,7 +229,7 @@ def _canonical_processing_status(
     return fallback_status
 
 
-def _status_snapshot_from_pipeline(pipeline_status: Any) -> Dict[str, Any]:
+def _status_snapshot_from_pipeline(pipeline_status: Any) -> dict[str, Any]:
     payload = pipeline_status.model_dump()
     stage_str = _pipeline_stage_value(pipeline_status)
     progress_value = payload.get("progress_percentage", 0)
@@ -230,7 +257,7 @@ def _status_snapshot_from_pipeline(pipeline_status: Any) -> Dict[str, Any]:
     }
 
 
-def _status_snapshot_from_job(job: Any) -> Dict[str, Any]:
+def _status_snapshot_from_job(job: Any) -> dict[str, Any]:
     mapped_status = _PDF_JOB_STATUS_TO_PROCESSING_STATUS.get(job.status, ProcessingStatus.PENDING.value)
     stage_value = job.current_stage or mapped_status
     if job.status in _TERMINAL_PDF_JOB_STATUSES:
@@ -261,7 +288,7 @@ def _status_snapshot_from_job(job: Any) -> Dict[str, Any]:
     }
 
 
-def _select_progress_snapshot(*, pipeline_status: Any, job: Any) -> Optional[Dict[str, Any]]:
+def _select_progress_snapshot(*, pipeline_status: Any, job: Any) -> dict[str, Any] | None:
     """Choose stream snapshot with durable-job lifecycle precedence."""
     if job:
         if job.status in _TERMINAL_PDF_JOB_STATUSES:
@@ -275,7 +302,7 @@ def _select_progress_snapshot(*, pipeline_status: Any, job: Any) -> Optional[Dic
     return None
 
 
-async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
+async def cleanup_phantom_documents(user: dict[str, Any]) -> int:
     """Clean up phantom documents - records in PostgreSQL that don't exist in Weaviate.
 
     This prevents the "invisible documents" issue where a user has documents in the
@@ -412,7 +439,7 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
 def verify_document_ownership(
     db: Session,
     document_id: str,
-    auth_user: Dict[str, Any]
+    auth_user: dict[str, Any]
 ) -> ViewerPDFDocument:
     """Verify document ownership and return document if authorized.
 
@@ -487,13 +514,13 @@ def validate_user_file_path(
         # Using relative_to() - raises ValueError if path is outside
         try:
             resolved_path.relative_to(user_storage_root)
-        except ValueError:
+        except ValueError as exc:
             logger.warning(
                 'Path traversal attempt detected: %s resolves outside user storage for %s', file_path, user_id)
             raise HTTPException(
                 status_code=403,
                 detail="Access denied: file path validation failed"
-            )
+            ) from exc
 
         return resolved_path
 
@@ -504,7 +531,7 @@ def validate_user_file_path(
         raise HTTPException(
             status_code=500,
             detail="File path validation error"
-        )
+        ) from e
 
 
 def _unlink_user_storage_file_if_present(
@@ -554,7 +581,7 @@ def _delete_user_document_directory_or_file_if_present(
         logger.info("Deleted PDF file for document %s", document_id)
 
 
-def _pipeline_payload_from_job(job: Any) -> Optional[Dict[str, Any]]:
+def _pipeline_payload_from_job(job: Any) -> dict[str, Any] | None:
     """Build pipeline-like status payload from durable PDF job."""
     if not job:
         return None
@@ -596,17 +623,17 @@ def _pipeline_payload_from_job(job: Any) -> Optional[Dict[str, Any]]:
 
 @router.get("/documents", response_model=DocumentListResponse)
 async def list_documents_endpoint(
-    user: Dict[str, Any] = get_auth_dependency(),
+    user: dict[str, Any] = get_auth_dependency(),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
-    search: Optional[str] = Query(None, description="Search term for filename"),
-    embedding_status: Optional[List[EmbeddingStatus]] = Query(None, description="Filter by embedding status"),
+    search: str | None = Query(None, description="Search term for filename"),
+    embedding_status: list[EmbeddingStatus] | None = Query(None, description="Filter by embedding status"),
     sort_by: SortBy = Query(SortBy.CREATION_DATE, description="Sort field"),
     sort_order: SortOrder = Query(SortOrder.DESC, description="Sort direction"),
-    date_from: Optional[datetime] = Query(None, description="Filter by creation date start"),
-    date_to: Optional[datetime] = Query(None, description="Filter by creation date end"),
-    min_vector_count: Optional[int] = Query(None, ge=0, description="Minimum vector count"),
-    max_vector_count: Optional[int] = Query(None, ge=0, description="Maximum vector count")
+    date_from: datetime | None = Query(None, description="Filter by creation date start"),
+    date_to: datetime | None = Query(None, description="Filter by creation date end"),
+    min_vector_count: int | None = Query(None, ge=0, description="Minimum vector count"),
+    max_vector_count: int | None = Query(None, ge=0, description="Maximum vector count")
 ):
     """
     List all PDF documents stored in Weaviate with pagination and filtering.
@@ -675,7 +702,7 @@ async def list_documents_endpoint(
         )
 
 
-async def _build_pdf_extraction_service_headers() -> Dict[str, str]:
+async def _build_pdf_extraction_service_headers() -> dict[str, str]:
     """Build service-auth headers for proxy endpoints that require auth (status/wake)."""
     global _pdf_extraction_service_token, _pdf_extraction_service_token_expires_at
 
@@ -724,7 +751,7 @@ async def _build_pdf_extraction_service_headers() -> Dict[str, str]:
             ),
         )
 
-    auth_basic = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+    auth_basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode("ascii")
     headers = {
         "Authorization": f"Basic {auth_basic}",
         "Content-Type": "application/x-www-form-urlencoded",
@@ -824,7 +851,7 @@ async def _require_pdf_extraction_worker_ready() -> None:
 
 
 @router.get("/documents/pdf-extraction-health")
-async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()):
+async def get_pdf_extraction_health(user: dict[str, Any] = get_auth_dependency()):
     """Report health status for the PDF extraction service."""
     del user
 
@@ -843,8 +870,8 @@ async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()
     deep_health_endpoint = f"{service_url}/api/v1/health/deep"
     status_endpoint = f"{service_url}/api/v1/status"
     timeout_seconds = float(os.getenv("PDF_EXTRACTION_HEALTH_TIMEOUT", "5"))
-    service_headers: Dict[str, str] = {}
-    auth_header_error: Optional[str] = None
+    service_headers: dict[str, str] = {}
+    auth_header_error: str | None = None
 
     try:
         service_headers = await _build_pdf_extraction_service_headers()
@@ -983,7 +1010,7 @@ async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()
 
 
 @router.post("/documents/pdf-extraction-wake")
-async def wake_pdf_extraction_worker(user: Dict[str, Any] = get_auth_dependency()):
+async def wake_pdf_extraction_worker(user: dict[str, Any] = get_auth_dependency()):
     """Wake PDF extraction worker and return resulting state."""
     del user
 
@@ -1058,7 +1085,7 @@ async def wake_pdf_extraction_worker(user: Dict[str, Any] = get_auth_dependency(
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
 async def get_document_endpoint(
     document_id: str = Path(..., description="Document ID"),
-    user: Dict[str, Any] = get_auth_dependency()
+    user: dict[str, Any] = get_auth_dependency()
 ):
     """
     Get detailed information about a specific document.
@@ -1149,7 +1176,7 @@ async def get_document_endpoint(
 async def update_document_endpoint(
     request: DocumentUpdateRequest,
     document_id: str = Path(..., description="Document ID"),
-    user: Dict[str, Any] = get_auth_dependency(),
+    user: dict[str, Any] = get_auth_dependency(),
 ):
     """
     Update document metadata (e.g., title).
@@ -1192,7 +1219,7 @@ async def update_document_endpoint(
 @router.delete("/documents/{document_id}", response_model=OperationResult)
 async def delete_document_endpoint(
     document_id: str = Path(..., description="Document ID"),
-    user: Dict[str, Any] = get_auth_dependency()
+    user: dict[str, Any] = get_auth_dependency()
 ):
     """
     Delete a document and all its associated chunks from Weaviate.
@@ -1221,7 +1248,7 @@ async def delete_document_endpoint(
         pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
         active_job_status = latest_job.status if latest_job else None
         pipeline_is_active = _is_pipeline_status_active(pipeline_status)
-        stale_dispatch_tracker = _is_stale_dispatch_upload_tracker(
+        stale_pipeline_tracker = _is_stale_pipeline_tracker(
             pipeline_status=pipeline_status,
             latest_job=latest_job,
         )
@@ -1254,19 +1281,22 @@ async def delete_document_endpoint(
                     f"(status '{document_processing_status}'{job_hint})"
                 ),
             )
-        if pipeline_is_active and not stale_dispatch_tracker:
+        if pipeline_is_active and not stale_pipeline_tracker:
             stage_value = getattr(getattr(pipeline_status, "current_stage", None), "value", getattr(pipeline_status, "current_stage", None))
             raise HTTPException(
                 status_code=409,
                 detail=f"Cannot delete document while pipeline is actively processing (stage '{stage_value}')",
             )
-        if stale_dispatch_tracker:
+        if stale_pipeline_tracker:
             logger.warning(
-                "Allowing delete despite stale dispatch upload tracker with terminal job status=%s document=%s",
+                "Allowing delete despite stale pipeline tracker with terminal job status=%s document=%s",
                 active_job_status,
                 document_id,
             )
-        if document_processing_status in _ACTIVE_PROCESSING_STATUSES:
+        if (
+            document_processing_status in _ACTIVE_PROCESSING_STATUSES
+            and active_job_status not in _TERMINAL_PDF_JOB_STATUSES
+        ):
             job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
             raise HTTPException(
                 status_code=409,
@@ -1275,8 +1305,18 @@ async def delete_document_endpoint(
                     f"(status '{document_processing_status}'{job_hint})"
                 ),
             )
+        if (
+            document_processing_status in _ACTIVE_PROCESSING_STATUSES
+            and active_job_status in _TERMINAL_PDF_JOB_STATUSES
+        ):
+            logger.warning(
+                "Allowing delete despite stale document processing status=%s with terminal job status=%s document=%s",
+                document_processing_status,
+                active_job_status,
+                document_id,
+            )
 
-        cleanup_snapshot: Dict[str, Any] | None = None
+        cleanup_snapshot: dict[str, Any] | None = None
         cleanup_session = SessionLocal()
         try:
             doc_to_cleanup = cleanup_session.execute(
@@ -1414,7 +1454,7 @@ async def upload_document_endpoint(
     background_tasks: BackgroundTasks,
     request: Request,
     file: UploadFile = File(..., description="PDF file to upload"),
-    user: Dict[str, Any] = get_auth_dependency()
+    user: dict[str, Any] = get_auth_dependency()
 ):
     """
     Upload a PDF document for processing.
@@ -1492,7 +1532,7 @@ async def import_documents_by_source_identifiers(
     payload: DocumentSourceIdentifierImportRequest,
     background_tasks: BackgroundTasks,
     request: Request,
-    user: Dict[str, Any] = get_auth_dependency(),
+    user: dict[str, Any] = get_auth_dependency(),
 ):
     """Import one or more documents by configured source-provider identifiers."""
     if not external_document_source_import_enabled():
@@ -1537,7 +1577,7 @@ async def import_documents_by_source_identifiers(
 async def resolve_documents_by_source_identifiers(
     payload: DocumentSourceIdentifierImportRequest,
     request: Request,
-    user: Dict[str, Any] = get_auth_dependency(),
+    user: dict[str, Any] = get_auth_dependency(),
 ):
     """Resolve source-provider identifiers without importing documents."""
     if not external_document_source_import_enabled():
@@ -1577,7 +1617,7 @@ async def resolve_documents_by_source_identifiers(
 @router.get("/documents/{document_id}/status")
 async def get_document_processing_status(
     document_id: str = Path(..., description="Document ID"),
-    user: Dict[str, Any] = get_auth_dependency()
+    user: dict[str, Any] = get_auth_dependency()
 ):
     """
     Get the current processing status of a document.
@@ -1653,7 +1693,7 @@ async def get_document_processing_status(
 @router.get("/documents/{document_id}/progress/stream")
 async def stream_document_progress(
     document_id: str = Path(..., description="Document ID"),
-    user: Dict[str, Any] = get_auth_dependency()
+    user: dict[str, Any] = get_auth_dependency()
 ):
     """
     Stream real-time processing progress via Server-Sent Events (SSE).
@@ -1780,7 +1820,7 @@ async def stream_document_progress(
                             'stage': 'waiting',
                             'progress': 0,
                             'message': 'Waiting for processing to start...',
-                            'timestamp': datetime.now().isoformat()
+                            'timestamp': datetime.now(timezone.utc).isoformat()
                         }
                         yield f"data: {json.dumps(waiting_data)}\n\n"
 
@@ -1797,7 +1837,7 @@ async def stream_document_progress(
                     'stage': 'timeout',
                     'progress': 0,
                     'message': f'Progress monitoring timed out after {timeout_minutes:g} minutes',
-                    'timestamp': datetime.now().isoformat(),
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
                     'final': True
                 }
                 yield f"data: {json.dumps(timeout_data)}\n\n"
@@ -1811,7 +1851,7 @@ async def stream_document_progress(
             error_data = {
                 'error': "Failed to stream document progress",
                 'document_id': document_id,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
             yield f"data: {json.dumps(error_data)}\n\n"
 
@@ -1829,7 +1869,7 @@ async def stream_document_progress(
 @router.get("/documents/{document_id}/download-info")
 async def get_download_info(
     document_id: str = Path(..., description="Document ID"),
-    user: Dict[str, Any] = get_auth_dependency()
+    user: dict[str, Any] = get_auth_dependency()
 ):
     """
     Get information about downloadable files for a document.
@@ -1941,7 +1981,7 @@ async def get_download_info(
 async def download_document_file(
     document_id: str = Path(..., description="Document ID"),
     file_type: str = Path(..., description="File type to download (pdf, pdfx_json, processed_json, source_markdown)"),
-    user: Dict[str, Any] = get_auth_dependency()
+    user: dict[str, Any] = get_auth_dependency()
 ):
     """
     Download a specific file associated with a document.

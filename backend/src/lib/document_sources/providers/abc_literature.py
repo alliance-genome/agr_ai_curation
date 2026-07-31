@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, TypeGuard
+from typing import Any, Self, TypeGuard
 
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
@@ -31,7 +31,6 @@ from src.lib.openai_agents.config import (
     get_abc_literature_auth_mode,
     get_abc_literature_bearer_token,
 )
-
 
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
 
@@ -65,10 +64,10 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         self._client = client
 
     @classmethod
-    def from_env(cls) -> "ABCLiteratureDocumentSourceProvider":
+    def from_env(cls) -> ABCLiteratureDocumentSourceProvider:
         return cls(ABCLiteratureClient(ABCLiteratureClientConfig.from_env()))
 
-    async def __aenter__(self) -> "ABCLiteratureDocumentSourceProvider":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> None:

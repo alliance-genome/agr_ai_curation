@@ -7,7 +7,6 @@ from uuid import uuid4
 
 import pytest
 from fastapi import BackgroundTasks
-
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.identifier_import import (
     IdentifierImportService,
@@ -15,9 +14,6 @@ from src.lib.document_sources.identifier_import import (
     normalize_source_identifier,
     parse_source_identifier_batch,
     select_reference_import_candidate,
-)
-from src.lib.document_sources.providers.abc_literature import (
-    ABCLiteratureDocumentSourceProvider,
 )
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
@@ -31,6 +27,9 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
     SourceReference,
+)
+from src.lib.document_sources.providers.abc_literature import (
+    ABCLiteratureDocumentSourceProvider,
 )
 from src.lib.pdf_jobs.upload_execution_service import (
     ProviderConversionExecutionRequest,

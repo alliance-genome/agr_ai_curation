@@ -81,10 +81,16 @@ normalized ready Markdown artifacts without requiring ABC's
 - Multiple equally preferred canonical candidates: treat as ambiguous instead
   of guessing.
 - `download_file` 403: fail that provider download for the curator; do not
-  retry with a broader service credential.
+  retry with a broader service credential. If the denied artifact is selected
+  canonical Markdown for a curator-uploaded PDF that is already saved locally,
+  mark the provider-text import failed and process that saved PDF through the
+  normal local pipeline on the same document/job. A source-PDF denial during
+  identifier import remains an item-level failure with no document/job.
 
 Known ABC papers should not silently fall back to local PDFX while canonical
-provider conversion is pending.
+provider conversion is pending. The explicit saved-PDF branch above applies
+only to an authoritative access denial for selected canonical Markdown, not to
+pending conversion, ambiguous selection, or another provider failure.
 
 ## Download Bytes
 

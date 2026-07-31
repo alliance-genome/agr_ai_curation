@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
 
 class DocumentSourceError(RuntimeError):
@@ -145,7 +145,7 @@ class DocumentSourceProvider(Protocol):
 
     provider_id: str
 
-    async def __aenter__(self) -> "DocumentSourceProvider":
+    async def __aenter__(self) -> Self:
         """Enter a provider context."""
         raise NotImplementedError
 
