@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, TypeGuard
 
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
     DocumentSourceError,
     DocumentSourceHealth,
     DocumentSourceProvider,
@@ -435,6 +436,14 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 artifact_id,
                 request_bearer_token=request_bearer_token,
             )
+        except ABCLiteratureHTTPError as exc:
+            if exc.status_code == 403:
+                raise DocumentSourceAccessDenied(
+                    "Document-source artifact access was denied"
+                ) from exc
+            raise DocumentSourceError(
+                "ABC Literature artifact download failed"
+            ) from exc
         except ABCLiteratureClientError as exc:
             raise DocumentSourceError("ABC Literature artifact download failed") from exc
 

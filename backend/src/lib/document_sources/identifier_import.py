@@ -25,6 +25,7 @@ from src.lib.document_sources.import_selection import (
 )
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
     DocumentSourceConfigError,
     DocumentSourceError,
     DocumentSourceProvider,
@@ -877,6 +878,19 @@ class IdentifierImportService:
                 curator_token=curator_token,
                 wait_for_conversion=wait_for_conversion,
             )
+        except DocumentSourceAccessDenied as exc:
+            logger.warning(
+                "Document-source PDF access denied for %s: %s",
+                normalized.normalized,
+                exc,
+            )
+            return IdentifierImportItemResult(
+                identifier=normalized.original,
+                normalized_identifier=normalized.normalized,
+                status="error",
+                error_code="document_source_access_denied",
+                message="Access to the document-source PDF was denied.",
+            )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
             logger.warning(
                 "Document-source identifier import failed for %s: %s",
@@ -1059,6 +1073,7 @@ class IdentifierImportService:
                             artifact.artifact_id
                             for artifact in decision.selected.provider_metadata_artifacts
                         ),
+                        file_path=saved_path,
                     ),
                 )
             elif wait_for_conversion:
@@ -1078,6 +1093,7 @@ class IdentifierImportService:
                             artifact.artifact_id
                             for artifact in decision.selected.provider_metadata_artifacts
                         ),
+                        file_path=saved_path,
                     ),
                 )
             else:

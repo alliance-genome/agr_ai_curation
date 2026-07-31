@@ -11,6 +11,7 @@ from src.lib.document_sources.identifier_import import (
     select_reference_import_candidate,
 )
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
     DocumentSourceConfigError,
     DocumentSourceError,
     SourceAccessPolicy,
@@ -46,6 +47,7 @@ class FakeABCLiteratureClient:
         self.conversion_payload: dict[str, Any] = {}
         self.conversion_error: Exception | None = None
         self.download_payload = b"artifact-bytes"
+        self.download_error: Exception | None = None
         self.closed = False
 
     async def lookup_external_curie(
@@ -150,6 +152,8 @@ class FakeABCLiteratureClient:
                 },
             )
         )
+        if self.download_error:
+            raise self.download_error
         return self.download_payload
 
     async def request_referencefile_conversion(
@@ -673,6 +677,42 @@ async def test_download_artifact_passes_request_bearer_token() -> None:
             {"artifact_id": "55", "request_bearer_token": "curator-token"},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_download_artifact_maps_forbidden_response_to_access_denied() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.download_error = ABCLiteratureHTTPError(
+        "ABC Literature request failed",
+        status_code=403,
+        endpoint="/reference/referencefile/download/55",
+    )
+    provider = provider_from_fake(fake_client)
+
+    with pytest.raises(DocumentSourceAccessDenied):
+        await provider.download_artifact(
+            "55",
+            request_bearer_token="curator-token",
+        )
+
+
+@pytest.mark.asyncio
+async def test_download_artifact_keeps_non_forbidden_http_error_generic() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.download_error = ABCLiteratureHTTPError(
+        "ABC Literature request failed",
+        status_code=500,
+        endpoint="/reference/referencefile/download/55",
+    )
+    provider = provider_from_fake(fake_client)
+
+    with pytest.raises(DocumentSourceError) as exc_info:
+        await provider.download_artifact(
+            "55",
+            request_bearer_token="curator-token",
+        )
+
+    assert not isinstance(exc_info.value, DocumentSourceAccessDenied)
 
 
 @pytest.mark.asyncio

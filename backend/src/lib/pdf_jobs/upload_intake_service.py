@@ -470,6 +470,7 @@ class UploadIntakeService:
                 curator_token=provider_import_plan.curator_token,
                 source_provenance=provider_import_plan.source_provenance,
                 figure_metadata_artifact_ids=provider_import_plan.figure_metadata_artifact_ids,
+                file_path=saved_path,
             )
             await self.upload_execution_service.dispatch_provider_markdown_execution(
                 background_tasks=background_tasks,
@@ -491,6 +492,7 @@ class UploadIntakeService:
                     curator_token=provider_import_plan.curator_token,
                     source_provenance=provider_import_plan.source_provenance,
                     figure_metadata_artifact_ids=provider_import_plan.figure_metadata_artifact_ids,
+                    file_path=saved_path,
                 ),
             )
         else:

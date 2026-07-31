@@ -39,6 +39,7 @@ from ..models.api_schemas import (
     DocumentResponse
 )
 from ..models.document import EmbeddingStatus, ProcessingStatus
+from ..models.pipeline import ProcessingStage
 from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
     get_document,
@@ -110,6 +111,42 @@ def _extract_document_processing_status(doc_payload: Dict[str, Any]) -> str:
     """Extract and normalize processing status from mixed payload key styles."""
     raw_status = doc_payload.get("processing_status", doc_payload.get("processingStatus"))
     return _normalize_processing_status(raw_status)
+
+
+def _as_utc_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _is_stale_dispatch_upload_tracker(
+    *,
+    pipeline_status: Any,
+    latest_job: Any,
+) -> bool:
+    """Return whether a dispatch-time upload tracker predates a terminal job."""
+    if (
+        not pipeline_status
+        or not latest_job
+        or latest_job.status not in _TERMINAL_PDF_JOB_STATUSES
+        or _pipeline_stage_value(pipeline_status) != ProcessingStage.UPLOAD.value
+    ):
+        return False
+
+    pipeline_updated_at = _as_utc_datetime(
+        getattr(pipeline_status, "updated_at", None)
+    )
+    job_terminal_at = _as_utc_datetime(
+        getattr(latest_job, "completed_at", None)
+        or getattr(latest_job, "updated_at", None)
+    )
+    return bool(
+        pipeline_updated_at
+        and job_terminal_at
+        and pipeline_updated_at <= job_terminal_at
+    )
 
 
 def _pipeline_status_payload_with_job_precedence(*, pipeline_status: Any, job: Any) -> Optional[Dict[str, Any]]:
@@ -1184,6 +1221,10 @@ async def delete_document_endpoint(
         pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
         active_job_status = latest_job.status if latest_job else None
         pipeline_is_active = _is_pipeline_status_active(pipeline_status)
+        stale_dispatch_tracker = _is_stale_dispatch_upload_tracker(
+            pipeline_status=pipeline_status,
+            latest_job=latest_job,
+        )
 
         document = None
         document_processing_status = "missing"
@@ -1213,28 +1254,27 @@ async def delete_document_endpoint(
                     f"(status '{document_processing_status}'{job_hint})"
                 ),
             )
-        if pipeline_is_active:
+        if pipeline_is_active and not stale_dispatch_tracker:
             stage_value = getattr(getattr(pipeline_status, "current_stage", None), "value", getattr(pipeline_status, "current_stage", None))
             raise HTTPException(
                 status_code=409,
                 detail=f"Cannot delete document while pipeline is actively processing (stage '{stage_value}')",
             )
+        if stale_dispatch_tracker:
+            logger.warning(
+                "Allowing delete despite stale dispatch upload tracker with terminal job status=%s document=%s",
+                active_job_status,
+                document_id,
+            )
         if document_processing_status in _ACTIVE_PROCESSING_STATUSES:
-            if latest_job and latest_job.status in _TERMINAL_PDF_JOB_STATUSES:
-                logger.warning(
-                    "Allowing delete for stale document processing status=%s with terminal job status=%s",
-                    document_processing_status,
-                    latest_job.status,
-                )
-            else:
-                job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Cannot delete document while it is being processed "
-                        f"(status '{document_processing_status}'{job_hint})"
-                    ),
-                )
+            job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Cannot delete document while it is being processed "
+                    f"(status '{document_processing_status}'{job_hint})"
+                ),
+            )
 
         cleanup_snapshot: Dict[str, Any] | None = None
         cleanup_session = SessionLocal()

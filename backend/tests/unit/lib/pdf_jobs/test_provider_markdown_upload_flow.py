@@ -470,6 +470,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     assert queued_request.converted_artifact_id == "markdown-55"
     assert queued_request.curator_token == "curator-token"
     assert queued_request.source_provenance["provider"] == "mock_literature"
+    assert queued_request.file_path == tmp_path / record.file_path
 
     await task.func(*task.args, **task.kwargs)
 

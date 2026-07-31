@@ -800,6 +800,7 @@ async def test_intake_upload_enabled_provider_ready_dispatches_markdown_import(t
     assert provider_request.converted_artifact_id == "markdown-1"
     assert provider_request.curator_token == "curator-token"
     assert provider_request.source_provenance["source_md5"] == FAKE_UPLOAD_MD5
+    assert provider_request.file_path == tmp_path / record.file_path
     assert provider.closed is True
     user_dir = tmp_path / "user-1"
     assert user_dir.exists()
@@ -890,6 +891,7 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
     assert conversion_request.reference == "AGRKB:101"
     assert conversion_request.source_artifact_id == "source-pdf-1"
     assert conversion_request.curator_token == "curator-token"
+    assert conversion_request.file_path == tmp_path / record.file_path
     assert provider.closed is True
     user_dir = tmp_path / "user-1"
     assert user_dir.exists()

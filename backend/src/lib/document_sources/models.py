@@ -16,6 +16,10 @@ class DocumentSourceConfigError(DocumentSourceError):
     """Raised when document-source provider configuration is invalid."""
 
 
+class DocumentSourceAccessDenied(DocumentSourceError):
+    """Raised when the provider denies access to a requested source artifact."""
+
+
 class SourceAccessScope(str, Enum):
     UNKNOWN = "unknown"
     GLOBAL = "global"

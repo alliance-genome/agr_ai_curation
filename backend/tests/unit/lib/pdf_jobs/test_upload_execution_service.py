@@ -18,6 +18,7 @@ from src.lib.pdf_jobs.upload_execution_service import (
     UploadExecutionService,
 )
 from src.lib.document_sources.models import (
+    DocumentSourceAccessDenied,
     SourceAccessPolicy,
     SourceAccessScope,
     SourceArtifact,
@@ -880,11 +881,16 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_markdown_fails_failed_figure_metadata_download(monkeypatch):
+async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_metadata(
+    monkeypatch,
+    tmp_path,
+):
     tracker = _Tracker()
     provider = _Provider()
     provider.payloads = {"markdown-1": b"# Results\n\nNative result."}
-    provider.download_errors = {"meta-bad": RuntimeError("missing sidecar")}
+    provider.download_errors = {
+        "meta-bad": DocumentSourceAccessDenied("sidecar access denied")
+    }
     ingestion_calls = []
     status_updates = []
 
@@ -902,6 +908,9 @@ async def test_execute_provider_markdown_fails_failed_figure_metadata_download(m
 
     service = UploadExecutionService(
         pipeline_tracker=tracker,
+        orchestrator_factory=lambda *_args: _RaisingOrchestrator(
+            AssertionError("local PDF fallback should not run for a denied sidecar")
+        ),
         document_source_provider_factory=lambda: provider,
         provider_markdown_ingestion_fn=_ingest,
     )
@@ -924,6 +933,8 @@ async def test_execute_provider_markdown_fails_failed_figure_metadata_download(m
         lambda **kwargs: failed_events.append(kwargs),
     )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+    file_path = tmp_path / "paper.pdf"
+    file_path.write_bytes(b"%PDF-1.7 local upload")
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
@@ -936,6 +947,7 @@ async def test_execute_provider_markdown_fails_failed_figure_metadata_download(m
             curator_token="curator-token",
             source_provenance={"provider": "fake_provider"},
             figure_metadata_artifact_ids=("meta-bad",),
+            file_path=file_path,
         )
     )
 
@@ -948,7 +960,7 @@ async def test_execute_provider_markdown_fails_failed_figure_metadata_download(m
     assert failed_events == [
         {
             "job_id": "job-provider",
-            "message": "missing sidecar",
+            "message": "sidecar access denied",
             "stage": ProcessingStage.FAILED.value,
         }
     ]
@@ -1618,6 +1630,86 @@ async def test_execute_provider_markdown_syncs_sql_failure_when_download_fails(m
     assert provider.closed is True
     assert failed_events[0]["message"] == "provider unavailable"
     assert sql_failures == [("doc-provider", "provider unavailable")]
+    assert tracker.calls[-1]["stage"] == ProcessingStage.FAILED
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denied(
+    monkeypatch,
+    tmp_path,
+):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.download_errors["markdown-1"] = DocumentSourceAccessDenied(
+        "Document-source artifact access was denied"
+    )
+    completed_events = []
+    failed_events = []
+    source_import_failures = []
+
+    async def _sync_source_import_failure(self, request, exc):
+        source_import_failures.append((request.document_id, str(exc)))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
+            {"success": True}
+        ),
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=lambda *_args, **_kwargs: None,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: completed_events.append(kwargs)
+        or SimpleNamespace(status=PdfJobStatus.COMPLETED.value, message=kwargs["message"]),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs)
+        or SimpleNamespace(status=PdfJobStatus.FAILED.value, message=kwargs["message"]),
+    )
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_source_import_failure",
+        _sync_source_import_failure,
+    )
+
+    file_path = tmp_path / "paper.pdf"
+    file_path.write_bytes(b"%PDF-1.7 local upload")
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "abc_literature",
+                "access_scope": "global",
+            },
+            file_path=file_path,
+        )
+    )
+
+    assert source_import_failures == [
+        ("doc-provider", "Document-source artifact access was denied")
+    ]
+    assert completed_events[-1] == {
+        "job_id": "job-provider",
+        "message": "Processing completed",
+    }
+    assert failed_events == []
+    assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
+    assert provider.closed is True
 
 
 @pytest.mark.asyncio
@@ -1737,6 +1829,33 @@ async def test_execute_provider_markdown_tracker_completed_failure_does_not_fail
         }
     ]
     assert failed_events == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_tracker_uses_durable_first_terminal_winner(monkeypatch):
+    tracker = _Tracker()
+    service = UploadExecutionService(pipeline_tracker=tracker)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **_kwargs: SimpleNamespace(
+            status=PdfJobStatus.FAILED.value,
+            message="Earlier failure won",
+        ),
+    )
+
+    await service._mark_completed_and_sync_tracker(
+        UploadExecutionRequest(
+            document_id="doc-first-terminal",
+            job_id="job-first-terminal",
+            user_id="user-provider",
+            file_path=Path("/tmp/not-used.pdf"),
+        ),
+        message="Processing completed",
+    )
+
+    assert tracker.calls[-1]["stage"] == ProcessingStage.FAILED
+    assert tracker.calls[-1]["message"] == "Earlier failure won"
 
 
 @pytest.mark.asyncio
