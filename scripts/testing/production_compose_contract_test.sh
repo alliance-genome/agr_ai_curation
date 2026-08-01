@@ -88,6 +88,8 @@ assert str(trace_review_env["DEV_MODE"]).lower() == "true"
 assert str(trace_review_env["SECURE_COOKIES"]).lower() == "false"
 assert str(backend_env["HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS"]).lower() == "false"
 assert str(backend_env["HEALTH_CHECK_REQUIRE_LITERATURE_DB"]).lower() == "false"
+assert backend_env["ELASTICSEARCH_HOST"]
+assert backend_env["ELASTICSEARCH_SCHEME"] == "https"
 PY
 
 # Exercise the exact render-and-validate preflight invoked by `make prod`.
