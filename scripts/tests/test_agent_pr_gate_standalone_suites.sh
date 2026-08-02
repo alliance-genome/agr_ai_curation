@@ -11,8 +11,16 @@ sandbox_repo="${temp_dir}/repo"
 mkdir -p "${sandbox_repo}"
 tar -C "${repo_root}" --exclude='./.git' -cf - . | tar -C "${sandbox_repo}" -xf -
 chmod -R u+w "${sandbox_repo}"
+if [[ -e "${sandbox_repo}/.git" ]]; then
+  echo "Sandbox copy unexpectedly contains Git metadata: ${sandbox_repo}/.git" >&2
+  exit 1
+fi
 
 git -C "${sandbox_repo}" init -q
+if [[ "$(git -C "${sandbox_repo}" rev-parse --show-toplevel)" != "${sandbox_repo}" ]]; then
+  echo "Sandbox Git root does not match the isolated copy: ${sandbox_repo}" >&2
+  exit 1
+fi
 git -C "${sandbox_repo}" config user.name "Codex"
 git -C "${sandbox_repo}" config user.email "codex@example.com"
 git -C "${sandbox_repo}" add -A

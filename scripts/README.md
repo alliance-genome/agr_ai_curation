@@ -244,11 +244,6 @@ This runs on backend container startup and can also be invoked manually.
 make prefix-refresh
 ```
 
-### local_db_tunnel.sh
-
-Interactive/manual version of the curation DB tunnel. This keeps the tunnel alive in the
-foreground until you stop it, which is useful for ad hoc debugging.
-
 ### maintenance_mode.sh
 
 Toggles maintenance mode which displays a banner in the UI warning users that the system is under maintenance.
