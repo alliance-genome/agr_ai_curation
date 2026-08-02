@@ -10,7 +10,7 @@ Status: investigation complete; **API-client trigram PR written, reviewed, and O
   - `5c43ce56` — Set B: ".env is the source of truth for model config; remove code fallbacks" (no-fallback refactor, gpt-4o retired/de-registered, model rename gpt-5.4→gpt-5.5 / gpt-5.4-mini→gpt-5-mini / gpt-5.4-nano→gpt-5-nano, compose env wiring).
   - `38bf7949` — completed the gpt-5.4-mini→gpt-5-mini rename + alembic migration `q3r4s5t6u7v8` + single-head pin bump.
 - Unit suite is green **CI-style** (`pytest -n 4 --dist loadscope` with the `.ci-ignore-paths`). Serial runs show a pre-existing cross-module test-isolation cascade that xdist hides (not ours). One local-only failure: `test_record_evidence_prompt_contract.py::test_pdf_corpus_trial_examples_do_not_teach_quote_submission` scans a **gitignored** local trial dump (`docs/design/pdf-corpus-trials/main-cross-agent-handoff-20260520-231032/`) — CI never sees it.
-- Sandbox is deployed on the new main and healthy (backend `http://127.0.0.1:8900`, frontend `:3900`, TraceReview `:3901`).
+- Sandbox is deployed on the new main and healthy (backend `http://redacted.invalid:8900`, frontend `:3900`, TraceReview `:3901`).
 - Ran the gene-expression paper PMID39550471 end-to-end on **gpt-5.5**. Trace: `23a1ea9c089a2a866e0dabfd770db45b`.
   - TraceReview `diagnostic_report` works: reasoning summaries **present** (gpt-5.5), 33 tool calls, 6 resolver-ledger entries, validation failure, builder abort.
   - The run hit `MaxTurnsExceeded: Max turns (20)` before `stage`/`finalize`. `AGENT_MAX_TURNS=20` is too low for gpt-5.5's thorough resolver loop → bump to ~40-50 for a full finalize. (Separate from the resolver fix.)

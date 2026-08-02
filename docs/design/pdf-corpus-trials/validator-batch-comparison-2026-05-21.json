@@ -101,7 +101,7 @@
     "status_short": "M config/agents/supervisor/prompt.yaml\n M docs/design/2026-05-20-chat-validator-payload-performance-plan.md\n M docs/design/pdf-corpus-trials/allele_drosophila_notch_facet_glossy.json\n M docs/design/pdf-corpus-trials/chemical_zebrafish_estradiol_segmentation.json\n M docs/design/pdf-corpus-trials/cross_domain_zebrafish_segmentation_screen.json\n M docs/design/pdf-corpus-trials/disease_mouse_pkd1_adpkd.json\n M docs/design/pdf-corpus-trials/gene_drosophila_crb_rhabdomere.json\n M docs/design/pdf-corpus-trials/gene_expression_zebrafish_flcn_brain.json\n M docs/design/pdf-corpus-trials/phenotype_celegans_mus81_reduced_brood.json\n M docs/design/pdf-corpus-trials/summary.json\n M packages/alliance/agents/gene_extractor/prompt.yaml\n?? docs/design/2026-05-16-go-annotation-flow-view-plan.md\n?? docs/design/2026-05-17-automation-full-auto-review-design.md\n?? docs/design/2026-05-17-validation-agent-rationalization-plan.md\n?? docs/design/2026-05-18-alliance-identifier-weaviate-index-design.md\n?? docs/design/2026-05-20-go-flow-demo-restore-handoff.md"
   },
   "sandbox": {
-    "backend_url": "http://127.0.0.1:8900",
+    "backend_url": "http://redacted.invalid:8900",
     "post_change_commit": "e300d1e1",
     "post_change_commit_subject": "Add batch validator dispatch for gene validation"
   },

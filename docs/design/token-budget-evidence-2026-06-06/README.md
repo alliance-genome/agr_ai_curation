@@ -1,6 +1,6 @@
 # Token Budget Evidence - 2026-06-06
 
-This folder captures real local development/VM runs used to evaluate token-budget pressure before implementing any P1 scalar truncation. The branch was deployed in `the local development stack` on `c974b53f`, with backend and TraceReview restarted against the main sandbox stack.
+This folder captures real local development/VM runs used to evaluate token-budget pressure before implementing any P1 scalar truncation. The branch was deployed in a local development stack on `c974b53f`, with backend and TraceReview restarted in the same stack.
 
 ## What Ran
 
@@ -116,7 +116,7 @@ a coordinator requests a fresh local development run:
   guardrail unit tests also passed with 22 tests.
 
 Residual risk: these tests prove deterministic compaction and recall contracts,
-but they do not replace a live local development/provider smoke with fresh Langfuse and
+but they do not replace a live provider smoke in a local development stack with fresh Langfuse and
 TraceReview artifacts. Run the full stack evidence preflight before any future
 live token-budget evidence capture, and keep raw smoke JSON, TraceReview
 payloads, and logs in local evidence bundles unless a curated artifact is

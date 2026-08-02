@@ -206,7 +206,7 @@ safe inside one multi-process pytest worker set.
 Preferred implementation:
 
 - Add `pytest-split` to the backend test dependency set in a way that keeps
-  local, local development, and CI behavior aligned. Prefer pinning through the backend
+  local development and CI behavior aligned. Prefer pinning through the backend
   dependency files used by `backend/Dockerfile.unit-test` instead of installing a
   floating version only in the Dockerfile.
 - Store a committed duration file, for example
@@ -290,7 +290,7 @@ local workflows.
 Implementation trial:
 
 - Add `pytest-xdist` to the unit image.
-- Run experiments in local development:
+- Run experiments in an isolated local development checkout:
   - `python -m pytest tests/unit -n auto --dist loadscope`
   - `python -m pytest tests/unit -n 2 --dist loadfile`
   - `python -m pytest tests/unit -n auto --dist worksteal`
@@ -299,7 +299,7 @@ Implementation trial:
 Decision rule:
 
 - If xdist is stable and significantly faster, use it inside each shard with a
-  small worker count, or use it locally/local development only.
+  small worker count, or use it only for local experiments.
 - If xdist exposes fixture/global-state coupling, keep CI on matrix sharding and
   use the failures as a test isolation cleanup backlog.
 
@@ -490,7 +490,7 @@ Acceptance:
 Scope:
 
 - Add `pytest-xdist` to local tooling or the unit image.
-- Run controlled local development trials with `-n 2`, `loadscope`, `loadfile`, and
+- Run controlled local trials with `-n 2`, `loadscope`, `loadfile`, and
   `worksteal`.
 - Record flake/isolation findings.
 

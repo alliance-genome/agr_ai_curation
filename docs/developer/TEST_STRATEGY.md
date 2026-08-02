@@ -213,6 +213,4 @@ link validation:
 ./scripts/maintenance/harness_hygiene.sh
 ```
 
-The harness includes a Markdown link check, required-doc presence check, and
-local worktree hygiene report. Record unrelated stale worktrees separately from
-change-local documentation failures.
+The harness includes a Markdown link check and a required-doc presence check.

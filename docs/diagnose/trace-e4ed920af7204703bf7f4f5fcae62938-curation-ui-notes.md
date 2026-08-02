@@ -1,6 +1,6 @@
 # Trace e4ed920af7204703bf7f4f5fcae62938 curation UI diagnosis
 
-Temporary diagnosis notes for the local local development main-sandbox run.
+Temporary diagnosis notes for a local development run.
 
 ## User-reported issues
 

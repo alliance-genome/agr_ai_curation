@@ -298,8 +298,8 @@ For an independent reviewer to confirm the claims in this doc:
 **Blue Team repo (`gh`, GITHUB_ALLIANCE_TOKEN):**
 `gh api repos/alliance-genome/agr_alliance_embedding/contents/docs/EMBEDDING_RESULTS.md -H "Accept: application/vnd.github.raw"` — confirm `text-embedding-3-small` recommendation, `word-window-600` chunking, NXML corpus.
 
-**S3 (AWS profile `ctabone`):**
-`AWS_PROFILE=ctabone aws s3 ls s3://agr-embedding-benchmark-dev/corpora/2026-05-nxml-pilot-v1/` and `.../runs/2026-05-nxml-pilot-1000-core-models-v1/` — confirm `chunks.jsonl` + `embeddings/<model>.jsonl` layout (the artifacts SCRUM-6137 proposes to move to parquet).
+**S3 (operator-provided AWS profile):**
+`AWS_PROFILE=<profile> aws s3 ls s3://agr-embedding-benchmark-dev/corpora/2026-05-nxml-pilot-v1/` and `.../runs/2026-05-nxml-pilot-1000-core-models-v1/` — confirm `chunks.jsonl` + `embeddings/<model>.jsonl` layout (the artifacts SCRUM-6137 proposes to move to parquet).
 
 **Live Weaviate schema (optional, on the AI Curation EC2 / local docker):**
 inspect the `DocumentChunk` collection config to confirm `text2vec-openai` + `text-embedding-3-small` + only `content` vectorized + multi-tenancy enabled.

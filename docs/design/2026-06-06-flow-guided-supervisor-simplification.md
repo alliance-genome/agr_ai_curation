@@ -232,7 +232,7 @@ unless `extra="forbid"` or an equivalent raw-definition normalizer rejects
 ### P5: local development Runtime And TraceReview Validation
 
 - Use the `the development runbook` local development operating model for runtime validation.
-- Validate in the `the local development stack` VM-backed app, not only through host unit tests.
+- Validate in the VM-backed local development app, not only through host unit tests.
 - Confirm local TraceReview health before the run with `/health` and
   `/health/langfuse`; use the documented alternate port `18001` if host port
   `8001` is occupied by the another local service.

@@ -1,5 +1,5 @@
 {
-  "base_url": "http://127.0.0.1:8900",
+  "base_url": "http://redacted.invalid:8900",
   "checks": [
     {
       "ok": true,

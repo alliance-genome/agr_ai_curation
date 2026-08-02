@@ -61,7 +61,7 @@ def test_send_error_notification_sns_uses_profile_session(monkeypatch):
 
     monkeypatch.setenv("PROMPT_SUGGESTIONS_USE_SNS", "true")
     monkeypatch.setenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:topic")
-    monkeypatch.setenv("AWS_PROFILE", "ctabone")
+    monkeypatch.setenv("AWS_PROFILE", "developer")
     monkeypatch.setenv("SNS_REGION", "us-west-2")
     monkeypatch.setattr(api_module.boto3, "Session", lambda profile_name: fake_session)
 

@@ -252,7 +252,7 @@ Use the selected trial. Example command shape:
 
 ```bash
 python3 scripts/testing/domain_envelope_pdf_corpus.py \
-  --base-url http://127.0.0.1:8900 \
+  --base-url http://redacted.invalid:8900 \
   --allow-dev-mode-fallback \
   --allow-duplicate-reuse \
   --trial <trial-id-or-domain> \

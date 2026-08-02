@@ -203,7 +203,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_PROFILE",
         "ABC_LITERATURE_SMOKE_AWS_PROFILE",
         "AWS_PROFILE",
-        default="ctabone",
+        default="default",
     )
 
     parser = argparse.ArgumentParser(

@@ -54,7 +54,7 @@ def test_rerank_chunks_uses_profile_and_reorders_results(monkeypatch):
             return _Client()
 
     monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
-    monkeypatch.setenv("AWS_PROFILE", "ctabone")
+    monkeypatch.setenv("AWS_PROFILE", "developer")
     monkeypatch.setenv("RERANK_AWS_PROFILE", "ai-curation-rerank-local")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)

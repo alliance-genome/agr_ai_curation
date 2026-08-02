@@ -346,7 +346,7 @@ where the DB session and document identity already live.
   curation (`catalog_service.py:2236-2265`). Needed by part 1. Blast radius: exactly one agent
   (gene_expression) flips None->curation.
 - **Literature OpenSearch enabled in sandbox**: `reference_validation` resolves PMIDs via the
-  VPC OpenSearch endpoint (`ELASTICSEARCH_HOST=vpc-literature-search-...es.amazonaws.com`). The
+  configured private OpenSearch endpoint (`ELASTICSEARCH_HOST=<host>`). The
   endpoint is reachable from the sandbox; only the env var was missing.
 - **Dedupe band-aid** (`chat_common.py:_persist_extraction_candidates`): collapses byte-identical
   candidates. To be REPLACED by part 4 (delete it).

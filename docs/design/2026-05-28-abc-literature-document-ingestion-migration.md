@@ -106,7 +106,7 @@ The migration should not be framed as "AI Curation uploads a PDF to PDFX differe
 
 ### AWS/PDFX runtime findings
 
-Checked with AWS profile `ctabone` on 2026-05-28.
+Checked with an operator-provided AWS profile on 2026-05-28.
 
 Current PDFX-related EC2 instances tagged `Project=pdfx` in `us-east-1`:
 
