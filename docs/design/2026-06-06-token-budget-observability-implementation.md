@@ -26,7 +26,7 @@ This plan also intentionally defers scalar `selected_inputs` value truncation.
 The current audit evidence shows real wins from duplicate removal, repeated
 lists/results, and observability-only payload separation, but it does not yet
 show large scalar validator input values as a recurring top offender. Scalar
-compaction should be considered only after this plan captures real Incus
+compaction should be considered only after this plan captures real local development
 chat/flow traces and proves a field is large, non-identity, and recoverable
 through an explicit full-value lookup path.
 
@@ -303,7 +303,7 @@ def compact_validator_selected_inputs(
 
 Open design choice:
 
-- After real Incus run artifacts exist, decide whether this section remains
+- After real local development run artifacts exist, decide whether this section remains
   report-only or becomes a field-policy implementation. The default answer
   should remain "no scalar truncation" unless the evidence says otherwise.
 
@@ -759,7 +759,7 @@ TraceReview frontend tests/build. Otherwise this slice can stay backend-only.
   and flow step where that metadata is available.
 - TraceReview exposes a model-live context endpoint that clearly separates
   provider-bound context from observability-only payload inventory.
-- A real-run evidence bundle under `docs/design/` captures Incus chat/flow
+- A real-run evidence bundle under `docs/design/` captures local development chat/flow
   traces, logs, context reports, TraceReview model-live summaries, payload
   inventories, and field-path size histograms for at least one sample paper.
 - Main-chat supervisor access remains bounded and authorized.

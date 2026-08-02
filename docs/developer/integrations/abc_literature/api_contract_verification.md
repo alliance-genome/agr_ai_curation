@@ -208,7 +208,7 @@ For release evidence, prefer the repo-owned runner instead of hand-exporting
 bearer tokens:
 
 ```bash
-python3 scripts/testing/abc_literature_live_smoke.py --aws-profile ctabone
+python3 scripts/testing/abc_literature_live_smoke.py --aws-profile your-aws-profile
 ```
 
 The runner uses boto3 with the selected AWS profile to create two short-lived
@@ -240,7 +240,7 @@ Cognito client secrets.
 Useful overrides:
 
 ```bash
-ABC_LITERATURE_SMOKE_AWS_PROFILE=ctabone
+ABC_LITERATURE_SMOKE_AWS_PROFILE=your-aws-profile
 ABC_LITERATURE_SMOKE_USER_POOL_ID=us-east-1_d3eK6SYpI
 ABC_LITERATURE_SMOKE_CLIENT_ID=<cognito app client id>
 ABC_LITERATURE_SMOKE_AUTHORIZED_GROUPS=FBStaff,FlyBaseCurator

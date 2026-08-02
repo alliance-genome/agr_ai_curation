@@ -822,7 +822,7 @@ Expected: all PASS.
 
 - [ ] **Step 2: Confirm `AGENT_DOCUMENTATION` is gone**
 
-Run: `cd /home/ctabone/agr_ai_curation && grep -rn "AGENT_DOCUMENTATION" backend/src || echo "removed"`
+Run: `cd <repo-root> && grep -rn "AGENT_DOCUMENTATION" backend/src || echo "removed"`
 Expected: prints `removed` (no references remain in source).
 
 - [ ] **Step 3: Manual spot-check in the running app**

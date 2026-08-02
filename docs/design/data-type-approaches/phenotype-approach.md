@@ -254,7 +254,7 @@ emits the extraction-output payload `{summary, curatable_objects, metadata}` whe
   `model_ref = "PhenotypeAnnotationPayload"`, schema_ref to PhenotypeAnnotation,
   `definition_state: in_development`.
 - `payload` = staged fields → `{annotation_kind, phenotype_annotation_object,
-  phenotype_annotation_subject(→PhenotypeSubject pending), phenotype_terms[…](→PhenotypeTerm pending),
+  `phenotype_annotation_subject` (PhenotypeSubject pending), `phenotype_terms` (PhenotypeTerm pending),
   single_reference(→Reference pending), negated, source_mentions[…]}` + the pending
   `PhenotypeSubject`/`PhenotypeTerm`/`Reference`/`EvidenceQuote` validated_reference/metadata_only
   objects.

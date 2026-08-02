@@ -59,17 +59,26 @@ def test_parse_args_defaults_to_shared_stage_fixture(tmp_path, monkeypatch):
     assert args.converted_referencefile_id == smoke.live_smoke.DEFAULT_CONVERTED_REFERENCEFILE_ID
 
 
+def test_parse_args_without_profile_has_no_named_fallback(monkeypatch):
+    smoke = _load_ready_smoke_module()
+    for name in (
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_PROFILE",
+        "ABC_LITERATURE_SMOKE_AWS_PROFILE",
+        "AWS_PROFILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    args = smoke.parse_args(["--env-file", ""])
+
+    assert args.aws_profile == ""
+
+
 def test_parse_args_loads_local_env_file_for_existing_curator(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            [
-                "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_USERNAME=ready@example.org",
-                "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_PASSWORD=unit-password",
-                "ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_BASE_URL=http://env-backend.test",
-            ]
-        )
-        + "\n",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_USERNAME=ready@example.org\n"
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_PASSWORD=unit-password\n"
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_BASE_URL=http://env-backend.test\n",
         encoding="utf-8",
     )
     smoke = _load_ready_smoke_module()

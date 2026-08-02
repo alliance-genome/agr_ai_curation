@@ -41,14 +41,9 @@ def _response(smoke, status_code: int, payload: Any = None, body: bytes | None =
 def test_parse_args_loads_ready_upload_fake_curator_env(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            [
-                "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_USERNAME=fake@example.org",
-                "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_PASSWORD=unit-password",
-                "ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_BASE_URL=http://backend.env",
-            ]
-        )
-        + "\n",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_USERNAME=fake@example.org\n"
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_PASSWORD=unit-password\n"
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_BASE_URL=http://backend.env\n",
         encoding="utf-8",
     )
     smoke = _load_upload_smoke_module()
@@ -60,6 +55,28 @@ def test_parse_args_loads_ready_upload_fake_curator_env(tmp_path, monkeypatch):
     assert args.curator_username == "fake@example.org"
     assert args.curator_password == "unit-password"
     assert args.backend_base_url == "http://backend.env"
+
+
+def test_parse_args_without_profile_has_no_named_fallback(monkeypatch):
+    smoke = _load_upload_smoke_module()
+    for name in (
+        "ADD_LITERATURE_UPLOAD_SMOKE_AWS_PROFILE",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_PROFILE",
+        "ABC_LITERATURE_SMOKE_AWS_PROFILE",
+        "AWS_PROFILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    args = smoke.parse_args(
+        [
+            "--env-file",
+            "",
+            "--sample-pdf",
+            "backend/tests/fixtures/sample_fly_publication.pdf",
+        ]
+    )
+
+    assert args.aws_profile == ""
 
 
 def test_backend_cookie_headers_use_auth_token_cookie_only():
@@ -195,9 +212,8 @@ def test_run_smoke_happy_path_uses_sample_pdf_jobs_and_cleanup(tmp_path):
         if method == "DELETE" and url == f"http://backend.test/weaviate/documents/{document_id}":
             state["deleted"] = True
             return _response(smoke, 200, {"success": True, "document_id": document_id})
-        if url == f"http://backend.test/weaviate/documents/{document_id}":
-            if state["deleted"]:
-                return _response(smoke, 404, {"detail": f"Document with ID {document_id} not found"})
+        if url == f"http://backend.test/weaviate/documents/{document_id}" and state["deleted"]:
+            return _response(smoke, 404, {"detail": f"Document with ID {document_id} not found"})
         raise AssertionError(f"Unexpected request: {method} {url}")
 
     result = smoke.run_smoke(

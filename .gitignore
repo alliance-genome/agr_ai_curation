@@ -79,7 +79,6 @@ CLAUDE.local.md
 .codex
 .codex/
 .playwright-mcp/
-.symphony-docker-config/
 
 # Local plans/designs (not committed)
 .plans/
@@ -177,6 +176,7 @@ find_*.py
 
 # Claude Code settings
 .claude/
+# Local orchestration/runtime state. No application source is owned here.
 .symphony/
 .superpowers/
 docs/superpowers/
@@ -200,14 +200,11 @@ docs/plans/*
 /FLOW_TICKETS.md
 /SOL_AUDIT.md
 /HOTFIX_Jul11.md
-/SYMPHONY_Jul11.md
-/july12_sym_fix.md
 docs/design/2026-04-01-pdf-evidence-fuzzy-search-experiments.md
 docs/design/2026-04-02-flow-evidence-curation-integration-plan.md
 docs/design/pdf-evidence-native-search-simplification-plan.md
 # Local design/corpus artifacts restored from stashed exploratory work.
 docs/design/2026-05-16-go-annotation-flow-view-plan.md
-docs/design/2026-05-17-symphony-full-auto-review-design.md
 docs/design/2026-05-17-validation-agent-rationalization-plan.md
 docs/design/2026-05-18-alliance-identifier-weaviate-index-design.md
 docs/design/2026-05-20-go-flow-demo-restore-handoff.md

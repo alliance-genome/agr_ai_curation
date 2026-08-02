@@ -622,12 +622,12 @@ Expected: all PASS (new tests + existing materialization/validation tests — th
 
 The sandbox sessions are envelope-backed; re-deriving review rows from the persisted envelope uses the new `workspace_display`. For each pack, count the draft fields a candidate now projects (should drop sharply, e.g. gene_expression 32 → ~12):
 
-Run (gene_expression example):
+Run the query from the local Compose database service (gene-expression example):
 ```bash
-incus exec symphony-main -- docker exec agrmainsandbox-postgres-1 sh -lc \
- 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select envelope_id, object_id, envelope_revision from curation_candidates where session_id='"'"'a1419a0e-d943-4718-a6d6-652fe35390a5'"'"' limit 1;"'
+docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+  "select envelope_id, object_id, envelope_revision from curation_candidates where session_id='<session-id>' limit 1;"
 ```
-Then call `GET /api/curation-workspace/domain-envelopes/{envelope_id}/review-rows?revision={rev}` against the dev backend (`http://10.79.64.167:8900`) and confirm each row's workspace fields match the new groups. (Existing persisted candidates keep their old draft until re-bootstrapped; the review-rows endpoint reflects the new projection live.)
+Then call `GET /api/curation-workspace/domain-envelopes/{envelope_id}/review-rows?revision={rev}` against the configured development backend and confirm each row's workspace fields match the new groups. (Existing persisted candidates keep their old draft until re-bootstrapped; the review-rows endpoint reflects the new projection live.)
 
 - [ ] **Step 3: Confirm no pack fails to load**
 

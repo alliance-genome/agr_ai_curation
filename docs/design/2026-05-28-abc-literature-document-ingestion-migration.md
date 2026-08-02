@@ -61,10 +61,10 @@ This is not an alternate-path system. The cutover still requires one configured 
 
 Repositories inspected:
 
-- AI Curation: `/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation`
+- AI Curation: `<repo-root>`
 - ABC Literature Service fresh clone: `/tmp/ai-curation-pdfx-migration-review-agr_literature_service`
-- ABC Literature UI: `/home/ctabone/programming/claude_code/analysis/alliance/agr_literature_ui`
-- ABC document parser package: `/home/ctabone/programming/claude_code/analysis/alliance/agr_abc_document_parsers`
+- ABC Literature UI: `<local-home>/programming/claude_code/analysis/alliance/agr_literature_ui`
+- ABC document parser package: `<local-home>/programming/claude_code/analysis/alliance/agr_abc_document_parsers`
 
 This assessment uses local checkouts plus the reviewed Jira/KANBAN work as implementation evidence.
 
@@ -106,7 +106,7 @@ The migration should not be framed as "AI Curation uploads a PDF to PDFX differe
 
 ### AWS/PDFX runtime findings
 
-Checked with AWS profile `ctabone` on 2026-05-28.
+Checked with an operator-provided AWS profile on 2026-05-28.
 
 Current PDFX-related EC2 instances tagged `Project=pdfx` in `us-east-1`:
 

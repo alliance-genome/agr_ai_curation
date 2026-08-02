@@ -201,7 +201,7 @@ metadata, and package validators.
 
 ## Live Curation DB Reconnaissance
 
-Read-only probes against the local Incus backend's configured curation DB showed
+Read-only probes against the local development backend's configured curation DB showed
 that the existing Alliance curation DB is already a strong ontology candidate
 source. The useful data is there; the current problem is mostly that our helper
 path is too literal and throws away too much explanatory context.

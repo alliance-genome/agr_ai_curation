@@ -1,7 +1,6 @@
 """Tests for prompt suggestion submission service."""
 
 import pytest
-
 from src.lib.agent_studio import suggestion_service as svc
 
 
@@ -121,7 +120,7 @@ async def test_submit_suggestion_uses_profiled_session_when_profile_present(monk
     monkeypatch.setenv("PROMPT_SUGGESTIONS_USE_SNS", "true")
     monkeypatch.setenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123:topic")
     monkeypatch.setenv("SNS_REGION", "us-east-1")
-    monkeypatch.setenv("AWS_PROFILE", "ctabone")
+    monkeypatch.setenv("AWS_PROFILE", "developer")
 
     session_args = {}
 
@@ -149,7 +148,7 @@ async def test_submit_suggestion_uses_profiled_session_when_profile_present(monk
 
     assert result["sns_message_id"] == "msg-2"
     assert session_args == {
-        "profile_name": "ctabone",
+        "profile_name": "developer",
         "service": "sns",
         "region_name": "us-east-1",
     }

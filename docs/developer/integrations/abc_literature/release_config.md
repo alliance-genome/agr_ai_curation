@@ -131,14 +131,14 @@ scripts/testing/abc_literature_ready_upload_smoke_docker.sh
 
 The smoke expects a configured running backend and a persistent test curator
 credential supplied through an uncommitted env file such as
-`/home/ctabone/.agr_ai_curation/.env`. Evidence is written under
+`~/.agr_ai_curation/.env`. Evidence is written under
 `file_outputs/temp/` with secrets redacted.
 
 The raw ABC Literature live smoke remains available for lower-level endpoint
 contract checks:
 
 ```bash
-python3 scripts/testing/abc_literature_live_smoke.py --aws-profile ctabone
+python3 scripts/testing/abc_literature_live_smoke.py --aws-profile your-aws-profile
 ```
 
 ## Disable Procedure

@@ -7,7 +7,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-
 import src.api.agent_studio as api_module
 from src.api import logs as logs_api
 from src.lib.agent_studio.models import ChatContext
@@ -41,7 +40,7 @@ def _install_langfuse(monkeypatch, trace_obj=None, observations=None, raise_on_i
                 ),
             )
 
-    setattr(module, "Langfuse", _Langfuse)
+    module.Langfuse = _Langfuse
     monkeypatch.setitem(sys.modules, "langfuse", module)
 
 
@@ -61,7 +60,7 @@ def test_send_error_notification_sns_uses_profile_session(monkeypatch):
 
     monkeypatch.setenv("PROMPT_SUGGESTIONS_USE_SNS", "true")
     monkeypatch.setenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:topic")
-    monkeypatch.setenv("AWS_PROFILE", "ctabone")
+    monkeypatch.setenv("AWS_PROFILE", "developer")
     monkeypatch.setenv("SNS_REGION", "us-west-2")
     monkeypatch.setattr(api_module.boto3, "Session", lambda profile_name: fake_session)
 
