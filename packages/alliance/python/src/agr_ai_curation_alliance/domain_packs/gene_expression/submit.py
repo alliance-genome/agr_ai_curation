@@ -20,9 +20,9 @@ from .export import (
 class GeneExpressionSubmissionAdapter(SubmissionTransportAdapter):
     """Validate and record a target-shaped gene-expression submission handoff.
 
-    The Symphony-accessible curation DB tunnel is read-only, so this adapter does
-    not mutate the Alliance database. It returns deterministic target state that
-    the workspace submission framework persists in submission history.
+    The configured curation database connection is read-only, so this adapter
+    does not mutate the Alliance database. It returns deterministic target state
+    that the workspace submission framework persists in submission history.
     """
 
     def __init__(self) -> None:

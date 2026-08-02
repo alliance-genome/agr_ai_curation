@@ -113,26 +113,13 @@ As of this document:
 This document now serves as both the implementation record and the durable
 reference for why the smoke looks the way it does.
 
-## 3.0) Required local/Incus preflight for evidence runs
+## 3.0) Required preflight for evidence runs
 
-Before running `scripts/testing/dev_release_smoke.py` in a Symphony/Incus
-sandbox, run the evidence-ready stack preflight:
-
-```bash
-bash scripts/utilities/symphony_full_stack_smoke_preflight.sh \
-  --workspace-dir "$PWD" \
-  --compose-project <compose_project> \
-  --backend-port <backend_port> \
-  --langfuse-port <langfuse_port> \
-  --require-langfuse
-```
-
-This preflight is intentionally stricter than `docker ps` or `/health`. It must
-pass before runs whose output will be used for TraceReview, token-budget
-analysis, validation diagnostics, release evidence, or design-doc conclusions.
-
-Treat `RESULT: not evidence-ready` as a hard stop unless the run is explicitly
-a degraded diagnostic. The helper prints `WHY:` lines explaining each blocker:
+Before running `scripts/testing/dev_release_smoke.py`, verify the target stack
+is evidence-ready. A normal application health response is necessary but not
+sufficient for TraceReview, token-budget analysis, validation diagnostics,
+release evidence, or design conclusions. Treat any failed requirement below as
+a hard stop unless the run is explicitly labeled as a degraded diagnostic:
 
 1. Langfuse is required because TraceReview, token analysis, and trace-level
    metrics depend on it. Do not disable or blank Langfuse env vars for evidence
@@ -160,8 +147,8 @@ a degraded diagnostic. The helper prints `WHY:` lines explaining each blocker:
    evidence can incorrectly look like missing required tool calls. The runner
    should surface that as a transport/provider error. Temporarily setting
    `OPENAI_RESPONSES_WEBSOCKET_ENABLED=false` is acceptable for a narrow
-   diagnostic workaround, but the preflight warns so the stack is not left slow
-   by accident.
+   diagnostic workaround, but restore the default immediately afterward so the
+   stack is not left slow by accident.
 
 ## 3.1) Current slice update: Bedrock rerank, flow persistence, stale-document cleanup, and chat hardening
 
@@ -766,7 +753,7 @@ Recommended strategy:
 1. Prefer the curator-style sample
    `sample_fly_publication.pdf` at repo root when available.
 2. Also recognize the shared local testing copy at
-   `/home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf`
+   `./sample_fly_publication.pdf`
    when running from a different checkout on the same machine.
 3. Allow `AGR_SMOKE_SAMPLE_PDF` to override the default primary fixture path
    explicitly for ad hoc runs.

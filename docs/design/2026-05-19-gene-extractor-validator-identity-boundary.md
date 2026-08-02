@@ -244,11 +244,11 @@ that field to approved package-owned lookup methods. It must not expose raw SQL
 or the full `agr_curation_query` method set to extractors.
 
 When designing or reviewing those field-to-tool mappings, agents should inspect
-the live read-only curation DB through the Symphony tunnel when table shape,
-controlled vocabulary rows, ontology storage, or real row population affects the
-decision. Use focused `SELECT`/`information_schema` queries through
-`scripts/utilities/symphony_curation_db_psql.sh`; never print the generated
-env file, and never turn the tunnel itself into an extractor runtime tool.
+the live read-only curation DB when table shape, controlled vocabulary rows,
+ontology storage, or real row population affects the decision. Use focused
+`SELECT`/`information_schema` queries through an explicitly configured
+`CURATION_DB_URL`; never print credentials or turn database access into an
+extractor runtime tool.
 
 The extractor should not receive the broad `agr_curation_query` tool if that
 tool exposes gene lookup methods such as:

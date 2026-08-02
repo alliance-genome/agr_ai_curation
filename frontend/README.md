@@ -493,7 +493,7 @@ View network requests:
 - `npm run build` - Build for production
 - `npm run preview` - Preview production build
 - `npm test` - Run test suite
-- `npm run test:symphony` - Run the frontend suite with stable low-concurrency Vitest settings for Symphony/VM workspaces
+- `npm run test:stable` - Run the frontend suite with stable low-concurrency Vitest settings
 - `npm run lint` - Run ESLint
 - `npm run type-check` - Check TypeScript types
 - `npm run type-check:changed` - Run TypeScript and fail only on changed frontend TypeScript files or unscoped/config-level errors

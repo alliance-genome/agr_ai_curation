@@ -104,14 +104,14 @@ LSP and repo inspection found the main symbols and files this design touches.
 
 ### Backend agent runtime
 
-- [streaming_tools.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/openai_agents/streaming_tools.py)
+- [streaming_tools.py](../../backend/src/lib/openai_agents/streaming_tools.py)
   - `_apply_relaxed_output_schema_if_needed`
   - `_pop_matching_pending_tool_call`
   - `SpecialistToolCall`
   - `SpecialistActivity`
   - `add_specialist_event`
   - `run_specialist_with_events`
-- [runner.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/openai_agents/runner.py)
+- [runner.py](../../backend/src/lib/openai_agents/runner.py)
   - streaming `TOOL_START` / `TOOL_COMPLETE` / `AGENT_THINKING`
   - evidence gate after `final_output`
   - `RUN_ERROR` emission for missing evidence records
@@ -131,7 +131,7 @@ the model's final output.
 
 ### Evidence workspace
 
-- [evidence_workspace.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/openai_agents/tools/evidence_workspace.py)
+- [evidence_workspace.py](../../backend/src/lib/openai_agents/tools/evidence_workspace.py)
   - `set_active_evidence_records`
   - `reset_active_evidence_records`
   - `create_list_recorded_evidence_tool`
@@ -146,7 +146,7 @@ parallel evidence registry.
 
 ### Alliance ontology resolver tools
 
-- [agr_curation.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py)
+- [agr_curation.py](../../packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py)
   - `search_domain_field_terms`
   - `inspect_ontology_term`
   - `resolve_domain_field_term`
@@ -157,10 +157,10 @@ memory-based controlled terms.
 
 ### Gene-expression config and conversion
 
-- [agent.yaml](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/packages/alliance/agents/gene_expression/agent.yaml)
-- [prompt.yaml](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/packages/alliance/agents/gene_expression/prompt.yaml)
-- [domain_pack.yaml](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/packages/alliance/domain_packs/gene_expression/domain_pack.yaml)
-- [conversion.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/packages/alliance/python/src/agr_ai_curation_alliance/domain_packs/gene_expression/conversion.py)
+- [agent.yaml](../../packages/alliance/agents/gene_expression/agent.yaml)
+- [prompt.yaml](../../packages/alliance/agents/gene_expression/prompt.yaml)
+- [domain_pack.yaml](../../packages/alliance/domain_packs/gene_expression/domain_pack.yaml)
+- [conversion.py](../../packages/alliance/python/src/agr_ai_curation_alliance/domain_packs/gene_expression/conversion.py)
 
 The prompt should stop asking the model to author the full
 `GeneExpressionEnvelope`. The conversion layer should remain authoritative for
@@ -168,22 +168,22 @@ domain-pack validation and final normalized payload semantics.
 
 ### TraceReview
 
-- [trace_extractor.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/trace_review/backend/src/services/trace_extractor.py)
+- [trace_extractor.py](../../trace_review/backend/src/services/trace_extractor.py)
   - `OBSERVATION_FIELDS`
   - `TraceExtractor.get_observations`
   - `TraceExtractor.extract_complete_trace`
-- [tool_calls.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/trace_review/backend/src/analyzers/tool_calls.py)
+- [tool_calls.py](../../trace_review/backend/src/analyzers/tool_calls.py)
   - `ToolResultParser`
   - `ToolCallAnalyzer._extract_tool_outputs`
   - `ToolCallAnalyzer._extract_function_calls_from_generation`
   - `ToolCallAnalyzer.extract_tool_calls`
-- [traces.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/trace_review/backend/src/api/traces.py)
+- [traces.py](../../trace_review/backend/src/api/traces.py)
   - `_build_trace_cache_data`
   - `_tool_call_summary`
   - `_compact_trace_bundle`
   - `analyze_trace`
   - trace export and view endpoints
-- [claude.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/trace_review/backend/src/api/claude.py)
+- [claude.py](../../trace_review/backend/src/api/claude.py)
   - `_ensure_trace_analyzed`
   - `/summary`
   - `/tool_calls/summary`

@@ -283,7 +283,7 @@ The `2026-05-28-abc-literature-document-ingestion-migration.md` plan (epic KANBA
 
 For an independent reviewer to confirm the claims in this doc:
 
-**Repo / code (this checkout):** `/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation`
+**Repo / code (this checkout):** `<repo-root>`
 - Chunker + defaults: `backend/src/models/strategy.py:71-81`, `backend/src/lib/pipeline/chunk.py`.
 - Markdown→elements + PDFX client: `backend/src/lib/pipeline/pdfx_parser.py:538-656`, `:45-73`.
 - Hierarchy LLM: `backend/src/lib/pipeline/hierarchy_resolution.py`; default model `.env.example:529-530`.

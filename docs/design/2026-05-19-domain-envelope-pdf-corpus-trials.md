@@ -1,7 +1,7 @@
 # Domain Envelope Real-PDF Corpus Trials
 
 Date: 2026-05-19
-Sandbox backend: `http://192.168.86.44:8900`
+Sandbox backend: `http://127.0.0.1:8900`
 Sandbox auth mode: dev-mode user (`dev-user-123`) because no `TESTING_API_KEY` was unlocked in this shell.
 Runner: `scripts/testing/domain_envelope_pdf_corpus.py`
 

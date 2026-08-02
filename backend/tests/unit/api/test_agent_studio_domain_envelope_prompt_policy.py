@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS = (
@@ -103,11 +102,6 @@ ALLOWED_VALIDATOR_DISPATCH_CLEANUP_CONTEXTS = (
         "frontend/src/features/curation/submission/SubmissionPreviewDialog.tsx",
         "export/submission readiness blockers are legitimate blocked states",
         re.compile(r"blockedCount|Blocked"),
-    ),
-    (
-        "docs/developer/guides/SYMPHONY_FLOW_AND_OPTIMIZATION.md",
-        "Linear workflow state names include Blocked outside validator capability metadata",
-        re.compile(r"`Blocked`"),
     ),
     (
         "docs/curator/AGENT_STUDIO.md",

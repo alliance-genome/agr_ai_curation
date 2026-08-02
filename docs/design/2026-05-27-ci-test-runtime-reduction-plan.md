@@ -51,7 +51,7 @@ The external ecosystem supports four useful approaches for this repo:
    tests while preserving one final coverage report and threshold.
 
 4. Affected-test tools such as `pytest-testmon` can select tests based on code
-   executed by prior runs. That is attractive for local/Symphony feedback, but
+   executed by prior runs. That is attractive for local feedback, but
    it is a higher-risk replacement for PR gates because it depends on a valid
    persisted dependency database and can expose hidden test dependencies.
 
@@ -206,7 +206,7 @@ safe inside one multi-process pytest worker set.
 Preferred implementation:
 
 - Add `pytest-split` to the backend test dependency set in a way that keeps
-  local, Symphony, and CI behavior aligned. Prefer pinning through the backend
+  local, local development, and CI behavior aligned. Prefer pinning through the backend
   dependency files used by `backend/Dockerfile.unit-test` instead of installing a
   floating version only in the Dockerfile.
 - Store a committed duration file, for example
@@ -285,12 +285,12 @@ Risk controls:
 ### Phase 2: Trial `pytest-xdist` for Local and Optional CI Speedups
 
 Goal: see whether vertical parallelism is safe enough to use, especially in
-local/Symphony workflows.
+local workflows.
 
 Implementation trial:
 
 - Add `pytest-xdist` to the unit image.
-- Run experiments in Incus:
+- Run experiments in local development:
   - `python -m pytest tests/unit -n auto --dist loadscope`
   - `python -m pytest tests/unit -n 2 --dist loadfile`
   - `python -m pytest tests/unit -n auto --dist worksteal`
@@ -299,7 +299,7 @@ Implementation trial:
 Decision rule:
 
 - If xdist is stable and significantly faster, use it inside each shard with a
-  small worker count, or use it locally/Symphony only.
+  small worker count, or use it locally/local development only.
 - If xdist exposes fixture/global-state coupling, keep CI on matrix sharding and
   use the failures as a test isolation cleanup backlog.
 
@@ -325,14 +325,14 @@ Recommendation:
 
 - Start with a repo-owned focused-test helper for common domains, because we
   already have strong path manifests and agent workflows.
-- Consider `pytest-testmon` later for local/Symphony loops only.
+- Consider `pytest-testmon` later for local loops only.
 - Do not make affected-test selection the only PR gate until we have evidence it
   catches shared domain-pack and validator regressions reliably.
 
 Example use:
 
 - Agent PR Gate can run a changed-scope unit slice before the full unit matrix.
-- Symphony agents can use the focused helper for quick feedback before pushing.
+- Local agents can use the focused helper for quick feedback before pushing.
 
 ### Phase 4: Reduce Repeated Image-Build Overhead
 
@@ -417,7 +417,7 @@ Acceptance:
 Scope:
 
 - Add pinned `pytest-split` support in the backend test dependency path used by
-  local/Symphony and CI unit runs.
+  local and CI unit runs.
 - Add shard options to `run_ci_unit_tests.sh`.
 - Add a 2-shard GitHub Actions matrix behind an env/config toggle or a draft
   workflow branch.
@@ -489,8 +489,8 @@ Acceptance:
 
 Scope:
 
-- Add `pytest-xdist` to local/Symphony tooling or the unit image.
-- Run controlled Incus trials with `-n 2`, `loadscope`, `loadfile`, and
+- Add `pytest-xdist` to local tooling or the unit image.
+- Run controlled local development trials with `-n 2`, `loadscope`, `loadfile`, and
   `worksteal`.
 - Record flake/isolation findings.
 

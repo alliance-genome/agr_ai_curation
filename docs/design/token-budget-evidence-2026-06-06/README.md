@@ -1,6 +1,6 @@
 # Token Budget Evidence - 2026-06-06
 
-This folder captures real Incus/VM runs used to evaluate token-budget pressure before implementing any P1 scalar truncation. The branch was deployed in `symphony-main` on `c974b53f`, with backend and TraceReview restarted against the main sandbox stack.
+This folder captures real local development/VM runs used to evaluate token-budget pressure before implementing any P1 scalar truncation. The branch was deployed in `the local development stack` on `c974b53f`, with backend and TraceReview restarted against the main sandbox stack.
 
 ## What Ran
 
@@ -79,7 +79,7 @@ The local evidence bundle also included:
 ALL-561 added deterministic unit coverage for the two model-live compaction
 surfaces after the standard chat and Agent Studio implementations landed.
 These tests are intentionally CI-friendly substitutes for provider smoke until
-a coordinator requests a fresh Incus run:
+a coordinator requests a fresh local development run:
 
 - Standard chat long-session replay:
   `backend/tests/unit/lib/openai_agents/test_chat_compaction_session.py::test_standard_chat_long_session_replay_stays_under_budget_and_keeps_flow_refs`
@@ -116,7 +116,7 @@ a coordinator requests a fresh Incus run:
   guardrail unit tests also passed with 22 tests.
 
 Residual risk: these tests prove deterministic compaction and recall contracts,
-but they do not replace a live Incus/provider smoke with fresh Langfuse and
+but they do not replace a live local development/provider smoke with fresh Langfuse and
 TraceReview artifacts. Run the full stack evidence preflight before any future
 live token-budget evidence capture, and keep raw smoke JSON, TraceReview
 payloads, and logs in local evidence bundles unless a curated artifact is

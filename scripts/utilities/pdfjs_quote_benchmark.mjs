@@ -68,7 +68,7 @@ function printUsage() {
   node scripts/utilities/pdfjs_quote_benchmark.mjs --pdf <path> [chunk source options] [options]
 
 Chunk source options:
-  --backend-url <url>       Backend base URL, e.g. http://10.222.162.167:8900
+  --backend-url <url>       Backend base URL, e.g. http://127.0.0.1:8000
   --document-id <id>        Document id used with --backend-url
   --chunks-file <path>      Local chunk JSON file from /weaviate/documents/{id}/chunks
 
@@ -91,8 +91,8 @@ Output:
 
 Example:
   node scripts/utilities/pdfjs_quote_benchmark.mjs \\
-    --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \\
-    --backend-url http://10.222.162.167:8900 \\
+    --pdf ./sample_fly_publication.pdf \\
+    --backend-url http://127.0.0.1:8000 \\
     --document-id 64fa682e-a074-446c-821e-c4a605d102f0 \\
     --sample-size 30 \\
     --output /tmp/pdf-quote-benchmark.json`)

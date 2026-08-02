@@ -272,7 +272,7 @@ check_required_ports() {
     owner="$(find_port_owner "$port" || true)"
     if [[ -n "$owner" ]]; then
       if [[ "$env_var" == "TRACE_REVIEW_BACKEND_HOST_PORT" ]]; then
-        record_port_conflict "Port ${port} in use by ${owner} (${service}; env ${env_var}). If this is a Symphony review proxy or another local service, choose a free TraceReview host port."
+        record_port_conflict "Port ${port} in use by ${owner} (${service}; env ${env_var}). If this is another local service, choose a free TraceReview host port."
       else
         record_port_conflict "Port ${port} in use by ${owner} (${service}; env ${env_var})"
       fi

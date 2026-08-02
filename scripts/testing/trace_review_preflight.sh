@@ -338,7 +338,7 @@ check_trace_review_backend() {
   if ! http_get "${backend_url%/}/health" "$payload_file"; then
     record_health_failure "TraceReview backend health unreachable at ${backend_url%/}/health. No service restart was attempted."
     if [[ "$backend_port" == "8001" ]]; then
-      record_warning "Port 8001 is the default TraceReview backend port and is easy to confuse with a Symphony review proxy; verify the listener or pass --backend-url."
+      record_warning "Port 8001 is the default TraceReview backend port and may be occupied by another local service; verify the listener or pass --backend-url."
     fi
     rm -f "$payload_file" "${payload_file}.err" "$preflight_payload_file" "${preflight_payload_file}.err"
     return 0
@@ -347,7 +347,7 @@ check_trace_review_backend() {
   if payload_is_trace_review_health "$payload_file"; then
     log_success "TraceReview backend health OK at ${backend_url%/}/health"
   else
-    record_health_failure "Backend URL responded but does not look like TraceReview API. This often means port ${backend_port:-unknown} is a Symphony review proxy or another local service."
+    record_health_failure "Backend URL responded but does not look like TraceReview API. This often means port ${backend_port:-unknown} belongs to another local service."
   fi
 
   if http_get "${backend_url%/}/health/preflight?source=${selected_source}" "$preflight_payload_file"; then

@@ -1,6 +1,6 @@
 # Trace e4ed920af7204703bf7f4f5fcae62938 curation UI diagnosis
 
-Temporary diagnosis notes for the local Incus main-sandbox run.
+Temporary diagnosis notes for the local local development main-sandbox run.
 
 ## User-reported issues
 
@@ -17,7 +17,7 @@ Temporary diagnosis notes for the local Incus main-sandbox run.
 
 - Trace ID: `e4ed920af7204703bf7f4f5fcae62938`
 - Document ID: `22af46c3-ccb1-4a08-8827-bfd3531dcf85`
-- Local TraceReview base used: `http://192.168.86.44:8901`
+- Local TraceReview base used: `http://127.0.0.1:8901`
 - Trace diagnostic summary:
   - durable events: `1074`
   - tool events: `174`
@@ -89,7 +89,7 @@ Temporary diagnosis notes for the local Incus main-sandbox run.
 
 ## Validation run
 
-- `cd frontend && npm run test:symphony -- CandidateFieldEditor.test.tsx auditHelpers.test.ts`: `77 passed`.
+- `cd frontend && npm run test:stable -- CandidateFieldEditor.test.tsx auditHelpers.test.ts`: `77 passed`.
 - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/openai_agents/test_builder_finalization_handoff.py -q"`: `12 passed`.
 - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/openai_agents/test_tool_event_friendly_name_contract.py -q"`: `23 passed`.
 - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/api/test_chat_stream_endpoint.py -q"`: `22 passed`.
@@ -101,7 +101,7 @@ Temporary diagnosis notes for the local Incus main-sandbox run.
 ## 2026-06-05 follow-up: selector fields showing AI Unconfirmed
 
 - Current main-sandbox logs were captured before any restart at:
-  `/home/ctabone/.symphony/diagnostics/agr_ai_curation/main-sandbox/20260605T153241Z`.
+  `<private-diagnostic-output>/20260605T153241Z`.
 - Live workspace session inspected:
   - session ID: `593b7992-3dbb-45a7-8106-711de19685e8`
   - candidate count: `12`
@@ -128,7 +128,7 @@ Temporary diagnosis notes for the local Incus main-sandbox run.
   - pipeline and explicit candidate validation now pass those aliases and refresh parent selector
     validation findings when a leaf field is validated.
 - Follow-up validation run:
-  - `cd frontend && npm run test:symphony -- CandidateFieldEditor.test.tsx fieldState.test.ts`: `17 passed`.
+  - `cd frontend && npm run test:stable -- CandidateFieldEditor.test.tsx fieldState.test.ts`: `17 passed`.
   - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/curation_workspace/test_domain_envelope_projections.py -q"`: `9 passed`.
   - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/curation_workspace/test_pipeline.py -q"`: `16 passed`.
   - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/curation_workspace/test_session_service.py -q"`: `70 passed`.
@@ -171,7 +171,7 @@ Temporary diagnosis notes for the local Incus main-sandbox run.
   - session ID: `b1ff84f5-d767-4113-999a-7d14bfdfaa21`
   - validator request ID: `domain-validation:85de56bb054b326a1ee27be88e646e26df9545e6154ca14aafeec14fe407b57c`
 - Backend logs were captured before any restart at:
-  `/home/ctabone/.symphony/diagnostics/agr_ai_curation/main-sandbox/20260605T163851Z-gene-validator-failure`.
+  `<private-diagnostic-output>/20260605T163851Z-gene-validator-failure`.
 - Extractor behavior looked healthy:
   - four gene mention evidence objects staged and finalized;
   - UNC-112 evidence quote resolved to verified sentence spans on page 1;

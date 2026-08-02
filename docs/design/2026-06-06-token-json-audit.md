@@ -29,8 +29,8 @@ The system is not fully optimal yet. The main risk is not normal two-turn chat. 
 
 Runtime target:
 
-- Backend: `http://192.168.86.44:8000`
-- TraceReview: `http://192.168.86.44:8001`
+- Backend: `http://127.0.0.1:8000`
+- TraceReview: `http://127.0.0.1:8001`
 - Paper chat session: `ea76b64d-552d-4e3b-b491-d40311f4df1e`
 
 Trace pair:

@@ -10,7 +10,7 @@ Status: investigation complete; **API-client trigram PR written, reviewed, and O
   - `5c43ce56` — Set B: ".env is the source of truth for model config; remove code fallbacks" (no-fallback refactor, gpt-4o retired/de-registered, model rename gpt-5.4→gpt-5.5 / gpt-5.4-mini→gpt-5-mini / gpt-5.4-nano→gpt-5-nano, compose env wiring).
   - `38bf7949` — completed the gpt-5.4-mini→gpt-5-mini rename + alembic migration `q3r4s5t6u7v8` + single-head pin bump.
 - Unit suite is green **CI-style** (`pytest -n 4 --dist loadscope` with the `.ci-ignore-paths`). Serial runs show a pre-existing cross-module test-isolation cascade that xdist hides (not ours). One local-only failure: `test_record_evidence_prompt_contract.py::test_pdf_corpus_trial_examples_do_not_teach_quote_submission` scans a **gitignored** local trial dump (`docs/design/pdf-corpus-trials/main-cross-agent-handoff-20260520-231032/`) — CI never sees it.
-- Sandbox is deployed on the new main and healthy (backend `http://192.168.86.44:8900`, frontend `:3900`, TraceReview `:3901`).
+- Sandbox is deployed on the new main and healthy (backend `http://127.0.0.1:8900`, frontend `:3900`, TraceReview `:3901`).
 - Ran the gene-expression paper PMID39550471 end-to-end on **gpt-5.5**. Trace: `23a1ea9c089a2a866e0dabfd770db45b`.
   - TraceReview `diagnostic_report` works: reasoning summaries **present** (gpt-5.5), 33 tool calls, 6 resolver-ledger entries, validation failure, builder abort.
   - The run hit `MaxTurnsExceeded: Max turns (20)` before `stage`/`finalize`. `AGENT_MAX_TURNS=20` is too low for gpt-5.5's thorough resolver loop → bump to ~40-50 for a full finalize. (Separate from the resolver fix.)
@@ -70,13 +70,12 @@ A direct `word_similarity('ciliated sensory neurons', name)` query returns `cili
 
 ## Re-orientation facts / commands
 
-- **Curation DB access (readonly):** `CURATION_DB_URL` env in the sandbox backend container (`ai_curation_readonly_curation@host.docker.internal:6331/curation`, tunneled to AWS).
-  - Query it: `incus exec symphony-main -- bash -lc 'docker exec -i agrmainsandbox-backend-1 python3 - <<"PYEOF" ... PYEOF'` using `psycopg2.connect(os.environ["CURATION_DB_URL"])`.
+- **Curation DB access (readonly):** configure `CURATION_DB_URL` in the backend container and query it with `psycopg2.connect(os.environ["CURATION_DB_URL"])`; never include credentials in documentation or output.
 - **Ontology tables:** `ontologyterm` (curie, name, namespace, definition, ontologytermtype, obsolete, childcount, descendantcount), `ontologyterm_synonym` + `synonym` (synonym text; exact join column TBD), `ontologytermclosure` (tree/closure), `vocabulary`/`vocabularyterm` (relation CV).
 - **Namespaces loaded:** CHEBI, GO, FBbt, UBERON, **WBbt (7191)**, MMO, CL, etc.
 - **Resolver tool layer (ours):** `packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py` — `search_domain_field_terms` (~4342), `resolve_domain_field_term` (~4959), `inspect_ontology_term` (~4691), `get_domain_field_term_options` (~4027). Synonyms dropped at ~3038/~3381.
-- **API-client (external):** prod pins `agr-curation-api-client==0.10.1` (`backend/requirements.lock.txt`). Local stale checkout `0.7.6` at `/home/ctabone/aws_incident/agr_curation_api_client/`. Engine: `src/agr_curation_api/db_methods.py:search_ontology_terms` (~1568), pg_trgm TODO (~1602).
-- **Trace + TraceReview:** trace `23a1ea9c089a2a866e0dabfd770db45b`; `http://192.168.86.44:3901/api/claude/traces/<id>/diagnostic_report?source=local`.
+- **API-client (external):** prod pins `agr-curation-api-client==0.10.1` (`backend/requirements.lock.txt`). Local stale checkout `0.7.6` at `<external-api-client-checkout>/`. Engine: `src/agr_curation_api/db_methods.py:search_ontology_terms` (~1568), pg_trgm TODO (~1602).
+- **Trace + TraceReview:** trace `23a1ea9c089a2a866e0dabfd770db45b`; `http://127.0.0.1:3901/api/claude/traces/<id>/diagnostic_report?source=local`.
 - **Reference materials (saved, gitignored):** `temp/ontology_resolution_refs/` — papers scispaCy (char-3gram TF-IDF + abbreviation), PPR-SSM (graph rerank), Uberon (lexical-is-suggestion-only); cloned repos scispacy, ncbo_annotator, ols4, PPRSSM, ontology-access-kit, uberon. Design docs: `docs/design/2026-05-29-ontology-resolution-reference-research.md`, `docs/design/2026-05-18-alliance-identifier-weaviate-index-design.md`, `docs/design/2026-05-29-gene-expression-linkml-extraction-failure-notes.md`.
 
 ## API-client PR — DONE → PR #18 (open)
@@ -115,7 +114,7 @@ What shipped (vs. the original target below — read for deltas):
 - **Deltas from plan:** used the **`word_similarity(:q, …)` function form, NOT the `%`/`%%` operator** (avoids psycopg2 escaping + the session-threshold dependency; lets us bind an explicit `threshold`). **Did NOT** touch `search_vocabulary_terms` or add a `definition` channel — kept the PR focused on `search_ontology_terms`; those are follow-ups. No `set_limit()` per-session call needed (threshold is a bound param).
 - **Fail-loud, no fallback:** if `pg_trgm` is absent, Tier 4 raises a **self-diagnosing** `AGRAPIError` naming the extension (not a silent degrade).
 - **Tests:** `tests/test_ontology_trigram_search.py` (7 mock-based unit tests: tier wiring, `exact_match` short-circuit, `matched_field` selection incl. tie, NULL synonym-score guard, generated-SQL assertion). Full suite: **73 passed, 352 skipped** (DB-integration gated).
-- **Live DB validation:** via `scripts/utilities/symphony_curation_db_psql.sh` (readonly tunnel). `pg_trgm` confirmed installed. `"ciliated neuron"` → exact `WBbt:0006816` @ score 1.000 + fuzzy neighbors (SQL valid). Typo `"ciliatd neuron"` → **contains tier 0 hits vs trigram 78 candidates** (the value-add).
+- **Live DB validation:** via a configured read-only curation database connection. `pg_trgm` confirmed installed. `"ciliated neuron"` → exact `WBbt:0006816` @ score 1.000 + fuzzy neighbors (SQL valid). Typo `"ciliatd neuron"` → **contains tier 0 hits vs trigram 78 candidates** (the value-add).
 - **Auth note:** pushed via `gh` as `christabone` (admin/push on the repo); the separate `GITHUB_ALLIANCE_TOKEN` was not needed.
 
 ---

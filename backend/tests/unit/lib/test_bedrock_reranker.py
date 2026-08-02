@@ -8,8 +8,7 @@ from typing import Any
 
 import pytest
 from botocore.exceptions import NoCredentialsError, ProfileNotFound
-
-import src.lib.bedrock_reranker as bedrock_reranker
+from src.lib import bedrock_reranker
 
 
 @pytest.mark.parametrize("provider", ["", "none"])
@@ -110,9 +109,9 @@ def test_rerank_aws_env_overrides_are_scoped_to_bedrock_session(monkeypatch):
             captured["config_file"] = os.environ.get("AWS_CONFIG_FILE")
 
     monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
-    monkeypatch.setenv("AWS_PROFILE", "ctabone")
-    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/home/ctabone/.aws/credentials")
-    monkeypatch.setenv("AWS_CONFIG_FILE", "/home/ctabone/.aws/config")
+    monkeypatch.setenv("AWS_PROFILE", "developer")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/external/aws/credentials")
+    monkeypatch.setenv("AWS_CONFIG_FILE", "/external/aws/config")
     monkeypatch.setenv("RERANK_AWS_PROFILE", "ai-curation-rerank-local")
     monkeypatch.setenv(
         "RERANK_AWS_SHARED_CREDENTIALS_FILE",
@@ -134,9 +133,9 @@ def test_rerank_aws_env_overrides_are_scoped_to_bedrock_session(monkeypatch):
         "credentials_file": "/runtime/secrets/aws-rerank/credentials",
         "config_file": "/runtime/secrets/aws-rerank/config",
     }
-    assert os.environ["AWS_PROFILE"] == "ctabone"
-    assert os.environ["AWS_SHARED_CREDENTIALS_FILE"] == "/home/ctabone/.aws/credentials"
-    assert os.environ["AWS_CONFIG_FILE"] == "/home/ctabone/.aws/config"
+    assert os.environ["AWS_PROFILE"] == "developer"
+    assert os.environ["AWS_SHARED_CREDENTIALS_FILE"] == "/external/aws/credentials"
+    assert os.environ["AWS_CONFIG_FILE"] == "/external/aws/config"
 
 
 def test_bedrock_status_ignores_blank_aws_profile_env(monkeypatch):

@@ -157,7 +157,7 @@ collected, in original dispatch order.
   runtime should provide a narrow domain-pack field helper that queries the
   configured database/API-backed source for that field. If no helper exists, the
   extractor should leave the field unresolved and record the gap.
-- Agents designing those helper mappings should use the read-only Symphony
+- Agents designing those helper mappings should use the read-only local development
   curation DB tunnel for focused schema and row-population checks when live data
   affects the design. The tunnel is reconnaissance for implementers, not an
   extractor-facing runtime capability.

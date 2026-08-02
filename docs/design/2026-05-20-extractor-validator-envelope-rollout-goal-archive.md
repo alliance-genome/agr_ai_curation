@@ -99,7 +99,7 @@ Result: `32 passed, 2 warnings`.
 - Domain-envelope state validator-summary and Opus prompt-policy slice: `21 passed, 4 warnings`.
 - Agent Studio prompt-target docs/tool-registry slice after updating current extractor/validator prompt targets: `17 passed, 4 warnings`; syntax compile passed with `PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache python3 -m py_compile backend/src/lib/agent_studio/diagnostic_tools/tool_definitions.py backend/tests/unit/api/test_agent_studio_domain_envelope_prompt_policy.py backend/tests/unit/lib/agent_studio/test_hybrid_tool_registry.py`.
 - Frontend OpusChat lookup-rendering slice: `cd frontend && npm run test -- OpusChat.test.tsx --run` -> `11 passed`; scoped TypeScript guard `cd frontend && npm run type-check:changed -- --base origin/main` -> `FRONTEND_TYPECHECK_STATUS=baseline_only`, 65 existing baseline errors outside changed files.
-- Current main-sandbox gene chat/workspace smoke at `f40c18d1`: `python3 scripts/testing/dev_release_smoke.py --base-url http://192.168.86.44:8900 --sample-pdf /tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere.pdf --allow-dev-mode-fallback --allow-duplicate-reuse --skip-user-info --skip-flow --skip-batch --chat-model gpt-4o --chat-message 'Briefly say whether the loaded paper discusses Crumbs/crb; mention crb if present.' --chat-timeout-seconds 300 --processing-timeout-seconds 900 --evidence-dir /tmp/agr_ai_curation_chat_smoke_f40c18d1` -> `PASS (partial/debug run; omitted or relaxed: user_info, flow, batch, rerank_provider_smoke, dev_mode_fallback, duplicate_reuse)`.
+- Current main-sandbox gene chat/workspace smoke at `f40c18d1`: `python3 scripts/testing/dev_release_smoke.py --base-url http://127.0.0.1:8900 --sample-pdf /tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere.pdf --allow-dev-mode-fallback --allow-duplicate-reuse --skip-user-info --skip-flow --skip-batch --chat-model gpt-4o --chat-message 'Briefly say whether the loaded paper discusses Crumbs/crb; mention crb if present.' --chat-timeout-seconds 300 --processing-timeout-seconds 900 --evidence-dir /tmp/agr_ai_curation_chat_smoke_f40c18d1` -> `PASS (partial/debug run; omitted or relaxed: user_info, flow, batch, rerank_provider_smoke, dev_mode_fallback, duplicate_reuse)`.
 - Document cleanup cascade slice after deciding to remove document-owned domain-envelope artifacts on PDF delete: syntax compile passed with `PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache python3 -m py_compile backend/src/lib/document_cleanup.py backend/tests/unit/lib/test_document_cleanup.py`; `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/test_document_cleanup.py tests/unit/api/test_documents_runtime_endpoints.py tests/unit/lib/test_weaviate_documents_runtime.py -q"` -> `52 passed, 1 warning`; `git diff --check` passed.
 - Gene-expression validator metadata/prompt gap slice: syntax compile passed for `backend/tests/contract/alliance/domain_packs/test_gene_expression_domain_pack.py`; `docker compose -f docker-compose.test.yml run --rm backend-contract-tests bash -lc "python -m pytest tests/contract/alliance/domain_packs/test_gene_expression_domain_pack.py -q -m 'not alliance_linkml'"` -> `7 passed, 2 deselected, 1 warning`; `docker compose -f docker-compose.test.yml run --rm backend-contract-tests bash -lc "python -m pytest tests/contract/alliance/domain_packs/test_validation_metadata.py -q"` -> `13 passed, 1 warning`; `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/test_gene_expression_prompt_policy.py -q"` -> `11 passed, 1 warning`; `git diff --check` passed.
 - Gene-expression Agent Studio alias/prompt-plan slice: syntax compile passed for the changed Agent Studio tests/tool docs; `git diff --check` passed; `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/agent_studio/test_catalog_service_prompt_keys.py tests/unit/lib/agent_studio/test_registry_builder.py tests/unit/lib/agent_studio/test_domain_envelope_tools.py tests/unit/lib/agent_studio/test_flow_tools.py tests/unit/api/test_agent_studio_domain_envelope_prompt_policy.py tests/unit/api/test_agent_studio_domain_envelope_tools.py tests/unit/lib/agent_studio/test_hybrid_tool_registry.py -q"` -> `78 passed, 4 warnings`.
@@ -115,8 +115,8 @@ Result: `32 passed, 2 warnings`.
 - Cross-domain scaffold-variant follow-up: syntax compile passed for chemical, phenotype, and gene extractor schemas/tests; `git diff --check` passed; `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/test_chemical_extractor_domain_envelope_contract.py tests/unit/test_phenotype_extractor_domain_envelope_contract.py tests/unit/test_gene_extractor_domain_envelope_contract.py tests/unit/test_gene_expression_prompt_policy.py tests/unit/lib/openai_agents/test_streaming_tools_retry_paths.py tests/unit/lib/openai_agents/test_streaming_tools_helpers.py -q"` -> `113 passed, 1 warning`.
 - Complete-flow corpus follow-up: syntax compile passed for `backend/src/lib/flows/executor.py`, `scripts/testing/domain_envelope_pdf_corpus.py`, `backend/tests/unit/lib/flows/test_executor.py`, and `backend/tests/unit/scripts/test_domain_envelope_pdf_corpus.py`; local checkout `python3 -m pytest backend/tests/unit/scripts/test_domain_envelope_pdf_corpus.py -q` -> `6 passed, 1 pytest cache warning`; `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/flows/test_executor.py -q"` -> `87 passed, 1 warning`; `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/api/test_chat_execute_flow_endpoint.py -q"` -> `27 passed, 1 warning`; `git diff --check` and `git diff --cached --check` passed.
 - Final prompt/static documentation boundary cleanup: syntax compile passed for `backend/src/lib/agent_studio/registry_builder.py`, `backend/tests/unit/lib/agent_studio/test_registry_builder.py`, `backend/tests/unit/test_supervisor_prompt_policy.py`, and `backend/tests/unit/api/test_agent_studio_domain_envelope_prompt_policy.py`; `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/agent_studio/test_registry_builder.py tests/unit/test_supervisor_prompt_policy.py tests/unit/api/test_agent_studio_domain_envelope_prompt_policy.py tests/unit/test_domain_envelope_repair_prompt_contract.py -q"` -> `29 passed, 1 warning`; `git diff --check` passed; stale extractor-owned lookup wording search across the static Agent Studio docs, supervisor prompt, Alliance package prompts, and Agent Studio prompt knowledge now only matches regression-test forbidden-string assertions, not source prompt/doc copy.
-- Focused cross-domain corpus after deployed `bb135263`: `python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://192.168.86.44:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --trial cross_domain --flow-timeout-seconds 900 --processing-timeout-seconds 1200` -> `pass`, flow run `cf091ea8-c628-450c-b91f-4bd84c7e23d0`, observed all three expected bindings, zero specialist text fallbacks, zero validator problem events.
-- Full real-PDF corpus after deployed `bb135263`: `python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://192.168.86.44:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --flow-timeout-seconds 900 --processing-timeout-seconds 1200` -> `overall_status=pass`, seven of seven trials passed the tightened gate, zero specialist text fallbacks, zero validator problem events.
+- Focused cross-domain corpus after deployed `bb135263`: `python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://127.0.0.1:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --trial cross_domain --flow-timeout-seconds 900 --processing-timeout-seconds 1200` -> `pass`, flow run `cf091ea8-c628-450c-b91f-4bd84c7e23d0`, observed all three expected bindings, zero specialist text fallbacks, zero validator problem events.
+- Full real-PDF corpus after deployed `bb135263`: `python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://127.0.0.1:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --flow-timeout-seconds 900 --processing-timeout-seconds 1200` -> `overall_status=pass`, seven of seven trials passed the tightened gate, zero specialist text fallbacks, zero validator problem events.
 
 Known test-image limitation:
 
@@ -220,26 +220,9 @@ deciding whether a controlled vocabulary, ontology term, reagent, specimen,
 allele, condition, or Gene Expression experiment-context field has a live DB
 target and what table/column/row shape the package-owned helper should query.
 
-Primary helper from a Symphony workspace:
-
-```bash
-bash scripts/utilities/symphony_curation_db_psql.sh -- \
-  -c "select current_database(), current_user;"
-```
-
-If the workspace branch predates the helper, use the source-root helper:
-
-```bash
-bash "${SYMPHONY_LOCAL_SOURCE_ROOT}/scripts/utilities/symphony_curation_db_psql.sh" \
-  --workspace-dir "$PWD" -- \
-  -c "select current_database(), current_user;"
-```
-
-Status check:
-
-```bash
-bash scripts/utilities/symphony_curation_db_psql.sh --status
-```
+Use an explicitly configured read-only `CURATION_DB_URL` from the backend
+container. Verify the connection with a focused `SELECT current_database(),
+current_user` query and never print the connection URL or credentials.
 
 Rules for DB inspection:
 
@@ -287,7 +270,7 @@ Important schema findings:
 - `condition_relations` is optional on annotations, but a present `ConditionRelation` requires `condition_relation_type`; `ConditionRelationDTO` requires both `condition_relation_type_name` and `condition_dtos`. Dispatch should not treat an absent optional condition-relation array as a missing required model field.
 - `GeneExpressionAnnotation` requires `relation`, `data_provider`, `expression_annotation_subject`, `single_reference`, `expression_pattern`, `when_expressed_stage_name`, `where_expressed_statement`, and `internal`. Live curation DB rows have `geneexpressionannotation.relation_id` populated for every checked row, and all checked rows use vocabulary term `is_expressed_in`.
 
-Live curation DB confirmation through the read-only Symphony tunnel:
+Live curation DB confirmation through the read-only configured read-only connection:
 
 - `diseaseannotation`: 81,227 rows; all count-checked rows have `diseaseannotationobject_id`, `relation_id`, and `dataprovider_id`.
 - `geneexpressionannotation`: 1,911,104 rows; all count-checked rows have `relation_id` and `dataprovider_id`; relation term is `is_expressed_in`.
@@ -344,8 +327,8 @@ Committed and pushed fixes now on `origin/main`:
 
 Main sandbox state:
 
-- VM source checkout and VM sandbox checkout `/home/ctabone/.symphony/sandboxes/agr_ai_curation/main` are at `8e7ca7e7b4342701f05d9cd12d6ce7fbb446c551`. The actual `agrmainsandbox-backend-1` container was restarted directly after `8e7ca7e7`; Docker health is `healthy` with container start `2026-05-19T21:39:33.447390174Z`, `/health` returned healthy at `2026-05-19T21:40:17.495970+00:00`, and backend log grep since restart found no `Traceback`, `ERROR`, `validator_agent_error`, `SPECIALIST_TEXT_FALLBACK_SUCCESS`, `AgentRunner.run_sync`, or `incomplete_flow_steps` matches.
-- Previous corpus-runtime deployment: VM source checkout and VM sandbox checkout `/home/ctabone/.symphony/sandboxes/agr_ai_curation/main` were at `bb1352631019ab1135529b280b73e28f8cf52adb`. Backend was restarted after `bb135263`; the first host health probes briefly got the expected startup `Empty reply from server`, and `/health` returned healthy at `2026-05-19T21:17:01.106809+00:00`.
+- VM source checkout and VM sandbox checkout `<private-app-worktree>` are at `8e7ca7e7b4342701f05d9cd12d6ce7fbb446c551`. The actual `agrmainsandbox-backend-1` container was restarted directly after `8e7ca7e7`; Docker health is `healthy` with container start `2026-05-19T21:39:33.447390174Z`, `/health` returned healthy at `2026-05-19T21:40:17.495970+00:00`, and backend log grep since restart found no `Traceback`, `ERROR`, `validator_agent_error`, `SPECIALIST_TEXT_FALLBACK_SUCCESS`, `AgentRunner.run_sync`, or `incomplete_flow_steps` matches.
+- Previous corpus-runtime deployment: VM source checkout and VM sandbox checkout `<private-app-worktree>` were at `bb1352631019ab1135529b280b73e28f8cf52adb`. Backend was restarted after `bb135263`; the first host health probes briefly got the expected startup `Empty reply from server`, and `/health` returned healthy at `2026-05-19T21:17:01.106809+00:00`.
 - Focused cross-domain corpus rerun after deployed `bb135263`: strict gate `pass`, flow run `cf091ea8-c628-450c-b91f-4bd84c7e23d0`, evidence records `3`, steps `chemical_extractor`, `phenotype_extractor`, and `gene_extractor` each emitted one evidence record, observed all expected bindings (`chemical_condition.chebi_api_lookup`, `phenotype_term_ontology_validator`, `alliance_gene_reference_lookup`), no specialist text fallback events, and no validator problem events.
 - Full real-PDF corpus run after deployed `bb135263`: strict gate `pass`, summary artifact `docs/design/pdf-corpus-trials/summary.json`, summary timestamp `2026-05-19T21:19:59.332670+00:00`, overall status `pass`. All seven trials passed with expected active validator lookup audit events, no `SPECIALIST_TEXT_FALLBACK_SUCCESS`, and no validator problem events. Flow runs: gene `78559033-da07-45bc-98c6-622829a696a2`; allele `33b36204-a254-4e1c-94d0-d8f88f073194`; disease `0b564b97-4216-40b3-810b-cf30a4d78e0d`; chemical `56f2b272-9fa5-43af-971f-c22d24bed700`; phenotype `d496934a-99f1-4a83-bf83-eb5aacd74101`; gene expression `aa9cd576-1278-4e97-9e83-6a1a0666c62e`; cross-domain `c037bdca-c29e-4424-8db4-5c138aeec02e`.
 - Backend log grep since `2026-05-19T21:17:00Z` found no `AgentRunner.run_sync`, `validator_agent_error`, `Package-scoped validator agent failed`, or `SPECIALIST_TEXT_FALLBACK_SUCCESS` matches. `/health` returned healthy at `2026-05-19T21:31:27.627520+00:00`.
@@ -354,9 +337,9 @@ Main sandbox state:
 - Focused disease real-PDF corpus trial after deployed `25687612`: strict gate `pass`, summary timestamp `2026-05-19T20:29:04.312731+00:00`, flow run `b5ae83bb-2e9e-441e-8986-5ac8bc2176c3`, evidence records `1`, observed lookup counts `disease_ontology_term_lookup: 4`, `disease_relation_cv_lookup: 2`, `disease_data_provider_lookup: 2`, no specialist text fallback events, and no validator problem events.
 - Full real-PDF corpus run after deployed `25687612`: strict gate `fail`, summary timestamp `2026-05-19T20:30:54.885059+00:00`. Gene, allele, and disease passed the tightened gate with expected active validator lookup audit events and no specialist text fallback. Chemical (`04905794-9b14-4dc4-a957-59db20a18f37`), phenotype (`63464e0f-7d75-4437-adac-622b24148339`), gene expression (`32cbd0ef-70b8-4a5e-b17c-7a15f20d500a`), and cross-domain (`05c5d84b-12d6-4aa6-a0f2-f29a74d529d0`) all had expected validator lookup audit events and no validator problem events, but failed the tightened gate because `SPECIALIST_TEXT_FALLBACK_SUCCESS` occurred. The remaining blocker is extractor structured-output/schema recovery for those domains, not missing validator dispatch visibility or LinkML-requiredness relaxation.
 - `agrmainsandbox` backend, frontend, Postgres, Weaviate, Redis, Langfuse, ClickHouse, and MinIO containers were healthy for the corpus run.
-- Sandbox corpus base URL: `http://192.168.86.44:8900`.
+- Sandbox corpus base URL: `http://127.0.0.1:8900`.
 - Backend was restarted after `a43f0450` and `/health` returned healthy at `2026-05-19T18:44:50.598484+00:00`.
-- Frontend was rebuilt/recreated after `f40c18d1` through `scripts/utilities/symphony_main_sandbox.sh repair`; `/health` returned healthy at `2026-05-19T18:54:54.293494+00:00`, and the frontend returned `HTTP/1.1 200 OK` with `Last-Modified: Tue, 19 May 2026 18:49:54 GMT`.
+- Frontend was rebuilt/recreated after `f40c18d1`; `/health` returned healthy at `2026-05-19T18:54:54.293494+00:00`, and the frontend returned `HTTP/1.1 200 OK` with `Last-Modified: Tue, 19 May 2026 18:49:54 GMT`.
 - Docs-only commit `f1c58557` was pulled into the VM source checkout and main sandbox checkout; backend `/health` remained healthy at `2026-05-19T19:03:14.225237+00:00`.
 - Backend cleanup commit `8aa4bc19` was pulled into the VM source checkout and main sandbox checkout; the existing backend container was restarted, and `/health` returned healthy at `2026-05-19T19:11:33.291971+00:00`.
 - Gene-expression metadata/prompt commit `de761e6b` was pulled into the VM source checkout and main sandbox checkout; the existing backend container was restarted, and `/health` returned healthy at `2026-05-19T19:17:53.388479+00:00`.
@@ -374,7 +357,7 @@ Main sandbox state:
 Historical full real-PDF corpus run after `558f671f` (superseded by the passing `bb135263` corpus):
 
 ```bash
-python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://192.168.86.44:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --flow-timeout-seconds 900 --processing-timeout-seconds 1200
+python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://127.0.0.1:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --flow-timeout-seconds 900 --processing-timeout-seconds 1200
 ```
 
 Script result: overall `pass`; summary artifact `docs/design/pdf-corpus-trials/summary.json` timestamp `2026-05-19T19:48:03.705766+00:00`.
@@ -394,7 +377,7 @@ Tightened-gate interpretation: this is not an exit-criterion corpus pass yet. Th
 Earlier real-PDF corpus run:
 
 ```bash
-python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://192.168.86.44:8900 --allow-dev-mode-fallback --allow-duplicate-reuse
+python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://127.0.0.1:8900 --allow-dev-mode-fallback --allow-duplicate-reuse
 ```
 
 Result: overall `pass`; summary artifact `docs/design/pdf-corpus-trials/summary.json` timestamp `2026-05-19T16:33:09.939454+00:00`.
@@ -402,7 +385,7 @@ Result: overall `pass`; summary artifact `docs/design/pdf-corpus-trials/summary.
 Earlier focused post-fix corpus rerun:
 
 ```bash
-python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://192.168.86.44:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --trial cross_domain_zebrafish_segmentation_screen
+python3 scripts/testing/domain_envelope_pdf_corpus.py --base-url http://127.0.0.1:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --trial cross_domain_zebrafish_segmentation_screen
 ```
 
 Result after nested-term materialization fix: `pass`; latest summary timestamp `2026-05-19T17:49:42.035468+00:00`, flow run `63239102-338f-40db-9bd6-3d3f12a3dfbe`. This real-PDF pass emitted the phenotype term under the phenotype annotation; the persistence sanitizer materialized a standalone `PhenotypeTerm`, and the active phenotype validator persisted an open blocked finding for `phenotype-term-1-1` without searching MP or WBPhenotype.
@@ -444,7 +427,7 @@ Direct gene-envelope check after `87430568`:
 Latest chat/workspace validation after `9c4008d5`:
 
 ```bash
-python3 scripts/testing/dev_release_smoke.py --base-url http://192.168.86.44:8900 --sample-pdf /tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere.pdf --allow-dev-mode-fallback --allow-duplicate-reuse --skip-user-info --skip-flow --skip-batch --chat-model gpt-4o --chat-message 'Briefly say whether the loaded paper discusses Crumbs/crb; mention crb if present.' --chat-timeout-seconds 300 --processing-timeout-seconds 900 --evidence-dir /tmp/agr_ai_curation_chat_smoke
+python3 scripts/testing/dev_release_smoke.py --base-url http://127.0.0.1:8900 --sample-pdf /tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere.pdf --allow-dev-mode-fallback --allow-duplicate-reuse --skip-user-info --skip-flow --skip-batch --chat-model gpt-4o --chat-message 'Briefly say whether the loaded paper discusses Crumbs/crb; mention crb if present.' --chat-timeout-seconds 300 --processing-timeout-seconds 900 --evidence-dir /tmp/agr_ai_curation_chat_smoke
 ```
 
 Observed result: `PASS (partial/debug run; omitted or relaxed: user_info, flow, batch, rerank_provider_smoke, dev_mode_fallback, duplicate_reuse)`.
@@ -636,13 +619,13 @@ PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache python3 -m py_compile <changed-
 After deploy to the main sandbox:
 
 ```bash
-python scripts/testing/domain_envelope_pdf_corpus.py --base-url http://192.168.86.44:8900 --allow-dev-mode-fallback --allow-duplicate-reuse
+python scripts/testing/domain_envelope_pdf_corpus.py --base-url http://127.0.0.1:8900 --allow-dev-mode-fallback --allow-duplicate-reuse
 ```
 
 Focused gene rerun:
 
 ```bash
-python scripts/testing/domain_envelope_pdf_corpus.py --base-url http://192.168.86.44:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --trial gene
+python scripts/testing/domain_envelope_pdf_corpus.py --base-url http://127.0.0.1:8900 --allow-dev-mode-fallback --allow-duplicate-reuse --trial gene
 ```
 
 ## Real-PDF Corpus Trial Plan

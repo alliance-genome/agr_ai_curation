@@ -1,8 +1,8 @@
 # Test Strategy
 
-This repository is Docker-first for backend validation. In Symphony issue
-workspaces, run backend suites through `docker-compose.test.yml` so tests use
-the same service wiring and dependencies as CI.
+This repository is Docker-first for backend validation. Run isolated backend
+suites through `docker-compose.test.yml` so tests use the same service wiring
+and dependencies as CI.
 
 ## Default Commands
 
@@ -10,42 +10,31 @@ Use the narrowest suite that covers the change:
 
 ```bash
 # Backend unit suite
-bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests
 
 # Backend contract suite
-bash scripts/utilities/symphony_backend_test.sh run --rm backend-contract-tests
+bash scripts/testing/docker-test-compose.sh run --rm backend-contract-tests
 
 # Full backend suite
-bash scripts/utilities/symphony_backend_test.sh run --rm backend-tests
+bash scripts/testing/docker-test-compose.sh run --rm backend-tests
 
 # Specific backend test file
-bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
   bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"
 ```
 
-The Symphony wrapper takes a real-workspace lock and a derived
-Docker-daemon/Compose-project lock before invoking `docker-compose.test.yml`,
-preventing unit/contract/integration commands from starting concurrently
-against the same project resources. It never cleans up containers on the
-normal path. If it reports a recognized stale
-container/network collision, `--repair-known-collision` explicitly permits a
-project-scoped `down --remove-orphans` followed by the configured bounded retry.
-Do not opt into repair while a raw Compose command is still active in that
-workspace.
-The Symphony wrapper explicitly selects rootful Docker by default because the
-Incus VM uses the system daemon at `/var/run/docker.sock`; it does not depend on
-the general test helper's rootless default. Set `AI_CURATION_TEST_DOCKER_MODE`
-or pass `--rootless` only in an environment with a working rootless daemon.
-The `--rootful` and `--rootless` selectors are supported. Custom Compose
-project, directory, env-file, profile, and file selectors are rejected because
-they would make lock and cleanup identity ambiguous.
+The generic Compose helper uses rootless Docker by default. Set
+`AI_CURATION_TEST_DOCKER_MODE=rootful` or pass `--rootful` when the local
+environment intentionally uses the system daemon. Run only one command against
+the same Compose project at a time, and inspect active containers before any
+manual cleanup.
 
 Frontend validation runs on the host Node toolchain:
 
 ```bash
 cd frontend
 npm ci
-npm run test:symphony
+npm run test:stable
 npm run type-check:changed -- --base origin/main
 ```
 
@@ -56,7 +45,7 @@ not treat it as ticket-local failure.
 For syntax-only Python checks, keep cache artifacts outside the workspace:
 
 ```bash
-PYTHONPYCACHEPREFIX=/tmp/symphony-pycache \
+PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache \
   python3 -m py_compile backend/src/path/to/file.py
 ```
 
@@ -79,7 +68,7 @@ The 0.7.0 domain-envelope gates are recorded in
 The offline provider-agnostic release gate uses:
 
 ```bash
-bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
   bash -lc "bash tests/unit/run_ci_unit_tests.sh --suite domain-envelope-release"
 ```
 
@@ -88,7 +77,7 @@ The path list is `backend/tests/unit/.domain-envelope-release-test-paths`.
 The Alliance domain-pack contract gate uses:
 
 ```bash
-bash scripts/utilities/symphony_backend_test.sh run --rm backend-contract-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-contract-tests \
   bash -lc "bash tests/contract/run_ci_contract_core_tests.sh \
     --path-file tests/contract/.alliance-domain-pack-test-paths \
     --suite-label alliance-domain-pack"
@@ -106,7 +95,7 @@ the repo-relative test module or guard file.
 The cheap structural catalog check is:
 
 ```bash
-bash scripts/utilities/symphony_backend_test.sh run --rm backend-unit-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
   bash -lc "python -m pytest tests/unit/test_guardrail_catalog.py -v --tb=short"
 ```
 
@@ -163,7 +152,7 @@ backend/tests/contract/.alliance-live-db-test-paths
 Run only with explicit enablement:
 
 ```bash
-bash scripts/utilities/symphony_backend_test.sh run --rm backend-contract-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-contract-tests \
   bash -lc "ALLIANCE_LIVE_DB_CONTRACT_TESTS=1 \
     bash tests/contract/run_ci_contract_core_tests.sh \
       --path-file tests/contract/.alliance-live-db-test-paths \
@@ -224,6 +213,6 @@ link validation:
 ./scripts/maintenance/harness_hygiene.sh
 ```
 
-The harness includes a Markdown link check and required-doc presence check. In
-local Symphony environments it may also report unrelated stale workspace
-hygiene; record that separately from ticket-local docs failures.
+The harness includes a Markdown link check, required-doc presence check, and
+local worktree hygiene report. Record unrelated stale worktrees separately from
+change-local documentation failures.

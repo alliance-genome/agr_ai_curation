@@ -9,16 +9,16 @@ trap 'rm -rf "${temp_dir}"' EXIT
 
 sandbox_repo="${temp_dir}/repo"
 mkdir -p "${sandbox_repo}"
-tar -C "${repo_root}" -cf - . | tar -C "${sandbox_repo}" -xf -
+tar -C "${repo_root}" --exclude='./.git' -cf - . | tar -C "${sandbox_repo}" -xf -
 chmod -R u+w "${sandbox_repo}"
-rm -f "${sandbox_repo}/.git/shallow.lock"
 
+git -C "${sandbox_repo}" init -q
 git -C "${sandbox_repo}" config user.name "Codex"
 git -C "${sandbox_repo}" config user.email "codex@example.com"
 git -C "${sandbox_repo}" add -A
 git -C "${sandbox_repo}" commit --allow-empty -q -m "baseline for agent_pr_gate standalone suite regression"
 git -C "${sandbox_repo}" branch -f scenario-base HEAD >/dev/null
-git -C "${sandbox_repo}" remote set-url origin "${sandbox_repo}"
+git -C "${sandbox_repo}" remote add origin "${sandbox_repo}"
 
 assert_check_state() {
   local report_path="$1"

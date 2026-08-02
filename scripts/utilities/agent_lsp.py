@@ -25,8 +25,8 @@ from typing import Any
 
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "agr-ai-curation" / "agent-lsp"
 SOURCE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
-# Symphony runs this helper from lightweight issue workspaces that often do not
-# have the backend virtualenv installed. Missing third-party imports are allowed
+# Agents may run this helper from lightweight workspaces that do not have the
+# backend virtualenv installed. Missing third-party imports are allowed
 # to remain dependency noise, but repo-local missing imports must still fail.
 PYRIGHT_DEPENDENCY_RESOLUTION_RULES = {
     "reportMissingImports",
@@ -895,16 +895,14 @@ Commands:
   references   Find known references for the symbol at a file position.
   diagnostics  Run scoped Ruff/Pyright/frontend changed-file diagnostics.
   cleanup      Remove old per-workspace LSP cache state.
-  warm         Refresh workspace LSP state. Usually automatic in Symphony lanes;
-               run manually only for local smoke testing or stale-state recovery.
+  warm         Refresh workspace LSP state for local smoke testing or
+               stale-state recovery.
 
 Use rg first for broad text/file discovery. Use this helper when symbol identity
 matters: definitions, references, imports/exports, large-file outlines, or
 reviewing shared API changes.
 
-In Symphony In Progress and In Review lanes, LSP warmup is automatic through the
-lane brief helpers. Run `warm` manually only for local smoke testing or recovery
-after a clearly stale or missing LSP state.
+Run `warm` manually when the cached workspace state is clearly stale or missing.
 """,
     )
     parser.add_argument(
@@ -925,11 +923,10 @@ after a clearly stale or missing LSP state.
     )
     subparsers.add_parser(
         "warm",
-        help="Refresh workspace LSP state; normally automatic in Symphony lanes.",
+        help="Refresh workspace LSP state.",
         description=(
-            "Refresh workspace LSP state. In Symphony In Progress and In Review lanes, "
-            "the lane helpers run this automatically; run it manually only for local "
-            "smoke testing or recovery after stale/missing state."
+            "Refresh workspace LSP state for local smoke testing or recovery after "
+            "stale or missing state."
         ),
     )
 

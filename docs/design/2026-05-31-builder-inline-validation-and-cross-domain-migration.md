@@ -460,40 +460,19 @@ sequencing from the 2026-05-21 docs.
 - Per remaining domain: does each builder's finalize enforce evidence/provenance equivalently
   to the inline `_emit_specialist_evidence_summary_or_raise` check before that check is deleted?
 
-## Sandbox testing runbook
+## Local testing runbook
 
-The work happens in the Symphony main sandbox (Incus VM `symphony-main`, compose project
-`agrmainsandbox`). The backend is at `http://127.0.0.1:8900` *inside the VM*; the host cannot
-reach it directly, so run cur/python via `incus exec`. DEV_MODE is on, so no auth header is
-needed (mock dev user `dev-user-123`).
-
-### Deploy a source change to the running sandbox
-
-The backend mounts source from the worktree `/home/ctabone/.symphony/sandboxes/agr_ai_curation/main`
-and runs uvicorn `--reload`. To deploy an edited file:
-
-```bash
-WT=/home/ctabone/.symphony/sandboxes/agr_ai_curation/main
-incus file push <hostfile> symphony-main$WT/<same/relative/path> --uid 1000 --gid 1000 --mode 0644
-# wait ~5s for --reload, then:
-incus exec symphony-main -- bash -lc 'docker exec agrmainsandbox-backend-1 python -c "import ast; ast.parse(open(\"/app/<path>\").read()); print(\"syntax OK\")"; curl -s -m6 -o /dev/null -w "health %{http_code}\n" http://127.0.0.1:8900/docs'
-```
-
-WARNING: never `docker compose down -v` or re-run the Symphony sandbox `prepare` — the worktree
-is a checkout of origin/main and the uncommitted fixes (this work) would be lost. If the backend
-container must be recreated, the **compose-time-only** env vars are NOT in the container env and
-must be in `$WT/.env`: `BACKEND_HOST_PORT=8900`, `RUN_DB_BOOTSTRAP_ON_START=true`,
-`RUN_DB_MIGRATIONS_ON_START=true`, `RERANK_AWS_CREDENTIALS_MOUNT_DIR=/home/ctabone/.symphony/secrets/agr_ai_curation/aws-rerank`,
-`ELASTICSEARCH_HOST=vpc-literature-search-3ioqj2ykpx2jbthmp5ocnbs7vi.us-east-1.es.amazonaws.com`
-(+ scheme `https`, port 443, index `references_index`). Recreate with
-`cd $WT && docker compose -p agrmainsandbox up -d --no-deps --no-build --force-recreate backend`.
+Use a clean checkout and the documented Compose development stack. Rebuild the
+backend from the checkout instead of copying source into a running container.
+Keep deployment-specific credentials and endpoints in an external `.env` file;
+never include them in this repository or in diagnostic output.
 
 ### End-to-end test for one data class
 
 Per data class, with the document already uploaded + PDFX-processed (see "Test PDF inventory"):
 
 ```bash
-BASE=http://127.0.0.1:8900
+BASE=${BACKEND_URL:-http://127.0.0.1:8000}
 DOC=<document_id>
 SID=<class>-test-$(date +%s)
 # 1) make it the active chat doc
@@ -524,8 +503,8 @@ For inline validation (Parts 1-2): grep the backend logs for the validator dispa
 chat turn (NOT just at bootstrap):
 
 ```bash
-incus exec symphony-main -- bash -lc 'docker logs --since <chat_start_iso> agrmainsandbox-backend-1 2>&1 | \
-  grep -iE "Active Validator Dispatch|chat domain-envelope validation dispatched|gene_validation|ontology_term_validation"'
+docker compose logs --since <chat_start_iso> backend 2>&1 | \
+  grep -iE "Active Validator Dispatch|chat domain-envelope validation dispatched|gene_validation|ontology_term_validation"
 ```
 
 Expect "chat domain-envelope validation dispatched N binding(s), M validator result(s), K finding(s)"
@@ -551,11 +530,11 @@ curl -s -m600 -X POST "$BASE/api/curation-workspace/documents/$DOC/bootstrap" \
 # response.session.validation.counts shows validated/conflict/etc.; warnings show service availability.
 ```
 
-### Whole-run diagnostic (TraceReview, port 8901 in the VM)
+### Whole-run diagnostic (TraceReview)
 
 ```bash
 TID=<trace_id from logs>
-incus exec symphony-main -- bash -lc "curl -s 'http://127.0.0.1:8901/api/claude/traces/$TID/diagnostic_report?source=local&include_raw_args=true&include_raw_outputs=true&include_sibling_traces=true&session_id=$SID'"
+curl -s "${TRACE_REVIEW_URL:-http://127.0.0.1:8001}/api/claude/traces/$TID/diagnostic_report?source=local&include_raw_args=true&include_raw_outputs=true&include_sibling_traces=true&session_id=$SID"
 ```
 
 `include_sibling_traces=true` + `session_id` is what folds validator sub-runs into one report.
