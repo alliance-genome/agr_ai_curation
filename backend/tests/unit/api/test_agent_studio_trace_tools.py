@@ -7,7 +7,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-
 import src.api.agent_studio as api_module
 from src.api import logs as logs_api
 from src.lib.agent_studio.models import ChatContext
@@ -41,7 +40,7 @@ def _install_langfuse(monkeypatch, trace_obj=None, observations=None, raise_on_i
                 ),
             )
 
-    setattr(module, "Langfuse", _Langfuse)
+    module.Langfuse = _Langfuse
     monkeypatch.setitem(sys.modules, "langfuse", module)
 
 

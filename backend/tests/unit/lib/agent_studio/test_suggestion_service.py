@@ -1,7 +1,6 @@
 """Tests for prompt suggestion submission service."""
 
 import pytest
-
 from src.lib.agent_studio import suggestion_service as svc
 
 
