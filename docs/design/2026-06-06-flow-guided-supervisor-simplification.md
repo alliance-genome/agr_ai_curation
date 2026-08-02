@@ -229,13 +229,13 @@ unless `extra="forbid"` or an equivalent raw-definition normalizer rejects
 - Return explicit failed validation/runtime errors rather than passing malformed
   JSON onward.
 
-### P5: local development Runtime And TraceReview Validation
+### P5: Local Development Runtime And TraceReview Validation
 
-- Use the `the development runbook` local development operating model for runtime validation.
+- Use the local development operating model from the development runbook for runtime validation.
 - Validate in the VM-backed local development app, not only through host unit tests.
 - Confirm local TraceReview health before the run with `/health` and
   `/health/langfuse`; use the documented alternate port `18001` if host port
-  `8001` is occupied by the another local service.
+  `8001` is occupied by another local service.
 - Use the sample FlyBase fixture PDF:
   `backend/tests/fixtures/sample_fly_publication.pdf`.
 - Create a small real flow around that PDF, run it from the main flow execution

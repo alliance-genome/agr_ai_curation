@@ -138,7 +138,7 @@ The raw ABC Literature live smoke remains available for lower-level endpoint
 contract checks:
 
 ```bash
-python3 scripts/testing/abc_literature_live_smoke.py --aws-profile default
+python3 scripts/testing/abc_literature_live_smoke.py --aws-profile your-aws-profile
 ```
 
 ## Disable Procedure

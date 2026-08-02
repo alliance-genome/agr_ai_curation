@@ -229,7 +229,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     default_aws_profile = _env_first(
         "ABC_LITERATURE_SMOKE_AWS_PROFILE",
         "AWS_PROFILE",
-        default="default",
+        default="",
     )
 
     parser = argparse.ArgumentParser(
@@ -243,7 +243,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=default_aws_profile,
         help=(
             "AWS profile with Cognito admin permissions. Defaults to "
-            "ABC_LITERATURE_SMOKE_AWS_PROFILE, AWS_PROFILE, then default."
+            "ABC_LITERATURE_SMOKE_AWS_PROFILE or AWS_PROFILE; when omitted, "
+            "the standard AWS credential provider chain is used."
         ),
     )
     parser.add_argument(

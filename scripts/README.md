@@ -469,7 +469,7 @@ Runs the durable ABC Literature stage smoke for release evidence:
 Typical usage on the dev host:
 
 ```bash
-python3 scripts/testing/abc_literature_live_smoke.py --aws-profile default
+python3 scripts/testing/abc_literature_live_smoke.py --aws-profile your-aws-profile
 ```
 
 Useful environment/CLI overrides:
@@ -520,7 +520,7 @@ Typical usage on a backend configured with `AUTH_PROVIDER=cognito`,
 
 ```bash
 python3 scripts/testing/abc_literature_ready_upload_smoke.py \
-  --aws-profile default \
+  --aws-profile your-aws-profile \
   --backend-base-url http://localhost:8000
 ```
 
@@ -636,7 +636,7 @@ Typical usage:
 
 ```bash
 python3 scripts/testing/abc_literature_identifier_import_smoke.py \
-  --aws-profile default \
+  --aws-profile your-aws-profile \
   --backend-base-url http://localhost:8000
 ```
 

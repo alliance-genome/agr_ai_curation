@@ -41,6 +41,18 @@ def test_parse_args_defaults_to_stage_fixture(monkeypatch):
     assert args.converted_referencefile_id == smoke.DEFAULT_CONVERTED_REFERENCEFILE_ID
 
 
+def test_parse_args_without_profile_uses_standard_credential_chain(monkeypatch):
+    smoke = _load_smoke_module()
+    monkeypatch.delenv("ABC_LITERATURE_SMOKE_AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+
+    args = smoke.parse_args([])
+    config = smoke.config_from_args(args)
+
+    assert args.aws_profile == ""
+    assert config.aws_profile is None
+
+
 def test_build_pytest_env_sets_live_harness_contract(tmp_path):
     smoke = _load_smoke_module()
     config = smoke.config_from_args(
