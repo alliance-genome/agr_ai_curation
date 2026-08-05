@@ -71,6 +71,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LIMIT = int(os.getenv("AGR_DEFAULT_LIMIT", "100"))
 HARD_MAX = int(os.getenv("AGR_HARD_MAX", "500"))
+BULK_SYMBOL_SOFT_CAP_ENV = "AGR_BULK_SYMBOL_SOFT_CAP"
+BULK_SYMBOL_SOFT_CAP_DEFAULT = 40
 _ALLELE_FUZZY_SIMILARITY_THRESHOLD = float(
     os.getenv("AGR_ALLELE_FUZZY_SIMILARITY_THRESHOLD", "0.35")
 )
@@ -878,6 +880,21 @@ def _normalize_limit(limit: Optional[int]) -> Tuple[int, List[str]]:
         limit_int = HARD_MAX
 
     return limit_int, warnings
+
+
+def _bulk_symbol_soft_cap() -> int:
+    cap = int(os.getenv(BULK_SYMBOL_SOFT_CAP_ENV, str(BULK_SYMBOL_SOFT_CAP_DEFAULT)))
+    if cap <= 0:
+        raise ValueError(f"{BULK_SYMBOL_SOFT_CAP_ENV} must be positive")
+    return cap
+
+
+def _apply_bulk_symbol_soft_cap(symbols: List[str]) -> Tuple[List[str], List[str]]:
+    cap = _bulk_symbol_soft_cap()
+    received = len(symbols)
+    if received <= cap:
+        return symbols, []
+    return symbols[:cap], [f"bulk_symbol_cap_applied:{cap}:{received}"]
 
 
 def _extract_fullname_attribution(fullname: Optional[str], taxon_id: str) -> Optional[Dict[str, Any]]:
@@ -1801,6 +1818,8 @@ def agr_curation_query(
                 taxon_ids = [taxon]
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
+            normalized_symbols, cap_warnings = _apply_bulk_symbol_soft_cap(normalized_symbols)
+            warnings.extend(cap_warnings)
 
             pending_matches: Dict[str, List[Dict[str, Any]]] = {}
             gene_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
@@ -2532,6 +2551,8 @@ def agr_curation_query(
                 taxon_ids = [taxon]
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
+            normalized_symbols, cap_warnings = _apply_bulk_symbol_soft_cap(normalized_symbols)
+            warnings.extend(cap_warnings)
 
             pending_matches: Dict[str, List[Dict[str, Any]]] = {}
             allele_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
