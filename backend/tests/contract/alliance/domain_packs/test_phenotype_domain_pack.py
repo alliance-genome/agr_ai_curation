@@ -1135,6 +1135,7 @@ def test_phenotype_condition_binding_scoped_and_shaped():
     assert "condition_id" not in composite["expected_result_fields"]
     assert composite["batch"]["enabled"] is True
     assert composite["batch"]["family"] == "experimental_condition_validation"
+    assert composite["batch"]["max_size"] == 4
 
     relation = bindings["phenotype_condition_relation_lookup"]
     assert relation["applies_to"]["object_types"] == [PHENOTYPE_OBJECT_TYPE]

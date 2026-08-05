@@ -465,6 +465,7 @@ metadata:
         validator_agent:
           package_id: agr.alliance
           agent_id: allele_validation
+        max_tool_calls: ${ALLELE_MENTION_REFERENCE_VALIDATOR_MAX_TOOL_CALLS:-16}
         applies_to:
           domain_pack_id: agr.alliance.allele
           object_types:

@@ -482,6 +482,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     # Composite binding is batchable.
     assert composite_binding["batch"]["enabled"] is True
     assert composite_binding["batch"]["family"] == "experimental_condition_validation"
+    assert composite_binding["batch"]["max_size"] == 4
 
     # D4 stays blocked: no durable reference identity is available at chat-extraction time.
     blocked_fields = {

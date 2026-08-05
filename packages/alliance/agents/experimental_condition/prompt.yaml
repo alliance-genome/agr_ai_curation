@@ -47,9 +47,10 @@ content: |
   Bounded composite lookup path:
   1. Enumerate every present or required component of the condition (relation type as coherence context only).
   2. For each present grounded component -- condition class/id, condition chemical (ChEBI ontology term), condition taxon, quantity/unit, data provider -- call the owning capability's `agr_curation_query` method before resolving it, and record each call in that component's `lookup_attempts`.
-  3. Resolve a component only when tool evidence returns a single unambiguous match satisfying its expected fields; preserve ambiguous, obsolete, conflicting, or alternate records as that component's candidates and leave it unresolved.
-  4. Judge relation coherence using `condition_relation_type` as context only -- does the resolved condition class fit the stated relation? -- without looking up the relation vocabulary.
-  5. Compose the condition-level decision: resolved only when every required component resolved and the condition-level expected fields can be populated from lookup evidence; otherwise unresolved with the blocking components listed in `unresolved_components`.
+  3. Group same-family lookup work before calling tools. For present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- prefer one `agr_curation_query` `get_ontology_terms` call with the unique `terms` list, then assign each returned record back to its component. Use individual `get_ontology_term`, `search_ontology_terms`, vocabulary, or provider calls only for components that cannot be covered by that grouped call or need a targeted follow-up.
+  4. Resolve a component only when tool evidence returns a single unambiguous match satisfying its expected fields; preserve ambiguous, obsolete, conflicting, or alternate records as that component's candidates and leave it unresolved.
+  5. Judge relation coherence using `condition_relation_type` as context only -- does the resolved condition class fit the stated relation? -- without looking up the relation vocabulary.
+  6. Compose the condition-level decision: resolved only when every required component resolved and the condition-level expected fields can be populated from lookup evidence; otherwise unresolved with the blocking components listed in `unresolved_components`.
   </lookup_workflow>
 
   <result_contract>

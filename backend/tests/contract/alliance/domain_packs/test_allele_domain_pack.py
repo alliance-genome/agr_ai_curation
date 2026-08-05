@@ -225,6 +225,7 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
         "package_id": "agr.alliance",
         "agent_id": "allele_validation",
     }
+    assert allele_lookup["max_tool_calls"] == 16
     assert allele_lookup["applies_to"]["object_types"] == ["AlleleMention"]
     assert allele_lookup["applies_to"]["field_paths"] == [
         "mention.text",
