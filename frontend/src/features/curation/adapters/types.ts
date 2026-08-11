@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import type { FieldRowInputProps } from '@/features/curation/editor'
 
 export interface CurationAdapterFieldLayoutEntry {
-  fieldKey: string
+  fieldPath: string
   label: string
   groupKey: string
   groupLabel: string
@@ -16,4 +16,3 @@ export interface CurationAdapterEditorPack {
   fieldLayout: readonly CurationAdapterFieldLayoutEntry[]
   renderFieldInput: (props: FieldRowInputProps) => ReactNode
 }
-
