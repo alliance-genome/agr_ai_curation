@@ -291,7 +291,7 @@ describe('buildHorizontalGridModel', () => {
       readOnly: null,
       staleValidation: null,
     })
-    expect(missingGeneCell?.value).toBeUndefined()
+    expect(missingGeneCell?.value).toBeNull()
   })
 
   it('uses adapter field metadata for labels and ordering without changing canonical identity', () => {
@@ -505,6 +505,7 @@ describe('buildHorizontalGridModel', () => {
       fieldKey: null,
       fieldPath: 'gene.name',
       hasField: false,
+      value: null,
       evidence: [{ anchor_id: 'missing-field' }],
       validation: {
         statuses: ['blocked'],
@@ -670,6 +671,24 @@ describe('buildHorizontalGridModel', () => {
       envelopeReviewRows: [],
     })).toThrow(
       "Candidate 'candidate-envelope' has an envelope projection but no envelope review row",
+    )
+  })
+
+  it('rejects review rows for candidates without an envelope projection', () => {
+    const genericCandidate = candidate({
+      id: 'candidate-generic',
+      objectId: 'object-generic',
+      order: 0,
+      fields: [],
+    })
+    const orphanReviewRow = workspaceRow({ candidate: genericCandidate })
+    genericCandidate.projection_ref = null
+
+    expect(() => buildHorizontalGridModel({
+      candidates: [genericCandidate],
+      envelopeReviewRows: [orphanReviewRow],
+    })).toThrow(
+      "Envelope review row references candidate 'candidate-generic' without an envelope projection",
     )
   })
 })

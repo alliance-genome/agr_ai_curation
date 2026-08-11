@@ -356,7 +356,7 @@ function projectRow(
       fieldKey: field?.field_key ?? null,
       fieldPath,
       hasField: field !== null,
-      value: field?.value,
+      value: field?.value ?? null,
       required: field?.required ?? null,
       readOnly: field?.read_only ?? null,
       staleValidation: field?.stale_validation ?? null,
@@ -444,7 +444,7 @@ function sourceRows({
 
     if (envelopeReviewRow) {
       throw new Error(
-        `Envelope review row projection does not match candidate '${candidate.candidate_id}'`,
+        `Envelope review row references candidate '${candidate.candidate_id}' without an envelope projection`,
       )
     }
 
