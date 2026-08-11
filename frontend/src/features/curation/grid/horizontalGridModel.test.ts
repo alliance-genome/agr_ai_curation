@@ -429,7 +429,7 @@ describe('buildHorizontalGridModel', () => {
         candidate: rowCandidate,
         evidence: [
           evidenceProjection({ id: 'name', fieldPath: 'gene.name' }),
-          evidenceProjection({ id: 'object', fieldPath: null }),
+          evidenceProjection({ id: 'object', fieldPath: '  ' }),
           evidenceProjection({ id: 'symbol', fieldPath: 'gene.symbol' }),
           evidenceProjection({ id: 'unrepresented', fieldPath: 'other.path' }),
         ],
@@ -450,6 +450,78 @@ describe('buildHorizontalGridModel', () => {
       'symbol',
       'unrepresented',
     ])
+    expect(model.rows[0]!.unmappedEvidence.map((item) => item.anchor_id)).toEqual([
+      'unrepresented',
+    ])
+  })
+
+  it('associates path projections with a column when the row lacks its draft field', () => {
+    const candidateWithField = candidate({
+      id: 'candidate-with-field',
+      objectId: 'object-with-field',
+      order: 0,
+      fields: [
+        draftField({
+          fieldKey: 'gene-name-input',
+          fieldPath: 'gene.name',
+          label: 'Name',
+          order: 0,
+        }),
+      ],
+    })
+    const candidateWithoutField = candidate({
+      id: 'candidate-without-field',
+      objectId: 'object-without-field',
+      order: 1,
+      fields: [],
+    })
+    const model = modelForRows([
+      workspaceRow({ candidate: candidateWithField }),
+      workspaceRow({
+        candidate: candidateWithoutField,
+        evidence: [
+          evidenceProjection({ id: 'missing-field', fieldPath: 'gene.name' }),
+          evidenceProjection({ id: 'unmapped', fieldPath: 'other.path' }),
+        ],
+        validation: [
+          validationProjection({
+            id: 'missing-field',
+            fieldPath: 'gene.name',
+            status: 'blocked',
+            findings: 1,
+            openFindings: 1,
+          }),
+          validationProjection({
+            id: 'unmapped',
+            fieldPath: 'other.path',
+            status: 'unresolved',
+            findings: 2,
+            openFindings: 1,
+          }),
+        ],
+      }),
+    ])
+
+    const row = model.rows[1]!
+    expect(row.cells[0]).toMatchObject({
+      fieldKey: null,
+      fieldPath: 'gene.name',
+      hasField: false,
+      evidence: [{ anchor_id: 'missing-field' }],
+      validation: {
+        statuses: ['blocked'],
+        summaryCount: 1,
+        findingCount: 1,
+        openFindingCount: 1,
+      },
+    })
+    expect(row.unmappedEvidence.map((item) => item.anchor_id)).toEqual(['unmapped'])
+    expect(row.unmappedValidation).toMatchObject({
+      statuses: ['unresolved'],
+      summaryCount: 1,
+      findingCount: 2,
+      openFindingCount: 1,
+    })
   })
 
   it('aggregates existing validation counts and statuses at cell and row scope', () => {
@@ -479,7 +551,7 @@ describe('buildHorizontalGridModel', () => {
           }),
           validationProjection({
             id: 'object-unresolved',
-            fieldPath: null,
+            fieldPath: ' ',
             status: 'unresolved',
             findings: 3,
             openFindings: 2,
@@ -586,5 +658,21 @@ describe('buildHorizontalGridModel', () => {
       hasField: true,
       value: 'Current value',
     })
+  })
+
+  it('rejects envelope candidates without their canonical review row', () => {
+    const envelopeCandidate = candidate({
+      id: 'candidate-envelope',
+      objectId: 'object-envelope',
+      order: 0,
+      fields: [],
+    })
+
+    expect(() => buildHorizontalGridModel({
+      candidates: [envelopeCandidate],
+      envelopeReviewRows: [],
+    })).toThrow(
+      "Candidate 'candidate-envelope' has an envelope projection but no envelope review row",
+    )
   })
 })

@@ -85,7 +85,7 @@ describe('referenceEditorPack', () => {
     const editorPack = getCurationAdapterEditorPack(REFERENCE_ADAPTER_KEY)
 
     expect(editorPack?.adapterKey).toBe(REFERENCE_ADAPTER_KEY)
-    expect(editorPack?.fieldLayout.map((field) => field.fieldKey)).toContain('citation.authors')
+    expect(editorPack?.fieldLayout.map((field) => field.fieldPath)).toContain('citation.authors')
     expect(getCurationAdapterEditorPack('unknown-adapter')).toBeNull()
   })
 
@@ -101,6 +101,15 @@ describe('referenceEditorPack', () => {
     })
 
     expect(onChange).toHaveBeenCalledWith(['Ada Lovelace', '', 'Katherine Johnson'])
+  })
+
+  it('resolves adapter widgets by canonical field path', () => {
+    renderInput(createField({
+      field_key: 'raw-authors',
+      metadata: { source_field_path: 'citation.authors' },
+    }))
+
+    expect(screen.getByLabelText('Authors')).toHaveValue('Ada Lovelace\nGrace Hopper')
   })
 
   it('preserves blank lines when authors are edited in the textarea', () => {

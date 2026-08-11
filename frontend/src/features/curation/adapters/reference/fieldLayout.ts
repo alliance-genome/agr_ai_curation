@@ -4,14 +4,14 @@ export const REFERENCE_ADAPTER_KEY = 'reference'
 
 export const REFERENCE_FIELD_LAYOUT: readonly CurationAdapterFieldLayoutEntry[] = [
   {
-    fieldKey: 'citation.title',
+    fieldPath: 'citation.title',
     label: 'Title',
     groupKey: 'citation_details',
     groupLabel: 'Citation details',
     order: 0,
   },
   {
-    fieldKey: 'citation.authors',
+    fieldPath: 'citation.authors',
     label: 'Authors',
     groupKey: 'citation_details',
     groupLabel: 'Citation details',
@@ -19,35 +19,35 @@ export const REFERENCE_FIELD_LAYOUT: readonly CurationAdapterFieldLayoutEntry[] 
     widget: 'reference_author_list',
   },
   {
-    fieldKey: 'citation.journal',
+    fieldPath: 'citation.journal',
     label: 'Journal',
     groupKey: 'citation_details',
     groupLabel: 'Citation details',
     order: 20,
   },
   {
-    fieldKey: 'citation.publication_year',
+    fieldPath: 'citation.publication_year',
     label: 'Publication year',
     groupKey: 'citation_details',
     groupLabel: 'Citation details',
     order: 30,
   },
   {
-    fieldKey: 'citation.reference_type',
+    fieldPath: 'citation.reference_type',
     label: 'Reference type',
     groupKey: 'citation_details',
     groupLabel: 'Citation details',
     order: 40,
   },
   {
-    fieldKey: 'identifiers.doi',
+    fieldPath: 'identifiers.doi',
     label: 'DOI',
     groupKey: 'identifiers',
     groupLabel: 'Identifiers',
     order: 100,
   },
   {
-    fieldKey: 'identifiers.pmid',
+    fieldPath: 'identifiers.pmid',
     label: 'PMID',
     groupKey: 'identifiers',
     groupLabel: 'Identifiers',
@@ -55,7 +55,6 @@ export const REFERENCE_FIELD_LAYOUT: readonly CurationAdapterFieldLayoutEntry[] 
   },
 ] as const
 
-export const REFERENCE_FIELD_LAYOUT_BY_KEY = new Map(
-  REFERENCE_FIELD_LAYOUT.map((field) => [field.fieldKey, field]),
+export const REFERENCE_FIELD_LAYOUT_BY_PATH = new Map(
+  REFERENCE_FIELD_LAYOUT.map((field) => [field.fieldPath, field]),
 )
-

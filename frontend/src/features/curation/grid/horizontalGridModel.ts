@@ -16,6 +16,7 @@ import type {
   FieldValidationResult,
 } from '@/features/curation/types'
 import type { WorkspaceEnvelopeObjectReviewRow } from '@/features/curation/workspace/envelopeObjectReviewRows'
+import { objectSelectorLabel } from '@/features/curation/workspace/objectSelector'
 import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
 
 export const HORIZONTAL_GRID_CONTEXT_COLUMN_KEY = 'context'
@@ -86,6 +87,8 @@ export interface HorizontalGridRow {
   cells: HorizontalGridFieldCell[]
   evidence: DomainEnvelopeEvidenceAnchorProjection[]
   validation: HorizontalGridValidationProjection
+  unmappedEvidence: DomainEnvelopeEvidenceAnchorProjection[]
+  unmappedValidation: HorizontalGridValidationProjection
 }
 
 export interface HorizontalGridModel {
@@ -142,7 +145,7 @@ function adapterLayoutForField(
   fieldPath: string,
 ): CurationAdapterFieldLayoutEntry | null {
   const editorPack = getCurationAdapterEditorPack(candidate.adapter_key)
-  return editorPack?.fieldLayout.find((entry) => entry.fieldKey === fieldPath) ?? null
+  return editorPack?.fieldLayout.find((entry) => entry.fieldPath === fieldPath) ?? null
 }
 
 function fieldOccurrence(
@@ -216,7 +219,7 @@ function compareEvidence(
   right: DomainEnvelopeEvidenceAnchorProjection,
 ): number {
   return (
-    compareNullableStrings(left.field_path?.trim() || null, right.field_path?.trim() || null)
+    compareNullableStrings(normalizeFieldPath(left.field_path), normalizeFieldPath(right.field_path))
     || compareStrings(left.anchor_id, right.anchor_id)
   )
 }
@@ -226,7 +229,7 @@ function compareValidationSummaries(
   right: DomainEnvelopeValidationSummaryProjection,
 ): number {
   return (
-    compareNullableStrings(left.field_path?.trim() || null, right.field_path?.trim() || null)
+    compareNullableStrings(normalizeFieldPath(left.field_path), normalizeFieldPath(right.field_path))
     || compareStrings(left.summary_id, right.summary_id)
   )
 }
@@ -248,22 +251,16 @@ function validationProjection(
   }
 }
 
+function normalizeFieldPath(fieldPath: string | null | undefined): string | null {
+  return fieldPath?.trim() || null
+}
+
 function fieldPathMatches(projectionPath: string | null | undefined, fieldPath: string): boolean {
-  return projectionPath?.trim() === fieldPath
+  return normalizeFieldPath(projectionPath) === fieldPath
 }
 
 function isObjectLevelProjection(projectionPath: string | null | undefined): boolean {
-  return projectionPath === null || projectionPath === undefined
-}
-
-function identityLabel(row: HorizontalGridSourceRow): string {
-  return (
-    row.reviewRow?.display_label?.trim()
-    || row.candidate.display_label?.trim()
-    || row.candidate.draft.title?.trim()
-    || row.projectionRef?.object_id
-    || row.candidate.candidate_id
-  )
+  return normalizeFieldPath(projectionPath) === null
 }
 
 function secondaryLabel(row: HorizontalGridSourceRow): string | null {
@@ -316,7 +313,7 @@ function contextForRow(row: HorizontalGridSourceRow): HorizontalGridRowContext {
     envelopeRevision: row.projectionRef?.envelope_revision ?? null,
     objectType: row.reviewRow?.object_type ?? null,
     objectRole: row.reviewRow?.object_role ?? null,
-    identityLabel: identityLabel(row),
+    identityLabel: objectSelectorLabel(row),
     secondaryLabel: secondaryLabel(row),
     candidateStatus: candidate.status,
     candidateSource: candidate.source,
@@ -333,6 +330,9 @@ function projectRow(
   const fieldsByPath = fieldsByCanonicalPath(row.candidate)
   const evidence = [...row.evidenceAnchors].sort(compareEvidence)
   const validationSummaries = [...row.validationSummaries].sort(compareValidationSummaries)
+  const columnFieldPaths = new Set(
+    fieldColumns.flatMap((column) => column.fieldPath === null ? [] : [column.fieldPath]),
+  )
   const context = contextForRow(row)
   const objectEvidence = evidence.filter((projection) =>
     isObjectLevelProjection(projection.field_path),
@@ -348,14 +348,12 @@ function projectRow(
     }
 
     const field = fieldsByPath.get(fieldPath) ?? null
-    const cellEvidence = field
-      ? evidence.filter((projection) => fieldPathMatches(projection.field_path, fieldPath))
-      : []
-    const cellValidation = field
-      ? validationSummaries.filter((projection) =>
-          fieldPathMatches(projection.field_path, fieldPath),
-        )
-      : []
+    const cellEvidence = evidence.filter((projection) =>
+      fieldPathMatches(projection.field_path, fieldPath),
+    )
+    const cellValidation = validationSummaries.filter((projection) =>
+      fieldPathMatches(projection.field_path, fieldPath),
+    )
 
     return {
       columnKey: column.key,
@@ -385,6 +383,14 @@ function projectRow(
     cells,
     evidence,
     validation: validationProjection(validationSummaries),
+    unmappedEvidence: evidence.filter((projection) => {
+      const fieldPath = normalizeFieldPath(projection.field_path)
+      return fieldPath !== null && !columnFieldPaths.has(fieldPath)
+    }),
+    unmappedValidation: validationProjection(validationSummaries.filter((projection) => {
+      const fieldPath = normalizeFieldPath(projection.field_path)
+      return fieldPath !== null && !columnFieldPaths.has(fieldPath)
+    })),
   }
 }
 
@@ -421,11 +427,13 @@ function sourceRows({
 
   return candidates.map((candidate) => {
     const envelopeReviewRow = reviewRowsByCandidateId.get(candidate.candidate_id) ?? null
-    if (envelopeReviewRow) {
-      if (
-        !candidate.projection_ref
-        || !sameProjectionRef(candidate.projection_ref, envelopeReviewRow.projectionRef)
-      ) {
+    if (candidate.projection_ref) {
+      if (!envelopeReviewRow) {
+        throw new Error(
+          `Candidate '${candidate.candidate_id}' has an envelope projection but no envelope review row`,
+        )
+      }
+      if (!sameProjectionRef(candidate.projection_ref, envelopeReviewRow.projectionRef)) {
         throw new Error(
           `Envelope review row projection does not match candidate '${candidate.candidate_id}'`,
         )
@@ -440,9 +448,15 @@ function sourceRows({
       }
     }
 
+    if (envelopeReviewRow) {
+      throw new Error(
+        `Envelope review row projection does not match candidate '${candidate.candidate_id}'`,
+      )
+    }
+
     return {
       candidate,
-      projectionRef: candidate.projection_ref ?? null,
+      projectionRef: null,
       reviewRow: null,
       evidenceAnchors: candidate.evidence_anchor_projections ?? [],
       validationSummaries: candidate.validation_summary_projections ?? [],
