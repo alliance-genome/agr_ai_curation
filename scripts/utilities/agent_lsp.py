@@ -307,6 +307,15 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
     fingerprint = workspace_fingerprint(root)
     digest = fingerprint_digest(fingerprint)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    languages = detect_languages(root)
+    typescript_state: dict[str, Any] | None = None
+
+    if "typescript" in languages:
+        # This also reconciles the lockfile marker when node_modules already exists,
+        # so the first semantic query never inherits deferred dependency work.
+        typescript_state = typescript_dependency_state(root)
+        if typescript_state["status"] in {"ready", "dependencies_missing"}:
+            typescript_state = ensure_typescript_dependencies(root)
 
     with workspace_lock(cache_dir, timeout=max(1.0, min(timeout, 30.0))):
         previous: dict[str, Any] = {}
@@ -332,7 +341,6 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
             ),
         }
 
-        languages = detect_languages(root)
         language_status: dict[str, Any] = {}
         if "python" in languages:
             pyright_available = tool_versions["pyright-langserver"]["available"]
@@ -344,8 +352,8 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
                     else "language_server_missing"
                 ),
             }
-        if "typescript" in languages:
-            language_status["typescript"] = typescript_dependency_state(root)
+        if typescript_state is not None:
+            language_status["typescript"] = typescript_state
         overall_status = (
             "ready"
             if all(
@@ -895,21 +903,28 @@ Commands:
   references   Find known references for the symbol at a file position.
   diagnostics  Run scoped Ruff/Pyright/frontend changed-file diagnostics.
   cleanup      Remove old per-workspace LSP cache state.
-  warm         Refresh workspace LSP state for local smoke testing or
-               stale-state recovery.
+  warm         Prepare pinned TypeScript dependencies when needed, then refresh
+               workspace LSP state for lane startup or stale-state recovery.
 
 Use rg first for broad text/file discovery. Use this helper when symbol identity
 matters: definitions, references, imports/exports, large-file outlines, or
 reviewing shared API changes.
 
-Run `warm` manually when the cached workspace state is clearly stale or missing.
+Automated lane warm-up invokes `warm` before agent work begins. Run it manually
+only for local smoke testing or recovery after clearly stale or missing state.
 """,
     )
     parser.add_argument(
         "--root", default=".", help="Workspace root. Default: current directory."
     )
     parser.add_argument(
-        "--timeout", type=float, default=30.0, help="Command timeout in seconds."
+        "--timeout",
+        type=float,
+        default=30.0,
+        help=(
+            "LSP request and cache-lock timeout in seconds. TypeScript dependency "
+            f"preparation uses {TYPESCRIPT_PREP_TIMEOUT_ENV}."
+        ),
     )
     parser.add_argument(
         "--format", choices=("json", "env"), default="json", help="Output format."
@@ -923,10 +938,11 @@ Run `warm` manually when the cached workspace state is clearly stale or missing.
     )
     subparsers.add_parser(
         "warm",
-        help="Refresh workspace LSP state.",
+        help="Prepare dependencies and refresh workspace LSP state.",
         description=(
-            "Refresh workspace LSP state for local smoke testing or recovery after "
-            "stale or missing state."
+            "Prepare pinned TypeScript dependencies when needed, then refresh "
+            "workspace LSP state for lane startup, local smoke testing, or recovery "
+            "after stale or missing state."
         ),
     )
 

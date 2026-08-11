@@ -265,8 +265,14 @@ run_path_scoped_check \
 run_path_scoped_check \
   "agent-lsp-diagnostics-shell-regression-suite" \
   "bash scripts/tests/test_agent_lsp_diagnostics.sh" \
-  "scripts/utilities/agent_lsp.py, scripts/tests/test_agent_lsp_diagnostics.sh" \
-  scripts/utilities/agent_lsp.py scripts/tests/test_agent_lsp_diagnostics.sh
+  "scripts/utilities/agent_lsp.py, scripts/tests/test_agent_lsp_diagnostics.sh, scripts/tests/test_agent_lsp_typescript_prep.sh" \
+  scripts/utilities/agent_lsp.py scripts/tests/test_agent_lsp_diagnostics.sh scripts/tests/test_agent_lsp_typescript_prep.sh
+
+run_path_scoped_check \
+  "agent-lsp-typescript-prep-shell-regression-suite" \
+  "bash scripts/tests/test_agent_lsp_typescript_prep.sh" \
+  "scripts/utilities/agent_lsp.py, scripts/tests/test_agent_lsp_diagnostics.sh, scripts/tests/test_agent_lsp_typescript_prep.sh" \
+  scripts/utilities/agent_lsp.py scripts/tests/test_agent_lsp_diagnostics.sh scripts/tests/test_agent_lsp_typescript_prep.sh
 
 run_path_scoped_check \
   "installer-shell-regression-suite" \
