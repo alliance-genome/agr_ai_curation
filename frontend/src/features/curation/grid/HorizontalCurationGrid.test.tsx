@@ -174,7 +174,10 @@ describe('HorizontalCurationGrid', () => {
       screen.getByRole('region', { name: 'Horizontally scrollable curation grid' }),
     ).toHaveAttribute('tabindex', '0')
     expect(screen.getByTestId('horizontal-grid-scroll-region')).toHaveStyle({ overflow: 'auto' })
-    expect(screen.getByTestId('horizontal-grid-table')).toHaveStyle({ minWidth: '876px' })
+    expect(screen.getByTestId('horizontal-grid-table')).toHaveStyle({
+      width: '876px',
+      minWidth: '876px',
+    })
     expect(screen.getByRole('button', { name: 'Inspect Alpha' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Review candidate-1' })).toBeInTheDocument()
 
@@ -204,6 +207,39 @@ describe('HorizontalCurationGrid', () => {
       'aria-pressed',
       'true',
     )
+    expect(screen.getByRole('status')).toHaveTextContent('Gamma column pinned beside Object')
+  })
+
+  it('filters stale pins when projection columns change', async () => {
+    const user = userEvent.setup()
+    const { rerender } = renderGrid()
+
+    await user.click(screen.getByRole('button', { name: 'Pin Beta column' }))
+    await user.click(screen.getByRole('button', { name: 'Pin Gamma column' }))
+
+    const currentModel = model()
+    const nextModel: HorizontalGridModel = {
+      ...currentModel,
+      columns: currentModel.columns.filter((column) => column.key !== 'field:beta'),
+      rows: currentModel.rows.map((gridRow) => ({
+        ...gridRow,
+        cells: gridRow.cells.filter((cell) => cell.columnKey !== 'field:beta'),
+      })),
+    }
+    rerender(
+      <ThemeProvider theme={theme}>
+        <HorizontalCurationGrid model={nextModel} />
+      </ThemeProvider>,
+    )
+
+    expect(displayedColumnKeys()).toEqual([
+      HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
+      'field:gamma',
+      'field:alpha',
+      'actions',
+    ])
+    expect(screen.getByRole('columnheader', { name: /Gamma/ })).toHaveStyle({ left: '220px' })
+    expect(screen.getByRole('button', { name: 'Clear 1 optional pinned column' })).toBeEnabled()
   })
 
   it('clears only optional pins and keeps the identity column locked', async () => {
@@ -242,6 +278,7 @@ describe('HorizontalCurationGrid', () => {
     expect(root).toHaveAttribute('data-density', 'comfortable')
     expect(compact).toHaveAttribute('aria-pressed', 'false')
     expect(comfortable).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('status')).toHaveTextContent('Comfortable row density enabled')
   })
 
   it('supports arrow-key and Shift-plus-wheel horizontal navigation', () => {
@@ -251,7 +288,14 @@ describe('HorizontalCurationGrid', () => {
     fireEvent.keyDown(scrollRegion, { key: 'ArrowRight' })
     expect(scrollRegion.scrollLeft).toBe(184)
 
-    fireEvent.wheel(scrollRegion, { deltaX: 0, deltaY: 60, shiftKey: true })
+    const wheelEvent = new WheelEvent('wheel', {
+      cancelable: true,
+      deltaX: 0,
+      deltaY: 60,
+      shiftKey: true,
+    })
+    expect(scrollRegion.dispatchEvent(wheelEvent)).toBe(false)
+    expect(wheelEvent.defaultPrevented).toBe(true)
     expect(scrollRegion.scrollLeft).toBe(244)
 
     fireEvent.keyDown(scrollRegion, { key: 'ArrowLeft' })

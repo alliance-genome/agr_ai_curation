@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type KeyboardEvent, type ReactNode, type WheelEvent } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import ClearAllRoundedIcon from '@mui/icons-material/ClearAllRounded'
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined'
@@ -139,16 +139,45 @@ export default function HorizontalCurationGrid({
   const theme = useTheme()
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const descriptionId = useId()
+  const scrollRegionRef = useRef<HTMLDivElement>(null)
   const [density, setDensity] = useState<HorizontalGridDensity>('compact')
   const [pinnedColumnKeys, setPinnedColumnKeys] = useState<string[]>([])
   const [announcement, setAnnouncement] = useState('')
   const contextColumn = model.columns.find(
     (column) => column.key === HORIZONTAL_GRID_CONTEXT_COLUMN_KEY && column.kind === 'context',
   )
-  const displayColumns = useMemo(
-    () => orderedFieldColumns(model.columns, pinnedColumnKeys),
+  const activePinnedColumnKeys = useMemo(
+    () => {
+      const fieldColumnKeys = new Set(
+        model.columns.filter((column) => column.kind === 'field').map((column) => column.key),
+      )
+      return pinnedColumnKeys.filter((key) => fieldColumnKeys.has(key))
+    },
     [model.columns, pinnedColumnKeys],
   )
+  const displayColumns = useMemo(
+    () => orderedFieldColumns(model.columns, activePinnedColumnKeys),
+    [activePinnedColumnKeys, model.columns],
+  )
+
+  useEffect(() => {
+    const scrollRegion = scrollRegionRef.current
+    if (!scrollRegion) {
+      return
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.shiftKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) {
+        return
+      }
+
+      event.preventDefault()
+      scrollRegion.scrollLeft += event.deltaY
+    }
+
+    scrollRegion.addEventListener('wheel', handleWheel, { passive: false })
+    return () => scrollRegion.removeEventListener('wheel', handleWheel)
+  }, [])
 
   if (!contextColumn) {
     throw new Error('Horizontal grid model requires its canonical context column')
@@ -191,15 +220,6 @@ export default function HorizontalCurationGrid({
       event.preventDefault()
       event.currentTarget.scrollLeft -= FIELD_COLUMN_WIDTH
     }
-  }
-
-  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (!event.shiftKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) {
-      return
-    }
-
-    event.preventDefault()
-    event.currentTarget.scrollLeft += event.deltaY
   }
 
   const stickyCellSx = (
@@ -257,15 +277,15 @@ export default function HorizontalCurationGrid({
       >
         <Button
           aria-label={
-            pinnedColumnKeys.length === 0
+            activePinnedColumnKeys.length === 0
               ? 'No optional pinned columns to clear'
-              : `Clear ${pinnedColumnKeys.length} optional pinned ${
-                  pinnedColumnKeys.length === 1 ? 'column' : 'columns'
+              : `Clear ${activePinnedColumnKeys.length} optional pinned ${
+                  activePinnedColumnKeys.length === 1 ? 'column' : 'columns'
                 }`
           }
-          disabled={pinnedColumnKeys.length === 0}
+          disabled={activePinnedColumnKeys.length === 0}
           onClick={() => {
-            const clearedCount = pinnedColumnKeys.length
+            const clearedCount = activePinnedColumnKeys.length
             setPinnedColumnKeys([])
             setAnnouncement(
               `${clearedCount} optional pinned ${
@@ -324,7 +344,7 @@ export default function HorizontalCurationGrid({
         component={Box}
         data-testid="horizontal-grid-scroll-region"
         onKeyDown={handleKeyDown}
-        onWheel={handleWheel}
+        ref={scrollRegionRef}
         role="region"
         tabIndex={0}
         sx={{
@@ -343,6 +363,7 @@ export default function HorizontalCurationGrid({
           data-testid="horizontal-grid-table"
           size="small"
           sx={{
+            width: tableMinWidth,
             minWidth: tableMinWidth,
             tableLayout: 'fixed',
             borderCollapse: 'separate',
@@ -383,7 +404,7 @@ export default function HorizontalCurationGrid({
                 data-sticky="left"
                 scope="col"
                 sx={{
-                  ...stickyCellSx('left', 0, true, pinnedColumnKeys.length === 0),
+                  ...stickyCellSx('left', 0, true, activePinnedColumnKeys.length === 0),
                   top: 0,
                   minWidth: CONTEXT_COLUMN_WIDTH,
                   borderRight: `1px solid ${theme.palette.divider}`,
@@ -408,9 +429,9 @@ export default function HorizontalCurationGrid({
               </TableCell>
 
               {displayColumns.map((column) => {
-                const pinnedIndex = pinnedColumnKeys.indexOf(column.key)
+                const pinnedIndex = activePinnedColumnKeys.indexOf(column.key)
                 const isPinned = pinnedIndex >= 0
-                const isLastPinned = isPinned && pinnedIndex === pinnedColumnKeys.length - 1
+                const isLastPinned = isPinned && pinnedIndex === activePinnedColumnKeys.length - 1
 
                 return (
                   <TableCell
@@ -514,7 +535,7 @@ export default function HorizontalCurationGrid({
                       data-sticky="left"
                       scope="row"
                       sx={{
-                        ...stickyCellSx('left', 0, false, pinnedColumnKeys.length === 0),
+                        ...stickyCellSx('left', 0, false, activePinnedColumnKeys.length === 0),
                         minWidth: CONTEXT_COLUMN_WIDTH,
                         px: 1.25,
                         py: density === 'compact' ? 1 : 2,
@@ -532,9 +553,10 @@ export default function HorizontalCurationGrid({
                         throw new Error(`Horizontal grid row is missing cell for column ${column.key}`)
                       }
 
-                      const pinnedIndex = pinnedColumnKeys.indexOf(column.key)
+                      const pinnedIndex = activePinnedColumnKeys.indexOf(column.key)
                       const isPinned = pinnedIndex >= 0
-                      const isLastPinned = isPinned && pinnedIndex === pinnedColumnKeys.length - 1
+                      const isLastPinned =
+                        isPinned && pinnedIndex === activePinnedColumnKeys.length - 1
                       const renderArgs = { cell, column, row }
 
                       return (
