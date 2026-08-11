@@ -34,7 +34,7 @@ Frontend validation runs on the host Node toolchain:
 ```bash
 cd frontend
 npm ci
-npm run test -- --run path/to/test.tsx
+npm run test -- --run src/path/to/File.test.tsx  # replace with the changed test file
 npm run type-check:changed -- --base origin/main
 ```
 
@@ -42,6 +42,9 @@ Run the smallest frontend test selection that proves the changed behavior.
 The blocking GitHub `Frontend Tests` job owns the complete clean-checkout
 suite. Run `npm run test:stable` locally only for documented cross-cutting
 risk, not as routine pre-PR validation or review duplication.
+GitHub intentionally runs Vitest with its default parallel configuration for
+faster broad feedback. The low-concurrency `test:stable` script is a local
+diagnostic for concurrency-sensitive failures, not the CI-equivalent command.
 
 `FRONTEND_TYPECHECK_STATUS=baseline_only` means the TypeScript compiler found
 existing errors outside changed frontend files. Record the baseline debt, but do
@@ -208,8 +211,9 @@ cd frontend
 npm run type-check:changed -- --base origin/main
 ```
 
-Run broader frontend tests when the change affects runtime UI components, not
-only static changelog content.
+Run the focused tests for any runtime UI components affected by the change.
+Expand to `npm run test:stable` only when a documented cross-cutting or
+concurrency-sensitive risk requires it.
 
 Run the broader harness hygiene check when a docs change needs repository-wide
 link validation:

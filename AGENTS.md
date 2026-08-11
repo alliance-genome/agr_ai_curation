@@ -49,13 +49,14 @@ For a local development checkout with the main app stack running:
 
 - Backend unit tests: `docker compose exec backend pytest tests/unit/ -v`
 - Backend contract tests: `docker compose exec backend pytest tests/contract/ -q`
-- Frontend tests: `docker compose exec frontend npm run test -- --run`
+- Focused frontend tests:
+  `docker compose exec frontend npm run test -- --run src/path/to/File.test.tsx`
 - Frontend build: `docker compose exec frontend npm run build`
 
 Host-side frontend validation:
 
 - Focused frontend tests:
-  `cd frontend && npm ci && npm run test -- --run path/to/test.tsx`
+  `cd frontend && npm ci && npm run test -- --run src/path/to/File.test.tsx`
 - Scoped TypeScript guard:
   `cd frontend && npm run type-check:changed -- --base origin/main`
 
