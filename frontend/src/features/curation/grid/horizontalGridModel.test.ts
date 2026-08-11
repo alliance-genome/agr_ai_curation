@@ -369,8 +369,6 @@ describe('buildHorizontalGridModel', () => {
 
     expect(model.rows[0]).toMatchObject({
       candidateId: 'candidate-context',
-      objectId: 'object-context',
-      identityLabel: 'Canonical identity',
       contextCell: {
         columnKey: HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
         value: {
@@ -640,11 +638,10 @@ describe('buildHorizontalGridModel', () => {
 
     expect(model.rows[0]).toMatchObject({
       candidateId: 'candidate-generic',
-      objectId: null,
-      identityLabel: 'Generic candidate',
       contextCell: {
         value: {
           objectId: null,
+          identityLabel: 'Generic candidate',
           envelopeId: null,
           envelopeRevision: null,
           objectType: null,

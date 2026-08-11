@@ -27,7 +27,6 @@ export interface HorizontalGridColumn {
   fieldPath: string | null
   label: string
   order: number
-  contextOnly: boolean
   required: boolean
   readOnly: boolean
   groupKey: string | null
@@ -81,8 +80,6 @@ export interface HorizontalGridFieldCell {
 
 export interface HorizontalGridRow {
   candidateId: string
-  objectId: string | null
-  identityLabel: string
   contextCell: HorizontalGridContextCell
   cells: HorizontalGridFieldCell[]
   evidence: DomainEnvelopeEvidenceAnchorProjection[]
@@ -204,7 +201,6 @@ function buildFieldColumns(
         fieldPath,
         label: representative.label,
         order: representative.order,
-        contextOnly: false,
         required: occurrences.some(({ field }) => field.required),
         readOnly: occurrences.every(({ field }) => field.read_only),
         groupKey: representative.groupKey,
@@ -372,8 +368,6 @@ function projectRow(
 
   return {
     candidateId: row.candidate.candidate_id,
-    objectId: row.projectionRef?.object_id ?? null,
-    identityLabel: context.identityLabel,
     contextCell: {
       columnKey: HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
       value: context,
@@ -478,7 +472,6 @@ export function buildHorizontalGridModel(
         fieldPath: null,
         label: 'Object',
         order: -1,
-        contextOnly: true,
         required: false,
         readOnly: true,
         groupKey: null,
