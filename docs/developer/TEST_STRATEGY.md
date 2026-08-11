@@ -34,9 +34,14 @@ Frontend validation runs on the host Node toolchain:
 ```bash
 cd frontend
 npm ci
-npm run test:stable
+npm run test -- --run path/to/test.tsx
 npm run type-check:changed -- --base origin/main
 ```
+
+Run the smallest frontend test selection that proves the changed behavior.
+The blocking GitHub `Frontend Tests` job owns the complete clean-checkout
+suite. Run `npm run test:stable` locally only for documented cross-cutting
+risk, not as routine pre-PR validation or review duplication.
 
 `FRONTEND_TYPECHECK_STATUS=baseline_only` means the TypeScript compiler found
 existing errors outside changed frontend files. Record the baseline debt, but do

@@ -54,9 +54,15 @@ For a local development checkout with the main app stack running:
 
 Host-side frontend validation:
 
-- Stable frontend tests: `cd frontend && npm ci && npm run test:stable`
+- Focused frontend tests:
+  `cd frontend && npm ci && npm run test -- --run path/to/test.tsx`
 - Scoped TypeScript guard:
   `cd frontend && npm run type-check:changed -- --base origin/main`
+
+Use focused tests for local implementation and review. The blocking GitHub
+`Frontend Tests` job is the authoritative clean-checkout broad suite; run
+`npm run test:stable` locally only when documented cross-cutting risk requires
+it, not as routine pre-PR validation.
 
 `type-check:changed` runs the full TypeScript compiler but fails only on
 changed frontend TypeScript files or unscoped/config-level errors. If it reports

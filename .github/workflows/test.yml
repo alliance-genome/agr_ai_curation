@@ -342,7 +342,6 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       - name: Checkout repository
@@ -369,7 +368,7 @@ jobs:
           echo "## Frontend Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Frontend tests completed. See logs above for details." >> $GITHUB_STEP_SUMMARY
-          echo "Note: This job is currently non-blocking while we stabilize legacy failures." >> $GITHUB_STEP_SUMMARY
+          echo "This blocking job is the authoritative clean-checkout frontend suite." >> $GITHUB_STEP_SUMMARY
 
   frontend-build:
     name: Frontend Build
