@@ -345,7 +345,25 @@ describe('buildHorizontalGridModel', () => {
     const model = modelForRows([
       workspaceRow({
         candidate: rowCandidate,
-        row: reviewRow('object-context', 'Canonical identity', 'Secondary context'),
+        row: {
+          ...reviewRow('object-context', 'Canonical identity', 'Secondary context'),
+          summary_fields: [
+            {
+              field_path: 'relation.stage',
+              label: 'Stage',
+              value: 'adult',
+              field_type: 'ontology_term',
+              metadata: { display_order: 20 },
+            },
+            {
+              field_path: 'relation.assay',
+              label: 'Assay',
+              value: 'RNA-seq',
+              field_type: 'string',
+              metadata: { display_order: 30 },
+            },
+          ],
+        },
       }),
     ])
 
@@ -362,6 +380,22 @@ describe('buildHorizontalGridModel', () => {
           identityLabel: 'Canonical identity',
           secondaryLabel: 'Secondary context',
           candidateMetadata: { source: 'candidate-context' },
+          summaryFields: [
+            {
+              field_path: 'relation.stage',
+              label: 'Stage',
+              value: 'adult',
+              field_type: 'ontology_term',
+              metadata: { display_order: 20 },
+            },
+            {
+              field_path: 'relation.assay',
+              label: 'Assay',
+              value: 'RNA-seq',
+              field_type: 'string',
+              metadata: { display_order: 30 },
+            },
+          ],
           reviewRowMetadata: { context_source: 'object-context' },
         },
       },
@@ -543,6 +577,7 @@ describe('buildHorizontalGridModel', () => {
           envelopeRevision: null,
           objectType: null,
           objectRole: null,
+          summaryFields: null,
         },
       },
     })

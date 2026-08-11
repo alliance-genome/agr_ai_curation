@@ -10,6 +10,7 @@ import type {
   DomainEnvelopeEvidenceAnchorProjection,
   DomainEnvelopeProjectionRef,
   DomainEnvelopeReviewRow,
+  DomainEnvelopeReviewRowSummaryField,
   DomainEnvelopeValidationStatus,
   DomainEnvelopeValidationSummaryProjection,
   FieldValidationResult,
@@ -52,6 +53,7 @@ export interface HorizontalGridRowContext {
   candidateStatus: CurationCandidateStatus
   candidateSource: CurationCandidateSource
   candidateMetadata: Record<string, unknown>
+  summaryFields: DomainEnvelopeReviewRowSummaryField[] | null
   reviewRowMetadata: Record<string, unknown> | null
 }
 
@@ -319,6 +321,7 @@ function contextForRow(row: HorizontalGridSourceRow): HorizontalGridRowContext {
     candidateStatus: candidate.status,
     candidateSource: candidate.source,
     candidateMetadata: candidate.metadata,
+    summaryFields: row.reviewRow ? [...row.reviewRow.summary_fields] : null,
     reviewRowMetadata: row.reviewRow?.metadata ?? null,
   }
 }
