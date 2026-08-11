@@ -14,6 +14,7 @@ This index defines where authoritative project knowledge lives.
 | Guardrail catalog | `docs/testing/guardrail-catalog.md` | Invariant, scan, and smoke guards with their protecting test paths |
 | Domain-envelope architecture | `docs/developer/guides/DOMAIN_ENVELOPES.md` | 0.7.0 envelope/domain-pack source-of-truth, validation, materialization, export, and submission contracts |
 | Gene Expression 0.7.0 release contract | `docs/developer/guides/GENE_EXPRESSION_0_7_0.md` | Pinned LinkML source, fixtures, validation behavior, export shape, known limitations, and non-Alliance domain-pack walkthrough |
+| Horizontal curation prototype | [`docs/prototypes/horizontal-curation-amplify/README.md`](prototypes/horizontal-curation-amplify/README.md) | Design evidence recovered from the standalone Amplify deployment; not production implementation guidance |
 | Deployment procedures | `docs/deployment/` | Environment and rollout runbooks |
 
 ## Precedence Rule
