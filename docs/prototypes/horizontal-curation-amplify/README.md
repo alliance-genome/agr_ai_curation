@@ -33,7 +33,8 @@ The deployed artifact also contains three rendered PDF-page JPEGs and a sample
 publication PDF. They are intentionally not copied into this public source
 reference because they are binary demo fixtures, not implementation source.
 Their hashes are retained so a future agent can verify an authorized artifact
-download.
+download. Because those referenced assets are absent, this snapshot cannot be
+opened as a complete working prototype without first retrieving the artifact.
 
 ## How to use this reference
 
@@ -42,7 +43,8 @@ application already owns the persistent PDF viewer, panel resizing,
 PDF-to-form evidence navigation, autosave, validation APIs, and durable
 candidate decisions. Port the horizontal review concepts through the existing
 React, MUI, domain-envelope, and domain-pack contracts; do not copy the
-prototype's hard-coded gene-expression records or its mock-only state changes.
+prototype's hard-coded gene-expression records, mock-only state changes, or
+fallback/defaulting patterns.
 
 Notable concepts represented here include:
 
@@ -59,8 +61,8 @@ Notable concepts represented here include:
 
 ## Retrieving the complete artifact
 
-Authorized Alliance AWS users can retrieve job `0000000009` with the
-`ctabone` profile through the Amplify `get-job` API. Use the expiring
+Authorized Alliance AWS users can retrieve job `0000000009` with an authorized
+Alliance AWS profile through the Amplify `get-job` API. Use the expiring
 `DEPLOY.artifactsUrl` returned by that request, download the ZIP, and compare
 the binary files with `BINARY_ASSETS.sha256`. Never commit the expiring
 presigned URL or its security token.
