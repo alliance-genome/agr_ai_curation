@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import type { EvidenceRecord, CurationEvidenceRecord } from '../types'
+import type {
+  CurationEvidenceRecord,
+  DomainEnvelopeEvidenceAnchorProjection,
+  EvidenceRecord,
+} from '../types'
 import {
   buildNavigationCommandFromChatEvidenceRecord,
   buildNavigationCommandFromCurationEvidenceRecord,
+  buildNavigationCommandFromEnvelopeEvidenceProjection,
 } from './navigationSourceAdapters'
 
 function makeChatEvidenceRecord(
@@ -22,14 +27,50 @@ function makeChatEvidenceRecord(
   }
 }
 
-function makeCurationEvidenceRecord(
-  overrides: Partial<CurationEvidenceRecord> = {},
-): CurationEvidenceRecord {
-  const { anchor: anchorOverrides, ...recordOverrides } = overrides as Partial<
-    CurationEvidenceRecord
-  > & {
-    anchor?: Partial<CurationEvidenceRecord['anchor']>
+function makeEnvelopeEvidenceProjection(): DomainEnvelopeEvidenceAnchorProjection {
+  return {
+    anchor_id: 'projection-anchor-1',
+    evidence_record_id: 'evidence-record-1',
+    envelope_id: 'envelope-1',
+    object_id: 'object-1',
+    object_type: 'Gene',
+    field_path: 'gene.symbol',
+    envelope_revision: 3,
+    document_id: 'document-1',
+    quote: 'The projected gene symbol is crb.',
+    page_number: 4,
+    page_label: '4',
+    chunk_id: 'chunk-4',
+    chunk_ids: ['chunk-4'],
+    section_title: 'Results',
+    subsection_title: 'Expression',
+    figure_reference: null,
+    table_reference: null,
+    source_id: null,
+    source_title: null,
+    source_url: null,
+    anchor: {
+      anchor_kind: 'snippet',
+      locator_quality: 'exact_quote',
+      supports_decision: 'supports',
+      viewer_search_text: 'Persisted exact viewer search text.',
+      sentence_text: 'The projected gene symbol is crb.',
+      snippet_text: 'The projected gene symbol is crb.',
+      page_number: 4,
+      section_title: 'Results',
+      subsection_title: 'Expression',
+      chunk_ids: ['chunk-4'],
+    },
+    metadata: {},
   }
+}
+
+function makeCurationEvidenceRecord(
+  overrides: Omit<Partial<CurationEvidenceRecord>, 'anchor'> & {
+    anchor?: Partial<CurationEvidenceRecord['anchor']>
+  } = {},
+): CurationEvidenceRecord {
+  const { anchor: anchorOverrides, ...recordOverrides } = overrides
 
   return {
     anchor_id: 'anchor-crb-7',
@@ -66,6 +107,63 @@ function makeCurationEvidenceRecord(
 }
 
 describe('navigationSourceAdapters', () => {
+  it('builds an exact viewer command from an envelope evidence projection', () => {
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection(
+      makeEnvelopeEvidenceProjection(),
+    )!
+
+    expect(command).toMatchObject({
+      anchorId: 'projection-anchor-1',
+      searchText: 'The projected gene symbol is crb.',
+      pageNumber: 4,
+      sectionTitle: 'Results',
+      mode: 'select',
+    })
+    expect(command.anchor.subsection_title).toBe('Expression')
+  })
+
+  it('normalizes envelope quote and hierarchy text before building viewer commands', () => {
+    const projection = makeEnvelopeEvidenceProjection()
+    projection.quote = '  The projected gene symbol is crb.  '
+    projection.section_title = '   '
+    projection.subsection_title = '  Expression  '
+    projection.anchor = {
+      ...projection.anchor,
+      viewer_search_text: '',
+      sentence_text: 'A noisier persisted sentence.',
+      section_title: ' Results ',
+      subsection_title: null,
+    }
+
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)!
+
+    expect(command.searchText).toBe('The projected gene symbol is crb.')
+    expect(command.sectionTitle).toBe('Results')
+    expect(command.anchor.section_title).toBe('Results')
+    expect(command.anchor.subsection_title).toBe('Expression')
+    expect(command.anchor.viewer_search_text).toBe('The projected gene symbol is crb.')
+  })
+
+  it('returns null for envelope evidence projections without navigable text or location', () => {
+    const projection = makeEnvelopeEvidenceProjection()
+    projection.quote = '   '
+    projection.page_number = null
+    projection.section_title = '   '
+    projection.subsection_title = null
+    projection.anchor = {
+      ...projection.anchor,
+      viewer_search_text: '',
+      sentence_text: null,
+      snippet_text: null,
+      normalized_text: null,
+      page_number: null,
+      section_title: null,
+      subsection_title: null,
+    }
+
+    expect(buildNavigationCommandFromEnvelopeEvidenceProjection(projection)).toBeNull()
+  })
+
   it('derives the same quote-centric viewer input for equivalent chat and curation evidence', () => {
     const chatCommand = buildNavigationCommandFromChatEvidenceRecord(
       makeChatEvidenceRecord(),

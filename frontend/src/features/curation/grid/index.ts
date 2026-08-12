@@ -19,3 +19,7 @@ export type {
   HorizontalGridDensity,
   HorizontalGridFieldRenderArgs,
 } from './HorizontalCurationGrid'
+export { default as InteractiveHorizontalCurationGrid } from './InteractiveHorizontalCurationGrid'
+export type {
+  InteractiveHorizontalCurationGridProps,
+} from './InteractiveHorizontalCurationGrid'

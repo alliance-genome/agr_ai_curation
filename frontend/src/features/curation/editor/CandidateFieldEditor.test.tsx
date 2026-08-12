@@ -836,6 +836,55 @@ describe('CandidateFieldEditor', () => {
     unsubscribe()
   })
 
+  it('disables unresolved field and section evidence without dispatching pdf navigation', () => {
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+    const workspace = buildWorkspace()
+    const projections = workspace.candidates[0]!.evidence_anchor_projections!
+    const fieldProjection = projections.find((projection) => projection.field_path !== null)!
+
+    workspace.candidates[0]!.evidence_anchor_projections = [
+      ...projections.filter((projection) => projection.anchor_id !== fieldProjection.anchor_id),
+      {
+        ...fieldProjection,
+        quote: null,
+        page_number: null,
+        page_label: null,
+        chunk_id: null,
+        chunk_ids: [],
+        section_title: null,
+        subsection_title: null,
+        figure_reference: null,
+        table_reference: null,
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'unresolved',
+          supports_decision: 'neutral',
+          chunk_ids: [],
+        },
+      },
+    ]
+
+    renderEditor(workspace)
+
+    const fieldEvidence = screen.getByRole('button', {
+      name: 'Field evidence 1 has no navigable PDF location',
+    })
+    const sectionEvidence = screen.getByRole('button', {
+      name: 'Details evidence has no navigable PDF location',
+    })
+    expect(fieldEvidence).toHaveAttribute('aria-disabled', 'true')
+    expect(fieldEvidence).toHaveTextContent('PDF navigation unavailable')
+    expect(sectionEvidence).toBeDisabled()
+
+    fireEvent.click(fieldEvidence)
+    fireEvent.click(sectionEvidence)
+
+    expect(fieldEvidence.closest('details')).not.toHaveAttribute('open')
+    expect(onNavigateEvidence).not.toHaveBeenCalled()
+    unsubscribe()
+  })
+
   it('dispatches pdf navigation from the object evidence quote', async () => {
     const user = userEvent.setup()
     const onNavigateEvidence = vi.fn()
@@ -857,6 +906,52 @@ describe('CandidateFieldEditor', () => {
     expect(command.sectionTitle).toBe('Results')
     expect(command.mode).toBe('select')
 
+    unsubscribe()
+  })
+
+  it('renders unresolved object evidence without dispatching pdf navigation', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+    const workspace = buildWorkspace()
+    const projections = workspace.candidates[0]!.evidence_anchor_projections!
+    const objectProjection = projections.find((projection) => projection.field_path === null)!
+
+    workspace.candidates[0]!.evidence_anchor_projections = [
+      ...projections.filter((projection) => projection.field_path !== null),
+      {
+        ...objectProjection,
+        quote: null,
+        page_number: null,
+        page_label: null,
+        chunk_id: null,
+        chunk_ids: [],
+        section_title: null,
+        subsection_title: null,
+        figure_reference: null,
+        table_reference: null,
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'unresolved',
+          supports_decision: 'neutral',
+          chunk_ids: [],
+        },
+      },
+    ]
+
+    renderEditor(workspace)
+
+    const unavailableAction = screen.getByRole('button', {
+      name: 'Object evidence 1 has no navigable PDF location',
+    })
+    expect(unavailableAction).toBeDisabled()
+    expect(screen.getByTestId('object-evidence-panel')).toHaveTextContent(
+      'PDF navigation is unavailable for this evidence.',
+    )
+
+    await user.click(unavailableAction)
+
+    expect(onNavigateEvidence).not.toHaveBeenCalled()
     unsubscribe()
   })
 

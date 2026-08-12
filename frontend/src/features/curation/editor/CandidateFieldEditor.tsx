@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
-import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import {
   Alert,
@@ -23,10 +21,11 @@ import type { ChipProps } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
 import {
+  buildNavigationCommandFromEnvelopeEvidenceProjection,
   buildEvidenceLocationLabel,
+  deriveNavigationQuoteFromEnvelopeEvidenceProjection,
   dispatchEvidenceNavigationCommand,
   EvidenceNavigationQuoteCard,
-  type EvidenceNavigationCommand,
 } from '@/features/curation/evidence'
 import {
   unavailableCapabilityMessage,
@@ -55,9 +54,9 @@ import {
 import {
   fieldState,
   sortFieldsNeedsReviewFirst,
-  type FieldStateKind,
 } from './fieldState'
 import FieldRow from './FieldRow'
+import FieldStateIndicator from './FieldStateIndicator'
 
 interface FieldSection {
   key: string
@@ -799,70 +798,8 @@ function FieldValidationSlot({
   )
 }
 
-function FieldStateIndicator({
-  fieldKey,
-  state,
-}: {
-  fieldKey: string
-  state: FieldStateKind
-}) {
-  const theme = useTheme()
-  const presentation = {
-    'needs-review': {
-      label: 'Needs review',
-      color: theme.palette.warning.main,
-      backgroundColor: alpha(theme.palette.warning.main, 0.12),
-      icon: <ErrorOutlineIcon fontSize="small" />,
-    },
-    resolved: {
-      label: 'Resolved',
-      color: theme.palette.success.main,
-      backgroundColor: alpha(theme.palette.success.main, 0.12),
-      icon: <CheckCircleOutlineIcon fontSize="small" />,
-    },
-    'ai-unconfirmed': {
-      label: 'AI unconfirmed',
-      color: theme.palette.text.secondary,
-      backgroundColor: alpha(theme.palette.common.white, 0.06),
-      icon: <RadioButtonUncheckedIcon fontSize="small" />,
-    },
-  } satisfies Record<FieldStateKind, {
-    label: string
-    color: string
-    backgroundColor: string
-    icon: JSX.Element
-  }>
-  const current = presentation[state]
-
-  return (
-    <Tooltip arrow title={current.label}>
-      <Box
-        aria-label={current.label}
-        data-testid={`field-state-indicator-${fieldKey}`}
-        role="img"
-        sx={{
-          alignItems: 'center',
-          backgroundColor: current.backgroundColor,
-          borderRadius: 1,
-          color: current.color,
-          display: 'inline-flex',
-          height: 24,
-          justifyContent: 'center',
-          mt: 0.35,
-          width: 24,
-        }}
-      >
-        {current.icon}
-      </Box>
-    </Tooltip>
-  )
-}
-
 function evidenceQuote(projection: DomainEnvelopeEvidenceAnchorProjection): string {
-  return projection.quote
-    ?? projection.anchor.sentence_text
-    ?? projection.anchor.snippet_text
-    ?? projection.anchor.normalized_text
+  return deriveNavigationQuoteFromEnvelopeEvidenceProjection(projection)
     ?? '[missing evidence text]'
 }
 
@@ -873,37 +810,6 @@ function quotePreview(quote: string): string {
   }
 
   return `${compactQuote.slice(0, 129).trimEnd()}...`
-}
-
-function evidenceProjectionCommand(
-  projection: DomainEnvelopeEvidenceAnchorProjection,
-): EvidenceNavigationCommand {
-  const pageNumber = projection.page_number ?? projection.anchor.page_number ?? null
-  const sectionTitle = projection.section_title ?? projection.anchor.section_title ?? null
-
-  return {
-    anchorId: projection.anchor_id,
-    anchor: projection.anchor,
-    searchText:
-      projection.anchor.viewer_search_text
-      ?? projection.quote
-      ?? projection.anchor.sentence_text
-      ?? projection.anchor.snippet_text
-      ?? null,
-    pageNumber,
-    sectionTitle,
-    mode: 'select',
-  }
-}
-
-function dispatchEvidenceProjection(
-  projection: DomainEnvelopeEvidenceAnchorProjection,
-  debugContext: Record<string, unknown>,
-): void {
-  dispatchEvidenceNavigationCommand(
-    evidenceProjectionCommand(projection),
-    debugContext,
-  )
 }
 
 function FieldEvidenceSlot({
@@ -931,6 +837,7 @@ function FieldEvidenceSlot({
           subsectionTitle,
         })
         const preview = quotePreview(quote)
+        const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
 
         return (
           <Box
@@ -949,7 +856,7 @@ function FieldEvidenceSlot({
                 borderRadius: 1,
                 boxShadow: `0 1px 0 ${alpha(theme.palette.common.black, 0.04)}`,
                 color: 'text.secondary',
-                cursor: 'pointer',
+                cursor: command ? 'pointer' : 'not-allowed',
                 display: 'grid',
                 gap: 0.55,
                 gridTemplateColumns: 'auto auto minmax(0, 1fr)',
@@ -961,11 +868,13 @@ function FieldEvidenceSlot({
                 py: 0.45,
                 transition: 'background-color 160ms cubic-bezier(0.2, 0, 0, 1), border-color 160ms cubic-bezier(0.2, 0, 0, 1), box-shadow 160ms cubic-bezier(0.2, 0, 0, 1)',
                 userSelect: 'none',
-                '&:hover': {
-                  backgroundColor: alpha(theme.palette.primary.main, 0.04),
-                  borderColor: alpha(theme.palette.primary.main, 0.42),
-                  boxShadow: `0 1px 0 ${alpha(theme.palette.primary.main, 0.12)}`,
-                },
+                '&:hover': command
+                  ? {
+                      backgroundColor: alpha(theme.palette.primary.main, 0.04),
+                      borderColor: alpha(theme.palette.primary.main, 0.42),
+                      boxShadow: `0 1px 0 ${alpha(theme.palette.primary.main, 0.12)}`,
+                    }
+                  : {},
               },
               '& summary::-webkit-details-marker': {
                 display: 'none',
@@ -983,15 +892,23 @@ function FieldEvidenceSlot({
             }}
           >
             <Box
-              aria-label={`Highlight field evidence ${index + 1}: ${quote}`}
+              aria-disabled={!command}
+              aria-label={command
+                ? `Highlight field evidence ${index + 1}: ${quote}`
+                : `Field evidence ${index + 1} has no navigable PDF location`}
               component="summary"
               data-testid={`field-evidence-projection-${projection.anchor_id}`}
-              onClick={() =>
-                dispatchEvidenceProjection(projection, {
+              onClick={(event) => {
+                if (!command) {
+                  event.preventDefault()
+                  return
+                }
+                dispatchEvidenceNavigationCommand(command, {
                   source: 'curation-field-editor',
                   fieldPath: projection.field_path,
                   objectId: projection.object_id,
-                })}
+                })
+              }}
               role="button"
             >
               <ExpandMoreIcon className="field-evidence-details-caret" sx={{ fontSize: 16 }} />
@@ -1017,7 +934,7 @@ function FieldEvidenceSlot({
                   whiteSpace: 'nowrap',
                 }}
               >
-                {label} · {preview}
+                {command ? label : 'PDF navigation unavailable'} · {preview}
               </Typography>
             </Box>
             <Stack
@@ -1080,13 +997,16 @@ function ObjectEvidencePanel({
       <Stack spacing={0.6}>
         {projections.map((projection, index) => {
           const quote = evidenceQuote(projection)
+          const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
 
           return (
             <EvidenceNavigationQuoteCard
               accentColor={theme.palette.primary.main}
               appearance="workspace"
-              ariaLabel={`Highlight object evidence ${index + 1}: ${quote}`}
-              command={evidenceProjectionCommand(projection)}
+              ariaLabel={command
+                ? `Highlight object evidence ${index + 1}: ${quote}`
+                : `Object evidence ${index + 1} has no navigable PDF location`}
+              command={command}
               debugContext={{
                 source: 'curation-object-evidence',
                 anchorId: projection.anchor_id,
@@ -1094,7 +1014,7 @@ function ObjectEvidencePanel({
                 pageNumber: projection.page_number ?? projection.anchor.page_number ?? null,
                 sectionTitle: projection.section_title ?? projection.anchor.section_title ?? null,
               }}
-              footerText={null}
+              footerText={command ? null : 'PDF navigation is unavailable for this evidence.'}
               key={projection.anchor_id}
               quote={quote}
             />
@@ -1139,40 +1059,53 @@ function SectionEvidenceSlot({
 
   const primaryProjection = projections[0]
   const quote = evidenceQuote(primaryProjection)
+  const command = buildNavigationCommandFromEnvelopeEvidenceProjection(primaryProjection)
 
   return (
-    <Tooltip arrow title={quote}>
-      <ButtonBase
-        aria-label={`Highlight ${label} evidence: ${quote}`}
-        data-testid={`field-section-evidence-${sectionKey}`}
-        onClick={() =>
-          dispatchEvidenceProjection(primaryProjection, {
-            source: 'curation-field-editor-section',
-            groupKey: sectionKey,
-            groupLabel: label,
-            objectId: primaryProjection.object_id,
-          })}
-        sx={{
-          alignItems: 'center',
-          border: `1px solid ${alpha(theme.palette.divider, 0.82)}`,
-          borderRadius: 1,
-          color: theme.palette.text.secondary,
-          display: 'inline-flex',
-          flexShrink: 0,
-          fontSize: theme.typography.caption.fontSize,
-          fontWeight: 700,
-          minHeight: 22,
-          px: 0.75,
-          py: 0.25,
-          '&:hover': {
-            borderColor: alpha(theme.palette.primary.main, 0.72),
-            backgroundColor: alpha(theme.palette.primary.main, 0.1),
-            color: theme.palette.primary.light,
-          },
-        }}
-      >
-        {projections.length} evidence
-      </ButtonBase>
+    <Tooltip arrow title={command ? quote : 'PDF navigation unavailable'}>
+      <span>
+        <ButtonBase
+          aria-label={command
+            ? `Highlight ${label} evidence: ${quote}`
+            : `${label} evidence has no navigable PDF location`}
+          data-testid={`field-section-evidence-${sectionKey}`}
+          disabled={!command}
+          onClick={command
+            ? () => {
+                dispatchEvidenceNavigationCommand(command, {
+                  source: 'curation-field-editor-section',
+                  groupKey: sectionKey,
+                  groupLabel: label,
+                  objectId: primaryProjection.object_id,
+                })
+              }
+            : undefined}
+          sx={{
+            alignItems: 'center',
+            border: `1px solid ${alpha(theme.palette.divider, 0.82)}`,
+            borderRadius: 1,
+            color: theme.palette.text.secondary,
+            display: 'inline-flex',
+            flexShrink: 0,
+            fontSize: theme.typography.caption.fontSize,
+            fontWeight: 700,
+            minHeight: 22,
+            px: 0.75,
+            py: 0.25,
+            '&:hover:not(.Mui-disabled)': {
+              borderColor: alpha(theme.palette.primary.main, 0.72),
+              backgroundColor: alpha(theme.palette.primary.main, 0.1),
+              color: theme.palette.primary.light,
+            },
+            '&.Mui-disabled': {
+              cursor: 'not-allowed',
+              opacity: 0.72,
+            },
+          }}
+        >
+          {projections.length} evidence
+        </ButtonBase>
+      </span>
     </Tooltip>
   )
 }
