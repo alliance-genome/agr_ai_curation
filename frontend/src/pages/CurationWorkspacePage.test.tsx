@@ -1314,6 +1314,9 @@ describe('CurationWorkspacePage', () => {
     const acceptButton = await screen.findByRole('button', { name: 'Accept Pending candidate' })
     expect(acceptButton).toBeDisabled()
     fireEvent.click(acceptButton)
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
     expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
 
     const validateButton = await screen.findByRole('button', { name: 'Validate Pending candidate' })
