@@ -9,8 +9,6 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest  # type: ignore[reportMissingImports]
-
-from . import find_repo_root
 from src.lib.agent_studio import runtime_validation
 from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
@@ -20,6 +18,8 @@ from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import load_tool_registry
 from src.schemas.curation_workspace import SubmissionMode
+
+from . import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
 FIXTURES_DIR = Path(__file__).parent / "fixtures"

@@ -357,7 +357,7 @@ function CurationWorkspacePageContent({
         session_id: workspace.session.session_id,
         candidate_id: tagId,
       })
-      await refreshWorkspace(activeCandidateId === tagId ? tagId : activeCandidateId)
+      await refreshWorkspace(activeCandidateId)
       if (response.validation_snapshot.state === 'failed') {
         throw new Error(
           response.validation_snapshot.warnings[0] ?? 'The server could not validate this entity.',
@@ -415,7 +415,7 @@ function CurationWorkspacePageContent({
         action: 'accept',
         advance_queue: false,
       })
-      await refreshWorkspace(activeCandidateId === tagId ? tagId : activeCandidateId)
+      await refreshWorkspace(activeCandidateId)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to accept this entity.'
       setTableError(message)
@@ -440,7 +440,7 @@ function CurationWorkspacePageContent({
         action: 'reject',
         advance_queue: false,
       })
-      await refreshWorkspace(activeCandidateId === tagId ? tagId : activeCandidateId)
+      await refreshWorkspace(activeCandidateId)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to reject this entity.'
       setTableError(message)
