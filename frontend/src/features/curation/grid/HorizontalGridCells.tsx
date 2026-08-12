@@ -2,6 +2,10 @@ import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
 import { ButtonBase, IconButton, Stack, Tooltip, Typography } from '@mui/material'
 
 import { FieldStateIndicator } from '@/features/curation/editor'
+import {
+  buildNavigationCommandFromEnvelopeEvidenceProjection,
+  type EvidenceNavigationCommand,
+} from '@/features/curation/evidence'
 import type {
   CurationDraftField,
   DomainEnvelopeEvidenceAnchorProjection,
@@ -21,7 +25,10 @@ export function HorizontalGridContextCellContent({
 }: {
   active: boolean
   cell: HorizontalGridContextCell
-  onEvidence: (projection: DomainEnvelopeEvidenceAnchorProjection) => void
+  onEvidence: (
+    projection: DomainEnvelopeEvidenceAnchorProjection,
+    command: EvidenceNavigationCommand,
+  ) => void
   onSelect: () => void
 }) {
   return (
@@ -54,20 +61,36 @@ export function HorizontalGridContextCellContent({
       </ButtonBase>
       {cell.evidence.length > 0 ? (
         <Stack direction="row" spacing={0.25}>
-          {cell.evidence.map((projection, index) => (
-            <Tooltip key={projection.anchor_id} title={`Show object evidence ${index + 1}`}>
-              <IconButton
-                aria-label={`Show object evidence ${index + 1} for ${cell.value.identityLabel}`}
-                onClick={() => {
-                  onSelect()
-                  onEvidence(projection)
-                }}
-                size="small"
+          {cell.evidence.map((projection, index) => {
+            const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
+            const evidenceNumber = index + 1
+
+            return (
+              <Tooltip
+                key={projection.anchor_id}
+                title={command
+                  ? `Show object evidence ${evidenceNumber}`
+                  : 'PDF navigation unavailable'}
               >
-                <FindInPageOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          ))}
+                <span>
+                  <IconButton
+                    aria-label={command
+                      ? `Show object evidence ${evidenceNumber} for ${cell.value.identityLabel}`
+                      : `Object evidence ${evidenceNumber} for ${cell.value.identityLabel} has no navigable PDF location`}
+                    disabled={!command}
+                    onClick={() => {
+                      if (!command) return
+                      onSelect()
+                      onEvidence(projection, command)
+                    }}
+                    size="small"
+                  >
+                    <FindInPageOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )
+          })}
         </Stack>
       ) : null}
     </Stack>

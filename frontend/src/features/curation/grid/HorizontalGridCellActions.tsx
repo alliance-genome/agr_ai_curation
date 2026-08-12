@@ -9,6 +9,10 @@ import {
   Typography,
 } from '@mui/material'
 
+import {
+  buildNavigationCommandFromEnvelopeEvidenceProjection,
+  type EvidenceNavigationCommand,
+} from '@/features/curation/evidence'
 import type {
   CurationDraftField,
   DomainEnvelopeEvidenceAnchorProjection,
@@ -22,7 +26,10 @@ export interface HorizontalGridCellActionsProps {
   isSaving: boolean
   isValidating: boolean
   onEdit: (field: CurationDraftField) => void
-  onEvidence: (projection: DomainEnvelopeEvidenceAnchorProjection) => void
+  onEvidence: (
+    projection: DomainEnvelopeEvidenceAnchorProjection,
+    command: EvidenceNavigationCommand,
+  ) => void
   onSelect: () => void
   onValidate: (field: CurationDraftField) => void
 }
@@ -47,20 +54,34 @@ export default function HorizontalGridCellActions({
   return (
     <Stack spacing={0.35}>
       <Stack direction="row" spacing={0.25}>
-        {cell.evidence.map((projection, index) => (
-          <Tooltip key={projection.anchor_id} title={`Show evidence ${index + 1}`}>
-            <IconButton
-              aria-label={`Show evidence ${index + 1} for ${field.label}`}
-              onClick={() => {
-                onSelect()
-                onEvidence(projection)
-              }}
-              size="small"
+        {cell.evidence.map((projection, index) => {
+          const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
+          const evidenceNumber = index + 1
+
+          return (
+            <Tooltip
+              key={projection.anchor_id}
+              title={command ? `Show evidence ${evidenceNumber}` : 'PDF navigation unavailable'}
             >
-              <FindInPageOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        ))}
+              <span>
+                <IconButton
+                  aria-label={command
+                    ? `Show evidence ${evidenceNumber} for ${field.label}`
+                    : `Evidence ${evidenceNumber} for ${field.label} has no navigable PDF location`}
+                  disabled={!command}
+                  onClick={() => {
+                    if (!command) return
+                    onSelect()
+                    onEvidence(projection, command)
+                  }}
+                  size="small"
+                >
+                  <FindInPageOutlinedIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )
+        })}
         {!field.read_only ? (
           <>
             <Tooltip title="Validate field">

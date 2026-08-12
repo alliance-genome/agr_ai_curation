@@ -4,7 +4,6 @@ import { useQueryClient } from '@tanstack/react-query'
 import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
 import {
   dispatchEvidenceNavigationCommand,
-  requireNavigationCommandFromEnvelopeEvidenceProjection,
 } from '@/features/curation/evidence'
 import { fieldState } from '@/features/curation/editor/fieldState'
 import {
@@ -246,9 +245,9 @@ export default function InteractiveHorizontalCurationGrid({
             fieldPath: args.cell.fieldPath,
           })
         }}
-        onEvidence={(projection) => {
+        onEvidence={(projection, command) => {
           dispatchEvidenceNavigationCommand(
-            requireNavigationCommandFromEnvelopeEvidenceProjection(projection),
+            command,
             {
               source: 'horizontal-curation-grid',
               candidateId: candidate.candidate_id,
@@ -270,9 +269,9 @@ export default function InteractiveHorizontalCurationGrid({
     <HorizontalGridContextCellContent
       active={activeCandidateId === row.candidateId}
       cell={cell}
-      onEvidence={(projection) => {
+      onEvidence={(projection, command) => {
         dispatchEvidenceNavigationCommand(
-          requireNavigationCommandFromEnvelopeEvidenceProjection(projection),
+          command,
           {
             source: 'horizontal-curation-grid-context',
             candidateId: row.candidateId,

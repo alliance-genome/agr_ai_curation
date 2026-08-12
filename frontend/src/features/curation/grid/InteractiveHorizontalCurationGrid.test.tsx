@@ -90,6 +90,32 @@ function evidenceProjection(
   }
 }
 
+function unresolvedEvidenceProjection(
+  anchorId: string,
+  fieldPath: string | null,
+): DomainEnvelopeEvidenceAnchorProjection {
+  const projection = evidenceProjection(anchorId, fieldPath)
+
+  return {
+    ...projection,
+    quote: null,
+    page_number: null,
+    page_label: null,
+    chunk_id: null,
+    chunk_ids: [],
+    section_title: null,
+    subsection_title: null,
+    figure_reference: null,
+    table_reference: null,
+    anchor: {
+      anchor_kind: 'snippet',
+      locator_quality: 'unresolved',
+      supports_decision: 'neutral',
+      chunk_ids: [],
+    },
+  }
+}
+
 function resolvedSummary(envelopeRevision = 3): DomainEnvelopeValidationSummaryProjection {
   return {
     summary_id: 'summary-authors',
@@ -512,6 +538,33 @@ describe('InteractiveHorizontalCurationGrid', () => {
         command: expect.objectContaining({ anchorId: 'object-evidence' }),
       },
     }))
+    unsubscribe()
+  })
+
+  it('disables unresolved field and context evidence without dispatching navigation', () => {
+    const navigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
+    const { setActiveCandidate } = renderGrid({
+      model: buildModel({
+        authorsEvidence: [unresolvedEvidenceProjection('field-unresolved', 'citation.authors')],
+        objectEvidence: [unresolvedEvidenceProjection('object-unresolved', null)],
+      }),
+    })
+
+    const fieldEvidence = screen.getByRole('button', {
+      name: 'Evidence 1 for Authors has no navigable PDF location',
+    })
+    const objectEvidence = screen.getByRole('button', {
+      name: 'Object evidence 1 for Reference one has no navigable PDF location',
+    })
+    expect(fieldEvidence).toBeDisabled()
+    expect(objectEvidence).toBeDisabled()
+
+    fireEvent.click(fieldEvidence)
+    fireEvent.click(objectEvidence)
+
+    expect(navigateEvidence).not.toHaveBeenCalled()
+    expect(setActiveCandidate).not.toHaveBeenCalled()
     unsubscribe()
   })
 
