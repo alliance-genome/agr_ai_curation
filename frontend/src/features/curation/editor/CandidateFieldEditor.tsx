@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
-import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import {
   Alert,
@@ -24,9 +22,10 @@ import { alpha, useTheme } from '@mui/material/styles'
 
 import {
   buildEvidenceLocationLabel,
+  buildNavigationCommandFromEnvelopeEvidenceProjection,
+  deriveNavigationQuoteFromEnvelopeEvidenceProjection,
   dispatchEvidenceNavigationCommand,
   EvidenceNavigationQuoteCard,
-  type EvidenceNavigationCommand,
 } from '@/features/curation/evidence'
 import {
   unavailableCapabilityMessage,
@@ -55,9 +54,9 @@ import {
 import {
   fieldState,
   sortFieldsNeedsReviewFirst,
-  type FieldStateKind,
 } from './fieldState'
 import FieldRow from './FieldRow'
+import FieldStateIndicator from './FieldStateIndicator'
 
 interface FieldSection {
   key: string
@@ -799,70 +798,8 @@ function FieldValidationSlot({
   )
 }
 
-function FieldStateIndicator({
-  fieldKey,
-  state,
-}: {
-  fieldKey: string
-  state: FieldStateKind
-}) {
-  const theme = useTheme()
-  const presentation = {
-    'needs-review': {
-      label: 'Needs review',
-      color: theme.palette.warning.main,
-      backgroundColor: alpha(theme.palette.warning.main, 0.12),
-      icon: <ErrorOutlineIcon fontSize="small" />,
-    },
-    resolved: {
-      label: 'Resolved',
-      color: theme.palette.success.main,
-      backgroundColor: alpha(theme.palette.success.main, 0.12),
-      icon: <CheckCircleOutlineIcon fontSize="small" />,
-    },
-    'ai-unconfirmed': {
-      label: 'AI unconfirmed',
-      color: theme.palette.text.secondary,
-      backgroundColor: alpha(theme.palette.common.white, 0.06),
-      icon: <RadioButtonUncheckedIcon fontSize="small" />,
-    },
-  } satisfies Record<FieldStateKind, {
-    label: string
-    color: string
-    backgroundColor: string
-    icon: JSX.Element
-  }>
-  const current = presentation[state]
-
-  return (
-    <Tooltip arrow title={current.label}>
-      <Box
-        aria-label={current.label}
-        data-testid={`field-state-indicator-${fieldKey}`}
-        role="img"
-        sx={{
-          alignItems: 'center',
-          backgroundColor: current.backgroundColor,
-          borderRadius: 1,
-          color: current.color,
-          display: 'inline-flex',
-          height: 24,
-          justifyContent: 'center',
-          mt: 0.35,
-          width: 24,
-        }}
-      >
-        {current.icon}
-      </Box>
-    </Tooltip>
-  )
-}
-
 function evidenceQuote(projection: DomainEnvelopeEvidenceAnchorProjection): string {
-  return projection.quote
-    ?? projection.anchor.sentence_text
-    ?? projection.anchor.snippet_text
-    ?? projection.anchor.normalized_text
+  return deriveNavigationQuoteFromEnvelopeEvidenceProjection(projection)
     ?? '[missing evidence text]'
 }
 
@@ -875,33 +812,12 @@ function quotePreview(quote: string): string {
   return `${compactQuote.slice(0, 129).trimEnd()}...`
 }
 
-function evidenceProjectionCommand(
-  projection: DomainEnvelopeEvidenceAnchorProjection,
-): EvidenceNavigationCommand {
-  const pageNumber = projection.page_number ?? projection.anchor.page_number ?? null
-  const sectionTitle = projection.section_title ?? projection.anchor.section_title ?? null
-
-  return {
-    anchorId: projection.anchor_id,
-    anchor: projection.anchor,
-    searchText:
-      projection.anchor.viewer_search_text
-      ?? projection.quote
-      ?? projection.anchor.sentence_text
-      ?? projection.anchor.snippet_text
-      ?? null,
-    pageNumber,
-    sectionTitle,
-    mode: 'select',
-  }
-}
-
 function dispatchEvidenceProjection(
   projection: DomainEnvelopeEvidenceAnchorProjection,
   debugContext: Record<string, unknown>,
 ): void {
   dispatchEvidenceNavigationCommand(
-    evidenceProjectionCommand(projection),
+    buildNavigationCommandFromEnvelopeEvidenceProjection(projection),
     debugContext,
   )
 }
@@ -1086,7 +1002,7 @@ function ObjectEvidencePanel({
               accentColor={theme.palette.primary.main}
               appearance="workspace"
               ariaLabel={`Highlight object evidence ${index + 1}: ${quote}`}
-              command={evidenceProjectionCommand(projection)}
+              command={buildNavigationCommandFromEnvelopeEvidenceProjection(projection)}
               debugContext={{
                 source: 'curation-object-evidence',
                 anchorId: projection.anchor_id,

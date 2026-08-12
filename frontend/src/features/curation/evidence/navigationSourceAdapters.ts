@@ -1,4 +1,8 @@
-import type { EvidenceRecord, CurationEvidenceRecord } from '../types'
+import type {
+  CurationEvidenceRecord,
+  DomainEnvelopeEvidenceAnchorProjection,
+  EvidenceRecord,
+} from '../types'
 import type { EvidenceAnchor } from '../contracts'
 import type { EvidenceNavigationCommand } from './types'
 import {
@@ -122,4 +126,33 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
     sectionTitle: evidenceRecord.anchor.section_title ?? null,
     mode,
   })
+}
+
+export function deriveNavigationQuoteFromEnvelopeEvidenceProjection(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+): string | null {
+  return projection.quote
+    ?? projection.anchor.sentence_text
+    ?? projection.anchor.snippet_text
+    ?? projection.anchor.normalized_text
+    ?? null
+}
+
+export function buildNavigationCommandFromEnvelopeEvidenceProjection(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+  mode: EvidenceNavigationCommand['mode'] = 'select',
+): EvidenceNavigationCommand {
+  return {
+    anchorId: projection.anchor_id,
+    anchor: projection.anchor,
+    searchText:
+      projection.anchor.viewer_search_text
+      ?? projection.quote
+      ?? projection.anchor.sentence_text
+      ?? projection.anchor.snippet_text
+      ?? null,
+    pageNumber: projection.page_number ?? projection.anchor.page_number ?? null,
+    sectionTitle: projection.section_title ?? projection.anchor.section_title ?? null,
+    mode,
+  }
 }

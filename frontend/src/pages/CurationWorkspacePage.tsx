@@ -68,6 +68,7 @@ import {
   mergeSubmissionExecutionIntoWorkspace,
   updateWorkspaceActiveCandidate,
 } from '@/features/curation/workspace/workspaceState'
+import { curationWorkspaceEnvelopeReviewRowsQueryKey } from '@/features/curation/workspace/queryKeys'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 // Temporary curator-facing WIP gate. Set true to restore the existing SubmissionPreviewDialog path.
@@ -180,8 +181,7 @@ function CurationWorkspacePageContent({
   const hasEnvelopeObjectRows = envelopeReviewRequests.length > 0
   const envelopeRowsQuery = useQuery({
     queryKey: [
-      'curation-workspace-envelope-review-rows',
-      workspace.session.session_id,
+      ...curationWorkspaceEnvelopeReviewRowsQueryKey(workspace.session.session_id),
       envelopeReviewRequests,
     ],
     queryFn: () => fetchCurationWorkspaceEnvelopeReviewRows(workspace),
