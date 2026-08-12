@@ -133,7 +133,9 @@ async def select_checksum_import_candidate(
         )
 
     source_artifact = authorized_source_list[0]
-    if _checksum_match_uses_local_pdf(provider, source_artifact):
+    # Removed optional provider-policy fallback — checksum routing is now required
+    # by the DocumentSourceProvider contract.
+    if provider.checksum_match_uses_local_pdf(source_artifact):
         source_only_candidate = ChecksumImportCandidate(
             source_artifact=source_artifact,
         )
@@ -144,15 +146,8 @@ async def select_checksum_import_candidate(
             selected=source_only_candidate,
             candidates=(source_only_candidate,),
             source_artifacts=authorized_sources,
-            message=(
-                "Checksum-matched supplemental PDF must use the exact local upload"
-            ),
-            metadata={
-                "text_source": "local_pdf",
-                "source_file_class": str(
-                    source_artifact.metadata.get("file_class") or ""
-                ).strip(),
-            },
+            message="Checksum-matched source must use the exact local upload",
+            metadata={"text_source": "local_pdf"},
         )
     provider_metadata_artifacts = provider_metadata_artifacts_for_source(
         provider=provider,
@@ -390,24 +385,6 @@ def provider_metadata_artifacts_for_source(
             ),
         )
     )
-
-
-def _checksum_match_uses_local_pdf(
-    provider: DocumentSourceProvider,
-    source_artifact: SourceArtifact,
-) -> bool:
-    checksum_match_uses_local_pdf = getattr(
-        provider,
-        "checksum_match_uses_local_pdf",
-        None,
-    )
-    if not callable(checksum_match_uses_local_pdf):
-        return False
-    typed_policy = cast(
-        Callable[[SourceArtifact], bool],
-        checksum_match_uses_local_pdf,
-    )
-    return typed_policy(source_artifact)
 
 
 def _access_policy_is_authorized(
