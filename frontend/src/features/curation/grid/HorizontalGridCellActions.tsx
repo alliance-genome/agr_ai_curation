@@ -9,7 +9,10 @@ import {
   Typography,
 } from '@mui/material'
 
-import type { CurationDraftField } from '@/features/curation/types'
+import type {
+  CurationDraftField,
+  DomainEnvelopeEvidenceAnchorProjection,
+} from '@/features/curation/types'
 import type { HorizontalGridFieldCell } from './horizontalGridModel'
 
 export interface HorizontalGridCellActionsProps {
@@ -18,10 +21,10 @@ export interface HorizontalGridCellActionsProps {
   field: CurationDraftField | null
   isSaving: boolean
   isValidating: boolean
-  onEdit: () => void
-  onEvidence: (evidenceIndex: number) => void
+  onEdit: (field: CurationDraftField) => void
+  onEvidence: (projection: DomainEnvelopeEvidenceAnchorProjection) => void
   onSelect: () => void
-  onValidate: () => void
+  onValidate: (field: CurationDraftField) => void
 }
 
 export default function HorizontalGridCellActions({
@@ -50,7 +53,7 @@ export default function HorizontalGridCellActions({
               aria-label={`Show evidence ${index + 1} for ${field.label}`}
               onClick={() => {
                 onSelect()
-                onEvidence(index)
+                onEvidence(projection)
               }}
               size="small"
             >
@@ -67,7 +70,7 @@ export default function HorizontalGridCellActions({
                   disabled={mutationDisabled}
                   onClick={() => {
                     onSelect()
-                    onValidate()
+                    onValidate(field)
                   }}
                   size="small"
                 >
@@ -86,7 +89,7 @@ export default function HorizontalGridCellActions({
                   disabled={mutationDisabled}
                   onClick={() => {
                     onSelect()
-                    onEdit()
+                    onEdit(field)
                   }}
                   size="small"
                 >

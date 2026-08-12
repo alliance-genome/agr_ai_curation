@@ -22,8 +22,8 @@ import { alpha, useTheme } from '@mui/material/styles'
 
 import {
   buildEvidenceLocationLabel,
-  buildNavigationCommandFromEnvelopeEvidenceProjection,
   deriveNavigationQuoteFromEnvelopeEvidenceProjection,
+  requireNavigationCommandFromEnvelopeEvidenceProjection,
   dispatchEvidenceNavigationCommand,
   EvidenceNavigationQuoteCard,
 } from '@/features/curation/evidence'
@@ -817,7 +817,7 @@ function dispatchEvidenceProjection(
   debugContext: Record<string, unknown>,
 ): void {
   dispatchEvidenceNavigationCommand(
-    buildNavigationCommandFromEnvelopeEvidenceProjection(projection),
+    requireNavigationCommandFromEnvelopeEvidenceProjection(projection),
     debugContext,
   )
 }
@@ -1002,7 +1002,7 @@ function ObjectEvidencePanel({
               accentColor={theme.palette.primary.main}
               appearance="workspace"
               ariaLabel={`Highlight object evidence ${index + 1}: ${quote}`}
-              command={buildNavigationCommandFromEnvelopeEvidenceProjection(projection)}
+              command={requireNavigationCommandFromEnvelopeEvidenceProjection(projection)}
               debugContext={{
                 source: 'curation-object-evidence',
                 anchorId: projection.anchor_id,

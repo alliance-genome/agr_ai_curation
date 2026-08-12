@@ -9,6 +9,7 @@ import {
   buildNavigationCommandFromChatEvidenceRecord,
   buildNavigationCommandFromCurationEvidenceRecord,
   buildNavigationCommandFromEnvelopeEvidenceProjection,
+  requireNavigationCommandFromEnvelopeEvidenceProjection,
 } from './navigationSourceAdapters'
 
 function makeChatEvidenceRecord(
@@ -108,18 +109,63 @@ function makeCurationEvidenceRecord(
 
 describe('navigationSourceAdapters', () => {
   it('builds an exact viewer command from an envelope evidence projection', () => {
-    const command = buildNavigationCommandFromEnvelopeEvidenceProjection(
+    const command = requireNavigationCommandFromEnvelopeEvidenceProjection(
       makeEnvelopeEvidenceProjection(),
     )
 
     expect(command).toMatchObject({
       anchorId: 'projection-anchor-1',
-      searchText: 'Persisted exact viewer search text.',
+      searchText: 'The projected gene symbol is crb.',
       pageNumber: 4,
       sectionTitle: 'Results',
       mode: 'select',
     })
     expect(command.anchor.subsection_title).toBe('Expression')
+  })
+
+  it('normalizes envelope quote and hierarchy text before building viewer commands', () => {
+    const projection = makeEnvelopeEvidenceProjection()
+    projection.quote = '  The projected gene symbol is crb.  '
+    projection.section_title = '   '
+    projection.subsection_title = '  Expression  '
+    projection.anchor = {
+      ...projection.anchor,
+      viewer_search_text: '',
+      sentence_text: 'A noisier persisted sentence.',
+      section_title: ' Results ',
+      subsection_title: null,
+    }
+
+    const command = requireNavigationCommandFromEnvelopeEvidenceProjection(projection)
+
+    expect(command.searchText).toBe('The projected gene symbol is crb.')
+    expect(command.sectionTitle).toBe('Results')
+    expect(command.anchor.section_title).toBe('Results')
+    expect(command.anchor.subsection_title).toBe('Expression')
+    expect(command.anchor.viewer_search_text).toBe('The projected gene symbol is crb.')
+  })
+
+  it('rejects envelope evidence projections without navigable text or location', () => {
+    const projection = makeEnvelopeEvidenceProjection()
+    projection.quote = '   '
+    projection.page_number = null
+    projection.section_title = '   '
+    projection.subsection_title = null
+    projection.anchor = {
+      ...projection.anchor,
+      viewer_search_text: '',
+      sentence_text: null,
+      snippet_text: null,
+      normalized_text: null,
+      page_number: null,
+      section_title: null,
+      subsection_title: null,
+    }
+
+    expect(buildNavigationCommandFromEnvelopeEvidenceProjection(projection)).toBeNull()
+    expect(() => requireNavigationCommandFromEnvelopeEvidenceProjection(projection)).toThrow(
+      "Envelope evidence projection 'projection-anchor-1' has no navigable context",
+    )
   })
 
   it('derives the same quote-centric viewer input for equivalent chat and curation evidence', () => {

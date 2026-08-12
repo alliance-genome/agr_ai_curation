@@ -13,6 +13,7 @@ export { default as EvidenceNavigationQuoteCard } from './EvidenceNavigationQuot
 export {
   buildNavigationCommandFromEnvelopeEvidenceProjection,
   deriveNavigationQuoteFromEnvelopeEvidenceProjection,
+  requireNavigationCommandFromEnvelopeEvidenceProjection,
 } from './navigationSourceAdapters'
 export {
   buildEvidenceLocationLabel,

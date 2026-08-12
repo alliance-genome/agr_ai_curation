@@ -26,6 +26,7 @@ import {
   type HorizontalGridModel,
   type HorizontalGridRow,
 } from './horizontalGridModel'
+import { formatHorizontalGridValue } from './horizontalGridFormatting'
 
 const CONTEXT_COLUMN_WIDTH = 220
 const FIELD_COLUMN_WIDTH = 184
@@ -55,26 +56,6 @@ export interface HorizontalCurationGridProps {
   renderRowActions?: (row: HorizontalGridRow) => ReactNode
 }
 
-function displayValue(value: unknown): string | null {
-  if (value === null || value === undefined || value === '') {
-    return null
-  }
-
-  if (typeof value === 'string') {
-    return value
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => displayValue(item) ?? '—').join(', ')
-  }
-
-  return JSON.stringify(value)
-}
-
 function DefaultContextCell({ cell }: HorizontalGridContextRenderArgs) {
   return (
     <Stack spacing={0.25} minWidth={0}>
@@ -99,7 +80,7 @@ function DefaultFieldCell({ cell }: HorizontalGridFieldRenderArgs) {
     )
   }
 
-  const value = displayValue(cell.value)
+  const value = formatHorizontalGridValue(cell.value)
   return (
     <Typography
       aria-label={value === null ? 'Empty value' : undefined}

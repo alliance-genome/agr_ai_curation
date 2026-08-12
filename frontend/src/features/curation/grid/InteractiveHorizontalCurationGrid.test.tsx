@@ -680,12 +680,21 @@ describe('InteractiveHorizontalCurationGrid', () => {
   })
 
   it('derives resolved status and validation messages only from authoritative projections', () => {
-    const summary = resolvedSummary()
+    const summary = {
+      ...resolvedSummary(),
+      messages: [
+        'Authors were validated by the server.',
+        'A second authoritative validation detail.',
+      ],
+    }
     renderGrid({ model: buildModel({ authorsValidation: validationProjection([summary]) }) })
 
     const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
     expect(within(authorsCell).getByRole('img', { name: 'Resolved' })).toBeInTheDocument()
     expect(within(authorsCell).getByText('Authors were validated by the server.')).toBeInTheDocument()
+    expect(within(authorsCell).getByText(
+      'A second authoritative validation detail.',
+    )).toBeInTheDocument()
   })
 
   it('surfaces a failed pre-validation save and does not call validation early', async () => {
@@ -718,10 +727,11 @@ describe('InteractiveHorizontalCurationGrid', () => {
 
   it('surfaces server validation errors without changing the projected field status', async () => {
     const user = userEvent.setup()
+    const autosave = createAutosave()
     serviceMocks.validateCurationCandidate.mockRejectedValue(
       new Error('Server validation failed for Authors.'),
     )
-    renderGrid()
+    renderGrid({ autosave })
 
     await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
 
@@ -732,6 +742,17 @@ describe('InteractiveHorizontalCurationGrid', () => {
       'img',
       { name: 'AI unconfirmed' },
     )).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Edit Authors' }))
+    fireEvent.change(screen.getByLabelText('Authors'), {
+      target: { value: 'Ada Lovelace\nKatherine Johnson' },
+    })
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(autosave.queueFieldChange).toHaveBeenCalledWith({
+      field_key: 'authors',
+      value: ['Ada Lovelace', 'Katherine Johnson'],
+    })
   })
 
   it('surfaces a failed authoritative validation snapshot after merging the candidate', async () => {

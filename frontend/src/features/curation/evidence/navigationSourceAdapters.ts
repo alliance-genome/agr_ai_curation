@@ -131,28 +131,55 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
 export function deriveNavigationQuoteFromEnvelopeEvidenceProjection(
   projection: DomainEnvelopeEvidenceAnchorProjection,
 ): string | null {
-  return projection.quote
-    ?? projection.anchor.sentence_text
-    ?? projection.anchor.snippet_text
-    ?? projection.anchor.normalized_text
-    ?? null
+  return normalizeEvidenceNavigationText(projection.quote)
+    ?? normalizeEvidenceNavigationText(projection.anchor.sentence_text)
+    ?? normalizeEvidenceNavigationText(projection.anchor.snippet_text)
+    ?? normalizeEvidenceNavigationText(projection.anchor.normalized_text)
 }
 
 export function buildNavigationCommandFromEnvelopeEvidenceProjection(
   projection: DomainEnvelopeEvidenceAnchorProjection,
   mode: EvidenceNavigationCommand['mode'] = 'select',
-): EvidenceNavigationCommand {
-  return {
-    anchorId: projection.anchor_id,
-    anchor: projection.anchor,
-    searchText:
-      projection.anchor.viewer_search_text
-      ?? projection.quote
-      ?? projection.anchor.sentence_text
-      ?? projection.anchor.snippet_text
-      ?? null,
-    pageNumber: projection.page_number ?? projection.anchor.page_number ?? null,
-    sectionTitle: projection.section_title ?? projection.anchor.section_title ?? null,
-    mode,
+): EvidenceNavigationCommand | null {
+  const anchor: EvidenceAnchor = {
+    ...projection.anchor,
+    page_number: projection.page_number ?? projection.anchor.page_number ?? null,
+    section_title:
+      normalizeEvidenceNavigationText(projection.section_title)
+      ?? projection.anchor.section_title,
+    subsection_title:
+      normalizeEvidenceNavigationText(projection.subsection_title)
+      ?? projection.anchor.subsection_title,
   }
+  const quote = deriveNavigationQuoteFromEnvelopeEvidenceProjection(projection)
+
+  if (!quote) {
+    return buildAnchorContextNavigationCommand({
+      anchorId: projection.anchor_id,
+      anchor,
+      mode,
+    })
+  }
+
+  return buildQuoteCentricEvidenceNavigationCommand({
+    anchorId: projection.anchor_id,
+    anchor,
+    quote,
+    pageNumber: anchor.page_number,
+    sectionTitle: anchor.section_title,
+    mode,
+  })
+}
+
+export function requireNavigationCommandFromEnvelopeEvidenceProjection(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+  mode: EvidenceNavigationCommand['mode'] = 'select',
+): EvidenceNavigationCommand {
+  const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection, mode)
+  if (!command) {
+    throw new Error(
+      `Envelope evidence projection '${projection.anchor_id}' has no navigable context`,
+    )
+  }
+  return command
 }

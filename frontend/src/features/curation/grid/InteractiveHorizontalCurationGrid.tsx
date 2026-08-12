@@ -3,8 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
 import {
-  buildNavigationCommandFromEnvelopeEvidenceProjection,
   dispatchEvidenceNavigationCommand,
+  requireNavigationCommandFromEnvelopeEvidenceProjection,
 } from '@/features/curation/evidence'
 import { fieldState } from '@/features/curation/editor/fieldState'
 import {
@@ -27,6 +27,7 @@ import {
 import { curationWorkspaceEnvelopeReviewRowsQueryKey } from '@/features/curation/workspace/queryKeys'
 import HorizontalCurationGrid, {
   type HorizontalCurationGridProps,
+  type HorizontalGridContextRenderArgs,
   type HorizontalGridFieldRenderArgs,
 } from './HorizontalCurationGrid'
 import HorizontalGridCellActions from './HorizontalGridCellActions'
@@ -152,6 +153,18 @@ export default function InteractiveHorizontalCurationGrid({
     setValidationStates((current) => ({ ...current, [key]: state }))
   }, [])
 
+  const clearValidationState = useCallback((candidateId: string, fieldKey: string) => {
+    const key = validationStateKey(candidateId, fieldKey)
+    setValidationStates((current) => {
+      if (!(key in current)) {
+        return current
+      }
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+  }, [])
+
   const validateField = useCallback(async (
     candidate: CurationCandidate,
     field: CurationDraftField,
@@ -226,23 +239,16 @@ export default function InteractiveHorizontalCurationGrid({
         field={field}
         isSaving={autosave.isSaving}
         isValidating={requestState?.isLoading ?? false}
-        onEdit={() => {
-          if (!field || field.read_only) {
-            return
-          }
+        onEdit={(editableField) => {
           setEditingTarget({
             candidateId: candidate.candidate_id,
-            fieldKey: field.field_key,
+            fieldKey: editableField.field_key,
             fieldPath: args.cell.fieldPath,
           })
         }}
-        onEvidence={(evidenceIndex) => {
-          const projection = args.cell.evidence[evidenceIndex]
-          if (!projection) {
-            return
-          }
+        onEvidence={(projection) => {
           dispatchEvidenceNavigationCommand(
-            buildNavigationCommandFromEnvelopeEvidenceProjection(projection),
+            requireNavigationCommandFromEnvelopeEvidenceProjection(projection),
             {
               source: 'horizontal-curation-grid',
               candidateId: candidate.candidate_id,
@@ -253,14 +259,31 @@ export default function InteractiveHorizontalCurationGrid({
           )
         }}
         onSelect={() => selectCandidate(candidate.candidate_id)}
-        onValidate={() => {
-          if (field && !field.read_only) {
-            void validateField(candidate, field)
-          }
+        onValidate={(editableField) => {
+          void validateField(candidate, editableField)
         }}
       />
     )
   }, [autosave.isSaving, candidates, selectCandidate, validateField, validationStates])
+
+  const renderContextCell = useCallback(({ cell, row }: HorizontalGridContextRenderArgs) => (
+    <HorizontalGridContextCellContent
+      active={activeCandidateId === row.candidateId}
+      cell={cell}
+      onEvidence={(projection) => {
+        dispatchEvidenceNavigationCommand(
+          requireNavigationCommandFromEnvelopeEvidenceProjection(projection),
+          {
+            source: 'horizontal-curation-grid-context',
+            candidateId: row.candidateId,
+            objectId: projection.object_id,
+            fieldPath: null,
+          },
+        )
+      }}
+      onSelect={() => selectCandidate(row.candidateId)}
+    />
+  ), [activeCandidateId, selectCandidate])
 
   return (
     <>
@@ -268,28 +291,7 @@ export default function InteractiveHorizontalCurationGrid({
         {...gridProps}
         model={model}
         renderCellActions={renderCellActions}
-        renderContextCell={({ cell, row }) => (
-          <HorizontalGridContextCellContent
-            active={activeCandidateId === row.candidateId}
-            cell={cell}
-            onEvidence={(evidenceIndex) => {
-              const projection = cell.evidence[evidenceIndex]
-              if (!projection) {
-                return
-              }
-              dispatchEvidenceNavigationCommand(
-                buildNavigationCommandFromEnvelopeEvidenceProjection(projection),
-                {
-                  source: 'horizontal-curation-grid-context',
-                  candidateId: row.candidateId,
-                  objectId: projection.object_id,
-                  fieldPath: null,
-                },
-              )
-            }}
-            onSelect={() => selectCandidate(row.candidateId)}
-          />
-        )}
+        renderContextCell={renderContextCell}
         renderFieldCell={renderFieldCell}
       />
       <HorizontalGridFieldEditorDialog
@@ -297,18 +299,20 @@ export default function InteractiveHorizontalCurationGrid({
         editorPack={selectedEditor?.editorPack ?? null}
         field={selectedEditor?.field ?? null}
         onChange={(value) => {
-          const field = selectedEditor?.field
-          if (!field || field.read_only) {
-            return
+          if (!selectedEditor || selectedEditor.field.read_only) {
+            throw new Error('Horizontal grid editor change requires an editable field')
           }
+          const { candidate, field } = selectedEditor
+          clearValidationState(candidate.candidate_id, field.field_key)
           autosave.queueFieldChange({ field_key: field.field_key, value })
         }}
         onClose={() => setEditingTarget(null)}
         onRevert={() => {
-          const field = selectedEditor?.field
-          if (!field || field.read_only) {
-            return
+          if (!selectedEditor || selectedEditor.field.read_only) {
+            throw new Error('Horizontal grid editor revert requires an editable field')
           }
+          const { candidate, field } = selectedEditor
+          clearValidationState(candidate.candidate_id, field.field_key)
           autosave.queueFieldChange({
             field_key: field.field_key,
             revert_to_seed: true,

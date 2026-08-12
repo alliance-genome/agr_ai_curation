@@ -2,32 +2,16 @@ import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
 import { ButtonBase, IconButton, Stack, Tooltip, Typography } from '@mui/material'
 
 import { FieldStateIndicator } from '@/features/curation/editor'
-import type { CurationDraftField } from '@/features/curation/types'
+import type {
+  CurationDraftField,
+  DomainEnvelopeEvidenceAnchorProjection,
+} from '@/features/curation/types'
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import type {
   HorizontalGridContextCell,
   HorizontalGridFieldCell,
 } from './horizontalGridModel'
-
-function displayValue(value: unknown): string | null {
-  if (value === null || value === undefined || value === '') {
-    return null
-  }
-
-  if (typeof value === 'string') {
-    return value
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => displayValue(item) ?? '—').join(', ')
-  }
-
-  return JSON.stringify(value)
-}
+import { formatHorizontalGridValue } from './horizontalGridFormatting'
 
 export function HorizontalGridContextCellContent({
   active,
@@ -37,7 +21,7 @@ export function HorizontalGridContextCellContent({
 }: {
   active: boolean
   cell: HorizontalGridContextCell
-  onEvidence: (evidenceIndex: number) => void
+  onEvidence: (projection: DomainEnvelopeEvidenceAnchorProjection) => void
   onSelect: () => void
 }) {
   return (
@@ -76,7 +60,7 @@ export function HorizontalGridContextCellContent({
                 aria-label={`Show object evidence ${index + 1} for ${cell.value.identityLabel}`}
                 onClick={() => {
                   onSelect()
-                  onEvidence(index)
+                  onEvidence(projection)
                 }}
                 size="small"
               >
@@ -111,9 +95,8 @@ export function HorizontalGridFieldCellContent({
     )
   }
 
-  const value = displayValue(field.value)
+  const value = formatHorizontalGridValue(field.value)
   const validationMessages = cell.validation.summaries.flatMap((summary) => summary.messages)
-  const warning = field.validation_result?.warnings[0] ?? validationMessages[0] ?? null
 
   return (
     <ButtonBase
@@ -141,11 +124,11 @@ export function HorizontalGridFieldCellContent({
           >
             {value ?? '—'}
           </Typography>
-          {warning ? (
-            <Typography color="warning.main" variant="caption">
-              {warning}
+          {validationMessages.map((message, index) => (
+            <Typography color="warning.main" key={`${index}:${message}`} variant="caption">
+              {message}
             </Typography>
-          ) : null}
+          ))}
         </Stack>
       </Stack>
     </ButtonBase>
