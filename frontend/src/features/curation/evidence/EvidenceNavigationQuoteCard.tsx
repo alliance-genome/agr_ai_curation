@@ -10,7 +10,7 @@ import {
 } from './navigationPresentation'
 
 interface EvidenceNavigationQuoteCardProps {
-  command: EvidenceNavigationCommand
+  command: EvidenceNavigationCommand | null
   quote: string
   quoteContent?: ReactNode
   ariaLabel: string
@@ -35,11 +35,13 @@ export default function EvidenceNavigationQuoteCard({
   onCopy = null,
 }: EvidenceNavigationQuoteCardProps) {
   const theme = useTheme()
-  const locationLabel = buildEvidenceLocationLabel({
-    pageNumber: command.pageNumber ?? command.anchor.page_number ?? null,
-    sectionTitle: command.sectionTitle ?? command.anchor.section_title ?? null,
-    subsectionTitle: command.anchor.subsection_title ?? null,
-  })
+  const locationLabel = command
+    ? buildEvidenceLocationLabel({
+        pageNumber: command.pageNumber ?? command.anchor.page_number ?? null,
+        sectionTitle: command.sectionTitle ?? command.anchor.section_title ?? null,
+        subsectionTitle: command.anchor.subsection_title ?? null,
+      })
+    : 'PDF location unavailable'
   const isChatAppearance = appearance === 'chat'
   const chatSurfaceColor = theme.palette.secondary.main
   const chatSurfaceTextColor = theme.palette.getContrastText(chatSurfaceColor)
@@ -53,7 +55,10 @@ export default function EvidenceNavigationQuoteCard({
       <Box
         aria-label={ariaLabel}
         component="button"
-        onClick={() => dispatchEvidenceNavigationCommand(command, debugContext)}
+        disabled={!command}
+        onClick={command
+          ? () => dispatchEvidenceNavigationCommand(command, debugContext)
+          : undefined}
         sx={{
           backgroundColor: isChatAppearance
             ? theme.palette.mode === 'dark'
@@ -67,14 +72,14 @@ export default function EvidenceNavigationQuoteCard({
           pr: onCopy ? '44px' : '12px',
           pb: footerText ? (onCopy ? '34px' : '30px') : '10px',
           borderLeft: `3px solid ${visibleAccentColor}`,
-          cursor: 'pointer',
+          cursor: command ? 'pointer' : 'not-allowed',
           display: 'block',
           font: 'inherit',
           textAlign: 'left',
           width: '100%',
           transition: 'background-color 140ms ease, transform 140ms ease',
           color: theme.palette.text.primary,
-          '&:hover': {
+          '&:hover:not(:disabled)': {
             backgroundColor: isChatAppearance
               ? theme.palette.mode === 'dark'
                 ? alpha(chatSurfaceTextColor, 0.12)
@@ -85,6 +90,9 @@ export default function EvidenceNavigationQuoteCard({
           '&:focus-visible': {
             outline: `2px solid ${visibleAccentColor}`,
             outlineOffset: '2px',
+          },
+          '&:disabled': {
+            opacity: 0.72,
           },
         }}
         type="button"

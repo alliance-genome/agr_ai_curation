@@ -860,6 +860,52 @@ describe('CandidateFieldEditor', () => {
     unsubscribe()
   })
 
+  it('renders unresolved object evidence without dispatching pdf navigation', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+    const workspace = buildWorkspace()
+    const projections = workspace.candidates[0]!.evidence_anchor_projections!
+    const objectProjection = projections.find((projection) => projection.field_path === null)!
+
+    workspace.candidates[0]!.evidence_anchor_projections = [
+      ...projections.filter((projection) => projection.field_path !== null),
+      {
+        ...objectProjection,
+        quote: null,
+        page_number: null,
+        page_label: null,
+        chunk_id: null,
+        chunk_ids: [],
+        section_title: null,
+        subsection_title: null,
+        figure_reference: null,
+        table_reference: null,
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'unresolved',
+          supports_decision: 'neutral',
+          chunk_ids: [],
+        },
+      },
+    ]
+
+    renderEditor(workspace)
+
+    const unavailableAction = screen.getByRole('button', {
+      name: 'Object evidence 1 has no navigable PDF location',
+    })
+    expect(unavailableAction).toBeDisabled()
+    expect(screen.getByTestId('object-evidence-panel')).toHaveTextContent(
+      'PDF navigation is unavailable for this evidence.',
+    )
+
+    await user.click(unavailableAction)
+
+    expect(onNavigateEvidence).not.toHaveBeenCalled()
+    unsubscribe()
+  })
+
   it('marks unserializable curator edit values explicitly', () => {
     const workspace = buildWorkspace()
     const circular: Record<string, unknown> = {}

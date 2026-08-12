@@ -21,6 +21,7 @@ import type { ChipProps } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
 import {
+  buildNavigationCommandFromEnvelopeEvidenceProjection,
   buildEvidenceLocationLabel,
   deriveNavigationQuoteFromEnvelopeEvidenceProjection,
   requireNavigationCommandFromEnvelopeEvidenceProjection,
@@ -996,13 +997,16 @@ function ObjectEvidencePanel({
       <Stack spacing={0.6}>
         {projections.map((projection, index) => {
           const quote = evidenceQuote(projection)
+          const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
 
           return (
             <EvidenceNavigationQuoteCard
               accentColor={theme.palette.primary.main}
               appearance="workspace"
-              ariaLabel={`Highlight object evidence ${index + 1}: ${quote}`}
-              command={requireNavigationCommandFromEnvelopeEvidenceProjection(projection)}
+              ariaLabel={command
+                ? `Highlight object evidence ${index + 1}: ${quote}`
+                : `Object evidence ${index + 1} has no navigable PDF location`}
+              command={command}
               debugContext={{
                 source: 'curation-object-evidence',
                 anchorId: projection.anchor_id,
@@ -1010,7 +1014,7 @@ function ObjectEvidencePanel({
                 pageNumber: projection.page_number ?? projection.anchor.page_number ?? null,
                 sectionTitle: projection.section_title ?? projection.anchor.section_title ?? null,
               }}
-              footerText={null}
+              footerText={command ? null : 'PDF navigation is unavailable for this evidence.'}
               key={projection.anchor_id}
               quote={quote}
             />
