@@ -12,3 +12,10 @@ export type {
   HorizontalGridRowContext,
   HorizontalGridValidationProjection,
 } from './horizontalGridModel'
+export { default as HorizontalCurationGrid } from './HorizontalCurationGrid'
+export type {
+  HorizontalCurationGridProps,
+  HorizontalGridContextRenderArgs,
+  HorizontalGridDensity,
+  HorizontalGridFieldRenderArgs,
+} from './HorizontalCurationGrid'
