@@ -78,11 +78,12 @@ export function HorizontalGridContextCellContent({
                       ? `Show object evidence ${evidenceNumber} for ${cell.value.identityLabel}`
                       : `Object evidence ${evidenceNumber} for ${cell.value.identityLabel} has no navigable PDF location`}
                     disabled={!command}
-                    onClick={() => {
-                      if (!command) return
-                      onSelect()
-                      onEvidence(projection, command)
-                    }}
+                    onClick={command
+                      ? () => {
+                          onSelect()
+                          onEvidence(projection, command)
+                        }
+                      : undefined}
                     size="small"
                   >
                     <FindInPageOutlinedIcon fontSize="small" />

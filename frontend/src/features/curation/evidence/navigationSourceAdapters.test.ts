@@ -9,7 +9,6 @@ import {
   buildNavigationCommandFromChatEvidenceRecord,
   buildNavigationCommandFromCurationEvidenceRecord,
   buildNavigationCommandFromEnvelopeEvidenceProjection,
-  requireNavigationCommandFromEnvelopeEvidenceProjection,
 } from './navigationSourceAdapters'
 
 function makeChatEvidenceRecord(
@@ -109,9 +108,9 @@ function makeCurationEvidenceRecord(
 
 describe('navigationSourceAdapters', () => {
   it('builds an exact viewer command from an envelope evidence projection', () => {
-    const command = requireNavigationCommandFromEnvelopeEvidenceProjection(
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection(
       makeEnvelopeEvidenceProjection(),
-    )
+    )!
 
     expect(command).toMatchObject({
       anchorId: 'projection-anchor-1',
@@ -136,7 +135,7 @@ describe('navigationSourceAdapters', () => {
       subsection_title: null,
     }
 
-    const command = requireNavigationCommandFromEnvelopeEvidenceProjection(projection)
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)!
 
     expect(command.searchText).toBe('The projected gene symbol is crb.')
     expect(command.sectionTitle).toBe('Results')
@@ -145,7 +144,7 @@ describe('navigationSourceAdapters', () => {
     expect(command.anchor.viewer_search_text).toBe('The projected gene symbol is crb.')
   })
 
-  it('rejects envelope evidence projections without navigable text or location', () => {
+  it('returns null for envelope evidence projections without navigable text or location', () => {
     const projection = makeEnvelopeEvidenceProjection()
     projection.quote = '   '
     projection.page_number = null
@@ -163,9 +162,6 @@ describe('navigationSourceAdapters', () => {
     }
 
     expect(buildNavigationCommandFromEnvelopeEvidenceProjection(projection)).toBeNull()
-    expect(() => requireNavigationCommandFromEnvelopeEvidenceProjection(projection)).toThrow(
-      "Envelope evidence projection 'projection-anchor-1' has no navigable context",
-    )
   })
 
   it('derives the same quote-centric viewer input for equivalent chat and curation evidence', () => {

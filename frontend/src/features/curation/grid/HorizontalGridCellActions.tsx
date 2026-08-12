@@ -69,11 +69,12 @@ export default function HorizontalGridCellActions({
                     ? `Show evidence ${evidenceNumber} for ${field.label}`
                     : `Evidence ${evidenceNumber} for ${field.label} has no navigable PDF location`}
                   disabled={!command}
-                  onClick={() => {
-                    if (!command) return
-                    onSelect()
-                    onEvidence(projection, command)
-                  }}
+                  onClick={command
+                    ? () => {
+                        onSelect()
+                        onEvidence(projection, command)
+                      }
+                    : undefined}
                   size="small"
                 >
                   <FindInPageOutlinedIcon fontSize="small" />

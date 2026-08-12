@@ -170,16 +170,3 @@ export function buildNavigationCommandFromEnvelopeEvidenceProjection(
     mode,
   })
 }
-
-export function requireNavigationCommandFromEnvelopeEvidenceProjection(
-  projection: DomainEnvelopeEvidenceAnchorProjection,
-  mode: EvidenceNavigationCommand['mode'] = 'select',
-): EvidenceNavigationCommand {
-  const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection, mode)
-  if (!command) {
-    throw new Error(
-      `Envelope evidence projection '${projection.anchor_id}' has no navigable context`,
-    )
-  }
-  return command
-}

@@ -1070,15 +1070,16 @@ function SectionEvidenceSlot({
             : `${label} evidence has no navigable PDF location`}
           data-testid={`field-section-evidence-${sectionKey}`}
           disabled={!command}
-          onClick={() => {
-            if (!command) return
-            dispatchEvidenceNavigationCommand(command, {
-              source: 'curation-field-editor-section',
-              groupKey: sectionKey,
-              groupLabel: label,
-              objectId: primaryProjection.object_id,
-            })
-          }}
+          onClick={command
+            ? () => {
+                dispatchEvidenceNavigationCommand(command, {
+                  source: 'curation-field-editor-section',
+                  groupKey: sectionKey,
+                  groupLabel: label,
+                  objectId: primaryProjection.object_id,
+                })
+              }
+            : undefined}
           sx={{
             alignItems: 'center',
             border: `1px solid ${alpha(theme.palette.divider, 0.82)}`,
