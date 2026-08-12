@@ -22,19 +22,17 @@ import { usePersistentPdfWorkspaceLayout } from '@/components/pdfViewer/Persiste
 import { buildManualCandidateDraft } from '@/features/curation/entityTags/workspaceEntityTags'
 import {
   buildHorizontalGridModel,
+  HorizontalGridRowActions,
   InteractiveHorizontalCurationGrid,
   type HorizontalGridRow,
 } from '@/features/curation/grid'
-import HorizontalGridRowActions from '@/features/curation/grid/HorizontalGridRowActions'
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
 import { SubmissionPreviewDialog } from '@/features/curation/submission'
 import {
-  buildCurationWorkspaceEnvelopeReviewRowsRequests,
   createManualCurationCandidate,
   executeCurationSubmission,
-  fetchCurationWorkspaceEnvelopeReviewRows,
   fetchCurationWorkspace,
   submitCurationCandidateDecision,
   validateAllCurationSessionCandidates,
@@ -58,6 +56,10 @@ import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
+import {
+  curationWorkspaceEnvelopeReviewRowsQueryOptions,
+  refreshCurationWorkspaceEnvelopeReviewRows,
+} from '@/features/curation/workspace/envelopeReviewRowsQuery'
 import { buildWorkspaceEnvelopeObjectReviewRows } from '@/features/curation/workspace/envelopeObjectReviewRows'
 import {
   type PdfToFormEvidence,
@@ -73,7 +75,6 @@ import {
   mergeSubmissionExecutionIntoWorkspace,
   updateWorkspaceActiveCandidate,
 } from '@/features/curation/workspace/workspaceState'
-import { curationWorkspaceEnvelopeReviewRowsQueryKey } from '@/features/curation/workspace/queryKeys'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 // Temporary curator-facing WIP gate. Set true to restore the existing SubmissionPreviewDialog path.
@@ -184,17 +185,14 @@ function CurationWorkspacePageContent({
   const [validatingAll, setValidatingAll] = useState(false)
   const [validatingCandidateIds, setValidatingCandidateIds] = useState<Set<string>>(new Set())
   const [decidingCandidateIds, setDecidingCandidateIds] = useState<Set<string>>(new Set())
-  const envelopeReviewRequests = useMemo(
-    () => buildCurationWorkspaceEnvelopeReviewRowsRequests(workspace),
+  const envelopeRowsQueryOptions = useMemo(
+    () => curationWorkspaceEnvelopeReviewRowsQueryOptions(workspace),
     [workspace],
   )
-  const hasEnvelopeObjectRows = envelopeReviewRequests.length > 0
+  const hasEnvelopeObjectRows = envelopeRowsQueryOptions.requests.length > 0
   const envelopeRowsQuery = useQuery({
-    queryKey: curationWorkspaceEnvelopeReviewRowsQueryKey(
-      workspace.session.session_id,
-      envelopeReviewRequests,
-    ),
-    queryFn: () => fetchCurationWorkspaceEnvelopeReviewRows(workspace),
+    queryKey: envelopeRowsQueryOptions.queryKey,
+    queryFn: envelopeRowsQueryOptions.queryFn,
     enabled: hasEnvelopeObjectRows,
     staleTime: WORKSPACE_STALE_TIME_MS,
   })
@@ -326,21 +324,7 @@ function CurationWorkspacePageContent({
       ),
     )
 
-    const nextReviewRequests = buildCurationWorkspaceEnvelopeReviewRowsRequests(nextWorkspace)
-    if (nextReviewRequests.length > 0) {
-      try {
-        await queryClient.fetchQuery({
-          queryKey: curationWorkspaceEnvelopeReviewRowsQueryKey(
-            workspace.session.session_id,
-            nextReviewRequests,
-          ),
-          queryFn: () => fetchCurationWorkspaceEnvelopeReviewRows(nextWorkspace),
-          staleTime: 0,
-        })
-      } catch {
-        // The query retains and presents this auxiliary projection error independently.
-      }
-    }
+    await refreshCurationWorkspaceEnvelopeReviewRows(queryClient, nextWorkspace)
   }, [queryClient, setWorkspace, workspace.session.session_id])
 
   const setCandidateBusy = useCallback((

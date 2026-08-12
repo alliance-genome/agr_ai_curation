@@ -226,10 +226,10 @@ refs, field paths, validators, or export/submission policy.
 The curation workspace frontend consumes domain-envelope projections from the
 backend:
 
-- `workspace/EnvelopeObjectReviewTable.tsx` renders materialized envelope object
-  rows with projected summary fields, validation status, and evidence counts.
-- `editor/CandidateFieldEditor.tsx` displays field-level validation summaries
-  and evidence anchors for the selected object projection.
+- `grid/InteractiveHorizontalCurationGrid.tsx` renders every candidate as a row
+  with projected fields, authoritative validation state, and evidence actions.
+- `grid/HorizontalGridRowActions.tsx` exposes server-backed validation and
+  decision actions for each pending candidate.
 - `submission/SubmissionPreviewDialog.tsx` shows readiness blockers for export
   and direct submission, including required/export-blocking fields, definition
   state blockers, validation findings, stale revisions, and curator override

@@ -17,7 +17,6 @@ import CurationWorkspacePage from './CurationWorkspacePage'
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
   createManualCurationCandidate: vi.fn(),
-  deleteCurationCandidate: vi.fn(),
   executeCurationSubmission: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
   fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
@@ -54,7 +53,6 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
     return Array.from(requestsByKey.values())
   },
   createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
-  deleteCurationCandidate: serviceMocks.deleteCurationCandidate,
   executeCurationSubmission: serviceMocks.executeCurationSubmission,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
   fetchCurationWorkspaceEnvelopeReviewRows: serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
@@ -521,7 +519,6 @@ describe('CurationWorkspacePage', () => {
     HTMLElement.prototype.scrollIntoView = vi.fn()
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.createManualCurationCandidate.mockReset()
-    serviceMocks.deleteCurationCandidate.mockReset()
     serviceMocks.executeCurationSubmission.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReset()
@@ -809,6 +806,9 @@ describe('CurationWorkspacePage', () => {
       candidates: workspace.candidates.map((candidate) => ({
         ...candidate,
         status: 'rejected',
+        projection_ref: candidate.projection_ref
+          ? { ...candidate.projection_ref, envelope_revision: 5 }
+          : null,
       })),
     }
     serviceMocks.fetchCurationWorkspace
@@ -816,7 +816,7 @@ describe('CurationWorkspacePage', () => {
       .mockResolvedValueOnce(refreshedWorkspace)
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows
       .mockResolvedValueOnce([buildEnvelopeReviewRows()])
-      .mockRejectedValueOnce(new Error('review row refresh failed'))
+      .mockRejectedValue(new Error('review row refresh failed'))
     serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
       candidate: refreshedWorkspace.candidates[0],
       session: refreshedWorkspace.session,
@@ -832,6 +832,9 @@ describe('CurationWorkspacePage', () => {
 
     expect(await screen.findByText('review row refresh failed')).toBeInTheDocument()
     await waitFor(() => {
+      const contextCell = screen.getByTestId('horizontal-grid-context-candidate-tmem67')
+      expect(contextCell).toHaveTextContent('Legacy candidate label')
+      expect(contextCell).not.toHaveTextContent('Gene assertion')
       expect(screen.getByText('rejected')).toBeInTheDocument()
       expect(screen.queryByRole('button', {
         name: 'Reject Legacy candidate label',

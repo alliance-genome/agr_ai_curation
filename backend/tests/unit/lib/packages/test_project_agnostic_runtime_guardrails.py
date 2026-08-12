@@ -227,7 +227,6 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("frontend/src/components/AgentStudio/FlowBuilder/FlowBuilder.test.tsx"),
     Path("frontend/src/components/AgentStudio/FlowBuilder/NodeEditor.test.tsx"),
     Path("frontend/src/components/AgentStudio/PromptWorkshop/PromptWorkshop.test.tsx"),
-    Path("frontend/src/features/curation/editor/CandidateFieldEditor.test.tsx"),
     Path("frontend/src/features/curation/entityTable/workspaceEntityTags.test.ts"),
     Path("frontend/src/features/curation/entityTags/workspaceEntityTags.test.ts"),
     Path("frontend/src/features/curation/types.test.ts"),

@@ -7,9 +7,7 @@ import {
 } from '@/features/curation/evidence'
 import { fieldState } from '@/features/curation/editor/fieldState'
 import {
-  buildCurationWorkspaceEnvelopeReviewRowsRequests,
   fetchCurationWorkspace,
-  fetchCurationWorkspaceEnvelopeReviewRows,
   validateCurationCandidate,
 } from '@/features/curation/services/curationWorkspaceService'
 import type {
@@ -20,10 +18,10 @@ import {
   useCurationWorkspaceAutosave,
   useCurationWorkspaceContext,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
+import { refreshCurationWorkspaceEnvelopeReviewRows } from '@/features/curation/workspace/envelopeReviewRowsQuery'
 import {
   resolveEnvelopeFieldPath,
 } from '@/features/curation/workspace/workspaceState'
-import { curationWorkspaceEnvelopeReviewRowsQueryKey } from '@/features/curation/workspace/queryKeys'
 import HorizontalCurationGrid, {
   type HorizontalCurationGridProps,
   type HorizontalGridContextRenderArgs,
@@ -183,24 +181,8 @@ export default function InteractiveHorizontalCurationGrid({
         field_keys: [field.field_key],
       })
       const refreshedWorkspace = await fetchCurationWorkspace(workspace.session.session_id)
-      const envelopeReviewRequests = buildCurationWorkspaceEnvelopeReviewRowsRequests(
-        refreshedWorkspace,
-      )
       setWorkspace(refreshedWorkspace)
-      if (envelopeReviewRequests.length > 0) {
-        try {
-          await queryClient.fetchQuery({
-            queryKey: curationWorkspaceEnvelopeReviewRowsQueryKey(
-              workspace.session.session_id,
-              envelopeReviewRequests,
-            ),
-            queryFn: () => fetchCurationWorkspaceEnvelopeReviewRows(refreshedWorkspace),
-            staleTime: 0,
-          })
-        } catch {
-          // The query retains and presents this auxiliary projection error independently.
-        }
-      }
+      await refreshCurationWorkspaceEnvelopeReviewRows(queryClient, refreshedWorkspace)
       if (response.validation_snapshot.state === 'failed') {
         throw new Error(
           response.validation_snapshot.warnings[0]
