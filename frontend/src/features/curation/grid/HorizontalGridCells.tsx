@@ -126,6 +126,7 @@ export function HorizontalGridFieldCellContent({
     <ButtonBase
       aria-label={`Select ${field.label} for ${cell.fieldPath}`}
       aria-pressed={active}
+      data-field-key={field.field_key}
       data-testid={`horizontal-grid-field-${field.field_key}`}
       onClick={onSelect}
       sx={{

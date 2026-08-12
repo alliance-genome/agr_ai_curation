@@ -821,17 +821,6 @@ export interface CurationCandidateDecisionResponse {
   action_log_entry: CurationActionLogEntry
 }
 
-export interface CurationCandidateDeleteRequest {
-  session_id: string
-  candidate_id: string
-}
-
-export interface CurationCandidateDeleteResponse {
-  deleted_candidate_id: string
-  session: CurationReviewSession
-  action_log_entry: CurationActionLogEntry
-}
-
 export interface CurationManualCandidateCreateRequest {
   session_id: string
   adapter_key: string

@@ -1,6 +1,4 @@
 import type {
-  CurationCandidateDeleteRequest,
-  CurationCandidateDeleteResponse,
   CurationCandidateDecisionRequest,
   CurationCandidateDecisionResponse,
   CurationCandidateValidationRequest,
@@ -205,21 +203,6 @@ export async function waiveCurationValidationFinding(
     {
       method: 'POST',
       body: JSON.stringify(request),
-      keepalive: options.keepalive,
-    },
-  )
-}
-
-export async function deleteCurationCandidate(
-  request: CurationCandidateDeleteRequest,
-  options: CurationWorkspaceRequestOptions = {},
-): Promise<CurationCandidateDeleteResponse> {
-  return fetchCurationWorkspaceJson<CurationCandidateDeleteResponse>(
-    `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/candidates/${
-      encodeURIComponent(request.candidate_id)
-    }`,
-    {
-      method: 'DELETE',
       keepalive: options.keepalive,
     },
   )

@@ -613,7 +613,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(screen.getByRole('button', { name: 'Show evidence 1 for Authors' })).toBeEnabled()
   })
 
-  it('keeps validation loading until the authoritative workspace and review rows are refreshed', async () => {
+  it('installs the authoritative workspace while review rows continue refreshing', async () => {
     const user = userEvent.setup()
     const navigateEvidence = vi.fn()
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
@@ -701,18 +701,20 @@ describe('InteractiveHorizontalCurationGrid', () => {
     })
     expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeDisabled()
     expect(screen.getByLabelText('Validating Authors')).toBeInTheDocument()
-    expect(screen.queryByText('Server Author')).not.toBeInTheDocument()
+    expect(screen.getByText('Server Author')).toBeInTheDocument()
+    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
+      'img',
+      { name: 'Resolved' },
+    )).toBeInTheDocument()
 
     await act(async () => {
       reviewRowsDeferred.resolve(serverReviewRows)
       await reviewRowsDeferred.promise
     })
 
-    expect(await screen.findByText('Server Author')).toBeInTheDocument()
-    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
-      'img',
-      { name: 'Resolved' },
-    )).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeEnabled()
+    })
     expect(screen.getByText('Authors were validated by the server.')).toBeInTheDocument()
     expect(queryClient.getQueryData([
       'curation-workspace-envelope-review-rows',
@@ -730,6 +732,58 @@ describe('InteractiveHorizontalCurationGrid', () => {
       },
     }))
     unsubscribe()
+  })
+
+  it('keeps successful field validation when the review-row refresh fails', async () => {
+    const user = userEvent.setup()
+    const serverCandidate = buildCandidate({
+      projection_ref: {
+        envelope_id: 'envelope-1',
+        object_id: 'object-1',
+        envelope_revision: 4,
+      },
+      validation_summary_projections: [resolvedSummary(4)],
+    })
+    serverCandidate.draft = {
+      ...serverCandidate.draft,
+      fields: serverCandidate.draft.fields.map((field) =>
+        field.field_key === 'authors'
+          ? { ...field, value: ['Server Author'], dirty: false, stale_validation: false }
+          : field,
+      ),
+    }
+    const serverWorkspace = {
+      ...buildWorkspace(serverCandidate),
+      validation_summary_projections: [resolvedSummary(4)],
+    }
+    const projectionError = new Error('review row refresh failed')
+    serviceMocks.validateCurationCandidate.mockResolvedValue(validationResponse(serverCandidate))
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(serverWorkspace)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockRejectedValue(projectionError)
+    const { queryClient } = renderGrid({
+      model: (workspace) => buildModel({
+        authorsValidation: validationProjection(
+          workspace.validation_summary_projections ?? [],
+        ),
+      }),
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
+
+    expect(await screen.findByText('Server Author')).toBeInTheDocument()
+    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
+      'img',
+      { name: 'Resolved' },
+    )).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(queryClient.getQueryState([
+      'curation-workspace-envelope-review-rows',
+      'session-1',
+      [{ envelope_id: 'envelope-1', envelope_revision: 4 }],
+    ])).toMatchObject({
+      error: projectionError,
+      status: 'error',
+    })
   })
 
   it('derives resolved status and validation messages only from authoritative projections', () => {
