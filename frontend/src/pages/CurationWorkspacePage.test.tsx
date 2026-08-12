@@ -1146,7 +1146,7 @@ describe('CurationWorkspacePage', () => {
     expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
   })
 
-  it('submits inline accept actions through the workspace decision service', async () => {
+  it('submits the row Accept action through the workspace decision service', async () => {
     const workspace = buildWorkspace()
     workspace.candidates[1] = {
       ...workspace.candidates[1],
@@ -1261,7 +1261,7 @@ describe('CurationWorkspacePage', () => {
     )
   })
 
-  it('flushes autosave before authoritative row validation and refreshes the grid', async () => {
+  it('keeps row Accept disabled until authoritative validation refreshes the grid', async () => {
     const workspace = buildWorkspace()
     const refreshedWorkspace: CurationWorkspace = {
       ...workspace,
@@ -1310,6 +1310,11 @@ describe('CurationWorkspacePage', () => {
     })
 
     renderPage('/curation/session-1/candidate-pending')
+
+    const acceptButton = await screen.findByRole('button', { name: 'Accept Pending candidate' })
+    expect(acceptButton).toBeDisabled()
+    fireEvent.click(acceptButton)
+    expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
 
     const validateButton = await screen.findByRole('button', { name: 'Validate Pending candidate' })
     fireEvent.click(validateButton)
