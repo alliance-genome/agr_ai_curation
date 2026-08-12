@@ -1,8 +1,10 @@
 """Unit tests for upload execution orchestration service."""
 
 import asyncio
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pytest
 from fastapi import BackgroundTasks
@@ -249,6 +251,16 @@ class _MidRunCancellingOrchestrator:
             message="Parsing started",
         )
         raise AssertionError("cancellation should interrupt pipeline progress")
+
+
+def test_provider_execution_requests_require_local_pdf_path():
+    for request_type in (
+        ProviderMarkdownExecutionRequest,
+        ProviderConversionExecutionRequest,
+    ):
+        file_path = inspect.signature(request_type).parameters["file_path"]
+        assert get_type_hints(request_type)["file_path"] is Path
+        assert file_path.default is inspect.Parameter.empty
 
 
 @pytest.mark.asyncio
@@ -559,6 +571,7 @@ async def test_execute_provider_markdown_downloads_with_curator_token_and_marks_
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             converted_artifact_id="markdown-1",
             curator_token="curator-token",
             source_provenance={
@@ -636,6 +649,7 @@ async def test_execute_provider_markdown_passes_downloaded_figure_metadata_to_in
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             converted_artifact_id="markdown-1",
             curator_token="curator-token",
             source_provenance={
@@ -741,6 +755,7 @@ async def test_execute_provider_markdown_discovers_figure_metadata_from_source_p
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             converted_artifact_id="markdown-1",
             curator_token="curator-token",
             source_provenance={
@@ -913,6 +928,7 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             reference="AGRKB:101",
             source_artifact_id="source-pdf-1",
             curator_token="curator-token",
@@ -1126,6 +1142,7 @@ async def test_upload_selection_accepts_per_mod_only_readiness():
             user_id="user-1",
             owner_user_id=1,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             reference="AGRKB:101",
             source_artifact_id="pdf-1",
             curator_token="token",
@@ -1177,6 +1194,7 @@ async def test_upload_selection_uses_non_abc_provider_declared_main_markdown():
             user_id="user-1",
             owner_user_id=1,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             reference="other:101",
             source_artifact_id="pdf-1",
             curator_token="token",
@@ -1276,6 +1294,7 @@ async def test_execute_provider_conversion_fails_when_completed_without_canonica
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             reference="AGRKB:101",
             source_artifact_id="source-pdf-1",
             curator_token="curator-token",
@@ -1363,6 +1382,7 @@ async def test_execute_provider_conversion_marks_failed_when_provider_fails(monk
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             reference="AGRKB:101",
             source_artifact_id="source-pdf-1",
             curator_token="curator-token",
@@ -1440,6 +1460,7 @@ async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sou
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             reference="AGRKB:101",
             source_artifact_id="source-pdf-1",
             curator_token="curator-token",
@@ -1509,6 +1530,7 @@ async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monke
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             reference="AGRKB:101",
             source_artifact_id="source-pdf-1",
             curator_token="curator-token",
@@ -1577,6 +1599,7 @@ async def test_execute_provider_markdown_times_out_and_marks_failed(monkeypatch)
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             converted_artifact_id="markdown-1",
             curator_token="curator-token",
             source_provenance={
@@ -1638,6 +1661,7 @@ async def test_execute_provider_markdown_rejects_blank_curator_token_before_down
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             converted_artifact_id="markdown-1",
             curator_token="  ",
             source_provenance={
@@ -1696,6 +1720,7 @@ async def test_execute_provider_markdown_syncs_sql_failure_when_download_fails(m
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             converted_artifact_id="markdown-1",
             curator_token="curator-token",
             source_provenance={
@@ -1924,6 +1949,7 @@ async def test_execute_provider_markdown_marks_cancelled_when_cancel_requested_a
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             converted_artifact_id="markdown-1",
             curator_token="curator-token",
             source_provenance={
@@ -1981,6 +2007,7 @@ async def test_execute_provider_markdown_tracker_completed_failure_does_not_fail
             user_id="user-provider",
             owner_user_id=42,
             filename="paper.pdf",
+            file_path=Path("/tmp/paper.pdf"),
             converted_artifact_id="markdown-1",
             curator_token="curator-token",
             source_provenance={
