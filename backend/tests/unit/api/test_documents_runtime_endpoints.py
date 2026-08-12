@@ -11,7 +11,6 @@ import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from src.api import documents
-from src.lib.pdf_jobs.upload_execution_service import normalize_pipeline_result
 from src.lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeProviderDecisionError,
@@ -155,23 +154,6 @@ async def test_validate_user_file_path_handles_resolve_errors(tmp_path):
     with pytest.raises(HTTPException) as exc:
         documents.validate_user_file_path(cast(Any, _BoomPath()), tmp_path, "user-1")
     assert exc.value.status_code == 500
-
-
-def test_normalize_pipeline_result_supports_legacy_dict_payload():
-    success, cancelled, error = normalize_pipeline_result(
-        {"status": "completed", "chunks_created": 0}
-    )
-    assert success is True
-    assert cancelled is False
-    assert error is None
-
-
-def test_normalize_pipeline_result_supports_object_payload():
-    payload = SimpleNamespace(success=False, cancelled=True, error="Cancelled by user")
-    success, cancelled, error = normalize_pipeline_result(payload)
-    assert success is False
-    assert cancelled is True
-    assert error == "Cancelled by user"
 
 
 @pytest.mark.asyncio

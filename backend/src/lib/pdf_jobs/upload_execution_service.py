@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import BackgroundTasks
 from src.lib.document_sources.ingestion import (
@@ -36,7 +36,7 @@ from src.lib.openai_agents.config import (
     get_document_source_import_timeout_seconds,
     get_document_source_poll_interval_seconds,
 )
-from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator
+from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator, ProcessingResult
 from src.lib.pipeline.tracker import PipelineTracker
 from src.lib.weaviate_client.documents import update_document_status
 from src.lib.weaviate_helpers import get_connection
@@ -62,28 +62,19 @@ class _ProviderMainMarkdownAccessDenied(DocumentSourceAccessDenied):
     """Internal signal that only the selected main Markdown was forbidden."""
 
 
-def normalize_pipeline_result(result: Any) -> tuple[bool, bool, str | None]:
-    """Normalize pipeline result payloads across object and legacy dict shapes."""
-    if isinstance(result, dict):
-        status = str(result.get("status", "")).strip().lower()
-        cancelled = bool(result.get("cancelled")) or status in {"cancelled", "canceled", "cancel_requested"}
-        success_raw = result.get("success")
-        if success_raw is None:
-            success = status in {"completed", "complete", "success", "succeeded"} and not cancelled
-        else:
-            success = bool(success_raw)
-        error = result.get("error") or result.get("message")
-        return success, cancelled, error
+class UploadPipelineOrchestrator(Protocol):
+    """Typed pipeline surface consumed by upload execution."""
 
-    status_attr = str(getattr(result, "status", "") or "").strip().lower()
-    cancelled = bool(getattr(result, "cancelled", False)) or status_attr in {"cancelled", "canceled", "cancel_requested"}
-    success_attr = getattr(result, "success", None)
-    if success_attr is None:
-        success = status_attr in {"completed", "complete", "success", "succeeded"} and not cancelled
-    else:
-        success = bool(success_attr)
-    error = getattr(result, "error", None) or getattr(result, "message", None)
-    return success, cancelled, error
+    async def process_pdf_document(
+        self,
+        *,
+        file_path: Path,
+        document_id: str,
+        user_id: str,
+        validate_first: bool,
+        cancel_requested_callback: Callable[[], Awaitable[bool]],
+        process_id_callback: Callable[[str], Awaitable[None]],
+    ) -> ProcessingResult: ...
 
 
 class JobAwarePipelineTracker:
@@ -210,7 +201,7 @@ class UploadExecutionService:
         self,
         *,
         pipeline_tracker: PipelineTracker,
-        orchestrator_factory: Callable[[Any, Any], DocumentPipelineOrchestrator] | None = None,
+        orchestrator_factory: Callable[[Any, Any], UploadPipelineOrchestrator] | None = None,
         document_source_provider_factory: Callable[[], DocumentSourceProvider] = get_configured_document_source_provider,
         provider_markdown_ingestion_fn: Callable[..., Any] = ingest_provider_markdown_document,
     ) -> None:
@@ -338,12 +329,13 @@ class UploadExecutionService:
                 process_id_callback=_on_process_id,
             )
             logger.info("Document %s processing completed: %s", request.document_id, result)
-            success, cancelled, error_message = normalize_pipeline_result(result)
+            # Removed legacy dict/status-alias fallback — DocumentPipelineOrchestrator
+            # returns ProcessingResult on every path.
             await self._finalize_pipeline_result(
                 request=request,
-                success=success,
-                cancelled=cancelled,
-                error_message=error_message,
+                success=result.success,
+                cancelled=result.cancelled,
+                error_message=result.error,
             )
         except Exception as exc:
             logger.exception("Error processing document %s", request.document_id)
@@ -1169,7 +1161,7 @@ class UploadExecutionService:
         self,
         connection: Any,
         tracker: Any,
-    ) -> DocumentPipelineOrchestrator:
+    ) -> UploadPipelineOrchestrator:
         return DocumentPipelineOrchestrator(
             weaviate_client=connection,
             tracker=tracker,

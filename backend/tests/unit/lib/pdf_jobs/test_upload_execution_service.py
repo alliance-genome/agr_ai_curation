@@ -27,6 +27,7 @@ from src.lib.pdf_jobs.upload_execution_service import (
     UploadExecutionRequest,
     UploadExecutionService,
 )
+from src.lib.pipeline.orchestrator import ProcessingResult
 from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus
@@ -48,10 +49,10 @@ class _Tracker:
 
 
 class _Orchestrator:
-    def __init__(self, result):
+    def __init__(self, result: ProcessingResult):
         self.result = result
 
-    async def process_pdf_document(self, **_kwargs):
+    async def process_pdf_document(self, **_kwargs) -> ProcessingResult:
         return self.result
 
 
@@ -59,7 +60,7 @@ class _RaisingOrchestrator:
     def __init__(self, exc):
         self.exc = exc
 
-    async def process_pdf_document(self, **_kwargs):
+    async def process_pdf_document(self, **_kwargs) -> ProcessingResult:
         raise self.exc
 
 
@@ -209,6 +210,22 @@ async def _async_value(value):
     return value
 
 
+def _pipeline_result(
+    *,
+    success: bool,
+    document_id: str,
+    error: str | None = None,
+    cancelled: bool = False,
+) -> ProcessingResult:
+    return ProcessingResult(
+        success=success,
+        document_id=document_id,
+        stages_completed=[],
+        error=error,
+        cancelled=cancelled,
+    )
+
+
 class _MidRunCancellingOrchestrator:
     def __init__(self, tracker, cancel_state):
         self.tracker = tracker
@@ -221,7 +238,7 @@ class _MidRunCancellingOrchestrator:
         cancel_requested_callback,
         process_id_callback,
         **_kwargs,
-    ):
+    ) -> ProcessingResult:
         assert await cancel_requested_callback() is False
         await process_id_callback("proc-123")
         self.cancel_state["value"] = True
@@ -231,6 +248,7 @@ class _MidRunCancellingOrchestrator:
             progress_percentage=35,
             message="Parsing started",
         )
+        raise AssertionError("cancellation should interrupt pipeline progress")
 
 
 @pytest.mark.asyncio
@@ -239,7 +257,9 @@ async def test_execute_upload_marks_completed_for_success(monkeypatch):
     tracker = _Tracker()
     service = UploadExecutionService(
         pipeline_tracker=tracker,
-        orchestrator_factory=lambda _connection, _tracker: _Orchestrator({"status": "completed"}),
+        orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
+            _pipeline_result(success=True, document_id="doc-1")
+        ),
     )
 
     events = {"completed": [], "failed": [], "cancelled": []}
@@ -297,7 +317,9 @@ async def test_execute_upload_marks_failed_for_failure_result(monkeypatch):
     tracker = _Tracker()
     service = UploadExecutionService(
         pipeline_tracker=tracker,
-        orchestrator_factory=lambda _connection, _tracker: _Orchestrator({"status": "failed", "error": "boom"}),
+        orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
+            _pipeline_result(success=False, document_id="doc-2", error="boom")
+        ),
     )
 
     events = {"completed": [], "failed": [], "cancelled": []}
@@ -338,7 +360,9 @@ async def test_execute_upload_handles_pre_start_cancellation(monkeypatch):
     tracker = _Tracker()
     service = UploadExecutionService(
         pipeline_tracker=tracker,
-        orchestrator_factory=lambda _connection, _tracker: _Orchestrator({"status": "completed"}),
+        orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
+            _pipeline_result(success=True, document_id="doc-3")
+        ),
     )
 
     events = {"cancelled": []}
@@ -1713,7 +1737,7 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
     service = UploadExecutionService(
         pipeline_tracker=tracker,
         orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
-            {"success": True}
+            _pipeline_result(success=True, document_id="doc-provider")
         ),
         document_source_provider_factory=lambda: provider,
         provider_markdown_ingestion_fn=lambda *_args, **_kwargs: None,
@@ -1784,9 +1808,9 @@ async def test_execute_provider_markdown_fails_when_local_pdf_source_state_canno
     failed_events = []
 
     class _RecordingOrchestrator:
-        async def process_pdf_document(self, **_kwargs):
+        async def process_pdf_document(self, **_kwargs) -> ProcessingResult:
             orchestrator_calls.append("called")
-            return {"success": True}
+            return _pipeline_result(success=True, document_id="doc-provider")
 
     async def _raise_source_import_failure(self, request):
         raise RuntimeError("database unavailable")
@@ -2109,7 +2133,12 @@ async def test_execute_upload_marks_cancelled_when_orchestrator_returns_cancelle
     service = UploadExecutionService(
         pipeline_tracker=tracker,
         orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
-            {"status": "cancelled", "message": "cancelled by user"}
+            _pipeline_result(
+                success=False,
+                document_id="doc-cancelled-result",
+                error="cancelled by user",
+                cancelled=True,
+            )
         ),
     )
 
@@ -2153,7 +2182,9 @@ async def test_execute_upload_marks_failed_when_terminal_tracker_sync_raises(mon
     tracker = _RaisingTracker(RuntimeError("tracker unavailable"))
     service = UploadExecutionService(
         pipeline_tracker=tracker,
-        orchestrator_factory=lambda _connection, _tracker: _Orchestrator({"status": "failed", "error": "boom"}),
+        orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
+            _pipeline_result(success=False, document_id="doc-tracker-failure", error="boom")
+        ),
     )
 
     events = {"failed": [], "cancelled": []}

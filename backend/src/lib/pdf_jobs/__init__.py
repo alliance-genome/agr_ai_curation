@@ -17,7 +17,6 @@ from .upload_execution_service import (
     ProviderMarkdownExecutionRequest,
     UploadExecutionRequest,
     UploadExecutionService,
-    normalize_pipeline_result,
 )
 from .upload_intake_service import (
     UploadIntakeDuplicateError,
@@ -41,7 +40,6 @@ __all__ = [
     "ProviderMarkdownExecutionRequest",
     "UploadExecutionRequest",
     "UploadExecutionService",
-    "normalize_pipeline_result",
     "UploadIntakeDuplicateError",
     "UploadIntakeResult",
     "UploadIntakeService",
