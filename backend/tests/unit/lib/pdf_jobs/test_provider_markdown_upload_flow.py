@@ -192,6 +192,10 @@ class _FakeDocumentSourceProvider:
     def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
         return artifact.metadata.get("file_class") == "semantic_text"
 
+    def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:
+        _ = source_artifact
+        return False
+
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
         _ = artifact
         return (0,)
