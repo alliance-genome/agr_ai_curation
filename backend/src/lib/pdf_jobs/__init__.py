@@ -26,6 +26,13 @@ from .upload_intake_service import (
 )
 
 __all__ = [
+    "ProviderMarkdownExecutionRequest",
+    "UploadExecutionRequest",
+    "UploadExecutionService",
+    "UploadIntakeDuplicateError",
+    "UploadIntakeResult",
+    "UploadIntakeService",
+    "UploadIntakeValidationError",
     "create_job",
     "get_job",
     "get_latest_job_for_document",
@@ -37,11 +44,4 @@ __all__ = [
     "request_cancel",
     "set_process_id",
     "update_progress",
-    "ProviderMarkdownExecutionRequest",
-    "UploadExecutionRequest",
-    "UploadExecutionService",
-    "UploadIntakeDuplicateError",
-    "UploadIntakeResult",
-    "UploadIntakeService",
-    "UploadIntakeValidationError",
 ]
