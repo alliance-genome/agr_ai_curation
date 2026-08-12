@@ -316,17 +316,6 @@ function CurationWorkspacePageContent({
 
   const refreshWorkspace = useCallback(async (preferredActiveCandidateId: string | null) => {
     const nextWorkspace = await fetchCurationWorkspace(workspace.session.session_id)
-    const nextReviewRequests = buildCurationWorkspaceEnvelopeReviewRowsRequests(nextWorkspace)
-    if (nextReviewRequests.length > 0) {
-      const nextReviewRows = await fetchCurationWorkspaceEnvelopeReviewRows(nextWorkspace)
-      queryClient.setQueryData(
-        curationWorkspaceEnvelopeReviewRowsQueryKey(
-          workspace.session.session_id,
-          nextReviewRequests,
-        ),
-        nextReviewRows,
-      )
-    }
     setWorkspace(
       updateWorkspaceActiveCandidate(
         nextWorkspace,
@@ -336,6 +325,22 @@ function CurationWorkspacePageContent({
           ?? null,
       ),
     )
+
+    const nextReviewRequests = buildCurationWorkspaceEnvelopeReviewRowsRequests(nextWorkspace)
+    if (nextReviewRequests.length > 0) {
+      try {
+        await queryClient.fetchQuery({
+          queryKey: curationWorkspaceEnvelopeReviewRowsQueryKey(
+            workspace.session.session_id,
+            nextReviewRequests,
+          ),
+          queryFn: () => fetchCurationWorkspaceEnvelopeReviewRows(nextWorkspace),
+          staleTime: 0,
+        })
+      } catch {
+        // The query retains and presents this auxiliary projection error independently.
+      }
+    }
   }, [queryClient, setWorkspace, workspace.session.session_id])
 
   const setCandidateBusy = useCallback((

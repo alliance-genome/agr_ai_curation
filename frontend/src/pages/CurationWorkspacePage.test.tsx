@@ -802,6 +802,43 @@ describe('CurationWorkspacePage', () => {
     expect(await screen.findByText('review rows unavailable')).toBeInTheDocument()
   })
 
+  it('keeps a successful decision when the following review-row refresh fails', async () => {
+    const workspace = buildEnvelopeWorkspace()
+    const refreshedWorkspace: CurationWorkspace = {
+      ...workspace,
+      candidates: workspace.candidates.map((candidate) => ({
+        ...candidate,
+        status: 'rejected',
+      })),
+    }
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspace)
+      .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows
+      .mockResolvedValueOnce([buildEnvelopeReviewRows()])
+      .mockRejectedValueOnce(new Error('review row refresh failed'))
+    serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
+      candidate: refreshedWorkspace.candidates[0],
+      session: refreshedWorkspace.session,
+      next_candidate_id: null,
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-tmem67')
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Reject Legacy candidate label',
+    }))
+
+    expect(await screen.findByText('review row refresh failed')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText('rejected')).toBeInTheDocument()
+      expect(screen.queryByRole('button', {
+        name: 'Reject Legacy candidate label',
+      })).not.toBeInTheDocument()
+    })
+  })
+
   it('renders the workspace header with document info', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 
