@@ -174,6 +174,10 @@ class DocumentSourceProvider(Protocol):
         """Return whether a converted text artifact is provider-designated main text."""
         raise NotImplementedError
 
+    def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:
+        """Return whether a checksum match must use the exact local PDF bytes."""
+        raise NotImplementedError
+
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
         """Rank converted text artifacts when more than one main-text candidate exists."""
         raise NotImplementedError

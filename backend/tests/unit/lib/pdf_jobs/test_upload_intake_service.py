@@ -735,10 +735,7 @@ async def test_intake_checksum_matched_supplement_processes_exact_uploaded_pdf(t
             selected=candidate,
             candidates=(candidate,),
             source_artifacts=(source_artifact,),
-            metadata={
-                "text_source": "local_pdf",
-                "source_file_class": "supplement",
-            },
+            metadata={"text_source": "local_pdf"},
         )
 
     service = UploadIntakeService(

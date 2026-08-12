@@ -93,6 +93,9 @@ class FakeChecksumProvider:
     def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
         return _fake_is_main_text_artifact(artifact, provider_id=self.provider_id)
 
+    def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:
+        return False
+
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
         return _fake_main_text_artifact_sort_key(artifact, provider_id=self.provider_id)
 
@@ -159,14 +162,9 @@ class FakeConversionProvider(FakeChecksumProvider):
         return self.listed_artifacts
 
 
-class FakeSupplementChecksumProvider(FakeChecksumProvider):
-    provider_id = "abc_literature"
-
+class FakeLocalPdfChecksumProvider(FakeChecksumProvider):
     def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:
-        return (
-            str(source_artifact.metadata.get("file_class") or "").strip().lower()
-            == "supplement"
-        )
+        return source_artifact.artifact_id == "local-only-1"
 
 
 def _fake_is_main_text_artifact(
@@ -227,7 +225,6 @@ def _source(
     scope: SourceAccessScope = SourceAccessScope.GLOBAL,
     mods: tuple[str, ...] = (),
     reference_curie: str = "AGRKB:101",
-    file_class: str | None = None,
 ) -> SourceArtifact:
     return SourceArtifact(
         provider=provider,
@@ -240,7 +237,6 @@ def _source(
         display_name=f"{artifact_id}.pdf",
         md5sum="abc123",
         access_policy=SourceAccessPolicy(scope=scope, mods=mods),
-        metadata={"file_class": file_class} if file_class else {},
     )
 
 
@@ -311,18 +307,13 @@ def test_provider_metadata_artifacts_for_source_filters_by_class_and_display_pre
 
 
 @pytest.mark.asyncio
-async def test_checksum_matched_abc_supplement_uses_exact_local_pdf():
-    source = _source(
-        "supplement-1",
-        provider="abc_literature",
-        file_class="supplement",
-    )
+async def test_checksum_match_provider_policy_can_require_exact_local_pdf():
+    source = _source("local-only-1")
     misleading_main_text = _converted(
         "main-markdown-1",
         source.artifact_id,
-        provider="abc_literature",
     )
-    provider = FakeSupplementChecksumProvider([source, misleading_main_text])
+    provider = FakeLocalPdfChecksumProvider([source, misleading_main_text])
 
     decision = await select_checksum_import_candidate(
         provider=provider,
@@ -337,10 +328,8 @@ async def test_checksum_matched_abc_supplement_uses_exact_local_pdf():
     assert decision.selected.source_artifact is source
     assert decision.selected.converted_artifact is None
     assert decision.selected.provider_metadata_artifacts == ()
-    assert decision.metadata == {
-        "text_source": "local_pdf",
-        "source_file_class": "supplement",
-    }
+    assert decision.message == "Checksum-matched source must use the exact local upload"
+    assert decision.metadata == {"text_source": "local_pdf"}
     assert provider.calls == [
         {"checksum": "abc123", "request_bearer_token": None},
     ]
