@@ -186,17 +186,21 @@ export default function InteractiveHorizontalCurationGrid({
       const envelopeReviewRequests = buildCurationWorkspaceEnvelopeReviewRowsRequests(
         refreshedWorkspace,
       )
-      const envelopeReviewRows = await fetchCurationWorkspaceEnvelopeReviewRows(
-        refreshedWorkspace,
-      )
-      queryClient.setQueryData(
-        curationWorkspaceEnvelopeReviewRowsQueryKey(
-          workspace.session.session_id,
-          envelopeReviewRequests,
-        ),
-        envelopeReviewRows,
-      )
       setWorkspace(refreshedWorkspace)
+      if (envelopeReviewRequests.length > 0) {
+        try {
+          await queryClient.fetchQuery({
+            queryKey: curationWorkspaceEnvelopeReviewRowsQueryKey(
+              workspace.session.session_id,
+              envelopeReviewRequests,
+            ),
+            queryFn: () => fetchCurationWorkspaceEnvelopeReviewRows(refreshedWorkspace),
+            staleTime: 0,
+          })
+        } catch {
+          // The query retains and presents this auxiliary projection error independently.
+        }
+      }
       if (response.validation_snapshot.state === 'failed') {
         throw new Error(
           response.validation_snapshot.warnings[0]
