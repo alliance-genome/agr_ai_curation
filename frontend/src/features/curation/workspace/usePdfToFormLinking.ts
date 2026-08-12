@@ -39,9 +39,12 @@ export interface PdfToFormEvidence {
   fieldPaths: string[]
 }
 
-function findFieldRowElement(fieldKey: string): HTMLElement | null {
+function findFieldRowElement(fieldKey: string, candidateId: string): HTMLElement | null {
   return Array.from(document.querySelectorAll<HTMLElement>(`[${FIELD_ROW_DATA_ATTRIBUTE}]`))
-    .find((element) => element.dataset.fieldKey === fieldKey) ?? null
+    .find((element) =>
+      element.dataset.fieldKey === fieldKey
+      && element.closest<HTMLElement>('[data-candidate-id]')?.dataset.candidateId === candidateId
+    ) ?? null
 }
 
 function findCandidateFieldKey(
@@ -175,7 +178,10 @@ export function usePdfToFormLinking({
       return
     }
 
-    const targetField = findFieldRowElement(pendingTarget.fieldKey)
+    const targetField = findFieldRowElement(
+      pendingTarget.fieldKey,
+      pendingTarget.candidateId,
+    )
     if (!targetField) {
       setPendingTarget(null)
       return
@@ -188,9 +194,11 @@ export function usePdfToFormLinking({
       block: 'center',
       inline: 'nearest',
     })
-    targetField.querySelector<HTMLElement>(
-      'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    )?.focus({ preventScroll: true })
+    const focusSelector = 'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusTarget = targetField.matches(focusSelector)
+      ? targetField
+      : targetField.querySelector<HTMLElement>(focusSelector)
+    focusTarget?.focus({ preventScroll: true })
     targetField.classList.add(PDF_TO_FORM_HIGHLIGHT_CLASSNAME)
     highlightedElementRef.current = targetField
     highlightTimeoutRef.current = window.setTimeout(() => {

@@ -1,3 +1,11 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { Outlet, matchPath, useLocation } from 'react-router-dom'
 import { Box, useMediaQuery } from '@mui/material'
 import { alpha, styled, useTheme } from '@mui/material/styles'
@@ -61,15 +69,36 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
   },
 }))
 
+export interface PersistentPdfWorkspaceLayoutController {
+  focusGrid: () => void
+  isPdfVisible: boolean
+  showPdf: () => void
+}
+
+const PersistentPdfWorkspaceLayoutContext =
+  createContext<PersistentPdfWorkspaceLayoutController | null>(null)
+
+export function usePersistentPdfWorkspaceLayout(): PersistentPdfWorkspaceLayoutController {
+  const controller = useContext(PersistentPdfWorkspaceLayoutContext)
+  if (!controller) {
+    throw new Error(
+      'usePersistentPdfWorkspaceLayout must be used inside PersistentPdfWorkspaceLayout',
+    )
+  }
+  return controller
+}
+
 export default function PersistentPdfWorkspaceLayout() {
   const { user } = useAuth()
   const theme = useTheme()
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'))
+  const [pdfVisible, setPdfVisible] = useState(true)
   const location = useLocation()
   const curationMatch = matchPath('/curation/:sessionId/:candidateId', location.pathname)
     ?? matchPath('/curation/:sessionId', location.pathname)
   const layoutKind = curationMatch ? 'curation' : 'home'
   const isCurationLayout = layoutKind === 'curation'
+  const isPdfVisible = !isCurationLayout || pdfVisible
   const activeDocumentOwnerToken = curationMatch?.params.sessionId
     ? buildCurationPDFViewerOwner(curationMatch.params.sessionId)
     : HOME_PDF_VIEWER_OWNER
@@ -83,85 +112,128 @@ export default function PersistentPdfWorkspaceLayout() {
       }
     : undefined
 
+  const focusGrid = useCallback(() => {
+    if (isCurationLayout) {
+      setPdfVisible(false)
+    }
+  }, [isCurationLayout])
+  const showPdf = useCallback(() => setPdfVisible(true), [])
+  const layoutController = useMemo<PersistentPdfWorkspaceLayoutController>(() => ({
+    focusGrid,
+    isPdfVisible,
+    showPdf,
+  }), [focusGrid, isPdfVisible, showPdf])
+
+  useEffect(() => {
+    if (!isCurationLayout) {
+      setPdfVisible(true)
+    }
+  }, [isCurationLayout])
+
   if (isCompactLayout) {
     return (
-      <Root
-        data-layout-kind={layoutKind}
-        data-testid="persistent-pdf-workspace-layout"
-        sx={rootWorkbenchSx}
-      >
-        <Box
-          sx={{
-            width: '100%',
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            gap: 1.5,
-          }}
+      <PersistentPdfWorkspaceLayoutContext.Provider value={layoutController}>
+        <Root
+          data-layout-kind={layoutKind}
+          data-pdf-visible={isPdfVisible ? 'true' : 'false'}
+          data-testid="persistent-pdf-workspace-layout"
+          sx={rootWorkbenchSx}
         >
           <Box
-            data-testid="persistent-pdf-viewer-panel"
             sx={{
-              flex: '0 0 42%',
-              minHeight: 280,
+              width: '100%',
+              height: '100%',
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
+              gap: 1.5,
             }}
           >
-            <PdfViewer
-              activeDocumentOwnerToken={activeDocumentOwnerToken}
-              storageUserId={user?.uid ?? null}
-              variant={isCurationLayout ? 'curation' : 'default'}
-            />
+            <Box
+              aria-hidden={!isPdfVisible}
+              data-testid="persistent-pdf-viewer-panel"
+              sx={{
+                flex: '0 0 42%',
+                minHeight: 280,
+                display: isPdfVisible ? 'flex' : 'none',
+                flexDirection: 'column',
+                overflow: 'hidden',
+              }}
+            >
+              <PdfViewer
+                activeDocumentOwnerToken={activeDocumentOwnerToken}
+                storageUserId={user?.uid ?? null}
+                variant={isCurationLayout ? 'curation' : 'default'}
+              />
+            </Box>
+            <Box
+              data-testid="persistent-pdf-route-content"
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+              }}
+            >
+              <Outlet />
+            </Box>
           </Box>
-          <Box
-            data-testid="persistent-pdf-route-content"
-            sx={{
-              flex: 1,
-              minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-            }}
-          >
-            <Outlet />
-          </Box>
-        </Box>
-      </Root>
+        </Root>
+      </PersistentPdfWorkspaceLayoutContext.Provider>
     )
   }
 
   return (
-    <Root
-      data-layout-kind={layoutKind}
-      data-testid="persistent-pdf-workspace-layout"
-      sx={rootWorkbenchSx}
-    >
-      <PanelGroup
-        autoSaveId={`persistent-pdf-workspace-layout-${layoutKind}`}
-        direction="horizontal"
-        style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden' }}
+    <PersistentPdfWorkspaceLayoutContext.Provider value={layoutController}>
+      <Root
+        data-layout-kind={layoutKind}
+        data-pdf-visible={isPdfVisible ? 'true' : 'false'}
+        data-testid="persistent-pdf-workspace-layout"
+        sx={rootWorkbenchSx}
       >
-        <Panel defaultSize={isCurationLayout ? 36 : 34} minSize={20} maxSize={60} order={1}>
-          <PanelSection data-testid="persistent-pdf-viewer-panel">
-            <PdfViewer
-              activeDocumentOwnerToken={activeDocumentOwnerToken}
-              storageUserId={user?.uid ?? null}
-              variant={isCurationLayout ? 'curation' : 'default'}
-            />
-          </PanelSection>
-        </Panel>
+        <PanelGroup
+          autoSaveId={`persistent-pdf-workspace-layout-${layoutKind}`}
+          direction="horizontal"
+          style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden' }}
+        >
+          <Panel
+            defaultSize={isCurationLayout ? 36 : 34}
+            maxSize={60}
+            minSize={20}
+            order={1}
+            style={isPdfVisible ? undefined : { display: 'none' }}
+          >
+            <PanelSection
+              aria-hidden={!isPdfVisible}
+              data-testid="persistent-pdf-viewer-panel"
+            >
+              <PdfViewer
+                activeDocumentOwnerToken={activeDocumentOwnerToken}
+                storageUserId={user?.uid ?? null}
+                variant={isCurationLayout ? 'curation' : 'default'}
+              />
+            </PanelSection>
+          </Panel>
 
-        <ResizeHandle aria-label="Resize PDF and route content panels" />
+          <ResizeHandle
+            aria-label="Resize PDF and route content panels"
+            sx={{ display: isPdfVisible ? undefined : 'none' }}
+          />
 
-        <Panel defaultSize={66} minSize={24} maxSize={80} order={2}>
-          <PanelSection data-testid="persistent-pdf-route-content">
-            <Outlet />
-          </PanelSection>
-        </Panel>
-      </PanelGroup>
-    </Root>
+          <Panel
+            defaultSize={66}
+            minSize={24}
+            maxSize={80}
+            order={2}
+            style={isPdfVisible ? undefined : { flexGrow: 1 }}
+          >
+            <PanelSection data-testid="persistent-pdf-route-content">
+              <Outlet />
+            </PanelSection>
+          </Panel>
+        </PanelGroup>
+      </Root>
+    </PersistentPdfWorkspaceLayoutContext.Provider>
   )
 }

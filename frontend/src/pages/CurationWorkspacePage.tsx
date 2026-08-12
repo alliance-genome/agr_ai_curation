@@ -18,7 +18,14 @@ import {
   buildCurationPDFViewerOwner,
   dispatchPDFDocumentChanged,
 } from '@/components/pdfViewer/pdfEvents'
+import { usePersistentPdfWorkspaceLayout } from '@/components/pdfViewer/PersistentPdfWorkspaceLayout'
 import { buildManualCandidateDraft } from '@/features/curation/entityTags/workspaceEntityTags'
+import {
+  buildHorizontalGridModel,
+  InteractiveHorizontalCurationGrid,
+  type HorizontalGridRow,
+} from '@/features/curation/grid'
+import HorizontalGridRowActions from '@/features/curation/grid/HorizontalGridRowActions'
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
@@ -26,13 +33,13 @@ import { SubmissionPreviewDialog } from '@/features/curation/submission'
 import {
   buildCurationWorkspaceEnvelopeReviewRowsRequests,
   createManualCurationCandidate,
-  deleteCurationCandidate,
   executeCurationSubmission,
   fetchCurationWorkspaceEnvelopeReviewRows,
   fetchCurationWorkspace,
   submitCurationCandidateDecision,
+  validateAllCurationSessionCandidates,
+  validateCurationCandidate,
 } from '@/features/curation/services/curationWorkspaceService'
-import { CandidateFieldEditor } from '@/features/curation/editor'
 import AddManualObjectDialog, {
   type ManualObjectDraft,
 } from '@/features/curation/workspace/AddManualObjectDialog'
@@ -56,13 +63,11 @@ import {
   type PdfToFormEvidence,
   usePdfToFormLinking,
 } from '@/features/curation/workspace/usePdfToFormLinking'
-import ObjectSelectorStrip from '@/features/curation/workspace/ObjectSelectorStrip'
 import WorkPaneToolbar from '@/features/curation/workspace/WorkPaneToolbar'
 import {
   countValidatedPending,
   isValidatedPendingCandidate,
 } from '@/features/curation/workspace/workPaneToolbar'
-import type { ObjectSelectorRow } from '@/features/curation/workspace/objectSelector'
 import {
   buildWorkspaceExpectedEnvelopeRevisions,
   mergeSubmissionExecutionIntoWorkspace,
@@ -123,6 +128,8 @@ function CurationWorkspacePageContent({
     setWorkspace,
     workspace,
   } = useCurationWorkspaceContext()
+  const queryClient = useQueryClient()
+  const { focusGrid, isPdfVisible, showPdf } = usePersistentPdfWorkspaceLayout()
   const autosave = useCurationWorkspaceAutosave()
   const hydration = useCurationWorkspaceHydration()
   const runtimeWarning = autosave.warning ?? hydration.warning
@@ -174,6 +181,9 @@ function CurationWorkspacePageContent({
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
   const [submissionWipDialogOpen, setSubmissionWipDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
+  const [validatingAll, setValidatingAll] = useState(false)
+  const [validatingCandidateIds, setValidatingCandidateIds] = useState<Set<string>>(new Set())
+  const [decidingCandidateIds, setDecidingCandidateIds] = useState<Set<string>>(new Set())
   const envelopeReviewRequests = useMemo(
     () => buildCurationWorkspaceEnvelopeReviewRowsRequests(workspace),
     [workspace],
@@ -206,23 +216,10 @@ function CurationWorkspacePageContent({
     () => buildWorkspaceExpectedEnvelopeRevisions(candidates),
     [candidates],
   )
-  const objectSelectorRows = useMemo<ObjectSelectorRow[]>(() => {
-    const envelopeRowsByCandidateId = new Map(
-      envelopeObjectRows.map((row) => [row.candidate.candidate_id, row]),
-    )
-
-    return candidates.map((candidate) => {
-      const envelopeRow = envelopeRowsByCandidateId.get(candidate.candidate_id)
-      if (envelopeRow) {
-        return envelopeRow
-      }
-
-      return {
-        candidate,
-        reviewRow: null,
-      }
-    })
-  }, [candidates, envelopeObjectRows])
+  const horizontalGridModel = useMemo(
+    () => buildHorizontalGridModel({ candidates, envelopeReviewRows: envelopeObjectRows }),
+    [candidates, envelopeObjectRows],
+  )
   const pendingCandidateCount = useMemo(
     () => candidates.filter((candidate) => candidate.status === 'pending').length,
     [candidates],
@@ -237,6 +234,29 @@ function CurationWorkspacePageContent({
     () => countValidatedPending(candidates),
     [candidates],
   )
+  const validationCounts = useMemo(() => candidates.reduce(
+    (summary, candidate) => {
+      const validation = candidate.validation
+      if (validation) {
+        summary.validated += validation.counts.validated
+        summary.blocking += validation.counts.ambiguous
+          + validation.counts.not_found
+          + validation.counts.invalid_format
+          + validation.counts.conflict
+        summary.stale += validation.stale_field_keys.length
+      }
+      return summary
+    },
+    {
+      blocking: 0,
+      openFindings: horizontalGridModel.rows.reduce(
+        (count, row) => count + row.validation.openFindingCount,
+        0,
+      ),
+      stale: 0,
+      validated: 0,
+    },
+  ), [candidates, horizontalGridModel.rows])
   const envelopeReviewRowsError = queryErrorMessage(envelopeRowsQuery.error)
 
   const handleSubmitPreview = useCallback(async (
@@ -296,6 +316,17 @@ function CurationWorkspacePageContent({
 
   const refreshWorkspace = useCallback(async (preferredActiveCandidateId: string | null) => {
     const nextWorkspace = await fetchCurationWorkspace(workspace.session.session_id)
+    const nextReviewRequests = buildCurationWorkspaceEnvelopeReviewRowsRequests(nextWorkspace)
+    if (nextReviewRequests.length > 0) {
+      const nextReviewRows = await fetchCurationWorkspaceEnvelopeReviewRows(nextWorkspace)
+      queryClient.setQueryData(
+        curationWorkspaceEnvelopeReviewRowsQueryKey(
+          workspace.session.session_id,
+          nextReviewRequests,
+        ),
+        nextReviewRows,
+      )
+    }
     setWorkspace(
       updateWorkspaceActiveCandidate(
         nextWorkspace,
@@ -305,15 +336,83 @@ function CurationWorkspacePageContent({
           ?? null,
       ),
     )
-  }, [setWorkspace, workspace.session.session_id])
+  }, [queryClient, setWorkspace, workspace.session.session_id])
 
-  const handleSelectTag = useCallback((tagId: string) => {
+  const setCandidateBusy = useCallback((
+    setter: typeof setValidatingCandidateIds,
+    candidateId: string,
+    busy: boolean,
+  ) => {
+    setter((current) => {
+      const next = new Set(current)
+      if (busy) {
+        next.add(candidateId)
+      } else {
+        next.delete(candidateId)
+      }
+      return next
+    })
+  }, [])
+
+  const handleValidateTag = useCallback(async (tagId: string) => {
     setTableError(null)
-    setActiveCandidate(tagId)
-  }, [setActiveCandidate])
+    setCandidateBusy(setValidatingCandidateIds, tagId, true)
+
+    try {
+      const draftSaved = await autosave.flush()
+      if (!draftSaved) {
+        throw new Error('Unable to save the current draft before validating this entity.')
+      }
+
+      const response = await validateCurationCandidate({
+        session_id: workspace.session.session_id,
+        candidate_id: tagId,
+      })
+      await refreshWorkspace(activeCandidateId === tagId ? tagId : activeCandidateId)
+      if (response.validation_snapshot.state === 'failed') {
+        throw new Error(
+          response.validation_snapshot.warnings[0] ?? 'The server could not validate this entity.',
+        )
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to validate this entity.'
+      setTableError(message)
+    } finally {
+      setCandidateBusy(setValidatingCandidateIds, tagId, false)
+    }
+  }, [activeCandidateId, autosave, refreshWorkspace, setCandidateBusy, workspace.session.session_id])
+
+  const handleValidateAll = useCallback(async () => {
+    setTableError(null)
+    setValidatingAll(true)
+
+    try {
+      const draftSaved = await autosave.flush()
+      if (!draftSaved) {
+        throw new Error('Unable to save the current draft before validating all entities.')
+      }
+
+      const response = await validateAllCurationSessionCandidates({
+        session_id: workspace.session.session_id,
+      })
+      await refreshWorkspace(activeCandidateId)
+      if (response.session_validation.state === 'failed') {
+        throw new Error(
+          response.session_validation.warnings[0]
+            ?? 'The server could not validate all entities.',
+        )
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to validate all entities.'
+      setTableError(message)
+    } finally {
+      setValidatingAll(false)
+    }
+  }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
 
   const handleAcceptTag = useCallback(async (tagId: string) => {
     setTableError(null)
+    setCandidateBusy(setDecidingCandidateIds, tagId, true)
 
     try {
       const draftSaved = await autosave.flush()
@@ -331,12 +430,14 @@ function CurationWorkspacePageContent({
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to accept this entity.'
       setTableError(message)
-      throw error
+    } finally {
+      setCandidateBusy(setDecidingCandidateIds, tagId, false)
     }
-  }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
+  }, [activeCandidateId, autosave, refreshWorkspace, setCandidateBusy, workspace.session.session_id])
 
   const handleRejectTag = useCallback(async (tagId: string) => {
     setTableError(null)
+    setCandidateBusy(setDecidingCandidateIds, tagId, true)
 
     try {
       const draftSaved = await autosave.flush()
@@ -354,37 +455,10 @@ function CurationWorkspacePageContent({
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to reject this entity.'
       setTableError(message)
-      throw error
+    } finally {
+      setCandidateBusy(setDecidingCandidateIds, tagId, false)
     }
-  }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
-
-  const handleDeleteTag = useCallback(async (tagId: string) => {
-    setTableError(null)
-
-    const candidate = candidates.find((currentCandidate) => currentCandidate.candidate_id === tagId)
-    if (!candidate) {
-      const missingCandidateError = new Error(`Unable to find candidate ${tagId} in the workspace.`)
-      setTableError(missingCandidateError.message)
-      throw missingCandidateError
-    }
-
-    try {
-      const draftSaved = await autosave.flush()
-      if (!draftSaved) {
-        throw new Error('Unable to save the current draft before deleting this entity.')
-      }
-
-      const response = await deleteCurationCandidate({
-        session_id: workspace.session.session_id,
-        candidate_id: candidate.candidate_id,
-      })
-      await refreshWorkspace(response.session.current_candidate_id ?? null)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to delete this entity.'
-      setTableError(message)
-      throw error
-    }
-  }, [autosave, candidates, refreshWorkspace, workspace.session.session_id])
+  }, [activeCandidateId, autosave, refreshWorkspace, setCandidateBusy, workspace.session.session_id])
 
   const handleAcceptAllValidated = useCallback(async (tagIds: string[]) => {
     setTableError(null)
@@ -487,6 +561,31 @@ function CurationWorkspacePageContent({
     }
   }, [handleCreateManualTag])
 
+  const renderRowActions = useCallback((row: HorizontalGridRow) => {
+    const candidate = candidates.find((item) => item.candidate_id === row.candidateId)
+    if (!candidate) {
+      throw new Error(`Horizontal grid row references missing candidate '${row.candidateId}'`)
+    }
+
+    return (
+      <HorizontalGridRowActions
+        candidate={candidate}
+        isDeciding={decidingCandidateIds.has(candidate.candidate_id)}
+        isValidating={validatingCandidateIds.has(candidate.candidate_id)}
+        onAccept={() => void handleAcceptTag(candidate.candidate_id)}
+        onReject={() => void handleRejectTag(candidate.candidate_id)}
+        onValidate={() => void handleValidateTag(candidate.candidate_id)}
+      />
+    )
+  }, [
+    candidates,
+    decidingCandidateIds,
+    handleAcceptTag,
+    handleRejectTag,
+    handleValidateTag,
+    validatingCandidateIds,
+  ])
+
   return (
     <Box
       sx={{
@@ -553,32 +652,27 @@ function CurationWorkspacePageContent({
             session={workspace.session}
           />
         )}
-        selectorSlot={(
+        workPaneSlot={(
           <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
             <WorkPaneToolbar
+              isPdfVisible={isPdfVisible}
+              isValidatingAll={validatingAll}
               totalCount={candidates.length}
               pendingCount={pendingCandidateCount}
+              validationCounts={validationCounts}
               validatedPendingCount={validatedPendingCount}
               onAcceptAllValidated={() => {
                 void handleAcceptAllValidated(validatedPendingCandidateIds)
               }}
               onAddObject={() => setManualObjectDialogOpen(true)}
+              onTogglePdf={isPdfVisible ? focusGrid : showPdf}
+              onValidateAll={() => void handleValidateAll()}
             />
-            <ObjectSelectorStrip
-              activeCandidateId={activeCandidateId}
-              onDelete={(candidateId) => {
-                void handleDeleteTag(candidateId)
-              }}
-              onSelect={handleSelectTag}
-              rows={objectSelectorRows}
+            <InteractiveHorizontalCurationGrid
+              model={horizontalGridModel}
+              renderRowActions={renderRowActions}
             />
           </Box>
-        )}
-        fieldEditorSlot={(
-          <CandidateFieldEditor
-            onAcceptCandidate={handleAcceptTag}
-            onRejectCandidate={handleRejectTag}
-          />
         )}
       />
 

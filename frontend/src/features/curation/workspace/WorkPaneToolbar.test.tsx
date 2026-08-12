@@ -13,8 +13,18 @@ function renderToolbar(
     pendingCount: 2,
     totalCount: 5,
     validatedPendingCount: 1,
+    validationCounts: {
+      blocking: 2,
+      openFindings: 3,
+      stale: 1,
+      validated: 7,
+    },
+    isPdfVisible: true,
+    isValidatingAll: false,
     onAcceptAllValidated: vi.fn(),
     onAddObject: vi.fn(),
+    onTogglePdf: vi.fn(),
+    onValidateAll: vi.fn(),
     ...props,
   }
 
@@ -33,6 +43,9 @@ describe('WorkPaneToolbar', () => {
 
     expect(screen.getByText(/5 objects/)).toBeInTheDocument()
     expect(screen.getByText(/2 pending/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent(
+      '7 validated · 2 blocking · 1 stale · 3 open findings',
+    )
   })
 
   it('enables Accept all validated only when there are validated pending candidates', () => {
@@ -51,12 +64,25 @@ describe('WorkPaneToolbar', () => {
     const user = userEvent.setup()
     const onAcceptAllValidated = vi.fn()
     const onAddObject = vi.fn()
-    renderToolbar({ onAcceptAllValidated, onAddObject })
+    const onTogglePdf = vi.fn()
+    const onValidateAll = vi.fn()
+    renderToolbar({ onAcceptAllValidated, onAddObject, onTogglePdf, onValidateAll })
 
     await user.click(screen.getByRole('button', { name: /accept all validated/i }))
     await user.click(screen.getByRole('button', { name: /add object/i }))
+    await user.click(screen.getByRole('button', { name: /focus grid/i }))
+    await user.click(screen.getByRole('button', { name: /validate all/i }))
 
     expect(onAcceptAllValidated).toHaveBeenCalledTimes(1)
     expect(onAddObject).toHaveBeenCalledTimes(1)
+    expect(onTogglePdf).toHaveBeenCalledTimes(1)
+    expect(onValidateAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows PDF restore and session validation progress states', () => {
+    renderToolbar({ isPdfVisible: false, isValidatingAll: true })
+
+    expect(screen.getByRole('button', { name: 'Show PDF' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Validating all…' })).toBeDisabled()
   })
 })

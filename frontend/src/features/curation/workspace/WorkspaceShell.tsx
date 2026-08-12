@@ -5,8 +5,7 @@ import { alpha, styled } from '@mui/material/styles'
 
 export interface WorkspaceShellProps {
   headerSlot?: ReactNode
-  selectorSlot?: ReactNode
-  fieldEditorSlot?: ReactNode
+  workPaneSlot?: ReactNode
 }
 
 const ShellRoot = styled(Box)(() => ({
@@ -64,8 +63,7 @@ function WorkspacePane({
 
 export default function WorkspaceShell({
   headerSlot,
-  selectorSlot,
-  fieldEditorSlot,
+  workPaneSlot,
 }: WorkspaceShellProps) {
   return (
     <ShellRoot data-testid="workspace-shell">
@@ -75,17 +73,12 @@ export default function WorkspaceShell({
 
       <WorkPaneStack spacing={0}>
         <WorkspacePane label="Review work pane" testId="workspace-shell-work-pane">
-          {selectorSlot ? (
-            <Box sx={{ flexShrink: 0 }} data-testid="workspace-shell-selector">
-              {selectorSlot}
-            </Box>
-          ) : null}
-          {fieldEditorSlot ? (
+          {workPaneSlot ? (
             <Box
               sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
-              data-testid="workspace-shell-field-editor"
+              data-testid="workspace-shell-work-pane-content"
             >
-              {fieldEditorSlot}
+              {workPaneSlot}
             </Box>
           ) : null}
         </WorkspacePane>

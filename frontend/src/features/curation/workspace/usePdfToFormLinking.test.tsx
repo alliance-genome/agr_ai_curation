@@ -113,7 +113,7 @@ function LinkingHarness({
   })
 
   return (
-    <div>
+    <div data-candidate-id={activeCandidate?.candidate_id}>
       {activeCandidate?.draft.fields.map((field) => (
         <div
           data-field-key={field.field_key}
