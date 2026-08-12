@@ -259,6 +259,9 @@ describe('HorizontalCurationGrid', () => {
     ])
     expect(screen.getByLabelText('Object is always pinned')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'No optional pinned columns to clear' })).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '2 optional pinned columns cleared; Object remains pinned',
+    )
   })
 
   it('switches between compact and comfortable feature-local density', async () => {
