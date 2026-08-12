@@ -329,8 +329,8 @@ class UploadExecutionService:
                 process_id_callback=_on_process_id,
             )
             logger.info("Document %s processing completed: %s", request.document_id, result)
-            # Removed legacy dict/status-alias fallback — DocumentPipelineOrchestrator
-            # returns ProcessingResult on every path.
+            # process_pdf_document returns ProcessingResult on success, cancellation,
+            # and failure.
             await self._finalize_pipeline_result(
                 request=request,
                 success=result.success,
