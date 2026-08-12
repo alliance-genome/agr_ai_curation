@@ -180,10 +180,10 @@ function CurationWorkspacePageContent({
   )
   const hasEnvelopeObjectRows = envelopeReviewRequests.length > 0
   const envelopeRowsQuery = useQuery({
-    queryKey: [
-      ...curationWorkspaceEnvelopeReviewRowsQueryKey(workspace.session.session_id),
+    queryKey: curationWorkspaceEnvelopeReviewRowsQueryKey(
+      workspace.session.session_id,
       envelopeReviewRequests,
-    ],
+    ),
     queryFn: () => fetchCurationWorkspaceEnvelopeReviewRows(workspace),
     enabled: hasEnvelopeObjectRows,
     staleTime: WORKSPACE_STALE_TIME_MS,

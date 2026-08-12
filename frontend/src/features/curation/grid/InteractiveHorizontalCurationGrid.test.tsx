@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from '@mui/material/styles'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
 import type {
@@ -11,6 +11,7 @@ import type {
   CurationCandidateValidationResponse,
   CurationWorkspace,
   DomainEnvelopeEvidenceAnchorProjection,
+  DomainEnvelopeReviewRowsResponse,
   DomainEnvelopeValidationSummaryProjection,
 } from '@/features/curation/types'
 import {
@@ -27,11 +28,16 @@ import {
 } from './horizontalGridModel'
 
 const serviceMocks = vi.hoisted(() => ({
+  fetchCurationWorkspace: vi.fn(),
+  fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
   validateCurationCandidate: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/features/curation/services/curationWorkspaceService')>(),
+  fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
+  fetchCurationWorkspaceEnvelopeReviewRows:
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
   validateCurationCandidate: serviceMocks.validateCurationCandidate,
 }))
 
@@ -46,6 +52,7 @@ const emptyValidation: HorizontalGridValidationProjection = {
 function evidenceProjection(
   anchorId: string,
   fieldPath: string | null,
+  envelopeRevision = 3,
 ): DomainEnvelopeEvidenceAnchorProjection {
   return {
     anchor_id: anchorId,
@@ -54,7 +61,7 @@ function evidenceProjection(
     object_id: 'object-1',
     object_type: 'Reference',
     field_path: fieldPath,
-    envelope_revision: 3,
+    envelope_revision: envelopeRevision,
     document_id: 'document-1',
     quote: `Evidence for ${fieldPath ?? 'object'}`,
     page_number: 7,
@@ -83,14 +90,14 @@ function evidenceProjection(
   }
 }
 
-function resolvedSummary(): DomainEnvelopeValidationSummaryProjection {
+function resolvedSummary(envelopeRevision = 3): DomainEnvelopeValidationSummaryProjection {
   return {
     summary_id: 'summary-authors',
     envelope_id: 'envelope-1',
     object_id: 'object-1',
     object_type: 'Reference',
     field_path: 'citation.authors',
-    envelope_revision: 3,
+    envelope_revision: envelopeRevision,
     status: 'resolved',
     highest_severity: null,
     finding_count: 1,
@@ -225,13 +232,14 @@ function buildWorkspace(candidate = buildCandidate()): CurationWorkspace {
 }
 
 function buildModel({
+  authorsEvidence = [evidenceProjection('field-evidence', 'citation.authors')],
   authorsValidation = emptyValidation,
+  objectEvidence = [evidenceProjection('object-evidence', null)],
 }: {
+  authorsEvidence?: DomainEnvelopeEvidenceAnchorProjection[]
   authorsValidation?: HorizontalGridValidationProjection
+  objectEvidence?: DomainEnvelopeEvidenceAnchorProjection[]
 } = {}): HorizontalGridModel {
-  const fieldEvidence = evidenceProjection('field-evidence', 'citation.authors')
-  const objectEvidence = evidenceProjection('object-evidence', null)
-
   return {
     columns: [
       {
@@ -299,7 +307,7 @@ function buildModel({
             summaryFields: [],
             reviewRowMetadata: {},
           },
-          evidence: [objectEvidence],
+          evidence: objectEvidence,
           validation: emptyValidation,
         },
         cells: [
@@ -313,7 +321,7 @@ function buildModel({
             readOnly: false,
             staleValidation: false,
             fieldValidation: null,
-            evidence: [fieldEvidence],
+            evidence: authorsEvidence,
             validation: authorsValidation,
           },
           {
@@ -343,7 +351,7 @@ function buildModel({
             validation: emptyValidation,
           },
         ],
-        evidence: [objectEvidence, fieldEvidence],
+        evidence: [...objectEvidence, ...authorsEvidence],
         validation: authorsValidation,
         unmappedEvidence: [],
         unmappedValidation: emptyValidation,
@@ -403,14 +411,13 @@ function renderGrid({
   workspace: initialWorkspace = buildWorkspace(),
 }: {
   autosave?: UseAutosaveReturn
-  model?: HorizontalGridModel
+  model?: HorizontalGridModel | ((workspace: CurationWorkspace) => HorizontalGridModel)
   workspace?: CurationWorkspace
 } = {}) {
   const setActiveCandidate = vi.fn()
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries')
 
   function Harness() {
     const [workspace, setWorkspace] = useState(initialWorkspace)
@@ -431,10 +438,11 @@ function renderGrid({
       },
       autosave,
     }
+    const renderedModel = typeof model === 'function' ? model(workspace) : model
 
     return (
       <CurationWorkspaceProvider value={contextValue}>
-        <InteractiveHorizontalCurationGrid model={model} />
+        <InteractiveHorizontalCurationGrid model={renderedModel} />
       </CurationWorkspaceProvider>
     )
   }
@@ -447,7 +455,7 @@ function renderGrid({
     </QueryClientProvider>,
   )
 
-  return { autosave, invalidateQueries, setActiveCandidate }
+  return { autosave, queryClient, setActiveCandidate }
 }
 
 function createDeferred<T>() {
@@ -459,6 +467,11 @@ function createDeferred<T>() {
   })
   return { promise, reject, resolve }
 }
+
+beforeEach(() => {
+  serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
+  serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([])
+})
 
 afterEach(() => {
   vi.clearAllMocks()
@@ -547,11 +560,28 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(screen.getByRole('button', { name: 'Show evidence 1 for Authors' })).toBeEnabled()
   })
 
-  it('flushes edits, sends a field-scoped validation request, and merges the server candidate', async () => {
+  it('keeps validation loading until the authoritative workspace and review rows are refreshed', async () => {
     const user = userEvent.setup()
+    const navigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
     const deferred = createDeferred<CurationCandidateValidationResponse>()
+    const reviewRowsDeferred = createDeferred<DomainEnvelopeReviewRowsResponse[]>()
     serviceMocks.validateCurationCandidate.mockReturnValue(deferred.promise)
-    const serverCandidate = buildCandidate()
+    const serverEvidence = evidenceProjection(
+      'server-field-evidence',
+      'citation.authors',
+      4,
+    )
+    const serverSummary = resolvedSummary(4)
+    const serverCandidate = buildCandidate({
+      projection_ref: {
+        envelope_id: 'envelope-1',
+        object_id: 'object-1',
+        envelope_revision: 4,
+      },
+      evidence_anchor_projections: [serverEvidence],
+      validation_summary_projections: [serverSummary],
+    })
     serverCandidate.draft = {
       ...serverCandidate.draft,
       fields: serverCandidate.draft.fields.map((field) =>
@@ -560,7 +590,34 @@ describe('InteractiveHorizontalCurationGrid', () => {
           : field,
       ),
     }
-    const { autosave, invalidateQueries } = renderGrid()
+    const serverWorkspace = {
+      ...buildWorkspace(serverCandidate),
+      evidence_anchor_projections: [serverEvidence],
+      validation_summary_projections: [serverSummary],
+    }
+    const serverReviewRows: DomainEnvelopeReviewRowsResponse[] = [{
+      envelope_id: 'envelope-1',
+      envelope_revision: 4,
+      row_count: 0,
+      rows: [],
+    }]
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(serverWorkspace)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReturnValue(
+      reviewRowsDeferred.promise,
+    )
+    const { autosave, queryClient } = renderGrid({
+      model: (workspace) => buildModel({
+        authorsEvidence: (workspace.evidence_anchor_projections ?? []).filter(
+          (projection) => projection.field_path === 'citation.authors',
+        ),
+        authorsValidation: validationProjection(
+          workspace.validation_summary_projections ?? [],
+        ),
+        objectEvidence: (workspace.evidence_anchor_projections ?? []).filter(
+          (projection) => projection.field_path === null,
+        ),
+      }),
+    })
     const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
     expect(within(authorsCell).getByRole('img', { name: 'AI unconfirmed' })).toBeInTheDocument()
 
@@ -584,15 +641,42 @@ describe('InteractiveHorizontalCurationGrid', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('Server Author')).toBeInTheDocument()
-      expect(invalidateQueries).toHaveBeenCalledWith({
-        queryKey: ['curation-workspace-envelope-review-rows', 'session-1'],
-      })
+      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledWith('session-1')
+      expect(serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows).toHaveBeenCalledWith(
+        serverWorkspace,
+      )
     })
+    expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeDisabled()
+    expect(screen.getByLabelText('Validating Authors')).toBeInTheDocument()
+    expect(screen.queryByText('Server Author')).not.toBeInTheDocument()
+
+    await act(async () => {
+      reviewRowsDeferred.resolve(serverReviewRows)
+      await reviewRowsDeferred.promise
+    })
+
+    expect(await screen.findByText('Server Author')).toBeInTheDocument()
     expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
       'img',
-      { name: 'AI unconfirmed' },
+      { name: 'Resolved' },
     )).toBeInTheDocument()
+    expect(screen.getByText('Authors were validated by the server.')).toBeInTheDocument()
+    expect(queryClient.getQueryData([
+      'curation-workspace-envelope-review-rows',
+      'session-1',
+      [{ envelope_id: 'envelope-1', envelope_revision: 4 }],
+    ])).toEqual(serverReviewRows)
+
+    await user.click(screen.getByRole('button', { name: 'Show evidence 1 for Authors' }))
+    expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+      detail: {
+        command: expect.objectContaining({
+          anchorId: 'server-field-evidence',
+          searchText: 'Evidence for citation.authors',
+        }),
+      },
+    }))
+    unsubscribe()
   })
 
   it('derives resolved status and validation messages only from authoritative projections', () => {
@@ -668,6 +752,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
       warnings: ['The configured Authors validator is unavailable.'],
     }
     serviceMocks.validateCurationCandidate.mockResolvedValue(response)
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace(serverCandidate))
     renderGrid()
 
     await user.click(screen.getByRole('button', { name: 'Validate Authors' }))

@@ -8,6 +8,9 @@ import {
 } from '@/features/curation/evidence'
 import { fieldState } from '@/features/curation/editor/fieldState'
 import {
+  buildCurationWorkspaceEnvelopeReviewRowsRequests,
+  fetchCurationWorkspace,
+  fetchCurationWorkspaceEnvelopeReviewRows,
   validateCurationCandidate,
 } from '@/features/curation/services/curationWorkspaceService'
 import type {
@@ -19,7 +22,6 @@ import {
   useCurationWorkspaceContext,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import {
-  replaceWorkspaceCandidate,
   resolveEnvelopeFieldPath,
 } from '@/features/curation/workspace/workspaceState'
 import { curationWorkspaceEnvelopeReviewRowsQueryKey } from '@/features/curation/workspace/queryKeys'
@@ -168,12 +170,21 @@ export default function InteractiveHorizontalCurationGrid({
         candidate_id: candidate.candidate_id,
         field_keys: [field.field_key],
       })
-      setWorkspace((currentWorkspace) =>
-        replaceWorkspaceCandidate(currentWorkspace, response.candidate),
+      const refreshedWorkspace = await fetchCurationWorkspace(workspace.session.session_id)
+      const envelopeReviewRequests = buildCurationWorkspaceEnvelopeReviewRowsRequests(
+        refreshedWorkspace,
       )
-      await queryClient.invalidateQueries({
-        queryKey: curationWorkspaceEnvelopeReviewRowsQueryKey(workspace.session.session_id),
-      })
+      const envelopeReviewRows = await fetchCurationWorkspaceEnvelopeReviewRows(
+        refreshedWorkspace,
+      )
+      queryClient.setQueryData(
+        curationWorkspaceEnvelopeReviewRowsQueryKey(
+          workspace.session.session_id,
+          envelopeReviewRequests,
+        ),
+        envelopeReviewRows,
+      )
+      setWorkspace(refreshedWorkspace)
       if (response.validation_snapshot.state === 'failed') {
         throw new Error(
           response.validation_snapshot.warnings[0]
