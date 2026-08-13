@@ -4962,6 +4962,167 @@ def test_submission_retry_reconciles_after_local_finalization_rollback_without_r
     assert adapter.reconcile_calls == 1
 
 
+def test_submission_intent_fingerprint_ignores_generated_validation_metadata():
+    def payload(
+        *,
+        snapshot_id: str,
+        requested_at: str,
+        candidate_updated_at: str,
+        envelope_revision: int,
+        semantic_created_at: str,
+    ):
+        body = {
+            "candidate_ids": ["candidate-1"],
+            "candidates": [
+                {
+                    "candidate_id": "candidate-1",
+                    "session_id": "session-1",
+                    "updated_at": candidate_updated_at,
+                    "draft": {
+                        "draft_id": "draft-1",
+                        "candidate_id": "candidate-1",
+                        "updated_at": candidate_updated_at,
+                        "fields": [],
+                    },
+                }
+            ],
+            "domain_envelope_candidates": [
+                {
+                    "candidate_id": "candidate-1",
+                    "envelope_id": "envelope-1",
+                    "envelope_revision": envelope_revision,
+                    "payload": {"created_at": semantic_created_at},
+                }
+            ],
+            "session_validation": {
+                "snapshot_id": snapshot_id,
+                "requested_at": requested_at,
+                "completed_at": requested_at,
+                "summary": {"last_validated_at": requested_at},
+            },
+        }
+        return SubmissionPayloadContract(
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            candidate_ids=["candidate-1"],
+            payload_json=body,
+            payload_text=json.dumps(body, sort_keys=True),
+            content_type="application/json",
+            filename="submission.json",
+        )
+
+    first = payload(
+        snapshot_id="snapshot-1",
+        requested_at="2026-08-13T10:00:00Z",
+        candidate_updated_at="2026-08-13T10:00:00Z",
+        envelope_revision=1,
+        semantic_created_at="1980-01-01",
+    )
+    refreshed_validation = payload(
+        snapshot_id="snapshot-2",
+        requested_at="2026-08-13T10:05:00Z",
+        candidate_updated_at="2026-08-13T10:05:00Z",
+        envelope_revision=1,
+        semantic_created_at="1980-01-01",
+    )
+    changed_envelope = payload(
+        snapshot_id="snapshot-2",
+        requested_at="2026-08-13T10:05:00Z",
+        candidate_updated_at="2026-08-13T10:05:00Z",
+        envelope_revision=2,
+        semantic_created_at="1980-01-01",
+    )
+    changed_semantic_timestamp = payload(
+        snapshot_id="snapshot-2",
+        requested_at="2026-08-13T10:05:00Z",
+        candidate_updated_at="2026-08-13T10:05:00Z",
+        envelope_revision=1,
+        semantic_created_at="1981-01-01",
+    )
+
+    assert submission_module._submission_intent_fingerprint(first) == (
+        submission_module._submission_intent_fingerprint(refreshed_validation)
+    )
+    assert submission_module._submission_intent_fingerprint(first) != (
+        submission_module._submission_intent_fingerprint(changed_envelope)
+    )
+    assert submission_module._submission_intent_fingerprint(first) != (
+        submission_module._submission_intent_fingerprint(changed_semantic_timestamp)
+    )
+
+
+def test_reused_submission_key_rejects_changed_domain_envelope_revision(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+    )
+
+    class CountingAdapter:
+        transport_key = "counting"
+
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            return {"status": "accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("A terminal accepted submission is not reconciled")
+
+    adapter = CountingAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=str(uuid4()),
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+
+    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
+    assert envelope_row is not None
+    envelope_row.revision = 2
+    db_session.add(envelope_row)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        module.execute_submission(
+            db_session,
+            seeded["session_id"],
+            request,
+            actor_claims={"sub": "user-1"},
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == (
+        "Idempotency key is already bound to a different submission intent"
+    )
+    assert adapter.submit_calls == 1
+
+
 def test_unknown_submission_outcome_is_not_blindly_resent(db_session, monkeypatch):
     seeded = _create_decision_session(
         db_session,
@@ -5035,9 +5196,15 @@ def test_confirmed_failure_retry_reuses_attempt_and_idempotency_key(db_session, 
 
         def __init__(self):
             self.keys = []
+            self.field_values = []
 
         def submit(self, *, payload, idempotency_key):
             self.keys.append(idempotency_key)
+            payload_json = payload.payload_json
+            assert isinstance(payload_json, dict)
+            self.field_values.append(
+                payload_json["candidates"][0]["draft"]["fields"][0]["value"]
+            )
             if len(self.keys) == 1:
                 raise SubmissionTransportError("Confirmed rejection")
             return {"status": "accepted"}
@@ -5064,6 +5231,16 @@ def test_confirmed_failure_retry_reuses_attempt_and_idempotency_key(db_session, 
     )
     db_session.commit()
 
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    assert candidate is not None
+    assert candidate.draft is not None
+    changed_fields = [dict(field) for field in candidate.draft.fields]
+    changed_fields[0]["value"] = "newer-draft-value"
+    candidate.draft.fields = changed_fields
+    candidate.draft.version += 1
+    db_session.add(candidate.draft)
+    db_session.commit()
+
     retry_response = module.retry_submission(
         db_session,
         seeded["session_id"],
@@ -5077,6 +5254,7 @@ def test_confirmed_failure_retry_reuses_attempt_and_idempotency_key(db_session, 
     assert retry_response.submission.submission_id == execute_response.submission.submission_id
     assert retry_response.submission.attempt_state == "succeeded"
     assert adapter.keys == [idempotency_key, idempotency_key]
+    assert adapter.field_values == ["edited-value", "edited-value"]
 
 
 def test_submission_attempt_idempotency_key_is_database_unique(db_session):

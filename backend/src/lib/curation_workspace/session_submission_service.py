@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,9 @@ from src.lib.curation_workspace.models import (
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
     DomainEnvelopeProjectionIndex,
+)
+from src.lib.curation_workspace.extraction_results import (
+    canonical_extraction_payload_hash,
 )
 from src.lib.curation_workspace.session_common import (
     _actor_claims_payload,
@@ -115,6 +119,16 @@ SUBMISSION_TRANSPORT_FAILURE_MESSAGE = "Submission failed unexpectedly. Please t
 _BLOCKING_EXPORT_STATUSES = {"blocked", "not_supported", "unsupported"}
 _NON_EXPORTABLE_FLAGS = ("exportable", "submit", "submittable")
 _MISSING = object()
+_SUBMISSION_VALIDATION_GENERATED_KEYS = frozenset(
+    {"snapshot_id", "requested_at", "completed_at"}
+)
+_SUBMISSION_CANDIDATE_GENERATED_KEYS = frozenset(
+    {"created_at", "updated_at", "last_reviewed_at"}
+)
+_SUBMISSION_DRAFT_GENERATED_KEYS = frozenset(
+    {"created_at", "updated_at", "last_saved_at"}
+)
+_SUBMISSION_EVIDENCE_GENERATED_KEYS = frozenset({"created_at", "updated_at"})
 
 
 @lru_cache(maxsize=1)
@@ -1928,6 +1942,80 @@ def _submission_candidate_ids(record: SubmissionModel) -> list[str]:
     )
 
 
+def _submission_intent_generated_keys(path: tuple[str | int, ...]) -> frozenset[str]:
+    """Return generated fields only for known payload-contract wrapper paths."""
+
+    if len(path) == 2 and path[1] == "session_validation":
+        return _SUBMISSION_VALIDATION_GENERATED_KEYS
+    if len(path) == 3 and path[1:] == ("session_validation", "summary"):
+        return frozenset({"last_validated_at"})
+    if len(path) == 3 and path[1] == "candidates" and isinstance(path[2], int):
+        return _SUBMISSION_CANDIDATE_GENERATED_KEYS
+    if (
+        len(path) == 4
+        and path[1] == "candidates"
+        and isinstance(path[2], int)
+        and path[3] == "draft"
+    ):
+        return _SUBMISSION_DRAFT_GENERATED_KEYS
+    if (
+        len(path) == 5
+        and path[1] == "candidates"
+        and isinstance(path[2], int)
+        and path[3] == "evidence_anchors"
+        and isinstance(path[4], int)
+    ):
+        return _SUBMISSION_EVIDENCE_GENERATED_KEYS
+    if (
+        len(path) == 4
+        and path[1] == "candidates"
+        and isinstance(path[2], int)
+        and path[3] == "validation"
+    ):
+        return frozenset({"last_validated_at"})
+    return frozenset()
+
+
+def _semantic_submission_intent_value(
+    value: Any,
+    *,
+    path: tuple[str | int, ...] = (),
+) -> Any:
+    """Remove generated wrapper metadata while preserving arbitrary semantic JSON."""
+
+    if isinstance(value, Mapping):
+        generated_keys = _submission_intent_generated_keys(path)
+        return {
+            str(key): _semantic_submission_intent_value(
+                item,
+                path=(*path, str(key)),
+            )
+            for key, item in value.items()
+            if key not in generated_keys
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _semantic_submission_intent_value(item, path=(*path, index))
+            for index, item in enumerate(value)
+        ]
+    return value
+
+
+def _submission_intent_fingerprint(payload: SubmissionPayloadContract) -> str:
+    """Hash the stable outbound intent represented by a submission contract."""
+
+    material = payload.model_dump(mode="json", exclude={"warnings"})
+    payload_text = material.get("payload_text")
+    if isinstance(payload_text, str):
+        try:
+            material["payload_text"] = json.loads(payload_text)
+        except (TypeError, ValueError):
+            pass
+    return canonical_extraction_payload_hash(
+        _semantic_submission_intent_value(material)
+    )
+
+
 def _reject_direct_submit_with_domain_blockers(
     readiness: Sequence[CurationCandidateSubmissionReadiness],
 ) -> None:
@@ -1961,6 +2049,7 @@ def _execute_direct_submission_attempt(
     action_type: CurationActionType,
     idempotency_key: str,
     retry_confirmed_failure: bool = False,
+    reuse_persisted_intent: bool = False,
     action_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[CurationSubmissionRecord, CurationActionLogEntry]:
     """Durably stage, deliver, and reconcile one idempotent submission attempt."""
@@ -2031,6 +2120,11 @@ def _execute_direct_submission_attempt(
         or submission_row.target_key != target_key
         or persisted_payload is None
         or persisted_payload.candidate_ids != payload.candidate_ids
+        or (
+            not reuse_persisted_intent
+            and _submission_intent_fingerprint(persisted_payload)
+            != _submission_intent_fingerprint(payload)
+        )
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2590,6 +2684,7 @@ def retry_submission(
         retry_confirmed_failure=(
             original_submission.attempt_state == CurationSubmissionAttemptState.FAILED
         ),
+        reuse_persisted_intent=True,
         action_metadata={
             "original_submission_id": str(original_submission.id),
             "retry_reason": retry_reason,
