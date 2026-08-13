@@ -1032,7 +1032,14 @@ async def execute_flow_endpoint(
 
                 outcome.observe(flat_event)
 
-                if event_type in {"RUN_FINISHED", "CHAT_OUTPUT_READY", "FILE_READY", "RUN_ERROR", "FLOW_FINISHED"}:
+                if event_type in {
+                    "RUN_FINISHED",
+                    "CHAT_OUTPUT_READY",
+                    "FILE_READY",
+                    "CURATION_HANDOFF_READY",
+                    "RUN_ERROR",
+                    "FLOW_FINISHED",
+                }:
                     continue
 
                 transcript_row = _build_execute_flow_transcript_row_from_event(flat_event)

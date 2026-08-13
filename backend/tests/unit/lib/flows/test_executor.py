@@ -6012,9 +6012,13 @@ class TestExecuteFlowTermination:
             for index, event in enumerate(events)
             if event.get("type") == "TOOL_COMPLETE"
         )
-        assert handoff_complete_index < event_types.index("CURATION_HANDOFF_READY")
-        assert event_types.index("CURATION_HANDOFF_READY") < event_types.index("CHAT_OUTPUT_READY")
-        assert event_types.index("CHAT_OUTPUT_READY") < event_types.index("FLOW_FINISHED")
+        assert handoff_complete_index < event_types.index("CHAT_OUTPUT_READY")
+        assert event_types.index("CHAT_OUTPUT_READY") < event_types.index(
+            "CURATION_HANDOFF_READY"
+        )
+        assert event_types.index("CURATION_HANDOFF_READY") < event_types.index(
+            "FLOW_FINISHED"
+        )
         assert "RUN_FINISHED" not in event_types
         chat_ready = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
         assert chat_ready["details"]["output"] == "Found one supported gene."
@@ -6518,6 +6522,12 @@ class TestExecuteFlowTermination:
         assert "CURATION_HANDOFF_READY" in event_types
         assert "RUN_FINISHED" in event_types
         assert "FLOW_ERROR" not in event_types
+        assert event_types.index("RUN_FINISHED") < event_types.index(
+            "CURATION_HANDOFF_READY"
+        )
+        assert event_types.index("CURATION_HANDOFF_READY") < event_types.index(
+            "FLOW_FINISHED"
+        )
 
         handoff_ready = next(
             event for event in events if event.get("type") == "CURATION_HANDOFF_READY"
@@ -6547,7 +6557,7 @@ class TestExecuteFlowTermination:
         assert persisted_requests[0].agent_key == "gene"
 
     @pytest.mark.asyncio
-    async def test_later_run_error_fails_after_curation_handoff_ready(
+    async def test_later_run_error_suppresses_curation_handoff_ready(
         self, monkeypatch
     ):
         flow = _make_flow([
@@ -6633,7 +6643,7 @@ class TestExecuteFlowTermination:
         ]
         event_types = [event.get("type") for event in events]
 
-        assert event_types.count("CURATION_HANDOFF_READY") == 1
+        assert "CURATION_HANDOFF_READY" not in event_types
         assert "RUN_ERROR" in event_types
         assert "FLOW_ERROR" in event_types
         flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")

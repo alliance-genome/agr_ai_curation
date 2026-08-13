@@ -89,6 +89,54 @@ def test_completed_outcome_preserves_multiple_typed_outputs_after_persistence():
     ]
 
 
+def test_completed_outcome_releases_handoff_readiness_after_persistence():
+    outcome = FlowRunOutcome()
+    outcome.observe({"type": "RUN_FINISHED", "response": "Raw fallback."})
+    outcome.observe(
+        {
+            "type": "CURATION_HANDOFF_READY",
+            "details": {"review_session_ids": ["review-gene"]},
+        }
+    )
+    outcome.observe({"type": "FLOW_FINISHED", "status": "completed"})
+
+    assert outcome.final_user_visible_text == "Raw fallback."
+    assert outcome.publishable_terminal_events() == []
+
+    outcome.mark_persisted(transcript=True)
+
+    assert [event["type"] for event in outcome.publishable_terminal_events()] == [
+        "RUN_FINISHED",
+        "CURATION_HANDOFF_READY",
+        "FLOW_FINISHED",
+    ]
+
+
+def test_failed_terminals_discard_buffered_handoff_readiness():
+    for terminal_event in (
+        {"type": "RUN_ERROR", "message": "runner failed"},
+        {
+            "type": "FLOW_FINISHED",
+            "status": "failed",
+            "failure_reason": "final validation failed",
+        },
+    ):
+        outcome = FlowRunOutcome()
+        outcome.observe(
+            {
+                "type": "CURATION_HANDOFF_READY",
+                "details": {"review_session_ids": ["review-gene"]},
+            }
+        )
+        outcome.observe(terminal_event)
+        outcome.mark_persisted(transcript=True)
+
+        assert all(
+            event["type"] != "CURATION_HANDOFF_READY"
+            for event in outcome.publishable_terminal_events()
+        )
+
+
 def test_persistence_failure_replaces_stale_success_terminal_order():
     outcome = FlowRunOutcome()
     outcome.observe({"type": "CHAT_OUTPUT_READY", "details": {"output": "stale"}})

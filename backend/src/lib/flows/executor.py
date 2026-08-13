@@ -4072,7 +4072,6 @@ async def execute_flow(
     failure_reason: Optional[str] = None
     trace_id: Optional[str] = None
     extraction_persisted = False
-    curation_handoff_emitted = False
     pending_output_events: list[dict[str, Any]] = []
     pending_run_finished_event: Optional[dict[str, Any]] = None
     flow_execution_state = supervisor._flow_execution_state
@@ -4315,30 +4314,6 @@ async def execute_flow(
                     yield flow_validator_audit_event
                 if flow_step_evidence_event is not None:
                     yield flow_step_evidence_event
-                curation_handoff_state = flow_execution_state.get("curation_handoff")
-                if (
-                    not curation_handoff_emitted
-                    and isinstance(curation_handoff_state, Mapping)
-                    and not _missing_consumed_tool_completions()
-                ):
-                    curation_handoff_emitted = True
-                    yield {
-                        "type": CURATION_HANDOFF_READY_EVENT,
-                        "timestamp": _now_iso(),
-                        "details": {
-                            "review_session_ids": list(
-                                curation_handoff_state.get("review_session_ids") or []
-                            ),
-                            "adapter_keys": list(
-                                curation_handoff_state.get("adapter_keys") or []
-                            ),
-                            "document_id": document_id,
-                        },
-                    }
-                    logger.info(
-                        "[Flow Executor] Curation handoff produced for flow '%s'",
-                        flow.name,
-                    )
                 flow_validator_audit_events = []
                 flow_step_evidence_event = None
                 break
@@ -4426,29 +4401,6 @@ async def execute_flow(
             yield flow_validator_audit_event
         if flow_step_evidence_event is not None:
             yield flow_step_evidence_event
-
-        curation_handoff_state = flow_execution_state.get("curation_handoff")
-        if (
-            not curation_handoff_emitted
-            and isinstance(curation_handoff_state, Mapping)
-            and not _missing_consumed_tool_completions()
-        ):
-            curation_handoff_emitted = True
-            yield {
-                "type": CURATION_HANDOFF_READY_EVENT,
-                "timestamp": _now_iso(),
-                "details": {
-                    "review_session_ids": list(
-                        curation_handoff_state.get("review_session_ids") or []
-                    ),
-                    "adapter_keys": list(curation_handoff_state.get("adapter_keys") or []),
-                    "document_id": document_id,
-                },
-            }
-            logger.info(
-                "[Flow Executor] Curation handoff produced for flow '%s'",
-                flow.name,
-            )
 
     if flow_status != "failed":
         missing_steps = _missing_required_flow_steps(flow_execution_state)
@@ -4632,6 +4584,25 @@ async def execute_flow(
         and pending_run_finished_event is not None
     ):
         yield pending_run_finished_event
+
+    curation_handoff_state = flow_execution_state.get("curation_handoff")
+    if flow_status == "completed" and isinstance(curation_handoff_state, Mapping):
+        yield {
+            "type": CURATION_HANDOFF_READY_EVENT,
+            "timestamp": _now_iso(),
+            "details": {
+                "review_session_ids": list(
+                    curation_handoff_state.get("review_session_ids") or []
+                ),
+                "adapter_keys": list(curation_handoff_state.get("adapter_keys") or []),
+                "document_id": document_id,
+            },
+        }
+        logger.info(
+            "[Flow Executor] Curation handoff ready after terminal validation "
+            "for flow '%s'",
+            flow.name,
+        )
 
     # Emit flow-specific completion event
     yield {

@@ -792,6 +792,10 @@ def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
                 "document_id": "doc-1",
             },
         }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "output_status": "complete"},
+        }
 
     published_events = []
     monkeypatch.setattr(
@@ -818,8 +822,10 @@ def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
     )
 
     assert result == ([], ["session-gene", "session-gene_expression"], "complete", [])
-    assert len(published_events) == 1
-    assert published_events[0]["type"] == "CURATION_HANDOFF_READY"
+    assert [event["type"] for event in published_events] == [
+        "CURATION_HANDOFF_READY",
+        "FLOW_FINISHED",
+    ]
     assert published_events[0]["batch_id"] == batch_id
     assert published_events[0]["document_id"] == document_id
 
@@ -887,7 +893,6 @@ def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypat
     ]
 
     assert [event["type"] for event in published_events] == [
-        "CURATION_HANDOFF_READY",
         "FLOW_ERROR",
         "FLOW_FINISHED",
     ]

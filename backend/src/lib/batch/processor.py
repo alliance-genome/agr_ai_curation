@@ -496,6 +496,10 @@ async def _execute_flow_for_document(
 
     result_files: list[dict[str, Any]] = []
     review_session_ids: list[str] = []
+    # Handoff readiness is a success-only terminal artifact. Keep it private
+    # until FLOW_FINISHED confirms that this execution completed.
+    pending_review_session_ids: list[str] = []
+    pending_curation_handoff_event: Optional[dict[str, Any]] = None
     flow_output_status: Optional[str] = None
     flow_output_branches: list[dict[str, Any]] = []
     flow_failure_message: Optional[str] = None
@@ -591,12 +595,23 @@ async def _execute_flow_for_document(
                         finished_data.get("failure_reason")
                         or "Flow execution failed."
                     )
+                if (
+                    finished_data.get("status") == "completed"
+                    and not flow_failure_message
+                    and pending_curation_handoff_event is not None
+                ):
+                    review_session_ids = pending_review_session_ids
+                    broadcaster.publish_sync(
+                        batch_uuid,
+                        pending_curation_handoff_event,
+                    )
+                    pending_curation_handoff_event = None
 
             if event_type == "CURATION_HANDOFF_READY":
                 handoff_details: Any = event.get("details")
                 if isinstance(handoff_details, dict):
                     raw_review_session_ids = handoff_details.get("review_session_ids")
-                    review_session_ids = (
+                    pending_review_session_ids = (
                         [
                             str(review_session_id)
                             for review_session_id in raw_review_session_ids
@@ -605,8 +620,12 @@ async def _execute_flow_for_document(
                         if isinstance(raw_review_session_ids, list)
                         else []
                     )
-                    enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
-                    broadcaster.publish_sync(batch_uuid, enriched_event)
+                    pending_curation_handoff_event = _enrich_event_for_batch(
+                        event,
+                        batch_id,
+                        document_id,
+                        session_id,
+                    )
                 continue
 
             # Enrich/publish non-file events with batch context for frontend streaming.
