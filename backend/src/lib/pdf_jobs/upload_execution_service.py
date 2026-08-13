@@ -173,8 +173,8 @@ class ProviderMarkdownExecutionRequest:
     converted_artifact_id: str
     curator_token: str = field(repr=False)
     source_provenance: Mapping[str, Any]
+    file_path: Path
     figure_metadata_artifact_ids: tuple[str, ...] = ()
-    file_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -190,8 +190,8 @@ class ProviderConversionExecutionRequest:
     source_artifact_id: str
     curator_token: str = field(repr=False)
     source_provenance: Mapping[str, Any]
+    file_path: Path
     figure_metadata_artifact_ids: tuple[str, ...] = ()
-    file_path: Path | None = None
 
 
 class UploadExecutionService:
@@ -817,7 +817,9 @@ class UploadExecutionService:
     ) -> None:
         """Use the curator-owned PDF when converted provider text is forbidden."""
         file_path = request.file_path
-        if file_path is None or not file_path.is_file():
+        # Removed optional provider-PDF fallback — all current upload/import emitters
+        # provide the saved PDF required for access-denial recovery.
+        if not file_path.is_file():
             logger.error(
                 "Provider text access denied for document %s, but no local PDF is available",
                 request.document_id,
