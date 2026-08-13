@@ -208,14 +208,6 @@ const nextOutputEdgeId = (existingEdges: FlowEdge[]): string => {
   return candidate
 }
 
-const unsupportedFlowVersionMessage = (
-  flowName: string,
-  version: string,
-): string => (
-  `Flow '${flowName}' uses unsupported schema version '${version}'. `
-  + 'Upgrade or archive it before editing.'
-)
-
 export const rebuildValidationGroupsFromEdges = (
   currentNodes: AgentNode[],
   currentEdges: FlowEdge[]
@@ -808,13 +800,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setLoading(true)
     try {
       const flow = await getFlow(id)
-      if (flow.flow_definition.version !== '1.1') {
-        setSnackbar({
-          message: unsupportedFlowVersionMessage(flow.name, flow.flow_definition.version),
-          severity: 'error',
-        })
-        return
-      }
       setFlowName(flow.name)
       setFlowDescription(flow.description || '')
       setTaskInstructionsDefaultOnly(flow.flow_definition.task_instructions_default_only === true)
@@ -1625,12 +1610,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     try {
       // First fetch the full flow to get its definition
       const fullFlow = await getFlow(editingFlowId)
-      if (fullFlow.flow_definition.version !== '1.1') {
-        throw new Error(unsupportedFlowVersionMessage(
-          fullFlow.name,
-          fullFlow.flow_definition.version,
-        ))
-      }
       // Update with new name
       const updatedFlow = await updateFlow(editingFlowId, {
         name: editingFlowName.trim(),

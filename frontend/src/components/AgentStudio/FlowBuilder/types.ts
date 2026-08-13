@@ -119,9 +119,6 @@ interface FlowDefinitionBody {
 /** Current flow schema accepted for editor mutations and save requests. */
 export type FlowDefinition = FlowDefinitionBody & { version: '1.1' }
 
-/** Read shape permits an explicit stale-version rejection at the editor boundary. */
-export type FlowDefinitionResponse = FlowDefinition | (FlowDefinitionBody & { version: '1.0' })
-
 // ============================================================================
 // API Response Types
 // ============================================================================
@@ -131,7 +128,8 @@ export interface FlowResponse {
   user_id: number
   name: string
   description: string | null
-  flow_definition: FlowDefinitionResponse
+  // Migration d6e7f8a9b0c1 guarantees persisted flows are v1.1.
+  flow_definition: FlowDefinition
   execution_count: number
   last_executed_at: string | null
   created_at: string
