@@ -1202,6 +1202,14 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(
             "details": {"output": "Selected TP53 for highest evidence confidence."},
         }
         yield {
+            "type": "CURATION_HANDOFF_READY",
+            "timestamp": "2026-02-26T00:00:03+00:00",
+            "details": {
+                "review_session_ids": review_session_ids,
+                "adapter_keys": adapter_keys,
+            },
+        }
+        yield {
             "type": "FLOW_FINISHED",
             "timestamp": "2026-02-26T00:00:04+00:00",
             "data": {
@@ -1257,15 +1265,27 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(
     assert execute_calls == ["session-flow-replay"]
     assert flow.execution_count == 1
     assert db.commit_calls == 1
-    assert [event["type"] for event in first_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
-    assert [event["type"] for event in second_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
+    assert [event["type"] for event in first_events] == [
+        "RUN_STARTED",
+        "CHAT_OUTPUT_READY",
+        "CURATION_HANDOFF_READY",
+        "FLOW_FINISHED",
+    ]
+    assert [event["type"] for event in second_events] == [
+        "RUN_STARTED",
+        "CHAT_OUTPUT_READY",
+        "CURATION_HANDOFF_READY",
+        "FLOW_FINISHED",
+    ]
     assert {event["turn_id"] for event in second_events} == {"turn-flow-replay"}
     assert second_events[0]["trace_id"] == "trace-flow-replay"
     assert second_events[1]["details"]["output"] == "Selected TP53 for highest evidence confidence."
-    assert second_events[2]["adapter_keys"] == adapter_keys
-    assert second_events[2]["extraction_result_ids"] == extraction_result_ids
-    assert second_events[2]["extraction_result_refs"] == first_events[2]["extraction_result_refs"]
-    assert second_events[2]["review_session_ids"] == review_session_ids
+    assert second_events[2]["details"]["review_session_ids"] == review_session_ids
+    assert second_events[2]["details"]["adapter_keys"] == adapter_keys
+    assert second_events[3]["adapter_keys"] == adapter_keys
+    assert second_events[3]["extraction_result_ids"] == extraction_result_ids
+    assert second_events[3]["extraction_result_refs"] == first_events[3]["extraction_result_refs"]
+    assert second_events[3]["review_session_ids"] == review_session_ids
     stored_turn_messages = repository.list_messages_for_turn(
         session_id="session-flow-replay",
         user_auth_sub="auth-sub",
@@ -1727,6 +1747,13 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
             "details": {"output": "This output should be discarded when persistence fails."},
         }
         yield {
+            "type": "CURATION_HANDOFF_READY",
+            "details": {
+                "review_session_ids": ["review-completion-failure"],
+                "adapter_keys": ["gene"],
+            },
+        }
+        yield {
             "type": "FLOW_FINISHED",
             "data": {
                 "status": "completed",
@@ -1768,6 +1795,7 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
         "RUN_ERROR",
     ]
     assert all(event["type"] != "FLOW_FINISHED" for event in events)
+    assert all(event["type"] != "CURATION_HANDOFF_READY" for event in events)
     assert "output should be discarded" not in json.dumps(events).lower()
     assert events[1]["details"]["context"] == "RuntimeError"
     assert events[1]["details"]["error"] == "Flow execution failed unexpectedly."
@@ -1792,6 +1820,9 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
             chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY
         ]
     ] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert "CURATION_HANDOFF_READY" not in json.dumps(
+        failure_summary.payload_json
+    )
     assert "Flow failed" in failure_summary.payload_json[
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]

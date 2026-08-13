@@ -33,6 +33,7 @@ class FlowRunOutcome:
     persistence_result: dict[str, Any] = field(default_factory=dict)
     _success_output_events: list[dict[str, Any]] = field(default_factory=list)
     _run_finished_event: dict[str, Any] | None = None
+    _curation_handoff_ready_event: dict[str, Any] | None = None
     _run_error_event: dict[str, Any] | None = None
     _flow_finished_event: dict[str, Any] | None = None
     _replacement_failure_events: list[dict[str, Any]] = field(default_factory=list)
@@ -60,6 +61,10 @@ class FlowRunOutcome:
             )
             return
 
+        if event_type == "CURATION_HANDOFF_READY":
+            self._curation_handoff_ready_event = dict(event)
+            return
+
         if event_type == "RUN_ERROR":
             self.status = "failed"
             self._run_error_event = dict(event)
@@ -67,6 +72,7 @@ class FlowRunOutcome:
             self.final_user_visible_text = None
             self._success_output_events = []
             self._run_finished_event = None
+            self._curation_handoff_ready_event = None
             return
 
         if event_type != "FLOW_FINISHED":
@@ -82,6 +88,7 @@ class FlowRunOutcome:
             self.final_user_visible_text = None
             self._success_output_events = []
             self._run_finished_event = None
+            self._curation_handoff_ready_event = None
             self._flow_finished_event["status"] = "failed"
             self._flow_finished_event["failure_reason"] = self.failure_reason
         else:
@@ -105,6 +112,11 @@ class FlowRunOutcome:
             events.append(dict(self._run_finished_event))
         elif self.status == "failed" and self._run_error_event is not None:
             events.append(dict(self._run_error_event))
+        if (
+            self.status == "completed"
+            and self._curation_handoff_ready_event is not None
+        ):
+            events.append(dict(self._curation_handoff_ready_event))
         if self._flow_finished_event is not None:
             events.append(dict(self._flow_finished_event))
         return events
@@ -128,6 +140,7 @@ class FlowRunOutcome:
         self.final_user_visible_text = None
         self._success_output_events = []
         self._run_finished_event = None
+        self._curation_handoff_ready_event = None
         self._run_error_event = None
         self._flow_finished_event = None
         self._replacement_failure_events = [dict(event) for event in terminal_events]
