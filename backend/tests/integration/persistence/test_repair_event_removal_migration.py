@@ -12,7 +12,6 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, text
 
-
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 MIGRATION_PATH = (
     BACKEND_ROOT
@@ -23,7 +22,9 @@ MIGRATION_PATH = (
 
 
 def _load_migration_module():
-    spec = spec_from_file_location("repair_event_removal_row_upgrade_test", MIGRATION_PATH)
+    spec = spec_from_file_location(
+        "repair_event_removal_row_upgrade_test", MIGRATION_PATH
+    )
     assert spec is not None
     assert spec.loader is not None
 

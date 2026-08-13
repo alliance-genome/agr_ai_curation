@@ -7,7 +7,6 @@ import types
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = (
     REPO_ROOT
