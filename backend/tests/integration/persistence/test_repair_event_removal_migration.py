@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from importlib.util import module_from_spec, spec_from_file_location
 import os
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-import pytest
 from sqlalchemy import create_engine, text
 
 
@@ -37,19 +37,22 @@ def migration_connection():
     engine = create_engine(os.environ["DATABASE_URL"])
     schema_name = f"repair_event_removal_{uuid4().hex}"
 
-    with engine.connect() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema_name}"'))
-        connection.commit()
-        try:
-            connection.execute(text(f'SET search_path TO "{schema_name}"'))
+    try:
+        with engine.connect() as connection:
+            connection.execute(text(f'CREATE SCHEMA "{schema_name}"'))
             connection.commit()
-            yield connection
-        finally:
-            connection.rollback()
-            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
-            connection.commit()
-
-    engine.dispose()
+            try:
+                connection.execute(text(f'SET search_path TO "{schema_name}"'))
+                connection.commit()
+                yield connection
+            finally:
+                connection.rollback()
+                connection.execute(
+                    text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE')
+                )
+                connection.commit()
+    finally:
+        engine.dispose()
 
 
 def test_upgrade_normalizes_legacy_rows(migration_connection):
