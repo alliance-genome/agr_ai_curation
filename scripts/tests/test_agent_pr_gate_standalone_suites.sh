@@ -104,8 +104,16 @@ commit_scenario_change "README.md" "<!-- unrelated scenario marker -->"
 report_path="${sandbox_repo}/file_outputs/ci/agent_pr_gate_unrelated_report.json"
 run_gate_for_scenario "${report_path}"
 assert_overall_pass "${report_path}"
+assert_check_state "${report_path}" "abc-literature-ready-upload-smoke-docker-shell-regression-suite" "skipped" "skipped" "pass"
 assert_check_state "${report_path}" "installer-shell-regression-suite" "skipped" "skipped" "pass"
 assert_check_state "${report_path}" "publish-artifact-shell-regression-suite" "skipped" "skipped" "pass"
+
+reset_to_base
+commit_scenario_change "scripts/testing/abc_literature_ready_upload_smoke_docker.sh" "# wrapper scenario marker"
+report_path="${sandbox_repo}/file_outputs/ci/agent_pr_gate_abc_smoke_wrapper_report.json"
+run_gate_for_scenario "${report_path}"
+assert_overall_pass "${report_path}"
+assert_check_state "${report_path}" "abc-literature-ready-upload-smoke-docker-shell-regression-suite" "passed" "ran" "pass"
 
 reset_to_base
 commit_scenario_change "scripts/install/01_preflight.sh" "# installer scenario marker"

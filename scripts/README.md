@@ -545,7 +545,17 @@ passed as `docker compose run -e NAME=value` arguments. If
 AWS credential setup because the runner does not need Cognito admin auth for
 that mode.
 
-Useful environment/CLI overrides:
+Useful runner configuration follows. The environment-variable forms work for
+both direct Python and Docker-wrapper runs. The CLI forms are options for the
+direct Python runner; the Docker wrapper resolves its host-side AWS/token
+preflight from environment and env-file settings before forwarding other
+runner arguments. In particular, the Docker wrapper rejects
+`--curator-id-token`: put
+`ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_ID_TOKEN` in the uncommitted smoke
+env file (or use `ADD_LITERATURE_UPLOAD_SMOKE_CURATOR_ID_TOKEN` for that
+wrapper) so token mode can skip AWS setup safely.
+
+Environment/direct-Python CLI overrides:
 
 - `ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_BASE_URL` / `--backend-base-url`
 - `ABC_LITERATURE_READY_UPLOAD_SMOKE_LITERATURE_BASE_URL` /
@@ -579,7 +589,7 @@ Useful environment/CLI overrides:
   `--curator-password`, existing test curator password from local `.env`
 - `ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_ID_TOKEN` /
   `--curator-id-token`, optional short-lived token for manual runs instead of
-  username/password
+  username/password; the CLI form is direct-Python only
 - `ABC_LITERATURE_READY_UPLOAD_SMOKE_EVIDENCE_DIR` / `--evidence-dir`
 - `ABC_LITERATURE_READY_UPLOAD_SMOKE_HTTP_TIMEOUT_SECONDS` /
   `--http-timeout-seconds`
