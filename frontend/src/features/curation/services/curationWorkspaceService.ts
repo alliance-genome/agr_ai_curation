@@ -1,6 +1,4 @@
 import type {
-  CurationCandidateDeleteRequest,
-  CurationCandidateDeleteResponse,
   CurationCandidateDecisionRequest,
   CurationCandidateDecisionResponse,
   CurationCandidateValidationRequest,
@@ -29,6 +27,17 @@ import { readCurationApiError } from './api'
 
 interface CurationWorkspaceRequestOptions {
   keepalive?: boolean
+  signal?: AbortSignal
+}
+
+export class CurationWorkspaceRequestError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'CurationWorkspaceRequestError'
+    this.status = status
+  }
 }
 
 export interface DomainEnvelopeReviewRowsRequest {
@@ -52,7 +61,10 @@ async function fetchCurationWorkspaceJson<T>(
   })
 
   if (!response.ok) {
-    throw new Error(await readCurationApiError(response))
+    throw new CurationWorkspaceRequestError(
+      response.status,
+      await readCurationApiError(response),
+    )
   }
 
   return response.json() as Promise<T>
@@ -129,6 +141,7 @@ export async function updateCurationSession(
       method: 'PATCH',
       body: JSON.stringify(request),
       keepalive: options.keepalive,
+      signal: options.signal,
     },
   )
 }
@@ -190,21 +203,6 @@ export async function waiveCurationValidationFinding(
     {
       method: 'POST',
       body: JSON.stringify(request),
-      keepalive: options.keepalive,
-    },
-  )
-}
-
-export async function deleteCurationCandidate(
-  request: CurationCandidateDeleteRequest,
-  options: CurationWorkspaceRequestOptions = {},
-): Promise<CurationCandidateDeleteResponse> {
-  return fetchCurationWorkspaceJson<CurationCandidateDeleteResponse>(
-    `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/candidates/${
-      encodeURIComponent(request.candidate_id)
-    }`,
-    {
-      method: 'DELETE',
       keepalive: options.keepalive,
     },
   )

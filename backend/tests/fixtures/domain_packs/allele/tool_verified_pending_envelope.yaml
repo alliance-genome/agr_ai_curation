@@ -8,7 +8,7 @@ envelope:
     name: Alliance Allele Paper Evidence Domain Pack
     version: 0.1.0
     definition_state: in_development
-  objects:
+  extracted_objects:
     - object_type: Reference
       payload:
         title: daf-2 allele evidence fixture paper

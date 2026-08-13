@@ -35,11 +35,6 @@ if ! curl -sS --fail --max-time 8 http://localhost:8000/api/admin/health/llm-pro
   FAILURES=$((FAILURES + 1))
 fi
 
-if [[ -d ".symphony/log" ]]; then
-  mkdir -p "${OUT_DIR}/symphony_log"
-  cp -R .symphony/log/. "${OUT_DIR}/symphony_log/" 2>/dev/null || true
-fi
-
 if [[ -x "./scripts/testing/llm_provider_smoke_local.sh" ]]; then
   if ! ./scripts/testing/llm_provider_smoke_local.sh > "${OUT_DIR}/llm_provider_smoke.stdout" 2>"${OUT_DIR}/llm_provider_smoke.stderr"; then
     FAILURES=$((FAILURES + 1))
@@ -63,7 +58,6 @@ cat > "${OUT_DIR}/README.md" <<EOF
 - \`backend_health.json\` - backend health endpoint response
 - \`llm_provider_health.json\` - provider health endpoint response
 - \`llm_provider_smoke.*\` - local smoke script output (best effort)
-- \`symphony_log/\` - Symphony logs when present
 EOF
 
 echo "Agent evidence collected: ${OUT_DIR}"

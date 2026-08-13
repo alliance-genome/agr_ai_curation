@@ -12,6 +12,7 @@ from src.lib.openai_agents.config import (
     get_agent_config,
     get_api_key,
     get_base_url,
+    get_flow_supervisor_parallel_tool_calls_enabled,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
     get_inspect_results_json_depth_limit,
@@ -21,12 +22,25 @@ from src.lib.openai_agents.config import (
     get_inspect_results_validation_page_size,
     get_openai_responses_websocket_ping_timeout_seconds,
     get_pdf_max_file_size_bytes,
+    get_pdf_upload_max_page_count,
     get_model_for_agent,
     is_retryable_groq_tool_call_error,
     resolve_model_provider,
     supports_reasoning,
     supports_temperature,
 )
+
+
+def test_flow_supervisor_parallel_tool_calls_default_disabled(monkeypatch):
+    monkeypatch.delenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
+
+    assert get_flow_supervisor_parallel_tool_calls_enabled() is False
+
+
+def test_flow_supervisor_parallel_tool_calls_honors_override(monkeypatch):
+    monkeypatch.setenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", "true")
+
+    assert get_flow_supervisor_parallel_tool_calls_enabled() is True
 
 
 class TestGetAgentConfig:
@@ -409,16 +423,38 @@ def test_openai_responses_websocket_ping_timeout_invalid_env_uses_default(monkey
     assert get_openai_responses_websocket_ping_timeout_seconds() is None
 
 
-def test_pdf_max_file_size_default_is_150mb(monkeypatch):
+def test_pdf_max_file_size_default_is_500mb(monkeypatch):
     monkeypatch.delenv("PDF_MAX_FILE_SIZE_BYTES", raising=False)
 
-    assert get_pdf_max_file_size_bytes() == 150 * 1024 * 1024
+    assert get_pdf_max_file_size_bytes() == 500 * 1024 * 1024
 
 
 def test_pdf_max_file_size_env_override(monkeypatch):
     monkeypatch.setenv("PDF_MAX_FILE_SIZE_BYTES", str(125 * 1024 * 1024))
 
     assert get_pdf_max_file_size_bytes() == 125 * 1024 * 1024
+
+
+def test_pdf_upload_max_page_count_defaults_to_100(monkeypatch):
+    monkeypatch.delenv("PDF_UPLOAD_MAX_PAGE_COUNT", raising=False)
+
+    assert get_pdf_upload_max_page_count() == 100
+
+
+def test_pdf_upload_max_page_count_env_override(monkeypatch):
+    monkeypatch.setenv("PDF_UPLOAD_MAX_PAGE_COUNT", "120")
+
+    assert get_pdf_upload_max_page_count() == 120
+
+
+@pytest.mark.parametrize("configured_value", ["0", "-5"])
+def test_pdf_upload_max_page_count_defends_positive_invariant(
+    monkeypatch,
+    configured_value,
+):
+    monkeypatch.setenv("PDF_UPLOAD_MAX_PAGE_COUNT", configured_value)
+
+    assert get_pdf_upload_max_page_count() == 1
 
 
 def test_inspect_results_display_limits_are_env_configured(monkeypatch):

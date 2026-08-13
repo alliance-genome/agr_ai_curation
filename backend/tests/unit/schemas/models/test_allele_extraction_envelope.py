@@ -345,3 +345,58 @@ def test_allele_extractor_group_rules_do_not_direct_database_lookup():
         assert "search_alleles" not in content
         assert "get_allele" not in content
         assert "agr_curation_query" not in content
+
+
+def test_mgi_group_rules_retain_stable_transgenic_lines_as_alleles():
+    """Protect the MGI scope decision recorded in KANBAN-1373.
+
+    MGI and the Alliance classify stable inherited Cre-driver, reporter, and
+    other transgenic lines as alleles, even when a paper uses them as tools or
+    strain-background components. Only transient expression/delivery and
+    construct-only mentions should be excluded. If this test fails after a
+    prompt edit, review that policy decision with MGI instead of merely updating
+    these assertions to match the new wording.
+    """
+    mgi_rules = (
+        REPO_ROOT
+        / "packages"
+        / "alliance"
+        / "agents"
+        / "allele_extractor"
+        / "group_rules"
+        / "mgi.yaml"
+    )
+    base_prompt = (
+        REPO_ROOT
+        / "packages"
+        / "alliance"
+        / "agents"
+        / "allele_extractor"
+        / "prompt.yaml"
+    )
+    content = str(yaml.safe_load(mgi_rules.read_text(encoding="utf-8"))["content"])
+    base_content = str(
+        yaml.safe_load(base_prompt.read_text(encoding="utf-8"))["content"]
+    )
+    assembled_content = f"{base_content}\n\n{content}"
+
+    # Keep both the positive inclusion rule and its boundary explicit so a
+    # generic transgene/tool exclusion cannot silently reintroduce this bug.
+    assert "stable inherited transgenic lines as alleles" in content
+    assert "even when it is used as a genetic tool" in content
+    assert "transient recombinase expression or delivery" in content
+
+    # This was the contradictory rule that caused the KANBAN-1373 false
+    # exclusion; its return should be treated as an intentional policy change.
+    assert "Cre driver lines (Tg(promoter-Cre)) are tools" not in content
+
+    # The runtime assembles the base prompt before the group rules. The base
+    # therefore must explicitly defer organism-specific classification and
+    # evidence scope to those later rules instead of issuing absolute exclusions.
+    assert "Active group-specific rules are authoritative" in base_content
+    assert "that organism-specific rule takes precedence" in base_content
+    assert "not a strain, transgene/reporter" not in base_content
+    assert "Transgene constructs and expression drivers used as tools." not in base_content
+    assert assembled_content.index("Active group-specific rules are authoritative") < (
+        assembled_content.index("stable inherited transgenic lines as alleles")
+    )

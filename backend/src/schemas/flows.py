@@ -10,14 +10,19 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.lib.executable_flow_graph import project_executable_flow_graph
+from src.lib.flow_edge_roles import (
+    CONTROL_FLOW_EDGE_ROLE,
+    FlowEdgeRole,
+    VALIDATION_ATTACHMENT_EDGE_ROLE,
+)
+
 
 # =============================================================================
 # FlowDefinition Schema (JSONB Validation)
 # =============================================================================
 
-FlowEdgeRole = Literal["control_flow", "validation_attachment"]
-DEFAULT_FLOW_EDGE_ROLE: FlowEdgeRole = "control_flow"
-VALIDATION_ATTACHMENT_EDGE_ROLE: FlowEdgeRole = "validation_attachment"
+DEFAULT_FLOW_EDGE_ROLE: FlowEdgeRole = CONTROL_FLOW_EDGE_ROLE
 FLOW_OUTPUT_FILENAME_TEMPLATE_VARIABLES = frozenset(
     {"input_filename", "input_filename_stem", "trace_id", "timestamp"}
 )
@@ -129,7 +134,6 @@ class FlowNodeData(BaseModel):
         max_length=5000,
         description="Curator's task/request that initiates the flow (required for task_input nodes)"
     )
-
     # Step configuration (for agent nodes)
     step_goal: Optional[str] = Field(
         None,
@@ -259,7 +263,10 @@ class FlowEdge(BaseModel):
     target: str = Field(..., description="Target node ID")
     role: FlowEdgeRole = Field(
         DEFAULT_FLOW_EDGE_ROLE,
-        description="Edge role: ordinary control flow or validator sidecar attachment",
+        description=(
+            "Edge role: ordinary control flow, formatter output attachment, "
+            "or validator sidecar attachment"
+        ),
     )
     satisfies_binding_id: Optional[str] = Field(
         None,
@@ -295,9 +302,9 @@ class FlowEdge(BaseModel):
                 "validation_attachment edges must name exactly one "
                 "satisfies_binding_id or replaces_attachment_id"
             )
-        if self.role == DEFAULT_FLOW_EDGE_ROLE and identity_count:
+        if self.role != VALIDATION_ATTACHMENT_EDGE_ROLE and identity_count:
             raise ValueError(
-                "control_flow edges cannot include validation attachment metadata"
+                f"{self.role} edges cannot include validation attachment metadata"
             )
         return self
 
@@ -305,7 +312,14 @@ class FlowEdge(BaseModel):
 class FlowDefinition(BaseModel):
     """Complete flow definition stored in JSONB."""
 
-    version: Literal["1.0"] = "1.0"
+    version: Literal["1.1"] = "1.1"
+    task_instructions_default_only: bool = Field(
+        False,
+        description=(
+            "Compatibility marker for migrated flows: use the generated Task Input "
+            "only when the run does not supply a user query."
+        ),
+    )
     nodes: List[FlowNode] = Field(..., min_length=1, max_length=30)
     edges: List[FlowEdge] = Field(default_factory=list)
     entry_node_id: str = Field(..., description="Starting node ID")
@@ -365,30 +379,7 @@ class FlowDefinition(BaseModel):
             raise ValueError("Flow can only have one task_input node")
         return self
 
-    # VALIDATOR 6: task_input must be entry node
-    @model_validator(mode="after")
-    def validate_task_input_is_entry(self) -> "FlowDefinition":
-        """If flow has task_input node, it must be the entry_node_id."""
-        task_input_nodes = [n for n in self.nodes if n.type == "task_input"]
-        if task_input_nodes:
-            task_input_id = task_input_nodes[0].id
-            if self.entry_node_id != task_input_id:
-                raise ValueError("task_input node must be the entry_node_id")
-        return self
-
-    # VALIDATOR 7: task_input cannot have incoming edges
-    @model_validator(mode="after")
-    def validate_task_input_no_incoming_edges(self) -> "FlowDefinition":
-        """Ensure task_input nodes have no incoming edges."""
-        task_input_nodes = [n for n in self.nodes if n.type == "task_input"]
-        if task_input_nodes:
-            task_input_id = task_input_nodes[0].id
-            incoming_edges = [e for e in self.edges if e.target == task_input_id]
-            if incoming_edges:
-                raise ValueError("task_input node cannot have incoming edges")
-        return self
-
-    # VALIDATOR 8: Reject non-executable agents (e.g., supervisor)
+    # Reject non-executable agents (e.g., supervisor)
     _BLOCKED_AGENT_IDS = frozenset({"supervisor"})
 
     @model_validator(mode="after")
@@ -400,6 +391,13 @@ class FlowDefinition(BaseModel):
                     f"Agent '{node.data.agent_id}' cannot be used in flows. "
                     "It is an internal system agent."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_executable_topology(self) -> "FlowDefinition":
+        """Enforce the canonical sequential control-flow contract at save time."""
+
+        project_executable_flow_graph(self)
         return self
 
 
@@ -495,6 +493,13 @@ class UpdateFlowRequest(BaseModel):
 # Response Schemas
 # =============================================================================
 
+class FlowValidationWarning(BaseModel):
+    """Validation issue surfaced when a stored flow loads with repairable problems."""
+
+    type: Literal["CRITICAL", "WARNING"]
+    message: str
+
+
 class FlowSummaryResponse(BaseModel):
     """Summary of a flow (for list view - excludes full flow_definition)."""
 
@@ -525,6 +530,8 @@ class FlowResponse(BaseModel):
     last_executed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    validation_warnings: List[FlowValidationWarning] = Field(default_factory=list)
+    has_critical_issues: bool = False
 
 
 class FlowListResponse(BaseModel):

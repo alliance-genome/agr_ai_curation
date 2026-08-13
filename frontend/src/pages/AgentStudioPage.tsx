@@ -32,6 +32,7 @@ import {
   AGENT_STUDIO_CHAT_HISTORY_KIND,
   buildRestorableChatMessages,
 } from '@/services/chatHistoryApi'
+import { safeGetItem, safeSetItem } from '@/lib/browserStorage'
 import type {
   PromptCatalog,
   ChatContext,
@@ -156,10 +157,18 @@ function AgentStudioPage() {
 
   // UI state (with persistence)
   const [activeTab, setActiveTab] = useState<TabValue>(() => {
-    const stored = localStorage.getItem(AGENT_STUDIO_TAB_KEY)
+    const storedResult = safeGetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, {
+      owner: 'preferences',
+      key: AGENT_STUDIO_TAB_KEY,
+      quiet: true,
+    })
+    const stored = storedResult.ok ? storedResult.value : null
     // Migrate old 'prompts' value to 'agents' (tab was renamed)
     if (stored === 'prompts') {
-      localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'agents')
+      safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agents', {
+        owner: 'preferences',
+        key: AGENT_STUDIO_TAB_KEY,
+      })
       return 'agents'
     }
     return (stored === 'agents' || stored === 'flows' || stored === 'agent_workshop') ? stored : 'agents'
@@ -168,7 +177,10 @@ function AgentStudioPage() {
   // Persist tab changes
   const handleTabChange = useCallback((_e: React.SyntheticEvent, newValue: TabValue) => {
     setActiveTab(newValue)
-    localStorage.setItem(AGENT_STUDIO_TAB_KEY, newValue)
+    safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, newValue, {
+      owner: 'preferences',
+      key: AGENT_STUDIO_TAB_KEY,
+    })
   }, [])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
@@ -317,21 +329,30 @@ function AgentStudioPage() {
   const flowDefinition: FlowContextDefinition | undefined =
     activeTab === 'flows' && flowState
       ? {
+          version: flowState.version,
+          entry_node_id: flowState.entry_node_id,
           nodes: flowState.nodes.map((node) => ({
             id: node.id,
+            node_type: node.type,
             agent_id: node.agent_id,
             agent_display_name: node.agent_display_name,
             task_instructions: node.task_instructions,
             custom_instructions: node.custom_instructions,
+            include_evidence: node.include_evidence,
             output_filename_template: node.output_filename_template,
+            projection_plan: node.projection_plan,
             output_key: node.output_key,
             validation_attachments: node.validation_attachments?.map((attachment) => ({
               ...attachment,
             }) as Record<string, unknown>),
           })),
           edges: flowState.edges.map((edge) => ({
+            id: edge.id,
             source: edge.source,
             target: edge.target,
+            role: edge.role,
+            satisfies_binding_id: edge.satisfies_binding_id,
+            replaces_attachment_id: edge.replaces_attachment_id,
           })),
         }
       : undefined
@@ -443,7 +464,10 @@ Agent ID: ${agentId}`
         setAgentWorkshopCustomAgentId(null)
       }
       setActiveTab('agent_workshop')
-      localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'agent_workshop')
+      safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agent_workshop', {
+        owner: 'preferences',
+        key: AGENT_STUDIO_TAB_KEY,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to clone agent')
     }
@@ -456,7 +480,10 @@ Agent ID: ${agentId}`
   const handleApplyWorkshopPromptUpdate = useCallback((proposal: WorkshopPromptUpdateProposal) => {
     promptUpdateCounterRef.current += 1
     setActiveTab('agent_workshop')
-    localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'agent_workshop')
+    safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agent_workshop', {
+      owner: 'preferences',
+      key: AGENT_STUDIO_TAB_KEY,
+    })
     setWorkshopPromptUpdateRequest({
       request_id: promptUpdateCounterRef.current,
       prompt: proposal.prompt,

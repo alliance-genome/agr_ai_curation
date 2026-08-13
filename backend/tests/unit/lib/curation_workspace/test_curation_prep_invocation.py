@@ -644,6 +644,7 @@ async def test_run_chat_curation_prep_passes_scope_confirmation_and_returns_summ
     assert captured["scope_confirmation"].adapter_keys == ["gene"]
     assert captured["persistence_context"].origin_session_id == "session-1"
     assert captured["persistence_context"].user_id == "user-1"
+    assert captured["persistence_context"].workflow == "curation_prep_chat"
 
 
 @pytest.mark.asyncio

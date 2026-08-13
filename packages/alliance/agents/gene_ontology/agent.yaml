@@ -63,9 +63,9 @@ structured_finalization:
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_GO_MODEL:-gpt-5.4-mini}"
+  model: "${AGENT_GO_MODEL:-gpt-5.6-terra}"
   temperature: 0.1
-  reasoning: "high"
+  reasoning: "medium"
 
 # -----------------------------------------------------------------------------
 # EXECUTION REQUIREMENTS

@@ -14,24 +14,115 @@ Architecture:
 """
 import asyncio
 import logging
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from src.models.sql.database import SessionLocal
 from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.user import User
 from src.models.sql.file_output import FileOutput
+from src.models.sql.pdf_document import PDFDocument
+from src.lib.observability.background_tasks import report_background_task_exception
+from src.lib.openai_agents.config import (
+    get_batch_worker_heartbeat_seconds,
+    get_batch_worker_lease_seconds,
+)
 from .events import get_batch_broadcaster
+from .service import BatchService
+from .status import require_batch_document_status_transition
 
 logger = logging.getLogger(__name__)
 _BACKEND_ONLY_EVENT_FIELDS = {"internal"}
+
+
+class BatchFlowExecutionError(RuntimeError):
+    """Raised when a flow emits a terminal failure during batch processing."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        sentry_already_reported: bool = False,
+        output_branches: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.sentry_already_reported = sentry_already_reported
+        self.output_branches = list(output_branches or [])
+
+
+class BatchCancelled(RuntimeError):
+    """Raised internally when persisted cancellation wins a checkpoint."""
+
+
+def _require_running_batch(
+    db: Session,
+    batch: Batch,
+    *,
+    lock_for_update: bool = False,
+    lease_owner: Optional[UUID] = None,
+) -> None:
+    """Refresh batch state and stop before the next processing side effect.
+
+    Write checkpoints lock the batch row until their immediate commit so a
+    concurrent cancellation cannot interleave between the check and counters.
+    """
+    db.refresh(batch, with_for_update=lock_for_update)
+    if batch.status != BatchStatus.RUNNING:
+        raise BatchCancelled(f"Batch {batch.id} is no longer running")
+    if lease_owner is not None:
+        now = datetime.now(timezone.utc)
+        if batch.lease_owner != lease_owner or (
+            batch.lease_expires_at is None or batch.lease_expires_at <= now
+        ):
+            raise BatchCancelled(f"Batch {batch.id} worker lease is no longer owned")
+
+
+@contextmanager
+def _maintain_batch_lease(batch_id: UUID, lease_owner: UUID):
+    """Heartbeat a durable worker lease while document flow work is running."""
+    stopped = threading.Event()
+    lease_seconds = get_batch_worker_lease_seconds()
+    heartbeat_seconds = get_batch_worker_heartbeat_seconds()
+
+    def heartbeat() -> None:
+        while not stopped.wait(heartbeat_seconds):
+            try:
+                with get_db_session() as heartbeat_db:
+                    if not BatchService(heartbeat_db).heartbeat_batch_lease(
+                        batch_id,
+                        lease_owner,
+                        lease_seconds,
+                    ):
+                        logger.info(
+                            "Batch lease heartbeat lost ownership: batch_id=%s", batch_id
+                        )
+                        return
+            except Exception:
+                logger.warning(
+                    "Batch lease heartbeat failed; renewal will retry on the next interval: "
+                    "batch_id=%s",
+                    batch_id,
+                    exc_info=True,
+                )
+
+    thread = threading.Thread(
+        target=heartbeat,
+        name=f"batch-lease-{batch_id}",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join()
 
 
 def _validate_file_ownership(file_id: str, expected_curator_id: str) -> bool:
@@ -106,81 +197,130 @@ def process_batch_task(batch_id: UUID) -> None:
     logger.info("Starting batch processing: batch_id=%s", batch_id)
 
     with get_db_session() as db:
-        stmt = (
-            select(Batch)
-            .where(Batch.id == batch_id)
-            .options(selectinload(Batch.documents))
+        service = BatchService(db)
+        lease_owner = uuid4()
+        batch = service.claim_recoverable_batch(
+            batch_id,
+            lease_owner,
+            get_batch_worker_lease_seconds(),
         )
-        batch = db.scalars(stmt).first()
-
         if not batch:
-            logger.error("Batch not found: batch_id=%s", batch_id)
-            return
-
-        # Get the flow definition
-        flow = db.query(CurationFlow).filter(CurationFlow.id == batch.flow_id).first()
-        if not flow:
-            logger.error("Flow not found: flow_id=%s, batch_id=%s", batch.flow_id, batch_id)
-            batch.status = BatchStatus.CANCELLED
-            db.commit()
-            return
-
-        # Get the user's auth_sub (Cognito subject) for flow execution
-        user = db.query(User).filter(User.id == batch.user_id).first()
-        if not user or not user.auth_sub:
-            logger.error("User not found or missing auth_sub: user_id=%s, batch_id=%s", batch.user_id, batch_id)
-            batch.status = BatchStatus.CANCELLED
-            db.commit()
-            return
-        cognito_sub = user.auth_sub
-
-        # Mark batch as running
-        batch.status = BatchStatus.RUNNING
-        batch.started_at = datetime.now(timezone.utc)
-        db.commit()
-        logger.info("Batch marked as running: batch_id=%s, flow=%s", batch_id, flow.name)
-
-        # Process each document
-        for batch_doc in batch.documents:
-            # Check for cancellation before each document
-            db.refresh(batch)
-            if batch.status == BatchStatus.CANCELLED:
-                logger.info("Batch cancelled, stopping: batch_id=%s", batch_id)
-                break
-
-            try:
-                _process_single_document(db, batch, batch_doc, flow, cognito_sub)
-            except Exception as e:
-                # CR-3: Explicit rollback before updating failure status
-                # If _process_single_document made partial changes, rollback ensures clean state
-                db.rollback()
-                logger.exception(
-                    "Error processing document: batch_id=%s, doc_id=%s",
-                    batch_id, batch_doc.document_id
-                )
-                # Re-fetch objects after rollback to ensure they're in session
-                batch = db.query(Batch).filter(Batch.id == batch_id).first()
-                batch_doc = db.query(BatchDocument).filter(BatchDocument.id == batch_doc.id).first()
-                if batch_doc and batch:
-                    # _process_single_document already persists FAILED status for expected runtime errors.
-                    # Only apply fallback persistence if the document is not already marked failed.
-                    if batch_doc.status != BatchDocumentStatus.FAILED:
-                        batch_doc.status = BatchDocumentStatus.FAILED
-                        batch_doc.error_message = str(e)[:500]  # Limit error message length
-                        batch_doc.processed_at = datetime.now(timezone.utc)
-                        batch.failed_documents += 1
-                        db.commit()
-
-        # Mark batch as completed (unless cancelled)
-        db.refresh(batch)
-        if batch.status != BatchStatus.CANCELLED:
-            batch.status = BatchStatus.COMPLETED
-            batch.completed_at = datetime.now(timezone.utc)
-            db.commit()
             logger.info(
-                "Batch completed: batch_id=%s, completed=%d, failed=%d",
-                batch_id, batch.completed_documents, batch.failed_documents
+                "Batch claim skipped because it is not recoverable or another worker owns it: batch_id=%s",
+                batch_id,
             )
+            return
+
+        with _maintain_batch_lease(batch_id, lease_owner):
+            _process_claimed_batch(db, service, batch, lease_owner)
+
+
+def _process_claimed_batch(
+    db: Session,
+    service: BatchService,
+    batch: Batch,
+    lease_owner: UUID,
+) -> None:
+    """Process only pending documents under an already-acquired durable lease."""
+    batch_id = batch.id
+    flow = db.query(CurationFlow).filter(CurationFlow.id == batch.flow_id).first()
+    if not flow:
+        logger.error("Flow not found: flow_id=%s, batch_id=%s", batch.flow_id, batch_id)
+        if not service.cancel_running_batch_for_lease(batch_id, lease_owner):
+            logger.info(
+                "Skipping missing-flow cancellation after lease loss: batch_id=%s",
+                batch_id,
+            )
+        return
+
+    user = db.query(User).filter(User.id == batch.user_id).first()
+    if not user or not user.auth_sub:
+        logger.error("User not found or missing auth_sub: user_id=%s, batch_id=%s", batch.user_id, batch_id)
+        if not service.cancel_running_batch_for_lease(batch_id, lease_owner):
+            logger.info(
+                "Skipping missing-user cancellation after lease loss: batch_id=%s",
+                batch_id,
+            )
+        return
+    cognito_sub = user.auth_sub
+
+    logger.info("Batch lease acquired: batch_id=%s, flow=%s", batch_id, flow.name)
+
+    for batch_doc in batch.documents:
+        if batch_doc.status != BatchDocumentStatus.PENDING:
+            continue
+        try:
+            _require_running_batch(db, batch, lease_owner=lease_owner)
+            _process_single_document(
+                db, batch, batch_doc, flow, cognito_sub, lease_owner=lease_owner
+            )
+        except BatchCancelled:
+            db.rollback()
+            logger.info("Batch cancelled during document processing: batch_id=%s", batch_id)
+            break
+        except Exception as error:
+            db.rollback()
+            _report_document_failure(error, batch_id, batch_doc)
+            batch = db.get(Batch, batch_id)
+            batch_doc = db.get(BatchDocument, batch_doc.id)
+            if not batch or not batch_doc:
+                continue
+            try:
+                _require_running_batch(
+                    db, batch, lock_for_update=True, lease_owner=lease_owner
+                )
+            except BatchCancelled:
+                logger.info(
+                    "Skipping document failure update after lease loss: batch_id=%s",
+                    batch_id,
+                )
+                break
+            if batch_doc.status != BatchDocumentStatus.FAILED:
+                require_batch_document_status_transition(
+                    batch_doc.status, BatchDocumentStatus.FAILED
+                )
+                batch_doc.status = BatchDocumentStatus.FAILED
+                batch_doc.error_message = str(error)[:500]
+                batch_doc.processed_at = datetime.now(timezone.utc)
+                service.recompute_batch_counters(batch)
+                db.commit()
+
+    if service.complete_running_batch(batch_id, lease_owner):
+        logger.info(
+            "Batch completed: batch_id=%s, completed=%d, failed=%d",
+            batch_id, batch.completed_documents, batch.failed_documents
+        )
+
+
+def _report_document_failure(
+    error: Exception,
+    batch_id: UUID,
+    batch_doc: BatchDocument,
+) -> None:
+    """Report an unhandled document failure once while preserving loop progress."""
+    if getattr(error, "sentry_already_reported", False):
+        logger.warning(
+            "Batch document failed after upstream Sentry reporting: batch_id=%s, doc_id=%s",
+            batch_id,
+            batch_doc.document_id,
+        )
+        return
+    logger.exception(
+        "Error processing document: batch_id=%s, doc_id=%s",
+        batch_id,
+        batch_doc.document_id,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    report_background_task_exception(
+        error,
+        task_name="batch.process_document",
+        tags={
+            "component": "batch",
+            "batch_id": batch_id,
+            "document_id": batch_doc.document_id,
+            "batch_document_id": batch_doc.id,
+        },
+    )
 
 
 def _process_single_document(
@@ -189,6 +329,8 @@ def _process_single_document(
     batch_doc: BatchDocument,
     flow: CurationFlow,
     cognito_sub: str,
+    *,
+    lease_owner: Optional[UUID] = None,
 ) -> None:
     """Process a single document in the batch.
 
@@ -204,54 +346,95 @@ def _process_single_document(
         batch.id, batch_doc.document_id, batch_doc.position + 1, batch.total_documents
     )
 
-    # Mark as processing
+    # Check cancellation immediately before each document-side state change.
+    _require_running_batch(
+        db, batch, lock_for_update=True, lease_owner=lease_owner
+    )
+    require_batch_document_status_transition(
+        batch_doc.status, BatchDocumentStatus.PROCESSING
+    )
     batch_doc.status = BatchDocumentStatus.PROCESSING
     db.commit()
 
     start_time = time.time()
 
     try:
+        _require_running_batch(db, batch, lease_owner=lease_owner)
         # Execute the flow on this document
         # Use asyncio.run() since we're in a sync context
-        result_file_path, review_session_ids = asyncio.run(
+        source_document = db.query(PDFDocument).filter(
+            PDFDocument.id == batch_doc.document_id,
+            PDFDocument.user_id == batch.user_id,
+        ).first()
+        document_name = getattr(source_document, "filename", None)
+
+        result_files, review_session_ids, output_status, output_branches = asyncio.run(
             _execute_flow_for_document(
                 flow=flow,
                 document_id=str(batch_doc.document_id),
+                document_name=document_name,
                 cognito_sub=cognito_sub,
                 batch_id=str(batch.id),
                 db_user_id=batch.user_id,
             )
         )
 
-        if not result_file_path and not review_session_ids:
+        if not result_files and not review_session_ids:
             raise RuntimeError("Flow completed without FILE_READY or curation handoff output")
 
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
 
-        # Mark as completed
+        _require_running_batch(
+            db, batch, lock_for_update=True, lease_owner=lease_owner
+        )
+        require_batch_document_status_transition(
+            batch_doc.status, BatchDocumentStatus.COMPLETED
+        )
         batch_doc.status = BatchDocumentStatus.COMPLETED
-        batch_doc.result_file_path = result_file_path
+        batch_doc.result_files = result_files or None
+        batch_doc.result_file_path = (
+            result_files[0]["download_url"] if result_files else None
+        )
         batch_doc.review_session_ids = review_session_ids or None
+        batch_doc.output_status = output_status
+        batch_doc.output_branches = output_branches or None
         batch_doc.processing_time_ms = processing_time_ms
         batch_doc.processed_at = datetime.now(timezone.utc)
-        batch.completed_documents += 1
+        BatchService(db).recompute_batch_counters(batch)
         db.commit()
 
         logger.info(
             "Document completed: batch_id=%s, doc_id=%s, time_ms=%d, result=%s",
-            batch.id, batch_doc.document_id, processing_time_ms, result_file_path
+            batch.id, batch_doc.document_id, processing_time_ms, batch_doc.result_file_path
         )
 
+    except BatchCancelled:
+        db.rollback()
+        raise
     except Exception as e:
+        db.rollback()
+        _require_running_batch(
+            db, batch, lock_for_update=True, lease_owner=lease_owner
+        )
+        db.refresh(batch_doc)
         processing_time_ms = int((time.time() - start_time) * 1000)
+        require_batch_document_status_transition(
+            batch_doc.status, BatchDocumentStatus.FAILED
+        )
         batch_doc.status = BatchDocumentStatus.FAILED
         batch_doc.result_file_path = None
+        batch_doc.result_files = None
+        batch_doc.output_status = "failed"
+        failure_output_branches = getattr(e, "output_branches", None)
+        batch_doc.output_branches = (
+            failure_output_branches if isinstance(failure_output_branches, list) else None
+        )
         batch_doc.review_session_ids = None
         batch_doc.error_message = str(e)[:500]
         batch_doc.processing_time_ms = processing_time_ms
         batch_doc.processed_at = datetime.now(timezone.utc)
-        batch.failed_documents += 1
+        BatchService(db).recompute_batch_counters(batch)
         db.commit()
         get_batch_broadcaster().publish_sync(
             batch.id,
@@ -263,6 +446,9 @@ def _process_single_document(
                 "position": batch_doc.position,
                 "status": BatchDocumentStatus.FAILED.value,
                 "result_file_path": None,
+                "result_files": [],
+                "output_status": "failed",
+                "output_branches": batch_doc.output_branches or [],
                 "review_session_ids": None,
                 "error_message": batch_doc.error_message,
                 "processing_time_ms": processing_time_ms,
@@ -278,7 +464,8 @@ async def _execute_flow_for_document(
     cognito_sub: str,
     batch_id: str,
     db_user_id: Optional[int] = None,
-) -> tuple[Optional[str], list[str]]:
+    document_name: Optional[str] = None,
+) -> tuple[list[dict[str, Any]], list[str], str, list[dict[str, Any]]]:
     """Execute a flow on a single document and extract batch success outputs.
 
     All events from the flow execution are published to the BatchEventBroadcaster
@@ -291,7 +478,7 @@ async def _execute_flow_for_document(
         batch_id: Batch UUID for session tracking
 
     Returns:
-        File path/ID of the generated result file and any review session ids.
+        Generated result-file manifests and any review session ids.
     """
     from src.lib.flows.executor import execute_flow
     from src.lib.context import set_current_user_id, set_current_session_id
@@ -312,9 +499,12 @@ async def _execute_flow_for_document(
         flow.name, document_id, session_id, cognito_sub
     )
 
-    result_file_path = None
+    result_files: list[dict[str, Any]] = []
     review_session_ids: list[str] = []
+    flow_output_status: Optional[str] = None
+    flow_output_branches: list[dict[str, Any]] = []
     flow_failure_message: Optional[str] = None
+    flow_failure_already_reported = False
 
     try:
         # Execute the flow and collect events
@@ -324,7 +514,7 @@ async def _execute_flow_for_document(
             session_id=session_id,
             db_user_id=db_user_id,
             document_id=document_id,
-            document_name=None,  # Will be fetched by DocumentContext
+            document_name=document_name,
             user_query=None,  # Use task_instructions from flow
             active_groups=None,  # Default groups
             flow_run_id=batch_id,
@@ -350,12 +540,31 @@ async def _execute_flow_for_document(
                     # This prevents cross-user file leakage even if event routing has bugs
                     # (defense-in-depth for KANBAN-935 race condition fix)
                     if _validate_file_ownership(file_id, cognito_sub):
-                        result_file_path = download_url
+                        result_file = {
+                            key: file_ready_details[key]
+                            for key in (
+                                "file_id",
+                                "filename",
+                                "download_url",
+                                "format",
+                                "formatter_node_id",
+                                "source_node_id",
+                                "source_node_ids",
+                                "formatter_label",
+                                "source_label",
+                                "source_labels",
+                                "source_extraction_result_ids",
+                                "source_keys",
+                                "source_envelope_ids",
+                            )
+                            if file_ready_details.get(key) is not None
+                        }
+                        result_files.append(result_file)
                         enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
                         broadcaster.publish_sync(batch_uuid, enriched_event)
                         logger.info(
                             "Found file output in flow: %s (filename: %s)",
-                            result_file_path,
+                            download_url,
                             file_ready_details.get("filename")
                         )
                     else:
@@ -370,6 +579,24 @@ async def _execute_flow_for_document(
                         download_url
                     )
                 continue
+
+            if event_type == "FLOW_FINISHED":
+                finished_data = event.get("data", {}) or {}
+                raw_output_status = finished_data.get("output_status")
+                if raw_output_status in {"complete", "partial", "none"}:
+                    flow_output_status = raw_output_status
+                raw_output_branches = finished_data.get("output_branches")
+                if isinstance(raw_output_branches, list):
+                    flow_output_branches = [
+                        dict(branch)
+                        for branch in raw_output_branches
+                        if isinstance(branch, dict)
+                    ]
+                if finished_data.get("status") == "failed" and not flow_failure_message:
+                    flow_failure_message = str(
+                        finished_data.get("failure_reason")
+                        or "Flow execution failed."
+                    )
 
             if event_type == "CURATION_HANDOFF_READY":
                 handoff_details: Any = event.get("details")
@@ -406,6 +633,13 @@ async def _execute_flow_for_document(
                     or event.get("message")
                     or "Flow execution failed."
                 )
+                flow_failure_already_reported = (
+                    failure_details.get("reason") in {
+                        "extraction_persistence_empty_result",
+                        "extraction_persistence_failed",
+                        "extraction_persistence_partial_result",
+                    }
+                )
 
             # Log supervisor completion for debugging
             if event_type == "SUPERVISOR_COMPLETE":
@@ -434,15 +668,22 @@ async def _execute_flow_for_document(
     if flow_failure_message:
         # A late flow error invalidates any earlier output event; do not return
         # a partial file or review handoff as a successful batch document.
-        raise RuntimeError(flow_failure_message)
+        raise BatchFlowExecutionError(
+            flow_failure_message,
+            sentry_already_reported=flow_failure_already_reported,
+            output_branches=flow_output_branches,
+        )
 
-    if not result_file_path and not review_session_ids:
+    if not result_files and not review_session_ids:
         logger.warning(
             "No batch success output found from flow '%s' for document %s",
             flow.name, document_id
         )
 
-    return result_file_path, review_session_ids
+    resolved_output_status = flow_output_status or (
+        "complete" if result_files or review_session_ids else "none"
+    )
+    return result_files, review_session_ids, resolved_output_status, flow_output_branches
 
 
 def _enrich_event_for_batch(

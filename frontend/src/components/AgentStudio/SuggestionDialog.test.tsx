@@ -55,6 +55,8 @@ describe('SuggestionDialog', () => {
     const dialog = screen.getByRole('dialog', { name: 'Submit Prompt Suggestion' })
     expect(dialog).toHaveAttribute('aria-modal', 'false')
     expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Move suggestion popup' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close suggestion popup' })).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText(/brief 1-2 sentence summary/i), {
       target: { value: 'Clarify allele lookup behavior' },

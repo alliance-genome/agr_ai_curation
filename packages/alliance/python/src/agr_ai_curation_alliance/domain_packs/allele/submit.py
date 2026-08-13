@@ -81,7 +81,7 @@ def build_allele_association_submission_plan(
     objects_by_ref = _objects_by_ref(envelope)
     association_objects = [
         domain_object
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
         if domain_object.object_type == ALLELE_PAPER_EVIDENCE_ASSOCIATION_OBJECT_TYPE
         and (not selected or stable_object_id(domain_object) in selected)
     ]
@@ -290,7 +290,7 @@ def _objects_by_ref(
     envelope: DomainEnvelope,
 ) -> dict[tuple[str, str], CuratableObjectEnvelope]:
     objects: dict[tuple[str, str], CuratableObjectEnvelope] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if domain_object.object_id is not None:
             objects[("object_id", domain_object.object_id)] = domain_object
         if domain_object.pending_ref_id is not None:

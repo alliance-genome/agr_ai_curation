@@ -10,6 +10,10 @@ from src.api import agent_studio as api_module
 from src.lib.chat_history_repository import AGENT_STUDIO_CHAT_KIND, ChatMessageRecord
 
 
+CONTEXT_SESSION_ID = "agent-studio-chatcontext-session"
+CONTEXT_TURN_ID = "agent-studio-chatcontext-turn-1"
+
+
 def _consume_sse_events(stream_response) -> list[dict]:
     events: list[dict] = []
     for line in stream_response.iter_lines():
@@ -69,6 +73,23 @@ def test_chat_context_model_round_trips_session_id():
     assert context.model_dump(exclude_none=True)["session_id"] == "assistant-session-123"
 
 
+def test_chat_context_model_round_trips_flow_entry_node_id():
+    context = api_module.ChatContext.model_validate(
+        {
+            "active_tab": "flows",
+            "flow_definition": {
+                "version": "1.1",
+                "entry_node_id": "task_input_0",
+                "nodes": [],
+                "edges": [],
+            },
+        }
+    )
+
+    assert context.flow_definition is not None
+    assert context.flow_definition.entry_node_id == "task_input_0"
+
+
 def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     contract_client,
     chat_contract_auth_headers,
@@ -86,7 +107,11 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)
-    monkeypatch.setattr(api_module, "set_current_flow_context", lambda _context: None)
+    monkeypatch.setattr(
+        api_module,
+        "set_current_flow_context",
+        lambda flow_context: captured.setdefault("flow_context", flow_context),
+    )
     monkeypatch.setattr(api_module, "clear_current_flow_context", lambda: None)
     monkeypatch.setattr(
         api_module,
@@ -102,8 +127,8 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     def _prepare_turn(*, request, **_kwargs):
         captured["request_context_session_id"] = request.context.session_id
         return api_module.PreparedAgentStudioTurn(
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-1",
+            session_id=CONTEXT_SESSION_ID,
+            turn_id=CONTEXT_TURN_ID,
             user_message=request.messages[-1].content,
             requested_context_session_id=request.context.session_id,
             user_turn_created=False,
@@ -114,9 +139,9 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
         captured["assistant_trace_id"] = trace_id
         return ChatMessageRecord(
             message_id=uuid4(),
-            session_id="agent-studio-session-1",
+            session_id=CONTEXT_SESSION_ID,
             chat_kind=AGENT_STUDIO_CHAT_KIND,
-            turn_id="opus-turn-1",
+            turn_id=CONTEXT_TURN_ID,
             role="assistant",
             message_type="text",
             content="Stored answer",
@@ -153,6 +178,36 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
             "context": {
                 "trace_id": "trace-123",
                 "session_id": "assistant-session-123",
+                "active_tab": "flows",
+                "flow_name": "Entry Context Flow",
+                "flow_definition": {
+                    "version": "1.1",
+                    "nodes": [
+                        {
+                            "id": "task_input_0",
+                            "node_type": "task_input",
+                            "agent_id": "task_input",
+                            "agent_display_name": "Initial Instructions",
+                            "task_instructions": "Extract alleles.",
+                            "output_key": "task_input",
+                        },
+                        {
+                            "id": "allele_1",
+                            "node_type": "agent",
+                            "agent_id": "allele_extractor",
+                            "agent_display_name": "Allele Extractor",
+                            "output_key": "alleles",
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "id": "control_1",
+                            "source": "task_input_0",
+                            "target": "allele_1",
+                            "role": "control_flow",
+                        }
+                    ],
+                },
             },
         },
     ) as response:
@@ -165,9 +220,13 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     assert [
         event["type"] for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
     ] == ["TEXT_DELTA", "DONE"]
-    assert all(event["session_id"] == "agent-studio-session-1" for event in events)
+    assert all(event["session_id"] == CONTEXT_SESSION_ID for event in events)
     assert captured["request_context_session_id"] == "assistant-session-123"
-    assert captured["assistant_trace_id"] == "trace-123"
+    assert captured["flow_context"]["entry_node_id"] == "task_input_0"
+    assert captured.get("assistant_trace_id") == "trace-123", {
+        "events": events,
+        "captured": captured,
+    }
     assistant_payload = captured["assistant_payload"]
     assert isinstance(assistant_payload, dict)
     preflight_events = assistant_payload.pop("provider_context_preflight_events", None)

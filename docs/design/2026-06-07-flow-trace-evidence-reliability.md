@@ -67,7 +67,7 @@ This does not call for a blind LLM retry. In the failed run, the expensive extra
 
 ## Flow Code Path
 
-The specialist wrapper in [backend/src/lib/flows/executor.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/flows/executor.py:2384) captures an internal extraction-event cursor before invoking the specialist tool.
+The specialist wrapper in [backend/src/lib/flows/executor.py](../../backend/src/lib/flows/executor.py) captures an internal extraction-event cursor before invoking the specialist tool.
 
 After the specialist returns, it asks `_internal_extraction_tool_output_since(...)` for the canonical internal extraction payload. If no internal payload is found, it falls back to the specialist result text.
 
@@ -78,7 +78,7 @@ Then it calls `build_extraction_envelope_candidate_with_evidence(...)` with:
 - `adapter_key=curation_adapter_key`
 - step metadata
 
-That helper in [backend/src/lib/curation_workspace/extraction_results.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/curation_workspace/extraction_results.py:533) builds a persistable candidate only if the payload is an extraction envelope and an adapter key can be resolved.
+That helper in [backend/src/lib/curation_workspace/extraction_results.py](../../backend/src/lib/curation_workspace/extraction_results.py) builds a persistable candidate only if the payload is an extraction envelope and an adapter key can be resolved.
 
 The completed step records:
 
@@ -147,7 +147,7 @@ The first implementation can use `null` for fields that are not yet observable, 
 
 ## Persistence Hole
 
-The final persistence path in [backend/src/lib/flows/executor.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/flows/executor.py:3671) calls `_persist_flow_extraction_candidates_or_build_error(...)` when extraction was not already persisted.
+The final persistence path in [backend/src/lib/flows/executor.py](../../backend/src/lib/flows/executor.py) calls `_persist_flow_extraction_candidates_or_build_error(...)` when extraction was not already persisted.
 
 The problem is lower down:
 
@@ -182,7 +182,7 @@ Fix:
 
 Confidence: medium-high.
 
-The builder tool path in [backend/src/lib/openai_agents/streaming_tools.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/openai_agents/streaming_tools.py:5420) emits `INTERNAL_EXTRACTION_RESULT` when `builder_finalization` exists. Flow then tries to consume that internal event after specialist invocation.
+The builder tool path in [backend/src/lib/openai_agents/streaming_tools.py](../../backend/src/lib/openai_agents/streaming_tools.py) emits `INTERNAL_EXTRACTION_RESULT` when `builder_finalization` exists. Flow then tries to consume that internal event after specialist invocation.
 
 The logs show the builder tools completed, but the final step evidence count was zero. That suggests one of these happened:
 
@@ -202,9 +202,9 @@ Fix:
 
 Confidence: medium.
 
-The smoke creates a custom agent from `template_source=gene_extractor`. Creation inherits the parent template's model, tools, output schema, category, and records `template_source=gene_extractor` in [backend/src/lib/agent_studio/custom_agent_service.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/agent_studio/custom_agent_service.py:399).
+The smoke creates a custom agent from `template_source=gene_extractor`. Creation inherits the parent template's model, tools, output schema, category, and records `template_source=gene_extractor` in [backend/src/lib/agent_studio/custom_agent_service.py](../../backend/src/lib/agent_studio/custom_agent_service.py).
 
-Catalog metadata has a curation inheritance path in [backend/src/lib/agent_studio/catalog_service.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/agent_studio/catalog_service.py:1644): if a DB custom agent has no direct config definition, operates on a document, and points to a launchable curation template, it can inherit the template's curation metadata.
+Catalog metadata has a curation inheritance path in [backend/src/lib/agent_studio/catalog_service.py](../../backend/src/lib/agent_studio/catalog_service.py): if a DB custom agent has no direct config definition, operates on a document, and points to a launchable curation template, it can inherit the template's curation metadata.
 
 The final flow event still had `adapter_keys=[]`. That does not prove metadata inheritance failed, but it means adapter metadata was not represented in any persisted candidate.
 
@@ -230,7 +230,7 @@ Fix:
 
 Confidence: medium.
 
-The backend repeatedly logged Redis auth failures while checking stream cancellation and active-stream cleanup. [backend/src/lib/redis_client.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/redis_client.py:20) caches a Redis client from `REDIS_URL` and logs connection/error details.
+The backend repeatedly logged Redis auth failures while checking stream cancellation and active-stream cleanup. [backend/src/lib/redis_client.py](../../backend/src/lib/redis_client.py) caches a Redis client from `REDIS_URL` and logs connection/error details.
 
 Fix:
 
@@ -365,7 +365,7 @@ docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "
 docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/agent_studio/test_catalog_service.py -v --tb=short"
 ```
 
-Then rerun the Incus smoke with tunnels and trace preflight:
+Then rerun the local development smoke with tunnels and trace preflight:
 
 ```bash
 scripts/testing/dev_release_smoke.py --base-url http://127.0.0.1:8000 --stream --flow --curation-workspace
@@ -389,5 +389,5 @@ Acceptance criteria:
 - Was `INTERNAL_EXTRACTION_RESULT` absent, or was it emitted but absent from the current flow cursor's live/collected lists?
 - Did `build_extraction_envelope_candidate_with_evidence(...)` reject a valid-looking payload because adapter metadata was missing or because the payload shape was not recognized as an extraction envelope?
 - Did the smoke custom agent catalog metadata include `curation.adapter_key` immediately before flow execution?
-- Do the local backend and TraceReview containers share the same Langfuse project credentials in the Incus stack?
+- Do the local backend and TraceReview containers share the same Langfuse project credentials in the local development stack?
 - Should flow output consider a builder tool sequence successful only after both extraction-result persistence and review-session materialization succeed?

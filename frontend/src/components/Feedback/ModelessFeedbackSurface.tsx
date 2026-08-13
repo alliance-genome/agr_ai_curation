@@ -36,6 +36,8 @@ interface ModelessFeedbackSurfaceProps {
   titleIcon?: ReactNode
   width?: SurfaceWidth
   sx?: SxProps<Theme>
+  moveControlLabel?: string
+  closeControlLabel?: string
 }
 
 interface Position {
@@ -99,6 +101,8 @@ function ModelessFeedbackSurface({
   titleIcon,
   width = 'sm',
   sx,
+  moveControlLabel = 'Move popup',
+  closeControlLabel = 'Close popup',
 }: ModelessFeedbackSurfaceProps) {
   const theme = useTheme()
   const titleId = useId()
@@ -334,7 +338,7 @@ function ModelessFeedbackSurface({
             onKeyDown={handleDragKeyboard}
             role={isSmallScreen ? undefined : 'button'}
             tabIndex={isSmallScreen ? undefined : 0}
-            aria-label={isSmallScreen ? undefined : 'Move feedback popup'}
+            aria-label={isSmallScreen ? undefined : moveControlLabel}
             sx={{
               display: 'flex',
               alignItems: 'center',
@@ -359,7 +363,7 @@ function ModelessFeedbackSurface({
             </Typography>
           </Box>
           <Tooltip title="Close">
-            <IconButton size="small" onClick={onClose} aria-label="Close feedback popup">
+            <IconButton size="small" onClick={onClose} aria-label={closeControlLabel}>
               <CloseIcon fontSize="small" />
             </IconButton>
           </Tooltip>

@@ -10,11 +10,15 @@ from sqlalchemy.exc import IntegrityError
 
 from src.lib.curation_workspace import extraction_results as module
 from src.lib.curation_workspace.extraction_results import (
+    ExtractionResultPayloadMismatchError,
+    build_flow_extraction_idempotency_key,
     build_extraction_envelope_candidate,
     build_extraction_envelope_candidate_with_evidence,
+    canonical_extraction_payload_hash,
     persist_inline_validated_extraction_result,
     persist_extraction_result,
     persist_extraction_results,
+    persist_idempotent_extraction_results,
 )
 from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
@@ -89,7 +93,7 @@ def _sample_persisted_domain_envelope_payload() -> dict:
         "domain_pack_id": "gene",
         "domain_pack_version": "0.1.0",
         "status": "extracted",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "gene_mention_evidence",
                 "pending_ref_id": "gene-notch",
@@ -104,6 +108,14 @@ def _sample_persisted_domain_envelope_payload() -> dict:
         "history": [],
         "metadata": {},
     }
+
+
+class _NestedTransaction:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return False
 
 
 class _FakeSession:
@@ -125,6 +137,7 @@ class _FakeSession:
         self.rollback_calls = 0
         self.closed = False
         self.execute_calls = 0
+        self.begin_nested_calls = 0
 
     def add(self, record):
         self.added = record
@@ -138,6 +151,10 @@ class _FakeSession:
         self.flush_calls += 1
         if self.fail_flush:
             raise RuntimeError("db write failed")
+
+    def begin_nested(self):
+        self.begin_nested_calls += 1
+        return _NestedTransaction()
 
     def commit(self):
         self.commit_calls += 1
@@ -175,6 +192,7 @@ class _RaceConflictSession:
         self.execute_calls = 0
         self.closed = False
         self._insert_conflict_raised = False
+        self.begin_nested_calls = 0
 
     def add(self, record):
         self.added = record
@@ -196,6 +214,10 @@ class _RaceConflictSession:
                 {},
                 Exception("duplicate key value violates unique constraint"),
             )
+
+    def begin_nested(self):
+        self.begin_nested_calls += 1
+        return _NestedTransaction()
 
     def commit(self):
         self.commit_calls += 1
@@ -454,23 +476,9 @@ def test_build_extraction_envelope_candidate_accepts_domain_envelope_curatable_o
     assert evidence_metadata["evidence_records"][0]["evidence_record_id"] == "evidence-notch"
 
 
-def test_gene_adapter_drops_zfin_compound_like_gene_objects():
+def test_build_extraction_envelope_candidate_leaves_non_alliance_payload_assumptions_alone():
     payload = _sample_domain_envelope_payload()
     payload["curatable_objects"] = [
-        {
-            "object_type": "gene_mention_evidence",
-            "pending_ref_id": "gene-mention-evidence-her1",
-            "payload": {
-                "mention": "her1",
-                "primary_external_id": "ZFIN:ZDB-GENE-980526-125",
-                "gene_symbol": "her1",
-                "taxon": "NCBITaxon:7955",
-                "species": "Danio rerio",
-                "data_provider_hint": "ZFIN",
-                "evidence_record_id": "evidence-her1",
-            },
-            "evidence_record_ids": ["evidence-her1"],
-        },
         {
             "object_type": "gene_mention_evidence",
             "pending_ref_id": "gene-mention-evidence-SB225002",
@@ -483,16 +491,24 @@ def test_gene_adapter_drops_zfin_compound_like_gene_objects():
             },
             "evidence_record_ids": ["evidence-sb225002"],
         },
+        {
+            "object_type": "PhenotypeAnnotation",
+            "pending_ref_id": "phenotype-annotation-1",
+            "payload": {
+                "phenotype_terms": [
+                    {
+                        "label": "boundary disruptions",
+                        "ontology_lookup_hint": {
+                            "taxon_id": "NCBITaxon:7955",
+                            "evidence_record_id": "evidence-phenotype",
+                        },
+                    }
+                ],
+            },
+            "evidence_record_ids": ["evidence-phenotype"],
+        },
     ]
     payload["metadata"]["evidence_records"] = [
-        {
-            "evidence_record_id": "evidence-her1",
-            "entity": "her1",
-            "verified_quote": "the her1 mutant background was analyzed.",
-            "page": 1,
-            "section": "Results",
-            "chunk_id": "chunk-her1",
-        },
         {
             "evidence_record_id": "evidence-sb225002",
             "entity": "SB225002",
@@ -501,113 +517,35 @@ def test_gene_adapter_drops_zfin_compound_like_gene_objects():
             "section": "Results",
             "chunk_id": "chunk-sb225002",
         },
-    ]
-
-    candidate = build_extraction_envelope_candidate(
-        json.dumps(payload),
-        agent_key="gene_extractor",
-        adapter_key="gene",
-        conversation_summary="Extract cross-domain gene evidence.",
-    )
-
-    assert candidate is not None
-    assert [obj["pending_ref_id"] for obj in candidate.payload_json["curatable_objects"]] == [
-        "gene-mention-evidence-her1"
-    ]
-    assert candidate.payload_json["metadata"]["exclusions"][-1] == {
-        "mention": "SB225002",
-        "reason_code": "unsupported_entity_type",
-        "evidence_record_ids": ["evidence-sb225002"],
-        "details": (
-            "Dropped from gene curatable_objects because ZFIN context plus "
-            "uppercase/digit notation indicates a compound or reagent without "
-            "a gene identity hint."
-        ),
-    }
-    assert "dropped_non_gene_zfin_candidate:SB225002" in candidate.payload_json[
-        "run_summary"
-    ]["warnings"]
-
-
-def test_phenotype_adapter_materializes_nested_term_object_for_validation():
-    payload = _sample_domain_envelope_payload()
-    payload["curatable_objects"] = [
-        {
-            "object_type": "PhenotypeAnnotation",
-            "pending_ref_id": "phenotype-annotation-1",
-            "payload": {
-                "annotation_kind": "phenotype_assertion",
-                "phenotype_annotation_object": "boundary disruptions",
-                "phenotype_terms": [
-                    {
-                        "resolution_state": "pending_ontology_resolution",
-                        "curie": None,
-                        "label": "boundary disruptions",
-                        "source_mentions": ["boundary disruptions"],
-                        "ontology_lookup_hint": {
-                            "taxon_id": "NCBITaxon:7955",
-                            "evidence_record_id": "evidence-phenotype",
-                        },
-                        "export_state": "blocked_pending_ontology_resolution",
-                        "write_blocked_reason": "phenotype term CURIE unresolved",
-                    }
-                ],
-                "evidence_record_ids": ["evidence-phenotype"],
-            },
-            "evidence_record_ids": ["evidence-phenotype"],
-        }
-    ]
-    payload["metadata"]["evidence_records"] = [
         {
             "evidence_record_id": "evidence-phenotype",
             "entity": "phenotype",
-            "verified_quote": "SB225002 caused boundary disruptions.",
+            "verified_quote": "Boundary disruptions were observed.",
             "page": 1,
             "section": "Results",
             "chunk_id": "chunk-phenotype",
-        }
+        },
     ]
 
     candidate = build_extraction_envelope_candidate(
         json.dumps(payload),
-        agent_key="phenotype_extractor",
-        adapter_key="phenotype",
-        conversation_summary="Extract phenotype evidence.",
+        agent_key="demo_extractor",
+        adapter_key="demo",
+        conversation_summary="Extract neutral demo evidence.",
     )
 
     assert candidate is not None
     objects = candidate.payload_json["curatable_objects"]
+    assert [obj["pending_ref_id"] for obj in objects] == [
+        "gene-mention-evidence-SB225002",
+        "phenotype-annotation-1",
+    ]
+    assert "exclusions" not in candidate.payload_json["metadata"]
     assert [obj["object_type"] for obj in objects] == [
+        "gene_mention_evidence",
         "PhenotypeAnnotation",
-        "PhenotypeTerm",
     ]
-    annotation = objects[0]
-    phenotype_term = objects[1]
-    assert annotation["object_refs"] == [
-        {
-            "pending_ref_id": "phenotype-term-1-1",
-            "object_type": "PhenotypeTerm",
-        }
-    ]
-    assert phenotype_term["pending_ref_id"] == "phenotype-term-1-1"
-    assert phenotype_term["object_role"] == "validated_reference"
-    assert phenotype_term["model_ref"] == "PhenotypeTermPayload"
-    assert phenotype_term["payload"]["label"] == "boundary disruptions"
-    assert phenotype_term["payload"]["ontology_lookup_hint"] == {
-        "taxon_id": "NCBITaxon:7955",
-        "evidence_record_id": "evidence-phenotype",
-    }
-    assert phenotype_term["evidence_record_ids"] == ["evidence-phenotype"]
-    assert phenotype_term["metadata"] == {
-        "object_role": "validated_reference",
-        "validation_state": "pending_ontology_resolution",
-        "validator_binding_id": "phenotype_term_ontology_validator",
-        "export_state": "blocked_pending_ontology_resolution",
-        "write_blocked_reason": "phenotype term CURIE unresolved",
-    }
-    assert "materialized_nested_phenotype_terms:1" in candidate.payload_json[
-        "run_summary"
-    ]["warnings"]
+    assert candidate.payload_json["run_summary"]["warnings"] == []
 
 
 def test_build_extraction_envelope_candidate_accepts_persisted_domain_envelope_shape():
@@ -623,7 +561,7 @@ def test_build_extraction_envelope_candidate_accepts_persisted_domain_envelope_s
     assert candidate.adapter_key == "gene"
     assert candidate.candidate_count == 1
     assert candidate.payload_json["envelope_id"] == "envelope-gene-notch"
-    assert candidate.payload_json["objects"][0]["payload"]["primary_external_id"] == (
+    assert candidate.payload_json["extracted_objects"][0]["payload"]["primary_external_id"] == (
         "FB:FBgn0004647"
     )
 
@@ -724,7 +662,8 @@ def test_persist_extraction_result_writes_record_and_returns_schema():
     response = persist_extraction_result(request, db=session)
 
     assert session.added is not None
-    assert session.commit_calls == 1
+    assert session.commit_calls == 0
+    assert session.flush_calls == 1
     assert session.refresh_calls == 1
     assert session.rollback_calls == 0
     assert str(session.added.document_id) == request.document_id
@@ -782,8 +721,8 @@ def test_persist_extraction_result_sanitizes_nul_characters_before_persisting():
     assert response.extraction_result.metadata["evidence_preview"] == "AB"
 
 
-def test_persist_extraction_result_rolls_back_on_commit_error():
-    session = _FakeSession(fail_commit=True)
+def test_persist_extraction_result_leaves_flush_error_for_caller_rollback():
+    session = _FakeSession(fail_flush=True)
     request = CurationExtractionPersistenceRequest(
         document_id=str(uuid4()),
         adapter_key="gene",
@@ -795,8 +734,9 @@ def test_persist_extraction_result_rolls_back_on_commit_error():
     with pytest.raises(RuntimeError, match="db write failed"):
         persist_extraction_result(request, db=session)
 
-    assert session.commit_calls == 1
-    assert session.rollback_calls == 1
+    assert session.commit_calls == 0
+    assert session.flush_calls == 1
+    assert session.rollback_calls == 0
     assert session.refresh_calls == 0
 
 
@@ -827,6 +767,7 @@ def test_persist_inline_validated_extraction_result_creates_idempotent_row():
 
     assert len(session.added_records) == 1
     assert session.flush_calls == 1
+    assert session.begin_nested_calls == 1
     assert session.commit_calls == 0
     assert session.rollback_calls == 0
     assert session.added.idempotency_key == response.idempotency_key
@@ -908,6 +849,48 @@ def test_persist_inline_validated_extraction_result_rejects_legacy_row_sources()
         )
 
 
+def test_persist_inline_validated_extraction_result_rejects_invalid_domain_envelope():
+    session = _FakeSession()
+    payload = _sample_persisted_domain_envelope_payload()
+    payload["validation_findings"] = [
+        {
+            "severity": "error",
+            "status": "open",
+            "code": "domain_pack.unknown_ref",
+            "message": "Finding points at an object that is not in extracted_objects.",
+            "object_ref": {
+                "pending_ref_id": "missing-object",
+                "object_type": "gene_mention_evidence",
+            },
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="DomainEnvelope schema validation failed",
+    ) as exc_info:
+        persist_inline_validated_extraction_result(
+            payload_json=payload,
+            document_id=str(uuid4()),
+            agent_key="gene",
+            adapter_key="gene",
+            tool_name="ask_gene_specialist",
+            source_kind=CurationExtractionSourceKind.CHAT,
+            origin_session_id="session-1",
+            trace_id="trace-1",
+            user_id="user-1",
+            builder_finalization={
+                "builder_run_id": "trace-1",
+                "builder_invocation_id": "builder-invocation-1",
+            },
+            db=session,
+        )
+
+    assert "missing-object" in str(exc_info.value)
+    assert session.added_records == []
+    assert session.flush_calls == 0
+
+
 def test_persist_inline_validated_extraction_result_reloads_after_insert_conflict():
     """The unique-index race loser rolls back and returns the race winner's row."""
 
@@ -951,11 +934,12 @@ def test_persist_inline_validated_extraction_result_reloads_after_insert_conflic
         db=session,
     )
 
-    # The race loser attempted exactly one insert, hit the conflict, rolled back,
-    # and did not insert a second time.
+    # The race loser attempted exactly one insert in a savepoint and did not
+    # roll back unrelated work in the caller's transaction.
     assert len(session.added_records) == 1
     assert session.flush_calls == 1
-    assert session.rollback_calls == 1
+    assert session.rollback_calls == 0
+    assert session.begin_nested_calls == 1
     assert session.refresh_calls == 0
     # Pre-check lookup (empty) + post-rollback reload (race winner) = 2 lookups.
     assert session.execute_calls == 2
@@ -1075,7 +1059,7 @@ def test_persist_extraction_results_commits_when_helper_owns_session(monkeypatch
     assert len(responses) == 2
 
 
-def test_persist_extraction_results_rolls_back_batch_on_shared_session_flush_error():
+def test_persist_extraction_results_leaves_shared_session_rollback_to_caller():
     session = _FakeSession(fail_flush=True)
     requests = [
         CurationExtractionPersistenceRequest(
@@ -1100,8 +1084,127 @@ def test_persist_extraction_results_rolls_back_batch_on_shared_session_flush_err
     assert len(session.added_records) == 2
     assert session.commit_calls == 0
     assert session.flush_calls == 1
-    assert session.rollback_calls == 1
+    assert session.rollback_calls == 0
     assert session.refresh_calls == 0
+
+
+def _flow_persistence_request(
+    *,
+    idempotency_key: str = "flow-extraction:key-1",
+    payload_json: dict | None = None,
+    payload_hash: str | None = None,
+) -> CurationExtractionPersistenceRequest:
+    payload = payload_json or _sample_envelope_payload()
+    return CurationExtractionPersistenceRequest(
+        document_id=str(uuid4()),
+        adapter_key="gene",
+        agent_key="gene-expression",
+        source_kind=CurationExtractionSourceKind.FLOW,
+        origin_session_id="session-1",
+        flow_run_id="flow-run-1",
+        user_id="user-1",
+        payload_json=payload,
+        idempotency_key=idempotency_key,
+        payload_hash=payload_hash or canonical_extraction_payload_hash(payload),
+    )
+
+
+def test_flow_idempotency_key_is_stable_and_source_scoped():
+    key_material = {
+        "document_id": "11111111-1111-1111-1111-111111111111",
+        "user_id": "user-1",
+        "origin_session_id": "session-1",
+        "flow_run_id": "flow-run-1",
+        "adapter_key": "gene",
+        "agent_key": "gene-extractor",
+        "source_kind": CurationExtractionSourceKind.FLOW,
+        "candidate_identity": "flow-1:1:ask_gene_extractor_specialist:gene-extractor",
+    }
+
+    first = build_flow_extraction_idempotency_key(**key_material)
+    retry = build_flow_extraction_idempotency_key(**dict(reversed(key_material.items())))
+    different_user = build_flow_extraction_idempotency_key(
+        **{**key_material, "user_id": "user-2"}
+    )
+
+    assert first == retry
+    assert first.startswith("flow-extraction:")
+    assert different_user != first
+
+
+def test_idempotent_batch_deduplicates_same_call_keys_in_first_seen_order():
+    session = _FakeSession()
+    first = _flow_persistence_request(idempotency_key="flow-extraction:first")
+    duplicate = first.model_copy(deep=True)
+    second = _flow_persistence_request(idempotency_key="flow-extraction:second")
+
+    responses = persist_idempotent_extraction_results(
+        [first, duplicate, second],
+        db=session,
+    )
+
+    assert len(responses) == 2
+    assert len(session.added_records) == 2
+    assert session.begin_nested_calls == 2
+    assert [response.extraction_result.idempotency_key for response in responses] == [
+        "flow-extraction:first",
+        "flow-extraction:second",
+    ]
+
+
+def test_idempotent_batch_rejects_same_call_payload_mismatch_before_writing():
+    session = _FakeSession()
+    first = _flow_persistence_request(idempotency_key="flow-extraction:conflict")
+    assert isinstance(first.payload_json, dict)
+    incompatible_payload = {**first.payload_json, "items": [{"label": "wingless"}]}
+    incompatible = first.model_copy(
+        update={
+            "payload_json": incompatible_payload,
+            "payload_hash": canonical_extraction_payload_hash(incompatible_payload),
+        },
+    )
+
+    with pytest.raises(
+        ExtractionResultPayloadMismatchError,
+        match="idempotency payload mismatch.*flow-extraction:conflict",
+    ):
+        persist_idempotent_extraction_results([first, incompatible], db=session)
+
+    assert session.added_records == []
+    assert session.flush_calls == 0
+
+
+def test_idempotent_batch_reuses_authoritative_row_and_detects_mismatch():
+    request = _flow_persistence_request(idempotency_key="flow-extraction:existing")
+    existing = _record_row(
+        id=uuid4(),
+        document_id=request.document_id,
+        agent_key=request.agent_key,
+        source_kind=request.source_kind,
+        origin_session_id=request.origin_session_id,
+        flow_run_id=request.flow_run_id,
+        user_id=request.user_id,
+        payload_json=request.payload_json,
+        idempotency_key=request.idempotency_key,
+        payload_hash=request.payload_hash,
+    )
+    session = _FakeSession(existing_rows=[existing])
+
+    responses = persist_idempotent_extraction_results([request], db=session)
+
+    assert responses[0].extraction_result.extraction_result_id == str(existing.id)
+    assert session.added_records == []
+
+    assert isinstance(request.payload_json, dict)
+    incompatible_payload = {**request.payload_json, "items": [{"label": "wingless"}]}
+    mismatch = request.model_copy(
+        update={
+            "payload_json": incompatible_payload,
+            "payload_hash": canonical_extraction_payload_hash(incompatible_payload),
+        }
+    )
+    with pytest.raises(ExtractionResultPayloadMismatchError):
+        persist_idempotent_extraction_results([mismatch], db=session)
 
 
 def test_list_extraction_results_returns_empty_for_invalid_document_id(monkeypatch, caplog):

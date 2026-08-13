@@ -22,28 +22,33 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Set
+from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Sequence, Set, cast
 from uuid import uuid4
 
-from agents import Agent, Runner, RunContextWrapper, function_tool
-from pydantic import ValidationError
-
+from agents import Agent, RunContextWrapper, function_tool
+from sqlalchemy.orm import Session
 from src.lib.context import (
+    get_current_flow_output_attachment,
     get_current_run_config,
     get_current_trace_id,
+    reset_current_flow_output_attachment,
     reset_current_output_filename_stem,
+    set_current_flow_output_attachment,
     set_current_output_filename_stem,
+    set_current_session_id,
+    set_current_user_id,
 )
 from src.lib.curation_workspace import (
     CurationPrepPersistenceContext,
     ExtractionEnvelopeCandidate,
+    build_flow_extraction_idempotency_key,
     build_extraction_envelope_candidate_with_evidence,
-    persist_extraction_results,
+    canonical_extraction_payload_hash,
+    persist_idempotent_extraction_results,
     run_curation_prep,
 )
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
@@ -51,12 +56,15 @@ from src.lib.curation_workspace.curation_prep_service import (
     build_flow_scope_confirmation as _build_flow_scope_confirmation,
     ensure_domain_envelope_materialization,
 )
+from src.lib.curation_workspace.domain_envelope_normalization import (
+    is_canonical_domain_envelope_payload,
+)
 from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
-from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
 from src.lib.curation_workspace.models import DomainEnvelopeModel
+from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     write_domain_envelope_checkpoint,
@@ -88,29 +96,30 @@ from src.lib.agent_studio.flow_agent_policy import (
 from src.lib.flows.output_projection import (
     FlowOutputArtifactBundle,
     FlowOutputProjectionPlan,
-    FlowOutputProjectionResult,
     build_flow_output_artifact_bundle,
     default_projection_plan,
     finalize_output_projection,
-    inspect_output_artifacts,
-    projection_plan_allows_empty_bundle,
-    preview_output_projection,
+)
+from src.lib.executable_flow_graph import project_executable_flow_graph
+from src.lib.flow_edge_roles import (
+    SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
+    agent_can_source_output_attachment,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
+from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
-    get_agent_metadata,
+    get_active_visible_agent_metadata as get_agent_metadata,
 )
 from src.lib.openai_agents.config import (
     get_agent_config,
     get_model_for_agent,
     build_model_settings,
-    get_flow_output_projection_planner_preview_limit,
+    get_flow_supervisor_parallel_tool_calls_enabled,
     get_flow_step_evidence_preview_limit,
     get_flow_step_output_preview_chars,
-    get_max_turns,
     resolve_model_provider,
 )
 from src.lib.runtime_payload_budget import provider_context_preflight
@@ -125,7 +134,6 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding
 from src.schemas.domain_validator import DomainValidationRequest, ValidatorAgentRef
-from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +144,9 @@ _FLOW_STEP_EVIDENCE_PREVIEW_LIMIT = get_flow_step_evidence_preview_limit()
 _FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
 _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME = "input"
 _FLOW_TEMPLATE_DEFAULT_TRACE_ID = "trace"
-_FLOW_TSV_FORMATTER_AGENT_IDS = {"tsv_formatter", "tsv_output_formatter"}
-_FLOW_CSV_FORMATTER_AGENT_IDS = {"csv_formatter", "csv_output_formatter"}
-_FLOW_JSON_FORMATTER_AGENT_IDS = {"json_formatter", "json_output_formatter"}
+_FLOW_TSV_FORMATTER_AGENT_IDS = {"tsv_formatter"}
+_FLOW_CSV_FORMATTER_AGENT_IDS = {"csv_formatter"}
+_FLOW_JSON_FORMATTER_AGENT_IDS = {"json_formatter"}
 _FLOW_CHAT_FORMATTER_AGENT_IDS = {"chat_output", "chat_output_formatter"}
 _FLOW_OUTPUT_FORMATTER_AGENT_IDS_BY_FORMAT = {
     "csv": _FLOW_CSV_FORMATTER_AGENT_IDS,
@@ -146,35 +154,6 @@ _FLOW_OUTPUT_FORMATTER_AGENT_IDS_BY_FORMAT = {
     "json": _FLOW_JSON_FORMATTER_AGENT_IDS,
     "chat": _FLOW_CHAT_FORMATTER_AGENT_IDS,
 }
-_FLOW_OUTPUT_PROJECTION_PLANNER_TOOL_NAMES = frozenset(
-    {
-        "inspect_output_artifacts",
-        "preview_output_projection",
-        "finalize_output_projection",
-    }
-)
-_FLOW_OUTPUT_PROJECTION_CUSTOMIZATION_HINT_PATTERN = re.compile(
-    r"\b("
-    r"artifact|object|objects|evidence|validation|finding|findings|row|rows|"
-    r"column|columns|header|headers|rename|omit|exclude|include|filter|"
-    r"sort|order|group|grouped|bundle|json|table|section|sections|bullet|"
-    r"derived|derive|combine|concat|join|count|map|label|limit|max"
-    r")\b",
-    re.IGNORECASE,
-)
-_FLOW_OUTPUT_PROJECTION_CURATOR_REQUEST_HINT_PATTERN = re.compile(
-    r"\b("
-    r"artifact rows?|object rows?|evidence rows?|validation findings?|"
-    r"row source|rows?|columns?|headers?|rename|call .* column|omit|exclude|"
-    r"skip|filter|only include|include only|validated rows?|sort|order by|"
-    r"before|after|first|last|precede|follows?|group|grouped|bundle|table|sections?|bullets?|derived|derive|"
-    r"combine|concat|join|count|map|limit|max"
-    r")\b",
-    re.IGNORECASE,
-)
-# Env-configurable via FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT (default 5);
-# see config.py.
-_FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT = get_flow_output_projection_planner_preview_limit()
 CURATION_HANDOFF_AGENT_ID = "curation_handoff"
 CURATION_HANDOFF_READY_EVENT = "CURATION_HANDOFF_READY"
 FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT = "FLOW_EXTRACTION_HANDOFF_AUDIT"
@@ -386,6 +365,40 @@ def _internal_extraction_tool_output_since(
     return payload
 
 
+def _internal_specialist_tool_output_since(
+    cursor: Mapping[str, Any],
+    *,
+    tool_name: str,
+) -> Any | None:
+    """Return the latest private output for one specialist-internal tool call."""
+
+    normalized_tool_name = str(tool_name or "").strip()
+    if not normalized_tool_name:
+        return None
+    sources: list[tuple[Any, int]] = []
+    for events_key, index_key in (
+        ("live_events", "live_index"),
+        ("collected_events", "collected_index"),
+    ):
+        events = cursor.get(events_key)
+        start_index = cursor.get(index_key)
+        if isinstance(events, list) and isinstance(start_index, int):
+            sources.append((events, start_index))
+    for events, start_index in sources:
+        for event in reversed(events[start_index:]):
+            if not isinstance(event, Mapping) or event.get("type") != "TOOL_COMPLETE":
+                continue
+            details = event.get("details") or {}
+            if not isinstance(details, Mapping):
+                continue
+            if str(details.get("toolName") or "").strip() != normalized_tool_name:
+                continue
+            internal = event.get("internal") or {}
+            if isinstance(internal, Mapping) and internal.get("tool_output") is not None:
+                return internal.get("tool_output")
+    return None
+
+
 def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW_CHARS) -> str:
     """Generate a bounded preview string for accumulated flow context."""
 
@@ -396,446 +409,31 @@ def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW
     return f"{text[:max_chars]}... [truncated {overflow} chars]"
 
 
-@dataclass
-class _FlowOutputProjectionPlannerState:
-    final_plan: FlowOutputProjectionPlan | None = None
-    final_result: FlowOutputProjectionResult | None = None
-    final_summary: dict[str, Any] | None = None
-    errors: list[str] | None = None
-    finalize_attempt_count: int = 0
+def _flow_formatter_failure_reason(completed_step: Mapping[str, Any]) -> str | None:
+    """Return a curator-facing reason when a formatter completed without output."""
 
-    def record_error(self, message: str) -> None:
-        if self.errors is None:
-            self.errors = []
-        self.errors.append(message)
-
-
-def _projection_tool_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
-
-
-def _projection_plan_from_tool_payload(
-    plan_json: str | Mapping[str, Any],
-    *,
-    output_format: str,
-) -> FlowOutputProjectionPlan:
-    raw_plan: Any
-    if isinstance(plan_json, str):
-        raw_text = plan_json.strip()
-        if not raw_text:
-            raise ValueError("Projection plan JSON is empty.")
+    raw_output = completed_step.get("formatter_failure_output")
+    if raw_output is None:
+        raw_output = completed_step.get("output")
+    parsed_output: Any = raw_output
+    if isinstance(raw_output, str):
         try:
-            raw_plan = json.loads(raw_text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Projection plan is not valid JSON: {exc.msg}") from exc
-    elif isinstance(plan_json, Mapping):
-        raw_plan = dict(plan_json)
-    else:
-        raise ValueError("Projection plan must be a JSON object or encoded JSON object.")
+            parsed_output = json.loads(raw_output)
+        except (TypeError, ValueError):
+            parsed_output = raw_output
 
-    if isinstance(raw_plan, Mapping) and isinstance(raw_plan.get("plan"), Mapping):
-        raw_plan = raw_plan["plan"]
-    if not isinstance(raw_plan, Mapping):
-        raise ValueError("Projection plan must decode to a JSON object.")
+    if isinstance(parsed_output, Mapping):
+        if str(parsed_output.get("status") or "") != "cannot_complete":
+            return None
+        reason_parts = [
+            str(parsed_output.get(key) or "").strip()
+            for key in ("reason", "missing_data", "suggested_next_step")
+        ]
+        reason = " ".join(part for part in reason_parts if part)
+        return _truncate_tool_output(reason) if reason else None
 
-    try:
-        plan = FlowOutputProjectionPlan.model_validate(raw_plan)
-    except ValidationError as exc:
-        raise ValueError(f"Projection plan schema is invalid: {exc}") from exc
-    return plan.model_copy(update={"format": output_format})
-
-
-def _projection_result_summary(
-    result: FlowOutputProjectionResult,
-) -> dict[str, Any]:
-    warnings = [
-        _truncate_tool_output(warning, 240)
-        for warning in result.warnings[:20]
-    ]
-    if len(result.warnings) > 20:
-        warnings.append(f"... [truncated {len(result.warnings) - 20} warnings]")
-    return {
-        "status": "ok",
-        "format": result.format,
-        "row_source": result.row_source,
-        "columns": [
-            column.model_dump(mode="json")
-            for column in result.columns
-        ],
-        "total_count": result.total_count,
-        "row_count": len(result.rows),
-        "truncated": result.truncated,
-        "group_by": result.group_by,
-        "warnings": warnings,
-    }
-
-
-def _build_output_projection_planner_tools(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-    state: _FlowOutputProjectionPlannerState,
-) -> list[Any]:
-    """Build bounded projection-planning tools for a terminal flow formatter."""
-
-    @function_tool(
-        name_override="inspect_output_artifacts",
-        description_override=(
-            "Inspect bounded row-source counts, default columns, field refs, "
-            "and compact examples for the completed flow artifacts."
-        ),
-        strict_mode=False,
-    )
-    async def _inspect_output_artifacts() -> str:
-        return _projection_tool_json(
-            {
-                "status": "ok",
-                "inventory": inspect_output_artifacts(bundle),
-            }
-        )
-
-    @function_tool(
-        name_override="preview_output_projection",
-        description_override=(
-            "Validate a proposed projection plan and return a bounded preview. "
-            "Pass the plan as encoded JSON in plan_json."
-        ),
-        strict_mode=False,
-    )
-    async def _preview_output_projection(plan_json: str) -> str:
-        try:
-            plan = _projection_plan_from_tool_payload(
-                plan_json,
-                output_format=output_format,
-            )
-            preview = preview_output_projection(
-                bundle,
-                plan,
-                limit=_FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT,
-            )
-            return _projection_tool_json(
-                {
-                    "status": preview.status,
-                    "preview": preview.model_dump(mode="json"),
-                }
-            )
-        except Exception as exc:
-            message = str(exc)
-            state.record_error(message)
-            return _projection_tool_json(
-                {
-                    "status": "invalid",
-                    "errors": [message],
-                }
-            )
-
-    @function_tool(
-        name_override="finalize_output_projection",
-        description_override=(
-            "Finalize the validated projection plan. This records only the plan "
-            "and a summary; the runtime saves or renders the output."
-        ),
-        strict_mode=False,
-    )
-    async def _finalize_output_projection(plan_json: str) -> str:
-        state.finalize_attempt_count += 1
-        try:
-            plan = _projection_plan_from_tool_payload(
-                plan_json,
-                output_format=output_format,
-            )
-            result = finalize_output_projection(bundle, plan)
-        except Exception as exc:
-            message = str(exc)
-            state.record_error(message)
-            return _projection_tool_json(
-                {
-                    "status": "invalid",
-                    "errors": [message],
-                    "attempt": state.finalize_attempt_count,
-                }
-            )
-
-        state.final_plan = plan
-        state.final_result = result
-        state.final_summary = _projection_result_summary(result)
-        return _projection_tool_json(state.final_summary)
-
-    return [
-        _inspect_output_artifacts,
-        _preview_output_projection,
-        _finalize_output_projection,
-    ]
-
-
-def _projection_planner_inventory_summary(
-    bundle: FlowOutputArtifactBundle,
-) -> dict[str, Any]:
-    row_sources = {
-        row_source: len(bundle.rows_for_source(row_source))  # type: ignore[arg-type]
-        for row_source in ("artifact", "object", "evidence", "validation_finding")
-    }
-    fields = [
-        {
-            "ref": field.ref,
-            "label": field.label,
-            "row_source": field.row_source,
-            "value_type": field.value_type,
-            "non_empty_count": field.non_empty_count,
-            "examples": field.examples[:2],
-        }
-        for field in bundle.field_catalog[:80]
-    ]
-    warnings = [
-        _truncate_tool_output(warning, 240)
-        for warning in bundle.warnings[:20]
-    ]
-    if len(bundle.warnings) > 20:
-        warnings.append(f"... [truncated {len(bundle.warnings) - 20} warnings]")
-    return {
-        "flow_name": bundle.flow_name,
-        "flow_run_id": bundle.flow_run_id,
-        "document_id": bundle.document_id,
-        "artifact_count": len(bundle.artifacts),
-        "default_row_source": bundle.default_row_source,
-        "row_sources": row_sources,
-        "fields": fields,
-        "warnings": warnings,
-    }
-
-
-def _build_output_projection_planner_instructions(
-    *,
-    output_format: str,
-    agent_name: str,
-) -> str:
-    return (
-        f"You are the flow-output projection planner for {agent_name}. "
-        f"The terminal output format is {output_format}.\n\n"
-        "Your job is to choose a small FlowOutputProjectionPlan that satisfies "
-        "the curator's output-shaping request using only the fields exposed by "
-        "the projection tools. You must not write CSV, TSV, JSON, markdown, or "
-        "file contents yourself. You must not call or request save-file tools. "
-        "The runtime will save or render the final output after your plan is "
-        "validated.\n\n"
-        "Use inspect_output_artifacts when you need row-source counts, fields, "
-        "or examples. Use preview_output_projection to check columns, filters, "
-        "sorting, grouping, and transforms. Always call finalize_output_projection "
-        "with the final valid plan. If a tool returns validation errors, correct "
-        "the plan once using the available field refs and finalize again."
-    )
-
-
-def _build_output_projection_planner_input(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-    default_plan: FlowOutputProjectionPlan,
-    agent_id: str,
-    agent_name: str,
-    node_data: Mapping[str, Any] | None,
-    resolved_query: str | None,
-) -> str:
-    node_data = node_data or {}
-    payload = {
-        "terminal_format": output_format,
-        "agent_id": agent_id,
-        "agent_name": agent_name,
-        "default_plan": default_plan.model_dump(mode="json"),
-        "artifact_inventory_summary": _projection_planner_inventory_summary(bundle),
-        "curator_output_request": {
-            "step_goal": _truncate_tool_output(node_data.get("step_goal"), 1200),
-            "custom_instructions": _truncate_tool_output(
-                node_data.get("custom_instructions"),
-                1200,
-            ),
-            "flow_step_query": _truncate_tool_output(resolved_query, 1600),
-        },
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-
-
-def _build_output_projection_planner_retry_input(
-    *,
-    previous_input: str,
-    state: _FlowOutputProjectionPlannerState,
-) -> str:
-    errors = state.errors or []
-    payload = {
-        "retry_reason": (
-            "No valid projection was finalized. Correct the projection plan and "
-            "call finalize_output_projection exactly once with a valid plan."
-        ),
-        "previous_errors": errors[-5:],
-        "previous_request": previous_input,
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-
-
-def _flow_output_default_row_source_is_ambiguous(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-) -> bool:
-    if output_format == "tsv":
-        return False
-    richer_sources = [
-        row_source
-        for row_source in ("object", "evidence", "validation_finding")
-        if bundle.rows_for_source(row_source)  # type: ignore[arg-type]
-    ]
-    return bundle.default_row_source == "artifact" and len(richer_sources) > 1
-
-
-def _flow_query_section_text(resolved_query: str | None, heading: str) -> str:
-    text = str(resolved_query or "")
-    marker = f"{heading}:\n"
-    start = text.find(marker)
-    if start < 0:
-        return ""
-    start += len(marker)
-    end = text.find("\n\n", start)
-    if end < 0:
-        end = len(text)
-    return text[start:end].strip()
-
-
-def _has_projection_customization_hint(
-    text: str | None,
-    *,
-    curator_request: bool = False,
-) -> bool:
-    pattern = (
-        _FLOW_OUTPUT_PROJECTION_CURATOR_REQUEST_HINT_PATTERN
-        if curator_request
-        else _FLOW_OUTPUT_PROJECTION_CUSTOMIZATION_HINT_PATTERN
-    )
-    return bool(
-        text
-        and pattern.search(str(text))
-    )
-
-
-def _flow_output_should_run_projection_planner(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-    node_data: Mapping[str, Any] | None,
-    resolved_query: str | None = None,
-) -> bool:
-    node_data = node_data or {}
-    custom_instructions = str(node_data.get("custom_instructions") or "").strip()
-    if custom_instructions:
-        return True
-
-    step_goal = str(node_data.get("step_goal") or "").strip()
-    if _has_projection_customization_hint(step_goal):
-        return True
-
-    curator_run_request = _flow_query_section_text(
-        resolved_query,
-        "Curator run request",
-    )
-    if _has_projection_customization_hint(curator_run_request, curator_request=True):
-        return True
-
-    return _flow_output_default_row_source_is_ambiguous(
-        bundle=bundle,
-        output_format=output_format,
-    )
-
-
-def _projection_planner_failure_message(
-    state: _FlowOutputProjectionPlannerState,
-) -> str:
-    errors = state.errors or []
-    if errors:
-        return "; ".join(errors[-5:])
-    return "planner did not call finalize_output_projection with a valid plan"
-
-
-async def _run_output_projection_planner(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-    default_plan: FlowOutputProjectionPlan,
-    agent_id: str,
-    agent_name: str,
-    node_data: Mapping[str, Any] | None,
-    resolved_query: str | None,
-) -> FlowOutputProjectionResult:
-    """Ask a dedicated planner to finalize a projection plan for custom output."""
-
-    state = _FlowOutputProjectionPlannerState()
-    tools = _build_output_projection_planner_tools(
-        bundle=bundle,
-        output_format=output_format,
-        state=state,
-    )
-
-    config = get_agent_config(agent_id)
-    provider = resolve_model_provider(config.model)
-    model = get_model_for_agent(config.model, provider_override=provider)
-    model_settings = build_model_settings(
-        model=config.model,
-        temperature=config.temperature,
-        reasoning_effort=config.reasoning,
-        tool_choice=config.tool_choice,
-        parallel_tool_calls=False,
-        provider_override=provider,
-    )
-    planner_agent = Agent(
-        name=f"{agent_name} Projection Planner",
-        instructions=_build_output_projection_planner_instructions(
-            output_format=output_format,
-            agent_name=agent_name,
-        ),
-        model=model,
-        model_settings=model_settings,
-        tools=tools,
-    )
-
-    planner_input = _build_output_projection_planner_input(
-        bundle=bundle,
-        output_format=output_format,
-        default_plan=default_plan,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        node_data=node_data,
-        resolved_query=resolved_query,
-    )
-    # Use the standard agent turn budget (default 60), not a tight clamp. The
-    # planner inspects row sources/fields, previews, corrects, and finalizes a
-    # multi-column plan; an 8-turn clamp exhausted before finalizing on richer
-    # bundles (e.g. multi-column allele TSV worklists), failing the whole flow.
-    max_turns = get_max_turns()
-
-    for attempt in range(2):
-        run_input = (
-            planner_input
-            if attempt == 0
-            else _build_output_projection_planner_retry_input(
-                previous_input=planner_input,
-                state=state,
-            )
-        )
-        await Runner.run(planner_agent, run_input, max_turns=max_turns)
-        if state.final_result is not None:
-            logger.info(
-                "[Flow Executor] Projection planner finalized %s output for '%s' "
-                "(row_source=%s, rows=%s, attempts=%s)",
-                output_format.upper(),
-                agent_id,
-                state.final_result.row_source,
-                state.final_result.total_count,
-                attempt + 1,
-            )
-            return state.final_result
-
-    raise RuntimeError(
-        "Flow output projection planner did not finalize a valid plan: "
-        f"{_projection_planner_failure_message(state)}"
-    )
+    reason = _truncate_tool_output(parsed_output)
+    return reason or None
 
 
 def _build_flow_step_instruction_prefix(
@@ -886,7 +484,7 @@ def _build_flow_conversation_summary(
 ) -> str:
     """Choose the best available summary string for flow persistence and prep context."""
 
-    for candidate in (user_query, get_task_instructions(flow)):
+    for candidate in (user_query, _get_authored_task_instructions(flow)):
         text = str(candidate or "").strip()
         if text:
             return text
@@ -1011,7 +609,11 @@ def _build_flow_step_query(
     """
 
     sections: list[str] = []
-    _append_flow_query_section(sections, "Flow task", get_task_instructions(flow))
+    _append_flow_query_section(
+        sections,
+        "Flow task",
+        _get_authored_task_instructions(flow),
+    )
     _append_flow_query_section(sections, "Curator run request", user_query)
 
     document_bits = []
@@ -1057,163 +659,321 @@ def _resolve_flow_terminal_output_format(agent_id: str) -> Optional[str]:
 def _flow_terminal_projection_error(agent_id: str, reason: str) -> FlowTerminalOutputProjectionError:
     return FlowTerminalOutputProjectionError(
         "Flow terminal formatter "
-        f"'{agent_id}' could not project runtime-owned output: {reason}. "
-        "Flow terminal formatter steps cannot fall back to ordinary formatter "
-        "models or model-written file contents."
+        f"'{agent_id}' could not prepare runtime-owned output: {reason}. "
+        "Flow terminal formatter steps cannot fall back to raw serializers "
+        "or model-written file contents."
     )
 
 
-async def _save_projected_file_output(
-    *,
-    output_format: str,
-    projection: FlowOutputProjectionResult,
-    descriptor: str,
-) -> dict[str, Any]:
-    data_rows = projection.rows
-    if output_format == "csv":
-        from src.lib.openai_agents.tools.file_output_tools import _save_csv_impl
-
-        return await _save_csv_impl(
-            data_json=json.dumps(data_rows, ensure_ascii=False),
-            filename=descriptor,
-            columns=json.dumps(
-                [column.key for column in projection.columns],
-                ensure_ascii=False,
-            ),
-        )
-    if output_format == "tsv":
-        from src.lib.openai_agents.tools.file_output_tools import _save_tsv_impl
-
-        data_rows = [
-            {
-                key: str(value or "").strip()
-                for key, value in row.items()
-            }
-            for row in projection.rows
-        ]
-        return await _save_tsv_impl(
-            data_json=json.dumps(data_rows, ensure_ascii=False),
-            filename=descriptor,
-            columns=json.dumps(
-                [column.key for column in projection.columns],
-                ensure_ascii=False,
-            ),
-        )
-    if output_format == "json":
-        from src.lib.openai_agents.tools.file_output_tools import _save_json_impl
-
-        json_data = projection.json_data if projection.json_data is not None else projection.rows
-        return await _save_json_impl(
-            data_json=json.dumps(json_data, ensure_ascii=False),
-            filename=descriptor,
-            pretty=True,
-        )
-    raise ValueError(f"Unsupported projected file output format: {output_format}")
+def _flow_file_output_format(agent_id: str) -> str | None:
+    output_format = _resolve_flow_terminal_output_format(agent_id)
+    if output_format in {"csv", "tsv", "json"}:
+        return output_format
+    return None
 
 
-async def _try_project_terminal_flow_output(
+def _build_terminal_flow_artifact_bundle(
     *,
     agent_id: str,
+    output_format: str,
     completed_steps: list[dict[str, Any]],
     flow_name: str,
-    agent_name: str | None = None,
     flow_run_id: str | None = None,
     document_id: str | None = None,
-    projection_plan: Mapping[str, Any] | None = None,
-    node_data: Mapping[str, Any] | None = None,
-    resolved_query: str | None = None,
-    output_filename_descriptor: str | None = None,
-) -> Optional[str]:
-    """Deterministically project terminal flow output from completed artifacts."""
-
-    output_format = _resolve_flow_terminal_output_format(agent_id)
-    if output_format is None:
-        return None
-
+    source_node_ids: Sequence[str] | None = None,
+) -> FlowOutputArtifactBundle:
     try:
-        plan_for_empty_check: FlowOutputProjectionPlan | None = None
-        if projection_plan is not None:
-            plan_for_empty_check = FlowOutputProjectionPlan.model_validate(projection_plan).model_copy(
-                update={"format": output_format}
+        scoped_steps = completed_steps
+        normalized_source_node_ids = tuple(
+            dict.fromkeys(
+                str(source_node_id).strip()
+                for source_node_id in (source_node_ids or ())
+                if str(source_node_id).strip()
             )
+        )
+        if normalized_source_node_ids:
+            source_node_id_set = set(normalized_source_node_ids)
+            scoped_steps = [
+                step
+                for step in completed_steps
+                if str(step.get("node_id") or "") in source_node_id_set
+            ]
+            completed_source_node_ids = [
+                str(step.get("node_id") or "") for step in scoped_steps
+            ]
+            missing_source_node_ids = [
+                source_node_id
+                for source_node_id in normalized_source_node_ids
+                if completed_source_node_ids.count(source_node_id) != 1
+            ]
+            if missing_source_node_ids:
+                raise _flow_terminal_projection_error(
+                    agent_id,
+                    (
+                        "each bound source node must produce exactly one completed "
+                        "artifact; invalid source node(s): "
+                        + ", ".join(
+                            f"'{source_node_id}' ({completed_source_node_ids.count(source_node_id)})"
+                            for source_node_id in missing_source_node_ids
+                        )
+                    ),
+                )
         bundle = build_flow_output_artifact_bundle(
-            completed_steps=completed_steps,
+            completed_steps=scoped_steps,
             flow_name=flow_name,
             flow_run_id=flow_run_id,
             document_id=document_id,
             output_format=output_format,  # type: ignore[arg-type]
         )
-        if not bundle.artifacts and not (
-            plan_for_empty_check is not None
-            and projection_plan_allows_empty_bundle(plan_for_empty_check)
+        if normalized_source_node_ids and len(bundle.artifacts) != len(
+            normalized_source_node_ids
         ):
+            raise _flow_terminal_projection_error(
+                agent_id,
+                (
+                    f"{len(normalized_source_node_ids)} bound source node(s) produced "
+                    f"{len(bundle.artifacts)} structured artifact(s); expected one "
+                    "artifact per bound source"
+                ),
+            )
+        if not bundle.artifacts:
             raise _flow_terminal_projection_error(
                 agent_id,
                 "no completed structured artifacts were available before the terminal formatter",
             )
-
-        default_plan = default_projection_plan(bundle, output_format=output_format)  # type: ignore[arg-type]
-        if plan_for_empty_check is not None:
-            plan = plan_for_empty_check
-            projection = finalize_output_projection(bundle, plan)
-        elif _flow_output_should_run_projection_planner(
-            bundle=bundle,
-            output_format=output_format,
-            node_data=node_data,
-            resolved_query=resolved_query,
-        ):
-            projection = await _run_output_projection_planner(
-                bundle=bundle,
-                output_format=output_format,
-                default_plan=default_plan,
-                agent_id=agent_id,
-                agent_name=agent_name or agent_id,
-                node_data=node_data,
-                resolved_query=resolved_query,
-            )
-        else:
-            projection = finalize_output_projection(bundle, default_plan)
+        return bundle
     except FlowTerminalOutputProjectionError as exc:
-        # Already a specific projection error -- log the reason in plain logs
-        # (backend logs otherwise only record the tool-result length) and re-raise
-        # as-is rather than re-wrapping (which doubled the message).
         logger.warning(
-            "[Flow Executor] Terminal formatter '%s' could not project output: %s",
+            "[Flow Executor] Terminal formatter '%s' could not prepare output: %s",
             agent_id,
             exc,
         )
         raise
     except Exception as exc:
         logger.warning(
-            "[Flow Executor] Terminal formatter '%s' could not project output: %s",
+            "[Flow Executor] Terminal formatter '%s' could not prepare output: %s",
             agent_id,
             exc,
         )
         raise _flow_terminal_projection_error(agent_id, str(exc)) from exc
 
-    if output_format == "chat":
+
+def _flow_formatter_source_counts(bundle: FlowOutputArtifactBundle) -> dict[str, int]:
+    return {
+        row_source: len(bundle.rows_for_source(row_source))  # type: ignore[arg-type]
+        for row_source in ("artifact", "object", "evidence", "validation_finding")
+    }
+
+
+def _build_flow_formatter_runtime_context(
+    *,
+    agent_id: str,
+    agent_name: str,
+    output_format: str,
+    bundle: FlowOutputArtifactBundle,
+    node_data: Mapping[str, Any],
+    resolved_query: str,
+    output_filename_descriptor: str | None,
+    source_node_ids: Sequence[str] | None,
+) -> str:
+    raw_projection_plan = node_data.get("projection_plan")
+    projection_plan = dict(raw_projection_plan) if isinstance(raw_projection_plan, Mapping) else None
+    payload = {
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "terminal_format": output_format,
+        "flow_name": bundle.flow_name,
+        "flow_run_id": bundle.flow_run_id,
+        "document_id": bundle.document_id,
+        "source_node_id": source_node_ids[0] if source_node_ids else None,
+        "source_node_ids": list(source_node_ids or ()),
+        "artifact_count": len(bundle.artifacts),
+        "default_row_source": bundle.default_row_source,
+        "row_sources": _flow_formatter_source_counts(bundle),
+        "filename_hint": output_filename_descriptor,
+        "configured_projection_plan": projection_plan,
+        "curator_output_request": {
+            "step_goal": _truncate_tool_output(node_data.get("step_goal"), 1200),
+            "custom_instructions": _truncate_tool_output(
+                node_data.get("custom_instructions"),
+                1200,
+            ),
+            "flow_step_query": _truncate_tool_output(resolved_query, 1600),
+        },
+    }
+    return (
+        "FLOW FORMATTER SOURCE BUNDLE\n"
+        "Your runtime tools are bound to the completed saved flow artifacts summarized below. "
+        "Use the formatter tools to inspect, validate, preview, and call finalize_and_save exactly once. "
+        "Do not ask for previous-step prose as input and do not compose file rows yourself. "
+        "If configured_projection_plan is present, treat it as the flow owner's requested starting plan: "
+        "validate/preview it with the runtime tools, adjust only through saved field refs if needed, then finalize. "
+        "Filename metadata is runtime-owned: filename_hint has already been resolved from the flow template, "
+        "and saved files retain a trace identifier suffix. A timestamp is included only when the configured template "
+        "contains {{timestamp}}. Do not require the input PDF filename or timestamp to appear in artifact rows, "
+        "and do not call "
+        "formatter_cannot_complete merely because those runtime-owned filename values are absent from the bundle. "
+        "If the saved bundle cannot support the requested output, call formatter_cannot_complete.\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    )
+
+
+def _make_flow_runtime_formatter_tool(
+    *,
+    agent_id: str,
+    agent_name: str,
+    output_format: str,
+    tool_name: str,
+    tool_description: str,
+    specialist_name: str,
+    base_context: Mapping[str, Any],
+    step_instruction_prefix: str,
+    completed_steps: list[dict[str, Any]],
+    flow_name: str,
+    flow_run_id: str | None,
+    document_id: str | None,
+    node_data: Mapping[str, Any],
+    source_node_ids: Sequence[str] | None = None,
+):
+    @function_tool(
+        name_override=tool_name,
+        description_override=tool_description,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def _runtime_formatter_tool(
+        ctx: RunContextWrapper[Any],
+        query: str,
+        output_filename_descriptor: str = "",
+    ) -> str:
+        bundle = _build_terminal_flow_artifact_bundle(
+            agent_id=agent_id,
+            output_format=output_format,
+            completed_steps=completed_steps,
+            flow_name=flow_name,
+            flow_run_id=flow_run_id,
+            document_id=document_id,
+            source_node_ids=source_node_ids,
+        )
+        runtime_contexts = [
+            context
+            for context in [
+                step_instruction_prefix,
+                _build_flow_formatter_runtime_context(
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    output_format=output_format,
+                    bundle=bundle,
+                    node_data=node_data,
+                    resolved_query=query,
+                    output_filename_descriptor=output_filename_descriptor or None,
+                    source_node_ids=source_node_ids,
+                ),
+            ]
+            if context
+        ]
+        agent_kwargs = dict(base_context)
+        agent_kwargs.update(
+            {
+                "formatter_bundle": bundle,
+                "formatter_output_format": output_format,
+                "formatter_agent_id": agent_id,
+                "additional_runtime_context": runtime_contexts,
+            }
+        )
+        agent = get_agent_by_id(agent_id, **agent_kwargs)
+        streaming_tool = cast(
+            Any,
+            _create_streaming_tool(
+                agent=agent,
+                tool_name=tool_name,
+                tool_description=tool_description,
+                specialist_name=specialist_name,
+                inline_chat_persistence=False,
+                isolate_run_config=True,
+                propagate_errors=True,
+            ),
+        )
+        tool_ctx = SimpleNamespace(
+            tool_name=tool_name,
+            run_config=getattr(ctx, "run_config", None),
+        )
+        current_attachment = get_current_flow_output_attachment() or {}
+        source_token = set_current_flow_output_attachment(
+            {
+                **current_attachment,
+                "source_extraction_result_ids": [
+                    artifact.extraction_result_id
+                    for artifact in bundle.artifacts
+                    if artifact.extraction_result_id
+                ],
+                "source_keys": [
+                    artifact.source_key for artifact in bundle.artifacts if artifact.source_key
+                ],
+                "source_envelope_ids": [
+                    artifact.envelope_id
+                    for artifact in bundle.artifacts
+                    if artifact.envelope_id
+                ],
+            }
+        )
+        try:
+            return await streaming_tool.on_invoke_tool(
+                tool_ctx,
+                json.dumps({"query": query}),
+            )
+        finally:
+            reset_current_flow_output_attachment(source_token)
+
+    return _runtime_formatter_tool
+
+
+def _make_flow_chat_output_tool(
+    *,
+    agent_id: str,
+    output_format: str,
+    tool_name: str,
+    tool_description: str,
+    completed_steps: list[dict[str, Any]],
+    flow_name: str,
+    flow_run_id: str | None,
+    document_id: str | None,
+    node_data: Mapping[str, Any],
+    source_node_ids: Sequence[str] | None = None,
+):
+    @function_tool(
+        name_override=tool_name,
+        description_override=tool_description,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def _chat_output_tool(query: str) -> str:
+        _ = query
+        bundle = _build_terminal_flow_artifact_bundle(
+            agent_id=agent_id,
+            output_format=output_format,
+            completed_steps=completed_steps,
+            flow_name=flow_name,
+            flow_run_id=flow_run_id,
+            document_id=document_id,
+            source_node_ids=source_node_ids,
+        )
+        raw_plan = node_data.get("projection_plan")
+        if isinstance(raw_plan, Mapping):
+            plan = FlowOutputProjectionPlan.model_validate(raw_plan).model_copy(
+                update={"format": output_format}
+            )
+        else:
+            plan = default_projection_plan(bundle, output_format=output_format)  # type: ignore[arg-type]
+        projection = finalize_output_projection(bundle, plan)
         logger.info(
-            "[Flow Executor] Rendered chat formatter flow artifact output directly for '%s' (%s rows)",
+            "[Flow Executor] Rendered chat formatter flow artifact output for '%s' (%s rows)",
             agent_id,
             projection.total_count,
         )
         return projection.chat_output or "No rows matched the requested output projection."
 
-    descriptor = sanitize_output_descriptor(
-        output_filename_descriptor or f"{flow_name}_{output_format}_export"
-    )
-    result = await _save_projected_file_output(
-        output_format=output_format,
-        projection=projection,
-        descriptor=descriptor,
-    )
-    logger.info(
-        "[Flow Executor] Saved %s formatter flow artifact output directly for '%s' (%s rows)",
-        output_format.upper(),
-        agent_id,
-        projection.total_count,
-    )
-    return json.dumps(result)
+    return _chat_output_tool
 
 
 def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) -> Optional[str]:
@@ -1227,6 +987,8 @@ def _flow_candidate_persistence_key(candidate: ExtractionEnvelopeCandidate) -> s
     """Return the deterministic persistence key for one flow extraction step."""
 
     metadata = candidate.metadata or {}
+    # Extraction candidate parsing rejects blank agent keys, so the final part
+    # guarantees a non-empty identity even when no flow metadata is available.
     key_parts = [
         str(metadata.get("flow_id") or "").strip(),
         str(metadata.get("step") or "").strip(),
@@ -1234,6 +996,57 @@ def _flow_candidate_persistence_key(candidate: ExtractionEnvelopeCandidate) -> s
         str(candidate.agent_key or "").strip(),
     ]
     return ":".join(part for part in key_parts if part)
+
+
+def _flow_candidate_envelope_id(
+    candidate: ExtractionEnvelopeCandidate,
+    *,
+    session_id: str,
+    flow_run_id: Optional[str],
+) -> str:
+    """Return the stable DomainEnvelope id for one flow extraction step."""
+
+    metadata = candidate.metadata or {}
+    explicit_id = str(metadata.get("envelope_id") or "").strip()
+    if explicit_id:
+        return explicit_id
+
+    run_scope = str(flow_run_id or session_id or "").strip() or "flow-run"
+    candidate_scope = (
+        _flow_candidate_persistence_key(candidate)
+        or str(candidate.agent_key or "").strip()
+        or "candidate"
+    )
+    return f"flow:{run_scope}:{candidate_scope}"
+
+
+def _validate_flow_extraction_candidate_payload(payload: Any) -> None:
+    """Reject ambiguous source/canonical envelope mixtures before persistence."""
+
+    if not isinstance(payload, Mapping):
+        return
+    if isinstance(payload.get("curatable_objects"), list) and isinstance(
+        payload.get("extracted_objects"), list
+    ):
+        raise ValueError(
+            "extraction payload mixes DomainEnvelope.extracted_objects[] with "
+            "DomainEnvelopeExtractionResult.curatable_objects[]"
+        )
+
+
+def _sanitize_flow_extraction_candidate_payload(payload: Any) -> Any:
+    """Remove untrusted row provenance until canonical persistence assigns it."""
+
+    if not isinstance(payload, Mapping) or not is_canonical_domain_envelope_payload(
+        payload
+    ):
+        return payload
+
+    sanitized_payload = dict(payload)
+    metadata = dict(sanitized_payload.get("metadata") or {})
+    metadata.pop("source_extraction_result_id", None)
+    sanitized_payload["metadata"] = metadata
+    return sanitized_payload
 
 
 def _flow_record_persistence_key(record: CurationExtractionResultRecord) -> str:
@@ -1262,55 +1075,6 @@ def _unique_non_empty_scope_values(values: list[Optional[str]]) -> list[str]:
         seen.add(normalized)
         ordered.append(normalized)
     return ordered
-
-
-def _build_flow_prep_extraction_results(
-    *,
-    completed_steps: list[dict[str, Any]],
-    document_id: str,
-    user_id: str,
-    session_id: str,
-    flow_run_id: Optional[str],
-    conversation_summary: str,
-) -> list[CurationExtractionResultRecord]:
-    """Convert completed flow extraction steps into prep-service input records."""
-
-    created_at = datetime.now(timezone.utc)
-    trace_id = get_current_trace_id()
-    extraction_results: list[CurationExtractionResultRecord] = []
-
-    for step in completed_steps:
-        candidate = step.get("candidate")
-        if not isinstance(candidate, ExtractionEnvelopeCandidate):
-            continue
-        if candidate.agent_key == CURATION_PREP_AGENT_ID:
-            continue
-
-        step_number = int(step.get("step") or 0)
-        extraction_results.append(
-            CurationExtractionResultRecord.model_validate(
-                {
-                    "extraction_result_id": (
-                        f"flow:{session_id}:step:{step_number}:{candidate.agent_key}"
-                    ),
-                    "document_id": document_id,
-                    "adapter_key": candidate.adapter_key,
-                    "agent_key": candidate.agent_key,
-                    "source_kind": CurationExtractionSourceKind.FLOW,
-                    "origin_session_id": session_id,
-                    "trace_id": trace_id,
-                    "flow_run_id": flow_run_id,
-                    "user_id": user_id,
-                    "candidate_count": candidate.candidate_count,
-                    "conversation_summary": candidate.conversation_summary or conversation_summary,
-                    "payload_json": candidate.payload_json,
-                    "created_at": created_at,
-                    "metadata": dict(candidate.metadata),
-                }
-            )
-        )
-
-    return extraction_results
 
 
 def _accumulate_step_evidence(
@@ -1457,6 +1221,8 @@ async def _run_custom_flow_validator_agent(
         # Flow execution: flows persist their own FLOW-source extraction rows; inline
         # CHAT persistence must not fire here (would write a shadow CHAT-source row).
         inline_chat_persistence=False,
+        isolate_run_config=True,
+        propagate_errors=True,
     )
     provider_payload = {
         "source_envelope": {
@@ -1494,9 +1260,9 @@ async def _run_custom_flow_validator_agent(
     )
     payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(streaming_tool, "on_invoke_tool"):
-        # Reuse the current request's warm websocket provider for this nested
-        # validator run (it is invoked outside the SDK tool-context path, so there
-        # is no ctx to inherit from); falls back to None if no run is active.
+        # Pass the parent RunConfig only as a trace/template source. The flow tool
+        # wrapper clones it onto a step-owned provider so the validator WebSocket
+        # closes cleanly before flow teardown.
         tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=get_current_run_config())
         return await streaming_tool.on_invoke_tool(
             tool_ctx,
@@ -1805,6 +1571,8 @@ async def _execute_validation_groups_for_step(
     agent_context: Mapping[str, Any],
     flow_conversation_summary: str,
 ) -> dict[str, Any]:
+    """Run validator groups and commit the session owned by this worker unit of work."""
+
     groups = _validation_groups_from_node_data(node_data)
     grouped = _groups_by_state(groups)
     executable_groups = (
@@ -1997,6 +1765,7 @@ async def _execute_validation_groups_for_step(
                 checkpoint_started_at
             )
 
+        session.commit()
         _emit_validation_group_timing(
             status="success",
             extra_details={
@@ -2026,6 +1795,9 @@ async def _execute_validation_groups_for_step(
                 "conversation_summary": flow_conversation_summary,
             }
         }
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -2391,6 +2163,16 @@ def _resolve_flow_agent_entry(
     except ValueError:
         return None
 
+    category = str(metadata.get("category") or "").strip().lower()
+    subcategory = str(metadata.get("subcategory") or "").strip().lower()
+    output_schema_key = str(metadata.get("output_schema_key") or "").strip()
+    is_extraction = "extract" in category or "extract" in subcategory
+    is_typed_validation = bool(
+        "validation" in category
+        and output_schema_key
+        and resolve_output_schema(output_schema_key) is not None
+    )
+
     return {
         "name": metadata.get("display_name", agent_id),
         "description": metadata.get("description") or "",
@@ -2398,6 +2180,11 @@ def _resolve_flow_agent_entry(
         "subcategory": metadata.get("subcategory") or "",
         "requires_document": metadata.get("requires_document", False),
         "required_params": metadata.get("required_params", []),
+        "output_schema_key": output_schema_key or None,
+        "is_active": metadata.get("is_active", True),
+        "visible": metadata.get("visible", True),
+        "visibility": metadata.get("visibility"),
+        "produces_flow_artifacts": is_extraction or is_typed_validation,
         "curation": metadata.get("curation"),
         "supervisor": metadata.get("supervisor") or {},
     }
@@ -2416,13 +2203,7 @@ def is_agent_in_flow(flow: CurationFlow, agent_id: str) -> bool:
     Returns:
         True if the agent is in the flow, False otherwise
     """
-    flow_def = flow.flow_definition
-    nodes = flow_def.get("nodes", [])
-    for node in nodes:
-        node_data = node.get("data", {})
-        if node_data.get("agent_id") == agent_id:
-            return True
-    return False
+    return agent_id in get_flow_agent_ids(flow)
 
 
 def get_flow_agent_ids(flow: CurationFlow) -> Set[str]:
@@ -2436,14 +2217,11 @@ def get_flow_agent_ids(flow: CurationFlow) -> Set[str]:
     Returns:
         Set of agent IDs (e.g., {"gene", "disease", "allele"})
     """
-    agent_ids = set()
-    for node in flow.flow_definition.get("nodes", []):
-        agent_id = node.get("data", {}).get("agent_id")
-        node_type = node.get("type", "agent")
-        # Skip task_input nodes - they're not agents
-        if agent_id and node_type != "task_input" and agent_id != "task_input":
-            agent_ids.add(agent_id)
-    return agent_ids
+    return {
+        agent_id
+        for node in _get_ordered_executable_nodes(flow)
+        if (agent_id := node.get("data", {}).get("agent_id"))
+    }
 
 
 def get_task_instructions(flow: CurationFlow) -> Optional[str]:
@@ -2466,75 +2244,102 @@ def get_task_instructions(flow: CurationFlow) -> Optional[str]:
     return None
 
 
-def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
-    """Return executable flow nodes in edge-traversal order.
+def _task_instructions_are_default_only(flow: CurationFlow) -> bool:
+    """Return whether a migrated Task Input is only a no-query fallback."""
 
-    Uses entry_node_id + edges when available, and appends disconnected
-    executable nodes at the end so no configured step is silently ignored.
-    """
+    return flow.flow_definition.get("task_instructions_default_only") is True
+
+
+def _get_authored_task_instructions(flow: CurationFlow) -> Optional[str]:
+    """Return curator-authored instructions, excluding migrated runtime defaults."""
+
+    if _task_instructions_are_default_only(flow):
+        return None
+    return get_task_instructions(flow)
+
+
+def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
+    """Return executable nodes from the canonical sequential projection."""
+
     flow_def = flow.flow_definition or {}
     nodes: List[Dict[str, Any]] = flow_def.get("nodes", []) or []
-    edges: List[Dict[str, Any]] = flow_def.get("edges", []) or []
-    entry_node_id = flow_def.get("entry_node_id")
-
     node_by_id = {n.get("id"): n for n in nodes if n.get("id")}
-    if not node_by_id:
-        return []
+    projection = project_executable_flow_graph(flow_def)
+    return [node_by_id[node_id] for node_id in projection.ordered_executable_node_ids]
 
-    edges_from: Dict[str, List[str]] = {}
-    incoming_targets: Set[str] = set()
-    validation_attachment_targets: Set[str] = set()
-    for edge in edges:
-        edge_role = edge.get("role", DEFAULT_FLOW_EDGE_ROLE)
-        source = edge.get("source")
-        target = edge.get("target")
-        if not source or not target:
-            continue
-        if edge_role == VALIDATION_ATTACHMENT_EDGE_ROLE:
-            validation_attachment_targets.add(target)
-            continue
-        edges_from.setdefault(source, []).append(target)
-        incoming_targets.add(target)
 
-    if entry_node_id and entry_node_id in node_by_id:
-        start_node_id = entry_node_id
-    else:
-        potential_starts = [n.get("id") for n in nodes if n.get("id") not in incoming_targets]
-        start_node_id = potential_starts[0] if potential_starts else nodes[0].get("id")
+def _runtime_output_sources_by_node_id(
+    flow: CurationFlow,
+    *,
+    db_user_id: int | None,
+) -> dict[str, tuple[str, ...]]:
+    """Validate runtime output roles and return formatter→extractors bindings."""
 
-    ordered: List[Dict[str, Any]] = []
-    visited: Set[str] = set()
-    queue: List[str] = [start_node_id] if start_node_id else []
-
-    def _is_executable(node: Dict[str, Any]) -> bool:
-        node_type = node.get("type", "agent")
-        agent_id = node.get("data", {}).get("agent_id")
-        node_id = node.get("id")
-        return (
-            node_id not in validation_attachment_targets
-            and node_type != "task_input"
-            and agent_id not in ("task_input", "supervisor")
+    flow_def = flow.flow_definition or {}
+    projection = project_executable_flow_graph(flow_def)
+    nodes_by_id = {
+        str(node.get("id")): node
+        for node in (flow_def.get("nodes") or [])
+        if node.get("id")
+    }
+    bindings = {
+        attachment.output_node_id: attachment.source_node_ids
+        for attachment in projection.output_attachments
+    }
+    errors: list[str] = []
+    for output_node_id, source_node_ids in bindings.items():
+        output_node = nodes_by_id.get(output_node_id, {})
+        output_data = output_node.get("data") or {}
+        output_agent_id = str(
+            (output_data.get("agent_id") or "") if isinstance(output_data, Mapping) else ""
         )
+        output_entry = _resolve_flow_agent_entry(
+            output_agent_id,
+            db_user_id=db_user_id,
+        )
+        if (
+            not _is_output_formatter_entry(output_entry)
+            or output_agent_id not in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+        ):
+            errors.append(
+                f"output node '{output_node_id}' agent '{output_agent_id}' is not an output formatter"
+            )
+        for source_node_id in source_node_ids:
+            source_node = nodes_by_id.get(source_node_id, {})
+            source_data = source_node.get("data") or {}
+            source_agent_id = str(
+                (source_data.get("agent_id") or "")
+                if isinstance(source_data, Mapping)
+                else ""
+            )
+            source_entry = _resolve_flow_agent_entry(
+                source_agent_id,
+                db_user_id=db_user_id,
+            )
+            if not agent_can_source_output_attachment(source_entry):
+                errors.append(
+                    f"source node '{source_node_id}' agent '{source_agent_id}' is not "
+                    "an extraction agent or a typed validation agent"
+                )
 
-    while queue:
-        node_id = queue.pop(0)
-        if node_id in visited:
-            continue
-        visited.add(node_id)
-        node = node_by_id.get(node_id)
-        if node and _is_executable(node):
-            ordered.append(node)
-        for next_id in edges_from.get(node_id, []):
-            if next_id not in visited:
-                queue.append(next_id)
+    for node_id in projection.ordered_executable_node_ids:
+        node = nodes_by_id.get(node_id, {})
+        node_data = node.get("data") or {}
+        agent_id = str(
+            (node_data.get("agent_id") or "") if isinstance(node_data, Mapping) else ""
+        )
+        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        if _is_output_formatter_entry(entry) and node_id not in bindings:
+            errors.append(
+                f"formatter node '{node_id}' must be connected as an output attachment "
+                "before execution"
+            )
 
-    # Append any disconnected executable nodes to preserve configured steps.
-    for node in nodes:
-        node_id = node.get("id")
-        if node_id not in visited and _is_executable(node):
-            ordered.append(node)
-
-    return ordered
+    if errors:
+        raise FlowTerminalOutputProjectionError(
+            "Invalid flow output attachment role(s): " + "; ".join(errors)
+        )
+    return bindings
 
 
 def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
@@ -2550,10 +2355,9 @@ def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
         Dict mapping agent_id to occurrence count.
     """
     counts: Dict[str, int] = {}
-    for node in flow.flow_definition.get("nodes", []):
-        node_type = node.get("type", "agent")
+    for node in _get_ordered_executable_nodes(flow):
         agent_id = node.get("data", {}).get("agent_id")
-        if node_type == "task_input" or agent_id == "task_input" or not agent_id:
+        if not agent_id:
             continue
         counts[agent_id] = counts.get(agent_id, 0) + 1
     return counts
@@ -2630,6 +2434,11 @@ def get_all_agent_tools(
         unavailable_steps contains skipped steps with reasons for UI warnings.
     """
     nodes = _get_ordered_executable_nodes(flow)
+    nodes_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
+    output_source_by_node_id = _runtime_output_sources_by_node_id(
+        flow,
+        db_user_id=db_user_id,
+    )
     agent_id_counts = _count_agent_ids(flow)
     all_tools = []
     created_tool_names: Set[str] = set()
@@ -2668,6 +2477,8 @@ def get_all_agent_tools(
         "next_tool_index": 0,
         "ordered_tool_names": ordered_tool_names,
         "completed_steps": [],
+        "step_claim_lock": asyncio.Lock(),
+        "in_flight_step": None,
         "evidence_registry": _EvidenceRegistry(),
         "persisted_extraction_results": [],
     }
@@ -2684,6 +2495,7 @@ def get_all_agent_tools(
         curation_adapter_key: str | None,
         candidate_expected_from: list[str],
         node_data: dict[str, Any],
+        node_id: str,
     ):
         """Enforce strict flow step ordering at runtime."""
 
@@ -2692,28 +2504,11 @@ def get_all_agent_tools(
         # names (ask_ca_<uuid>_specialist) for TOOL_START/TOOL_COMPLETE labels.
         description_override = f"Ask the {specialist_label}"
 
-        @function_tool(name_override=tool_name, description_override=description_override)
-        async def _ordered_tool(ctx: RunContextWrapper[Any], query: str) -> str:
+        async def _run_claimed_ordered_tool(
+            ctx: RunContextWrapper[Any], query: str, claimed_step_index: int
+        ) -> str:
             step_started_at = time.monotonic()
             phase_timings_ms: dict[str, int] = {}
-            next_idx = execution_state["next_tool_index"]
-            if next_idx >= len(ordered_tool_names):
-                return (
-                    "All remaining flow steps are already complete. "
-                    "Summarize final output and stop."
-                )
-            expected_tool = ordered_tool_names[next_idx]
-            if tool_name != expected_tool:
-                logger.info(
-                    "[Flow Executor] Step order blocked tool '%s'; expected '%s' next",
-                    tool_name,
-                    expected_tool,
-                )
-                return (
-                    f"Flow step order is strict. The next required step tool is "
-                    f"'{expected_tool}'. Do not call '{tool_name}' yet."
-                )
-
             template_timestamp = _format_flow_template_timestamp()
             template_variables = _build_flow_builtin_template_variables(
                 document_name=document_name,
@@ -2737,47 +2532,72 @@ def get_all_agent_tools(
             # _create_streaming_tool() returns a FunctionTool (not a plain callable).
             # Invoke via on_invoke_tool() so we execute the underlying specialist wrapper.
             output_filename_token = set_current_output_filename_stem(output_filename_descriptor)
+            output_source_node_ids = output_source_by_node_id.get(node_id, ())
+            source_node_labels = [
+                str(
+                    (nodes_by_id.get(source_node_id, {}).get("data") or {}).get(
+                        "agent_display_name"
+                    )
+                    or (nodes_by_id.get(source_node_id, {}).get("data") or {}).get(
+                        "agent_id"
+                    )
+                    or source_node_id
+                )
+                for source_node_id in output_source_node_ids
+            ]
+            output_attachment_token = (
+                set_current_flow_output_attachment(
+                    {
+                        "flow_id": str(flow.id),
+                        "flow_run_id": str(flow_run_id or ""),
+                        "formatter_node_id": node_id,
+                        "source_node_id": (
+                            output_source_node_ids[0] if output_source_node_ids else None
+                        ),
+                        "source_node_ids": list(output_source_node_ids),
+                        "formatter_label": str(
+                            node_data.get("agent_display_name") or agent_name or node_id
+                        ),
+                        "source_label": (
+                            source_node_labels[0] if source_node_labels else None
+                        ),
+                        "source_labels": source_node_labels,
+                        "document_id": str(document_id or ""),
+                    }
+                )
+                if output_source_node_ids
+                else None
+            )
             internal_event_cursor = _capture_internal_extraction_event_cursor()
             specialist_started_at = time.monotonic()
             projected_chat_output: str | None = None
             try:
-                direct_formatter_result = await _try_project_terminal_flow_output(
-                    agent_id=agent_id,
-                    completed_steps=execution_state["completed_steps"],
-                    flow_name=flow.name,
-                    agent_name=agent_name,
-                    flow_run_id=flow_run_id,
-                    document_id=document_id,
-                    projection_plan=(
-                        node_data.get("projection_plan")
-                        if isinstance(node_data.get("projection_plan"), Mapping)
-                        else None
-                    ),
-                    node_data=node_data,
-                    resolved_query=resolved_query,
-                    output_filename_descriptor=output_filename_descriptor,
-                )
-                if direct_formatter_result is not None:
-                    result = direct_formatter_result
-                    if agent_id in _FLOW_CHAT_FORMATTER_AGENT_IDS:
-                        projected_chat_output = direct_formatter_result
-                elif hasattr(tool_callable, "on_invoke_tool"):
+                if hasattr(tool_callable, "on_invoke_tool"):
                     # Newer openai-agents tool invokers dereference ctx.tool_name and,
-                    # on handled tool errors, ctx.run_config (0.17+). Reuse the flow
-                    # supervisor run's RunConfig (its warm websocket provider) so the
-                    # nested specialist run shares the same connection instead of opening
-                    # a new one; fall back to None when the SDK did not supply one.
+                    # on handled tool errors, ctx.run_config (0.17+). Pass the parent
+                    # RunConfig as a trace/template source; the flow tool wrapper clones
+                    # it onto a step-owned provider so each flow-step WebSocket closes
+                    # before the supervisor provider is torn down.
                     tool_ctx = SimpleNamespace(
                         tool_name=tool_name,
                         run_config=getattr(ctx, "run_config", None),
                     )
+                    tool_input = {"query": resolved_query}
+                    if _flow_file_output_format(agent_id) is not None:
+                        tool_input["output_filename_descriptor"] = (
+                            output_filename_descriptor or ""
+                        )
                     result = await tool_callable.on_invoke_tool(
                         tool_ctx,
-                        json.dumps({"query": resolved_query}),
+                        json.dumps(tool_input),
                     )
+                    if agent_id in _FLOW_CHAT_FORMATTER_AGENT_IDS:
+                        projected_chat_output = _stringify_tool_output(result)
                 else:
                     result = await tool_callable(query=resolved_query)
             finally:
+                if output_attachment_token is not None:
+                    reset_current_flow_output_attachment(output_attachment_token)
                 reset_current_output_filename_stem(output_filename_token)
                 phase_timings_ms["specialist_tool_invoke_ms"] = _elapsed_ms(
                     specialist_started_at
@@ -2797,6 +2617,14 @@ def get_all_agent_tools(
             if not used_internal_extraction_payload:
                 step_result = result
             result_text = _stringify_tool_output(step_result)
+            formatter_failure_output = (
+                _internal_specialist_tool_output_since(
+                    internal_event_cursor,
+                    tool_name="formatter_cannot_complete",
+                )
+                if _flow_file_output_format(agent_id) is not None
+                else None
+            )
             validation_schedule = validation_schedule_from_node_data(node_data)
             validation_schedule_metadata = (
                 {"validation_schedule": validation_schedule}
@@ -2909,11 +2737,17 @@ def get_all_agent_tools(
             }
             completed_step = {
                 "step": step_number,
+                "node_id": node_id,
                 "agent_id": agent_id,
                 "agent_name": agent_name,
                 "tool_name": tool_name,
                 "output": result_text,
                 "output_preview": _truncate_tool_output(result_text),
+                **(
+                    {"formatter_failure_output": formatter_failure_output}
+                    if formatter_failure_output is not None
+                    else {}
+                ),
                 "candidate": candidate,
                 "timing": step_timing,
                 **(
@@ -2928,7 +2762,7 @@ def get_all_agent_tools(
             if extraction_handoff_audit is not None:
                 completed_step["extraction_handoff_audit"] = extraction_handoff_audit
             execution_state["completed_steps"].append(completed_step)
-            execution_state["next_tool_index"] = next_idx + 1
+            execution_state["next_tool_index"] = claimed_step_index + 1
             phase_timings_ms["state_update_ms"] = _elapsed_ms(
                 state_update_started_at
             )
@@ -2985,11 +2819,79 @@ def get_all_agent_tools(
                 _emit_flow_runtime_event(flow_handoff_audit_event)
             return result
 
+        @function_tool(
+            name_override=tool_name,
+            description_override=description_override,
+            failure_error_function=None,
+        )
+        async def _ordered_tool(ctx: RunContextWrapper[Any], query: str) -> str:
+            claim_token = object()
+            async with execution_state["step_claim_lock"]:
+                next_idx = execution_state["next_tool_index"]
+                if next_idx >= len(ordered_tool_names):
+                    return (
+                        "All remaining flow steps are already complete. "
+                        "Summarize final output and stop."
+                    )
+
+                expected_tool = ordered_tool_names[next_idx]
+                in_flight_step = execution_state["in_flight_step"]
+                if in_flight_step is not None:
+                    active_tool = in_flight_step["tool_name"]
+                    if tool_name == active_tool:
+                        logger.info(
+                            "[Flow Executor] Rejected duplicate in-flight tool '%s'",
+                            tool_name,
+                        )
+                        return (
+                            f"Flow step tool '{tool_name}' is already in progress. "
+                            "Do not call it again."
+                        )
+                    logger.info(
+                        "[Flow Executor] Blocked tool '%s' while '%s' is in flight",
+                        tool_name,
+                        active_tool,
+                    )
+                    return (
+                        f"Flow step order is strict. The current step tool "
+                        f"'{active_tool}' is still in progress. Do not call "
+                        f"'{tool_name}' yet."
+                    )
+
+                if tool_name != expected_tool:
+                    logger.info(
+                        "[Flow Executor] Step order blocked tool '%s'; expected '%s' next",
+                        tool_name,
+                        expected_tool,
+                    )
+                    return (
+                        f"Flow step order is strict. The next required step tool is "
+                        f"'{expected_tool}'. Do not call '{tool_name}' yet."
+                    )
+
+                execution_state["in_flight_step"] = {
+                    "tool_name": tool_name,
+                    "step_index": next_idx,
+                    "claim_token": claim_token,
+                }
+
+            try:
+                return await _run_claimed_ordered_tool(ctx, query, next_idx)
+            finally:
+                async with execution_state["step_claim_lock"]:
+                    in_flight_step = execution_state["in_flight_step"]
+                    if (
+                        in_flight_step is not None
+                        and in_flight_step.get("claim_token") is claim_token
+                    ):
+                        execution_state["in_flight_step"] = None
+
         return _ordered_tool
 
     for node in nodes:
         data = node.get("data", {})
         agent_id = data.get("agent_id")
+        node_id = str(node.get("id") or "")
 
         step_num += 1
 
@@ -3060,7 +2962,11 @@ def get_all_agent_tools(
                 current_step_goal: Optional[str],
                 current_custom_instructions: Optional[str],
             ):
-                @function_tool(name_override=tool_name, description_override=tool_description)
+                @function_tool(
+                    name_override=tool_name,
+                    description_override=tool_description,
+                    failure_error_function=None,
+                )
                 async def _curation_prep_tool(query: str) -> str:
                     _ = (current_step_goal, current_custom_instructions, query)
                     if not document_id or not user_id or not session_id:
@@ -3068,34 +2974,53 @@ def get_all_agent_tools(
                             "Curation prep flow steps require document_id, user_id, and session_id."
                         )
 
-                    extraction_results = _build_flow_prep_extraction_results(
-                        completed_steps=execution_state["completed_steps"],
-                        document_id=document_id,
-                        user_id=user_id,
-                        session_id=session_id,
-                        flow_run_id=flow_run_id,
-                        conversation_summary=flow_conversation_summary,
-                    )
-                    if not extraction_results:
-                        raise RuntimeError(
-                            "Curation prep flow steps require at least one upstream extraction envelope."
-                        )
-
-                    prep_output = await run_curation_prep(
-                        extraction_results,
-                        scope_confirmation=_build_flow_scope_confirmation(
-                            extraction_results,
-                            flow_name=flow.name,
-                        ),
-                        persistence_context=CurationPrepPersistenceContext(
+                    prep_db = SessionLocal()
+                    try:
+                        extraction_results = _persist_flow_extraction_candidates(
+                            candidates=_collect_completed_step_candidates(
+                                execution_state["completed_steps"]
+                            ),
                             document_id=document_id,
-                            source_kind=CurationExtractionSourceKind.FLOW,
-                            origin_session_id=session_id,
+                            user_id=user_id,
+                            session_id=session_id,
                             trace_id=get_current_trace_id(),
                             flow_run_id=flow_run_id,
-                            user_id=user_id,
-                            conversation_summary=flow_conversation_summary,
-                        ),
+                            db=prep_db,
+                        )
+                        if not extraction_results:
+                            raise RuntimeError(
+                                "Curation prep flow steps require at least one upstream extraction envelope."
+                            )
+
+                        prep_output = await run_curation_prep(
+                            extraction_results,
+                            scope_confirmation=_build_flow_scope_confirmation(
+                                extraction_results,
+                                flow_name=flow.name,
+                            ),
+                            persistence_context=CurationPrepPersistenceContext(
+                                document_id=document_id,
+                                source_kind=CurationExtractionSourceKind.FLOW,
+                                origin_session_id=session_id,
+                                trace_id=get_current_trace_id(),
+                                flow_run_id=flow_run_id,
+                                user_id=user_id,
+                                conversation_summary=flow_conversation_summary,
+                                workflow="curation_prep_flow",
+                            ),
+                            db=prep_db,
+                        )
+                        prep_db.commit()
+                    except Exception:
+                        if prep_db.in_transaction():
+                            prep_db.rollback()
+                        raise
+                    finally:
+                        prep_db.close()
+
+                    _merge_persisted_flow_extraction_results(
+                        execution_state,
+                        extraction_results,
                     )
                     return prep_output.model_dump_json()
 
@@ -3111,7 +3036,11 @@ def get_all_agent_tools(
                 current_step_goal: Optional[str],
                 current_custom_instructions: Optional[str],
             ):
-                @function_tool(name_override=tool_name, description_override=tool_description)
+                @function_tool(
+                    name_override=tool_name,
+                    description_override=tool_description,
+                    failure_error_function=None,
+                )
                 async def _curation_handoff_tool(query: str) -> str:
                     _ = (current_step_goal, current_custom_instructions, query)
                     if not document_id or not user_id or not session_id:
@@ -3119,21 +3048,24 @@ def get_all_agent_tools(
                             "Curation handoff flow steps require document_id, user_id, and session_id."
                         )
 
-                    extraction_results = _build_flow_prep_extraction_results(
-                        completed_steps=execution_state["completed_steps"],
-                        document_id=document_id,
-                        user_id=user_id,
-                        session_id=session_id,
-                        flow_run_id=flow_run_id,
-                        conversation_summary=flow_conversation_summary,
-                    )
-                    if not extraction_results:
-                        raise RuntimeError(
-                            "Curation handoff flow steps require at least one upstream extraction envelope."
-                        )
-
                     handoff_db = SessionLocal()
                     try:
+                        extraction_results = _persist_flow_extraction_candidates(
+                            candidates=_collect_completed_step_candidates(
+                                execution_state["completed_steps"]
+                            ),
+                            document_id=document_id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            trace_id=get_current_trace_id(),
+                            flow_run_id=flow_run_id,
+                            db=handoff_db,
+                        )
+                        if not extraction_results:
+                            raise RuntimeError(
+                                "Curation handoff flow steps require at least one upstream extraction envelope."
+                            )
+
                         handoff_output = await run_flow_curation_handoff(
                             extraction_results=extraction_results,
                             document_id=document_id,
@@ -3143,6 +3075,10 @@ def get_all_agent_tools(
                             conversation_summary=flow_conversation_summary,
                             db=handoff_db,
                         )
+                    except Exception:
+                        if handoff_db.in_transaction():
+                            handoff_db.rollback()
+                        raise
                     finally:
                         handoff_db.close()
 
@@ -3150,6 +3086,10 @@ def get_all_agent_tools(
                         "review_session_ids": handoff_output.review_session_ids,
                         "adapter_keys": handoff_output.adapter_keys,
                     }
+                    _merge_persisted_flow_extraction_results(
+                        execution_state,
+                        extraction_results,
+                    )
                     execution_state["curation_handoff"] = handoff_state
                     return json.dumps(handoff_state)
 
@@ -3172,41 +3112,76 @@ def get_all_agent_tools(
             agent_kwargs = dict(context)
             if step_instruction_prefix:
                 agent_kwargs["additional_runtime_context"] = [step_instruction_prefix]
-            try:
-                agent = get_agent_by_id(agent_id, **agent_kwargs)
-            except Exception as e:
-                logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
-                unavailable_steps.append({
-                    "step": step_num,
-                    "agent_id": agent_id,
-                    "agent_name": entry.get("name", agent_id),
-                    "reason": str(e),
-                })
-                continue
-
-            if step_instruction_prefix:
-                applied_overrides: List[str] = []
-                if custom_instr and custom_instr.strip():
-                    applied_overrides.append("custom_instructions")
-                if include_evidence is not None:
-                    applied_overrides.append("include_evidence")
-                logger.info(
-                    "[Flow Executor] Prepended step-local instructions to agent '%s' step %s (%s)",
-                    agent_id,
-                    step_num,
-                    ", ".join(applied_overrides),
+            output_format = _resolve_flow_terminal_output_format(agent_id)
+            file_output_format = _flow_file_output_format(agent_id)
+            if file_output_format is not None:
+                raw_streaming_tool = _make_flow_runtime_formatter_tool(
+                    agent_id=agent_id,
+                    agent_name=entry.get("name", agent_id),
+                    output_format=file_output_format,
+                    tool_name=tool_name,
+                    tool_description=tool_description,
+                    specialist_name=specialist_name,
+                    base_context=agent_kwargs,
+                    step_instruction_prefix=step_instruction_prefix,
+                    completed_steps=execution_state["completed_steps"],
+                    flow_name=flow.name,
+                    flow_run_id=flow_run_id,
+                    document_id=document_id,
+                    node_data=data,
+                    source_node_ids=output_source_by_node_id.get(node_id),
                 )
+            elif output_format == "chat":
+                raw_streaming_tool = _make_flow_chat_output_tool(
+                    agent_id=agent_id,
+                    output_format=output_format,
+                    tool_name=tool_name,
+                    tool_description=tool_description,
+                    completed_steps=execution_state["completed_steps"],
+                    flow_name=flow.name,
+                    flow_run_id=flow_run_id,
+                    document_id=document_id,
+                    node_data=data,
+                    source_node_ids=output_source_by_node_id.get(node_id),
+                )
+            else:
+                try:
+                    agent = get_agent_by_id(agent_id, **agent_kwargs)
+                except Exception as e:
+                    logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
+                    unavailable_steps.append({
+                        "step": step_num,
+                        "agent_id": agent_id,
+                        "agent_name": entry.get("name", agent_id),
+                        "reason": str(e),
+                    })
+                    continue
 
-            raw_streaming_tool = _create_streaming_tool(
-                agent=agent,
-                tool_name=tool_name,
-                tool_description=tool_description,
-                specialist_name=specialist_name,
-                # Flow execution: flows persist their own FLOW-source extraction rows;
-                # inline CHAT persistence must not fire here (would write a shadow
-                # CHAT-source row in addition to the FLOW-source row).
-                inline_chat_persistence=False,
-            )
+                if step_instruction_prefix:
+                    applied_overrides: List[str] = []
+                    if custom_instr and custom_instr.strip():
+                        applied_overrides.append("custom_instructions")
+                    if include_evidence is not None:
+                        applied_overrides.append("include_evidence")
+                    logger.info(
+                        "[Flow Executor] Prepended step-local instructions to agent '%s' step %s (%s)",
+                        agent_id,
+                        step_num,
+                        ", ".join(applied_overrides),
+                    )
+
+                raw_streaming_tool = _create_streaming_tool(
+                    agent=agent,
+                    tool_name=tool_name,
+                    tool_description=tool_description,
+                    specialist_name=specialist_name,
+                    # Flow execution: flows persist their own FLOW-source extraction rows;
+                    # inline CHAT persistence must not fire here (would write a shadow
+                    # CHAT-source row in addition to the FLOW-source row).
+                    inline_chat_persistence=False,
+                    isolate_run_config=True,
+                    propagate_errors=True,
+                )
 
         curation = entry.get("curation")
         curation_adapter_key = (
@@ -3230,6 +3205,7 @@ def get_all_agent_tools(
             node_data=data,
             curation_adapter_key=curation_adapter_key,
             candidate_expected_from=candidate_expected_from,
+            node_id=node_id,
         )
 
         logger.info('[Flow Executor] Created streaming tool: %s (%s)', tool_name, specialist_name)
@@ -3411,7 +3387,9 @@ def build_flow_prompt(
 
     # Extract task_instructions from task_input node (if present)
     task_instructions = get_task_instructions(flow)
-    if task_instructions:
+    if task_instructions and not (
+        user_query and _task_instructions_are_default_only(flow)
+    ):
         prompt_parts.append(f"Task Instructions:\n{task_instructions}")
 
     # NOTE: Don't add document_id to prompt - PDF agent's tools already have document context
@@ -3486,6 +3464,7 @@ def create_flow_supervisor(
         temperature=config.temperature,
         reasoning_effort=config.reasoning,
         provider_override=model_provider,
+        parallel_tool_calls=get_flow_supervisor_parallel_tool_calls_enabled(),
     )
 
     # Get all tools with flow-based is_enabled
@@ -3561,47 +3540,50 @@ def _persist_flow_extraction_candidates(
     session_id: str,
     trace_id: Optional[str],
     flow_run_id: Optional[str],
+    db: Session | None = None,
 ) -> list[CurationExtractionResultRecord]:
     """Persist flow-produced extraction envelopes and return stored records."""
 
     if not candidates or not document_id:
         return []
 
-    normalized_flow_run_id = str(flow_run_id or "").strip() or None
-    existing_by_key: dict[str, CurationExtractionResultRecord] = {}
-    if normalized_flow_run_id is not None:
-        existing_results = list_extraction_results(
-            document_id=document_id,
-            flow_run_id=normalized_flow_run_id,
-            origin_session_id=session_id,
-            user_id=user_id,
-            source_kind=CurationExtractionSourceKind.FLOW,
-        )
-        existing_by_key = {
-            key: result
-            for result in existing_results
-            if (key := _flow_record_persistence_key(result))
-        }
-
-    ordered_records: list[CurationExtractionResultRecord] = []
     requests: list[CurationExtractionPersistenceRequest] = []
-    request_keys: list[str] = []
     for candidate in candidates:
+        _validate_flow_extraction_candidate_payload(candidate.payload_json)
+        payload_json = _sanitize_flow_extraction_candidate_payload(candidate.payload_json)
         flow_step_key = _flow_candidate_persistence_key(candidate)
-        if flow_step_key in existing_by_key:
-            ordered_records.append(existing_by_key[flow_step_key])
-            continue
-
         metadata = dict(candidate.metadata)
-        if flow_step_key:
-            metadata["flow_step_key"] = flow_step_key
+        metadata.setdefault(
+            "envelope_id",
+            _flow_candidate_envelope_id(
+                candidate,
+                session_id=session_id,
+                flow_run_id=flow_run_id,
+            ),
+        )
+        metadata["flow_step_key"] = flow_step_key
+        adapter_key = _resolve_flow_candidate_adapter_key(candidate) or candidate.agent_key
+        payload_hash = canonical_extraction_payload_hash(payload_json)
+        idempotency_key = build_flow_extraction_idempotency_key(
+            document_id=document_id,
+            user_id=user_id,
+            origin_session_id=session_id,
+            flow_run_id=flow_run_id,
+            adapter_key=adapter_key,
+            agent_key=candidate.agent_key,
+            source_kind=CurationExtractionSourceKind.FLOW,
+            candidate_identity=flow_step_key,
+        )
+        metadata.update(
+            {
+                "idempotency_key": idempotency_key,
+                "payload_hash": payload_hash,
+            }
+        )
         requests.append(
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
-                adapter_key=(
-                    _resolve_flow_candidate_adapter_key(candidate)
-                    or candidate.agent_key
-                ),
+                adapter_key=adapter_key,
                 agent_key=candidate.agent_key,
                 source_kind=CurationExtractionSourceKind.FLOW,
                 origin_session_id=session_id,
@@ -3610,46 +3592,47 @@ def _persist_flow_extraction_candidates(
                 user_id=user_id,
                 candidate_count=candidate.candidate_count,
                 conversation_summary=candidate.conversation_summary,
-                payload_json=candidate.payload_json,
+                payload_json=payload_json,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
                 metadata=metadata,
             )
         )
-        request_keys.append(flow_step_key)
 
-    if requests:
-        responses = persist_extraction_results(requests)
-        persisted_by_key = {
-            key: response.extraction_result
-            for key, response in zip(request_keys, responses)
-        }
-        for candidate in candidates:
-            flow_step_key = _flow_candidate_persistence_key(candidate)
-            if flow_step_key in existing_by_key:
-                continue
-            persisted = persisted_by_key.get(flow_step_key)
-            if persisted is not None:
-                ordered_records.append(persisted)
+    persistence_responses = (
+        persist_idempotent_extraction_results(requests, db=db)
+        if db is not None
+        else persist_idempotent_extraction_results(requests)
+    )
+    ordered_records = [
+        response.extraction_result for response in persistence_responses
+    ]
 
-    _materialize_flow_domain_envelope_records(ordered_records)
+    _materialize_flow_domain_envelope_records(ordered_records, db=db)
     return ordered_records
 
 
 def _materialize_flow_domain_envelope_records(
     records: list[CurationExtractionResultRecord],
+    *,
+    db: Session | None = None,
 ) -> None:
     """Ensure flow-persisted domain-envelope extraction records get review rows."""
 
     for record in records:
-        if not _is_flow_domain_envelope_payload(record.payload_json):
+        if not _is_flow_domain_envelope_source_payload(record.payload_json):
             continue
-        ensure_domain_envelope_materialization(record, persist=True)
+        if db is None:
+            ensure_domain_envelope_materialization(record, persist=True)
+        else:
+            ensure_domain_envelope_materialization(record, persist=True, db=db)
 
 
-def _is_flow_domain_envelope_payload(payload: Any) -> bool:
+def _is_flow_domain_envelope_source_payload(payload: Any) -> bool:
     if not isinstance(payload, Mapping):
         return False
-    if {"envelope_id", "domain_pack_id", "objects"}.issubset(payload):
-        return isinstance(payload.get("objects"), list)
+    if is_canonical_domain_envelope_payload(payload):
+        return True
     return isinstance(payload.get("curatable_objects"), list)
 
 
@@ -3690,6 +3673,36 @@ def _merge_persisted_flow_extraction_results(
             continue
         refs.append(_flow_extraction_result_ref(record))
         seen.add(record_id)
+
+
+def _report_flow_extraction_persistence_failure(
+    exc: BaseException,
+    *,
+    operation: str,
+    document_id: Optional[str],
+    session_id: str,
+    trace_id: Optional[str],
+    flow_run_id: Optional[str],
+    candidate_count: int,
+    extraction_output_required: bool,
+    persisted_count: int | None = None,
+) -> None:
+    context: dict[str, Any] = {
+        "document_id": document_id,
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "flow_run_id": flow_run_id,
+        "candidate_count": candidate_count,
+        "extraction_output_required": extraction_output_required,
+    }
+    if persisted_count is not None:
+        context["persisted_count"] = persisted_count
+    report_runtime_exception(
+        exc,
+        component="flow_executor",
+        operation=operation,
+        context=context,
+    )
 
 
 def _persist_flow_extraction_candidates_or_build_error(
@@ -3781,10 +3794,21 @@ def _persist_flow_extraction_candidates_or_build_error(
             flow_run_id=flow_run_id,
         )
     except Exception as exc:
+        _report_flow_extraction_persistence_failure(
+            exc,
+            operation="extraction_persistence_failed",
+            document_id=document_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+            candidate_count=len(candidates),
+            extraction_output_required=extraction_output_required,
+        )
         failure_reason = f"Failed to persist extraction results for flow '{flow_name}'. {exc}"
-        logger.exception(
-            "[Flow Executor] Extraction persistence failed for flow '%s'",
+        logger.warning(
+            "[Flow Executor] Extraction persistence failed for flow '%s': %s",
             flow_name,
+            exc,
             extra={
                 "document_id": document_id,
                 "session_id": session_id,
@@ -3806,6 +3830,17 @@ def _persist_flow_extraction_candidates_or_build_error(
         )
 
     if extraction_output_required and not persisted_records:
+        _report_flow_extraction_persistence_failure(
+            RuntimeError("flow_extraction_persistence_empty_result"),
+            operation="extraction_persistence_empty_result",
+            document_id=document_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+            candidate_count=len(candidates),
+            extraction_output_required=extraction_output_required,
+            persisted_count=0,
+        )
         failure_reason = (
             f"Flow '{flow_name}' expected persisted extraction results, but "
             "persistence returned no records."
@@ -3824,6 +3859,17 @@ def _persist_flow_extraction_candidates_or_build_error(
             [],
         )
     if extraction_output_required and len(persisted_records) < len(candidates):
+        _report_flow_extraction_persistence_failure(
+            RuntimeError("flow_extraction_persistence_partial_result"),
+            operation="extraction_persistence_partial_result",
+            document_id=document_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+            candidate_count=len(candidates),
+            extraction_output_required=extraction_output_required,
+            persisted_count=len(persisted_records),
+        )
         failure_reason = (
             f"Flow '{flow_name}' persisted only {len(persisted_records)} of "
             f"{len(candidates)} required extraction candidate(s)."
@@ -3942,6 +3988,8 @@ async def execute_flow(
         f"user_id={user_id}, session_id={session_id}"
     )
     flow_run_id = flow_run_id or str(uuid4())
+    set_current_session_id(session_id)
+    set_current_user_id(str(user_id))
 
     # Pre-fetch document context BEFORE creating supervisor (optimization)
     # This matches how chat pre-fetches and passes through to avoid redundant Weaviate queries
@@ -4025,10 +4073,102 @@ async def execute_flow(
     trace_id: Optional[str] = None
     extraction_persisted = False
     curation_handoff_emitted = False
-    pending_terminal_output_event: Optional[dict[str, Any]] = None
+    pending_output_events: list[dict[str, Any]] = []
+    pending_run_finished_event: Optional[dict[str, Any]] = None
     flow_execution_state = supervisor._flow_execution_state
     completed_steps = flow_execution_state["completed_steps"]
     evidence_registry = flow_execution_state["evidence_registry"]
+    consumed_tool_completions: set[str] = {
+        str(step.get("tool_name") or "").strip()
+        for step in completed_steps
+        if str(step.get("tool_name") or "").strip()
+    }
+
+    def _missing_consumed_tool_completions() -> list[str]:
+        return [
+            tool_name
+            for tool_name in flow_execution_state.get("ordered_tool_names") or []
+            if tool_name not in consumed_tool_completions
+        ]
+
+    flow_projection = project_executable_flow_graph(flow.flow_definition or {})
+    flow_nodes_by_id = {
+        str(node.get("id")): node
+        for node in (flow.flow_definition.get("nodes") or [])
+        if node.get("id")
+    }
+    expected_output_attachments = [
+        {
+            **attachment.to_dict(),
+            "agent_id": str(
+                (
+                    flow_nodes_by_id.get(attachment.output_node_id, {}).get("data")
+                    or {}
+                ).get("agent_id")
+                or ""
+            ),
+            "formatter_label": str(
+                (
+                    flow_nodes_by_id.get(attachment.output_node_id, {}).get("data")
+                    or {}
+                ).get("agent_display_name")
+                or (
+                    flow_nodes_by_id.get(attachment.output_node_id, {}).get("data")
+                    or {}
+                ).get("agent_id")
+                or attachment.output_node_id
+            ),
+            "source_node_ids": list(attachment.source_node_ids),
+            "source_labels": [
+                str(
+                    (
+                        flow_nodes_by_id.get(source_node_id, {}).get("data") or {}
+                    ).get("agent_display_name")
+                    or (
+                        flow_nodes_by_id.get(source_node_id, {}).get("data") or {}
+                    ).get("agent_id")
+                    or source_node_id
+                )
+                for source_node_id in attachment.source_node_ids
+            ],
+        }
+        for attachment in flow_projection.output_attachments
+    ]
+    for attachment in expected_output_attachments:
+        attachment["source_label"] = (
+            attachment["source_labels"][0] if attachment["source_labels"] else ""
+        )
+    output_source_by_node_id = {
+        attachment["output_node_id"]: tuple(attachment["source_node_ids"])
+        for attachment in expected_output_attachments
+    }
+    output_attachment_by_node_id = {
+        attachment["output_node_id"]: attachment
+        for attachment in expected_output_attachments
+    }
+
+    def _queue_output_event(output_event: dict[str, Any]) -> None:
+        details = output_event.get("details") or {}
+        event_type = str(output_event.get("type") or "")
+        identity = (
+            event_type,
+            str(details.get("formatter_node_id") or ""),
+            str(details.get("file_id") or details.get("output") or ""),
+        )
+        for existing in pending_output_events:
+            existing_details = existing.get("details") or {}
+            existing_identity = (
+                str(existing.get("type") or ""),
+                str(existing_details.get("formatter_node_id") or ""),
+                str(
+                    existing_details.get("file_id")
+                    or existing_details.get("output")
+                    or ""
+                ),
+            )
+            if identity == existing_identity:
+                return
+        pending_output_events.append(output_event)
 
     async for event in run_agent_streamed(
         context_messages=[{"role": "user", "content": prompt}],
@@ -4040,6 +4180,13 @@ async def execute_flow(
         agent=supervisor,  # Pass the flow supervisor
         doc_context=doc_context,  # Pass pre-fetched context (optimization)
         trace_context=trace_context,
+        sentry_workflow="execute_flow",
+        sentry_span_data={
+            "ai_curation.flow.id": str(flow.id),
+            "ai_curation.flow.name": flow.name,
+            "ai_curation.flow.run_id": flow_run_id,
+            "ai_curation.flow.total_steps": total_steps,
+        },
     ):
         event_type = event.get("type")
         event_data = event.get("data", {}) or {}
@@ -4050,14 +4197,63 @@ async def execute_flow(
         if event_type == "RUN_STARTED" and "trace_id" in event_data:
             trace_id = event_data.get("trace_id")
 
+        if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
+            output_event = dict(event)
+            output_details = dict(output_event.get("details") or {})
+            if event_type == "CHAT_OUTPUT_READY" and not output_details.get(
+                "formatter_node_id"
+            ):
+                chat_step = next(
+                    (
+                        step
+                        for step in reversed(completed_steps)
+                        if str(step.get("agent_id") or "")
+                        in {"chat_output", "chat_output_formatter"}
+                    ),
+                    None,
+                )
+                if chat_step is not None:
+                    formatter_node_id = str(chat_step.get("node_id") or "")
+                    output_details["formatter_node_id"] = formatter_node_id or None
+                    attachment = output_attachment_by_node_id.get(formatter_node_id, {})
+                    source_node_ids = list(
+                        output_source_by_node_id.get(formatter_node_id, ())
+                    )
+                    output_details["source_node_id"] = (
+                        source_node_ids[0] if source_node_ids else None
+                    )
+                    output_details["source_node_ids"] = source_node_ids
+                    output_details["formatter_label"] = attachment.get("formatter_label")
+                    output_details["source_label"] = attachment.get("source_label")
+                    output_details["source_labels"] = attachment.get("source_labels", [])
+                    output_event["details"] = output_details
+            _queue_output_event(output_event)
+            missing_steps = _missing_consumed_tool_completions()
+            if missing_steps:
+                logger.info(
+                    "[Flow Executor] Deferring terminal %s for flow '%s' until all "
+                    "required steps complete; missing=%s",
+                    event_type,
+                    flow.name,
+                    missing_steps,
+                )
+                continue
+            logger.info(
+                "[Flow Executor] Buffering terminal %s for flow '%s' until "
+                "post-loop validation and persistence complete",
+                event_type,
+                flow.name,
+            )
+            break
+
         flow_step_evidence_event: Optional[dict[str, Any]] = None
         flow_validator_audit_events: list[dict[str, Any]] = []
-        projected_chat_ready_event: Optional[dict[str, Any]] = None
         if event_type == "TOOL_COMPLETE":
             details = event.get("details", {}) or {}
             tool_name = str(details.get("toolName") or "").strip()
             completed_step = _find_completed_step_by_tool_name(completed_steps, tool_name)
             if completed_step is not None:
+                consumed_tool_completions.add(tool_name)
                 flow_validator_audit_events = (
                     _build_flow_validator_lookup_audit_events(completed_step)
                 )
@@ -4082,50 +4278,70 @@ async def execute_flow(
                 }
                 projected_chat_output = completed_step.get("projected_chat_output")
                 if isinstance(projected_chat_output, str):
-                    projected_chat_ready_event = {
-                        "type": "CHAT_OUTPUT_READY",
-                        "timestamp": _now_iso(),
-                        "details": {
-                            "output": projected_chat_output,
-                            "output_preview": _truncate_tool_output(
-                                projected_chat_output,
-                                max_chars=200,
-                            ),
-                            "output_length": len(projected_chat_output),
-                        },
-                    }
-            if (
-                pending_terminal_output_event is not None
-                and not _missing_required_flow_steps(flow_execution_state)
-            ):
+                    formatter_node_id = str(completed_step.get("node_id") or "")
+                    _queue_output_event(
+                        {
+                            "type": "CHAT_OUTPUT_READY",
+                            "timestamp": _now_iso(),
+                            "details": {
+                                "output": projected_chat_output,
+                                "output_preview": _truncate_tool_output(projected_chat_output),
+                                "output_length": len(projected_chat_output),
+                                "formatter_node_id": formatter_node_id or None,
+                                "source_node_id": (
+                                    output_source_by_node_id.get(formatter_node_id, (None,))[0]
+                                ),
+                                "source_node_ids": list(
+                                    output_source_by_node_id.get(formatter_node_id, ())
+                                ),
+                                "formatter_label": output_attachment_by_node_id.get(
+                                    formatter_node_id, {}
+                                ).get("formatter_label"),
+                                "source_label": output_attachment_by_node_id.get(
+                                    formatter_node_id, {}
+                                ).get("source_label"),
+                                "source_labels": output_attachment_by_node_id.get(
+                                    formatter_node_id, {}
+                                ).get("source_labels", []),
+                            },
+                        }
+                    )
+            terminal_output_ready = bool(pending_output_events) and not (
+                _missing_consumed_tool_completions()
+            )
+            if terminal_output_ready:
                 yield event
                 for flow_validator_audit_event in flow_validator_audit_events:
                     yield flow_validator_audit_event
                 if flow_step_evidence_event is not None:
                     yield flow_step_evidence_event
-                event = pending_terminal_output_event
-                event_type = str(event.get("type") or "")
-                event_data = event.get("data", {}) or {}
-                pending_terminal_output_event = None
+                curation_handoff_state = flow_execution_state.get("curation_handoff")
+                if (
+                    not curation_handoff_emitted
+                    and isinstance(curation_handoff_state, Mapping)
+                    and not _missing_consumed_tool_completions()
+                ):
+                    curation_handoff_emitted = True
+                    yield {
+                        "type": CURATION_HANDOFF_READY_EVENT,
+                        "timestamp": _now_iso(),
+                        "details": {
+                            "review_session_ids": list(
+                                curation_handoff_state.get("review_session_ids") or []
+                            ),
+                            "adapter_keys": list(
+                                curation_handoff_state.get("adapter_keys") or []
+                            ),
+                            "document_id": document_id,
+                        },
+                    }
+                    logger.info(
+                        "[Flow Executor] Curation handoff produced for flow '%s'",
+                        flow.name,
+                    )
                 flow_validator_audit_events = []
                 flow_step_evidence_event = None
-
-        if projected_chat_ready_event is not None:
-            yield event
-            for flow_validator_audit_event in flow_validator_audit_events:
-                yield flow_validator_audit_event
-            if flow_step_evidence_event is not None:
-                yield flow_step_evidence_event
-            event = projected_chat_ready_event
-            event_type = "CHAT_OUTPUT_READY"
-            event_data = event.get("data", {}) or {}
-            flow_validator_audit_events = []
-            flow_step_evidence_event = None
-
-        # Terminate flow after output is produced
-        # FILE_READY indicates a file output agent (CSV, TSV, JSON) completed
-        # CHAT_OUTPUT_READY indicates chat output agent completed
-        # This prevents the supervisor from looping back to call agents again
+                break
         if event_type == "SPECIALIST_ERROR":
             yield event
             details = event.get("details", {}) or {}
@@ -4186,86 +4402,22 @@ async def execute_flow(
                 },
             }
             break
-        if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
-            missing_steps = _missing_required_flow_steps(flow_execution_state)
+        if event_type == "RUN_FINISHED":
+            pending_run_finished_event = dict(event)
+            missing_steps = _missing_consumed_tool_completions()
             if missing_steps:
-                if event_type == "FILE_READY":
-                    pending_terminal_output_event = event
-                    logger.info(
-                        "[Flow Executor] Deferring terminal FILE_READY for flow '%s' "
-                        "until required step state catches up; missing=%s",
-                        flow.name,
-                        missing_steps,
-                    )
-                    continue
-                failure_reason, flow_error_event = _flow_incomplete_error_event(
-                    flow_name=flow.name,
-                    missing_steps=missing_steps,
+                logger.info(
+                    "[Flow Executor] Deferring terminal %s for flow '%s' until all "
+                    "required steps complete; missing=%s",
+                    event_type,
+                    flow.name,
+                    missing_steps,
                 )
-                flow_status = "failed"
-                yield flow_error_event
-                break
-
-            handoff_failures = _flow_expected_extraction_handoff_failures(completed_steps)
-            if handoff_failures:
-                failure_reason, flow_error_event = (
-                    _flow_expected_extraction_output_error_event(
-                        flow_name=flow.name,
-                        failures=handoff_failures,
-                        completed_steps=completed_steps,
-                    )
-                )
-                flow_status = "failed"
-                yield flow_error_event
-                break
-
-            extraction_candidates = _collect_completed_step_candidates(completed_steps)
-            extraction_output_required = (
-                _flow_extraction_output_expected(completed_steps)
-                or bool(extraction_candidates)
-            )
-            persisted, failure_reason, flow_error_event, persisted_records = (
-                _persist_flow_extraction_candidates_or_build_error(
-                    flow_name=flow.name,
-                    candidates=extraction_candidates,
-                    document_id=document_id,
-                    user_id=str(user_id),
-                    session_id=session_id,
-                    trace_id=trace_id,
-                    flow_run_id=flow_run_id,
-                    extraction_output_required=extraction_output_required,
-                )
-            )
-            if not persisted:
-                _apply_persisted_result_counts_to_handoff_audits(
-                    completed_steps,
-                    persisted_records,
-                    persistence_status="failed",
-                    persistence_error_reason=failure_reason,
-                )
-                flow_status = "failed"
-                if flow_error_event is not None:
-                    flow_error_event = _attach_extraction_handoff_audits_to_flow_error(
-                        flow_error_event,
-                        completed_steps,
-                    )
-                    yield flow_error_event
-                break
-
-            extraction_persisted = True
-            _apply_persisted_result_counts_to_handoff_audits(
-                completed_steps,
-                persisted_records,
-                persistence_status="success",
-            )
-            _merge_persisted_flow_extraction_results(
-                flow_execution_state,
-                persisted_records,
-            )
-            yield event
+                continue
             logger.info(
-                "[Flow Executor] %s produced - terminating flow '%s'",
-                "Output file" if event_type == "FILE_READY" else "Chat output",
+                "[Flow Executor] Buffering terminal %s for flow '%s' until "
+                "post-loop validation and persistence complete",
+                event_type,
                 flow.name,
             )
             break
@@ -4279,17 +4431,8 @@ async def execute_flow(
         if (
             not curation_handoff_emitted
             and isinstance(curation_handoff_state, Mapping)
+            and not _missing_consumed_tool_completions()
         ):
-            missing_steps = _missing_required_flow_steps(flow_execution_state)
-            if missing_steps:
-                failure_reason, flow_error_event = _flow_incomplete_error_event(
-                    flow_name=flow.name,
-                    missing_steps=missing_steps,
-                )
-                flow_status = "failed"
-                yield flow_error_event
-                break
-
             curation_handoff_emitted = True
             yield {
                 "type": CURATION_HANDOFF_READY_EVENT,
@@ -4317,10 +4460,13 @@ async def execute_flow(
             flow_status = "failed"
             yield flow_error_event
 
-    if flow_status != "failed" and not extraction_persisted:
+    output_prerequisites_valid = extraction_persisted
+    if not extraction_persisted and (
+        flow_status != "failed" or bool(pending_output_events)
+    ):
         handoff_failures = _flow_expected_extraction_handoff_failures(completed_steps)
         if handoff_failures:
-            failure_reason, flow_error_event = (
+            handoff_failure_reason, flow_error_event = (
                 _flow_expected_extraction_output_error_event(
                     flow_name=flow.name,
                     failures=handoff_failures,
@@ -4328,6 +4474,7 @@ async def execute_flow(
                 )
             )
             flow_status = "failed"
+            failure_reason = handoff_failure_reason
             yield flow_error_event
         else:
             extraction_candidates = _collect_completed_step_candidates(completed_steps)
@@ -4335,7 +4482,7 @@ async def execute_flow(
                 _flow_extraction_output_expected(completed_steps)
                 or bool(extraction_candidates)
             )
-            persisted, failure_reason, flow_error_event, persisted_records = (
+            persisted, persistence_failure_reason, flow_error_event, persisted_records = (
                 _persist_flow_extraction_candidates_or_build_error(
                     flow_name=flow.name,
                     candidates=extraction_candidates,
@@ -4352,9 +4499,10 @@ async def execute_flow(
                     completed_steps,
                     persisted_records,
                     persistence_status="failed",
-                    persistence_error_reason=failure_reason,
+                    persistence_error_reason=persistence_failure_reason,
                 )
                 flow_status = "failed"
+                failure_reason = persistence_failure_reason
                 if flow_error_event is not None:
                     flow_error_event = _attach_extraction_handoff_audits_to_flow_error(
                         flow_error_event,
@@ -4363,6 +4511,7 @@ async def execute_flow(
                     yield flow_error_event
             else:
                 extraction_persisted = True
+                output_prerequisites_valid = True
                 _apply_persisted_result_counts_to_handoff_audits(
                     completed_steps,
                     persisted_records,
@@ -4372,6 +4521,117 @@ async def execute_flow(
                     flow_execution_state,
                     persisted_records,
                 )
+
+    produced_output_events: list[dict[str, Any]] = []
+    if output_prerequisites_valid:
+        produced_output_events = pending_output_events
+        for output_event in produced_output_events:
+            yield output_event
+
+    output_events_by_formatter_node_id = {
+        str((output_event.get("details") or {}).get("formatter_node_id") or ""):
+        output_event
+        for output_event in produced_output_events
+        if str((output_event.get("details") or {}).get("formatter_node_id") or "")
+    }
+    completed_steps_by_node_id = {
+        str(step.get("node_id") or ""): step
+        for step in completed_steps
+        if str(step.get("node_id") or "")
+    }
+
+    def _build_output_branch_outcome(attachment: dict[str, Any]) -> dict[str, Any]:
+        output_node_id = attachment["output_node_id"]
+        output_event = output_events_by_formatter_node_id.get(output_node_id)
+        if output_event is not None:
+            return {
+                **attachment,
+                "status": "completed",
+                "output": {
+                    "type": output_event.get("type"),
+                    **dict(output_event.get("details") or {}),
+                },
+            }
+
+        branch_outcome = {
+            **attachment,
+            "status": "missing",
+            "output": None,
+        }
+        completed_step = completed_steps_by_node_id.get(output_node_id)
+        if output_prerequisites_valid and completed_step is not None:
+            branch_failure_reason = _flow_formatter_failure_reason(completed_step)
+            if branch_failure_reason:
+                branch_outcome["failure_reason"] = branch_failure_reason
+        return branch_outcome
+
+    output_branches = [
+        _build_output_branch_outcome(attachment)
+        for attachment in expected_output_attachments
+    ]
+    missing_output_branches = [
+        branch for branch in output_branches if branch["status"] != "completed"
+    ]
+    if expected_output_attachments and not produced_output_events:
+        output_status = "none"
+        if flow_status != "failed":
+            flow_status = "failed"
+            branch_failure_reasons = [
+                str(branch.get("failure_reason") or "").strip()
+                for branch in missing_output_branches
+                if str(branch.get("failure_reason") or "").strip()
+            ]
+            failure_reason = (
+                f"Formatter could not create an output: {branch_failure_reasons[0]}"
+                if branch_failure_reasons
+                else (
+                    f"Flow '{flow.name}' did not produce an output for any configured "
+                    "formatter attachment."
+                )
+            )
+            yield {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "missing_formatter_outputs",
+                    "message": failure_reason,
+                    "missing_output_node_ids": [
+                        branch["output_node_id"] for branch in missing_output_branches
+                    ],
+                    "output_branches": missing_output_branches,
+                },
+            }
+    elif missing_output_branches or flow_status == "failed":
+        output_status = "partial" if produced_output_events else "none"
+        if missing_output_branches and produced_output_events:
+            yield {
+                "type": "DOMAIN_WARNING",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "partial_formatter_outputs",
+                    "message": (
+                        f"Flow '{flow.name}' produced {len(produced_output_events)} "
+                        "output(s), but one or more formatter branches produced no output."
+                    ),
+                    "missing_output_node_ids": [
+                        branch["output_node_id"] for branch in missing_output_branches
+                    ],
+                    "output_branches": missing_output_branches,
+                },
+            }
+    else:
+        output_status = "complete" if produced_output_events else "none"
+
+    # Preserve current main's raw-response fallback for flows without explicit
+    # output attachments. Typed formatter branches are authoritative whenever
+    # they exist and must not be accompanied by the runner's generic response.
+    if (
+        flow_status == "completed"
+        and not expected_output_attachments
+        and not produced_output_events
+        and pending_run_finished_event is not None
+    ):
+        yield pending_run_finished_event
 
     # Emit flow-specific completion event
     yield {
@@ -4384,6 +4644,16 @@ async def execute_flow(
             "document_id": document_id,
             "origin_session_id": session_id,
             "status": flow_status,
+            "output_status": output_status,
+            "output_count": len(produced_output_events),
+            "outputs": [
+                {
+                    "type": output_event.get("type"),
+                    **dict(output_event.get("details") or {}),
+                }
+                for output_event in produced_output_events
+            ],
+            "output_branches": output_branches,
             "failure_reason": failure_reason,
             "total_evidence_records": len(evidence_registry.records()),
             "step_evidence_counts": _build_step_evidence_counts(completed_steps),

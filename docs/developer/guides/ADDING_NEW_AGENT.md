@@ -296,11 +296,10 @@ agent_bundles:
 ```
 
 Then install or update the package under `~/.agr_ai_curation/runtime/packages/`
-and restart the backend:
+and rerun the guarded production start-and-verify stage:
 
 ```bash
-docker compose --env-file ~/.agr_ai_curation/.env \
-  -f docker-compose.production.yml restart backend
+scripts/install/install.sh --from-stage 6
 ```
 
 Repo-maintainer note:
@@ -321,11 +320,10 @@ python3 -c "import yaml; yaml.safe_load(open('$HOME/.agr_ai_curation/runtime/pac
 python3 -c "import yaml; yaml.safe_load(open('$HOME/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent/prompt.yaml'))"
 ```
 
-#### Restart Backend
+#### Restart and verify the production stack
 
 ```bash
-docker compose --env-file ~/.agr_ai_curation/.env \
-  -f docker-compose.production.yml restart backend
+scripts/install/install.sh --from-stage 6
 ```
 
 #### Test in Chat

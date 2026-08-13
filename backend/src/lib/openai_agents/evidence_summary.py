@@ -1159,7 +1159,7 @@ def _extract_object_payload_evidence_records(payload: Dict[str, Any]) -> List[Di
     """Extract evidence records embedded in domain-envelope object payloads."""
 
     registry = _EvidenceRegistry()
-    objects = payload.get("objects")
+    objects = payload.get("extracted_objects")
     if not isinstance(objects, list):
         objects = payload.get("curatable_objects")
     if not isinstance(objects, list):
@@ -1283,7 +1283,7 @@ def _structured_result_retained_collections(
             return retained_collections
 
     generic_collections: List[Tuple[str, List[Dict[str, Any]]]] = []
-    for field_name in ("objects", "curatable_objects"):
+    for field_name in ("extracted_objects", "curatable_objects"):
         object_records = _coerce_dict_list(payload.get(field_name))
         if not object_records:
             continue

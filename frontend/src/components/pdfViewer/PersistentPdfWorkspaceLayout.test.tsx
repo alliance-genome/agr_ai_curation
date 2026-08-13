@@ -5,7 +5,9 @@ import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import theme from '@/theme'
-import PersistentPdfWorkspaceLayout from './PersistentPdfWorkspaceLayout'
+import PersistentPdfWorkspaceLayout, {
+  usePersistentPdfWorkspaceLayout,
+} from './PersistentPdfWorkspaceLayout'
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
@@ -71,10 +73,15 @@ function HomeStub() {
 
 function CurationStub() {
   const navigate = useNavigate()
+  const { focusGrid, isPdfVisible, showPdf } = usePersistentPdfWorkspaceLayout()
 
   return (
     <div>
       <div>Curation route content</div>
+      <div>{isPdfVisible ? 'PDF shown' : 'Grid focused'}</div>
+      <button onClick={isPdfVisible ? focusGrid : showPdf} type="button">
+        {isPdfVisible ? 'Focus grid' : 'Show PDF'}
+      </button>
       <button onClick={() => navigate('/')} type="button">
         Back home
       </button>
@@ -166,6 +173,47 @@ describe('PersistentPdfWorkspaceLayout', () => {
     )
     expect(screen.getByTestId('pdf-viewer').getAttribute('data-instance-id')).toBe(initialInstanceId)
     expect(viewerLifecycle.mounts).toBe(1)
+    expect(viewerLifecycle.unmounts).toBe(0)
+  })
+
+  it('focuses the desktop grid and restores the PDF without remounting the viewer', () => {
+    renderLayout(['/curation/session-1'])
+
+    const initialInstanceId = screen.getByTestId('pdf-viewer').getAttribute('data-instance-id')
+    expect(screen.getByText('PDF shown')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Focus grid' }))
+
+    expect(screen.getByText('Grid focused')).toBeInTheDocument()
+    expect(screen.getByTestId('persistent-pdf-workspace-layout')).toHaveAttribute(
+      'data-pdf-visible',
+      'false',
+    )
+    expect(screen.getByTestId('persistent-pdf-viewer-panel')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByTestId('pdf-viewer').getAttribute('data-instance-id')).toBe(initialInstanceId)
+    expect(viewerLifecycle.unmounts).toBe(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show PDF' }))
+
+    expect(screen.getByText('PDF shown')).toBeInTheDocument()
+    expect(screen.getByTestId('persistent-pdf-workspace-layout')).toHaveAttribute(
+      'data-pdf-visible',
+      'true',
+    )
+    expect(screen.getByTestId('pdf-viewer').getAttribute('data-instance-id')).toBe(initialInstanceId)
+    expect(viewerLifecycle.unmounts).toBe(0)
+  })
+
+  it('focuses the compact grid while retaining the hidden PDF instance', () => {
+    setMatchMedia(true)
+    renderLayout(['/curation/session-1'])
+
+    const initialInstanceId = screen.getByTestId('pdf-viewer').getAttribute('data-instance-id')
+    fireEvent.click(screen.getByRole('button', { name: 'Focus grid' }))
+
+    expect(screen.getByText('Grid focused')).toBeInTheDocument()
+    expect(screen.getByTestId('persistent-pdf-viewer-panel')).toHaveStyle({ display: 'none' })
+    expect(screen.getByTestId('pdf-viewer').getAttribute('data-instance-id')).toBe(initialInstanceId)
     expect(viewerLifecycle.unmounts).toBe(0)
   })
 })

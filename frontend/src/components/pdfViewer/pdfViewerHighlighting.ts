@@ -1,4 +1,5 @@
 import type { HighlightSettings } from '@/components/pdfViewer/highlightSettings'
+import { safeSetJson } from '@/lib/browserStorage'
 import type { ViewerDocument, ViewerSession, ViewerState } from './pdfViewerTypes'
 
 export const uniqueTerms = (terms: string[]): string[] => {
@@ -23,11 +24,10 @@ export const persistSession = (storageKey: string | null, doc: ViewerDocument, s
     ...state,
     lastInteraction: new Date().toISOString(),
   }
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(session))
-  } catch (error) {
-    console.warn('Unable to persist viewer session', error)
-  }
+  safeSetJson(() => window.localStorage, storageKey, session, {
+    owner: 'pdf-viewer',
+    workflowCritical: true,
+  })
 }
 
 export const ensureMarkInjected = (iframeDoc: Document, settings: HighlightSettings) => {

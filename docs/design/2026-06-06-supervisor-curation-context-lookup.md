@@ -457,7 +457,7 @@ Specialist prompt additions should stay minimal. Specialists should focus on fin
 P1 and P1b are main front-window chat work. Flow supervisor execution and batch processing have separate runtime/tool construction and synthetic session boundaries; they should not be assumed to inherit these tools automatically. The intended flow direction is documented in `docs/design/2026-06-06-flow-guided-supervisor-simplification.md`: remove inter-step prompt dataflow, keep structured artifacts, and expose flow details through `flow_run_id`/trace/result refs.
 
 Runtime acceptance for the next flow slice should use the `$sym-help`
-Incus/Symphony loop: create a sample flow from
+local development loop: create a sample flow from
 `backend/tests/fixtures/sample_fly_publication.pdf`, run it in the VM-backed app,
 capture `flow_run_id` and `trace_id`, and inspect that trace in local TraceReview
 before declaring the implementation complete.

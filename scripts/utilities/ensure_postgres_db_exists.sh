@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Best-effort local DB bootstrap for developer/Symphony workspaces.
+# Best-effort local database bootstrap for developer workspaces.
 # This avoids startup failures when a reused local Postgres volume exists
 # without the expected application database.
 

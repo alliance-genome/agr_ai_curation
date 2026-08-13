@@ -226,10 +226,10 @@ refs, field paths, validators, or export/submission policy.
 The curation workspace frontend consumes domain-envelope projections from the
 backend:
 
-- `workspace/EnvelopeObjectReviewTable.tsx` renders materialized envelope object
-  rows with projected summary fields, validation status, and evidence counts.
-- `editor/CandidateFieldEditor.tsx` displays field-level validation summaries
-  and evidence anchors for the selected object projection.
+- `grid/InteractiveHorizontalCurationGrid.tsx` renders every candidate as a row
+  with projected fields, authoritative validation state, and evidence actions.
+- `grid/HorizontalGridRowActions.tsx` exposes server-backed validation and
+  decision actions for each pending candidate.
 - `submission/SubmissionPreviewDialog.tsx` shows readiness blockers for export
   and direct submission, including required/export-blocking fields, definition
   state blockers, validation findings, stale revisions, and curator override
@@ -493,7 +493,7 @@ View network requests:
 - `npm run build` - Build for production
 - `npm run preview` - Preview production build
 - `npm test` - Run test suite
-- `npm run test:symphony` - Run the frontend suite with stable low-concurrency Vitest settings for Symphony/VM workspaces
+- `npm run test:stable` - Run the frontend suite with stable low-concurrency Vitest settings
 - `npm run lint` - Run ESLint
 - `npm run type-check` - Check TypeScript types
 - `npm run type-check:changed` - Run TypeScript and fail only on changed frontend TypeScript files or unscoped/config-level errors

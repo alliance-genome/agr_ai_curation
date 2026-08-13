@@ -1,6 +1,6 @@
 {
   "created_at_utc": "2026-05-20T07:10:00Z",
-  "backend_url": "http://10.79.64.167:8900",
+  "backend_url": "http://redacted.invalid:8900",
   "selected_paper": {
     "title": "Parallel Activin and BMP signaling coordinates R7/R8 photoreceptor subtype pairing in the stochastic Drosophila retina",
     "article_url": "https://elifesciences.org/articles/25301",

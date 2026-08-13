@@ -5,6 +5,7 @@ import {
   ASSISTANT_CHAT_HISTORY_KIND,
   buildChatHistoryDetailQueryParams,
   buildChatHistoryListQueryParams,
+  buildRestorableChatMessages,
   bulkDeleteChatSessions,
   deleteChatSession,
   fetchChatHistoryDetail,
@@ -198,5 +199,31 @@ describe('chatHistoryApi', () => {
         sessionIds: ['session-1', 'session-2'],
       }),
     ).rejects.toThrow('Failed to delete chat sessions')
+  })
+
+  it('does not restore malformed flow-step evidence without a flow name', () => {
+    const [message] = buildRestorableChatMessages([
+      {
+        message_id: 'message-1',
+        session_id: 'session-1',
+        turn_id: 'turn-1',
+        chat_kind: 'assistant_chat',
+        role: 'flow',
+        message_type: 'flow_step_evidence',
+        content: 'Flow evidence',
+        payload_json: {
+          flow_id: 'flow-1',
+          flow_run_id: 'run-1',
+          step: 1,
+          evidence_count: 0,
+          total_evidence_records: 0,
+        },
+        trace_id: null,
+        created_at: '2026-07-12T00:00:00Z',
+      },
+    ])
+
+    expect(message.flowStepEvidence).toBeUndefined()
+    expect(message.type).toBe('text')
   })
 })

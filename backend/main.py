@@ -12,21 +12,20 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 # Disable telemetry before any imports that might use it
 os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
-from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch, pdf_jobs, curation_workspace
+from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch, pdf_jobs, curation_workspace, observability
 from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
+from src.lib.observability.sentry import initialize_sentry_if_configured
 from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
-from src.lib.weaviate_client.settings import get_embedding_config
 from src.models.sql.database import SessionLocal
 
 configure_logging()
@@ -262,10 +261,11 @@ async def lifespan(app: FastAPI):
         weaviate_host = os.getenv("WEAVIATE_HOST", "localhost")
         weaviate_port = os.getenv("WEAVIATE_PORT", "8080")
         weaviate_scheme = os.getenv("WEAVIATE_SCHEME", "http")
+        weaviate_api_key = os.getenv("WEAVIATE_API_KEY") or None
         weaviate_url = f"{weaviate_scheme}://{weaviate_host}:{weaviate_port}"
 
         logger.info("Connecting to Weaviate at %s...", weaviate_url)
-        connection = WeaviateConnection(url=weaviate_url)
+        connection = WeaviateConnection(url=weaviate_url, api_key=weaviate_api_key)
         await connection.connect_to_weaviate()
         logger.info("Successfully connected to Weaviate")
 
@@ -446,13 +446,28 @@ async def lifespan(app: FastAPI):
         logger.error("The application cannot start without Weaviate database connection!")
         raise  # Fail fast - don't start if DB isn't ready
 
-    yield
+    from src.lib.batch.recovery import schedule_startup_batch_recovery
 
-    logger.info("Shutting down Weaviate Control Panel API...")
+    recovered_batch_count = schedule_startup_batch_recovery()
+    logger.info("Batch recovery startup scan dispatched %d batch(es)", recovered_batch_count)
+
+    from src.lib.curation_workspace.submission_attempt_cleanup import (
+        schedule_submission_attempt_cleanup,
+        stop_submission_attempt_cleanup,
+    )
+
+    schedule_submission_attempt_cleanup()
+    logger.info("Submission attempt retention cleanup scheduled")
+
     try:
-        await connection.close()
-    except Exception as e:
-        logger.error("Error during shutdown: %s", e)
+        yield
+    finally:
+        await stop_submission_attempt_cleanup()
+        logger.info("Shutting down Weaviate Control Panel API...")
+        try:
+            await connection.close()
+        except Exception as e:
+            logger.error("Error during shutdown: %s", e)
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -712,7 +727,7 @@ async def deep_health_check():
         with connection.session() as client:
             client.collections.list_all()
             health_status["services"]["weaviate"] = "connected"
-    except Exception as e:
+    except Exception:
         health_status["services"]["weaviate"] = "disconnected"
         health_status["status"] = "degraded"
 
@@ -744,6 +759,8 @@ async def deep_health_check():
 
 def create_app() -> FastAPI:
     """Create a FastAPI application instance."""
+    initialize_sentry_if_configured()
+
     application = FastAPI(
         title="AI Curation Platform API",
         description="Unified API for AI Chat (OpenAI Agents SDK) and Weaviate Control Panel",
@@ -753,7 +770,7 @@ def create_app() -> FastAPI:
 
     application.add_exception_handler(
         RequestValidationError,
-        validation_exception_handler,
+        validation_exception_handler,  # pyright: ignore[reportArgumentType]
     )
 
     application.add_middleware(
@@ -774,6 +791,7 @@ def create_app() -> FastAPI:
     application.include_router(chat.router, tags=["Chat"])
     application.include_router(feedback.router, tags=["Feedback"])
     application.include_router(maintenance.router, tags=["Maintenance"])
+    application.include_router(observability.router, tags=["Observability"])
     application.include_router(agent_studio.router, tags=["Agent Studio"])
     application.include_router(agent_studio_custom.router, tags=["Agent Studio"])
     application.include_router(flows.router, tags=["Flows"])
@@ -794,9 +812,7 @@ def create_app() -> FastAPI:
     application.include_router(admin_prompts_router, tags=["Admin - Prompts"])
     application.include_router(admin_connections_router, tags=["Admin - Health"])
 
-    pdf_storage_path = get_pdf_storage_path()
-    ensure_writable_directory(pdf_storage_path)
-    application.mount("/uploads", StaticFiles(directory=pdf_storage_path), name="uploads")
+    ensure_writable_directory(get_pdf_storage_path())
 
     application.add_api_route("/", root, methods=["GET"])
     application.add_api_route("/health", health_check, methods=["GET"])

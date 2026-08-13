@@ -85,6 +85,60 @@ async def test_resolve_document_hierarchy_falls_back_on_empty_llm_result(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_resolve_document_hierarchy_handles_provider_figure_metadata_deterministically(
+    monkeypatch,
+) -> None:
+    llm_inputs = []
+
+    async def _fake_llm(section_info):
+        llm_inputs.append(section_info)
+        return (
+            [
+                hierarchy.SectionItem(
+                    header="Results",
+                    parent_section="Results",
+                    subsection=None,
+                    is_top_level=True,
+                ),
+            ],
+            None,
+            {"model": "stub"},
+        )
+
+    monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _fake_llm)
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+
+    elements = [
+        {"metadata": {"section_title": "Results"}, "text": "Native result"},
+        {
+            "metadata": {"section_title": "Provider Figure Metadata"},
+            "text": "Provider Figure Metadata",
+        },
+        {
+            "metadata": {"section_title": "Provider Figure: Figure 1"},
+            "text": "Fig. 1A shows wg expression.",
+        },
+    ]
+
+    updated, metadata = await hierarchy.resolve_document_hierarchy(elements)
+
+    assert llm_inputs == [[{"title": "Results", "preview": "Native result"}]]
+    assert updated[1]["section_title"] == "Provider Figure Metadata"
+    assert updated[1]["parent_section"] == "Provider Figure Metadata"
+    assert updated[1]["subsection"] is None
+    assert updated[2]["section_title"] == (
+        "Provider Figure Metadata > Provider Figure: Figure 1"
+    )
+    assert updated[2]["parent_section"] == "Provider Figure Metadata"
+    assert updated[2]["subsection"] == "Provider Figure: Figure 1"
+    assert metadata is not None
+    assert metadata.top_level_sections == ["Results", "Provider Figure Metadata"]
+    assert "Provider Figure Metadata" in {
+        item["parent_section"] for item in metadata.sections
+    }
+
+
+@pytest.mark.asyncio
 async def test_resolve_document_hierarchy_can_skip_metadata_storage(monkeypatch):
     async def _fake_llm(_section_info):
         return (
@@ -133,12 +187,15 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
     class FakeAgent:
         def __init__(self, **kwargs):
             captured["agent_kwargs"] = kwargs
+            self.name = kwargs.get("name")
+            self.model = kwargs.get("model")
 
     class FakeRunner:
         @staticmethod
-        async def run(agent, user_prompt):
+        async def run(agent, user_prompt, max_turns):
             captured["run_agent"] = agent
             captured["user_prompt"] = user_prompt
+            captured["max_turns"] = max_turns
             if raise_error:
                 raise RuntimeError("llm failed")
             return SimpleNamespace(final_output=final_output)
@@ -160,6 +217,21 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
     return captured, FakeReasoning
 
 
+class _FakeContextManager:
+    def __init__(self, value=None):
+        self.value = value
+
+    def __enter__(self):
+        if hasattr(self.value, "active"):
+            self.value.active = True
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb):
+        if hasattr(self.value, "active"):
+            self.value.active = False
+        return None
+
+
 @pytest.mark.asyncio
 async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch):
     output = hierarchy.HierarchyOutput(
@@ -174,9 +246,24 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
         abstract_section_title="Intro",
     )
     captured, fake_reasoning_cls = _install_fake_agent_modules(monkeypatch, final_output=output)
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        active = False
+
+        def set_data(self, key, value):
+            assert self.active, "Sentry span data must be written before span exit"
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(hierarchy, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
+    monkeypatch.setenv("HIERARCHY_RESOLUTION_MAX_TURNS", "6")
 
     sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
         [{"title": "Intro", "preview": "overview"}]
@@ -188,9 +275,15 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
     assert raw["sections_count"] == 1
     assert raw["abstract_section_title"] == "Intro"
     assert captured["temperature"] is None
+    assert captured["max_turns"] == 6
     assert isinstance(captured["reasoning"], fake_reasoning_cls)
     assert captured["reasoning"].effort == "medium"
     assert "Intro" in captured["user_prompt"]
+    span_call = next(call for call in sentry_calls if call[0] == "span")
+    assert span_call[1]["workflow"] == "hierarchy_resolution"
+    assert span_call[1]["agent_key"] == "hierarchy_classifier"
+    assert span_call[1]["input_preview"]["section_count"] == 1
+    assert ("data", "ai_curation.validation.status", "accepted") in sentry_calls
 
 
 @pytest.mark.asyncio
@@ -214,6 +307,20 @@ async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch):
     _install_fake_agent_modules(monkeypatch, final_output=None, raise_error=True)
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        active = False
+
+        def set_data(self, key, value):
+            assert self.active, "Sentry span data must be written before span exit"
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(hierarchy, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
@@ -223,3 +330,13 @@ async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch):
     assert sections == []
     assert abstract_title is None
     assert raw is None
+    assert ("data", "ai_curation.validation.status", "error") in sentry_calls
+    assert (
+        "data",
+        "ai_curation.error.detail",
+        {
+            "message": "llm failed",
+            "error_type": "RuntimeError",
+            "phase": "hierarchy_resolution",
+        },
+    ) in sentry_calls

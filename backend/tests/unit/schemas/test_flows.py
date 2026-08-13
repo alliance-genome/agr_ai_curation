@@ -81,11 +81,33 @@ def make_validation_attachment(**overrides) -> dict:
 class TestFlowDefinitionTaskInputRequirement:
     """Tests for task_input node requirement in FlowDefinition."""
 
+    def test_flow_definition_defaults_to_current_schema_version(self):
+        flow = FlowDefinition.model_validate(
+            {
+                "nodes": [make_task_input_node("task_1", "Extract genes")],
+                "edges": [],
+                "entry_node_id": "task_1",
+            }
+        )
+
+        assert flow.version == "1.1"
+
+    def test_flow_definition_rejects_v1_0(self):
+        with pytest.raises(ValidationError, match="1.1"):
+            FlowDefinition.model_validate(
+                {
+                    "version": "1.0",
+                    "nodes": [make_task_input_node("task_1", "Extract genes")],
+                    "edges": [],
+                    "entry_node_id": "task_1",
+                }
+            )
+
     def test_flow_definition_requires_task_input(self):
         """Flow without task_input node should raise ValidationError."""
         # Create flow with only agent nodes (no task_input)
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [make_agent_node("n1", "pdf_extraction")],
             "edges": [],
             "entry_node_id": "n1",
@@ -103,7 +125,7 @@ class TestFlowDefinitionTaskInputRequirement:
     def test_flow_definition_with_task_input_passes(self):
         """Flow with valid task_input node should pass validation."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract gene mentions"),
                 make_agent_node("n1", "pdf_extraction", "pdf_output"),
@@ -119,7 +141,7 @@ class TestFlowDefinitionTaskInputRequirement:
     def test_saved_edges_default_to_control_flow_role(self):
         """Edges without an explicit role load as ordinary control flow."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract gene mentions"),
                 make_agent_node("n1", "pdf_extraction", "pdf_output"),
@@ -136,7 +158,7 @@ class TestFlowDefinitionTaskInputRequirement:
     def test_validation_attachment_edge_requires_binding_identity(self):
         """Sidecar validator edges must explicitly name their binding target."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract gene mentions"),
                 make_agent_node("extract_1", "gene_extractor", "gene_output"),
@@ -162,7 +184,7 @@ class TestFlowDefinitionTaskInputRequirement:
     def test_control_flow_edges_reject_validation_attachment_metadata(self):
         """Binding metadata is only valid on validation sidecar edges."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract gene mentions"),
                 make_agent_node("n1", "pdf_extraction", "pdf_output"),
@@ -186,12 +208,12 @@ class TestFlowDefinitionTaskInputRequirement:
     def test_flow_definition_accepts_output_filename_template(self):
         """Formatter/output nodes should accept the explicit filename-template field."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Export the reviewed findings"),
                 make_agent_node(
                     "n1",
-                    "chat_output_formatter",
+                    "pdf_extraction",
                     "final_output",
                     output_filename_template="{{input_filename_stem}}.tsv",
                 ),
@@ -207,7 +229,7 @@ class TestFlowDefinitionTaskInputRequirement:
     def test_task_input_must_have_instructions(self):
         """task_input node without instructions should fail validation."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", ""),  # Empty instructions
                 make_agent_node("n1", "pdf_extraction", "pdf_output"),
@@ -228,7 +250,7 @@ class TestFlowDefinitionTaskInputRequirement:
     def test_task_input_whitespace_only_fails(self):
         """task_input node with whitespace-only instructions should fail."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "   "),  # Whitespace only
                 make_agent_node("n1", "pdf_extraction", "pdf_output"),
@@ -262,7 +284,7 @@ def test_execute_flow_request_rejects_blank_turn_id():
 def test_multiple_task_inputs_fails():
     """Flow with multiple task_input nodes should fail."""
     flow_data = {
-        "version": "1.0",
+        "version": "1.1",
         "nodes": [
             make_task_input_node("task_1", "First task"),
             make_task_input_node("task_2", "Second task"),
@@ -283,7 +305,7 @@ def test_multiple_task_inputs_fails():
 def test_task_input_must_be_entry_node():
     """task_input node must be the entry_node_id."""
     flow_data = {
-        "version": "1.0",
+        "version": "1.1",
         "nodes": [
             make_task_input_node("task_1", "Test task"),
             make_agent_node("n1", "pdf_extraction", "pdf_output"),
@@ -304,7 +326,7 @@ def test_task_input_must_be_entry_node():
 def test_task_input_cannot_have_incoming_edges():
     """task_input node cannot have incoming edges."""
     flow_data = {
-        "version": "1.0",
+        "version": "1.1",
         "nodes": [
             make_task_input_node("task_1", "Test task"),
             make_agent_node("n1", "pdf_extraction", "pdf_output"),
@@ -323,7 +345,7 @@ def test_task_input_cannot_have_incoming_edges():
 def test_task_input_none_instructions_fails():
     """task_input node with None instructions should fail."""
     flow_data = {
-        "version": "1.0",
+        "version": "1.1",
         "nodes": [
             {
                 "id": "task_1",
@@ -349,7 +371,7 @@ def test_task_input_none_instructions_fails():
 def test_task_input_type_requires_matching_agent_id():
     """task_input type node must have agent_id='task_input'."""
     flow_data = {
-        "version": "1.0",
+        "version": "1.1",
         "nodes": [{
             "id": "task_1",
             "type": "task_input",
@@ -378,10 +400,10 @@ class TestFlowDefinitionOtherValidations:
     def test_include_evidence_round_trips_on_agent_nodes(self):
         """Agent node configuration should preserve optional include_evidence."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Format the extracted genes"),
-                make_agent_node("n1", "chat_output_formatter", "formatted_output", include_evidence=True),
+                make_agent_node("n1", "gene_extractor", "formatted_output", include_evidence=True),
             ],
             "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
             "entry_node_id": "task_1",
@@ -394,7 +416,7 @@ class TestFlowDefinitionOtherValidations:
         """Enabled validator choices should persist on agent nodes."""
         attachment = make_validation_attachment()
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract genes"),
                 make_agent_node(
@@ -429,7 +451,7 @@ class TestFlowDefinitionOtherValidations:
             affected_fields=["gene.symbol"],
         )
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract genes"),
                 make_agent_node(
@@ -458,7 +480,7 @@ class TestFlowDefinitionOtherValidations:
     def test_required_validation_opt_out_can_be_disabled_when_policy_allows(self):
         """Required/export-blocking validators can be disabled when policy allows."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract genes"),
                 make_agent_node(
@@ -481,7 +503,7 @@ class TestFlowDefinitionOtherValidations:
     def test_required_validation_cannot_be_disabled_without_policy(self):
         """Required/export-blocking validators need explicit opt-out policy."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract genes"),
                 make_agent_node(
@@ -508,7 +530,7 @@ class TestFlowDefinitionOtherValidations:
     def test_under_development_validation_attachment_cannot_be_enabled(self):
         """Under-development validators stay visible metadata rather than active runs."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract genes"),
                 make_agent_node(
@@ -540,7 +562,7 @@ class TestFlowDefinitionOtherValidations:
     def test_legacy_validation_attachment_states_are_rejected(self, legacy_state):
         """Legacy validator capability states are not valid flow attachments."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract genes"),
                 make_agent_node(
@@ -571,7 +593,7 @@ class TestFlowDefinitionOtherValidations:
     def test_legacy_prompt_dataflow_fields_are_rejected(self):
         """Flow definitions must not accept legacy prompt-routing fields."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Extract alleles from the paper"),
                 {
@@ -600,7 +622,7 @@ class TestFlowDefinitionOtherValidations:
     def test_unique_node_ids(self):
         """Node IDs must be unique."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("duplicate_id", "Test task"),
                 {
@@ -624,7 +646,7 @@ class TestFlowDefinitionOtherValidations:
     def test_unique_output_keys(self):
         """Output keys must be unique."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Test task"),
                 {
@@ -648,7 +670,7 @@ class TestFlowDefinitionOtherValidations:
     def test_entry_node_must_exist(self):
         """entry_node_id must reference an existing node."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [make_task_input_node("task_1", "Test task")],
             "edges": [],
             "entry_node_id": "nonexistent",
@@ -660,7 +682,7 @@ class TestFlowDefinitionOtherValidations:
     def test_edge_nodes_must_exist(self):
         """Edge source and target must reference existing nodes."""
         flow_data = {
-            "version": "1.0",
+            "version": "1.1",
             "nodes": [
                 make_task_input_node("task_1", "Test task"),
                 make_agent_node("n1", "pdf_extraction", "pdf_output"),

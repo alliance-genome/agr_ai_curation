@@ -79,7 +79,6 @@ CLAUDE.local.md
 .codex
 .codex/
 .playwright-mcp/
-.symphony-docker-config/
 
 # Local plans/designs (not committed)
 .plans/
@@ -177,6 +176,7 @@ find_*.py
 
 # Claude Code settings
 .claude/
+# Local orchestration/runtime state. No application source is owned here.
 .symphony/
 .superpowers/
 docs/superpowers/
@@ -184,18 +184,27 @@ docs/superpowers/
 # Git worktrees
 .worktrees/
 
+# Local clone of the private AI Curation observability operations repo.
+# This is intentionally not a submodule/subtree of the application repo.
+/agr_ai_curation_observability/
+
+# Local-only ABC Literature dev-mode setup note (token-minting details; do not commit)
+docs/developer/integrations/abc_literature/*.local.md
+
 # Local planning docs (private - not for public repo)
 docs/plans/
 !docs/plans/
 docs/plans/*
 !docs/plans/2026-03-20-all-94-pdfx-markdown-to-pdf-text-layer-spike.md
 !docs/plans/2026-03-20-localization-policy.md
+/FLOW_TICKETS.md
+/SOL_AUDIT.md
+/HOTFIX_Jul11.md
 docs/design/2026-04-01-pdf-evidence-fuzzy-search-experiments.md
 docs/design/2026-04-02-flow-evidence-curation-integration-plan.md
 docs/design/pdf-evidence-native-search-simplification-plan.md
 # Local design/corpus artifacts restored from stashed exploratory work.
 docs/design/2026-05-16-go-annotation-flow-view-plan.md
-docs/design/2026-05-17-symphony-full-auto-review-design.md
 docs/design/2026-05-17-validation-agent-rationalization-plan.md
 docs/design/2026-05-18-alliance-identifier-weaviate-index-design.md
 docs/design/2026-05-20-go-flow-demo-restore-handoff.md
@@ -220,6 +229,7 @@ external_review_prompt.md
 /*.pdf
 # Loose markdown in root (analysis notes, drafts, working docs)
 /goal.md
+/CURRENT_STATE.md
 /*_analysis*.md
 /*_working*.md
 /*_draft*.md
@@ -240,6 +250,7 @@ skills-lock.json
 # Local design notes not intended for the repo
 /docs/design/2026-05-07-domain-pack-curatable-unit-notes.md
 /docs/design/domain-pack-migration/
+/docs/design/2026-06-16-mmhcdb-grant-ai-curation-description.md
 
 # Prompt-customization migration working set (local only, do not commit)
 docs/design/2026-06-08-prompt-customization-migration/

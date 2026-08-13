@@ -40,7 +40,8 @@ curl http://localhost:8000/weaviate/health
 ```
 
 - **Default base URL**: `http://localhost:8000`
-- **Static uploads**: served from `http://localhost:8000/uploads/<tenant>/<filename>`
+- **PDF bytes**: served only through the authenticated, ownership-checked
+  `/api/pdf-viewer/documents/<document-id>/content` endpoint.
 - **PDF extraction service**: reachable at `https://pdfx.alliancegenome.org` (VPN/network policy permitting)
 
 > All cURL snippets assume DEV mode (auth bypass). For Cognito-protected deployments see [Base URLs & Auth Modes](#base-urls--auth-modes).
@@ -56,7 +57,7 @@ curl http://localhost:8000/weaviate/health
 # 1) Upload a PDF (multipart)
 curl -X POST http://localhost:8000/weaviate/documents/upload \
   -F file=@sample_fly_publication.pdf
-# If duplicate: response includes existing_document_id to reuse.
+# If duplicate: response includes existing_document_id and existing_filename to locate and reuse.
 
 # 2) Check status (optional)
 DOC=1379822b-95c7-4dae-b67b-cd30532b598b   # replace with your doc_id
@@ -541,14 +542,24 @@ Use `/api/users/me` to confirm env parity before running tests.
 
 ## PDF Viewer Metadata API
 
-No auth guard is applied today (the viewer sits behind the same network perimeter). Endpoints:
+The PDF viewer document list, detail, URL-resolution, and content endpoints
+require authentication and enforce the same database-user ownership policy for
+metadata and PDF bytes. The commands below work without explicit credentials
+only when `DEV_MODE=true`; otherwise, send the authenticated `cognito_token`
+cookie. Endpoints:
 
 ```bash
 curl http://localhost:8000/api/pdf-viewer/documents | jq
 curl http://localhost:8000/api/pdf-viewer/documents/<uuid> | jq
 curl http://localhost:8000/api/pdf-viewer/documents/<uuid>/url | jq
 ```
-Responses contain `viewer_url` (always `/uploads/<tenant>/<relative-path>`), `page_count`, `file_size`, SHA-256 `file_hash`, and timestamps for last access – ideal for verifying UI download links.
+Responses contain `viewer_url` (the protected
+`/api/pdf-viewer/documents/<document-id>/content` route, or `null` for a
+text-only document), `page_count`, `file_size`, SHA-256 `file_hash`, and
+timestamps for last access. Lists and document-specific operations require
+authentication and expose only documents owned by the current database user.
+Legacy documents without an owner are not readable; shared-source provenance
+does not grant access.
 
 ---
 

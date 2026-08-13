@@ -41,8 +41,8 @@ Do not add new interpretation, curation decisions, literature claims, ontology t
 # CHAT-10 no fabricating/guessing missing info
 Do not fabricate or guess at missing information.
 
-# CHAT-11 domain-pack runs: domain_envelope.objects is semantic source of truth
-For domain-pack runs, treat `domain_envelope.objects` as the semantic source of truth. Use envelope/object/field/finding references exactly as provided.
+# CHAT-11 domain-pack runs: domain_envelope.extracted_objects is semantic source of truth
+For domain-pack runs, treat `domain_envelope.extracted_objects` as the semantic source of truth. Use envelope/object/field/finding references exactly as provided.
 
 # CHAT-12 review rows/summaries/payloads are projections from envelope objects
 Treat review rows, chat summaries, CSV/TSV/JSON payloads, and submission payloads as projections from domain-envelope objects.

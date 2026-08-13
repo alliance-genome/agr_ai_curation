@@ -1,8 +1,12 @@
+import inspect
 import json
+from datetime import datetime, timezone
 
 import pytest
 from types import SimpleNamespace
 
+import src.lib.flows.output_projection as output_projection_module
+from src.lib.config import schema_discovery
 from src.lib.flows.output_projection import (
     FlowOutputColumnSpec,
     FlowOutputFilterSpec,
@@ -10,10 +14,15 @@ from src.lib.flows.output_projection import (
     FlowOutputSortSpec,
     FlowOutputTransformSpec,
     apply_projection_plan,
+    build_extraction_result_artifact_bundle,
     build_flow_output_artifact_bundle,
     default_projection_plan,
     inspect_output_artifacts,
     preview_output_projection,
+)
+from src.schemas.curation_workspace import (
+    CurationExtractionResultRecord,
+    CurationExtractionSourceKind,
 )
 
 
@@ -32,7 +41,7 @@ def _completed_domain_step():
             payload_json={
                 "domain_pack_id": "gene",
                 "envelope_id": "env-gene-1",
-                "objects": [
+                "extracted_objects": [
                     {
                         "object_type": "Gene",
                         "object_id": "gene-1",
@@ -72,6 +81,43 @@ def _completed_domain_step():
     }
 
 
+def _typed_validator_result_payload(**schema_fields):
+    return {
+        "status": "resolved",
+        "request_id": "request-output-1",
+        "validator_binding_id": "binding-output-1",
+        "validator_agent": {
+            "package_id": "agr.alliance",
+            "agent_id": "typed_validator",
+        },
+        "target": {
+            "domain_pack_id": "agr.alliance",
+            "object_type": "ValidatedRecord",
+            "object_id": "target-1",
+            "object_role": "validated_reference",
+            "field_path": "payload.identifier",
+            "expected_fields": ["identifier"],
+            "input_values": {"identifier": "target-1"},
+        },
+        "resolved_values": {"identifier": "target-1"},
+        "resolved_objects": [],
+        "missing_expected_fields": [],
+        "candidates": [],
+        "lookup_attempts": [
+            {
+                "provider": "fixture_api",
+                "method": "GET",
+                "query": {"identifier": "target-1"},
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        "curator_message": "Resolved from provider data.",
+        "explanation": "Provider lookup returned one typed result.",
+        **schema_fields,
+    }
+
+
 def _completed_generic_pdf_step():
     return {
         "step": 1,
@@ -85,8 +131,11 @@ def _completed_generic_pdf_step():
             candidate_count=2,
             conversation_summary="Extracted two generic reagents.",
             payload_json={
-                "summary": "Two genetic reagent candidates were retained.",
-                "curatable_objects": [
+                "envelope_id": "env-generic-1",
+                "domain_pack_id": "generic",
+                "domain_pack_version": "0.1.0",
+                "status": "extracted",
+                "extracted_objects": [
                     {
                         "object_type": "generic_reagent_candidate",
                         "pending_ref_id": "generic-obj-1",
@@ -112,7 +161,10 @@ def _completed_generic_pdf_step():
                         "evidence_record_ids": ["ev-2"],
                     },
                 ],
+                "history": [],
+                "validation_findings": [],
                 "metadata": {
+                    "summary": "Two genetic reagent candidates were retained.",
                     "evidence_records": [
                         {
                             "evidence_record_id": "ev-1",
@@ -124,10 +176,166 @@ def _completed_generic_pdf_step():
                         },
                     ]
                 },
-                "run_summary": {"candidate_count": 2, "kept_count": 2},
             },
         ),
     }
+
+
+_DEBBIE_TUMOR_COLUMNS = [
+    "Organ/Cell Type of origin",
+    "Tumor classification term",
+    "Species",
+    "Tumor type",
+    "Section",
+    "Extracted phrase",
+]
+
+
+_DEBBIE_ATTRIBUTE_FIELD_REFS = [
+    "object.attribute.organ_cell_type_of_origin",
+    "object.attribute.tumor_classification_term",
+    "object.attribute.species",
+    "object.attribute.tumor_type",
+    "object.attribute.section",
+    "object.attribute.extracted_phrase",
+]
+
+
+_DEBBIE_TUMOR_ROWS = [
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "lymphoma incidence; B-cell lymphomas",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "diffuse large B-cell lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "1 DLBCL",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "splenic marginal zone lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "1 SMZL",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "follicular lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "1 FL",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "chronic lymphocytic leukemia",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "1 CLL/SLL-like",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "plasmacytoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "2 plasmacytomas",
+    },
+    {
+        "Organ/Cell Type of origin": "lymphocyte",
+        "Tumor classification term": "lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "13 lymphomas",
+    },
+    {
+        "Organ/Cell Type of origin": "T cell",
+        "Tumor classification term": "T-cell lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "5 T-cell lymphomas",
+    },
+    {
+        "Organ/Cell Type of origin": "histiocyte",
+        "Tumor classification term": "histiocytic sarcoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "2 histiocytic sarcomas",
+    },
+]
+
+
+def _debbie_attribute_payload(values: dict[str, str]) -> dict[str, str]:
+    return {
+        "Organ/Cell Type of origin": values["Organ/Cell Type of origin"],
+        "Tumor classification term": values["Tumor classification term"],
+        "Species": values["Species"],
+        "Tumor type": values["Tumor type"],
+        "Section": values["Section"],
+        "Extracted phrase": values["Extracted phrase"],
+    }
+
+
+def _debbie_tumor_extraction_result() -> CurationExtractionResultRecord:
+    return CurationExtractionResultRecord(
+        extraction_result_id="4170023b-8ba3-44e2-ad7c-dacaa3a3a221",
+        document_id="debbie-tumor-paper",
+        adapter_key="generic",
+        agent_key="pdf_extraction",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id="d2d3cf18-04f0-44e3-a965-09381b0f2bca",
+        trace_id="360762fa9fa0f7383115e86bb9bc88d6",
+        flow_run_id=None,
+        user_id="debbie",
+        candidate_count=len(_DEBBIE_TUMOR_ROWS),
+        conversation_summary="Extracted tumor observations.",
+        payload_json={
+            "summary": "Nine tumor observations were extracted.",
+            "curatable_objects": [
+                {
+                    "object_type": "generic_object",
+                    "pending_ref_id": f"generic-object-{index}",
+                    "payload": {
+                        "label": row["Tumor classification term"],
+                        "class_key": "generic:generic_object",
+                        "semantic_class": "tumor_classification_occurrence",
+                        "confidence": "high",
+                        "attributes": _debbie_attribute_payload(row),
+                        "classification_notes": [
+                            "The object represents one evidence-backed tumor observation.",
+                        ],
+                    },
+                    "evidence_record_ids": [f"evidence-{index}"],
+                }
+                for index, row in enumerate(_DEBBIE_TUMOR_ROWS, start=1)
+            ],
+            "metadata": {
+                "evidence_records": [
+                    {
+                        "evidence_record_id": f"evidence-{index}",
+                        "verified_quote": row["Extracted phrase"],
+                        "section": row["Section"],
+                    }
+                    for index, row in enumerate(_DEBBIE_TUMOR_ROWS, start=1)
+                ],
+            },
+            "run_summary": {"candidate_count": len(_DEBBIE_TUMOR_ROWS)},
+        },
+        created_at=datetime(2026, 6, 16, 22, 7, tzinfo=timezone.utc),
+        metadata={},
+    )
 
 
 def _completed_domain_source_step(
@@ -155,7 +363,7 @@ def _completed_domain_source_step(
             payload_json={
                 "domain_pack_id": adapter_key,
                 "envelope_id": f"env-{source_id}",
-                "objects": [
+                "extracted_objects": [
                     {
                         "object_type": object_type,
                         "object_id": object_id,
@@ -338,9 +546,134 @@ def test_raw_step_output_curatable_objects_cannot_become_curation_tsv_rows():
         output_format="tsv",
     )
 
-    assert bundle.rows_for_source("object")
-    assert bundle.rows_for_source("object")[0]["artifact.is_canonical_curation_data"] is False
-    with pytest.raises(ValueError, match="model-written step output cannot be used"):
+    assert bundle.rows_for_source("object") == []
+    with pytest.raises(ValueError, match="Row source 'object' is not available"):
+        apply_projection_plan(
+            bundle,
+            default_projection_plan(bundle, output_format="tsv"),
+        )
+
+
+def test_trusted_candidate_curatable_objects_project_to_curation_tsv_rows():
+    payload = {
+        "summary": "Builder-finalized generic extraction.",
+        "curatable_objects": [
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "generic-object-1",
+                "payload": {
+                    "class_key": "generic:generic_reagent_candidate",
+                    "label": "Ck:GFP",
+                    "source": "This study",
+                    "count": 4,
+                },
+                "evidence_record_ids": ["evidence-generic-1"],
+            },
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "generic-object-2",
+                "payload": {
+                    "class_key": "generic:generic_reagent_candidate",
+                    "label": "Actn RNAi",
+                    "source": "Source not found",
+                    "count": 2,
+                },
+                "evidence_record_ids": ["evidence-generic-2"],
+            },
+        ],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "output_preview": "Builder finalized generic reagents.",
+                "candidate": SimpleNamespace(
+                    agent_key="pdf_extraction",
+                    adapter_key="generic",
+                    candidate_count=2,
+                    payload_json=payload,
+                ),
+            }
+        ],
+        flow_name="Trusted Candidate Projection Flow",
+        output_format="tsv",
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "domain_envelope_extraction"
+    assert bundle.artifacts[0].object_count == 2
+    assert [row["object.label"] for row in bundle.rows_for_source("object")] == [
+        "Ck:GFP",
+        "Actn RNAi",
+    ]
+
+    result = apply_projection_plan(
+        bundle,
+        default_projection_plan(bundle, output_format="tsv"),
+    )
+
+    assert result.row_source == "object"
+    assert result.total_count == 2
+    assert [row["object_payload_label"] for row in result.rows] == ["Ck:GFP", "Actn RNAi"]
+
+
+def test_output_projection_extractor_envelope_path_is_candidate_gated():
+    payload_shape_source = inspect.getsource(output_projection_module._payload_shape)
+    object_items_source = inspect.getsource(output_projection_module._payload_object_items)
+    candidate_items_source = inspect.getsource(
+        output_projection_module._candidate_payload_object_items
+    )
+    build_artifact_source = inspect.getsource(output_projection_module._build_artifact_from_step)
+    old_shape_name = "domain_" + "extraction_result"
+
+    assert old_shape_name not in payload_shape_source
+    assert "curatable_objects" not in payload_shape_source
+    assert "curatable_objects" not in object_items_source
+    assert "curatable_objects" in candidate_items_source
+    assert "payload_from_candidate" in build_artifact_source
+
+
+def test_mixed_domain_and_extractor_payload_cannot_become_object_rows():
+    payload = {
+        "envelope_id": "env-mixed-1",
+        "domain_pack_id": "generic",
+        "extracted_objects": [
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "object-row-1",
+                "payload": {"label": "Ck:GFP"},
+            }
+        ],
+        "curatable_objects": [
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "stale-row-1",
+                "payload": {"label": "stale"},
+            }
+        ],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "candidate": SimpleNamespace(
+                    agent_key="pdf_extraction",
+                    adapter_key="generic",
+                    candidate_count=1,
+                    payload_json=payload,
+                ),
+            }
+        ],
+        flow_name="Mixed Shape Projection Flow",
+        output_format="tsv",
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "non_structured"
+    assert bundle.rows_for_source("object") == []
+    with pytest.raises(ValueError, match="Row source 'object' is not available"):
         apply_projection_plan(
             bundle,
             default_projection_plan(bundle, output_format="tsv"),
@@ -352,7 +685,7 @@ def test_nested_raw_step_output_objects_cannot_become_curation_tsv_rows():
         "result": {
             "domain_pack_id": "gene",
             "envelope_id": "env-raw-gene",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "Gene",
                     "object_id": "gene-raw-1",
@@ -382,7 +715,7 @@ def test_nested_raw_step_output_objects_cannot_become_curation_tsv_rows():
         )
 
 
-def test_canonical_curatable_objects_default_tsv_exports_one_row_per_object():
+def test_canonical_domain_envelope_default_tsv_exports_one_row_per_object():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_generic_pdf_step()],
         flow_name="PDF Projection Flow",
@@ -392,7 +725,7 @@ def test_canonical_curatable_objects_default_tsv_exports_one_row_per_object():
     plan = default_projection_plan(bundle, output_format="tsv")
     result = apply_projection_plan(bundle, plan)
 
-    assert bundle.artifacts[0].artifact_shape == "domain_extraction_result"
+    assert bundle.artifacts[0].artifact_shape == "domain_envelope"
     assert result.row_source == "object"
     assert plan.row_strategy == "wide_union"
     assert result.total_count == 2
@@ -405,6 +738,147 @@ def test_canonical_curatable_objects_default_tsv_exports_one_row_per_object():
     assert result.rows[0]["object_payload_source_identifier"] == "New in paper"
     assert result.rows[0]["object_payload_count"] == 4
     assert bundle.rows_for_source("evidence")[0]["evidence.evidence_record_id"] == "ev-1"
+
+
+def test_extraction_result_bundle_projects_debbie_generic_object_attributes():
+    extraction_result = _debbie_tumor_extraction_result()
+    payload_json = extraction_result.payload_json
+    assert isinstance(payload_json, dict)
+    assert all(
+        "row" not in curatable_object["payload"]
+        and "claim_text" not in curatable_object["payload"]
+        and curatable_object["object_type"] == "generic_object"
+        for curatable_object in payload_json["curatable_objects"]
+    )
+
+    bundle = build_extraction_result_artifact_bundle(
+        extraction_results=[extraction_result],
+        bundle_name="Debbie Tumor Terms",
+        output_format="csv",
+    )
+    plan = default_projection_plan(bundle, output_format="csv")
+    result = apply_projection_plan(bundle, plan)
+
+    assert bundle.artifacts[0].artifact_shape == "domain_envelope"
+    assert bundle.artifacts[0].extraction_result_id == (
+        "4170023b-8ba3-44e2-ad7c-dacaa3a3a221"
+    )
+    assert result.total_count == 9
+    assert [column.field_ref for column in result.columns[:6]] == _DEBBIE_ATTRIBUTE_FIELD_REFS
+    assert [column.key for column in result.columns[:6]] == [
+        field_ref.removeprefix("object.attribute.")
+        for field_ref in _DEBBIE_ATTRIBUTE_FIELD_REFS
+    ]
+    assert result.rows[0]["organ_cell_type_of_origin"] == "B cell"
+    assert result.rows[0]["tumor_classification_term"] == "lymphoma"
+    assert result.rows[0]["extracted_phrase"] == "lymphoma incidence; B-cell lymphomas"
+    assert result.rows[-1]["tumor_classification_term"] == "histiocytic sarcoma"
+    assert all("object_payload_claim_text" not in row for row in result.rows)
+
+
+def test_generic_claim_text_is_not_reinterpreted_as_export_columns():
+    steps = [
+        _completed_domain_source_step(
+            step=index,
+            agent_id="pdf_extraction",
+            adapter_key="generic",
+            object_type="generic_claim",
+            object_id=f"generic-claim-{index}",
+            payload={
+                "class_key": "generic:generic_claim",
+                "label": f"Narrative claim {index}",
+                "claim_text": (
+                    f"cell_type=B cell; tumor_type=lymphoma; "
+                    f"species=Mouse; replicate={index}"
+                ),
+            },
+        )
+        for index in range(1, 3)
+    ]
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=steps,
+        flow_name="Narrative Claim Flow",
+        output_format="csv",
+    )
+
+    object_rows = bundle.rows_for_source("object")
+    assert all("object.payload.claim_text" in row for row in object_rows)
+    assert all(
+        not any(field_ref.startswith("object.attribute.") for field_ref in row)
+        for row in object_rows
+    )
+    plan = default_projection_plan(bundle, output_format="csv")
+    result = apply_projection_plan(bundle, plan)
+    exported_keys = {column.key for column in result.columns}
+    assert "cell_type" not in exported_keys
+    assert "tumor_type" not in exported_keys
+    assert "species" not in exported_keys
+
+
+def test_explicit_structured_row_payload_is_not_projected_as_export_columns():
+    step = _completed_domain_source_step(
+        step=1,
+        agent_id="pdf_extraction",
+        adapter_key="generic",
+        object_type="generic_object",
+        object_id="generic-object-1",
+        payload={
+            "class_key": "generic:generic_object",
+            "label": "Structured row object",
+            "structured_row": {
+                "Organ/Cell Type of origin": "B cell",
+                "Tumor classification term": "lymphoma",
+            },
+        },
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Structured Claim Flow",
+        output_format="csv",
+    )
+    object_rows = bundle.rows_for_source("object")
+
+    assert object_rows
+    assert not any(field_ref.startswith("object.row.") for field_ref in object_rows[0])
+    result = apply_projection_plan(
+        bundle,
+        default_projection_plan(bundle, output_format="csv"),
+    )
+    assert "Organ/Cell Type of origin" not in {column.header for column in result.columns}
+    assert "Tumor classification term" not in {column.header for column in result.columns}
+
+
+def test_generic_attributes_structured_row_blob_is_not_projected_as_row_fields():
+    step = _completed_domain_source_step(
+        step=1,
+        agent_id="pdf_extraction",
+        adapter_key="generic",
+        object_type="generic_object",
+        object_id="generic-object-1",
+        payload={
+            "class_key": "generic:generic_object",
+            "label": "Structured row blob object",
+            "attributes": {
+                "structured_row": {
+                    "Organ/Cell Type of origin": "B cell",
+                    "Tumor classification term": "lymphoma",
+                },
+            },
+        },
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Structured Attribute Blob Flow",
+        output_format="csv",
+    )
+
+    object_rows = bundle.rows_for_source("object")
+
+    assert object_rows
+    assert not any(
+        field_ref.startswith(("object.row.", "object.attribute."))
+        for field_ref in object_rows[0]
+    )
 
 
 def test_persisted_extraction_ids_define_tsv_source_identity_before_source_keys():
@@ -689,13 +1163,13 @@ def test_object_projection_supports_rename_omit_reorder_filter_sort_and_concat()
 
 def test_projection_safe_derived_transforms_cover_supported_surface():
     step = _completed_domain_step()
-    step["candidate"].payload_json["objects"][0]["payload"].update(
+    step["candidate"].payload_json["extracted_objects"][0]["payload"].update(
         {
             "alias": "",
             "is_primary": True,
         }
     )
-    step["candidate"].payload_json["objects"][0]["evidence_record_ids"] = ["ev-1", "ev-2"]
+    step["candidate"].payload_json["extracted_objects"][0]["evidence_record_ids"] = ["ev-1", "ev-2"]
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[step],
         flow_name="Projection Flow",
@@ -1011,8 +1485,8 @@ def test_literal_only_projection_can_create_plumbing_row_without_artifacts():
 
 def test_ordered_numeric_filters_do_not_fall_back_to_lexicographic_comparison():
     step = _completed_domain_step()
-    step["candidate"].payload_json["objects"][0]["payload"]["score"] = "10"
-    step["candidate"].payload_json["objects"][1]["payload"]["score"] = "2"
+    step["candidate"].payload_json["extracted_objects"][0]["payload"]["score"] = "10"
+    step["candidate"].payload_json["extracted_objects"][1]["payload"]["score"] = "2"
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[step],
         flow_name="Projection Flow",
@@ -1118,7 +1592,7 @@ def test_chat_grouped_projection_renders_visible_sections():
 
 def test_step_level_evidence_and_validation_metadata_are_projectable_without_payload_records():
     step = _completed_domain_step()
-    for obj in step["candidate"].payload_json["objects"]:
+    for obj in step["candidate"].payload_json["extracted_objects"]:
         obj.pop("evidence", None)
         obj.pop("validation_findings", None)
     step["evidence_records"] = [
@@ -1195,7 +1669,7 @@ def test_step_level_evidence_and_validation_metadata_are_projectable_without_pay
 
 def test_step_level_metadata_uses_explicit_object_refs_without_guessing():
     step = _completed_domain_step()
-    for obj in step["candidate"].payload_json["objects"]:
+    for obj in step["candidate"].payload_json["extracted_objects"]:
         obj.pop("evidence", None)
         obj.pop("validation_findings", None)
     step["evidence_records"] = [
@@ -1338,8 +1812,8 @@ def test_step_level_evidence_deduplicates_embedded_records_by_id():
 def test_planner_inventory_and_preview_bound_long_values():
     long_text = "A" * 1000
     step = _completed_domain_step()
-    step["candidate"].payload_json["objects"][0]["payload"]["long_note"] = long_text
-    step["candidate"].payload_json["objects"][0]["evidence_record_ids"] = list(range(20))
+    step["candidate"].payload_json["extracted_objects"][0]["payload"]["long_note"] = long_text
+    step["candidate"].payload_json["extracted_objects"][0]["evidence_record_ids"] = list(range(20))
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[step],
         flow_name="Projection Flow",
@@ -1376,6 +1850,36 @@ def test_planner_inventory_and_preview_bound_long_values():
     assert long_text not in encoded_preview
     assert "truncated" in encoded_preview
     assert len(encoded_preview) < 2500
+
+
+def test_projection_preview_depth_uses_env_config(monkeypatch):
+    row = {
+        "nested": {
+            "level1": {
+                "level2": {
+                    "level3": {
+                        "level4": {
+                            "leaf": "deep value",
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    monkeypatch.delenv("FLOW_OUTPUT_PROJECTION_PREVIEW_MAX_DEPTH", raising=False)
+    default_row = output_projection_module._bounded_projection_row(row)
+
+    assert default_row["nested"]["level1"]["level2"]["level3"] == {
+        "level4": "[truncated:depth]",
+    }
+
+    monkeypatch.setenv("FLOW_OUTPUT_PROJECTION_PREVIEW_MAX_DEPTH", "2")
+    env_row = output_projection_module._bounded_projection_row(row)
+
+    assert env_row["nested"]["level1"] == {
+        "level2": "[truncated:depth]",
+    }
 
 
 def test_overlarge_max_rows_is_rejected():
@@ -1431,3 +1935,142 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
     assert bundle.rows_for_source("object") == []
     assert bundle.rows_for_source("evidence") == []
     assert any("No canonical curation object rows" in warning for warning in bundle.warnings)
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "schema_fields", "output_format", "expected_id"),
+    [
+        (
+            "AlleleResultEnvelope",
+            {
+                "allele_candidates": [
+                    {
+                        "allele_id": "MGI:3689906",
+                        "symbol": "Pax6<Sey>",
+                        "species": "Mus musculus",
+                    }
+                ]
+            },
+            "csv",
+            "MGI:3689906",
+        ),
+        (
+            "GOTermResultEnvelope",
+            {
+                "results": [
+                    {
+                        "go_id": "GO:0003677",
+                        "name": "DNA binding",
+                        "aspect": "molecular_function",
+                    }
+                ],
+                "query_summary": "Resolved one GO term.",
+                "not_found": [],
+            },
+            "chat",
+            "GO:0003677",
+        ),
+        (
+            "GOAnnotationsResult",
+            {
+                "gene_id": "WB:WBGene00000898",
+                "gene_symbol": "daf-16",
+                "annotations": [
+                    {
+                        "go_id": "GO:0008286",
+                        "go_name": "insulin receptor signaling pathway",
+                        "aspect": "biological_process",
+                        "evidence_code": "IMP",
+                    }
+                ],
+                "manual_count": 1,
+                "automatic_count": 0,
+            },
+            "csv",
+            "GO:0008286",
+        ),
+    ],
+)
+def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
+    schema_name,
+    schema_fields,
+    output_format,
+    expected_id,
+):
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)[schema_name]
+    payload = schema.model_validate(
+        _typed_validator_result_payload(**schema_fields)
+    ).model_dump(mode="json")
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "typed_validator",
+                "agent_name": schema_name,
+                "output": json.dumps(payload),
+            }
+        ],
+        flow_name="Typed validator output",
+        output_format=output_format,
+    )
+
+    assert len(bundle.artifacts) == 1
+    assert bundle.artifacts[0].artifact_shape == "structured_result"
+    assert bundle.default_row_source == "object"
+    assert bundle.rows_for_source("object")
+    assert bundle.rows_for_source("object")[0]["object.object_id"] == expected_id
+
+    plan = default_projection_plan(bundle, output_format=output_format)
+    result = apply_projection_plan(bundle, plan)
+
+    assert result.rows
+    if output_format == "chat":
+        assert result.chat_output
+
+
+def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
+    payload = _typed_validator_result_payload(
+        gene_id="WB:WBGene00000898",
+        gene_symbol="daf-16",
+        annotations=[{"go_id": "GO:0008286", "go_name": "signaling"}],
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[{"step": 1, "agent_id": "go_annotations", "output": payload}],
+        flow_name="GO annotations",
+        output_format="csv",
+    )
+
+    row = bundle.rows_for_source("object")[0]
+    assert row["object.payload.gene_id"] == "WB:WBGene00000898"
+    assert row["object.payload.gene_symbol"] == "daf-16"
+
+
+def test_validator_like_payload_with_legacy_items_remains_non_structured():
+    payload = _typed_validator_result_payload(
+        items=[{"id": "legacy-row"}],
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[{"step": 1, "agent_id": "custom", "output": payload}],
+        flow_name="Rejected legacy rows",
+        output_format="csv",
+    )
+
+    assert bundle.artifacts == []
+    assert bundle.rows_for_source("object") == []
+
+
+def test_raw_result_list_remains_non_structured():
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "custom",
+                "output": json.dumps([{"go_id": "GO:0003677"}]),
+            }
+        ],
+        flow_name="Rejected raw list",
+        output_format="csv",
+    )
+
+    assert bundle.artifacts == []
+    assert bundle.rows_for_source("object") == []

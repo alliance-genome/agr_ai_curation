@@ -534,20 +534,21 @@ class TestAgentWorkshopSystemPrompt:
 
         assert api_module._load_agent_studio_system_prompt_template() == "canonical prompt"
 
-    def test_load_system_prompt_template_falls_back_when_canonical_missing(self, monkeypatch, tmp_path):
+    def test_load_system_prompt_template_loads_explicit_package_candidate_when_config_missing(self, monkeypatch, tmp_path):
         from src.api import agent_studio as api_module
 
         missing = tmp_path / "missing_prompt.md"
-        fallback = tmp_path / "packaged_prompt.md"
-        fallback.write_text("fallback prompt", encoding="utf-8")
+        package_prompt = tmp_path / "package_config" / "agent_studio_system_prompt.md"
+        package_prompt.parent.mkdir()
+        package_prompt.write_text("package prompt", encoding="utf-8")
 
         monkeypatch.setattr(
             api_module,
             "AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES",
-            [missing, fallback],
+            [missing, package_prompt],
         )
 
-        assert api_module._load_agent_studio_system_prompt_template() == "fallback prompt"
+        assert api_module._load_agent_studio_system_prompt_template() == "package prompt"
 
     def test_build_opus_system_prompt_injects_package_diagnostic_tool_metadata(self, monkeypatch):
         from src.lib.agent_studio import prompt_builder

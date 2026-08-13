@@ -58,7 +58,7 @@ describe('ModelessFeedbackSurface', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close feedback popup' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close popup' }))
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 
@@ -105,7 +105,7 @@ describe('ModelessFeedbackSurface', () => {
       toJSON: () => ({}),
     }))
 
-    const handle = screen.getByRole('button', { name: 'Move feedback popup' })
+    const handle = screen.getByRole('button', { name: 'Move popup' })
     fireEvent.pointerDown(handle, { clientX: 10, clientY: 10, pointerId: 1 })
     fireEvent.pointerMove(window, { clientX: 1200, clientY: 900 })
     fireEvent.pointerUp(window)

@@ -135,7 +135,7 @@ def _assertion_envelope(
     return DomainEnvelope(
         envelope_id="selector-env",
         domain_pack_id="fixture.selectors",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="Assertion",
                 pending_ref_id="assertion-1",

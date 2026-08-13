@@ -3,7 +3,7 @@
 Mirrors ``phenotype``'s ``materialize_phenotype_builder_state`` (the closest multi-object
 reference) and ``gene``'s mention-only posture: read finalized builder-workspace candidates and
 emit the shared extraction-output payload (``curatable_objects[]`` + ``metadata`` with RELATIVE
-``metadata_refs``). The generic converter (``_domain_envelope_from_extraction_result``) turns that
+``metadata_refs``). The shared ``domain_envelope_from_extraction_result`` normalizer turns that
 payload into a DomainEnvelope, nesting ``metadata`` under ``metadata.extraction_metadata``.
 
 POSTURE (preserve the existing pack — runbook §3): the migration changes the EXTRACTION

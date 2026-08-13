@@ -69,6 +69,20 @@ export interface PromptLayerInfo {
   hash: string
 }
 
+export interface PromptLayerManifest {
+  agent_id: string
+  layers: PromptLayerInfo[]
+  hash: string
+}
+
+export interface CombinedPromptResponse {
+  agent_id: string
+  group_id: string
+  combined_prompt: string
+  effective_prompt_hash: string
+  layer_manifest: PromptLayerManifest
+}
+
 // Individual agent prompt information
 export interface PromptInfo {
   agent_id: string
@@ -254,19 +268,28 @@ export interface ChatMessage {
 
 // Flow definition for context (simplified version for chat)
 export interface FlowContextDefinition {
+  version: '1.1'
+  entry_node_id?: string
   nodes: Array<{
     id: string
+    node_type: 'agent' | 'decision' | 'output' | 'task_input'
     agent_id: string
     agent_display_name: string
     task_instructions?: string  // For task_input nodes
     custom_instructions?: string
+    include_evidence?: boolean
     output_filename_template?: string
+    projection_plan?: Record<string, unknown>
     output_key: string
     validation_attachments?: Array<Record<string, unknown>>
   }>
   edges: Array<{
+    id: string
     source: string
     target: string
+    role?: 'control_flow' | 'output_attachment' | 'validation_attachment'
+    satisfies_binding_id?: string
+    replaces_attachment_id?: string
   }>
 }
 

@@ -27,7 +27,7 @@ tools: []
 output_schema: CurationPrepAgentOutput
 
 model_config:
-  model: "${AGENT_CURATION_PREP_MODEL:-gpt-5.4-mini}"
+  model: "${AGENT_CURATION_PREP_MODEL:-gpt-5.6-terra}"
   temperature: 0.1
   reasoning: "medium"
 

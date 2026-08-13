@@ -134,6 +134,17 @@ if [[ " $* " == *" compose "* && " $* " == *" config "* && " $* " == *" --servic
   exit 0
 fi
 
+if [[ " $* " == *" compose "* && " $* " == *" config "* && " $* " == *" --format json "* ]]; then
+  if [[ " $* " != *" --env-file ${HOME}/.agr_ai_curation/.env "* ]]; then
+    echo "production config did not use the generated environment file: $*" >&2
+    exit 2
+  fi
+  cat <<'JSON'
+{"services":{"backend":{"image":"example/backend:sha-abcdef1","environment":{"AUTH_PROVIDER":"oidc","OIDC_ISSUER_URL":"https://issuer.example.org","OIDC_CLIENT_ID":"curation-production","OIDC_REDIRECT_URI":"https://curation.example.org/auth/callback","DEBUG":"false","DEV_MODE":"false","HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS":"true","HEALTH_CHECK_REQUIRE_LITERATURE_DB":"true","HEALTH_CHECK_STRICT_MODE":"true","SECURE_COOKIES":"true","SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS":"2000","SENTRY_TRANSACTION_RETAINED_SPANS_MAX":"50"}},"frontend":{"image":"example/frontend:sha-abcdef1","environment":{"VITE_DEV_MODE":"false"}},"trace_review_backend":{"image":"example/trace-review:sha-abcdef1","environment":{"DEV_MODE":"false","SECURE_COOKIES":"true"}},"weaviate":{"image":"example/weaviate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":{"AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED":"false","AUTHENTICATION_APIKEY_ENABLED":"true","AUTHENTICATION_APIKEY_ALLOWED_KEYS":"test-key","AUTHORIZATION_ADMINLIST_USERS":"curation-backend"}},"postgres":{"image":"example/postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"redis":{"image":"example/redis@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"clickhouse":{"image":"example/clickhouse@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"minio":{"image":"example/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"loki":{"image":"example/loki@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"promtail":{"image":"example/promtail@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"langfuse":{"image":"example/langfuse@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"langfuse-worker":{"image":"example/langfuse@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
+JSON
+  exit 0
+fi
+
 if [[ " $* " == *" compose "* && " $* " == *" ps "* && " $* " == *" -q "* ]]; then
   service="${*: -1}"
   printf 'cid-%s\n' "$service"

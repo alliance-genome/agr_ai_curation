@@ -172,6 +172,7 @@ export type CurationQueueNavigationDirection =
 export const CURATION_SUBMISSION_STATUSES = [
   'preview_ready',
   'export_ready',
+  'pending',
   'queued',
   'accepted',
   'validation_errors',
@@ -437,7 +438,12 @@ export interface CurationActionLogEntry {
   metadata: Record<string, unknown>
 }
 
+export const CURATION_INVENTORY_SCOPES = ['my_inventory', 'my_organization', 'show_all'] as const
+export type CurationInventoryScope = (typeof CURATION_INVENTORY_SCOPES)[number]
+export const DEFAULT_CURATION_INVENTORY_SCOPE: CurationInventoryScope = 'my_inventory'
+
 export interface CurationSessionFilters {
+  inventory_scope?: CurationInventoryScope
   statuses?: CurationSessionStatus[]
   adapter_keys?: string[]
   curator_ids?: string[]
@@ -500,6 +506,10 @@ export interface CurationSubmissionRecord {
   mode: SubmissionMode
   target_key: SubmissionTargetKey
   status: CurationSubmissionStatus
+  idempotency_key?: string | null
+  attempt_state?: 'pending' | 'sending' | 'succeeded' | 'failed' | 'unknown' | null
+  attempt_state_history?: Record<string, unknown>[]
+  retention_expires_at?: string | null
   readiness: CurationCandidateSubmissionReadiness[]
   payload?: SubmissionPayloadContract | null
   requested_at: string
@@ -708,6 +718,9 @@ export interface CurationDocumentBootstrapAvailabilityResponse {
 
 export interface CurationSessionUpdateRequest {
   session_id: string
+  expected_session_version?: number | null
+  intent_owner?: string | null
+  intent_generation?: number | null
   status?: CurationSessionStatus | null
   notes?: string | null
   curator_id?: string | null
@@ -808,17 +821,6 @@ export interface CurationCandidateDecisionResponse {
   action_log_entry: CurationActionLogEntry
 }
 
-export interface CurationCandidateDeleteRequest {
-  session_id: string
-  candidate_id: string
-}
-
-export interface CurationCandidateDeleteResponse {
-  deleted_candidate_id: string
-  session: CurationReviewSession
-  action_log_entry: CurationActionLogEntry
-}
-
 export interface CurationManualCandidateCreateRequest {
   session_id: string
   adapter_key: string
@@ -914,6 +916,7 @@ export interface CurationSubmissionPreviewResponse {
 
 export interface CurationSubmissionExecuteRequest {
   session_id: string
+  idempotency_key: string
   target_key: SubmissionTargetKey
   candidate_ids?: string[]
   mode?: SubmissionMode

@@ -62,7 +62,7 @@ def test_noop_submission_adapter_invokes_transport_with_mock_payload():
         warnings=["Awaiting downstream worker."],
     )
 
-    result = adapter.submit(payload=_payload())
+    result = adapter.submit(payload=_payload(), idempotency_key="test-submit")
 
     assert result.status == CurationSubmissionStatus.QUEUED
     assert result.external_reference == f"noop:{DEFAULT_NOOP_SUBMISSION_TARGET_KEY}:1"
@@ -126,6 +126,9 @@ def test_submission_adapter_rejects_unsupported_target_key():
     adapter = NoOpSubmissionAdapter(target_key="submit.target")
 
     with pytest.raises(ValueError) as exc:
-        adapter.submit(payload=_payload(target_key="other.target"))
+        adapter.submit(
+            payload=_payload(target_key="other.target"),
+            idempotency_key="test-submit",
+        )
 
     assert "does not support target" in str(exc.value)

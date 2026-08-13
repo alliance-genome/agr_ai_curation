@@ -115,7 +115,7 @@ def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -
                     "content": raw_content,
                     "contentPreview": content_preview,
                     "elementType": chunk.get("element_type", "NarrativeText"),
-                    "pageNumber": chunk.get("page_number", 1),
+                    "pageNumber": chunk.get("page_number"),
                     "sectionTitle": chunk.get("section_title"),
                     "metadata": json.dumps(base_metadata),  # Serialize metadata to JSON string
                 }

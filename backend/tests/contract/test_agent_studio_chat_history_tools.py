@@ -5,10 +5,15 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 from src.api import agent_studio as api_module
 from src.lib.chat_history_repository import AGENT_STUDIO_CHAT_KIND, ALL_CHAT_KINDS_SENTINEL
+
+
+HISTORY_TOOLS_SESSION_ID = "agent-studio-history-tools-session"
+HISTORY_TOOLS_TURN_ID = "agent-studio-history-tools-turn-1"
 
 
 def _consume_sse_events(stream_response) -> list[dict]:
@@ -44,7 +49,7 @@ class _FakeSuccessfulStream:
 
 
 class _FakeMessagesApi:
-    def __init__(self, captured: dict[str, object]):
+    def __init__(self, captured: dict[str, Any]):
         self._captured = captured
 
     def stream(self, **kwargs):
@@ -64,7 +69,7 @@ class _FakeMessagesApi:
 
 
 class _FakeAnthropicClient:
-    def __init__(self, captured: dict[str, object]):
+    def __init__(self, captured: dict[str, Any]):
         self.beta = SimpleNamespace(messages=_FakeMessagesApi(captured))
 
 
@@ -73,7 +78,7 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
     chat_contract_auth_headers,
     monkeypatch,
 ):
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(
@@ -100,8 +105,8 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
         api_module,
         "_prepare_agent_studio_turn",
         lambda *, request, **_kwargs: api_module.PreparedAgentStudioTurn(
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-1",
+            session_id=HISTORY_TOOLS_SESSION_ID,
+            turn_id=HISTORY_TOOLS_TURN_ID,
             user_message=request.messages[-1].content,
             requested_context_session_id=request.context.session_id if request.context else None,
             user_turn_created=False,
@@ -149,9 +154,12 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
     ] == ["TEXT_DELTA", "DONE"]
 
     tools_by_name = {tool["name"]: tool for tool in captured["tools"]}
-    assert {"list_recent_chats", "search_chat_history", "get_chat_conversation"} <= set(
-        tools_by_name
-    )
+    assert {
+        "list_recent_chats",
+        "search_chat_history",
+        "get_chat_conversation",
+        "get_chat_turn",
+    } <= set(tools_by_name)
     assert tools_by_name["list_recent_chats"]["input_schema"]["required"] == ["chat_kind"]
     assert tools_by_name["list_recent_chats"]["input_schema"]["properties"]["chat_kind"]["enum"] == [
         "assistant_chat",
@@ -163,3 +171,4 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
         "chat_kind",
     ]
     assert tools_by_name["get_chat_conversation"]["input_schema"]["required"] == ["session_id"]
+    assert tools_by_name["get_chat_turn"]["input_schema"]["required"] == ["session_id", "turn_id"]

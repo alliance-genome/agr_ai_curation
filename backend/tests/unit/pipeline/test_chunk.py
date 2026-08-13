@@ -179,7 +179,7 @@ def test_create_document_chunk_maps_type_hierarchy_and_provenance():
     assert chunk.metadata.content_type == "table"
 
 
-def test_create_document_chunk_falls_back_for_invalid_page_and_bbox():
+def test_create_document_chunk_does_not_invent_page_for_invalid_metadata():
     strategy = _strategy(ChunkingMethod.BY_PARAGRAPH, max_chars=500, overlap=50)
     chunk_data = {
         "content": "Image chunk",
@@ -210,7 +210,7 @@ def test_create_document_chunk_falls_back_for_invalid_page_and_bbox():
     chunk = _create_document_chunk(chunk_data, 1, "doc-2", strategy)
 
     assert chunk.element_type == ElementType.LIST_ITEM
-    assert chunk.page_number == 1
+    assert chunk.page_number is None
     assert chunk.doc_items == []
     assert chunk.metadata.has_image is True
 

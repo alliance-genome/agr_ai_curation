@@ -214,6 +214,7 @@ def migrate_legacy_curation_workspace_to_domain_envelopes(
                 document_id=session_row.document_id,
                 session_id=session_row.id,
                 flow_run_id=session_row.flow_run_id,
+                adapter_key=session_row.adapter_key,
                 object_model_ref_json=_legacy_model_ref_json(),
                 model_field_ref_json=_legacy_field_ref_json(),
             ),
@@ -261,6 +262,8 @@ def migrate_legacy_curation_workspace_to_domain_envelopes(
                 expected_revision=0,
                 document_id=extraction_result.document_id,
                 flow_run_id=extraction_result.flow_run_id,
+                adapter_key=extraction_result.adapter_key,
+                source_extraction_result_id=str(extraction_result.id),
                 object_model_ref_json=_legacy_model_ref_json(),
                 model_field_ref_json=_legacy_field_ref_json(),
             ),
@@ -731,7 +734,7 @@ def _session_envelope(
         domain_pack_id=options.domain_pack_id,
         domain_pack_version=options.domain_pack_version,
         status=_envelope_status_for_session(session_row),
-        objects=objects,
+        extracted_objects=objects,
         validation_findings=validation_findings,
         history=history,
         metadata={
@@ -774,7 +777,7 @@ def _extraction_result_envelope(
         domain_pack_id=options.domain_pack_id,
         domain_pack_version=options.domain_pack_version,
         status=DomainEnvelopeStatus.EXTRACTED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=LEGACY_EXTRACTION_OBJECT_TYPE,
                 object_id=object_id,
@@ -1154,7 +1157,7 @@ def _link_session_candidates(
         candidate.envelope_revision = envelope_revision
         linked_count += 1
     if linked_count:
-        db.commit()
+        db.flush()
     return linked_count
 
 

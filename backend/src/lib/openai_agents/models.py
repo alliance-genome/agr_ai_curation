@@ -3,7 +3,7 @@ Shared Pydantic models for OpenAI Agents structured outputs.
 """
 
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Mapping, Optional
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
@@ -43,6 +43,68 @@ class FileInfo(BaseModel):
     trace_id: Optional[str] = Field(None, description="Langfuse trace ID")
     session_id: Optional[str] = Field(None, description="Chat session ID")
     curator_id: Optional[str] = Field(None, description="User who requested the file")
+    flow_id: Optional[str] = Field(None, description="Owning flow ID for branched output")
+    flow_run_id: Optional[str] = Field(None, description="Owning flow-run ID")
+    formatter_node_id: Optional[str] = Field(None, description="Formatter graph node ID")
+    source_node_id: Optional[str] = Field(
+        None,
+        description="First bound extraction graph node ID (single-source compatibility)",
+    )
+    source_node_ids: List[str] = Field(
+        default_factory=list,
+        description="Ordered extraction graph node IDs bound to this formatter",
+    )
+    formatter_label: Optional[str] = Field(None, description="Human-readable formatter label")
+    source_label: Optional[str] = Field(
+        None,
+        description="First human-readable extraction label (single-source compatibility)",
+    )
+    source_labels: List[str] = Field(
+        default_factory=list,
+        description="Ordered human-readable labels for bound extraction sources",
+    )
+    source_extraction_result_ids: List[str] = Field(
+        default_factory=list,
+        description="Persisted extraction-result identities used by this output",
+    )
+    source_keys: List[str] = Field(
+        default_factory=list,
+        description="Canonical artifact source keys used by this output",
+    )
+    source_envelope_ids: List[str] = Field(
+        default_factory=list,
+        description="Canonical domain-envelope identities used by this output",
+    )
+    document_id: Optional[str] = Field(None, description="Source document ID")
+
+
+_FILE_READY_EVENT_DETAIL_FIELDS = (
+    "file_id",
+    "filename",
+    "format",
+    "size_bytes",
+    "mime_type",
+    "download_url",
+    "created_at",
+    "flow_id",
+    "flow_run_id",
+    "formatter_node_id",
+    "source_node_id",
+    "source_node_ids",
+    "formatter_label",
+    "source_label",
+    "source_labels",
+    "source_extraction_result_ids",
+    "source_keys",
+    "source_envelope_ids",
+    "document_id",
+)
+
+
+def file_ready_event_details(file_info: Mapping[str, Any]) -> dict[str, Any]:
+    """Project safe FileInfo fields into the shared FILE_READY contract."""
+
+    return {field: file_info.get(field) for field in _FILE_READY_EVENT_DETAIL_FIELDS}
 
 
 class Citation(BaseModel):

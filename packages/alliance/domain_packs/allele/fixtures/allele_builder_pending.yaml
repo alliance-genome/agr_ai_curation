@@ -27,7 +27,7 @@ fixtures:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/allele.yaml
             class: AlleleAssociation
-    objects:
+    extracted_objects:
     - object_type: Reference
       object_role: validated_reference
       pending_ref_id: paper-reference-1
@@ -171,7 +171,7 @@ fixtures:
         pending_ref_id: allele-paper-evidence-association-1
         object_type: AllelePaperEvidenceAssociation
     metadata:
-      semantic_source: domain_envelope.objects
+      semantic_source: domain_envelope.extracted_objects
       legacy_semantic_lists: []
       extraction_summary: Finalized allele extraction from builder-staged mentions.
       extraction_metadata:

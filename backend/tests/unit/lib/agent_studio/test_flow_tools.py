@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 import src.lib.agent_studio.flow_tools as flow_tools
+from src.lib.agent_studio.models import FlowContextDefinition
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +35,13 @@ def test_flow_context_set_get_clear():
     assert flow_tools.get_current_flow_context() is None
     flow_tools.set_current_flow_context({"flow_name": "My Flow", "nodes": []})
     assert flow_tools.get_current_flow_context()["flow_name"] == "My Flow"
+
+
+def test_flow_context_definition_is_v1_1_only():
+    assert FlowContextDefinition().version == "1.1"
+
+    with pytest.raises(ValidationError, match="1.1"):
+        FlowContextDefinition(version="1.0")
     flow_tools.clear_current_flow_context()
     assert flow_tools.get_current_flow_context() is None
 
@@ -105,7 +114,7 @@ def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
 
     assert result["valid"] is True
     assert any("Consider adding 'pdf_extraction'" in s for s in result["suggestions"])
-    assert any("Consider adding 'chat_output'" in s for s in result["suggestions"])
+    assert any("Consider attaching 'chat_output'" in s for s in result["suggestions"])
 
 
 def test_validate_flow_handler_only_mentions_installed_agent_ids(monkeypatch):
@@ -405,13 +414,18 @@ def test_get_current_flow_handler_detects_parallel_and_disconnected_nodes():
     result = handler()
 
     assert result["success"] is True
-    assert result["step_count"] == 3
-    assert result["disconnected_count"] == 1
+    # Invalid branches do not get flattened into a pretend sequential order.
+    assert result["step_count"] == 0
+    assert result["disconnected_count"] == 3
     assert result["has_critical_issues"] is True
     assert result["critical_issue_count"] >= 2  # empty task instructions + parallel branching
     assert any(w["type"] == "CRITICAL" for w in result["validation_warnings"])
-    assert any(w["type"] == "WARNING" for w in result["validation_warnings"])
-    assert "Parallel flows not yet supported" in result["execution_order_markdown"]
+    assert {issue["code"] for issue in result["executable_graph"]["issues"]} >= {
+        "branch",
+        "ambiguous_terminal",
+        "disconnected",
+    }
+    assert "Invalid executable flow topology" in result["execution_order_markdown"]
 
 
 def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
@@ -419,6 +433,7 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
     flow_tools.set_current_flow_context(
         {
             "flow_name": "Validator Sidecar Flow",
+            "version": "1.1",
             "entry_node_id": "task_input_0",
             "nodes": [
                 {
@@ -451,7 +466,7 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
                 },
                 {
                     "id": "output_1",
-                    "type": "agent",
+                    "type": "output",
                     "data": {
                         "agent_id": "chat_output",
                         "agent_display_name": "Output",
@@ -461,7 +476,11 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
             ],
             "edges": [
                 {"source": "task_input_0", "target": "extract_1"},
-                {"source": "extract_1", "target": "output_1"},
+                {
+                    "source": "extract_1",
+                    "target": "output_1",
+                    "role": "output_attachment",
+                },
                 {
                     "source": "extract_1",
                     "target": "custom_validator_1",
@@ -475,11 +494,10 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
     result = handler()
 
     assert result["success"] is True
-    assert result["step_count"] == 3
+    assert result["step_count"] == 2
     assert result["disconnected_count"] == 0
     assert result["has_critical_issues"] is False
     assert [step["node_id"] for step in result["steps"]] == [
-        "task_input_0",
         "extract_1",
         "output_1",
     ]
@@ -488,6 +506,98 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
         warning["node_id"] == "custom_validator_1"
         for warning in result["validation_warnings"]
     )
+
+
+def test_get_current_flow_handler_explains_output_attachment_binding():
+    handler = flow_tools._get_current_flow_handler()
+    flow_tools.set_current_flow_context(
+        {
+            "flow_name": "Multiple Export Flow",
+            "version": "1.1",
+            "entry_node_id": "task_input_0",
+            "nodes": [
+                {
+                    "id": "task_input_0",
+                    "type": "task_input",
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "Extract alleles and genes.",
+                        "output_key": "task_input",
+                    },
+                },
+                {
+                    "id": "allele_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "allele_extractor",
+                        "agent_display_name": "Allele Extraction",
+                        "output_key": "alleles",
+                    },
+                },
+                {
+                    "id": "allele_csv",
+                    "type": "output",
+                    "data": {
+                        "agent_id": "csv_formatter",
+                        "agent_display_name": "Allele CSV",
+                        "output_key": "allele_csv",
+                    },
+                },
+                {
+                    "id": "gene_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "gene_extractor",
+                        "agent_display_name": "Gene Extraction",
+                        "output_key": "genes",
+                    },
+                },
+            ],
+            "edges": [
+                {
+                    "id": "control_1",
+                    "source": "task_input_0",
+                    "target": "allele_1",
+                    "role": "control_flow",
+                },
+                {
+                    "id": "output_1",
+                    "source": "allele_1",
+                    "target": "allele_csv",
+                    "role": "output_attachment",
+                },
+                {
+                    "id": "control_2",
+                    "source": "allele_1",
+                    "target": "gene_1",
+                    "role": "control_flow",
+                },
+            ],
+        }
+    )
+
+    result = handler()
+
+    assert result["success"] is True
+    assert [step["node_id"] for step in result["steps"]] == [
+        "allele_1",
+        "gene_1",
+        "allele_csv",
+    ]
+    formatter_step = result["steps"][2]
+    assert formatter_step["output_attachment"]["source_node_id"] == "allele_1"
+    assert formatter_step["output_attachment"]["source_agent_id"] == "allele_extractor"
+    assert result["edges"][1]["role"] == "output_attachment"
+    assert result["has_critical_issues"] is False
+    assert not any(
+        issue["code"] == "entry_mismatch"
+        for issue in result["executable_graph"]["issues"]
+    )
+    markdown = result["execution_order_markdown"]
+    assert "Formatter output branches" in markdown
+    assert "Multiple formatter branches create multiple independent" in markdown
+    assert "Only projects the result owned by Allele Extraction" in markdown
 
 
 def test_get_current_flow_handler_flags_attachment_only_validator_step(monkeypatch):
@@ -538,7 +648,7 @@ def test_get_current_flow_handler_flags_attachment_only_validator_step(monkeypat
 
     assert result["success"] is True
     assert result["has_critical_issues"] is True
-    assert result["steps"][1]["flow_step_policy_warning"].startswith(
+    assert result["steps"][0]["flow_step_policy_warning"].startswith(
         "Allele Validation is an attachment-only validator"
     )
     assert any(
@@ -600,7 +710,7 @@ def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch)
         flow_tools,
         "current_flow_domain_envelope_analysis",
         lambda **_kwargs: {
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "envelope_node_count": 1,
             "nodes": [
                 {
@@ -686,7 +796,7 @@ def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch)
     result = handler()
 
     assert result["success"] is True
-    assert result["domain_envelope_analysis"]["semantic_source"] == "domain_envelope.objects"
+    assert result["domain_envelope_analysis"]["semantic_source"] == "domain_envelope.extracted_objects"
     assert result["domain_envelope_analysis"]["envelope_node_count"] == 1
     assert (
         result["domain_envelope_analysis"]["nodes"][0]["validation_schedule"][
@@ -761,11 +871,25 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     create = flow_tools._create_flow_handler()
 
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 123)
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "gene", "csv_formatter"],
+    )
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
-        {"pdf_extraction": {"name": "PDF Specialist"}, "gene": {"name": "Gene Specialist"}},
+        {
+            "pdf_extraction": {
+                "name": "PDF Specialist",
+                "category": "Extraction",
+            },
+            "gene": {"name": "Gene Specialist", "category": "Validation"},
+            "csv_formatter": {
+                "name": "CSV Formatter",
+                "category": "Output",
+            },
+        },
     )
 
     import src.models.sql as sql_module
@@ -785,6 +909,47 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     assert result["success"] is True
     assert "flow_id" in result
     assert success_db.closed is True
+    assert success_db.added.flow_definition["version"] == "1.1"
+
+    branch_db = _FakeDB()
+    monkeypatch.setattr(sql_module, "get_db", _gen_db(branch_db))
+    branch_result = create(
+        name="Branched Output Flow",
+        description="Extract and export while retaining the control chain",
+        steps=[
+            {"agent_id": "pdf_extraction", "step_goal": "extract"},
+            {
+                "agent_id": "csv_formatter",
+                "source_step": 1,
+                "output_filename_template": (
+                    "{{input_filename_stem}}-{{timestamp}}.csv"
+                ),
+            },
+            {"agent_id": "gene", "step_goal": "validate"},
+        ],
+    )
+    assert branch_result["success"] is True, branch_result
+    assert branch_db.added.flow_definition["version"] == "1.1"
+    assert [node["type"] for node in branch_db.added.flow_definition["nodes"]] == [
+        "task_input",
+        "agent",
+        "output",
+        "agent",
+    ]
+    assert branch_db.added.flow_definition["edges"][1] == {
+        "id": "output_edge_2",
+        "source": "step_1",
+        "target": "step_2",
+        "role": "output_attachment",
+        "satisfies_binding_id": None,
+        "replaces_attachment_id": None,
+        "condition": None,
+    }
+    assert branch_db.added.flow_definition["edges"][2]["source"] == "step_1"
+    assert branch_db.added.flow_definition["edges"][2]["target"] == "step_3"
+    assert branch_db.added.flow_definition["nodes"][2]["data"][
+        "output_filename_template"
+    ] == "{{input_filename_stem}}-{{timestamp}}.csv"
 
     dup_db = _FakeDB(commit_side_effect=Exception("uq_user_flow_name_active"))
     monkeypatch.setattr(sql_module, "get_db", _gen_db(dup_db))
@@ -957,3 +1122,9 @@ def test_register_flow_tools_registers_five_tools(monkeypatch):
     ]
     assert all(entry["category"] == "flows" for entry in registrations)
     assert all(callable(entry["handler"]) for entry in registrations)
+    create_flow_schema = registrations[0]["input_schema"]
+    step_properties = create_flow_schema["properties"]["steps"]["items"][
+        "properties"
+    ]
+    assert "source_step" in step_properties
+    assert "output_filename_template" in step_properties

@@ -88,7 +88,7 @@ async def test_status_endpoint_maps_upload_stage_to_processing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_status_endpoint_prefers_terminal_job_over_pipeline_conflict(monkeypatch):
+async def test_status_endpoint_does_not_let_completed_job_hide_active_reprocess(monkeypatch):
     document_id = "33333333-3333-3333-3333-333333333333"
 
     async def fake_get_document(_user_sub, _document_id):
@@ -140,7 +140,7 @@ async def test_status_endpoint_prefers_terminal_job_over_pipeline_conflict(monke
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 
-    assert result["processing_status"] == "completed"
+    assert result["processing_status"] == "processing"
     assert result["pipeline_status"]["current_stage"] == "completed"
     assert result["job_status"] == "completed"
 

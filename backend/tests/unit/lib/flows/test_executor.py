@@ -1,5 +1,6 @@
 """Tests for flow executor custom_instructions wiring."""
 import asyncio
+from dataclasses import replace
 import importlib
 import json
 import logging
@@ -45,6 +46,48 @@ async def execute_flow(*args, **kwargs):
         yield event
 
 
+def test_formatter_failure_reason_prefers_private_cannot_complete_payload():
+    reason = _executor_module()._flow_formatter_failure_reason(
+        {
+            "output": "Generic formatter summary",
+            "formatter_failure_output": json.dumps(
+                {
+                    "status": "cannot_complete",
+                    "reason": "Saved rows do not have a reliable join key.",
+                    "missing_data": "One extraction result must own all requested columns.",
+                    "suggested_next_step": "Attach a formatter to each extractor.",
+                }
+            ),
+        }
+    )
+
+    assert reason == (
+        "Saved rows do not have a reliable join key. "
+        "One extraction result must own all requested columns. "
+        "Attach a formatter to each extractor."
+    )
+
+
+def test_internal_specialist_tool_output_finds_formatter_cannot_complete():
+    events = [
+        {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "formatter_cannot_complete"},
+            "internal": {"tool_output": '{"status":"cannot_complete","reason":"no join"}'},
+        }
+    ]
+
+    assert _executor_module()._internal_specialist_tool_output_since(
+        {
+            "live_events": events,
+            "live_index": 0,
+            "collected_events": [],
+            "collected_index": 0,
+        },
+        tool_name="formatter_cannot_complete",
+    ) == '{"status":"cannot_complete","reason":"no join"}'
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -52,9 +95,67 @@ async def execute_flow(*args, **kwargs):
 def _make_flow(nodes):
     """Create a mock CurationFlow with the given nodes list."""
     flow = MagicMock()
-    flow.flow_definition = {"nodes": nodes}
+    flow.flow_definition = {
+        "version": "1.1",
+        "nodes": nodes,
+        "edges": [
+            {
+                "id": f"edge_{index}",
+                "source": nodes[index]["id"],
+                "target": nodes[index + 1]["id"],
+            }
+            for index in range(len(nodes) - 1)
+        ],
+        "entry_node_id": nodes[0]["id"] if nodes else "",
+    }
     flow.name = "Test Flow"
     flow.id = "11111111-1111-1111-1111-111111111111"
+    return flow
+
+
+def _make_output_attachment_flow(nodes, *, source_node_id, output_node_id):
+    """Create a v1.1 flow with one formatter leaf and a continuing control path."""
+
+    flow = _make_flow(nodes)
+    source_node_ids = (
+        [source_node_id] if isinstance(source_node_id, str) else list(source_node_id)
+    )
+    output_node_ids = [output_node_id] if isinstance(output_node_id, str) else list(output_node_id)
+    output_node_id_set = set(output_node_ids)
+    for node in nodes:
+        if node["id"] in output_node_id_set:
+            node["type"] = "output"
+    control_nodes = [node for node in nodes if node["id"] not in output_node_id_set]
+    attachment_pairs = (
+        [(source_node_ids[0], attached_output_node_id) for attached_output_node_id in output_node_ids]
+        if len(source_node_ids) == 1
+        else [(attached_source_node_id, output_node_ids[0]) for attached_source_node_id in source_node_ids]
+    )
+    flow.flow_definition = {
+        "version": "1.1",
+        "nodes": nodes,
+        "edges": [
+            {
+                "id": f"control_{index}",
+                "source": control_nodes[index]["id"],
+                "target": control_nodes[index + 1]["id"],
+                "role": "control_flow",
+            }
+            for index in range(len(control_nodes) - 1)
+        ]
+        + [
+            {
+                "id": f"output_attachment_{index}",
+                "source": attached_source_node_id,
+                "target": attached_output_node_id,
+                "role": "output_attachment",
+            }
+            for index, (attached_source_node_id, attached_output_node_id) in enumerate(
+                attachment_pairs, start=1
+            )
+        ],
+        "entry_node_id": control_nodes[0]["id"],
+    }
     return flow
 
 
@@ -62,6 +163,7 @@ def test_ordered_executable_nodes_treats_validation_edges_as_sidecars():
     """Validation attachment targets should not become ordinary flow steps."""
     flow = MagicMock()
     flow.flow_definition = {
+        "version": "1.1",
         "nodes": [
             _task_input_node(),
             _agent_node("extract_1", "gene_extractor", output_key="extract_output"),
@@ -85,6 +187,285 @@ def test_ordered_executable_nodes_treats_validation_edges_as_sidecars():
     ordered = _executor_module()._get_ordered_executable_nodes(flow)
 
     assert [node["id"] for node in ordered] == ["extract_1", "prep_1"]
+
+
+def test_legacy_v1_formatter_control_graph_is_rejected():
+    """v1.0 formatter control steps are no longer executable."""
+
+    flow = _make_flow(
+        [
+            _task_input_node(),
+            _agent_node("extract_1", "allele_extractor"),
+            _agent_node("output_1", "chat_output"),
+        ]
+    )
+    flow.flow_definition["version"] = "1.0"
+
+    with pytest.raises(
+        ValueError,
+        match="formatter_in_control_flow",
+    ):
+        _executor_module()._get_ordered_executable_nodes(flow)
+
+
+def test_unbound_v1_1_formatter_remains_fail_closed():
+    """A v1.1 formatter must be a typed output attachment."""
+
+    flow = _make_flow(
+        [
+            _task_input_node(),
+            _agent_node("extract_1", "allele_extractor"),
+            _agent_node("output_1", "chat_output"),
+        ]
+    )
+    flow.flow_definition["version"] = "1.1"
+
+    with pytest.raises(
+        ValueError,
+        match="formatter_in_control_flow",
+    ):
+        _executor_module()._get_ordered_executable_nodes(flow)
+
+
+def test_runtime_output_binding_preserves_multiple_strict_sources(monkeypatch):
+    flow = _make_output_attachment_flow(
+        [
+            _task_input_node(),
+            _agent_node("extract_1", "allele_extractor"),
+            _agent_node("extract_2", "gene_extractor"),
+            _agent_node("output_1", "csv_formatter"),
+        ],
+        source_node_id=["extract_1", "extract_2"],
+        output_node_id="output_1",
+    )
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "_resolve_flow_agent_entry",
+        lambda agent_id, **_kwargs: {
+            "category": "Output" if agent_id == "csv_formatter" else "Extraction",
+            "subcategory": "Formatter" if agent_id == "csv_formatter" else "Domain",
+        },
+    )
+
+    bindings = _executor_module()._runtime_output_sources_by_node_id(
+        flow,
+        db_user_id=None,
+    )
+
+    assert bindings == {"output_1": ("extract_1", "extract_2")}
+
+
+@pytest.mark.parametrize(
+    ("category", "output_schema_key", "is_active", "allowed"),
+    [
+        ("Validation", "GOTermResultEnvelope", True, True),
+        ("Validation", None, True, False),
+        ("Validation", "GOTermResultEnvelope", False, False),
+        ("Custom", "GOTermResultEnvelope", True, False),
+        ("General", "GOTermResultEnvelope", True, False),
+    ],
+)
+def test_runtime_output_binding_accepts_only_typed_validation_sources(
+    monkeypatch,
+    category,
+    output_schema_key,
+    is_active,
+    allowed,
+):
+    flow = _make_output_attachment_flow(
+        [
+            _task_input_node(),
+            _agent_node("source_1", "source_agent"),
+            _agent_node("output_1", "csv_formatter"),
+        ],
+        source_node_id="source_1",
+        output_node_id="output_1",
+    )
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "_resolve_flow_agent_entry",
+        lambda agent_id, **_kwargs: {
+            "category": "Output" if agent_id == "csv_formatter" else category,
+            "subcategory": "Formatter" if agent_id == "csv_formatter" else "",
+            "output_schema_key": (
+                None if agent_id == "csv_formatter" else output_schema_key
+            ),
+            "is_active": True if agent_id == "csv_formatter" else is_active,
+        },
+    )
+
+    if allowed:
+        assert _executor_module()._runtime_output_sources_by_node_id(
+            flow,
+            db_user_id=None,
+        ) == {"output_1": ("source_1",)}
+    else:
+        with pytest.raises(
+            _executor_module().FlowTerminalOutputProjectionError,
+            match="typed validation agent",
+        ):
+            _executor_module()._runtime_output_sources_by_node_id(
+                flow,
+                db_user_id=None,
+            )
+
+
+def test_resolved_flow_agent_entry_rejects_unresolvable_validation_schema(monkeypatch):
+    monkeypatch.setattr(
+        _executor_module(),
+        "get_agent_metadata",
+        lambda _agent_id, **_kwargs: {
+            "display_name": "Broken Validator",
+            "category": "Validation",
+            "output_schema_key": "MissingValidatorResult",
+            "is_active": True,
+        },
+    )
+    monkeypatch.setattr(
+        _executor_module(),
+        "resolve_output_schema",
+        lambda _schema_key: None,
+    )
+
+    entry = _executor_module()._resolve_flow_agent_entry("broken_validator")
+
+    assert entry is not None
+    assert entry["produces_flow_artifacts"] is False
+    assert _executor_module().agent_can_source_output_attachment(entry) is False
+
+
+def test_terminal_formatter_bundle_filters_all_and_only_bound_sources(monkeypatch):
+    captured_steps = []
+    expected_bundle = SimpleNamespace(
+        artifacts=[SimpleNamespace(), SimpleNamespace()]
+    )
+
+    def _build_bundle(*, completed_steps, **_kwargs):
+        captured_steps.extend(completed_steps)
+        return expected_bundle
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "build_flow_output_artifact_bundle",
+        _build_bundle,
+    )
+    completed_steps = [
+        {"node_id": "extract_1"},
+        {"node_id": "unbound_extract"},
+        {"node_id": "extract_2"},
+        {"node_id": "output_1"},
+    ]
+
+    bundle = _executor_module()._build_terminal_flow_artifact_bundle(
+        agent_id="csv_formatter",
+        output_format="csv",
+        completed_steps=completed_steps,
+        flow_name="Multi-source flow",
+        source_node_ids=("extract_1", "extract_2"),
+    )
+
+    assert bundle is expected_bundle
+    assert [step["node_id"] for step in captured_steps] == [
+        "extract_1",
+        "extract_2",
+    ]
+
+
+def test_terminal_formatter_bundle_fails_closed_when_any_bound_source_is_missing(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        _executor_module(),
+        "build_flow_output_artifact_bundle",
+        lambda **_kwargs: SimpleNamespace(artifacts=[SimpleNamespace()]),
+    )
+
+    with pytest.raises(
+        _executor_module().FlowTerminalOutputProjectionError,
+        match=r"invalid source node\(s\): 'extract_2' \(0\)",
+    ):
+        _executor_module()._build_terminal_flow_artifact_bundle(
+            agent_id="csv_formatter",
+            output_format="csv",
+            completed_steps=[{"node_id": "extract_1"}],
+            flow_name="Multi-source flow",
+            source_node_ids=("extract_1", "extract_2"),
+        )
+
+
+def test_terminal_formatter_bundle_fails_closed_when_a_source_has_no_artifact(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        _executor_module(),
+        "build_flow_output_artifact_bundle",
+        lambda **_kwargs: SimpleNamespace(artifacts=[SimpleNamespace()]),
+    )
+
+    with pytest.raises(
+        _executor_module().FlowTerminalOutputProjectionError,
+        match="expected one artifact per bound source",
+    ):
+        _executor_module()._build_terminal_flow_artifact_bundle(
+            agent_id="csv_formatter",
+            output_format="csv",
+            completed_steps=[
+                {"node_id": "extract_1"},
+                {"node_id": "extract_2"},
+            ],
+            flow_name="Multi-source flow",
+            source_node_ids=("extract_1", "extract_2"),
+        )
+
+
+def test_migrated_default_task_instruction_preserves_legacy_user_query_behavior():
+    """The synthetic Task Input must not augment runs that already have a query."""
+
+    task = _task_input_node()
+    task["data"]["task_instructions"] = "Execute the 'Test Flow' curation workflow."
+    flow = _make_flow([task, _agent_node("extract_1", "gene")])
+    flow.flow_definition["task_instructions_default_only"] = True
+
+    with_query = _executor_module().build_flow_prompt(
+        flow,
+        user_query="Curate only the selected paper.",
+    )
+    without_query = _executor_module().build_flow_prompt(flow)
+    step_query = _executor_module()._build_flow_step_query(
+        flow=flow,
+        node_data=flow.flow_definition["nodes"][1]["data"],
+        step_number=1,
+        agent_name="Gene Specialist",
+        user_query="Curate only the selected paper.",
+        document_id=None,
+        document_name=None,
+    )
+    step_query_without_request = _executor_module()._build_flow_step_query(
+        flow=flow,
+        node_data=flow.flow_definition["nodes"][1]["data"],
+        step_number=1,
+        agent_name="Gene Specialist",
+        user_query=None,
+        document_id=None,
+        document_name=None,
+    )
+
+    assert "User Query: Curate only the selected paper." in with_query
+    assert "Task Instructions:" not in with_query
+    assert "Task Instructions:" in without_query
+    assert "Execute the 'Test Flow' curation workflow." in without_query
+    assert "Curator run request:\nCurate only the selected paper." in step_query
+    assert "Execute the 'Test Flow' curation workflow." not in step_query
+    assert "Execute the 'Test Flow' curation workflow." not in step_query_without_request
+    assert _executor_module()._build_flow_conversation_summary(
+        flow,
+        "Curate only the selected paper.",
+    ) == "Curate only the selected paper."
+    assert _executor_module()._build_flow_conversation_summary(flow, None) == (
+        "Run flow 'Test Flow'"
+    )
 
 
 def test_validation_groups_from_node_data_rejects_unexpected_group_type():
@@ -300,12 +681,13 @@ def _make_extraction_handoff_audit(
     }
 
 
-def _recording_persist_extraction_results(persisted_requests=None):
+def _recording_persist_idempotent_extraction_results(persisted_requests=None):
     """Build a test double that records requests and returns persistence responses."""
 
     recorded_requests = persisted_requests if persisted_requests is not None else []
 
-    def _persist(requests):
+    def _persist(requests, *, db=None):
+        _ = db
         recorded_requests.extend(requests)
         return [
             SimpleNamespace(
@@ -437,15 +819,14 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
 
     monkeypatch.setattr(
         executor,
-        "persist_extraction_results",
-        _recording_persist_extraction_results(persisted_requests),
+        "persist_idempotent_extraction_results",
+        _recording_persist_idempotent_extraction_results(persisted_requests),
     )
     monkeypatch.setattr(
         executor,
         "ensure_domain_envelope_materialization",
         lambda record, *, persist: materialized.append((record, persist)),
     )
-
     candidate = executor.ExtractionEnvelopeCandidate(
         agent_key="gene_extractor",
         adapter_key="gene",
@@ -456,7 +837,7 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
             "domain_pack_id": "gene",
             "domain_pack_version": "0.1.0",
             "status": "validated",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_mention_evidence",
                     "object_role": "validated_reference",
@@ -466,6 +847,9 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
             ],
             "validation_findings": [],
             "history": [],
+            "metadata": {
+                "source_extraction_result_id": "flow:session-1:step:1:extraction"
+            },
         },
         metadata={"tool_name": "ask_gene_extractor_specialist", "step": 1},
     )
@@ -481,7 +865,235 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
 
     assert len(records) == 1
     assert len(persisted_requests) == 1
+    assert (
+        persisted_requests[0].payload_json["metadata"].get(
+            "source_extraction_result_id"
+        )
+        is None
+    )
     assert materialized == [(records[0], True)]
+
+
+def test_flow_candidate_persistence_normalizes_from_authoritative_record(monkeypatch):
+    """Flow persistence must retain extractor input until its canonical row exists."""
+
+    executor = _executor_module()
+    persisted_requests = []
+    materialized = []
+
+    monkeypatch.setattr(
+        executor,
+        "persist_idempotent_extraction_results",
+        _recording_persist_idempotent_extraction_results(persisted_requests),
+    )
+    monkeypatch.setattr(
+        executor,
+        "ensure_domain_envelope_materialization",
+        lambda record, *, persist: materialized.append((record, persist)),
+    )
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        candidate_count=1,
+        conversation_summary="Extract Crumbs.",
+        payload_json={
+            "summary": "One gene mention was extracted.",
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
+                    "object_id": "gene-row-1",
+                    "payload": {"primary_external_id": "FB:FBgn0259685"},
+                    "evidence_record_ids": ["evidence-1"],
+                }
+            ],
+            "metadata": {},
+            "run_summary": {"candidate_count": 1},
+        },
+        metadata={
+            "flow_id": "flow-1",
+            "tool_name": "ask_gene_extractor_specialist",
+            "step": 1,
+        },
+    )
+
+    records = executor._persist_flow_extraction_candidates(
+        candidates=[candidate],
+        document_id="11111111-1111-1111-1111-111111111111",
+        user_id="curator-1",
+        session_id="session-1",
+        trace_id="trace-1",
+        flow_run_id="flow-run-1",
+    )
+
+    assert len(records) == 1
+    assert len(persisted_requests) == 1
+    persisted_payload = persisted_requests[0].payload_json
+    assert "envelope_id" not in persisted_payload
+    assert persisted_payload["curatable_objects"][0]["object_id"] == "gene-row-1"
+    assert "extracted_objects" not in persisted_payload
+    assert "source_extraction_result_id" not in persisted_payload.get("metadata", {})
+    assert persisted_requests[0].metadata["envelope_id"] == (
+        "flow:flow-run-1:flow-1:1:ask_gene_extractor_specialist:gene_extractor"
+    )
+    assert persisted_requests[0].candidate_count == 1
+    assert persisted_requests[0].idempotency_key.startswith("flow-extraction:")
+    assert persisted_requests[0].payload_hash == executor.canonical_extraction_payload_hash(
+        persisted_payload
+    )
+    assert persisted_requests[0].metadata["flow_step_key"] == (
+        "flow-1:1:ask_gene_extractor_specialist:gene_extractor"
+    )
+    assert materialized == [(records[0], True)]
+
+
+def test_flow_candidate_persistence_retry_has_stable_normalized_payload(monkeypatch):
+    """An extractor-shaped retry must reload one row instead of changing its hash."""
+
+    executor = _executor_module()
+    persisted_requests = []
+    authoritative_by_key = {}
+
+    def persist_idempotently(requests):
+        responses = []
+        for request in requests:
+            persisted_requests.append(request)
+            record = authoritative_by_key.get(request.idempotency_key)
+            if record is None:
+                record = SimpleNamespace(
+                    extraction_result_id="11111111-1111-1111-1111-111111111111",
+                    document_id=request.document_id,
+                    adapter_key=request.adapter_key,
+                    agent_key=request.agent_key,
+                    source_kind=request.source_kind,
+                    origin_session_id=request.origin_session_id,
+                    trace_id=request.trace_id,
+                    flow_run_id=request.flow_run_id,
+                    user_id=request.user_id,
+                    candidate_count=request.candidate_count,
+                    conversation_summary=request.conversation_summary,
+                    payload_json=request.payload_json,
+                    metadata=dict(request.metadata),
+                )
+                authoritative_by_key[request.idempotency_key] = record
+            elif request.payload_hash != record.metadata["payload_hash"]:
+                pytest.fail("identical retry produced an incompatible payload hash")
+            responses.append(SimpleNamespace(extraction_result=record))
+        return responses
+
+    monkeypatch.setattr(
+        executor,
+        "persist_idempotent_extraction_results",
+        persist_idempotently,
+    )
+    monkeypatch.setattr(
+        executor,
+        "ensure_domain_envelope_materialization",
+        lambda record, *, persist: None,
+    )
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        candidate_count=1,
+        conversation_summary="Extract Crumbs.",
+        payload_json={
+            "summary": "One gene mention was extracted.",
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
+                    "object_id": "gene-row-1",
+                    "payload": {"primary_external_id": "FB:FBgn0259685"},
+                    "evidence_record_ids": ["evidence-1"],
+                }
+            ],
+            "metadata": {},
+            "run_summary": {"candidate_count": 1},
+        },
+        metadata={
+            "flow_id": "flow-1",
+            "tool_name": "ask_gene_extractor_specialist",
+            "step": 1,
+        },
+    )
+    persistence_scope = {
+        "candidates": [candidate],
+        "document_id": "11111111-1111-1111-1111-111111111111",
+        "user_id": "curator-1",
+        "session_id": "session-1",
+        "flow_run_id": "flow-run-1",
+    }
+
+    first_records = executor._persist_flow_extraction_candidates(
+        **persistence_scope,
+        trace_id="trace-1",
+    )
+    retry_records = executor._persist_flow_extraction_candidates(
+        **persistence_scope,
+        trace_id="trace-2",
+    )
+
+    assert len(authoritative_by_key) == 1
+    assert [record.extraction_result_id for record in first_records] == [
+        record.extraction_result_id for record in retry_records
+    ]
+    assert [executor._flow_extraction_result_ref(record) for record in first_records] == [
+        executor._flow_extraction_result_ref(record) for record in retry_records
+    ]
+    assert persisted_requests[0].payload_json == persisted_requests[1].payload_json
+    assert persisted_requests[0].payload_hash == persisted_requests[1].payload_hash
+    assert "source_extraction_result_id" not in persisted_requests[0].payload_json.get(
+        "metadata", {}
+    )
+
+
+def test_flow_candidate_persistence_rejects_mixed_shape_candidate(monkeypatch):
+    """New flow candidates must not mix canonical and extractor envelope shapes."""
+
+    executor = _executor_module()
+    monkeypatch.setattr(
+        executor,
+        "persist_idempotent_extraction_results",
+        lambda _requests: pytest.fail("mixed-shape candidates must fail before persist"),
+    )
+
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        candidate_count=1,
+        payload_json={
+            "envelope_id": "env-mixed-1",
+            "domain_pack_id": "gene",
+            "domain_pack_version": "0.1.0",
+            "status": "extracted",
+            "extracted_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "payload": {"primary_external_id": "FB:canonical"},
+                }
+            ],
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "payload": {"primary_external_id": "FB:extractor"},
+                }
+            ],
+            "history": [],
+            "validation_findings": [],
+            "metadata": {},
+        },
+        metadata={"tool_name": "ask_gene_extractor_specialist", "step": 1},
+    )
+
+    with pytest.raises(ValueError, match="mixes DomainEnvelope.extracted_objects"):
+        executor._persist_flow_extraction_candidates(
+            candidates=[candidate],
+            document_id="11111111-1111-1111-1111-111111111111",
+            user_id="curator-1",
+            session_id="session-1",
+            trace_id="trace-1",
+            flow_run_id=None,
+        )
 
 
 def test_flow_candidate_persistence_skips_legacy_non_domain_payloads(monkeypatch):
@@ -492,8 +1104,8 @@ def test_flow_candidate_persistence_skips_legacy_non_domain_payloads(monkeypatch
 
     monkeypatch.setattr(
         executor,
-        "persist_extraction_results",
-        _recording_persist_extraction_results(),
+        "persist_idempotent_extraction_results",
+        _recording_persist_idempotent_extraction_results(),
     )
     monkeypatch.setattr(
         executor,
@@ -640,7 +1252,8 @@ class TestCountAgentIds:
 
     def test_empty_flow(self):
         flow = _make_flow([])
-        assert _count_agent_ids(flow) == {}
+        with pytest.raises(ValueError, match="ambiguous_entry"):
+            _count_agent_ids(flow)
 
 
 class TestFlowTemplateHelpers:
@@ -754,7 +1367,7 @@ MOCK_REGISTRY = {
             "launchable": True,
         },
     },
-    "csv_output_formatter": {
+    "csv_formatter": {
         "name": "CSV Output Formatter",
         "description": "Format the final CSV file",
         "category": "Output",
@@ -766,7 +1379,7 @@ MOCK_REGISTRY = {
             "launchable": True,
         },
     },
-    "json_output_formatter": {
+    "json_formatter": {
         "name": "JSON Output Formatter",
         "description": "Format the final JSON file",
         "category": "Output",
@@ -866,7 +1479,7 @@ class TestDbUserIdPropagation:
         flow = _make_flow([_agent_node("n1", "gene")])
         get_all_agent_tools(flow, db_user_id=77)
 
-        assert observed == [77]
+        assert observed == [77, 77]
         assert mock_get_agent.call_args.kwargs.get("db_user_id") == 77
 
     @patch("src.lib.flows.executor._create_streaming_tool")
@@ -1051,97 +1664,44 @@ class TestGetAllAgentToolsCustomInstructions:
         assert mock_agent.instructions == base_prompt
         assert "additional_runtime_context" not in mock_get_agent.call_args.kwargs
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_include_evidence_guidance_prepended(self, mock_get_agent, mock_streaming):
+    def test_include_evidence_guidance_prepended(self):
         """include_evidence should reuse the existing step-local instruction prefix."""
-        base_prompt = "You are the output specialist."
-        mock_agent = MagicMock(spec=Agent)
-        mock_agent.instructions = base_prompt
-        mock_get_agent.return_value = mock_agent
-        mock_streaming.return_value = MagicMock()
-
-        flow = _make_flow([
-            _agent_node("n1", "chat_output_formatter", include_evidence=True),
-        ])
-
-        get_all_agent_tools(flow)
-
-        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        runtime_context = _executor_module()._build_flow_step_instruction_prefix(
+            custom_instructions=None,
+            include_evidence=True,
+        )
         assert runtime_context.startswith("## OUTPUT EVIDENCE REQUIREMENT")
         assert "include supporting evidence from earlier steps" in runtime_context
-        assert mock_agent.instructions == base_prompt
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_custom_instructions_and_include_evidence_share_prefix(self, mock_get_agent, mock_streaming):
+    def test_custom_instructions_and_include_evidence_share_prefix(self):
         """Custom instructions and evidence guidance should share one runtime context."""
-        base_prompt = "You are the output specialist."
-        mock_agent = MagicMock(spec=Agent)
-        mock_agent.instructions = base_prompt
-        mock_get_agent.return_value = mock_agent
-        mock_streaming.return_value = MagicMock()
-
-        flow = _make_flow([
-            _agent_node(
-                "n1",
-                "chat_output_formatter",
-                custom_instructions="Group results by species.",
-                include_evidence=True,
-            ),
-        ])
-
-        get_all_agent_tools(flow)
-
-        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        runtime_context = _executor_module()._build_flow_step_instruction_prefix(
+            custom_instructions="Group results by species.",
+            include_evidence=True,
+        )
         assert runtime_context.startswith("## CUSTOM INSTRUCTIONS")
         assert "Group results by species." in runtime_context
         assert "## OUTPUT EVIDENCE REQUIREMENT" in runtime_context
         assert runtime_context.index("## CUSTOM INSTRUCTIONS") < runtime_context.index(
             "## OUTPUT EVIDENCE REQUIREMENT"
         )
-        assert mock_agent.instructions == base_prompt
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_output_formatter_defaults_include_evidence_when_flag_missing(self, mock_get_agent, mock_streaming):
+    def test_output_formatter_defaults_include_evidence_when_flag_missing(self):
         """Output/formatter steps should include evidence by default when the flag is absent."""
-        base_prompt = "You are the output specialist."
-        mock_agent = MagicMock(spec=Agent)
-        mock_agent.instructions = base_prompt
-        mock_get_agent.return_value = mock_agent
-        mock_streaming.return_value = MagicMock()
-
-        flow = _make_flow([
-            _agent_node("n1", "chat_output_formatter"),
-        ])
-
-        get_all_agent_tools(flow)
-
-        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        runtime_context = _executor_module()._build_flow_step_instruction_prefix(
+            custom_instructions=None,
+            include_evidence=True,
+        )
         assert runtime_context.startswith("## OUTPUT EVIDENCE REQUIREMENT")
-        assert mock_agent.instructions == base_prompt
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_output_formatter_false_flag_excludes_evidence(self, mock_get_agent, mock_streaming):
+    def test_output_formatter_false_flag_excludes_evidence(self):
         """Explicit false should prepend exclusion guidance for output/formatter steps."""
-        base_prompt = "You are the output specialist."
-        mock_agent = MagicMock(spec=Agent)
-        mock_agent.instructions = base_prompt
-        mock_get_agent.return_value = mock_agent
-        mock_streaming.return_value = MagicMock()
-
-        flow = _make_flow([
-            _agent_node("n1", "chat_output_formatter", include_evidence=False),
-        ])
-
-        get_all_agent_tools(flow)
-
-        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        runtime_context = _executor_module()._build_flow_step_instruction_prefix(
+            custom_instructions=None,
+            include_evidence=False,
+        )
         assert runtime_context.startswith("## OUTPUT EVIDENCE EXCLUSION")
         assert "do NOT include supporting evidence" in runtime_context
-        assert mock_agent.instructions == base_prompt
 
 
 # ===========================================================================
@@ -1284,6 +1844,201 @@ class TestGetAllAgentToolsDuplicateAgents:
 
 class TestGetAllAgentToolsStepOrderRuntime:
     """Tests strict step order against real FunctionTool invocation shape."""
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_concurrent_duplicate_claim_invokes_specialist_once(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        specialist_started = asyncio.Event()
+        release_specialist = asyncio.Event()
+        invocations = []
+
+        def _make_streaming_tool(
+            agent, tool_name, tool_description, specialist_name, **_kwargs
+        ):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                invocations.append(tool_name)
+                specialist_started.set()
+                await release_specialist.wait()
+                return f"ok:{tool_name}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        tools, _, _, execution_state = get_all_agent_tools(
+            _make_flow([_agent_node("n1", "gene")]),
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        owner = asyncio.create_task(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "owner"}))
+        )
+        await specialist_started.wait()
+        duplicate = asyncio.create_task(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "duplicate"}))
+        )
+        duplicate_result = await duplicate
+        release_specialist.set()
+        owner_result, = await asyncio.gather(owner)
+
+        assert owner_result == "ok:ask_gene_specialist"
+        assert "already in progress" in duplicate_result
+        assert invocations == ["ask_gene_specialist"]
+        assert execution_state["next_tool_index"] == 1
+        assert len(execution_state["completed_steps"]) == 1
+        assert execution_state["in_flight_step"] is None
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_later_step_cannot_enter_while_current_step_is_in_flight(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        invocations = []
+
+        def _make_streaming_tool(
+            agent, tool_name, tool_description, specialist_name, **_kwargs
+        ):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                invocations.append(tool_name)
+                if tool_name == "ask_gene_specialist":
+                    first_started.set()
+                    await release_first.wait()
+                return f"ok:{tool_name}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        tools, _, _, execution_state = get_all_agent_tools(
+            _make_flow([
+                _agent_node("n1", "gene"),
+                _agent_node("n2", "disease"),
+            ]),
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        current = asyncio.create_task(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "current"}))
+        )
+        await first_started.wait()
+        later = asyncio.create_task(
+            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "later"}))
+        )
+        later_result = await later
+        release_first.set()
+        await asyncio.gather(current)
+
+        assert "still in progress" in later_result
+        assert invocations == ["ask_gene_specialist"]
+        assert execution_state["next_tool_index"] == 1
+
+        retry_result = await tools[1].on_invoke_tool(
+            tool_ctx, json.dumps({"query": "retry"})
+        )
+        assert retry_result == "ok:ask_disease_specialist"
+        assert invocations == ["ask_gene_specialist", "ask_disease_specialist"]
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_independent_flow_runs_do_not_share_step_claims(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        both_started = asyncio.Event()
+        release_specialists = asyncio.Event()
+        invocations = 0
+
+        def _make_streaming_tool(
+            agent, tool_name, tool_description, specialist_name, **_kwargs
+        ):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                nonlocal invocations
+                invocations += 1
+                if invocations == 2:
+                    both_started.set()
+                await release_specialists.wait()
+                return f"ok:{query}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        flow = _make_flow([_agent_node("n1", "gene")])
+        first_tools, _ = get_all_agent_tools(flow)
+        second_tools, _ = get_all_agent_tools(flow)
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        first = asyncio.create_task(
+            first_tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "first"}))
+        )
+        second = asyncio.create_task(
+            second_tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "second"}))
+        )
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        release_specialists.set()
+        await asyncio.gather(first, second)
+
+        assert invocations == 2
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_cancelled_owner_releases_claim_without_advancing_step(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        specialist_started = asyncio.Event()
+        block_first_invocation = asyncio.Event()
+        invocations = 0
+
+        def _make_streaming_tool(
+            agent, tool_name, tool_description, specialist_name, **_kwargs
+        ):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                nonlocal invocations
+                invocations += 1
+                if invocations == 1:
+                    specialist_started.set()
+                    await block_first_invocation.wait()
+                return "ok"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        tools, _, _, execution_state = get_all_agent_tools(
+            _make_flow([_agent_node("n1", "gene")]),
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        owner = asyncio.create_task(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "owner"}))
+        )
+        await specialist_started.wait()
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+
+        assert execution_state["in_flight_step"] is None
+        assert execution_state["next_tool_index"] == 0
+        assert execution_state["completed_steps"] == []
+
+        assert await tools[0].on_invoke_tool(
+            tool_ctx, json.dumps({"query": "retry"})
+        ) == "ok"
+        assert invocations == 2
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -1708,80 +2463,65 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_custom_output_step_uses_projection_planner_not_formatter_model(
-        self, mock_get_agent, mock_streaming, monkeypatch
+    def test_custom_output_step_invokes_bound_formatter_agent(
+        self, mock_get_agent, mock_streaming
     ):
-        """Custom terminal output should plan a projection, then save deterministically."""
+        """Custom terminal output should run the visible formatter with a bound bundle."""
         executor = _executor_module()
         from src.lib.openai_agents.streaming_tools import (
             clear_collected_events,
             get_collected_events,
         )
 
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        planner_calls = []
+        agent_builds = []
         formatter_invocations = []
-        save_calls = []
+
+        def _fake_get_agent(agent_id, **kwargs):
+            agent = MagicMock(spec=Agent, instructions="Base")
+            agent.name = {
+                "gene": "Gene Specialist",
+                "csv_formatter": "CSV File Formatter",
+            }.get(agent_id, agent_id)
+            agent.agent_id = agent_id
+            agent.runtime_kwargs = kwargs
+            agent_builds.append({"agent_id": agent_id, "kwargs": kwargs, "agent": agent})
+            return agent
+
+        mock_get_agent.side_effect = _fake_get_agent
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
-                if tool_name == "ask_csv_output_formatter_specialist":
-                    formatter_invocations.append(query)
-                    raise AssertionError("Formatter model path should not run")
+                if tool_name == "ask_csv_formatter_specialist":
+                    formatter_invocations.append(
+                        {
+                            "query": query,
+                            "agent_kwargs": agent.runtime_kwargs,
+                        }
+                    )
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "file_id": "file-visible-flow-csv",
+                            "filename": "visible-flow.csv",
+                            "format": "csv",
+                            "download_url": "/api/files/file-visible-flow-csv/download",
+                        }
+                    )
                 return json.dumps(_structured_step_output("TP53"))
 
             return _tool
 
-        async def _fake_projection_planner(**kwargs):
-            planner_calls.append(kwargs)
-            plan = executor.default_projection_plan(
-                kwargs["bundle"],
-                output_format=kwargs["output_format"],
-            )
-            return executor.finalize_output_projection(kwargs["bundle"], plan)
-
-        async def _fake_save_csv_impl(
-            data_json: str,
-            filename: str,
-            columns: str | None = None,
-        ) -> dict:
-            save_calls.append(
-                {
-                    "data": json.loads(data_json),
-                    "columns": json.loads(columns or "[]"),
-                    "filename": filename,
-                }
-            )
-            return {
-                "file_id": "file-planned-flow-csv",
-                "filename": "planned-flow.csv",
-                "format": "csv",
-                "size_bytes": 123,
-                "mime_type": "text/csv",
-                "download_url": "/api/files/file-planned-flow-csv/download",
-                "created_at": "2026-04-26T00:00:00Z",
-            }
-
         mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            executor,
-            "_run_output_projection_planner",
-            _fake_projection_planner,
-        )
-        monkeypatch.setattr(
-            "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
-            _fake_save_csv_impl,
-        )
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _agent_node("n1", "gene", output_key="gene_output"),
             _agent_node(
                 "n2",
-                "csv_output_formatter",
+                "csv_formatter",
                 custom_instructions="Use object rows and keep a compact CSV export.",
             ),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
 
         clear_collected_events()
         try:
@@ -1800,14 +2540,24 @@ class TestGetAllAgentToolsStepOrderRuntime:
             clear_collected_events()
 
         result = json.loads(result_text)
-        assert result["file_id"] == "file-planned-flow-csv"
-        assert len(planner_calls) == 1
-        assert planner_calls[0]["agent_id"] == "csv_output_formatter"
-        assert "compact CSV export" in planner_calls[0]["node_data"]["custom_instructions"]
-        assert formatter_invocations == []
-        assert save_calls[0]["filename"] == "Test_Flow_csv_export"
-        assert "TP53" in save_calls[0]["data"][0]["artifact_preview"]
-        assert execution_state["completed_steps"][-1]["agent_id"] == "csv_output_formatter"
+        assert result["file_id"] == "file-visible-flow-csv"
+        assert [build["agent_id"] for build in agent_builds] == [
+            "gene",
+            "csv_formatter",
+        ]
+        assert len(formatter_invocations) == 1
+        formatter_kwargs = formatter_invocations[0]["agent_kwargs"]
+        assert formatter_kwargs["formatter_output_format"] == "csv"
+        assert formatter_kwargs["formatter_agent_id"] == "csv_formatter"
+        assert len(formatter_kwargs["formatter_bundle"].artifacts) == 1
+        runtime_context = "\n".join(formatter_kwargs["additional_runtime_context"])
+        assert "FLOW FORMATTER SOURCE BUNDLE" in runtime_context
+        assert "compact CSV export" in runtime_context
+        assert "filename_hint has already been resolved" in runtime_context
+        assert "trace identifier suffix" in runtime_context
+        assert "trace prefix" not in runtime_context
+        assert "A timestamp is included only when" in runtime_context
+        assert execution_state["completed_steps"][-1]["agent_id"] == "csv_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
         assert "extraction_handoff_audit" not in execution_state["completed_steps"][-1]
         formatter_audit_events = [
@@ -1815,63 +2565,76 @@ class TestGetAllAgentToolsStepOrderRuntime:
             for event in collected_events
             if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
             and event.get("data", {}).get("toolName")
-            == "ask_csv_output_formatter_specialist"
+            == "ask_csv_formatter_specialist"
         ]
         assert formatter_audit_events == []
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_literal_only_terminal_output_can_run_without_structured_artifacts(
+    def test_configured_projection_plan_is_formatter_context_not_executor_save(
         self, mock_get_agent, mock_streaming, monkeypatch
     ):
-        """Literal-only formatter plans can create deterministic smoke artifacts."""
-        executor = _executor_module()
-
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        """Flow projection_plan is guidance for the real formatter, not an executor bypass."""
+        formatter_contexts = []
         formatter_invocations = []
-        save_calls = []
+
+        def _fake_get_agent(agent_id, **kwargs):
+            agent = MagicMock(spec=Agent, instructions="Base")
+            agent.name = {
+                "pdf_extraction": "General PDF Extraction Agent",
+                "json_formatter": "JSON File Formatter",
+            }.get(agent_id, agent_id)
+            agent.agent_id = agent_id
+            agent.runtime_kwargs = kwargs
+            return agent
+
+        mock_get_agent.side_effect = _fake_get_agent
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
-                formatter_invocations.append((tool_name, query))
-                return "PDF specialist completed document access for batch smoke."
+                if tool_name == "ask_json_formatter_specialist":
+                    formatter_invocations.append((tool_name, query))
+                    formatter_contexts.extend(agent.runtime_kwargs["additional_runtime_context"])
+                    return json.dumps(
+                        {
+                            "status": "cannot_complete",
+                            "saved_file": False,
+                            "reason": "literal-only files are not source-backed",
+                        }
+                    )
+                return json.dumps(
+                    {
+                        "domain_pack_id": "generic",
+                        "envelope_id": "env-generic-1",
+                        "extracted_objects": [
+                            {
+                                "object_type": "GenericFinding",
+                                "payload": {"label": "batch smoke finding"},
+                            }
+                        ],
+                    }
+                )
 
             return _tool
 
-        async def _fake_save_json_impl(
-            data_json: str,
-            filename: str,
-            pretty: bool = False,
-        ) -> dict:
-            save_calls.append(
-                {
-                    "data": json.loads(data_json),
-                    "filename": filename,
-                    "pretty": pretty,
-                }
-            )
-            return {
-                "file_id": "file-literal-json",
-                "filename": "literal.json",
-                "format": "json",
-                "size_bytes": 42,
-                "mime_type": "application/json",
-                "download_url": "/api/files/file-literal-json/download",
-                "created_at": "2026-06-07T00:00:00Z",
-            }
-
         mock_streaming.side_effect = _make_streaming_tool
         monkeypatch.setattr(
-            executor,
-            "get_agent_metadata",
+            "src.lib.flows.executor.get_agent_metadata",
             lambda agent_id, **_kwargs: {
                 "display_name": {
                     "pdf_extraction": "General PDF Extraction Agent",
                     "json_formatter": "JSON File Formatter",
                 }.get(agent_id, agent_id),
                 "description": "",
-                "category": "",
+                "category": (
+                    "Output" if agent_id == "json_formatter" else "Extraction"
+                ),
+                "subcategory": (
+                    "Formatter" if agent_id == "json_formatter" else "Document"
+                ),
+                "output_schema_key": None,
+                "is_active": True,
                 "requires_document": agent_id == "pdf_extraction",
                 "tool_name": {
                     "pdf_extraction": "ask_pdf_extraction_specialist",
@@ -1881,12 +2644,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "curation_metadata": None,
             },
         )
-        monkeypatch.setattr(
-            "src.lib.openai_agents.tools.file_output_tools._save_json_impl",
-            _fake_save_json_impl,
-        )
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _agent_node("n1", "pdf_extraction", output_key="pdf_output"),
             _agent_node(
                 "n2",
@@ -1894,7 +2653,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 output_key="final_output",
                 custom_instructions="Save the literal smoke status JSON artifact.",
             ),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
         flow.flow_definition["nodes"][1]["data"]["projection_plan"] = {
             "format": "json",
             "row_source": "artifact",
@@ -1930,63 +2689,26 @@ class TestGetAllAgentToolsStepOrderRuntime:
         )
 
         result = json.loads(result_text)
-        assert result["file_id"] == "file-literal-json"
-        assert save_calls == [
-            {
-                "data": [{"check": "batch_file_output", "status": "completed"}],
-                "filename": "Test_Flow_json_export",
-                "pretty": True,
-            }
-        ]
+        assert result["status"] == "cannot_complete"
+        assert result["saved_file"] is False
         assert len(formatter_invocations) == 1
-        assert formatter_invocations[0][0] == "ask_pdf_extraction_specialist"
-        assert "General PDF Extraction Agent" in formatter_invocations[0][1]
+        assert formatter_invocations[0][0] == "ask_json_formatter_specialist"
+        joined_context = "\n".join(formatter_contexts)
+        assert "FLOW FORMATTER SOURCE BUNDLE" in joined_context
+        assert "configured_projection_plan" in joined_context
+        assert "batch_file_output" in joined_context
         assert execution_state["completed_steps"][-1]["agent_id"] == "json_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_terminal_output_without_artifacts_fails_before_formatter_model(
-        self, mock_get_agent, mock_streaming
-    ):
-        """Terminal formatter steps with no artifacts must not call the model formatter."""
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        formatter_invocations = []
+    @pytest.mark.parametrize(
+        "agent_id",
+        ("csv_formatter", "json_formatter", "chat_output_formatter", "chat_output"),
+    )
+    def test_legacy_terminal_output_without_binding_is_rejected(self, agent_id):
+        flow = _make_flow([_task_input_node(), _agent_node("n1", agent_id)])
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str) -> str:
-                formatter_invocations.append((tool_name, query))
-                raise AssertionError("ordinary formatter fallback must not run")
-
-            return _tool
-
-        mock_streaming.side_effect = _make_streaming_tool
-
-        for agent_id in (
-            "csv_output_formatter",
-            "json_output_formatter",
-            "chat_output_formatter",
-        ):
-            flow = _make_flow([_agent_node("n1", agent_id)])
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-
-            result = asyncio.run(
-                tools[0].on_invoke_tool(
-                    tool_ctx,
-                    json.dumps({"query": "format"}),
-                )
-            )
-
-            assert "no completed structured artifacts" in result
-            assert "cannot fall back to ordinary formatter models" in result
-            assert execution_state["completed_steps"] == []
-
-        assert formatter_invocations == []
+        with pytest.raises(ValueError, match="formatter_in_control_flow"):
+            get_all_agent_tools(flow, include_unavailable=True)
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -2096,7 +2818,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-automatic",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2127,7 +2849,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
 
         class _Registry:
@@ -2245,7 +2967,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-unsupported-phenotype",
             domain_pack_id="agr.alliance.phenotype",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="PhenotypeTerm",
                     pending_ref_id="phenotype-term-1",
@@ -2315,7 +3037,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
 
         class _Registry:
@@ -2395,7 +3117,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-non-dispatch",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2419,7 +3141,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
 
         class _Registry:
@@ -2487,7 +3209,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-already-validated",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2518,7 +3240,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
         envelope = envelope.model_copy(
             update={
@@ -2604,7 +3326,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-already-attempted",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2635,7 +3357,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
         envelope = envelope.model_copy(
             update={
@@ -2698,8 +3420,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
         ]
 
-    def test_supplemental_validation_group_runs_custom_validator_node(self, monkeypatch):
-        """Supplemental validator attachments should execute against the source revision."""
+    def test_supplemental_validation_groups_run_every_custom_validator_node(
+        self, monkeypatch
+    ):
+        """Distinct supplemental sidecars must all execute against the source revision."""
         executor = _executor_module()
         from src.lib.domain_packs.validation_registry import (
             ValidationBindingState,
@@ -2713,7 +3437,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-supplemental",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2741,16 +3465,27 @@ class TestGetAllAgentToolsStepOrderRuntime:
             },
             expected_result_fields={"identifier": "gene.identifier"},
         )
-        match = ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=envelope.objects[0],
+        second_binding = replace(
+            binding,
+            binding_id="custom.supplemental.identifier",
+        )
+        matches = (
+            ValidatorBindingMatch(
+                binding=binding,
+                envelope=envelope,
+                object_envelope=envelope.extracted_objects[0],
+            ),
+            ValidatorBindingMatch(
+                binding=second_binding,
+                envelope=envelope,
+                object_envelope=envelope.extracted_objects[0],
+            ),
         )
 
         class _Registry:
             def match_bindings(self, _envelope, *, states):
                 assert states == [ValidationBindingState.ACTIVE]
-                return (match,)
+                return matches
 
         calls = []
 
@@ -2801,9 +3536,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "_run_custom_flow_validator_agent",
             _fake_custom_validator,
         )
-        flow = _make_flow([
-            _agent_node("supplemental_validator", "custom_validator"),
-        ])
+        flow = _make_flow(
+            [
+                _agent_node("supplemental_validator", "custom_validator_symbol"),
+                _agent_node(
+                    "supplemental_identifier_validator",
+                    "custom_validator_identifier",
+                ),
+            ]
+        )
 
         materialization_inputs, selector_findings, metadata = asyncio.run(
             executor._collect_flow_validator_materialization_inputs(
@@ -2817,7 +3558,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
                         "binding_id": "custom.supplemental",
                         "edge_id": "validation-1",
                         "validator_node_id": "supplemental_validator",
-                    }
+                    },
+                    {
+                        "group_id": "edge:validation-2",
+                        "state": "supplemental",
+                        "binding_id": "custom.supplemental.identifier",
+                        "edge_id": "validation-2",
+                        "validator_node_id": "supplemental_identifier_validator",
+                    },
                 ],
                 flow=flow,
                 agent_context={"user_id": "curator-1"},
@@ -2825,49 +3573,56 @@ class TestGetAllAgentToolsStepOrderRuntime:
         )
 
         assert selector_findings == []
-        assert len(calls) == 1
-        assert calls[0]["binding_match"] is match
-        assert calls[0]["source_envelope_id"] == "env-supplemental"
-        assert calls[0]["source_envelope_revision"] == 7
-        assert calls[0]["request"].validator_binding_id == "custom.supplemental"
-        assert calls[0]["request"].validator_agent.package_id == "flow"
-        assert calls[0]["request"].validator_agent.agent_id == "custom_validator"
-        assert calls[0]["request"].request_id.endswith(
-            ":flow-validator:custom_validator"
-        )
-        assert len(materialization_inputs) == 1
-        assert materialization_inputs[0].match is match
-        assert materialization_inputs[0].request is calls[0]["request"]
-        assert len(metadata) == 1
-        assert {
-            "group_id": metadata[0]["group_id"],
-            "state": metadata[0]["state"],
-            "validator_binding_id": metadata[0]["validator_binding_id"],
-            "status": metadata[0]["status"],
-            "request_id": metadata[0]["request_id"],
-            "missing_expected_fields": metadata[0]["missing_expected_fields"],
-        } == {
-            "group_id": "edge:validation-1",
-            "state": "supplemental",
-            "validator_binding_id": "custom.supplemental",
-            "status": "resolved",
-            "request_id": calls[0]["request"].request_id,
-            "missing_expected_fields": [],
-        }
-        assert metadata[0]["selected_inputs"] == {"identifier": "AGR:0001"}
-        assert metadata[0]["expected_result_fields"] == {
-            "identifier": "gene.identifier"
-        }
-        assert metadata[0]["lookup_attempts"] == [
-            {
-                "provider": "flow_validator",
-                "method": "non_lookup_validation",
-                "query": {"source_envelope_revision": 7},
-                "result_count": 1,
-                "outcome": "success",
-                "message": None,
-            }
+        assert len(calls) == 2
+        assert [call["binding_match"] for call in calls] == list(matches)
+        assert {call["source_envelope_id"] for call in calls} == {"env-supplemental"}
+        assert {call["source_envelope_revision"] for call in calls} == {7}
+        assert [call["request"].validator_binding_id for call in calls] == [
+            "custom.supplemental",
+            "custom.supplemental.identifier",
         ]
+        assert [call["request"].validator_agent.agent_id for call in calls] == [
+            "custom_validator_symbol",
+            "custom_validator_identifier",
+        ]
+        assert all(call["request"].validator_agent.package_id == "flow" for call in calls)
+        assert len(materialization_inputs) == 2
+        assert [item.match for item in materialization_inputs] == list(matches)
+        assert [item.request for item in materialization_inputs] == [
+            call["request"] for call in calls
+        ]
+        assert [item["group_id"] for item in metadata] == [
+            "edge:validation-1",
+            "edge:validation-2",
+        ]
+        assert [item["validator_binding_id"] for item in metadata] == [
+            "custom.supplemental",
+            "custom.supplemental.identifier",
+        ]
+        assert {item["status"] for item in metadata} == {"resolved"}
+        assert all(item["missing_expected_fields"] == [] for item in metadata)
+        assert all(
+            item["selected_inputs"] == {"identifier": "AGR:0001"}
+            for item in metadata
+        )
+        assert all(
+            item["expected_result_fields"] == {"identifier": "gene.identifier"}
+            for item in metadata
+        )
+        assert all(
+            item["lookup_attempts"]
+            == [
+                {
+                    "provider": "flow_validator",
+                    "method": "non_lookup_validation",
+                    "query": {"source_envelope_revision": 7},
+                    "result_count": 1,
+                    "outcome": "success",
+                    "message": None,
+                }
+            ]
+            for item in metadata
+        )
 
     def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch):
         executor = _executor_module()
@@ -2974,10 +3729,16 @@ class TestGetAllAgentToolsStepOrderRuntime:
         async def _fake_validation_groups(**kwargs):
             if not kwargs["node_data"].get("validation_groups"):
                 return {}
-            events.append("validators:start")
+            events.append("validators:start:binding-1")
             assert kwargs["candidate"].metadata["step"] == 1
-            assert kwargs["node_data"]["validation_groups"][0]["binding_id"] == "binding-1"
-            events.append("validators:done")
+            groups = kwargs["node_data"]["validation_groups"]
+            assert [group["binding_id"] for group in groups] == [
+                "binding-1",
+                "binding-2",
+            ]
+            events.append("validators:materialized:binding-1")
+            events.append("validators:start:binding-2")
+            events.append("validators:materialized:binding-2")
             return {
                 "validation_group_results": {
                     "source_envelope_id": "env-1",
@@ -2989,7 +3750,13 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "state": "automatic",
                             "validator_binding_id": "binding-1",
                             "status": "resolved",
-                        }
+                        },
+                        {
+                            "group_id": "supplemental-validator",
+                            "state": "supplemental",
+                            "validator_binding_id": "binding-2",
+                            "status": "resolved",
+                        },
                     ],
                 }
             }
@@ -3009,7 +3776,16 @@ class TestGetAllAgentToolsStepOrderRuntime:
                         "attachment_id": "active-lookup",
                         "required": True,
                         "blocking": True,
-                    }
+                    },
+                    {
+                        "group_id": "supplemental-validator",
+                        "state": "supplemental",
+                        "binding_id": "binding-2",
+                        "edge_id": "validation-2",
+                        "validator_node_id": "validator-2",
+                        "required": True,
+                        "blocking": True,
+                    },
                 ],
             ),
             _agent_node("n2", "disease"),
@@ -3029,33 +3805,91 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         assert events == [
             "tool:ask_gene_specialist",
-            "validators:start",
-            "validators:done",
+            "validators:start:binding-1",
+            "validators:materialized:binding-1",
+            "validators:start:binding-2",
+            "validators:materialized:binding-2",
             "tool:ask_disease_specialist",
         ]
-        assert execution_state["completed_steps"][0]["validation_group_results"][
-            "source_envelope_revision"
-        ] == 3
+        validation_results = execution_state["completed_steps"][0][
+            "validation_group_results"
+        ]
+        assert validation_results["source_envelope_revision"] == 3
+        assert [
+            group["validator_binding_id"] for group in validation_results["groups"]
+        ] == ["binding-1", "binding-2"]
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_output_filename_template_sets_step_scoped_formatter_override(
-        self, mock_get_agent, mock_streaming, monkeypatch
+        self, mock_get_agent, mock_streaming
     ):
-        """Projected formatter steps should honor filename templates during save."""
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        """Runtime formatter finalize/save honors filename templates during save."""
         observed = {}
+
+        def _fake_get_agent(agent_id, **kwargs):
+            agent = MagicMock(spec=Agent, instructions="Base")
+            agent.name = {
+                "gene": "Gene Specialist",
+                "csv_formatter": "CSV File Formatter",
+            }.get(agent_id, agent_id)
+            agent.agent_id = agent_id
+            agent.runtime_kwargs = kwargs
+            return agent
+
+        mock_get_agent.side_effect = _fake_get_agent
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
-                if tool_name == "ask_csv_output_formatter_specialist":
-                    raise AssertionError("ordinary formatter fallback must not run")
+                if tool_name == "ask_csv_formatter_specialist":
+                    from src.lib.context import get_current_output_filename_stem
+                    from src.lib.openai_agents.tools.output_formatter_tools import (
+                        build_output_formatter_tools,
+                    )
+
+                    async def _fake_save_projected_output(
+                        output_format,
+                        projection,
+                        filename_hint,
+                        formatter_agent_id,
+                    ):
+                        observed["during_save"] = get_current_output_filename_stem()
+                        observed["filename_hint"] = filename_hint
+                        observed["format"] = output_format
+                        observed["formatter_agent_id"] = formatter_agent_id
+                        observed["rows"] = projection.rows
+                        return {
+                            "file_id": "file-template-csv",
+                            "filename": "templated.csv",
+                            "format": "csv",
+                            "size_bytes": 123,
+                            "mime_type": "text/csv",
+                            "download_url": "/api/files/file-template-csv/download",
+                            "created_at": "2026-04-26T00:00:00Z",
+                        }
+
+                    formatter_tools = build_output_formatter_tools(
+                        bundle=agent.runtime_kwargs["formatter_bundle"],
+                        output_format=agent.runtime_kwargs["formatter_output_format"],
+                        formatter_agent_id=agent.runtime_kwargs["formatter_agent_id"],
+                        save_projected_output=_fake_save_projected_output,
+                    )
+                    finalize_tool = next(
+                        tool
+                        for tool in formatter_tools
+                        if getattr(tool, "name", "") == "finalize_and_save"
+                    )
+                    tool_ctx = SimpleNamespace(tool_name="finalize_and_save")
+                    return await finalize_tool.on_invoke_tool(
+                        tool_ctx,
+                        json.dumps({"plan_json": "", "filename_hint": ""}),
+                    )
                 return json.dumps(
                     {
                         "domain_pack_id": "gene",
                         "envelope_id": "env-gene-1",
-                        "objects": [
+                        "extracted_objects": [
                             {
                                 "object_type": "Gene",
                                 "payload": {"symbol": "BRCA1"},
@@ -3066,40 +3900,17 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
             return _tool
 
-        async def _fake_save_csv_impl(
-            data_json: str,
-            filename: str,
-            columns: str | None = None,
-        ) -> dict:
-            from src.lib.context import get_current_output_filename_stem
-
-            observed["during_save"] = get_current_output_filename_stem()
-            observed["filename"] = filename
-            return {
-                "file_id": "file-template-csv",
-                "filename": "templated.csv",
-                "format": "csv",
-                "size_bytes": 123,
-                "mime_type": "text/csv",
-                "download_url": "/api/files/file-template-csv/download",
-                "created_at": "2026-04-26T00:00:00Z",
-            }
-
         mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
-            _fake_save_csv_impl,
-        )
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
             _agent_node("n1", "gene", output_key="gene_output"),
             _agent_node(
                 "n2",
-                "csv_output_formatter",
+                "csv_formatter",
                 output_filename_template="{{input_filename_stem}}.csv",
             ),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
 
         tools, _ = get_all_agent_tools(flow, document_name="Smith et al. (2024).pdf")
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
@@ -3109,7 +3920,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
         from src.lib.context import get_current_output_filename_stem
 
         assert observed["during_save"] == "Smith_et_al_2024"
-        assert observed["filename"] == "Smith_et_al_2024"
+        assert observed["filename_hint"] == "Test Flow_csv_export"
+        assert observed["format"] == "csv"
+        assert observed["formatter_agent_id"] == "csv_formatter"
+        assert observed["rows"][0]["object_payload_symbol"] == "BRCA1"
         assert get_current_output_filename_stem() is None
 
     @patch("src.lib.flows.executor._create_streaming_tool")
@@ -3120,6 +3934,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
         """Curation prep steps should hand upstream flow extractions to the deterministic mapper."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         captured = {}
+        persisted_requests = []
+        fake_db = MagicMock()
+        fake_db.in_transaction.return_value = True
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -3208,6 +4025,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
         with patch("src.lib.flows.executor.run_curation_prep", _fake_run_curation_prep), patch(
             "src.lib.flows.executor.get_current_trace_id",
             lambda: "trace-123",
+        ), patch(
+            "src.lib.flows.executor.SessionLocal",
+            lambda: fake_db,
+        ), patch(
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
+        ), patch(
+            "src.lib.flows.executor._materialize_flow_domain_envelope_records",
+            lambda *_args, **_kwargs: None,
         ):
             flow = _make_flow([
                 _task_input_node("Prepare the extracted gene-expression findings for review."),
@@ -3240,6 +4066,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         payload = json.loads(prep_output)
         assert payload["run_metadata"]["model_name"] == "deterministic_programmatic_mapper_v1"
         assert len(captured["extraction_results"]) == 1
+        assert UUID(captured["extraction_results"][0].extraction_result_id)
         assert captured["extraction_results"][0].agent_key == "gene"
         assert captured["extraction_results"][0].source_kind is _executor_module().CurationExtractionSourceKind.FLOW
         assert captured["scope_confirmation"].confirmed is True
@@ -3249,6 +4076,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert captured["persistence_context"].flow_run_id == "flow-run-123"
         assert captured["persistence_context"].trace_id == "trace-123"
         assert captured["persistence_context"].user_id == "user-123"
+        assert captured["db"] is fake_db
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].idempotency_key
+        assert persisted_requests[0].payload_hash
+        fake_db.commit.assert_called_once()
+        fake_db.close.assert_called_once()
         assert mock_get_agent.call_count == 1
 
     @patch("src.lib.flows.executor._create_streaming_tool")
@@ -3259,6 +4092,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         """Curation handoff steps should materialize review sessions without an LLM specialist."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         captured = {}
+        persisted_requests = []
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -3283,6 +4117,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
         class _FakeSession:
             def __init__(self):
                 self.closed = False
+
+            def in_transaction(self):
+                return True
+
+            def rollback(self):
+                raise AssertionError("successful handoff must not roll back")
 
             def close(self):
                 self.closed = True
@@ -3325,6 +4165,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ), patch(
             "src.lib.flows.executor.get_agent_metadata",
             _fake_get_agent_metadata,
+        ), patch(
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
+        ), patch(
+            "src.lib.flows.executor._materialize_flow_domain_envelope_records",
+            lambda *_args, **_kwargs: None,
         ):
             flow = _make_flow([
                 _task_input_node("Hand extracted findings to the review workspace."),
@@ -3360,6 +4206,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "adapter_keys": ["gene"],
         }
         assert len(captured["extraction_results"]) == 1
+        assert UUID(captured["extraction_results"][0].extraction_result_id)
         assert captured["extraction_results"][0].agent_key == "gene"
         assert captured["document_id"] == "doc-123"
         assert captured["runner_user_id"] == "user-123"
@@ -3367,8 +4214,89 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert captured["origin_session_id"] == "session-123"
         assert captured["conversation_summary"] is not None
         assert captured["db"] is fake_db
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].idempotency_key
+        assert persisted_requests[0].payload_hash
         assert fake_db.closed is True
         assert mock_get_agent.call_count == 1
+
+    @pytest.mark.parametrize(
+        "failure_boundary", ["canonical_insert", "materialization", "final_commit"]
+    )
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_curation_handoff_source_failure_rolls_back_without_ready_state(
+        self, mock_get_agent, mock_streaming, failure_boundary
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        fake_db = MagicMock()
+        fake_db.in_transaction.return_value = True
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return json.dumps(_structured_step_output("unc-54"))
+
+            return _tool
+
+        def _fake_get_agent_metadata(agent_id, **_kwargs):
+            return {
+                "display_name": agent_id,
+                "description": agent_id,
+                "requires_document": agent_id == "curation_handoff",
+                "curation": {"adapter_key": "gene"} if agent_id == "gene" else None,
+            }
+
+        def _persist(requests, *, db=None):
+            if failure_boundary == "canonical_insert":
+                raise RuntimeError("canonical insert failed")
+            return _recording_persist_idempotent_extraction_results()(requests, db=db)
+
+        def _materialize(*_args, **_kwargs):
+            if failure_boundary == "materialization":
+                raise RuntimeError("materialization failed")
+
+        handoff_failure = (
+            RuntimeError("final commit failed")
+            if failure_boundary == "final_commit"
+            else AssertionError("handoff must not run after source failure")
+        )
+
+        mock_streaming.side_effect = _make_streaming_tool
+        with patch("src.lib.flows.executor.SessionLocal", lambda: fake_db), patch(
+            "src.lib.flows.executor.get_agent_metadata", _fake_get_agent_metadata
+        ), patch(
+            "src.lib.flows.executor.persist_idempotent_extraction_results", _persist
+        ), patch(
+            "src.lib.flows.executor._materialize_flow_domain_envelope_records", _materialize
+        ), patch(
+            "src.lib.flows.executor.run_flow_curation_handoff",
+            side_effect=handoff_failure,
+        ):
+            flow = _make_flow([
+                _task_input_node("Extract and hand off."),
+                _agent_node("n1", "gene", step_goal="Extract genes"),
+                _agent_node("n2", "curation_handoff", step_goal="Create review sessions"),
+            ])
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                document_id="doc-123",
+                user_id="user-123",
+                session_id="session-123",
+                flow_run_id="flow-run-123",
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+            with pytest.raises(RuntimeError, match=failure_boundary.split("_")[0]):
+                asyncio.run(
+                    tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "handoff"}))
+                )
+
+        assert "curation_handoff" not in execution_state
+        assert execution_state["persisted_extraction_results"] == []
+        fake_db.rollback.assert_called_once()
+        fake_db.close.assert_called_once()
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -3393,20 +4321,154 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n2", "curation_prep", step_goal="Prepare candidates for the workspace"),
         ])
 
-        tools, _ = get_all_agent_tools(
+        tools, _, _, execution_state = get_all_agent_tools(
             flow,
             document_id="doc-123",
             user_id="user-123",
             session_id="session-123",
+            include_unavailable=True,
         )
 
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
-        prep_output = asyncio.run(
-            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
+        with pytest.raises(
+            RuntimeError,
+            match="require at least one upstream extraction envelope",
+        ):
+            asyncio.run(
+                tools[1].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "prepare for review"}),
+                )
+            )
+
+        assert execution_state["next_tool_index"] == 1
+        assert len(execution_state["completed_steps"]) == 1
+        assert execution_state["completed_steps"][0]["agent_id"] == "gene"
+
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_specialist_exception_does_not_complete_or_advance(
+        self, mock_get_agent, monkeypatch
+    ):
+        """The real SDK FunctionTool path must re-raise a failed flow specialist."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        async def _raise_sentinel(**_kwargs):
+            raise RuntimeError("sentinel specialist failure")
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.agents.supervisor_agent._run_streaming_specialist_tool",
+            _raise_sentinel,
+        )
+        flow = _make_flow([
+            _task_input_node("Extract findings."),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        with pytest.raises(RuntimeError, match="sentinel specialist failure"):
+            asyncio.run(
+                tools[0].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "extract"}),
+                )
+            )
+
+        assert execution_state["completed_steps"] == []
+        assert execution_state["next_tool_index"] == 0
+        assert execution_state["in_flight_step"] is None
+
+    @patch("src.lib.flows.executor.get_agent_metadata")
+    def test_curation_handoff_without_envelope_does_not_create_ready_state(
+        self, mock_get_agent_metadata
+    ):
+        mock_get_agent_metadata.return_value = {
+            "display_name": "Curation Handoff",
+            "description": "Create review sessions",
+            "requires_document": True,
+            "curation": None,
+        }
+        flow = _make_flow([
+            _task_input_node("Create review sessions."),
+            _agent_node("n1", "curation_handoff", step_goal="Create review sessions"),
+        ])
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            document_id="doc-123",
+            user_id="user-123",
+            session_id="session-123",
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        with pytest.raises(
+            RuntimeError,
+            match="require at least one upstream extraction envelope",
+        ):
+            asyncio.run(
+                tools[0].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "prepare review"}),
+                )
+            )
+
+        assert execution_state["completed_steps"] == []
+        assert execution_state["next_tool_index"] == 0
+        assert "curation_handoff" not in execution_state
+        assert execution_state["in_flight_step"] is None
+
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_formatter_exception_does_not_complete_or_advance(
+        self, mock_get_agent, monkeypatch
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        async def _specialist_result(*, tool_name, **_kwargs):
+            if tool_name == "ask_gene_specialist":
+                return json.dumps(_structured_step_output("TP53"))
+            raise RuntimeError("sentinel formatter failure")
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.agents.supervisor_agent._run_streaming_specialist_tool",
+            _specialist_result,
+        )
+        flow = _make_output_attachment_flow(
+            [
+                _task_input_node("Read and format the document."),
+                _agent_node("n1", "gene", step_goal="Extract genes"),
+                _agent_node("n2", "json_formatter", step_goal="Save JSON"),
+            ],
+            source_node_id="n1",
+            output_node_id="n2",
+        )
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            document_id="doc-123",
+            user_id="user-123",
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        asyncio.run(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"}))
         )
 
-        assert "require at least one upstream extraction envelope" in prep_output
+        with pytest.raises(RuntimeError, match="sentinel formatter failure"):
+            asyncio.run(
+                tools[1].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "format"}),
+                )
+            )
+
+        assert execution_state["next_tool_index"] == 1
+        assert len(execution_state["completed_steps"]) == 1
+        assert execution_state["completed_steps"][0]["agent_id"] == "gene"
+        assert execution_state["in_flight_step"] is None
 
 
 # ===========================================================================
@@ -3464,26 +4526,29 @@ class TestBuildSupervisorCustomInstructions:
         assert "[has custom instructions]" not in disease_line
 
     def test_step_with_include_evidence_annotated(self):
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
+            _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output", include_evidence=True),
-        ])
+        ], source_node_id="extract", output_node_id="n1")
         result = build_supervisor_instructions(flow)
         assert "[includes evidence in output]" in result
 
     def test_output_formatter_without_flag_defaults_to_include_evidence_annotation(self):
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
+            _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output"),
-        ])
+        ], source_node_id="extract", output_node_id="n1")
         result = build_supervisor_instructions(flow)
         assert "[includes evidence in output]" in result
 
     def test_output_formatter_false_flag_annotated_as_excluding_evidence(self):
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
+            _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output", include_evidence=False),
-        ])
+        ], source_node_id="extract", output_node_id="n1")
         result = build_supervisor_instructions(flow)
         assert "[excludes evidence from output]" in result
 
@@ -4034,9 +5099,16 @@ class TestCreateFlowSupervisorNoTools:
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_does_not_raise_when_tools_created(
-        self, mock_get_agent, mock_streaming, mock_config, mock_model, mock_settings
+        self,
+        mock_get_agent,
+        mock_streaming,
+        mock_config,
+        mock_model,
+        mock_settings,
+        monkeypatch,
     ):
         """Should NOT raise when at least one tool is created."""
+        monkeypatch.delenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
         mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
@@ -4050,6 +5122,38 @@ class TestCreateFlowSupervisorNoTools:
         # Should not raise
         supervisor = create_flow_supervisor(flow)
         assert supervisor is not None
+        assert mock_settings.call_args.kwargs["parallel_tool_calls"] is False
+
+    @patch("src.lib.flows.executor.build_model_settings")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.5")
+    @patch("src.lib.flows.executor.get_agent_config")
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_parallel_tool_calls_honors_flow_override(
+        self,
+        mock_get_agent,
+        mock_streaming,
+        mock_config,
+        mock_model,
+        mock_settings,
+        monkeypatch,
+    ):
+        """Flow-specific override should be forwarded without affecting chat supervisors."""
+        monkeypatch.setenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", "true")
+        mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+        mock_settings.return_value = ModelSettings()
+
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+
+        supervisor = create_flow_supervisor(flow)
+
+        assert supervisor is not None
+        assert mock_settings.call_args.kwargs["parallel_tool_calls"] is True
 
 
 # ===========================================================================
@@ -4096,6 +5200,7 @@ class TestExecuteFlowTermination:
         assert "FLOW_STARTED" in event_types
         assert "SPECIALIST_ERROR" in event_types
         assert "FLOW_ERROR" in event_types
+        assert "RUN_FINISHED" not in event_types
         assert "CHAT_OUTPUT_READY" not in event_types
 
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
@@ -4177,7 +5282,7 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             lambda *_args, **_kwargs: pytest.fail(
                 "incomplete flows must not persist final extraction results"
             ),
@@ -4205,6 +5310,7 @@ class TestExecuteFlowTermination:
         assert flow_error["details"]["missing_steps"] == [
             {"step": 2, "tool_name": "ask_phenotype_extractor_specialist"}
         ]
+        assert "RUN_FINISHED" not in event_types
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "failed"
         assert "step 2" in (flow_finished["data"]["failure_reason"] or "")
@@ -4400,13 +5506,14 @@ class TestExecuteFlowTermination:
     ):
         """Direct formatter projection can emit FILE_READY before TOOL_COMPLETE."""
 
-        flow = _make_flow([
+        flow = _make_output_attachment_flow([
             _task_input_node(),
             _agent_node("n1", "pdf_extraction", step_goal="Read document"),
             _agent_node("n2", "json_formatter", step_goal="Save JSON"),
-        ])
+        ], source_node_id="n1", output_node_id="n2")
         pdf_step = {
             "step": 1,
+            "node_id": "n1",
             "agent_id": "pdf_extraction",
             "agent_name": "PDF Extraction",
             "tool_name": "ask_pdf_extraction_specialist",
@@ -4417,6 +5524,7 @@ class TestExecuteFlowTermination:
         }
         formatter_step = {
             "step": 2,
+            "node_id": "n2",
             "agent_id": "json_formatter",
             "agent_name": "JSON Formatter",
             "tool_name": "ask_json_formatter_specialist",
@@ -4448,7 +5556,13 @@ class TestExecuteFlowTermination:
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
             yield {
                 "type": "FILE_READY",
-                "details": {"file_path": "smoke.json", "filename": "smoke.json"},
+                "details": {
+                    "file_path": "smoke.json",
+                    "filename": "smoke.json",
+                    "formatter_node_id": "n2",
+                    "source_node_id": "n1",
+                    "source_node_ids": ["n1"],
+                },
             }
             supervisor._flow_execution_state["completed_steps"].append(formatter_step)
             yield {
@@ -4470,6 +5584,548 @@ class TestExecuteFlowTermination:
         assert event_types.index("TOOL_COMPLETE") < event_types.index("FILE_READY")
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_preserves_multiple_file_outputs_and_reports_manifest(
+        self, monkeypatch
+    ):
+        flow = _make_output_attachment_flow([
+            _task_input_node(),
+            _agent_node("n1", "pdf_extraction", step_goal="Read document"),
+            _agent_node("n2", "csv_formatter", step_goal="Save CSV"),
+            _agent_node("n3", "json_formatter", step_goal="Save JSON"),
+        ], source_node_id="n1", output_node_id=["n2", "n3"])
+        pdf_step = {
+            "step": 1,
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "PDF specialist completed document access.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        formatter_steps = [
+            {
+                "step": 2,
+                "node_id": "n2",
+                "agent_id": "csv_formatter",
+                "agent_name": "CSV Formatter",
+                "tool_name": "ask_csv_formatter_specialist",
+                "output": '{"file_id": "file-csv"}',
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+            {
+                "step": 3,
+                "node_id": "n3",
+                "agent_id": "json_formatter",
+                "agent_name": "JSON Formatter",
+                "tool_name": "ask_json_formatter_specialist",
+                "output": (
+                    "Unable to create JSON because the bound extraction result "
+                    "does not contain the requested source fields."
+                ),
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+        ]
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_csv_formatter_specialist",
+                "ask_json_formatter_specialist",
+            ],
+        )
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            for formatter_step, file_id, filename, formatter_node_id in zip(
+                formatter_steps,
+                ("file-csv", "file-json"),
+                ("alleles.csv", "alleles.json"),
+                ("n2", "n3"),
+                strict=True,
+            ):
+                yield {
+                    "type": "FILE_READY",
+                    "details": {
+                        "file_id": file_id,
+                        "filename": filename,
+                        "download_url": f"/api/files/{file_id}/download",
+                        "formatter_node_id": formatter_node_id,
+                        "source_node_id": "n1",
+                    },
+                }
+                supervisor._flow_execution_state["completed_steps"].append(
+                    formatter_step
+                )
+                yield {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": formatter_step["tool_name"]},
+                }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        file_events = [event for event in events if event.get("type") == "FILE_READY"]
+        assert [event["details"]["file_id"] for event in file_events] == [
+            "file-csv",
+            "file-json",
+        ]
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["output_status"] == "complete"
+        assert flow_finished["data"]["output_count"] == 2
+        assert [output["file_id"] for output in flow_finished["data"]["outputs"]] == [
+            "file-csv",
+            "file-json",
+        ]
+
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_csv_formatter_specialist",
+                "ask_json_formatter_specialist",
+            ],
+        )
+
+        async def _fake_partial_run(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-2"}}
+            yield {
+                "type": "FILE_READY",
+                "details": {
+                    "file_id": "file-csv-only",
+                    "filename": "alleles.csv",
+                    "download_url": "/api/files/file-csv-only/download",
+                    "formatter_node_id": "n2",
+                    "source_node_id": "n1",
+                },
+            }
+            for formatter_step in formatter_steps:
+                supervisor._flow_execution_state["completed_steps"].append(
+                    formatter_step
+                )
+                yield {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": formatter_step["tool_name"]},
+                }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_partial_run,
+        )
+        partial_events = [
+            event
+            async for event in execute_flow(flow, user_id="u1", session_id="s2")
+        ]
+        partial_finished = next(
+            event for event in partial_events if event.get("type") == "FLOW_FINISHED"
+        )
+        assert partial_finished["data"]["status"] == "completed"
+        assert partial_finished["data"]["output_status"] == "partial"
+        assert partial_finished["data"]["output_count"] == 1
+        assert [
+            branch["status"]
+            for branch in partial_finished["data"]["output_branches"]
+        ] == ["completed", "missing"]
+        assert partial_finished["data"]["output_branches"][1]["failure_reason"] == (
+            "Unable to create JSON because the bound extraction result does not "
+            "contain the requested source fields."
+        )
+        assert any(
+            event.get("details", {}).get("reason") == "partial_formatter_outputs"
+            for event in partial_events
+        )
+        partial_warning = next(
+            event
+            for event in partial_events
+            if event.get("details", {}).get("reason") == "partial_formatter_outputs"
+        )
+        assert partial_warning["details"]["output_branches"][0][
+            "failure_reason"
+        ].startswith("Unable to create JSON")
+
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_csv_formatter_specialist",
+                "ask_json_formatter_specialist",
+            ],
+        )
+
+        async def _fake_cannot_complete_run(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-3"}}
+            for formatter_step in formatter_steps:
+                supervisor._flow_execution_state["completed_steps"].append(
+                    formatter_step
+                )
+                yield {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": formatter_step["tool_name"]},
+                }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_cannot_complete_run,
+        )
+        cannot_complete_events = [
+            event
+            async for event in execute_flow(flow, user_id="u1", session_id="s3")
+        ]
+        formatter_error = next(
+            event
+            for event in cannot_complete_events
+            if event.get("details", {}).get("reason") == "missing_formatter_outputs"
+        )
+        assert formatter_error["details"]["message"].startswith(
+            "Formatter could not create an output: Unable to create JSON"
+        )
+        cannot_complete_finished = next(
+            event
+            for event in cannot_complete_events
+            if event.get("type") == "FLOW_FINISHED"
+        )
+        assert cannot_complete_finished["data"]["status"] == "failed"
+        assert cannot_complete_finished["data"]["failure_reason"].startswith(
+            "Formatter could not create an output: Unable to create JSON"
+        )
+
+    @pytest.mark.asyncio
+    async def test_formatter_and_handoff_events_complete_before_terminal_output(
+        self, monkeypatch
+    ):
+        """Future handoff state must not overtake its runner completion event."""
+
+        flow = _make_output_attachment_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+            _agent_node(
+                "n2",
+                "chat_output_formatter",
+                step_goal="Summarize findings",
+            ),
+            _agent_node("n3", "curation_handoff", step_goal="Prepare review sessions"),
+        ], source_node_id="n1", output_node_id="n2")
+        gene_step = _make_completed_step(
+            agent_id="gene",
+            agent_name="Gene",
+            tool_name="ask_gene_specialist",
+            step=1,
+            adapter_key="gene",
+            payload=_structured_step_output("TP53", actor="gene", destination="gene"),
+        )
+        chat_step = {
+            "step": 2,
+            "node_id": "n2",
+            "agent_id": "chat_output_formatter",
+            "agent_name": "Chat Output",
+            "tool_name": "ask_chat_output_specialist",
+            "output": "Found one supported gene.",
+            "projected_chat_output": "Found one supported gene.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        handoff_step = {
+            "step": 3,
+            "agent_id": "curation_handoff",
+            "agent_name": "Curation Handoff",
+            "tool_name": "ask_curation_handoff_specialist",
+            "output": json.dumps(
+                {"review_session_ids": ["session-gene"], "adapter_keys": ["gene"]}
+            ),
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        supervisor = SimpleNamespace(
+            name="Flow Supervisor",
+            model="gpt-5",
+            tools=[],
+            output_type=None,
+            _flow_unavailable_steps=[],
+            _flow_execution_state=_make_flow_execution_state(
+                gene_step,
+                chat_step,
+                ordered_tool_names=[
+                    "ask_gene_specialist",
+                    "ask_chat_output_specialist",
+                    "ask_curation_handoff_specialist",
+                ],
+            ),
+        )
+        persisted_requests = []
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                hierarchy=None,
+                abstract=None,
+                section_count=lambda: 0,
+            ),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
+        )
+
+        runner = importlib.import_module("src.lib.openai_agents.runner")
+
+        def _sdk_tool_event(item_type, *, tool_name=None, output=None, call_id):
+            raw_item = SimpleNamespace(call_id=call_id)
+            if tool_name is not None:
+                raw_item.arguments = "{}"
+            return SimpleNamespace(
+                type="run_item_stream_event",
+                item=SimpleNamespace(
+                    type=item_type,
+                    name=tool_name,
+                    output=output,
+                    raw_item=raw_item,
+                ),
+            )
+
+        sdk_events = [
+            _sdk_tool_event(
+                "tool_call_item",
+                tool_name="ask_chat_output_specialist",
+                call_id="chat-call",
+            ),
+            _sdk_tool_event(
+                "tool_call_output_item",
+                output=chat_step["output"],
+                call_id="chat-call",
+            ),
+            _sdk_tool_event(
+                "tool_call_item",
+                tool_name="ask_curation_handoff_specialist",
+                call_id="handoff-call",
+            ),
+            _sdk_tool_event(
+                "tool_call_output_item",
+                output=handoff_step["output"],
+                call_id="handoff-call",
+            ),
+        ]
+
+        class _FakeSdkRunResult:
+            final_output = "should not leak"
+
+            async def stream_events(self):
+                for sdk_event in sdk_events:
+                    yield sdk_event
+
+        class _FakeProvider:
+            async def aclose(self):
+                return None
+
+        def _fake_sdk_run_streamed(*_args, **_kwargs):
+            # The SDK may finish both calls before execute_flow consumes either
+            # TOOL_COMPLETE translated by the production runner.
+            supervisor._flow_execution_state["completed_steps"].append(handoff_step)
+            supervisor._flow_execution_state["curation_handoff"] = {
+                "review_session_ids": ["session-gene"],
+                "adapter_keys": ["gene"],
+            }
+            return _FakeSdkRunResult()
+
+        monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+        monkeypatch.setattr(runner, "provider_context_preflight", lambda **_kwargs: None)
+        monkeypatch.setattr(runner, "commit_pending_prompts", lambda _agent: None)
+        monkeypatch.setattr(runner, "write_stream_event", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            runner,
+            "write_extraction_trace_event",
+            lambda **event: event,
+        )
+        monkeypatch.setattr(runner, "_log_used_prompts_to_db", lambda **_kwargs: 0)
+        monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda: object())
+        monkeypatch.setattr(
+            runner,
+            "_build_request_openai_provider",
+            lambda _client: _FakeProvider(),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_build_agents_run_config",
+            lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+        monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+        monkeypatch.setattr(runner.Runner, "run_streamed", _fake_sdk_run_streamed)
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+        event_types = [event.get("type") for event in events]
+
+        assert "FLOW_ERROR" not in event_types
+        assert event_types.count("TOOL_COMPLETE") == 2
+        tool_completions = [
+            event for event in events if event.get("type") == "TOOL_COMPLETE"
+        ]
+        assert [event["details"]["toolName"] for event in tool_completions] == [
+            "ask_chat_output_specialist",
+            "ask_curation_handoff_specialist",
+        ]
+        assert all(event["details"]["success"] is True for event in tool_completions)
+        assert event_types.count("CHAT_OUTPUT_READY") == 1
+        assert event_types.count("CURATION_HANDOFF_READY") == 1
+        handoff_complete_index = max(
+            index
+            for index, event in enumerate(events)
+            if event.get("type") == "TOOL_COMPLETE"
+        )
+        assert handoff_complete_index < event_types.index("CURATION_HANDOFF_READY")
+        assert event_types.index("CURATION_HANDOFF_READY") < event_types.index("CHAT_OUTPUT_READY")
+        assert event_types.index("CHAT_OUTPUT_READY") < event_types.index("FLOW_FINISHED")
+        assert "RUN_FINISHED" not in event_types
+        chat_ready = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
+        assert chat_ready["details"]["output"] == "Found one supported gene."
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].agent_key == "gene"
+
+    @pytest.mark.asyncio
+    async def test_preserves_two_production_chat_formatter_branches(
+        self, monkeypatch
+    ):
+        flow = _make_output_attachment_flow(
+            [
+                _task_input_node(),
+                _agent_node("pdf", "pdf_extraction", step_goal="Read document"),
+                _agent_node("chat-a", "chat_output_formatter"),
+                _agent_node("chat-b", "chat_output_formatter"),
+            ],
+            source_node_id="pdf",
+            output_node_id=["chat-a", "chat-b"],
+        )
+        pdf_step = {
+            "step": 1,
+            "node_id": "pdf",
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "Document read.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        chat_steps = [
+            {
+                "step": 2,
+                "node_id": "chat-a",
+                "agent_id": "chat_output_formatter",
+                "agent_name": "Chat Output A",
+                "tool_name": "ask_chat_output_formatter_specialist",
+                "output": "Allele summary",
+                "projected_chat_output": "Allele summary",
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+            {
+                "step": 3,
+                "node_id": "chat-b",
+                "agent_id": "chat_output_formatter",
+                "agent_name": "Chat Output B",
+                "tool_name": "ask_chat_output_formatter_specialist_step_3",
+                "output": "Gene summary",
+                "projected_chat_output": "Gene summary",
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+        ]
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_chat_output_formatter_specialist",
+                "ask_chat_output_formatter_specialist_step_3",
+            ],
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-chat"}}
+            for chat_step in chat_steps:
+                supervisor._flow_execution_state["completed_steps"].append(chat_step)
+                yield {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": chat_step["tool_name"]},
+                }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        chat_events = [
+            event for event in events if event.get("type") == "CHAT_OUTPUT_READY"
+        ]
+        assert [event["details"]["output"] for event in chat_events] == [
+            "Allele summary",
+            "Gene summary",
+        ]
+        assert [event["details"]["formatter_node_id"] for event in chat_events] == [
+            "chat-a",
+            "chat-b",
+        ]
+        flow_finished = next(
+            event for event in events if event.get("type") == "FLOW_FINISHED"
+        )
+        assert flow_finished["data"]["output_status"] == "complete"
+        assert flow_finished["data"]["output_count"] == 2
 
     @pytest.mark.asyncio
     async def test_fails_when_expected_extraction_step_has_no_candidate(self, monkeypatch):
@@ -4513,7 +6169,7 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             lambda *_args, **_kwargs: pytest.fail(
                 "missing extraction handoff must fail before persistence"
             ),
@@ -4563,6 +6219,7 @@ class TestExecuteFlowTermination:
             _task_input_node(),
             _agent_node("n1", "gene", step_goal="Extract genes"),
         ])
+        runtime_reports = []
         evidence_record = _make_evidence_record(
             "TP53",
             verified_quote="TP53 expression increased.",
@@ -4608,8 +6265,12 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             lambda _requests: [],
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -4639,6 +6300,135 @@ class TestExecuteFlowTermination:
         assert finished_audit["persistenceAttempted"] is True
         assert finished_audit["persistenceStatus"] == "failed"
         assert finished_audit["persistedResultCount"] == 0
+        assert len(runtime_reports) == 1
+        reported_exc, report_kwargs = runtime_reports[0]
+        assert isinstance(reported_exc, RuntimeError)
+        assert report_kwargs["component"] == "flow_executor"
+        assert report_kwargs["operation"] == "extraction_persistence_empty_result"
+        context = report_kwargs["context"]
+        assert UUID(context.pop("flow_run_id"))
+        assert context == {
+            "document_id": "doc-1",
+            "session_id": "s1",
+            "trace_id": "trace-1",
+            "candidate_count": 1,
+            "extraction_output_required": True,
+            "persisted_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_fails_when_required_extraction_persistence_returns_partial_records(
+        self, monkeypatch
+    ):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+            _agent_node("n2", "allele", step_goal="Extract alleles"),
+        ])
+        completed_gene_step = _make_completed_step(
+            agent_id="gene",
+            agent_name="Gene",
+            tool_name="ask_gene_specialist",
+            step=1,
+            adapter_key="gene",
+            payload=_structured_step_output("TP53", actor="gene", destination="gene"),
+        )
+        completed_allele_step = _make_completed_step(
+            agent_id="allele",
+            agent_name="Allele",
+            tool_name="ask_allele_specialist",
+            step=2,
+            adapter_key="allele",
+            payload=_structured_step_output("notch", actor="allele", destination="allele"),
+        )
+        completed_gene_step["extraction_handoff_audit"] = _make_extraction_handoff_audit(
+            step=1,
+            tool_name="ask_gene_specialist",
+            agent_id="gene",
+            agent_name="Gene",
+            adapter_key="gene",
+        )
+        completed_allele_step["extraction_handoff_audit"] = _make_extraction_handoff_audit(
+            step=2,
+            tool_name="ask_allele_specialist",
+            agent_id="allele",
+            agent_name="Allele",
+            adapter_key="allele",
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            completed_gene_step,
+            completed_allele_step,
+        )
+        runtime_reports = []
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+
+        def _persist_first_only(requests):
+            return _recording_persist_idempotent_extraction_results([])(requests[:1])
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _persist_first_only,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+
+        flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "extraction_persistence_partial_result"
+        assert flow_error["details"]["persisted_count"] == 1
+        assert flow_error["details"]["candidate_count"] == 2
+        flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert len(runtime_reports) == 1
+        reported_exc, report_kwargs = runtime_reports[0]
+        assert isinstance(reported_exc, RuntimeError)
+        assert report_kwargs["component"] == "flow_executor"
+        assert report_kwargs["operation"] == "extraction_persistence_partial_result"
+        context = report_kwargs["context"]
+        assert UUID(context.pop("flow_run_id"))
+        assert context == {
+            "document_id": "doc-1",
+            "session_id": "s1",
+            "trace_id": "trace-1",
+            "candidate_count": 2,
+            "extraction_output_required": True,
+            "persisted_count": 1,
+        }
 
     @pytest.mark.asyncio
     async def test_marks_completed_on_curation_handoff_ready_and_preserves_extraction_refs(
@@ -4649,6 +6439,7 @@ class TestExecuteFlowTermination:
             _agent_node("n1", "gene", step_goal="Extract genes"),
             _agent_node("n2", "curation_handoff", step_goal="Prepare review sessions"),
         ])
+        flow.flow_definition["version"] = "1.1"
         completed_gene_step = _make_completed_step(
             agent_id="gene",
             agent_name="Gene",
@@ -4696,8 +6487,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -4809,7 +6600,7 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             lambda *_args, **_kwargs: pytest.fail(
                 "curation handoff should suppress fallback extraction persistence"
             ),
@@ -4920,8 +6711,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.uuid4",
@@ -4995,11 +6786,12 @@ class TestExecuteFlowTermination:
         assert persisted_requests[0].flow_run_id == "00000000-0000-0000-0000-000000000123"
 
     @pytest.mark.asyncio
-    async def test_failed_extraction_persistence_updates_handoff_audit(self, monkeypatch):
+    async def test_failed_extraction_persistence_updates_handoff_audit(self, monkeypatch, caplog):
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
         ])
+        runtime_reports = []
         evidence_record = _make_evidence_record(
             "TP53",
             verified_quote="TP53 expression increased.",
@@ -5048,8 +6840,12 @@ class TestExecuteFlowTermination:
             raise RuntimeError("db unavailable")
 
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             _raise_persistence_error,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -5060,6 +6856,7 @@ class TestExecuteFlowTermination:
             "src.lib.openai_agents.runner.run_agent_streamed",
             _fake_run_agent_streamed,
         )
+        caplog.set_level(logging.WARNING, logger="src.lib.flows.executor")
 
         events = [
             event
@@ -5081,6 +6878,28 @@ class TestExecuteFlowTermination:
         assert finished_audit["persistenceStatus"] == "failed"
         assert finished_audit["persistedResultCount"] == 0
         assert "db unavailable" in finished_audit["persistenceErrorReason"]
+        matching_records = [
+            record
+            for record in caplog.records
+            if "Extraction persistence failed" in record.getMessage()
+        ]
+        assert len(matching_records) == 1
+        assert matching_records[0].exc_info is None
+        assert len(runtime_reports) == 1
+        reported_exc, report_kwargs = runtime_reports[0]
+        assert isinstance(reported_exc, RuntimeError)
+        assert str(reported_exc) == "db unavailable"
+        assert report_kwargs["component"] == "flow_executor"
+        assert report_kwargs["operation"] == "extraction_persistence_failed"
+        context = report_kwargs["context"]
+        assert UUID(context.pop("flow_run_id"))
+        assert context == {
+            "document_id": "doc-1",
+            "session_id": "flow-session-1",
+            "trace_id": "trace-1",
+            "candidate_count": 1,
+            "extraction_output_required": True,
+        }
 
     @pytest.mark.asyncio
     async def test_execute_flow_emits_validator_lookup_audit_events(self, monkeypatch):
@@ -5143,8 +6962,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -5238,8 +7057,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -5305,8 +7124,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -5384,8 +7203,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -5459,7 +7278,10 @@ class TestExecuteFlowTermination:
         assert captured["trace_context"] == {"trace_id": "trace-existing"}
 
     @pytest.mark.asyncio
-    async def test_skips_duplicate_extraction_persistence_when_flow_run_already_has_results(self, monkeypatch):
+    async def test_retry_routes_extraction_through_idempotent_database_boundary(
+        self,
+        monkeypatch,
+    ):
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
@@ -5492,12 +7314,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.list_extraction_results",
-            lambda **_kwargs: [SimpleNamespace(id="existing-result")],
-        )
-        monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
-            _recording_persist_extraction_results(persisted_requests),
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            _recording_persist_idempotent_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -5525,7 +7343,10 @@ class TestExecuteFlowTermination:
         ]
 
         assert "FLOW_FINISHED" in [event.get("type") for event in events]
-        assert persisted_requests == []
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].flow_run_id == "flow-run-existing"
+        assert persisted_requests[0].idempotency_key.startswith("flow-extraction:")
+        assert persisted_requests[0].payload_hash
 
     @pytest.mark.asyncio
     async def test_marks_flow_failed_when_extraction_persistence_fails(self, monkeypatch):
@@ -5533,6 +7354,7 @@ class TestExecuteFlowTermination:
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
         ])
+        runtime_reports = []
         payload = _structured_step_output("notch")
         completed_step = _make_completed_step(
             agent_id="gene-expression",
@@ -5564,8 +7386,12 @@ class TestExecuteFlowTermination:
             raise RuntimeError("db unavailable")
 
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_results",
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
             _raise_persistence,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -5574,7 +7400,10 @@ class TestExecuteFlowTermination:
                 "type": "TOOL_COMPLETE",
                 "details": {"toolName": "ask_gene_expression_specialist"},
             }
-            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+            yield {
+                "type": "RUN_FINISHED",
+                "data": {"response": "Stale success must not escape."},
+            }
 
         monkeypatch.setattr(
             "src.lib.openai_agents.runner.run_agent_streamed",
@@ -5593,8 +7422,22 @@ class TestExecuteFlowTermination:
         ]
 
         event_types = [event.get("type") for event in events]
-        assert "CHAT_OUTPUT_READY" not in event_types
+        assert "RUN_FINISHED" not in event_types
         assert "FLOW_ERROR" in event_types
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "failed"
         assert "db unavailable" in (flow_finished["data"]["failure_reason"] or "")
+        assert len(runtime_reports) == 1
+        reported_exc, report_kwargs = runtime_reports[0]
+        assert isinstance(reported_exc, RuntimeError)
+        assert report_kwargs["component"] == "flow_executor"
+        assert report_kwargs["operation"] == "extraction_persistence_failed"
+        context = report_kwargs["context"]
+        assert UUID(context.pop("flow_run_id"))
+        assert context == {
+            "document_id": "doc-1",
+            "session_id": "flow-session-1",
+            "trace_id": "trace-1",
+            "candidate_count": 1,
+            "extraction_output_required": True,
+        }

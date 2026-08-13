@@ -23,13 +23,27 @@ import {
   completeDocumentLoad,
   failDocumentLoad,
 } from '@/features/documents/documentLoadEvents'
+import {
+  beginChatDocumentIntent,
+  invalidateChatDocumentIntent,
+} from '@/features/documents/chatDocumentIntent'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
+import type { LatestIntentOperation } from '@/lib/latestIntent'
+import {
+  safeGetItem,
+  safeRemoveItem,
+  safeSetJson,
+} from '@/lib/browserStorage'
 import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
 import { getStreamEventSessionId } from '@/lib/streamEventSession'
-import { clearChatRenderCacheForSession, getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  clearChatRenderCacheForSession,
+  getChatLocalStorageKeys,
+  pruneChatMessageCacheMessages,
+} from '@/lib/chatCacheKeys'
 import { extractEvidenceCurationSupport } from '@/services/chatHistoryApi'
 
 import {
@@ -54,6 +68,7 @@ import {
   humanizeAdapterKey,
   loadMessagesFromStorage,
   mergeTraceIds,
+  mergeFlowChatOutputs,
   shouldShowCurationDbWarning,
   upsertAssistantTurnMessage,
   withEvidenceRecords,
@@ -81,8 +96,11 @@ export function useChatController({
   sessionId: propSessionId,
   onSessionChange,
   events,
+  eventStreamVersion,
+  processedEventCount,
   isLoading,
-  sendMessage
+  sendMessage,
+  markEventsProcessed,
 }: ChatProps) {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -125,9 +143,12 @@ export function useChatController({
   const sessionIdCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastProgressUpdateRef = useRef<number>(0)
   const assistantBuffersRef = useRef<Record<string, string>>({})
+  const flowChatOutputsRef = useRef<Record<string, {
+    content: string
+    identities: Set<string>
+  }>>({})
   const activeTurnIdRef = useRef<string | null>(null)
   const rescuedTurnIdsRef = useRef<Set<string>>(new Set())
-  const processedEventIdsRef = useRef<Set<number>>(new Set())
   const latestMessagesRef = useRef<Message[]>(messages)
   const latestSessionIdRef = useRef<string | null>(propSessionId)
   const sessionStateVersionRef = useRef(0)
@@ -136,6 +157,13 @@ export function useChatController({
   const messageStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
   const previousSessionIdRef = useRef<string | null>(propSessionId)
+  const documentOperationRef = useRef<LatestIntentOperation | null>(null)
+
+  const beginDocumentOperation = useCallback(() => {
+    const operation = beginChatDocumentIntent()
+    documentOperationRef.current = operation
+    return operation
+  }, [])
   const normalizedSessionId = normalizeOptionalText(propSessionId)
   const [sessionIdCopied, setSessionIdCopied] = useState(false)
 
@@ -153,7 +181,10 @@ export function useChatController({
       if (!sessionId || !chatStorageKeys || messageStorageUserIdRef.current !== storageUserId) return
 
       if (nextMessages.length === 0) {
-        localStorage.removeItem(chatStorageKeys.messages)
+        safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+          owner: 'chat',
+          workflowCritical: true,
+        })
         return
       }
 
@@ -161,11 +192,23 @@ export function useChatController({
         ...msg,
         timestamp: msg.timestamp.toISOString()
       }))
+      const prunedMessages = pruneChatMessageCacheMessages(serialized)
+      if (prunedMessages.length === 0) {
+        safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+          owner: 'chat',
+          workflowCritical: true,
+        })
+        return
+      }
+
       const storageData: StoredChatData = {
         session_id: sessionId,
-        messages: serialized
+        messages: prunedMessages
       }
-      localStorage.setItem(chatStorageKeys.messages, JSON.stringify(storageData))
+      safeSetJson(() => window.localStorage, chatStorageKeys.messages, storageData, {
+        owner: 'chat',
+        workflowCritical: true,
+      })
     } catch (error) {
       console.warn('Failed to persist messages to localStorage:', error)
     }
@@ -175,32 +218,42 @@ export function useChatController({
     if (!chatStorageKeys) {
       return null
     }
-    return localStorage.getItem(chatStorageKeys.activeDocument)
+    const stored = safeGetItem(() => window.localStorage, chatStorageKeys.activeDocument, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
+    return stored.ok ? stored.value : null
   }, [chatStorageKeys])
 
   const clearStoredActiveDocument = useCallback(() => {
     if (!chatStorageKeys) {
       return
     }
-    localStorage.removeItem(chatStorageKeys.activeDocument)
+    safeRemoveItem(() => window.localStorage, chatStorageKeys.activeDocument, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
   }, [chatStorageKeys])
 
   const clearStoredMessages = useCallback(() => {
     if (!chatStorageKeys) {
       return
     }
-    localStorage.removeItem(chatStorageKeys.messages)
+    safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
   }, [chatStorageKeys])
 
   const restoreDocumentToPdfViewer = useCallback(async (
     document: ActiveDocument,
-    shouldCommitViewerRestore?: () => boolean,
+    operation: LatestIntentOperation,
   ) => {
     await rehydrateChatDocumentFromSource({
       loadDocument: async () => document,
       chatStorageKeys,
       ownerToken: HOME_PDF_VIEWER_OWNER,
-      shouldCommitViewerRestore,
+      operation,
     })
   }, [chatStorageKeys])
 
@@ -217,6 +270,7 @@ export function useChatController({
   const invalidateTurnRuntimeState = useCallback(() => {
     sessionStateVersionRef.current += 1
     assistantBuffersRef.current = {}
+    flowChatOutputsRef.current = {}
     activeTurnIdRef.current = null
     rescuedTurnIdsRef.current = new Set()
   }, [])
@@ -478,12 +532,16 @@ export function useChatController({
 
   // Process SSE events from useChatStream hook
   useEffect(() => {
-    // Process only new events (track by array index)
-    const newEvents = events.slice(processedEventIdsRef.current.size)
+    // Process only events this shared stream has not already rendered. The cursor
+    // lives with useChatStream so route remounts do not replay old deltas.
+    const startIndex = Math.min(processedEventCount, events.length)
+    const newEvents = events.slice(startIndex)
+    let sawEventForAnotherSession = false
 
     newEvents.forEach((parsed: ChatStreamEvent) => {
       const eventSessionId = getStreamEventSessionId(parsed)
       if (eventSessionId && propSessionId && eventSessionId !== propSessionId) {
+        sawEventForAnotherSession = true
         debug.log('[SSE] Ignoring event for stale session:', {
           eventType: parsed.type,
           eventSessionId,
@@ -801,10 +859,28 @@ export function useChatController({
         const outputText = String(parsed.details.output || parsed.details.output_preview || '').trim()
         if (outputText) {
           if (turnId) {
-            assistantBuffersRef.current[turnId] = outputText
+            const formatterNodeId = String(parsed.details.formatter_node_id || '').trim()
+            const outputIdentity = formatterNodeId
+              ? `${formatterNodeId}:${outputText}`
+              : `output:${outputText}`
+            const existingOutputs = flowChatOutputsRef.current[turnId]
+            if (existingOutputs?.identities.has(outputIdentity)) {
+              return
+            }
+            const combinedOutput = existingOutputs
+              ? mergeFlowChatOutputs(existingOutputs.content, outputText)
+              : outputText
+            flowChatOutputsRef.current[turnId] = {
+              content: combinedOutput,
+              identities: new Set([
+                ...(existingOutputs?.identities ?? []),
+                outputIdentity,
+              ]),
+            }
+            assistantBuffersRef.current[turnId] = combinedOutput
             setMessages((prev) => upsertAssistantTurnMessage(prev, {
               turnId,
-              content: outputText,
+              content: combinedOutput,
               timestamp: messageTimestamp,
               traceId: parsed.trace_id,
               terminalState: null,
@@ -843,6 +919,13 @@ export function useChatController({
           mime_type: parsed.details.mime_type,
           download_url: parsed.details.download_url,
           created_at: parsed.details.created_at,
+          formatter_node_id: parsed.details.formatter_node_id,
+          source_node_id: parsed.details.source_node_id,
+          formatter_label: parsed.details.formatter_label,
+          source_label: parsed.details.source_label,
+          source_extraction_result_ids: parsed.details.source_extraction_result_ids,
+          source_keys: parsed.details.source_keys,
+          source_envelope_ids: parsed.details.source_envelope_ids,
         }
         debug.log('[FILE_READY] File ready for download:', fileData.filename)
 
@@ -852,7 +935,7 @@ export function useChatController({
             role: 'assistant',
             content: `File ready: ${fileData.filename}`,
             timestamp: messageTimestamp,
-            id: `file-${Date.now()}`,
+            id: `file-${fileData.file_id}-${fileData.formatter_node_id ?? 'formatter'}`,
             turnId: turnId ?? undefined,
             type: 'file_download',
             fileData,
@@ -907,14 +990,18 @@ export function useChatController({
       }
     })
 
-    // Mark all new events as processed
-    processedEventIdsRef.current = new Set(Array.from({ length: events.length }, (_, i) => i))
+    if (!sawEventForAnotherSession) {
+      markEventsProcessed(eventStreamVersion, events.length)
+    }
   }, [
     events,
     activeDocument,
     clearProgressState,
+    eventStreamVersion,
     getAssistantTurnContent,
     handleAssistantRescue,
+    markEventsProcessed,
+    processedEventCount,
     propSessionId,
     updateProgressMessage,
   ])
@@ -996,11 +1083,12 @@ export function useChatController({
     }, 30000)
 
     const fetchActiveDocument = async () => {
+      const operation = beginDocumentOperation()
       debug.log('[Chat] fetchActiveDocument called')
       try {
         await rehydrateChatDocumentFromSource({
           loadDocument: async () => {
-            const response = await fetch('/api/chat/document')
+            const response = await fetch('/api/chat/document', { signal: operation.signal })
             if (!response.ok) {
               console.error('[Chat] fetchActiveDocument failed:', response.status)
               throw new Error('Failed to fetch active document')
@@ -1018,9 +1106,9 @@ export function useChatController({
           },
           chatStorageKeys,
           ownerToken: HOME_PDF_VIEWER_OWNER,
-          shouldCommitViewerRestore: () => isActive,
+          operation,
           onDocument: async (activeDocument) => {
-            if (!isActive) {
+            if (!isActive || !operation.ownsLatest()) {
               return false
             }
 
@@ -1032,6 +1120,9 @@ export function useChatController({
             debug.log('[PDF RESTORE] Restoring active document to PDF viewer:', activeDocument.filename)
           },
           onMissingDocument: async () => {
+            if (!isActive || !operation.ownsLatest()) {
+              return
+            }
             // CRITICAL: Check if the event handler has already set a document in localStorage
             // This prevents a race condition where fetchActiveDocument() completes after
             // the user loads a document from DocumentsPage
@@ -1041,16 +1132,15 @@ export function useChatController({
               return
             }
 
-            if (!isActive) {
-              return
-            }
-
             debug.log('[Chat] fetchActiveDocument: No document in localStorage either, clearing state')
             setActiveDocument(null)
             clearStoredActiveDocument()
           },
         })
       } catch (error) {
+        if (!operation.ownsLatest()) {
+          return
+        }
         console.error('[Chat] fetchActiveDocument error:', error)
       }
     }
@@ -1059,15 +1149,18 @@ export function useChatController({
     fetchActiveDocument()
 
     const documentChangeHandler = async (event: Event) => {
+      const operation = beginDocumentOperation()
       debug.log('[Chat] chat-document-changed event received', event)
       const customEvent = event as CustomEvent
       const detail = customEvent.detail || {}
       debug.log('[Chat] Event detail:', detail)
 
+      if (!isActive || !operation.ownsLatest()) {
+        return
+      }
+      setIsUnloadingPDF(false)
+
       if (detail?.active && detail.document) {
-        if (!isActive) {
-          return
-        }
         debug.log('[Chat] Setting active document:', detail.document.filename || detail.document.id)
         setActiveDocument(detail.document)
 
@@ -1077,10 +1170,11 @@ export function useChatController({
           const resetResponse = await fetch('/api/chat/conversation/reset', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: operation.signal,
           })
           if (resetResponse.ok) {
             const resetData = await resetResponse.json()
-            if (!isActive) {
+            if (!isActive || !operation.ownsLatest()) {
               return
             }
             debug.log('[Chat] Conversation reset for new document:', resetData)
@@ -1096,15 +1190,18 @@ export function useChatController({
             dispatchClearHighlights('document-change')
           }
         } catch (resetError) {
+          if (!operation.ownsLatest()) {
+            return
+          }
           console.error('[Chat] Failed to reset conversation for new document:', resetError)
         }
 
         // Load the PDF in the viewer when document changes
         try {
           debug.log('[Chat] Fetching PDF metadata for:', detail.document.id)
-          await restoreDocumentToPdfViewer(detail.document, () => isActive)
+          await restoreDocumentToPdfViewer(detail.document, operation)
 
-          if (isActive) {
+          if (isActive && operation.ownsLatest()) {
             debug.log('[Chat] Loading PDF in viewer after document change:', detail.document.filename)
             completeDocumentLoad({
               documentId: detail.document.id,
@@ -1114,7 +1211,7 @@ export function useChatController({
           }
         } catch (pdfError) {
           console.warn('[Chat] Unable to load PDF viewer after document change:', pdfError)
-          if (isActive) {
+          if (isActive && operation.ownsLatest()) {
             failDocumentLoad({
               documentId: detail.document.id,
               filename: detail.document.filename,
@@ -1123,9 +1220,6 @@ export function useChatController({
           }
         }
       } else {
-        if (!isActive) {
-          return
-        }
         debug.log('[Chat] Clearing active document')
         setActiveDocument(null)
         clearStoredActiveDocument()
@@ -1137,12 +1231,15 @@ export function useChatController({
 
     return () => {
       isActive = false
+      invalidateChatDocumentIntent(documentOperationRef.current)
+      documentOperationRef.current = null
       window.removeEventListener('chat-document-changed', documentChangeHandler)
       clearInterval(interval)
     }
   }, [
     clearStoredActiveDocument,
     clearStoredMessages,
+    beginDocumentOperation,
     getStoredActiveDocument,
     onSessionChange,
     restoreDocumentToPdfViewer,
@@ -1458,11 +1555,21 @@ export function useChatController({
       return
     }
 
+    const operation = beginDocumentOperation()
     setIsUnloadingPDF(true)
     try {
       const response = await fetch('/api/chat/document', {
         method: 'DELETE',
+        signal: operation.signal,
+        headers: {
+          'X-Chat-Document-Intent-Owner': operation.owner,
+          'X-Chat-Document-Intent-Generation': String(operation.generation),
+        },
       })
+
+      if (!operation.ownsLatest()) {
+        return
+      }
 
       if (response.ok) {
         debug.log('PDF unloaded successfully')
@@ -1486,10 +1593,15 @@ export function useChatController({
         alert('Failed to unload PDF. Please try again.')
       }
     } catch (error) {
+      if (!operation.ownsLatest()) {
+        return
+      }
       console.error('Error unloading PDF:', error)
       alert('An error occurred while unloading the PDF.')
     } finally {
-      setIsUnloadingPDF(false)
+      if (operation.ownsLatest()) {
+        setIsUnloadingPDF(false)
+      }
     }
   }
 
@@ -1508,6 +1620,7 @@ export function useChatController({
     activeTurnIdRef.current = turnId
     rescuedTurnIdsRef.current.delete(turnId)
     assistantBuffersRef.current[turnId] = ''
+    delete flowChatOutputsRef.current[turnId]
 
     const userMessage: Message = {
       role: 'user',
@@ -1557,6 +1670,7 @@ export function useChatController({
     activeTurnIdRef.current = turnId
     rescuedTurnIdsRef.current.delete(turnId)
     assistantBuffersRef.current[turnId] = ''
+    delete flowChatOutputsRef.current[turnId]
 
     const userMessage: Message = {
       role: 'user',

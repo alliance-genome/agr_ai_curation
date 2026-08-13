@@ -18,6 +18,7 @@ import time
 import uuid
 from collections import deque
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional, List
 
@@ -48,6 +49,7 @@ from .langfuse_client import (
     is_openai_agents_tracing_enabled,
 )
 from .agents.supervisor_agent import create_supervisor_agent
+from .chat_compaction_session import build_standard_chat_compaction_session
 from .audit_labels import (
     BUILTIN_SPECIALIST_DISPLAY_NAMES,
     resolve_tool_display_name as _shared_resolve_tool_display_name,
@@ -82,7 +84,7 @@ from .extraction_builder_workspace import (
     stage_extraction_payload,
 )
 from .guardrails import enforce_uncited_negative_guardrail
-from .models import Answer
+from .models import Answer, file_ready_event_details
 from .evidence_summary import (
     build_record_evidence_summary_record,
     extract_evidence_records_from_structured_result,
@@ -129,6 +131,11 @@ from src.models.sql.database import SessionLocal
 # Request-scoped context for tools (trace_id captured via closure)
 from src.lib.context import set_current_trace_id, set_current_run_config, reset_current_run_config
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
+from src.lib.observability.sentry import (
+    gen_ai_conversation_scope,
+    gen_ai_invoke_agent_span,
+    set_redacted_ai_span_data,
+)
 
 if TYPE_CHECKING:
     from src.lib.document_context import DocumentContext
@@ -414,6 +421,48 @@ def _build_agents_run_config(
     )
 
 
+def build_isolated_openai_run_config(parent_run_config: Any | None) -> tuple[Any, OpenAIProvider]:
+    """Create a child RunConfig with its own OpenAI provider/websocket lifecycle.
+
+    Chat turns intentionally reuse one warm provider across the supervisor and nested
+    specialist runs. Multi-step flows need a tighter owner for each step so closing the
+    supervisor's provider cannot race an SDK streaming task that still belongs to a
+    child step.
+    """
+
+    openai_client = SafeAsyncOpenAI()
+    openai_provider = _build_request_openai_provider(openai_client)
+    base_config = parent_run_config or RunConfig(
+        model_provider=openai_provider,
+        tracing_disabled=not is_openai_agents_tracing_enabled(),
+        trace_include_sensitive_data=True,
+    )
+    run_config = replace(
+        base_config,
+        model_provider=openai_provider,
+        trace_include_sensitive_data=True,
+    )
+    return run_config, openai_provider
+
+
+async def close_isolated_openai_provider(
+    openai_provider: OpenAIProvider,
+    *,
+    trace_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    """Close an isolated OpenAI provider without masking the run outcome."""
+
+    try:
+        await openai_provider.aclose()
+    except Exception:
+        logger.warning(
+            "Failed to close isolated OpenAI provider websocket",
+            extra={"trace_id": trace_id, "user_id": user_id},
+            exc_info=True,
+        )
+
+
 def _now_iso() -> str:
     """Return current UTC time in ISO format for audit events."""
     return datetime.now(timezone.utc).isoformat()
@@ -517,7 +566,7 @@ def _looks_like_curation_shaped_payload(payload: Any) -> bool:
     if isinstance(payload.get("curatable_objects"), list):
         return True
     return isinstance(payload.get("domain_pack_id"), str) and isinstance(
-        payload.get("objects"),
+        payload.get("extracted_objects"),
         list,
     )
 
@@ -688,6 +737,10 @@ async def _run_agent_with_groq_retry(
     document_name: Optional[str],
     user_message: str,
     trace_id: str,
+    chat_session_id: Optional[str] = None,
+    chat_turn_id: Optional[str] = None,
+    sentry_workflow: Optional[str] = None,
+    sentry_span_data: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Run tracing stream with Groq-specific retry on transient tool-call parse failures."""
     max_retries = get_groq_tool_call_max_retries() if _is_groq_runtime_model(getattr(agent, "model", None)) else 0
@@ -704,6 +757,10 @@ async def _run_agent_with_groq_retry(
                 document_name=document_name,
                 user_message=user_message,
                 trace_id=trace_id,
+                chat_session_id=chat_session_id,
+                chat_turn_id=chat_turn_id,
+                sentry_workflow=sentry_workflow,
+                sentry_span_data=sentry_span_data,
             ):
                 yield event
             return
@@ -871,6 +928,10 @@ async def _run_agent_with_tracing(
     document_name: Optional[str],
     user_message: str,
     trace_id: str,
+    chat_session_id: Optional[str] = None,
+    chat_turn_id: Optional[str] = None,
+    sentry_workflow: Optional[str] = None,
+    sentry_span_data: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Internal generator that runs the agent within Langfuse trace context.
@@ -905,9 +966,9 @@ async def _run_agent_with_tracing(
         document_id=document_id,
         document_name=document_name,
     )
-    # Make the per-request RunConfig (and its warm websocket provider) available to
-    # deeply nested runs invoked outside the SDK tool-context path (e.g. custom flow
-    # validators) so they reuse the same connection instead of opening a new one.
+    # Make the per-request RunConfig available to deeply nested runs invoked outside
+    # the SDK tool-context path. Chat helpers can reuse its warm provider directly;
+    # flow helpers clone it onto step-owned providers for explicit teardown.
     run_config_token = set_current_run_config(run_config)
 
     # Create live event list for real-time specialist event streaming
@@ -967,8 +1028,125 @@ async def _run_agent_with_tracing(
             tool_calls=structured_tool_calls,
             live_evidence_records=evidence_records,
         )
+    sdk_session = None
+    if chat_session_id and chat_turn_id:
+        sdk_session = build_standard_chat_compaction_session(
+            session_id=chat_session_id,
+            user_id=user_id,
+            current_turn_id=chat_turn_id,
+            model=str(getattr(agent, "model", "") or ""),
+            client=openai_client,
+        )
+        await sdk_session.run_compaction({"compaction_mode": "input"})
     llm_run_start = time.monotonic()
-    result = Runner.run_streamed(agent, input=input_items, max_turns=max_turns, run_config=run_config)
+    current_trace_run = get_current_extraction_trace_run()
+    sentry_conversation_id = chat_session_id or getattr(
+        current_trace_run,
+        "session_id",
+        None,
+    )
+    effective_sentry_workflow = sentry_workflow or ("assistant_chat" if chat_session_id else None)
+    manual_sentry_span_data = {
+        "ai_curation.agent.output_type": structured_finalization_state.output_type_name,
+    }
+    if sentry_span_data:
+        manual_sentry_span_data.update(sentry_span_data)
+    conversation_context_manager = (
+        gen_ai_conversation_scope(sentry_conversation_id)
+        if effective_sentry_workflow
+        else None
+    )
+    sentry_span_context_manager = None
+    sentry_span = None
+    if conversation_context_manager is not None:
+        conversation_context_manager.__enter__()
+    if effective_sentry_workflow:
+        sentry_span_context_manager = gen_ai_invoke_agent_span(
+            agent_name=current_agent,
+            model=str(getattr(agent, "model", "") or ""),
+            conversation_id=sentry_conversation_id,
+            workflow=effective_sentry_workflow,
+            agent_key=str(getattr(agent, "name", "") or current_agent),
+            agent_source="runtime",
+            trace_id=trace_id or getattr(current_trace_run, "trace_id", None),
+            document_id=document_id,
+            document_present=bool(document_id),
+            finalization_required=structured_finalization_state.required,
+            finalization_tool=structured_finalization_state.tool_name,
+            input_preview=input_items,
+            span_data=manual_sentry_span_data,
+        )
+        sentry_span = sentry_span_context_manager.__enter__()
+    sentry_stream_finalization_status = "stream_finished"
+
+    def _record_sentry_post_stream_outcome(
+        *,
+        status: str,
+        output: Any | None = None,
+        error_detail: Any | None = None,
+    ) -> None:
+        if not effective_sentry_workflow:
+            return
+        with gen_ai_conversation_scope(sentry_conversation_id):
+            with gen_ai_invoke_agent_span(
+                agent_name=current_agent,
+                model=str(getattr(agent, "model", "") or ""),
+                conversation_id=sentry_conversation_id,
+                workflow=f"{effective_sentry_workflow}_post_stream",
+                agent_key=str(getattr(agent, "name", "") or current_agent),
+                agent_source="runtime",
+                trace_id=trace_id or getattr(current_trace_run, "trace_id", None),
+                document_id=document_id,
+                document_present=bool(document_id),
+                finalization_required=structured_finalization_state.required,
+                finalization_tool=structured_finalization_state.tool_name,
+                finalization_status=status,
+                validation_status=status,
+                validation_error_count=len(builder_workspace.validation_errors),
+                tool_call_count=tool_calls_count,
+                candidate_count=len(builder_workspace.candidates),
+                output_preview=output,
+                span_data={
+                    "ai_curation.agent.events_collected": len(live_events),
+                    "ai_curation.finalization.detail": {
+                        "agents_used": list(agents_used),
+                        "structured_finalization_attempts": len(
+                            structured_finalization_state.calls
+                        ),
+                        "structured_finalization_max_attempts": (
+                            structured_finalization_state.max_attempts
+                        ),
+                    },
+                    **({"ai_curation.error.detail": error_detail} if error_detail else {}),
+                },
+            ):
+                pass
+    try:
+        result = Runner.run_streamed(
+            agent,
+            input=input_items,
+            max_turns=max_turns,
+            run_config=run_config,
+            session=sdk_session,
+        )
+    except BaseException as exc:
+        sentry_stream_finalization_status = (
+            "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
+        )
+        _record_sentry_post_stream_outcome(
+            status=sentry_stream_finalization_status,
+            error_detail={
+                "message": str(exc),
+                "error_type": type(exc).__name__,
+                "phase": "runner_start_streamed",
+                "trace_id": trace_id,
+            },
+        )
+        if sentry_span_context_manager is not None:
+            sentry_span_context_manager.__exit__(None, None, None)
+        if conversation_context_manager is not None:
+            conversation_context_manager.__exit__(None, None, None)
+        raise
     write_extraction_trace_event(
         event_type="model.reasoning_summary.request",
         trace_id=trace_id,
@@ -1377,8 +1555,8 @@ async def _run_agent_with_tracing(
                             write_stream_event(chat_ready_event, trace_id=trace_id)
                             yield chat_ready_event
 
-                        # Check if tool output contains FileInfo (file download)
-                        # export_to_file and file formatter tools return FileInfo as JSON
+                        # Check if tool output contains FileInfo (file download).
+                        # Runtime formatter projection tools return FileInfo as JSON.
                         if output:
                             try:
                                 output_data = json.loads(str(output)) if isinstance(output, str) else output
@@ -1398,15 +1576,7 @@ async def _run_agent_with_tracing(
                                     file_ready_event = {
                                         "type": "FILE_READY",
                                         "timestamp": _now_iso(),
-                                        "details": {
-                                            "file_id": output_data.get("file_id"),
-                                            "filename": output_data.get("filename"),
-                                            "format": output_data.get("format"),
-                                            "size_bytes": output_data.get("size_bytes"),
-                                            "mime_type": output_data.get("mime_type"),
-                                            "download_url": output_data.get("download_url"),
-                                            "created_at": output_data.get("created_at"),
-                                        }
+                                        "details": file_ready_event_details(output_data),
                                     }
                                     write_stream_event(file_ready_event, trace_id=trace_id)
                                     yield file_ready_event
@@ -1493,14 +1663,46 @@ async def _run_agent_with_tracing(
             live_events_yielded += 1
 
     except asyncio.CancelledError:
+        sentry_stream_finalization_status = "cancelled"
+        _record_sentry_post_stream_outcome(
+            status="cancelled",
+            error_detail={
+                "message": "runner stream cancelled",
+                "error_type": "CancelledError",
+                "phase": "runner_stream",
+                "trace_id": trace_id,
+            },
+        )
         builder_workspace.mark_cancelled(reason="runner stream cancelled")
         raise
     except Exception as exc:
+        sentry_stream_finalization_status = "error"
+        _record_sentry_post_stream_outcome(
+            status="error",
+            error_detail={
+                "message": str(exc),
+                "error_type": type(exc).__name__,
+                "phase": "runner_stream",
+                "trace_id": trace_id,
+            },
+        )
         builder_workspace.mark_aborted(reason=f"{type(exc).__name__}: {exc}")
         raise
     finally:
         # Clear the live event list reference
         set_live_event_list(None)
+        if sentry_span is not None:
+            set_redacted_ai_span_data(sentry_span, "ai_curation.tool_call.count", tool_calls_count)
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.agent.events_collected",
+                len(live_events),
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.finalization.status",
+                sentry_stream_finalization_status,
+            )
         _safe_reset_run_context_token(
             label="evidence_workspace",
             reset_fn=reset_active_evidence_records,
@@ -1522,6 +1724,10 @@ async def _run_agent_with_tracing(
             trace_id=trace_id,
             user_id=user_id,
         )
+        if sentry_span_context_manager is not None:
+            sentry_span_context_manager.__exit__(None, None, None)
+        if conversation_context_manager is not None:
+            conversation_context_manager.__exit__(None, None, None)
         # Close the per-request provider's warm websocket connection once the stream
         # is fully drained. Guarded so a close failure cannot mask the real outcome.
         try:
@@ -1607,6 +1813,10 @@ async def _run_agent_with_tracing(
                     "trace_id": trace_id,
                 },
             }
+            _record_sentry_post_stream_outcome(
+                status="rejected",
+                error_detail=run_error_event["data"],
+            )
             write_stream_event(run_error_event, trace_id=trace_id)
             yield run_error_event
             return
@@ -1649,7 +1859,7 @@ async def _run_agent_with_tracing(
                     "keys": sorted(structured_result.keys()),
                     "object_count": len(
                         structured_result.get("curatable_objects")
-                        or structured_result.get("objects")
+                        or structured_result.get("extracted_objects")
                         or []
                     ),
                 },
@@ -1703,6 +1913,10 @@ async def _run_agent_with_tracing(
                     "trace_id": trace_id,
                 },
             }
+            _record_sentry_post_stream_outcome(
+                status="rejected",
+                error_detail=run_error_event["data"],
+            )
             write_stream_event(run_error_event, trace_id=trace_id)
             yield run_error_event
             return
@@ -1730,6 +1944,11 @@ async def _run_agent_with_tracing(
                         "trace_id": trace_id
                     }
                 }
+                _record_sentry_post_stream_outcome(
+                    status="rejected",
+                    output=structured_result,
+                    error_detail=run_error_event["data"],
+                )
                 write_stream_event(run_error_event, trace_id=trace_id)
                 yield run_error_event
                 return
@@ -1788,6 +2007,10 @@ async def _run_agent_with_tracing(
             "trace_id": trace_id
         }
     }
+    _record_sentry_post_stream_outcome(
+        status="accepted",
+        output=structured_result if structured_result is not None else full_response,
+    )
     write_stream_event(run_finished_event, trace_id=trace_id)
     yield run_finished_event
 
@@ -1796,6 +2019,7 @@ async def run_agent_streamed(
     context_messages: List[Dict[str, Any]],
     user_id: str,
     session_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
     document_id: Optional[str] = None,
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
@@ -1808,6 +2032,8 @@ async def run_agent_streamed(
     agent: Optional[Agent] = None,
     doc_context: Optional["DocumentContext"] = None,
     trace_context: Optional[Dict[str, str]] = None,
+    sentry_workflow: Optional[str] = None,
+    sentry_span_data: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Run an agent with streaming output.
@@ -1829,6 +2055,7 @@ async def run_agent_streamed(
                           current user message
         user_id: The user's user ID for tenant isolation
         session_id: Optional chat session UUID for Langfuse trace grouping
+        turn_id: Optional durable turn id for standard-chat context compaction
         document_id: Optional UUID of the PDF document (enables PDF specialist)
         document_name: Optional name of the document for context
         active_groups: Optional list of group IDs (for example ["group-a", "group-b"]) for injecting
@@ -1845,6 +2072,9 @@ async def run_agent_streamed(
         doc_context: Optional pre-fetched DocumentContext. If provided, avoids
                      redundant Weaviate queries. Used by flow executor for optimization.
         trace_context: Optional Langfuse trace identifiers to reuse for retries.
+        sentry_workflow: Optional Sentry workflow label for this run.
+        sentry_span_data: Optional additional `ai_curation.*`/`gen_ai.*` Sentry
+                          span data for the manual AI span.
 
     Yields:
         SSE-compatible event dictionaries with types:
@@ -1909,6 +2139,7 @@ async def run_agent_streamed(
             specialist_model_override=specialist_model,
             specialist_temperature_override=specialist_temperature,
             specialist_reasoning_override=specialist_reasoning,
+            current_user_request=user_message,
         )
         agent_name = agent.name
         agent_for_prompt_commit = agent
@@ -2116,6 +2347,10 @@ async def run_agent_streamed(
                         document_name=document_name,
                         user_message=user_message,
                         trace_id=trace_id,
+                        chat_session_id=session_id if not provided_runtime_agent else None,
+                        chat_turn_id=turn_id if not provided_runtime_agent else None,
+                        sentry_workflow=sentry_workflow,
+                        sentry_span_data=sentry_span_data,
                     ):
                         # Capture completion data to update span
                         if event.get("type") == "RUN_FINISHED":
@@ -2364,6 +2599,10 @@ async def run_agent_streamed(
                     document_name=document_name,
                     user_message=user_message,
                     trace_id=fallback_trace_id,
+                    chat_session_id=session_id if not provided_runtime_agent else None,
+                    chat_turn_id=turn_id if not provided_runtime_agent else None,
+                    sentry_workflow=sentry_workflow,
+                    sentry_span_data=sentry_span_data,
                 ):
                     yield event
             finally:
@@ -2411,6 +2650,10 @@ async def run_agent_streamed(
                 document_name=document_name,
                 user_message=user_message,
                 trace_id=fallback_trace_id,
+                chat_session_id=session_id if not provided_runtime_agent else None,
+                chat_turn_id=turn_id if not provided_runtime_agent else None,
+                sentry_workflow=sentry_workflow,
+                sentry_span_data=sentry_span_data,
             ):
                 yield event
         finally:

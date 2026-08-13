@@ -555,7 +555,7 @@ def test_extract_evidence_records_from_domain_envelope_extraction_metadata():
     envelope = {
         "envelope_id": "gene-expression-envelope",
         "domain_pack_id": "gene_expression",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "GeneExpressionAnnotation",
                 "pending_ref_id": "expression-flcn-brain",
@@ -602,7 +602,7 @@ def test_extract_evidence_records_from_domain_envelope_object_payload():
     envelope = {
         "envelope_id": "gene-envelope",
         "domain_pack_id": "gene",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "gene_mention_evidence",
                 "object_role": "validated_reference",
@@ -667,7 +667,7 @@ def test_canonicalize_prunes_unreferenced_live_evidence_from_domain_envelope():
     envelope = {
         "envelope_id": "gene-envelope",
         "domain_pack_id": "gene",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "gene_mention_evidence",
                 "pending_ref_id": "gene-crb",

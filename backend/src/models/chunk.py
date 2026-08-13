@@ -121,7 +121,11 @@ class DocumentChunk(BaseModel):
     chunk_index: int = Field(..., ge=0, description="Order within document")
     content: str = Field(..., min_length=1, description="Extracted text content")
     element_type: ElementType
-    page_number: int = Field(..., gt=0, description="Source page number")
+    page_number: Optional[int] = Field(
+        None,
+        gt=0,
+        description="One-based source page number when known",
+    )
     section_title: Optional[str] = None
     section_path: Optional[List[str]] = None
     # New hierarchy fields from LLM-based section resolution
@@ -149,9 +153,9 @@ class DocumentChunk(BaseModel):
 
     @field_validator('page_number')
     @classmethod
-    def validate_page_number(cls, v: int) -> int:
-        """Validate page number is positive."""
-        if v <= 0:
+    def validate_page_number(cls, v: Optional[int]) -> Optional[int]:
+        """Validate a known page number is positive."""
+        if v is not None and v <= 0:
             raise ValueError("Page number must be positive")
         return v
 

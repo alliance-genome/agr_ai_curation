@@ -7,11 +7,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -21,7 +23,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PostgresUUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 
 from src.models.sql.database import Base
 from src.schemas.curation_workspace import (
@@ -34,6 +36,7 @@ from src.schemas.curation_workspace import (
     CurationSessionSortField,
     CurationSessionStatus,
     CurationSortDirection,
+    CurationSubmissionAttemptState,
     CurationSubmissionStatus,
     CurationValidationScope,
     CurationValidationSnapshotState,
@@ -108,6 +111,10 @@ class CurationReviewSession(Base):
         nullable=False,
         default=1,
         server_default="1",
+    )
+    current_candidate_intent_owner: Mapped[str | None] = mapped_column(String(), nullable=True)
+    current_candidate_intent_generation: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[list[str]] = mapped_column(
@@ -198,6 +205,13 @@ class CurationReviewSession(Base):
 
     __table_args__ = (
         CheckConstraint("session_version >= 1", name="ck_curation_review_sessions_version"),
+        CheckConstraint(
+            "(current_candidate_intent_owner IS NULL) = "
+            "(current_candidate_intent_generation IS NULL) AND "
+            "(current_candidate_intent_generation IS NULL OR "
+            "current_candidate_intent_generation >= 1)",
+            name="ck_curation_sessions_candidate_intent_pair",
+        ),
         CheckConstraint(
             "total_candidates >= 0 AND reviewed_candidates >= 0 AND pending_candidates >= 0 "
             "AND accepted_candidates >= 0 AND rejected_candidates >= 0 "
@@ -305,14 +319,17 @@ class DomainEnvelopeModel(Base):
     project_key: Mapped[str] = mapped_column(String(), nullable=False)
     domain_pack_key: Mapped[str] = mapped_column(String(), nullable=False)
     domain_pack_version: Mapped[str | None] = mapped_column(String(), nullable=True)
+    adapter_key: Mapped[str] = mapped_column(String(), nullable=False)
+    source_extraction_result_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    source_payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[DomainEnvelopeStatus] = mapped_column(
         _enum_type(DomainEnvelopeStatus),
         nullable=False,
     )
-    document_id: Mapped[UUID | None] = mapped_column(
+    document_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
         _fk("pdf_documents.id"),
-        nullable=True,
+        nullable=False,
     )
     session_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
@@ -380,6 +397,15 @@ class DomainEnvelopeModel(Base):
 
     __table_args__ = (
         CheckConstraint("revision >= 1", name="ck_domain_envelopes_revision"),
+        CheckConstraint(
+            "session_id IS NOT NULL OR source_extraction_result_id IS NOT NULL",
+            name="ck_domain_envelopes_owner_association",
+        ),
+        UniqueConstraint(
+            "envelope_id",
+            "session_id",
+            name="uq_domain_envelopes_session_owner",
+        ),
         Index("ix_domain_envelopes_document", "document_id"),
         Index(
             "ix_domain_envelopes_session",
@@ -396,6 +422,14 @@ class DomainEnvelopeModel(Base):
             "project_key",
             "domain_pack_key",
             "status",
+        ),
+        Index(
+            "uq_domain_envelopes_source_scope",
+            "source_extraction_result_id",
+            "adapter_key",
+            "domain_pack_key",
+            unique=True,
+            postgresql_where=text("source_extraction_result_id IS NOT NULL"),
         ),
     )
 
@@ -736,7 +770,6 @@ class CurationCandidate(Base):
     )
     envelope_id: Mapped[str | None] = mapped_column(
         String(),
-        _fk("domain_envelopes.envelope_id"),
         nullable=True,
     )
     object_id: Mapped[str | None] = mapped_column(String(), nullable=True)
@@ -775,7 +808,12 @@ class CurationCandidate(Base):
         "CurationExtractionResultRecord",
         back_populates="candidates",
     )
-    domain_envelope: Mapped[DomainEnvelopeModel | None] = relationship("DomainEnvelopeModel")
+    domain_envelope: Mapped[DomainEnvelopeModel | None] = relationship(
+        "DomainEnvelopeModel",
+        primaryjoin=lambda: foreign(CurationCandidate.envelope_id)
+        == DomainEnvelopeModel.envelope_id,
+        viewonly=True,
+    )
     draft: Mapped["CurationDraft | None"] = relationship(
         "CurationDraft",
         back_populates="candidate",
@@ -798,6 +836,13 @@ class CurationCandidate(Base):
     )
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["envelope_id", "session_id"],
+            ["domain_envelopes.envelope_id", "domain_envelopes.session_id"],
+            name="fk_curation_candidates_envelope_session_owner",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         CheckConstraint('"order" >= 0', name="ck_curation_candidates_order"),
         CheckConstraint(
             "(envelope_id IS NULL AND object_id IS NULL AND envelope_revision IS NULL) "
@@ -1057,6 +1102,21 @@ class CurationSubmissionRecord(Base):
         _enum_type(CurationSubmissionStatus),
         nullable=False,
     )
+    idempotency_key: Mapped[str | None] = mapped_column(String(), nullable=True)
+    attempt_state: Mapped[CurationSubmissionAttemptState | None] = mapped_column(
+        _enum_type(CurationSubmissionAttemptState),
+        nullable=True,
+    )
+    attempt_state_history: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=JSONB_EMPTY_ARRAY,
+    )
+    retention_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     readiness: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB,
         nullable=False,
@@ -1099,7 +1159,9 @@ class CurationSubmissionRecord(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_curation_submissions_idempotency_key"),
         Index("ix_submissions_session", "session_id", text("requested_at DESC")),
+        Index("ix_submissions_retention", "retention_expires_at"),
     )
 
 

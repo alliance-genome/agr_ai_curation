@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
+from threading import Event, Lock
 from uuid import UUID, uuid4
 
 import pytest
@@ -55,6 +57,7 @@ def _seed_submission_record(
     from src.lib.curation_workspace import session_service
     from src.lib.curation_workspace.models import CurationSubmissionRecord
     from src.schemas.curation_workspace import SubmissionMode, SubmissionPayloadContract
+    from src.schemas.curation_workspace import CurationSubmissionAttemptState
 
     normalized_mode = SubmissionMode(mode)
 
@@ -66,6 +69,13 @@ def _seed_submission_record(
         mode=normalized_mode,
         target_key=target_key,
         status=status,
+        idempotency_key=str(uuid4()) if normalized_mode == SubmissionMode.DIRECT_SUBMIT else None,
+        attempt_state=(
+            CurationSubmissionAttemptState.FAILED
+            if normalized_mode == SubmissionMode.DIRECT_SUBMIT
+            else None
+        ),
+        attempt_state_history=[],
         readiness=[
             {
                 "candidate_id": candidate_id,
@@ -721,6 +731,7 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
     response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "inventory_scope": "show_all",
             "curator_id": seeded_review_sessions["current_user_auth_sub"],
             "prepared_from": "2026-03-01T00:00:00Z",
             "prepared_to": "2026-03-15T00:00:00Z",
@@ -753,6 +764,7 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
     filtered_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "inventory_scope": "show_all",
             "status": "in_progress",
             "adapter_key": "gene",
             "flow_run_id": "flow-alpha",
@@ -766,6 +778,57 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
     assert [session["session_id"] for session in filtered_payload["sessions"]] == [
         seeded_review_sessions["session_beta_id"]
     ]
+
+
+def test_list_review_sessions_defaults_to_my_inventory_and_show_all_expands(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    default_response = client.get(
+        "/api/curation-workspace/sessions",
+        params={
+            "sort_by": "prepared_at",
+            "sort_direction": "asc",
+        },
+    )
+    assert default_response.status_code == 200, default_response.text
+    default_payload = default_response.json()
+
+    assert default_payload["applied_filters"]["inventory_scope"] == "my_inventory"
+    assert [session["session_id"] for session in default_payload["sessions"]] == [
+        seeded_review_sessions["session_alpha_id"],
+        seeded_review_sessions["session_gamma_id"],
+    ]
+    assert default_payload["page_info"]["total_items"] == 2
+
+    show_all_response = client.get(
+        "/api/curation-workspace/sessions",
+        params={
+            "inventory_scope": "show_all",
+            "sort_by": "prepared_at",
+            "sort_direction": "asc",
+        },
+    )
+    assert show_all_response.status_code == 200, show_all_response.text
+    show_all_payload = show_all_response.json()
+
+    assert show_all_payload["applied_filters"]["inventory_scope"] == "show_all"
+    assert [session["session_id"] for session in show_all_payload["sessions"]] == [
+        seeded_review_sessions["session_alpha_id"],
+        seeded_review_sessions["session_beta_id"],
+        seeded_review_sessions["session_gamma_id"],
+    ]
+    assert show_all_payload["page_info"]["total_items"] == 3
+
+
+def test_my_organization_inventory_scope_returns_explicit_error(client: TestClient):
+    response = client.get(
+        "/api/curation-workspace/sessions",
+        params={"inventory_scope": "my_organization"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "organization or group metadata" in response.json()["detail"]
 
 
 def test_get_review_flow_runs_returns_filtered_group_summaries(
@@ -803,6 +866,7 @@ def test_get_review_flow_run_sessions_returns_paginated_group_members(
     response = client.get(
         "/api/curation-workspace/flow-runs/flow-alpha/sessions",
         params={
+            "inventory_scope": "show_all",
             "page": 1,
             "page_size": 1,
         },
@@ -891,7 +955,7 @@ def test_list_review_sessions_search_escapes_like_wildcards(
 ):
     percent_response = client.get(
         "/api/curation-workspace/sessions",
-        params={"search": "100%"},
+        params={"inventory_scope": "show_all", "search": "100%"},
     )
     assert percent_response.status_code == 200, percent_response.text
     assert [session["session_id"] for session in percent_response.json()["sessions"]] == [
@@ -900,7 +964,7 @@ def test_list_review_sessions_search_escapes_like_wildcards(
 
     underscore_response = client.get(
         "/api/curation-workspace/sessions",
-        params={"search": "Beta_gene"},
+        params={"inventory_scope": "show_all", "search": "Beta_gene"},
     )
     assert underscore_response.status_code == 200, underscore_response.text
     assert [session["session_id"] for session in underscore_response.json()["sessions"]] == [
@@ -915,6 +979,7 @@ def test_list_review_sessions_supports_adapter_sorting(
     ascending_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "inventory_scope": "show_all",
             "sort_by": "adapter",
             "sort_direction": "asc",
         },
@@ -929,6 +994,7 @@ def test_list_review_sessions_supports_adapter_sorting(
     descending_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "inventory_scope": "show_all",
             "sort_by": "adapter",
             "sort_direction": "desc",
         },
@@ -974,6 +1040,129 @@ def test_patch_review_session_updates_status_and_notes(
     assert refreshed is not None
     assert refreshed.status == CurationSessionStatus.PAUSED
     assert refreshed.notes == "Paused for curator follow-up"
+
+
+def test_patch_review_session_rejects_stale_expected_session_version(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import CurationReviewSession
+
+    session_id = seeded_review_sessions["session_alpha_id"]
+    latest_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": 2,
+            "current_candidate_id": seeded_review_sessions["candidate_alpha_id"],
+        },
+    )
+    assert latest_response.status_code == 200, latest_response.text
+    assert latest_response.json()["session"]["session_version"] == 2
+
+    response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "notes": "This stale mutation must not commit",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Session version mismatch: expected 1, found 2"
+    test_db.expire_all()
+    refreshed = test_db.get(CurationReviewSession, UUID(session_id))
+    assert refreshed is not None
+    assert refreshed.notes != "This stale mutation must not commit"
+
+
+def test_patch_review_session_rejects_late_older_candidate_intent(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import CurationReviewSession
+
+    session_id = seeded_review_sessions["session_alpha_id"]
+    older_generation = 1_780_000_000_000_001
+    latest_generation = older_generation + 1
+    latest_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": latest_generation,
+            "current_candidate_id": seeded_review_sessions["candidate_alpha_id"],
+        },
+    )
+    assert latest_response.status_code == 200, latest_response.text
+
+    stale_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": older_generation,
+            "current_candidate_id": None,
+        },
+    )
+    assert stale_response.status_code == 409
+
+    test_db.expire_all()
+    refreshed = test_db.get(CurationReviewSession, UUID(session_id))
+    assert refreshed is not None
+    assert str(refreshed.current_candidate_id) == seeded_review_sessions["candidate_alpha_id"]
+    assert refreshed.current_candidate_intent_owner == "browser-a"
+    assert refreshed.current_candidate_intent_generation == latest_generation
+
+
+def test_newer_candidate_intent_supersedes_first_server_commit(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import CurationReviewSession
+
+    session_id = seeded_review_sessions["session_alpha_id"]
+    first_generation = 1_780_000_000_000_001
+    latest_generation = first_generation + 1
+    first_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": first_generation,
+            "current_candidate_id": None,
+        },
+    )
+    assert first_response.status_code == 200, first_response.text
+    assert first_response.json()["session"]["session_version"] == 2
+
+    latest_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}",
+        json={
+            "session_id": session_id,
+            "expected_session_version": 1,
+            "intent_owner": "browser-a",
+            "intent_generation": latest_generation,
+            "current_candidate_id": seeded_review_sessions["candidate_alpha_id"],
+        },
+    )
+    assert latest_response.status_code == 200, latest_response.text
+    assert latest_response.json()["session"]["session_version"] == 3
+
+    test_db.expire_all()
+    refreshed = test_db.get(CurationReviewSession, UUID(session_id))
+    assert refreshed is not None
+    assert str(refreshed.current_candidate_id) == seeded_review_sessions["candidate_alpha_id"]
+    assert refreshed.current_candidate_intent_generation == latest_generation
 
 
 def test_post_candidate_decision_updates_status_and_writes_action_log(
@@ -1155,17 +1344,25 @@ def test_get_review_session_stats_returns_aggregate_counts(
     payload = response.json()
     stats = payload["stats"]
 
-    assert stats["total_sessions"] == 3
-    assert stats["adapter_count"] == 2
+    assert payload["applied_filters"]["inventory_scope"] == "my_inventory"
+    assert stats["total_sessions"] == 2
+    assert stats["adapter_count"] == 1
     assert stats["new_sessions"] == 1
-    assert stats["in_progress_sessions"] == 1
+    assert stats["in_progress_sessions"] == 0
     assert stats["ready_for_submission_sessions"] == 0
     assert stats["paused_sessions"] == 0
     assert stats["submitted_sessions"] == 1
     assert stats["rejected_sessions"] == 0
     assert stats["assigned_to_current_user"] == 2
-    assert stats["assigned_to_others"] == 1
+    assert stats["assigned_to_others"] == 0
     assert stats["submitted_last_7_days"] == 1
+
+    show_all_response = client.get(
+        "/api/curation-workspace/sessions/stats",
+        params={"inventory_scope": "show_all"},
+    )
+    assert show_all_response.status_code == 200, show_all_response.text
+    assert show_all_response.json()["stats"]["total_sessions"] == 3
 
 
 def test_get_next_review_session_returns_queue_navigation_context(
@@ -1183,9 +1380,10 @@ def test_get_next_review_session_returns_queue_navigation_context(
     assert response.status_code == 200, response.text
     payload = response.json()
 
-    assert payload["session"]["session_id"] == seeded_review_sessions["session_beta_id"]
+    assert payload["session"]["session_id"] == seeded_review_sessions["session_gamma_id"]
     assert payload["queue_context"] == {
         "filters": {
+            "inventory_scope": "my_inventory",
             "statuses": [],
             "adapter_keys": [],
             "curator_ids": [],
@@ -1201,9 +1399,9 @@ def test_get_next_review_session_returns_queue_navigation_context(
         "sort_by": "prepared_at",
         "sort_direction": "asc",
         "position": 2,
-        "total_sessions": 3,
+        "total_sessions": 2,
         "previous_session_id": seeded_review_sessions["session_alpha_id"],
-        "next_session_id": seeded_review_sessions["session_gamma_id"],
+        "next_session_id": None,
     }
 
 
@@ -1372,7 +1570,7 @@ def test_post_session_validation_returns_session_and_candidate_snapshots(
     assert payload["candidate_validations"][0]["field_results"]["disease_term"]["status"] == "skipped"
 
 
-def test_post_submission_retry_creates_new_submission_record(
+def test_post_submission_retry_reuses_original_submission_attempt(
     client: TestClient,
     seeded_review_sessions,
     test_db,
@@ -1418,7 +1616,7 @@ def test_post_submission_retry_creates_new_submission_record(
     assert response.status_code == 200, response.text
     payload = response.json()
 
-    assert payload["submission"]["submission_id"] != original_submission_id
+    assert payload["submission"]["submission_id"] == original_submission_id
     assert payload["submission"]["status"] == "accepted"
     assert payload["submission"]["target_key"] == "review_export_bundle"
     assert payload["submission"]["payload"]["candidate_ids"] == [
@@ -1429,8 +1627,7 @@ def test_post_submission_retry_creates_new_submission_record(
 
     original_record = test_db.get(CurationSubmissionRecord, UUID(original_submission_id))
     assert original_record is not None
-    assert original_record.status == CurationSubmissionStatus.FAILED
-    assert original_record.response_message == "Initial submission failed."
+    assert original_record.status == CurationSubmissionStatus.ACCEPTED
 
     retried_record = test_db.get(
         CurationSubmissionRecord,
@@ -1447,10 +1644,9 @@ def test_post_submission_retry_creates_new_submission_record(
         .order_by(CurationSubmissionRecord.requested_at.asc())
         .all()
     )
-    assert len(direct_submit_rows) == 2
+    assert len(direct_submit_rows) == 1
     assert str(direct_submit_rows[0].id) == original_submission_id
-    assert direct_submit_rows[0].status == CurationSubmissionStatus.FAILED
-    assert direct_submit_rows[1].status == CurationSubmissionStatus.ACCEPTED
+    assert direct_submit_rows[0].status == CurationSubmissionStatus.ACCEPTED
 
     action_log_rows = (
         test_db.query(session_service.SessionActionLogModel)
@@ -1465,6 +1661,86 @@ def test_post_submission_retry_creates_new_submission_record(
         .all()
     )
     assert len(action_log_rows) == 1
+
+
+def test_concurrent_duplicate_submission_requests_invoke_mutation_once(
+    client: TestClient,
+    seeded_review_sessions,
+    monkeypatch,
+):
+    from src.lib.curation_workspace.export_adapters import JsonBundleExportAdapter
+    from src.models.sql.database import SessionLocal, get_db
+
+    class CoordinatedAdapter:
+        transport_key = "coordinated_submission"
+
+        def __init__(self) -> None:
+            self.submit_calls = 0
+            self.reconcile_calls = 0
+            self._lock = Lock()
+            self._reconcile_started = Event()
+
+        def submit(self, *, payload, idempotency_key):
+            with self._lock:
+                self.submit_calls += 1
+            self._reconcile_started.wait(timeout=5)
+            return {"status": "accepted", "external_reference": "target:one"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            with self._lock:
+                self.reconcile_calls += 1
+            self._reconcile_started.set()
+            return {"status": "accepted", "external_reference": "target:one"}
+
+    adapter = CoordinatedAdapter()
+    _patch_submission_transport_adapter(monkeypatch, lambda _target_key: adapter)
+    _patch_export_adapter(monkeypatch, JsonBundleExportAdapter(adapter_key="gene"))
+
+    app = client.app
+    previous_override = app.dependency_overrides[get_db]
+
+    def _independent_db_session():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _independent_db_session
+    session_id = seeded_review_sessions["session_beta_id"]
+    request_json = {
+        "session_id": session_id,
+        "idempotency_key": str(uuid4()),
+        "candidate_ids": [seeded_review_sessions["candidate_beta_id"]],
+        "target_key": "review_export_bundle",
+    }
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(
+                    lambda _index: client.post(
+                        f"/api/curation-workspace/sessions/{session_id}/submit",
+                        json=request_json,
+                    ),
+                    range(2),
+                )
+            )
+    finally:
+        app.dependency_overrides[get_db] = previous_override
+
+    assert [response.status_code for response in responses] == [200, 200]
+    submission_ids = {
+        response.json()["submission"]["submission_id"] for response in responses
+    }
+    assert len(submission_ids) == 1
+    assert all(
+        [event["state"] for event in response.json()["submission"]["attempt_state_history"]]
+        == ["pending", "sending", "succeeded"]
+        for response in responses
+    )
+    assert adapter.submit_calls == 1
+    assert adapter.reconcile_calls == 1
 
 
 def test_get_submission_history_returns_single_submission_record(

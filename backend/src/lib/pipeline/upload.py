@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 import uuid
 
+from pypdf import PdfReader
+
 from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES, pdf_file_size_limit_message
 from src.models.document import PDFDocument, ProcessingStatus, EmbeddingStatus, DocumentMetadata
 from src.lib.storage_permissions import ensure_writable_directory
@@ -50,6 +52,7 @@ class PDFUploadHandler:
         Raises:
             UploadError: If upload or save fails
         """
+        doc_dir: Path | None = None
         try:
             # Generate document ID
             document_id = str(uuid.uuid4())
@@ -86,12 +89,16 @@ class PDFUploadHandler:
                 shutil.rmtree(doc_dir, ignore_errors=True)
                 raise UploadError(pdf_file_size_limit_message(file_size))
 
+            page_count = len(PdfReader(saved_path).pages)
+            if page_count < 1:
+                raise UploadError("PDF must contain at least one page")
+
             # Generate checksum
             checksum = await generate_checksum(saved_path)
 
             # Create document metadata
             doc_metadata = DocumentMetadata(
-                page_count=1,  # Will be updated during parsing, default to 1
+                page_count=page_count,
                 author=metadata.get('author') if metadata else None,
                 title=metadata.get('title', original_filename) if metadata else original_filename,
                 checksum=checksum,
@@ -117,6 +124,8 @@ class PDFUploadHandler:
             return saved_path, document
 
         except Exception as e:
+            if doc_dir is not None:
+                shutil.rmtree(doc_dir, ignore_errors=True)
             error_msg = f"Failed to save uploaded PDF: {str(e)}"
             logger.error(error_msg)
             raise UploadError(error_msg) from e

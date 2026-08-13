@@ -159,7 +159,10 @@ Curation Flows can output results in multiple ways:
 | **TSV** | TSV Formatter | Tab-separated for database import |
 | **JSON** | JSON Formatter | Structured data with nested information |
 
-Each flow uses one output agent. Use Chat Output to review results first, then swap to a File Formatter when ready to export.
+A flow can use one or more output agents. Each output is attached directly to
+the structured extraction or validation steps it should include, and one output
+may combine several selected sources. For example, the same flow can produce a
+Chat Output for review and a File Formatter export in one run.
 
 File outputs appear in the chat as downloadable cards with metadata including file size and download count.
 

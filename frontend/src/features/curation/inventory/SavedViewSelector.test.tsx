@@ -16,6 +16,7 @@ function buildSavedView(overrides: Partial<CurationSavedView> = {}): CurationSav
     name: 'My pending sessions',
     description: 'Only active sessions assigned to me.',
     filters: {
+      inventory_scope: 'show_all',
       statuses: ['in_progress'],
       adapter_keys: ['gene'],
       curator_ids: ['user-1'],
@@ -63,6 +64,7 @@ function renderSelector(props: Partial<ComponentProps<typeof SavedViewSelector>>
       <ThemeProvider theme={theme}>
         <SavedViewSelector
           filters={{
+            inventory_scope: 'my_inventory',
             statuses: [],
             adapter_keys: ['gene'],
             curator_ids: [],
@@ -181,6 +183,7 @@ describe('SavedViewSelector', () => {
     const user = userEvent.setup()
     const { onApplyView } = renderSelector({
       filters: {
+        inventory_scope: 'show_all',
         statuses: ['in_progress'],
         adapter_keys: ['gene'],
         curator_ids: [],
@@ -228,6 +231,7 @@ describe('SavedViewSelector', () => {
     })
     expect(requestBody.filters.origin_session_id).toBeNull()
     expect(requestBody.filters.saved_view_id).toBeNull()
+    expect(requestBody.filters.inventory_scope).toBe('show_all')
     expect(requestBody.filters.statuses).toEqual(['in_progress'])
   }, 20_000)
 
@@ -284,7 +288,7 @@ describe('SavedViewSelector', () => {
 
   it('does not delete a saved view until the confirmation is accepted', async () => {
     const savedView = buildSavedView()
-    const fetchSpy = vi.fn(async () =>
+    const fetchSpy = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify({ views: [savedView] }), {
         status: 200,
         headers: {

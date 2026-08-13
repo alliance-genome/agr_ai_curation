@@ -126,7 +126,15 @@ class TestLifespan:
                      "summary": {},
                  },
              ), \
-             patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):
+             patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False), \
+             patch("src.lib.batch.recovery.schedule_startup_batch_recovery", return_value=0), \
+             patch(
+                 "src.lib.curation_workspace.submission_attempt_cleanup.schedule_submission_attempt_cleanup"
+             ) as mock_schedule_submission_cleanup, \
+             patch(
+                 "src.lib.curation_workspace.submission_attempt_cleanup.stop_submission_attempt_cleanup",
+                 new_callable=AsyncMock,
+             ) as mock_stop_submission_cleanup:
             # Mock the database session context manager
             mock_db = MagicMock()
             mock_session.return_value = mock_db
@@ -138,6 +146,8 @@ class TestLifespan:
                 "get_required_connections": mock_get_required_connections,
                 "get_optional_connections": mock_get_optional_connections,
                 "check_required_health": mock_check_required_health,
+                "schedule_submission_cleanup": mock_schedule_submission_cleanup,
+                "stop_submission_cleanup": mock_stop_submission_cleanup,
             }
 
     @pytest.mark.asyncio
@@ -158,6 +168,19 @@ class TestLifespan:
             pass
 
         mock_subsystems["check_required_health"].assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_starts_and_stops_submission_cleanup(self, mock_init, mock_conn_cls, mock_subsystems):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
+
+        async with _main_module().lifespan(FastAPI()):
+            mock_subsystems["schedule_submission_cleanup"].assert_called_once_with()
+            mock_subsystems["stop_submission_cleanup"].assert_not_awaited()
+
+        mock_subsystems["stop_submission_cleanup"].assert_awaited_once_with()
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
@@ -245,6 +268,7 @@ class TestLifespan:
         "WEAVIATE_HOST": "example",
         "WEAVIATE_PORT": "9090",
         "WEAVIATE_SCHEME": "https",
+        "WEAVIATE_API_KEY": "production-key",
     })
     async def test_uses_environment_configuration(self, mock_init, mock_conn_cls):
         connection, _ = make_connection()
@@ -253,7 +277,10 @@ class TestLifespan:
         app = FastAPI()
 
         async with _main_module().lifespan(app):
-            mock_conn_cls.assert_called_with(url="https://example:9090")
+            mock_conn_cls.assert_called_with(
+                url="https://example:9090",
+                api_key="production-key",
+            )
             mock_init.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -474,7 +501,15 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
              new_callable=AsyncMock,
              return_value=(True, []),
          ), \
-         patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):
+         patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False), \
+         patch("src.lib.batch.recovery.schedule_startup_batch_recovery", return_value=0), \
+         patch(
+             "src.lib.curation_workspace.submission_attempt_cleanup.schedule_submission_attempt_cleanup"
+         ), \
+         patch(
+             "src.lib.curation_workspace.submission_attempt_cleanup.stop_submission_attempt_cleanup",
+             new_callable=AsyncMock,
+         ):
         async with main.lifespan(FastAPI()):
             pass
 

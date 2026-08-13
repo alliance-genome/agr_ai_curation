@@ -30,7 +30,6 @@ from .._export_utils import (
 )
 from ..schema_refs import ALLIANCE_LINKML_COMMIT
 from .constants import (
-    DISEASE_DOMAIN_PACK_ID,
     DISEASE_LINKML_SCHEMA_SOURCE_FILE,
     DISEASE_OBJECT_TYPE,
 )
@@ -147,7 +146,7 @@ def build_disease_annotation_export_payload(
             "schema_version": DISEASE_EXPORT_SCHEMA_VERSION,
             "payload_type": "alliance_disease_annotation_export",
             "payload_status": payload_status,
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "grounding": {
                 "linkml": {
                     "commit": ALLIANCE_LINKML_COMMIT,

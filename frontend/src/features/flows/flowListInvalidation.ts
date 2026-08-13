@@ -1,4 +1,5 @@
 import logger from '@/services/logger'
+import { safeSetJson } from '@/lib/browserStorage'
 
 export type FlowListInvalidationReason = 'created' | 'updated' | 'deleted'
 
@@ -30,10 +31,20 @@ export function notifyFlowListInvalidated(
   )
 
   try {
-    window.localStorage.setItem(
-      FLOW_LIST_INVALIDATED_STORAGE_KEY,
-      JSON.stringify(eventDetail)
-    )
+    const result = safeSetJson(() => window.localStorage, FLOW_LIST_INVALIDATED_STORAGE_KEY, eventDetail, {
+      owner: 'workflow',
+      key: FLOW_LIST_INVALIDATED_STORAGE_KEY,
+    })
+    if (!result.ok) {
+      logger.warn('Failed to persist flow list invalidation event', {
+        component: 'flowListInvalidation',
+        metadata: {
+          error: result.error instanceof Error ? result.error.message : 'Unknown error',
+          flowId: eventDetail.flowId,
+          reason: eventDetail.reason,
+        },
+      })
+    }
   } catch (error) {
     logger.warn('Failed to persist flow list invalidation event', {
       component: 'flowListInvalidation',
