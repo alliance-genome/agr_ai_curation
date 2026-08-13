@@ -40,11 +40,25 @@ import {
   CHAT_RUN_TERMINAL_EVENT,
   type ChatRunTerminalEventDetail,
 } from './hooks/useChatStream'
+import { getEnvVar } from './utils/env'
 import './App.css'
 
 export const queryClient = new QueryClient()
 const DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS = 4000
+const DEFAULT_RUN_COMPLETION_TOAST_AUTO_HIDE_MS = 6000
 const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right' } as const
+
+export function getRunCompletionToastAutoHideMs(): number {
+  const configuredValue = getEnvVar('VITE_RUN_COMPLETION_TOAST_AUTO_HIDE_MS')
+  if (!configuredValue?.trim()) {
+    return DEFAULT_RUN_COMPLETION_TOAST_AUTO_HIDE_MS
+  }
+
+  const parsedValue = Number(configuredValue)
+  return Number.isInteger(parsedValue) && parsedValue > 0
+    ? parsedValue
+    : DEFAULT_RUN_COMPLETION_TOAST_AUTO_HIDE_MS
+}
 
 const APP_THEME_GLOBAL_ALPHA = {
   dark: {
@@ -448,7 +462,7 @@ export function AppContent() {
         open: true,
         message: isFlowRun ? 'Curation flow finished.' : 'Curation chat finished.',
         severity: 'success',
-        autoHideDurationMs: 6000,
+        autoHideDurationMs: getRunCompletionToastAutoHideMs(),
         anchorOrigin: DEFAULT_GLOBAL_SNACKBAR_ANCHOR,
         showStorageRecoveryAction: false,
         actionLabel: isFlowRun ? 'Open flow' : 'Open chat',
