@@ -1,7 +1,62 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
+import {
+  isOutputFormatterAgentFromMetadata,
+  SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
+} from './agentMetadataUtils'
 import { projectExecutableFlowGraph } from './executableFlowGraph'
+import type { ExecutableFlowGraph } from './executableFlowGraph'
 import type { FlowEdgeDefinition, FlowNodeDefinition } from './types'
+
+interface ParityFixtureCase {
+  name: string
+  flow: {
+    version: '1.1'
+    entry_node_id: string
+    nodes: FlowNodeDefinition[]
+    edges: FlowEdgeDefinition[]
+  }
+  expected: Omit<ExecutableFlowGraph, 'issues'> & { issue_codes: string[] }
+}
+
+interface ParityFixture {
+  schema_version: number
+  formatter_agent_ids: string[]
+  non_formatter_agent_id: string
+  cases: ParityFixtureCase[]
+}
+
+const parityFixture = JSON.parse(readFileSync(resolve(
+  process.cwd(),
+  '../docs/testing/executable-flow-graph-parity.json',
+), 'utf8')) as ParityFixture
+
+if (parityFixture.schema_version !== 1) {
+  throw new Error(`Unsupported executable flow parity fixture schema: ${parityFixture.schema_version}`)
+}
+
+const parityProjection = (
+  graph: ExecutableFlowGraph,
+): Omit<ExecutableFlowGraph, 'issues'> & { issue_codes: string[] } => ({
+  valid: graph.valid,
+  control_node_ids: graph.control_node_ids,
+  ordered_control_node_ids: graph.ordered_control_node_ids,
+  ordered_executable_node_ids: graph.ordered_executable_node_ids,
+  entry_node_ids: graph.entry_node_ids,
+  exit_node_ids: graph.exit_node_ids,
+  terminal_node_ids: graph.terminal_node_ids,
+  output_attachments: graph.output_attachments,
+  validation_sidecars: graph.validation_sidecars.map(sidecar => {
+    const { replaces_attachment_id: replacesAttachmentId, ...requiredFields } = sidecar
+    return replacesAttachmentId === undefined
+      ? requiredFields
+      : { ...requiredFields, replaces_attachment_id: replacesAttachmentId }
+  }),
+  issue_codes: graph.issues.map(issue => issue.code),
+})
 
 const node = (
   id: string,
@@ -72,6 +127,32 @@ const multiOutputAttachmentFlow = (): {
 })
 
 describe('projectExecutableFlowGraph', () => {
+  it('matches the shared complete formatter classification', () => {
+    expect([...SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS].sort()).toEqual(
+      [...parityFixture.formatter_agent_ids].sort(),
+    )
+    parityFixture.formatter_agent_ids.forEach(agentId => {
+      expect(isOutputFormatterAgentFromMetadata(agentId, {})).toBe(true)
+    })
+    expect(isOutputFormatterAgentFromMetadata(
+      parityFixture.non_formatter_agent_id,
+      {},
+    )).toBe(false)
+  })
+
+  describe.each(parityFixture.cases)('shared parity fixture: $name', ({ flow, expected }) => {
+    it('matches the language-neutral expected projection', () => {
+      const graph = projectExecutableFlowGraph(
+        flow.nodes,
+        flow.edges,
+        flow.entry_node_id,
+        flow.version,
+      )
+
+      expect(parityProjection(graph)).toEqual(expected)
+    })
+  })
+
   it('keeps distinct validator sidecars outside the sequential control path', () => {
     const flow = multiSidecarFlow()
     const graph = projectExecutableFlowGraph(flow.nodes, flow.edges, 'task')

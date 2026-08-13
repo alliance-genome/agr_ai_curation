@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "description": "Language-neutral golden cases for the backend-authoritative and frontend-advisory executable flow projections.",
+  "formatter_agent_ids": [
+    "chat_output",
+    "chat_output_formatter",
+    "csv_formatter",
+    "tsv_formatter",
+    "json_formatter"
+  ],
+  "non_formatter_agent_id": "example_extractor",
+  "cases": [
+    {
+      "name": "sequential_flow_with_sidecar_and_ordered_output_sources",
+      "flow": {
+        "version": "1.1",
+        "entry_node_id": "task",
+        "nodes": [
+          {"id": "task", "type": "task_input", "position": {"x": 0, "y": 0}, "data": {"agent_id": "task_input", "agent_display_name": "Task Input", "output_key": "task_output"}},
+          {"id": "general", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "pdf_extraction", "agent_display_name": "Extraction", "output_key": "general_output"}},
+          {"id": "gene", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "gene_extractor", "agent_display_name": "Gene", "output_key": "gene_output"}},
+          {"id": "validator", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "identifier_validator", "agent_display_name": "Validator", "output_key": "validator_output"}},
+          {"id": "output", "type": "output", "position": {"x": 0, "y": 0}, "data": {"agent_id": "csv_formatter", "agent_display_name": "CSV", "output_key": "output_file"}}
+        ],
+        "edges": [
+          {"id": "control_1", "source": "task", "target": "general"},
+          {"id": "control_2", "source": "general", "target": "gene"},
+          {"id": "validation_1", "source": "gene", "target": "validator", "role": "validation_attachment", "satisfies_binding_id": "identifier"},
+          {"id": "output_1", "source": "general", "target": "output", "role": "output_attachment"},
+          {"id": "output_2", "source": "gene", "target": "output", "role": "output_attachment"}
+        ]
+      },
+      "expected": {
+        "valid": true,
+        "control_node_ids": ["task", "general", "gene"],
+        "ordered_control_node_ids": ["task", "general", "gene"],
+        "ordered_executable_node_ids": ["general", "gene", "output"],
+        "entry_node_ids": ["task"],
+        "exit_node_ids": ["gene"],
+        "terminal_node_ids": ["gene", "output"],
+        "output_attachments": [
+          {
+            "output_node_id": "output",
+            "edge_id": "output_1",
+            "source_node_id": "general",
+            "sources": [
+              {"edge_id": "output_1", "source_node_id": "general"},
+              {"edge_id": "output_2", "source_node_id": "gene"}
+            ]
+          }
+        ],
+        "validation_sidecars": [
+          {"edge_id": "validation_1", "source_node_id": "gene", "validator_node_id": "validator", "binding_id": "identifier"}
+        ],
+        "issue_codes": []
+      }
+    },
+    {
+      "name": "formatter_agent_in_control_flow_is_rejected",
+      "flow": {
+        "version": "1.1",
+        "entry_node_id": "task",
+        "nodes": [
+          {"id": "task", "type": "task_input", "position": {"x": 0, "y": 0}, "data": {"agent_id": "task_input", "agent_display_name": "Task Input", "output_key": "task_output"}},
+          {"id": "formatter", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "csv_formatter", "agent_display_name": "CSV", "output_key": "formatter_output"}}
+        ],
+        "edges": [
+          {"id": "control_1", "source": "task", "target": "formatter"}
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "control_node_ids": ["task", "formatter"],
+        "ordered_control_node_ids": ["task", "formatter"],
+        "ordered_executable_node_ids": ["formatter"],
+        "entry_node_ids": ["task"],
+        "exit_node_ids": ["formatter"],
+        "terminal_node_ids": ["formatter"],
+        "output_attachments": [],
+        "validation_sidecars": [],
+        "issue_codes": ["formatter_in_control_flow"]
+      }
+    },
+    {
+      "name": "branch_creates_multiple_terminals_and_disconnected_nodes",
+      "flow": {
+        "version": "1.1",
+        "entry_node_id": "task",
+        "nodes": [
+          {"id": "task", "type": "task_input", "position": {"x": 0, "y": 0}, "data": {"agent_id": "task_input", "agent_display_name": "Task Input", "output_key": "task_output"}},
+          {"id": "extract", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "gene_extractor", "agent_display_name": "Extract", "output_key": "extract_output"}},
+          {"id": "finish_a", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "curation_prep", "agent_display_name": "Finish A", "output_key": "finish_a_output"}},
+          {"id": "finish_b", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "curation_handoff", "agent_display_name": "Finish B", "output_key": "finish_b_output"}}
+        ],
+        "edges": [
+          {"id": "control_1", "source": "task", "target": "extract"},
+          {"id": "branch_a", "source": "extract", "target": "finish_a"},
+          {"id": "branch_b", "source": "extract", "target": "finish_b"}
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "control_node_ids": ["task", "extract", "finish_a", "finish_b"],
+        "ordered_control_node_ids": ["task", "extract"],
+        "ordered_executable_node_ids": ["extract"],
+        "entry_node_ids": ["task"],
+        "exit_node_ids": ["finish_a", "finish_b"],
+        "terminal_node_ids": ["finish_a", "finish_b"],
+        "output_attachments": [],
+        "validation_sidecars": [],
+        "issue_codes": ["branch", "ambiguous_terminal", "disconnected"]
+      }
+    },
+    {
+      "name": "cycle_and_join_are_rejected",
+      "flow": {
+        "version": "1.1",
+        "entry_node_id": "task",
+        "nodes": [
+          {"id": "task", "type": "task_input", "position": {"x": 0, "y": 0}, "data": {"agent_id": "task_input", "agent_display_name": "Task Input", "output_key": "task_output"}},
+          {"id": "extract", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "gene_extractor", "agent_display_name": "Extract", "output_key": "extract_output"}},
+          {"id": "finish", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "curation_prep", "agent_display_name": "Finish", "output_key": "finish_output"}}
+        ],
+        "edges": [
+          {"id": "control_1", "source": "task", "target": "extract"},
+          {"id": "control_2", "source": "extract", "target": "finish"},
+          {"id": "cycle", "source": "finish", "target": "extract"}
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "control_node_ids": ["task", "extract", "finish"],
+        "ordered_control_node_ids": ["task", "extract", "finish"],
+        "ordered_executable_node_ids": ["extract", "finish"],
+        "entry_node_ids": ["task"],
+        "exit_node_ids": [],
+        "terminal_node_ids": [],
+        "output_attachments": [],
+        "validation_sidecars": [],
+        "issue_codes": ["join", "ambiguous_terminal", "cycle"]
+      }
+    },
+    {
+      "name": "duplicate_validation_binding_is_rejected",
+      "flow": {
+        "version": "1.1",
+        "entry_node_id": "task",
+        "nodes": [
+          {"id": "task", "type": "task_input", "position": {"x": 0, "y": 0}, "data": {"agent_id": "task_input", "agent_display_name": "Task Input", "output_key": "task_output"}},
+          {"id": "extract", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "gene_extractor", "agent_display_name": "Extract", "output_key": "extract_output"}},
+          {"id": "validator_a", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "identifier_validator", "agent_display_name": "Validator A", "output_key": "validator_a_output"}},
+          {"id": "validator_b", "type": "agent", "position": {"x": 0, "y": 0}, "data": {"agent_id": "identifier_validator", "agent_display_name": "Validator B", "output_key": "validator_b_output"}}
+        ],
+        "edges": [
+          {"id": "control_1", "source": "task", "target": "extract"},
+          {"id": "validation_a", "source": "extract", "target": "validator_a", "role": "validation_attachment", "satisfies_binding_id": "identifier"},
+          {"id": "validation_b", "source": "extract", "target": "validator_b", "role": "validation_attachment", "satisfies_binding_id": "identifier"}
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "control_node_ids": ["task", "extract"],
+        "ordered_control_node_ids": ["task", "extract"],
+        "ordered_executable_node_ids": ["extract"],
+        "entry_node_ids": ["task"],
+        "exit_node_ids": ["extract"],
+        "terminal_node_ids": ["extract"],
+        "output_attachments": [],
+        "validation_sidecars": [
+          {"edge_id": "validation_a", "source_node_id": "extract", "validator_node_id": "validator_a", "binding_id": "identifier"},
+          {"edge_id": "validation_b", "source_node_id": "extract", "validator_node_id": "validator_b", "binding_id": "identifier"}
+        ],
+        "issue_codes": ["duplicate_validation_binding"]
+      }
+    }
+  ]
+}
