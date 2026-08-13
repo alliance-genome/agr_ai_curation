@@ -2564,7 +2564,7 @@ metadata:
         batch:
           enabled: true
           family: experimental_condition_validation
-          max_size: 25
+          max_size: ${EXPERIMENTAL_CONDITION_VALIDATOR_BATCH_MAX_SIZE:-4}
     under_development:
       - binding_id: reagent_context_materialization
         display_name: Reagent context materialization

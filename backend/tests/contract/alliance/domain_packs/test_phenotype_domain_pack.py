@@ -1106,7 +1106,11 @@ def test_phenotype_pack_declares_condition_fields_multivalued_and_active():
     )
 
 
-def test_phenotype_condition_binding_scoped_and_shaped():
+def test_phenotype_condition_binding_scoped_and_shaped(monkeypatch):
+    monkeypatch.delenv(
+        "EXPERIMENTAL_CONDITION_VALIDATOR_BATCH_MAX_SIZE",
+        raising=False,
+    )
     raw_validator_bindings = _phenotype_pack().metadata.metadata["validator_bindings"]
     bindings = {
         binding["binding_id"]: binding
@@ -1135,6 +1139,7 @@ def test_phenotype_condition_binding_scoped_and_shaped():
     assert "condition_id" not in composite["expected_result_fields"]
     assert composite["batch"]["enabled"] is True
     assert composite["batch"]["family"] == "experimental_condition_validation"
+    assert composite["batch"]["max_size"] == 4
 
     relation = bindings["phenotype_condition_relation_lookup"]
     assert relation["applies_to"]["object_types"] == [PHENOTYPE_OBJECT_TYPE]

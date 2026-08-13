@@ -18,7 +18,7 @@ content: |
   - `condition_components`: structured component list or payload object.
   - `condition_relation_type`: the parent condition-relation name (e.g. `has_condition`), supplied as coherence CONTEXT ONLY. The dedicated condition-relation binding owns its vocabulary validation; do not re-resolve it here.
   - `condition_class_curie`, `condition_class_name`, `condition_id_curie`, or `condition_id_name`: ZECO/XCO/MMO-style condition ontology inputs.
-  - `condition_chemical_curie`, `condition_chemical_name`, or `chemical_name`: ChEBI chemical inputs, validated as ontology terms (ontologytermtype `CHEBITerm`) via `agr_curation_query` `get_ontology_term`.
+  - `condition_chemical_curie`, `condition_chemical_name`, or `chemical_name`: ChEBI chemical inputs, validated as ontology terms (ontologytermtype `CHEBITerm`) via grouped `agr_curation_query` `get_ontology_terms`, with `get_ontology_term` only for a residual targeted lookup.
   - `condition_taxon_curie`, `taxon`, or `taxon_id`: NCBITaxon inputs.
   - `data_provider_abbreviation`, `data_provider_name`, or `data_provider`: provider context for taxon/provider consistency.
   - `source_mentions`: exact paper phrases captured by the extractor.
@@ -35,7 +35,7 @@ content: |
   - Ground every component from lookup, not memory: call the relevant package tool before marking any present ontology, chemical (ChEBI as an ontology term), data-provider, or taxon component resolved. Each component CURIE is grounded via lookup, never guessed from memory or training-data knowledge. If a required lower-level capability is absent, unavailable, or cannot be executed, leave that component unresolved and explain that the condition binding cannot be active yet.
   - Component ownership (use the same tools and semantics owned by the lower-level validator bundles; do not invent a separate lookup policy):
     - Condition class/id ontology terms and condition taxon use the `ontology_term_validation` capability through `agr_curation_query` methods `get_ontology_term`, `get_ontology_terms`, `search_ontology_terms`, and `map_curies_to_names`.
-    - Condition chemical (ChEBI) is an ontology term in the curation DB (ontologyterm table, ontologytermtype `CHEBITerm`). Validate `condition_chemical_curie` via `agr_curation_query` `get_ontology_term` (or `get_ontology_terms`), exactly like ZECO/taxon -- call `get_ontology_term` with `term=<CHEBI:...>`. Do NOT call `chebi_api_call` for condition chemicals; the ChEBI REST endpoint is not the resolution path for condition components.
+    - Condition chemical (ChEBI) is an ontology term in the curation DB (ontologyterm table, ontologytermtype `CHEBITerm`). Validate `condition_chemical_curie` via grouped `agr_curation_query` `get_ontology_terms`, exactly like ZECO/taxon; use `get_ontology_term` with `term=<CHEBI:...>` only when a residual targeted lookup is needed. Do NOT call `chebi_api_call` for condition chemicals; the ChEBI REST endpoint is not the resolution path for condition components.
     - Quantity/unit vocabulary uses the `controlled_vocabulary_validation` capability through `agr_curation_query` methods `get_vocabulary_term` and `search_vocabulary_terms`.
     - Data-provider context uses the `data_provider_validation` capability through `agr_curation_query` methods `get_data_provider` and `get_data_providers`.
   - Relation type is COHERENCE CONTEXT ONLY: the dedicated condition-relation binding owns relation-vocabulary validation and already resolves the relation name (e.g. `has_condition`) against its own vocabulary. Do NOT look up the relation vocabulary yourself and do NOT mark the condition unresolved because of the relation. Use `condition_relation_type` only to judge coherence -- does the resolved condition class fit the stated relation? -- and never call `get_vocabulary_term`/`search_vocabulary_terms` for the relation.
@@ -46,10 +46,11 @@ content: |
   <lookup_workflow>
   Bounded composite lookup path:
   1. Enumerate every present or required component of the condition (relation type as coherence context only).
-  2. For each present grounded component -- condition class/id, condition chemical (ChEBI ontology term), condition taxon, quantity/unit, data provider -- call the owning capability's `agr_curation_query` method before resolving it, and record each call in that component's `lookup_attempts`.
-  3. Resolve a component only when tool evidence returns a single unambiguous match satisfying its expected fields; preserve ambiguous, obsolete, conflicting, or alternate records as that component's candidates and leave it unresolved.
-  4. Judge relation coherence using `condition_relation_type` as context only -- does the resolved condition class fit the stated relation? -- without looking up the relation vocabulary.
-  5. Compose the condition-level decision: resolved only when every required component resolved and the condition-level expected fields can be populated from lookup evidence; otherwise unresolved with the blocking components listed in `unresolved_components`.
+  2. Group same-family lookup work across every target in the request before calling tools. Collect the unique present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- and make one `agr_curation_query` `get_ontology_terms` call with the combined `terms` list before any single-term ontology lookup. Assign each returned record back to every matching component and record the shared call in that component's `lookup_attempts`.
+  3. For each present grounded component not resolved by the grouped call -- including quantity/unit, data provider, or an ontology component needing targeted follow-up -- call only the owning capability's residual `agr_curation_query` method before resolving it, and record that call in the component's `lookup_attempts`.
+  4. Resolve a component only when tool evidence returns a single unambiguous match satisfying its expected fields; preserve ambiguous, obsolete, conflicting, or alternate records as that component's candidates and leave it unresolved.
+  5. Judge relation coherence using `condition_relation_type` as context only -- does the resolved condition class fit the stated relation? -- without looking up the relation vocabulary.
+  6. Compose the condition-level decision: resolved only when every required component resolved and the condition-level expected fields can be populated from lookup evidence; otherwise unresolved with the blocking components listed in `unresolved_components`.
   </lookup_workflow>
 
   <result_contract>

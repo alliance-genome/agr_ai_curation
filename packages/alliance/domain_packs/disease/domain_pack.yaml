@@ -3004,7 +3004,7 @@ metadata:
         batch:
           enabled: true
           family: experimental_condition_validation
-          max_size: 25
+          max_size: ${EXPERIMENTAL_CONDITION_VALIDATOR_BATCH_MAX_SIZE:-4}
     under_development:
       - binding_id: disease_pending_envelope_validator
         display_name: Data check
