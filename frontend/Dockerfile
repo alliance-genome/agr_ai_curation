@@ -29,7 +29,8 @@ ENV VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS=$VITE_AI_CURATION_DRAFT_AUTOSAV
 ENV VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS=$VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS
 RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") && \
     echo "Building version: $VITE_APP_VERSION (SHA: $VITE_GIT_SHA)" && \
-    npm run build
+    npm run build && \
+    node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")'
 
 # Stage 2: Serve with Nginx
 FROM public.ecr.aws/nginx/nginx:alpine

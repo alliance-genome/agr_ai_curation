@@ -13,6 +13,8 @@ env_file="${temp_dir}/production.env"
 rendered_file="${temp_dir}/rendered.json"
 development_env_file="${temp_dir}/development.env"
 development_rendered_file="${temp_dir}/development-rendered.json"
+frontend_build_metadata_file="${temp_dir}/frontend-build-metadata.json"
+unsafe_frontend_build_metadata_file="${temp_dir}/unsafe-frontend-build-metadata.json"
 
 write_test_env() {
   {
@@ -48,9 +50,11 @@ render_with_override() {
 
 assert_rejected_with() {
   local config_json="$1"
-  shift
+  local build_metadata_json="$2"
+  shift 2
   local output="${temp_dir}/preflight.out"
-  if "${preflight}" --env-file "${env_file}" --config-json "${config_json}" >"${output}" 2>&1; then
+  if "${preflight}" --env-file "${env_file}" --config-json "${config_json}" \
+    --frontend-build-metadata-json "${build_metadata_json}" >"${output}" 2>&1; then
     echo "Expected production preflight to reject ${config_json}" >&2
     return 1
   fi
@@ -65,6 +69,15 @@ assert_rejected_with() {
 }
 
 write_test_env
+printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
+  >"${frontend_build_metadata_file}"
+printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
+  >"${unsafe_frontend_build_metadata_file}"
+
+publish_workflow="${repo_root}/.github/workflows/publish-images.yml"
+grep -Fq 'Verify frontend compiled mode artifact' "${publish_workflow}"
+grep -Fq '/usr/share/nginx/html/build-metadata.json' "${publish_workflow}"
+grep -Fq '.vite_dev_mode == false' "${publish_workflow}"
 
 # Exercise the environment created by a fresh `make setup` and the effective
 # development Compose interpolation, without starting containers.
@@ -92,9 +105,11 @@ assert backend_env["ELASTICSEARCH_HOST"] == ""
 assert backend_env["ELASTICSEARCH_SCHEME"] == "https"
 PY
 
-# Exercise the exact render-and-validate preflight invoked by `make prod`.
-"${preflight}" --env-file "${env_file}"
 docker compose --env-file "${env_file}" -f "${compose_file}" config --format json >"${rendered_file}"
+# Exercise the same validator with deterministic image metadata while the
+# installer tests cover its real image-inspection invocation.
+"${preflight}" --env-file "${env_file}" --config-json "${rendered_file}" \
+  --frontend-build-metadata-json "${frontend_build_metadata_file}"
 python3 - "${rendered_file}" <<'PY'
 import json
 import sys
@@ -131,8 +146,7 @@ unsafe_environment="${temp_dir}/unsafe-environment.json"
 render_with_override \
   "${fixture_dir}/production-compose-unsafe-environment.yml" \
   "${unsafe_environment}"
-assert_rejected_with "${unsafe_environment}" \
-  'frontend.VITE_DEV_MODE' \
+assert_rejected_with "${unsafe_environment}" "${frontend_build_metadata_file}" \
   'backend.AUTH_PROVIDER' \
   'backend.DEBUG' \
   'backend.DEV_MODE' \
@@ -151,12 +165,15 @@ unsafe_images="${temp_dir}/unsafe-images-and-ports.json"
 render_with_override \
   "${fixture_dir}/production-compose-unsafe-images-and-ports.yml" \
   "${unsafe_images}"
-assert_rejected_with "${unsafe_images}" \
+assert_rejected_with "${unsafe_images}" "${frontend_build_metadata_file}" \
   'backend.image must use a vX.Y.Z or sha-<shortsha> tag' \
   'frontend.image must use a vX.Y.Z or sha-<shortsha> tag' \
   'trace_review_backend.image must use a vX.Y.Z or sha-<shortsha> tag' \
   'postgres.image must not use the mutable latest tag' \
   'postgres.image must be pinned by digest' \
   'weaviate must not publish data ports in production'
+
+assert_rejected_with "${rendered_file}" "${unsafe_frontend_build_metadata_file}" \
+  'frontend image must be compiled with vite_dev_mode=false'
 
 echo "Production Compose render-backed contract tests passed"

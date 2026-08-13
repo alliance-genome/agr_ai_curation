@@ -116,8 +116,6 @@ services:
       log_component: nextjs
     ports:
       - "${FRONTEND_HOST_PORT:-3002}:80"
-    environment:
-      VITE_DEV_MODE: "false"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
       interval: 30s

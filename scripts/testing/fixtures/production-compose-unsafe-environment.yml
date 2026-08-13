@@ -1,7 +1,4 @@
 services:
-  frontend:
-    environment:
-      VITE_DEV_MODE: "true"
   backend:
     environment:
       AUTH_PROVIDER: dev
