@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '../../test/test-utils';
+import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
 import DocumentList from './DocumentList';
 import type { DocumentSummary } from '../../services/weaviate';
 import {
@@ -10,6 +10,16 @@ import {
 const refetchHealthMock = vi.fn();
 const emitGlobalToastMock = vi.fn();
 const openCurationWorkspaceMock = vi.fn();
+const usePdfExtractionHealthMock = vi.fn((_options?: unknown) => ({
+  data: {
+    status: 'healthy',
+    last_checked: '2026-03-05T00:00:00Z',
+  },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+  refetch: refetchHealthMock,
+}));
 
 const createTestDocument = (overrides: Partial<DocumentSummary> = {}): DocumentSummary => ({
   id: '1',
@@ -51,16 +61,7 @@ vi.mock('../../services/weaviate', async () => {
   const actual = await vi.importActual<typeof import('../../services/weaviate')>('../../services/weaviate');
   return {
     ...actual,
-    usePdfExtractionHealth: () => ({
-      data: {
-        status: 'healthy',
-        last_checked: '2026-03-05T00:00:00Z',
-      },
-      isLoading: false,
-      isError: false,
-      isFetching: false,
-      refetch: refetchHealthMock,
-    }),
+    usePdfExtractionHealth: (options: unknown) => usePdfExtractionHealthMock(options),
   };
 });
 
@@ -73,16 +74,53 @@ vi.mock('@mui/x-data-grid', async () => {
     checkboxSelection = false,
     rowSelectionModel,
     onRowSelectionModelChange,
+    sortModel = [],
+    onSortModelChange,
+    sortingMode = 'client',
+    paginationMode = 'client',
+    filterMode = 'client',
+    sortingOrder = ['asc', 'desc', null],
+    sx,
   }: {
     rows?: any[];
     columns?: any[];
     checkboxSelection?: boolean;
     rowSelectionModel?: string[];
     onRowSelectionModelChange?: (ids: string[]) => void;
+    sortModel?: Array<{ field: string; sort?: 'asc' | 'desc' | null }>;
+    onSortModelChange?: (model: Array<{ field: string; sort?: 'asc' | 'desc' | null }>) => void;
+    sortingMode?: 'client' | 'server';
+    paginationMode?: 'client' | 'server';
+    filterMode?: 'client' | 'server';
+    sortingOrder?: Array<'asc' | 'desc' | null>;
+    sx?: Record<string, unknown>;
   }) => {
     const [internalSelection, setInternalSelection] = React.useState<string[]>([]);
     const selectedIds =
       rowSelectionModel !== undefined ? rowSelectionModel.map(String) : internalSelection;
+    const activeSort = sortModel[0];
+    const sortedRows = React.useMemo(() => {
+      if (sortingMode === 'server' || !activeSort?.field || !activeSort.sort) {
+        return rows;
+      }
+
+      const sortedColumn = columns.find((column: any) => column.field === activeSort.field);
+      if (!sortedColumn) {
+        return rows;
+      }
+
+      const direction = activeSort.sort === 'asc' ? 1 : -1;
+      return [...rows].sort((left, right) => {
+        const leftValue = left[activeSort.field];
+        const rightValue = right[activeSort.field];
+        const comparison =
+          typeof sortedColumn.sortComparator === 'function'
+            ? sortedColumn.sortComparator(leftValue, rightValue)
+            : String(leftValue ?? '').localeCompare(String(rightValue ?? ''));
+
+        return comparison * direction;
+      });
+    }, [activeSort?.field, activeSort?.sort, columns, rows, sortingMode]);
 
     const setSelection = (ids: string[]) => {
       if (rowSelectionModel === undefined) {
@@ -91,8 +129,26 @@ vi.mock('@mui/x-data-grid', async () => {
       onRowSelectionModelChange?.(ids);
     };
 
+    const handleHeaderClick = (field: string) => {
+      const currentSort = activeSort?.field === field ? activeSort.sort : null;
+      const currentIndex = sortingOrder.findIndex((sort) => sort === currentSort);
+      const nextSort = sortingOrder[(currentIndex + 1) % sortingOrder.length];
+
+      onSortModelChange?.(nextSort ? [{ field, sort: nextSort }] : []);
+    };
+
     return (
-      <div className="MuiDataGrid-root" role="grid">
+      <div
+        className="MuiDataGrid-root"
+        role="grid"
+        data-sorting-mode={sortingMode}
+        data-pagination-mode={paginationMode}
+        data-filter-mode={filterMode}
+        style={{
+          height: typeof sx?.height === 'string' ? sx.height : undefined,
+          minHeight: typeof sx?.minHeight === 'number' ? `${sx.minHeight}px` : undefined,
+        }}
+      >
         <table>
           <thead>
             <tr>
@@ -102,12 +158,25 @@ vi.mock('@mui/x-data-grid', async () => {
                 </th>
               )}
               {columns.map((column: any) => (
-                <th key={column.field}>{column.headerName}</th>
+                <th
+                  key={column.field}
+                  style={{ minWidth: column.minWidth }}
+                  aria-sort={
+                    activeSort?.field === column.field && activeSort.sort
+                      ? activeSort.sort === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : undefined
+                  }
+                  onClick={() => column.sortable !== false && handleHeaderClick(column.field)}
+                >
+                  {column.headerName}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row: any) => (
+            {sortedRows.map((row: any) => (
               <tr key={row.id} className="MuiDataGrid-row" style={{ cursor: 'pointer' }}>
                 {checkboxSelection && (
                   <td>
@@ -178,6 +247,7 @@ describe('DocumentList', () => {
     vi.clearAllMocks();
     sessionStorage.clear();
     refetchHealthMock.mockReset();
+    usePdfExtractionHealthMock.mockClear();
     emitGlobalToastMock.mockReset();
     openCurationWorkspaceMock.mockReset();
   });
@@ -188,6 +258,78 @@ describe('DocumentList', () => {
     expect(screen.getByText('doc1.pdf')).toBeInTheDocument();
     expect(screen.getByText('doc2.pdf')).toBeInTheDocument();
     expect(screen.getByText('doc3.pdf')).toBeInTheDocument();
+  });
+
+  it('shows durable failed processing state and error instead of stale pending embedding state', () => {
+    const failedDocument = createTestDocument({
+      id: 'failed-provider-document',
+      filename: 'provider-paper.pdf',
+      processingStatus: 'failed',
+      embeddingStatus: 'pending',
+      errorMessage: 'S07: line 170: Table has no separator line',
+    });
+
+    render(<DocumentList {...defaultProps} documents={[failedDocument]} totalCount={1} />);
+
+    expect(screen.getByText('failed')).toBeInTheDocument();
+    expect(screen.queryByText('pending')).not.toBeInTheDocument();
+    expect(screen.getByText('S07: line 170: Table has no separator line')).toBeInTheDocument();
+    const deleteButton = screen.getByTestId('DeleteIcon').closest('button');
+    expect(deleteButton).not.toBeDisabled();
+  });
+
+  it('keeps an embedding failure visible after document processing completed', () => {
+    const failedEmbeddingDocument = createTestDocument({
+      id: 'failed-embedding-document',
+      processingStatus: 'completed',
+      embeddingStatus: 'failed',
+    });
+
+    render(<DocumentList {...defaultProps} documents={[failedEmbeddingDocument]} totalCount={1} />);
+
+    expect(screen.getByText('failed')).toBeInTheDocument();
+    expect(screen.queryByText('completed')).not.toBeInTheDocument();
+  });
+
+  it('displays provider provenance in the source column', () => {
+    const docs = [
+      createTestDocument({
+        id: 'provider-doc',
+        filename: 'provider.pdf',
+        sourceProvenance: {
+          provider: 'abc_literature',
+          referenceCurie: 'AGRKB:101',
+          referenceId: null,
+          sourceFileId: 'source-pdf-1',
+          pdfArtifactId: 'source-pdf-1',
+          convertedArtifactId: 'converted-md-1',
+          externalIds: { pmid: '12345' },
+          sourceMd5: 'abc123',
+          fileClass: 'converted_merged_nxml',
+          fileExtension: 'md',
+          artifactStatus: 'ready',
+          importStatus: 'imported',
+          importedAt: null,
+          accessScope: 'restricted',
+          accessMods: { mods: ['FB'] },
+          viewerMode: 'local_pdf',
+        },
+      }),
+      createTestDocument({ id: 'local-doc', filename: 'local.pdf', sourceProvenance: null }),
+    ];
+
+    render(<DocumentList {...defaultProps} documents={docs} totalCount={2} />);
+
+    expect(screen.getByText('Source')).toBeInTheDocument();
+    expect(screen.getByText('Source').closest('th')).toHaveStyle({ minWidth: '280px' });
+    expect(screen.getByText('ABC Literature')).toBeInTheDocument();
+    expect(screen.getByText('AGRKB:101')).toBeInTheDocument();
+    expect(screen.getByText('Local PDF')).toBeInTheDocument();
+    expect(screen.getByText('Uploaded PDF')).toBeInTheDocument();
+    expect(screen.getByText('ABC Literature').closest('.MuiChip-root')).toHaveStyle({
+      flexShrink: '0',
+    });
+    expect(screen.getByText('imported').closest('.MuiChip-root')).toHaveStyle({ flexShrink: '0' });
   });
 
   it('displays loading state', () => {
@@ -327,20 +469,116 @@ describe('DocumentList', () => {
   it('handles pagination changes', async () => {
     const { container } = render(<DocumentList {...defaultProps} totalCount={100} />);
 
-    // DataGrid should handle pagination internally
     const grid = container.querySelector('.MuiDataGrid-root');
     expect(grid).toBeInTheDocument();
+    expect(grid).toHaveAttribute('data-pagination-mode', 'server');
+    expect(grid).toHaveAttribute('data-filter-mode', 'server');
+    expect(grid).toHaveAttribute('data-sorting-mode', 'client');
   });
 
-  it('handles sorting', () => {
-    const { container } = render(<DocumentList {...defaultProps} />);
+  it('sorts rows by text, number, and date columns and toggles direction', () => {
+    const documents = [
+      createTestDocument({
+        id: 'doc-gamma',
+        filename: 'gamma.pdf',
+        fileSize: 3000,
+        creationDate: '2024-01-03T00:00:00.000Z',
+      }),
+      createTestDocument({
+        id: 'doc-alpha',
+        filename: 'alpha.pdf',
+        fileSize: 1000,
+        creationDate: '2024-01-02T00:00:00.000Z',
+      }),
+      createTestDocument({
+        id: 'doc-beta',
+        filename: 'beta.pdf',
+        fileSize: 2000,
+        creationDate: '2024-01-01T00:00:00.000Z',
+      }),
+    ];
+    const getRenderedFilenames = () =>
+      within(screen.getByRole('grid'))
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => within(row).getAllByRole('cell')[0].textContent);
 
-    // Click on filename header to sort
+    render(<DocumentList {...defaultProps} documents={documents} />);
+
+    expect(getRenderedFilenames()).toEqual(['gamma.pdf', 'alpha.pdf', 'beta.pdf']);
+
     const filenameHeader = screen.getByText('Filename');
     fireEvent.click(filenameHeader);
+    expect(getRenderedFilenames()).toEqual(['alpha.pdf', 'beta.pdf', 'gamma.pdf']);
+    expect(filenameHeader.closest('th')).toHaveAttribute('aria-sort', 'ascending');
 
-    // DataGrid handles sorting internally
-    expect(container.querySelector('.MuiDataGrid-root')).toBeInTheDocument();
+    fireEvent.click(filenameHeader);
+    expect(getRenderedFilenames()).toEqual(['gamma.pdf', 'beta.pdf', 'alpha.pdf']);
+    expect(filenameHeader.closest('th')).toHaveAttribute('aria-sort', 'descending');
+
+    fireEvent.click(screen.getByText('Size'));
+    expect(getRenderedFilenames()).toEqual(['alpha.pdf', 'beta.pdf', 'gamma.pdf']);
+
+    fireEvent.click(screen.getByText('Created'));
+    expect(getRenderedFilenames()).toEqual(['beta.pdf', 'alpha.pdf', 'gamma.pdf']);
+  });
+
+  it('sorts nullable number and date values as missing values', () => {
+    const documents = [
+      createTestDocument({
+        id: 'doc-missing',
+        filename: 'missing-values.pdf',
+        fileSize: null,
+        creationDate: null,
+      }),
+      createTestDocument({
+        id: 'doc-zero',
+        filename: 'zero-values.pdf',
+        fileSize: 0,
+        creationDate: '1970-01-01T00:00:00.000Z',
+      }),
+      createTestDocument({
+        id: 'doc-current',
+        filename: 'current-values.pdf',
+        fileSize: 2000,
+        creationDate: '2024-01-01T00:00:00.000Z',
+      }),
+    ];
+    const getRenderedFilenames = () =>
+      within(screen.getByRole('grid'))
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => within(row).getAllByRole('cell')[0].textContent);
+
+    render(<DocumentList {...defaultProps} documents={documents} />);
+
+    fireEvent.click(screen.getByText('Size'));
+    expect(getRenderedFilenames()).toEqual([
+      'zero-values.pdf',
+      'current-values.pdf',
+      'missing-values.pdf',
+    ]);
+
+    fireEvent.click(screen.getByText('Size'));
+    expect(getRenderedFilenames()).toEqual([
+      'missing-values.pdf',
+      'current-values.pdf',
+      'zero-values.pdf',
+    ]);
+
+    fireEvent.click(screen.getByText('Created'));
+    expect(getRenderedFilenames()).toEqual([
+      'zero-values.pdf',
+      'current-values.pdf',
+      'missing-values.pdf',
+    ]);
+
+    fireEvent.click(screen.getByText('Created'));
+    expect(getRenderedFilenames()).toEqual([
+      'missing-values.pdf',
+      'current-values.pdf',
+      'zero-values.pdf',
+    ]);
   });
 
   it('displays correct column headers', () => {
@@ -391,6 +629,18 @@ describe('DocumentList', () => {
     expect(screen.getByText('No documents yet. Upload a PDF to get started.')).toBeInTheDocument();
     const grid = document.querySelector('.MuiDataGrid-root');
     expect(grid).not.toBeInTheDocument();
+  });
+
+  it('hides upload controls when rendered as the Library table', () => {
+    const { container } = render(
+      <DocumentList {...defaultProps} documents={[]} totalCount={0} showUploadControls={false} />
+    );
+
+    expect(screen.getByText('No library documents yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'UPLOAD DOCUMENT(S)' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/PDF extraction service/i)).not.toBeInTheDocument();
+    expect(container.querySelector('input[type="file"]')).not.toBeInTheDocument();
+    expect(usePdfExtractionHealthMock).toHaveBeenCalledWith({ enabled: false });
   });
 
   it('allows selecting multiple files for upload', () => {

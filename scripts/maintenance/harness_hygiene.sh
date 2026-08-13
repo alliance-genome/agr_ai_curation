@@ -47,7 +47,6 @@ required = [
     Path('docs/README.md'),
     Path('docs/developer/README.md'),
     Path('docs/developer/TEST_STRATEGY.md'),
-    Path('.symphony/WORKFLOW.md'),
 ]
 missing = [str(p) for p in required if not p.exists()]
 if missing:
@@ -85,36 +84,6 @@ if errors:
     print('\\n'.join(errors))
     sys.exit(1)
 print('markdown-links: ok')
-PY"
-
-run_check "symphony-workspace-hygiene" "python3 - <<'PY'
-from pathlib import Path
-import time
-import os
-import sys
-
-root = Path.home() / '.symphony' / 'workspaces' / 'agr_ai_curation'
-now = time.time()
-stale_days = 14
-stale = []
-is_ci = os.getenv('GITHUB_ACTIONS', '').lower() == 'true'
-if root.exists():
-    for child in root.iterdir():
-        try:
-            age_days = (now - child.stat().st_mtime) / 86400.0
-        except FileNotFoundError:
-            continue
-        if age_days >= stale_days:
-            stale.append((child.name, round(age_days, 1)))
-
-if stale:
-    print('stale-workspaces:')
-    for name, age in stale:
-        print(f'- {name} ({age} days)')
-    if not is_ci:
-        sys.exit(1)
-else:
-    print('no-stale-workspaces')
 PY"
 
 SUMMARY="${OUT_DIR}/summary.md"

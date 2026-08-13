@@ -10,9 +10,9 @@ import {
   useReembedDocument,
   useReprocessDocument,
   useUpdateEmbeddingSettings,
-  useUpdateWeaviateSettings,
   useUpdateChunkingStrategy,
   useWeaviateHealth,
+  normalizeDocumentDetailResponse,
 } from './weaviate';
 import { createMockDocument, createMockFilter, createMockPaginationParams } from '../test/test-utils';
 
@@ -109,6 +109,15 @@ describe('weaviate service', () => {
             page_count: 10,
             author: 'Author',
           },
+          source_provenance: {
+            provider: 'abc_literature',
+            reference_curie: 'AGRKB:101',
+            external_ids: { pmid: '12345' },
+            converted_artifact_id: 'converted-md-1',
+            source_md5: 'abc123',
+            access_mods: { mods: ['FB'] },
+            viewer_mode: 'local_pdf',
+          },
         },
         chunks_preview: [
           {
@@ -165,6 +174,7 @@ describe('weaviate service', () => {
         document: {
           id: 'doc-1',
           filename: 'mock.pdf',
+          title: null,
           fileSize: 2048,
           creationDate: '2024-01-01T00:00:00Z',
           lastAccessedDate: '2024-01-02T00:00:00Z',
@@ -175,6 +185,24 @@ describe('weaviate service', () => {
           metadata: {
             page_count: 10,
             author: 'Author',
+          },
+          sourceProvenance: {
+            provider: 'abc_literature',
+            referenceId: null,
+            referenceCurie: 'AGRKB:101',
+            sourceFileId: null,
+            pdfArtifactId: null,
+            convertedArtifactId: 'converted-md-1',
+            externalIds: { pmid: '12345' },
+            sourceMd5: 'abc123',
+            fileClass: null,
+            fileExtension: null,
+            artifactStatus: null,
+            importStatus: null,
+            importedAt: null,
+            accessScope: null,
+            accessMods: { mods: ['FB'] },
+            viewerMode: 'local_pdf',
           },
         },
         embeddingSummary: {
@@ -212,6 +240,7 @@ describe('weaviate service', () => {
           {
             id: 'doc-2',
             filename: 'secondary.pdf',
+            title: null,
             fileSize: null,
             creationDate: null,
             lastAccessedDate: null,
@@ -220,6 +249,7 @@ describe('weaviate service', () => {
             chunkCount: 5,
             vectorCount: 5,
             metadata: null,
+            sourceProvenance: null,
           },
         ],
         schemaVersion: '1.0.0',
@@ -238,6 +268,100 @@ describe('weaviate service', () => {
 
       expect(mockFetch).not.toHaveBeenCalled();
       expect(result.current.fetchStatus).toBe('idle');
+    });
+
+    it('normalizes flat document contract payloads', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          document_id: 'doc-flat',
+          filename: 'flat.pdf',
+          status: 'COMPLETED',
+          upload_timestamp: '2026-06-26T00:00:00Z',
+          file_size_bytes: 4096,
+          chunk_count: 14,
+          source_provenance: {
+            provider: 'abc_literature',
+            reference_id: 'ref-flat',
+            external_ids: { pmid: '98765' },
+            viewer_mode: 'local_pdf',
+          },
+        }),
+      });
+
+      const { result } = renderHook(
+        () => useDocument('doc-flat'),
+        { wrapper: createWrapper() }
+      );
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true);
+      });
+
+      expect(result.current.data?.document).toMatchObject({
+        id: 'doc-flat',
+        filename: 'flat.pdf',
+        processingStatus: 'completed',
+        fileSize: 4096,
+        creationDate: '2026-06-26T00:00:00Z',
+        chunkCount: 14,
+        sourceProvenance: expect.objectContaining({
+          provider: 'abc_literature',
+          referenceId: 'ref-flat',
+          externalIds: { pmid: '98765' },
+          viewerMode: 'local_pdf',
+        }),
+      });
+      expect(result.current.data?.totalChunks).toBe(14);
+    });
+  });
+
+  describe('normalizeDocumentDetailResponse', () => {
+    it('preserves explicit null provenance instead of falling back to stale summary provenance', () => {
+      const normalized = normalizeDocumentDetailResponse(
+        {
+          document: {
+            id: 'doc-null',
+            filename: 'null.pdf',
+            source_provenance: null,
+          },
+        },
+        {
+          fallbackSummary: {
+            id: 'doc-null',
+            filename: 'stale.pdf',
+            title: null,
+            fileSize: null,
+            creationDate: null,
+            lastAccessedDate: null,
+            processingStatus: null,
+            embeddingStatus: null,
+            chunkCount: null,
+            vectorCount: null,
+            metadata: null,
+            sourceProvenance: {
+              provider: 'abc_literature',
+              referenceId: 'stale-ref',
+              referenceCurie: null,
+              sourceFileId: null,
+              pdfArtifactId: null,
+              convertedArtifactId: null,
+              externalIds: null,
+              sourceMd5: null,
+              fileClass: null,
+              fileExtension: null,
+              artifactStatus: null,
+              importStatus: null,
+              importedAt: null,
+              accessScope: null,
+              accessMods: null,
+              viewerMode: null,
+            },
+          },
+        }
+      );
+
+      expect(normalized.document.sourceProvenance).toBeNull();
     });
   });
 

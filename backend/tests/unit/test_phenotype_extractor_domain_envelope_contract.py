@@ -31,6 +31,7 @@ from agr_ai_curation_alliance.domain_packs.phenotype import (  # noqa: E402
     PHENOTYPE_DOMAIN_PACK_ID,
     PHENOTYPE_FIXTURE_PACK_ID,
     PHENOTYPE_OBJECT_TYPE,
+    PHENOTYPE_TERM_OBJECT_TYPE,
     validate_pending_phenotype_envelope,
 )
 
@@ -526,6 +527,55 @@ def test_phenotype_payload_persists_as_curatable_objects_only_for_new_runs():
     )
 
 
+def test_phenotype_package_normalizer_materializes_nested_term_object_for_validation():
+    payload = _valid_phenotype_payload()
+    annotation = copy.deepcopy(payload["curatable_objects"][-1])
+    annotation["object_refs"] = []
+    payload["curatable_objects"] = [annotation]
+
+    candidate = build_extraction_envelope_candidate_with_evidence(
+        json.dumps(payload),
+        agent_key="phenotype_extractor",
+        adapter_key="phenotype",
+        conversation_summary="Extract phenotype evidence.",
+    )[0]
+
+    assert candidate is not None
+    objects = candidate.payload_json["curatable_objects"]
+    assert [obj["object_type"] for obj in objects] == [
+        PHENOTYPE_OBJECT_TYPE,
+        PHENOTYPE_TERM_OBJECT_TYPE,
+    ]
+    normalized_annotation = objects[0]
+    phenotype_term = objects[1]
+    assert normalized_annotation["object_refs"] == [
+        {
+            "pending_ref_id": "phenotype-term-1-1",
+            "object_type": PHENOTYPE_TERM_OBJECT_TYPE,
+        }
+    ]
+    assert phenotype_term["pending_ref_id"] == "phenotype-term-1-1"
+    assert phenotype_term["object_role"] == "validated_reference"
+    assert phenotype_term["model_ref"] == "PhenotypeTermPayload"
+    assert phenotype_term["payload"]["label"] == "reduced brood size"
+    assert phenotype_term["payload"]["ontology_lookup_hint"] == {
+        "data_provider": "WB",
+        "taxon_id": "NCBITaxon:6239",
+        "evidence_record_id": "reduced-brood-size-evidence-1",
+    }
+    assert phenotype_term["evidence_record_ids"] == ["reduced-brood-size-evidence-1"]
+    assert phenotype_term["metadata"] == {
+        "object_role": "validated_reference",
+        "validation_state": "pending_ontology_resolution",
+        "validator_binding_id": "phenotype_term_ontology_validator",
+        "export_state": "blocked_pending_ontology_resolution",
+        "write_blocked_reason": "phenotype term CURIE unresolved",
+    }
+    assert "materialized_nested_phenotype_terms:1" in candidate.payload_json[
+        "run_summary"
+    ]["warnings"]
+
+
 def test_phenotype_domain_pack_loads_tool_verified_pending_fixture():
     registry = load_alliance_domain_pack_registry()
     pack = registry.get_pack(PHENOTYPE_DOMAIN_PACK_ID)
@@ -540,12 +590,12 @@ def test_phenotype_domain_pack_loads_tool_verified_pending_fixture():
     envelope = fixture_pack.fixtures[0].envelope
 
     assert validate_pending_phenotype_envelope(envelope) == ()
-    assert envelope.metadata["semantic_source"] == "domain_envelope.objects"
+    assert envelope.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(envelope.metadata)
     assert envelope.metadata["raw_mentions"][0]["mention"] == "reduced brood size"
     assert envelope.metadata["exclusions"][0]["reason_code"] == "previously_reported"
     assert envelope.metadata["ambiguities"][0]["mention"] == "daf-2(e1370)"
-    annotation = next(obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE)
+    annotation = next(obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE)
     assert annotation.object_role == "curatable_unit"
     assert annotation.payload["phenotype_terms"][0]["curie"] == "WBPhenotype:0000886"
     assert annotation.metadata["write_behavior"]["status"] == "blocked"

@@ -7,6 +7,38 @@ Primary script target: `scripts/testing/dev_release_smoke.py`
 Execution cadence: implement one slice at a time, validate it, run a GPT-5.5
 xhigh code-review pass, then move to the next slice
 
+SDK upgrade gate: `openai-agents` is intentionally pinned exactly in
+`backend/requirements.txt` and `backend/requirements.lock.txt`. Any PR that
+changes that pin must pass the full `scripts/testing/dev_release_smoke.py`
+suite, which now starts with an installed-vs-lockfile SDK-version assertion and
+then exercises real chat, extractor finalization, flow completion, and batch
+behavior against the deployed backend. Record the passing evidence in the PR body
+as `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>` so the
+Agent PR Gate can enforce the upgrade policy.
+
+Release skill alignment: if a change adds, removes, or materially changes a
+dev-release smoke, live integration gate, domain-corpus/evidence runner,
+TraceReview/Langfuse preflight, ABC/Literature smoke, or LLM-assisted evidence
+review requirement, update `$ai-curation-release` in the same change. The
+release skill is the operational checklist agents use during release sessions;
+this strategy document explains why the gate exists, but the skill must name
+what actually runs before production.
+
+Auth mode split: `scripts/testing/dev_release_smoke.py` is the generic deployed
+backend smoke for chat, flow, batch, export/download, and artifact behavior. On
+ABC-backed dev stacks, run it with `--auth-mode curator-cookie` and a local
+secret-bearing env file so document upload can forward a real curator bearer to
+ABC Literature. Keep ABC-specific provenance/source-Markdown/identifier-import
+assertions in `abc_literature_ready_upload_smoke.py`,
+`abc_literature_identifier_import_smoke.py`, and
+`add_literature_upload_smoke.py`.
+The domain-envelope corpus runner also accepts the same `--auth-mode
+curator-cookie` path because it uploads real PDFs before exercising the
+agent/validator corpus. On ABC-backed dev stacks, run the corpus with
+`--salt-upload-pdfs` so public corpus fixtures avoid source-document checksum
+matches and MOD-specific ABC access policy. ABC provenance/source-document
+behavior is covered separately by the scoped ABC smokes.
+
 ## 1) Why this document exists
 
 This document is the durable source of truth for the dev-release smoke effort.
@@ -52,6 +84,7 @@ As of this document:
 
 1. `scripts/testing/dev_release_smoke.py` now covers the full intended
    release-critical API path on dev:
+   - installed `openai-agents` vs backend lockfile pin preflight
    - health and auth preflight
    - PDFX readiness
    - upload + artifacts
@@ -80,26 +113,13 @@ As of this document:
 This document now serves as both the implementation record and the durable
 reference for why the smoke looks the way it does.
 
-## 3.0) Required local/Incus preflight for evidence runs
+## 3.0) Required preflight for evidence runs
 
-Before running `scripts/testing/dev_release_smoke.py` in a Symphony/Incus
-sandbox, run the evidence-ready stack preflight:
-
-```bash
-bash scripts/utilities/symphony_full_stack_smoke_preflight.sh \
-  --workspace-dir "$PWD" \
-  --compose-project <compose_project> \
-  --backend-port <backend_port> \
-  --langfuse-port <langfuse_port> \
-  --require-langfuse
-```
-
-This preflight is intentionally stricter than `docker ps` or `/health`. It must
-pass before runs whose output will be used for TraceReview, token-budget
-analysis, validation diagnostics, release evidence, or design-doc conclusions.
-
-Treat `RESULT: not evidence-ready` as a hard stop unless the run is explicitly
-a degraded diagnostic. The helper prints `WHY:` lines explaining each blocker:
+Before running `scripts/testing/dev_release_smoke.py`, verify the target stack
+is evidence-ready. A normal application health response is necessary but not
+sufficient for TraceReview, token-budget analysis, validation diagnostics,
+release evidence, or design conclusions. Treat any failed requirement below as
+a hard stop unless the run is explicitly labeled as a degraded diagnostic:
 
 1. Langfuse is required because TraceReview, token analysis, and trace-level
    metrics depend on it. Do not disable or blank Langfuse env vars for evidence
@@ -127,8 +147,8 @@ a degraded diagnostic. The helper prints `WHY:` lines explaining each blocker:
    evidence can incorrectly look like missing required tool calls. The runner
    should surface that as a transport/provider error. Temporarily setting
    `OPENAI_RESPONSES_WEBSOCKET_ENABLED=false` is acceptable for a narrow
-   diagnostic workaround, but the preflight warns so the stack is not left slow
-   by accident.
+   diagnostic workaround, but restore the default immediately afterward so the
+   stack is not left slow by accident.
 
 ## 3.1) Current slice update: Bedrock rerank, flow persistence, stale-document cleanup, and chat hardening
 
@@ -733,7 +753,7 @@ Recommended strategy:
 1. Prefer the curator-style sample
    `sample_fly_publication.pdf` at repo root when available.
 2. Also recognize the shared local testing copy at
-   `/home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf`
+   `./sample_fly_publication.pdf`
    when running from a different checkout on the same machine.
 3. Allow `AGR_SMOKE_SAMPLE_PDF` to override the default primary fixture path
    explicitly for ad hoc runs.
@@ -756,6 +776,9 @@ Before a production rollout is considered, the following should all be true:
 3. The smoke evidence JSON is retained and referenced in the deployment notes.
 4. Chris has manually exercised the UI/browser path on dev.
 5. Any migration or data-impact review has been completed separately.
+6. If an `openai-agents` pin changed, the PR includes a
+   `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>` line
+   pointing to the full smoke evidence from the upgraded SDK run.
 
 If the deep smoke fails, the release candidate should be considered blocked
 until the failure is explained and resolved.

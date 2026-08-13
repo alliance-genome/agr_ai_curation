@@ -5,12 +5,10 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
-from . import find_repo_root
+import pytest  # type: ignore[reportMissingImports]
 from src.lib.agent_studio import runtime_validation
 from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
@@ -20,6 +18,8 @@ from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import load_tool_registry
 from src.schemas.curation_workspace import SubmissionMode
+
+from . import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -143,11 +143,19 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/api/test_agent_studio_trace_tools.py"),
     Path("backend/tests/unit/api/test_auth_api_endpoints.py"),
     Path("backend/tests/unit/api/test_chat_execute_flow_endpoint.py"),
+    Path("backend/tests/unit/api/test_documents_download_endpoint.py"),
+    Path("backend/tests/unit/api/test_documents_runtime_endpoints.py"),
     Path("backend/tests/unit/api/test_flows_api.py"),
     Path("backend/tests/unit/lib/alerts/test_tool_failure_notifier.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_extraction_results.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_gene_expression_export_submission.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_session_service.py"),
+    Path("backend/tests/unit/lib/document_sources/test_abc_literature_provider.py"),
+    Path("backend/tests/unit/lib/document_sources/test_access_health.py"),
+    Path("backend/tests/unit/lib/document_sources/test_identifier_import.py"),
+    Path("backend/tests/unit/lib/document_sources/test_import_selection.py"),
+    Path("backend/tests/unit/lib/document_sources/test_ingestion.py"),
+    Path("backend/tests/unit/lib/document_sources/test_provenance.py"),
     Path("backend/tests/unit/lib/domain_packs/test_allele_domain_pack_fixtures.py"),
     Path("backend/tests/unit/lib/domain_packs/test_materialization.py"),
     Path("backend/tests/unit/lib/domain_packs/test_pack_workspace_display.py"),
@@ -155,7 +163,13 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/domain_packs/test_validation_registry_metadata.py"),
     Path("backend/tests/unit/lib/feedback/test_service.py"),
     Path("backend/tests/unit/lib/flows/test_executor.py"),
+    Path("backend/tests/unit/lib/flows/test_output_projection.py"),
+    Path("backend/tests/unit/lib/literature/test_client.py"),
     Path("backend/tests/unit/lib/openai_agents/test_streaming_tools_retry_paths.py"),
+    Path("backend/tests/unit/lib/pdf_jobs/test_upload_intake_service.py"),
+    Path("backend/tests/unit/models/sql/test_pdf_document.py"),
+    Path("backend/tests/unit/scripts/test_abc_literature_ready_upload_smoke.py"),
+    Path("backend/tests/unit/test_weaviate_client.py"),
     Path("backend/tests/unit/models/sql/test_agent_prompt_override_columns.py"),
     Path("backend/tests/unit/schemas/models/test_allele_extraction_envelope.py"),
     Path("backend/tests/unit/schemas/test_curation_workspace.py"),
@@ -185,6 +199,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/contract/test_documents_upload.py"),
     Path("backend/tests/contract/test_list_documents.py"),
     Path("backend/tests/integration/conftest.py"),
+    Path("backend/tests/integration/alliance/test_allele_fuzzy_db_lookup.py"),
     Path("backend/tests/integration/evidence_test_support.py"),
     Path("backend/tests/integration/test_cross_user_access.py"),
     Path("backend/tests/integration/test_curation_submission_e2e.py"),
@@ -203,6 +218,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/live_integration/test_backend_batch_live_processing.py"),
     Path("backend/tests/live_integration/test_backend_chat_live_pdf_qa.py"),
     Path("backend/tests/live_integration/test_backend_flow_live_llm.py"),
+    Path("backend/tests/live_integration/test_abc_literature_live_smoke.py"),
     Path("backend/tests/live_integration/test_backend_pdfx_live_cancellation.py"),
     Path("backend/tests/live_integration/test_backend_pdfx_live_pipeline.py"),
     # Frontend tests that assert current shipped Alliance defaults or auth fixtures.
@@ -211,11 +227,13 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("frontend/src/components/AgentStudio/FlowBuilder/FlowBuilder.test.tsx"),
     Path("frontend/src/components/AgentStudio/FlowBuilder/NodeEditor.test.tsx"),
     Path("frontend/src/components/AgentStudio/PromptWorkshop/PromptWorkshop.test.tsx"),
-    Path("frontend/src/features/curation/editor/CandidateFieldEditor.test.tsx"),
     Path("frontend/src/features/curation/entityTable/workspaceEntityTags.test.ts"),
     Path("frontend/src/features/curation/entityTags/workspaceEntityTags.test.ts"),
     Path("frontend/src/features/curation/types.test.ts"),
+    Path("frontend/src/components/weaviate/DocumentDetailsDialog.test.tsx"),
+    Path("frontend/src/components/weaviate/DocumentList.test.tsx"),
     Path("frontend/src/pages/CurationWorkspacePage.test.tsx"),
+    Path("frontend/src/services/weaviate.test.tsx"),
     Path("frontend/src/test/components/Chat.test.tsx"),
     Path("frontend/src/test/utils/auditHelpers.test.ts"),
 }
@@ -223,15 +241,26 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
 
 @pytest.fixture(autouse=True)
 def _reset_runtime_caches():
+    from src.lib.openai_agents import streaming_tools
+
     agent_loader.reset_cache()
     prompt_loader.reset_cache()
     schema_discovery.reset_cache()
+    _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
     yield
     agent_loader.reset_cache()
     prompt_loader.reset_cache()
     schema_discovery.reset_cache()
+    _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
+
+
+def _reset_streaming_tool_caches(streaming_tools: ModuleType) -> None:
+    streaming_tools._tool_metadata_by_name.cache_clear()
+    streaming_tools._tool_provider_adapter_factories.cache_clear()
+    streaming_tools.builder_finalization_tool_names.cache_clear()
+    streaming_tools._run_state_tool_impls.cache_clear()
 
 
 def _copy_runtime_package(source: Path, packages_dir: Path, directory_name: str) -> Path:
@@ -411,7 +440,7 @@ def test_org_custom_domain_pack_walkthrough_registers_runtime_surfaces(monkeypat
         "domain_pack_version": envelope.domain_pack_version,
         "object_id": "demo-record-1",
         "object_type": "DemoRecord",
-        "payload": envelope.objects[0].payload,
+        "payload": envelope.extracted_objects[0].payload,
     }
     payload = export_adapter.build_submission_payload(
         mode=SubmissionMode.EXPORT,

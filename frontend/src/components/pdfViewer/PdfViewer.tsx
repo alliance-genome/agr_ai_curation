@@ -29,6 +29,7 @@ import {
   completeDocumentLoad,
   failDocumentLoad,
 } from '@/features/documents/documentLoadEvents'
+import { safeRemoveItem } from '@/lib/browserStorage'
 import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import { PdfViewerChrome } from './PdfViewerChrome'
 import {
@@ -44,6 +45,7 @@ import {
   createPdfJsQuoteSearchAdapter,
   dispatchEvidenceSpikeFind,
   findPdfJsSelectedHighlightRects,
+  findEvidenceOccurrenceIndexForRange,
   findTextLayerMatchRects,
   getEvidenceHighlightRectStyles,
   getNavigationBannerMessage,
@@ -231,7 +233,10 @@ export function PdfViewer({
     })
     commitNavigationResult(null)
     if (viewerSessionStorageKey) {
-      localStorage.removeItem(viewerSessionStorageKey)
+      safeRemoveItem(() => window.localStorage, viewerSessionStorageKey, {
+        owner: 'pdf-viewer',
+        workflowCritical: true,
+      })
     }
   }, [commitNavigationResult, viewerSessionStorageKey])
 
@@ -652,6 +657,54 @@ export function PdfViewer({
           matchedSync,
         })
         clearPdfJsFindHighlights(pdfApp)
+
+        const pageCorpusText = getCachedEvidencePageText(matchedTarget.pageNumber)
+        const trustedOccurrenceIndex = pageCorpusText
+          ? findEvidenceOccurrenceIndexForRange(
+            pageCorpusText,
+            matchedTarget.query,
+            matchedTarget.expectedRange,
+          )
+          : null
+        const textLayerRects = matchedSync.occurrence && trustedOccurrenceIndex !== null
+          ? findTextLayerMatchRects(
+            iframeDoc,
+            matchedTarget.pageNumber,
+            matchedTarget.query,
+            trustedOccurrenceIndex,
+          )
+          : []
+        if (textLayerRects.length > 0) {
+          setEvidenceHighlight({
+            anchorId: command.anchorId,
+            kind: 'quote',
+            mode: command.mode,
+            pageNumber: matchedTarget.pageNumber,
+            query: matchedTarget.query,
+            pageMatchIndex: trustedOccurrenceIndex,
+            rects: textLayerRects,
+            renderOverlay: true,
+            nativeTarget: null,
+          })
+          logPdfEvidenceDebug('Used the RapidFuzz-localized text-layer range after native PDF.js occurrence verification failed', {
+            anchorId: command.anchorId,
+            quoteSearchText,
+            matchedTarget,
+            rectCount: textLayerRects.length,
+          })
+          return {
+            ...baseResult,
+            status: 'matched',
+            strategy: fuzzyMatch.strategy,
+            locatorQuality,
+            degraded: fuzzyMatch.crossPage,
+            matchedQuery: matchedTarget.query,
+            matchedPage: matchedTarget.pageNumber,
+            matchesTotal: 1,
+            currentMatch: 1,
+            note: 'Localized the quote with RapidFuzz and highlighted the independently matched PDF text layer span.',
+          }
+        }
       }
     }
 
@@ -1468,7 +1521,10 @@ export function PdfViewer({
       handledNavigationKeyRef.current = null
       navigationRequestIdRef.current += 1
       if (viewerSessionStorageKey && viewerSessionStorageUserIdRef.current === storageUserId) {
-        localStorage.removeItem(viewerSessionStorageKey)
+        safeRemoveItem(() => window.localStorage, viewerSessionStorageKey, {
+          owner: 'pdf-viewer',
+          workflowCritical: true,
+        })
       }
       const nextIdleError = idleResetErrorRef.current
       idleResetErrorRef.current = null
@@ -1746,7 +1802,11 @@ export function PdfViewer({
     }
 
     const handleAnchorSelection = () => {
-      dispatchPDFViewerEvidenceAnchorSelected(evidenceHighlight.anchorId)
+      dispatchPDFViewerEvidenceAnchorSelected(
+        evidenceHighlight.anchorId,
+        activeDocument.documentId,
+        activeDocumentOwnerToken ?? null,
+      )
     }
     const primaryHighlightNode = selectedHighlights[0] ?? null
 
@@ -1783,7 +1843,13 @@ export function PdfViewer({
     })
 
     return cleanupNativeHighlights
-  }, [activeDocument?.documentId, evidenceHighlight, overlayRenderKey, status])
+  }, [
+    activeDocument?.documentId,
+    activeDocumentOwnerToken,
+    evidenceHighlight,
+    overlayRenderKey,
+    status,
+  ])
 
   useEffect(() => {
     const iframeDoc = iframeRef.current?.contentWindow?.document
@@ -1826,7 +1892,11 @@ export function PdfViewer({
     const rectStyles = getEvidenceHighlightRectStyles(evidenceHighlight, theme)
     const rectCleanupFns: Array<() => void> = []
     const handleAnchorSelection = () => {
-      dispatchPDFViewerEvidenceAnchorSelected(evidenceHighlight.anchorId)
+      dispatchPDFViewerEvidenceAnchorSelected(
+        evidenceHighlight.anchorId,
+        activeDocument.documentId,
+        activeDocumentOwnerToken ?? null,
+      )
     }
 
     rects.forEach((rect) => {
@@ -1873,7 +1943,14 @@ export function PdfViewer({
       rectCleanupFns.forEach((cleanup) => cleanup())
       highlightLayer.remove()
     }
-  }, [activeDocument?.documentId, evidenceHighlight, overlayRenderKey, status, theme])
+  }, [
+    activeDocument?.documentId,
+    activeDocumentOwnerToken,
+    evidenceHighlight,
+    overlayRenderKey,
+    status,
+    theme,
+  ])
 
   useEffect(() => {
     if (!activeDocument) return

@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 import hashlib
 from unittest.mock import Mock, AsyncMock
+from pypdf import PdfWriter
 
 from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES, MAX_PDF_FILE_SIZE_MB
 from src.lib.pipeline.upload import (
@@ -26,7 +27,10 @@ def upload_handler(tmp_path):
 @pytest.fixture
 def mock_pdf_file(tmp_path):
     pdf_path = tmp_path / "test.pdf"
-    pdf_path.write_bytes(b'%PDF-1.5\n%Test PDF content\n%%EOF')
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    with pdf_path.open("wb") as file_handle:
+        writer.write(file_handle)
     return pdf_path
 
 
@@ -65,6 +69,29 @@ class TestPDFUploadHandler:
         assert document.metadata.author == "Test Author"
         assert document.metadata.title == "Test Document"
         assert document.metadata.document_type == "research"
+        assert document.metadata.page_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_count", [49, 50, 51, 99, 100, 101])
+    async def test_save_uploaded_pdf_parses_actual_page_count(
+        self,
+        upload_handler,
+        tmp_path,
+        page_count,
+    ):
+        pdf_path = tmp_path / f"{page_count}-pages.pdf"
+        writer = PdfWriter()
+        for _ in range(page_count):
+            writer.add_blank_page(width=612, height=792)
+        with pdf_path.open("wb") as file_handle:
+            writer.write(file_handle)
+        mock_file = Mock()
+        mock_file.filename = pdf_path.name
+        mock_file.read = AsyncMock(return_value=pdf_path.read_bytes())
+
+        _saved_path, document = await upload_handler.save_uploaded_pdf(mock_file)
+
+        assert document.metadata.page_count == page_count
 
     def test_init_normalizes_storage_directory_permissions(self, tmp_path):
         storage_path = tmp_path / "user-1"

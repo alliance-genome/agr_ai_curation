@@ -36,14 +36,6 @@ Avoid:
 
 ## Source-Of-Truth Layers
 
-- `.symphony/WORKFLOW.md` is the authoritative contract for unattended Symphony runs.
 - `AGENTS.md` is the fast startup map and should summarize this doctrine briefly.
 - This document is the fuller human-readable explanation of the policy and examples.
-
-## VM / Symphony Note
-
-Because Symphony runs inside the `symphony-main` Incus VM (in the Incus
-project named by `SYMPHONY_INCUS_PROJECT`, default `default`):
-
-- changes to `.symphony/WORKFLOW.md` must be pushed into the VM source tree and picked up by the running Symphony process;
-- tracked repo docs such as `AGENTS.md` and this file only affect new workspaces after they are committed, pushed, and available from the source branch Symphony clones.
+- CI workflows are the executable contracts for public pull-request validation.

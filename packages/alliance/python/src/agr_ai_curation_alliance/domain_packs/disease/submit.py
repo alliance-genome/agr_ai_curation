@@ -40,6 +40,7 @@ class DiseaseAnnotationSubmissionBlockerAdapter(SubmissionTransportAdapter):
         self,
         *,
         payload: SubmissionPayloadContract,
+        idempotency_key: str,
     ) -> SubmissionTransportResult:
         return blocked_submission_result(
             payload=payload,

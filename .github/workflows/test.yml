@@ -14,6 +14,7 @@ on:
       - 'promtail-config.yml'
       - 'scripts/install/**'
       - 'scripts/release/**'
+      - 'scripts/testing/**'
       - 'scripts/tests/**'
       - 'trace_review/**'
       - '.github/workflows/test.yml'
@@ -30,6 +31,7 @@ on:
       - 'promtail-config.yml'
       - 'scripts/install/**'
       - 'scripts/release/**'
+      - 'scripts/testing/**'
       - 'scripts/tests/**'
       - 'trace_review/**'
       - '.github/workflows/test.yml'
@@ -64,6 +66,10 @@ jobs:
         run: |
           bash backend/tests/unit/run_ci_unit_tests.sh --validate-only
 
+      - name: Validate rendered production Compose contract
+        run: |
+          bash scripts/testing/production_compose_contract_test.sh
+
       - name: Run unit tests
         run: |
           mkdir -p backend/htmlcov backend/file_outputs/ci
@@ -75,8 +81,10 @@ jobs:
             -v "${{ github.workspace }}/packages:/app/packages:ro" \
             -v "${{ github.workspace }}/docs:/app/docs:ro" \
             -v "${{ github.workspace }}/frontend:/app/frontend:ro" \
+            -v "${{ github.workspace }}/scripts/testing:/app/scripts/testing:ro" \
             -v "${{ github.workspace }}/docker-compose.yml:/workspace/docker-compose.yml:ro" \
             -v "${{ github.workspace }}/docker-compose.production.yml:/workspace/docker-compose.production.yml:ro" \
+            -v "${{ github.workspace }}/Makefile:/workspace/Makefile:ro" \
             -v "${{ github.workspace }}/promtail-config.yml:/workspace/promtail-config.yml:ro" \
             -v "${{ github.workspace }}/scripts/install:/workspace/scripts/install:ro" \
             -e PYTHONUNBUFFERED=1 \
@@ -245,6 +253,39 @@ jobs:
           echo "Job status: \`${{ job.status }}\`." >> $GITHUB_STEP_SUMMARY
           echo "Artifact: \`publish-artifact-shell-regression-log\`." >> $GITHUB_STEP_SUMMARY
 
+  openai-agents-upgrade-gate-shell-regression-tests:
+    name: OpenAI Agents Upgrade Gate Shell Regression Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run OpenAI Agents upgrade gate shell regression suite
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/openai-agents-upgrade-gate-shell-tests
+          bash scripts/tests/test_check_openai_agents_upgrade_gate.sh | tee artifacts/openai-agents-upgrade-gate-shell-tests/openai-agents-upgrade-gate-shell-regression.log
+
+      - name: Upload OpenAI Agents upgrade gate shell regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openai-agents-upgrade-gate-shell-regression-log
+          path: artifacts/openai-agents-upgrade-gate-shell-tests/openai-agents-upgrade-gate-shell-regression.log
+          if-no-files-found: error
+
+      - name: OpenAI Agents upgrade gate shell summary
+        if: always()
+        run: |
+          echo "## OpenAI Agents Upgrade Gate Shell Regression Suite" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Ran \`bash scripts/tests/test_check_openai_agents_upgrade_gate.sh\` on \`ubuntu-latest\`." >> $GITHUB_STEP_SUMMARY
+          echo "This suite checks SDK pin-diff detection, smoke-evidence enforcement, and invalid diff-range failure behavior." >> $GITHUB_STEP_SUMMARY
+          echo "Job status: \`${{ job.status }}\`." >> $GITHUB_STEP_SUMMARY
+          echo "Artifact: \`openai-agents-upgrade-gate-shell-regression-log\`." >> $GITHUB_STEP_SUMMARY
+
   backend-persistence-tests:
     name: Backend Persistence Tests
     runs-on: ubuntu-latest
@@ -301,7 +342,6 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       - name: Checkout repository
@@ -328,7 +368,7 @@ jobs:
           echo "## Frontend Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Frontend tests completed. See logs above for details." >> $GITHUB_STEP_SUMMARY
-          echo "Note: This job is currently non-blocking while we stabilize legacy failures." >> $GITHUB_STEP_SUMMARY
+          echo "This blocking job is the authoritative clean-checkout frontend suite." >> $GITHUB_STEP_SUMMARY
 
   frontend-build:
     name: Frontend Build

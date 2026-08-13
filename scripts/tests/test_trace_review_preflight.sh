@@ -44,7 +44,7 @@ case "$url" in
     ;;
   */health)
     if [[ "${TRACE_REVIEW_CURL_STUB_MODE:-healthy}" == "proxy" ]]; then
-      printf '{"status":"ok","message":"Symphony review proxy"}\n'
+      printf '{"status":"ok","message":"unrelated local service"}\n'
     else
       printf '{"status":"ok","message":"Trace Review API is running","cache_stats":{"size":0,"ttl_hours":1}}\n'
     fi
@@ -306,7 +306,7 @@ test_detects_port_proxy_confusion() {
 
   assert_contains "Port 8001 listener: node/2222" "$output_file"
   assert_contains "does not look like TraceReview API" "$output_file"
-  assert_contains "Symphony review proxy or another local service" "$output_file"
+  assert_contains "belongs to another local service" "$output_file"
   assert_contains "TRACE_REVIEW_PREFLIGHT_RESULT exit_code=20" "$output_file"
 }
 

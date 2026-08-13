@@ -379,7 +379,7 @@ describe('agentStudioService', () => {
       created_at: '2026-04-03T00:00:00Z',
       updated_at: '2026-04-03T00:00:00Z',
       flow_definition: {
-        version: '1.0' as const,
+        version: '1.1' as const,
         entry_node_id: 'node_0',
         nodes: [],
         edges: [],
@@ -418,7 +418,7 @@ describe('agentStudioService', () => {
       created_at: '2026-04-03T00:00:00Z',
       updated_at: '2026-04-03T01:00:00Z',
       flow_definition: {
-        version: '1.0' as const,
+        version: '1.1' as const,
         entry_node_id: 'node_0',
         nodes: [],
         edges: [],

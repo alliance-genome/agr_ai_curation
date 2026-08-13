@@ -115,6 +115,16 @@ export interface ChatProps {
   events: SSEEvent[]
 
   /**
+   * Version for the retained stream event list.
+   */
+  eventStreamVersion: number
+
+  /**
+   * Count of retained events already rendered by chat for this stream version.
+   */
+  processedEventCount: number
+
+  /**
    * Loading state from useChatStream hook.
    */
   isLoading: boolean
@@ -127,6 +137,11 @@ export interface ChatProps {
     sessionId: string,
     options?: SendChatMessageOptions,
   ) => Promise<void>
+
+  /**
+   * Advance the shared chat render cursor after events are processed.
+   */
+  markEventsProcessed: (eventStreamVersion: number, count: number) => void
 }
 
 export interface StoredChatData {

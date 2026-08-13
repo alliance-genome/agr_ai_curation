@@ -42,8 +42,10 @@ import { generateAuditEventId } from '../utils/auditHelpers';
 import FeedbackDialog from '../components/Chat/FeedbackDialog';
 import { submitFeedback } from '../services/feedbackService';
 import { useAuth } from '../contexts/AuthContext';
-import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
+import AuthoritativeReviewAndCurateButton from '@/features/curation/components/AuthoritativeReviewAndCurateButton';
 import { listFlows, type FlowSummaryResponse } from '@/services/agentStudioService';
+import { buildBatchAuditStorageKey } from '@/lib/aiCurationLocalCache';
+import { safeGetJson, safeRemoveItem, safeSetJson } from '@/lib/browserStorage';
 
 // Valid audit event types that should be shown in the batch audit panel
 // NOTE: Excludes AGENT_THINKING because it emits per-token events that
@@ -85,15 +87,90 @@ const isValidAuditEventType = (type: string): type is AuditEventType => {
 type BatchStatus = 'setup' | 'running' | 'completed' | 'cancelled';
 type DocumentStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
-interface BatchDocument {
+interface BatchResultFile {
+  file_id?: string;
+  filename?: string;
+  download_url: string;
+  format?: string;
+  formatter_node_id?: string;
+  source_node_id?: string;
+  formatter_label?: string;
+  source_label?: string;
+  source_extraction_result_ids?: string[];
+  source_keys?: string[];
+  source_envelope_ids?: string[];
+}
+
+interface BatchOutputBranch {
+  source_node_id: string;
+  output_node_id: string;
+  formatter_label?: string;
+  source_label?: string;
+  status: 'completed' | 'missing';
+  failure_reason?: string;
+}
+
+export interface BatchDocument {
   id: string;
   document_id: string;
   title: string;
   status: DocumentStatus;
   result_file_path?: string;
+  result_files?: BatchResultFile[];
+  output_status?: 'complete' | 'partial' | 'none' | 'failed';
+  output_branches?: BatchOutputBranch[];
   error_message?: string;
   processing_time_ms?: number;
   trace_id?: string;  // Langfuse trace ID for debugging
+  adapter_keys?: string[];
+  extraction_result_ids?: string[];
+  extraction_result_refs?: Array<Record<string, unknown>>;
+  flow_run_id?: string;
+  origin_session_id?: string;
+  review_session_ids: string[];
+}
+
+interface BatchDocumentPayload {
+  id: string;
+  document_id: string;
+  document_title?: string | null;
+  position: number;
+  status: DocumentStatus;
+  result_file_path?: string;
+  result_files?: BatchResultFile[];
+  output_status?: 'complete' | 'partial' | 'none' | 'failed';
+  output_branches?: BatchOutputBranch[];
+  error_message?: string;
+  processing_time_ms?: number;
+  trace_id?: string;
+  adapter_keys?: string[];
+  extraction_result_ids?: string[];
+  extraction_result_refs?: Array<Record<string, unknown>>;
+  flow_run_id?: string;
+  origin_session_id?: string;
+  review_session_ids?: string[] | null;
+}
+
+export function mapBatchDocument(doc: BatchDocumentPayload): BatchDocument {
+  return {
+    id: doc.id,
+    document_id: doc.document_id,
+    title: doc.document_title || `Document ${doc.position + 1}`,
+    status: doc.status,
+    result_file_path: doc.result_file_path,
+    result_files: doc.result_files,
+    output_status: doc.output_status,
+    output_branches: doc.output_branches,
+    error_message: doc.error_message,
+    processing_time_ms: doc.processing_time_ms,
+    trace_id: doc.trace_id,
+    adapter_keys: doc.adapter_keys,
+    extraction_result_ids: doc.extraction_result_ids,
+    extraction_result_refs: doc.extraction_result_refs,
+    flow_run_id: doc.flow_run_id,
+    origin_session_id: doc.origin_session_id,
+    review_session_ids: Array.isArray(doc.review_session_ids) ? doc.review_session_ids : [],
+  };
 }
 
 interface RecentBatch {
@@ -135,6 +212,7 @@ const BatchPage: React.FC = () => {
       document_id: doc.id,
       title: doc.title,
       status: 'pending',
+      review_session_ids: [],
     })),
     selectedFlowId: null,
     flowValidation: null,
@@ -157,45 +235,44 @@ const BatchPage: React.FC = () => {
 
   // Helper to save audit events to localStorage
   const saveAuditEventsToStorage = (batchId: string, events: AuditEvent[]) => {
-    try {
-      localStorage.setItem(`batch_audit_${batchId}`, JSON.stringify(events));
-    } catch (e) {
-      console.error('Failed to save audit events to localStorage:', e);
-    }
+    safeSetJson(() => window.localStorage, buildBatchAuditStorageKey(batchId), events, {
+      owner: 'batch',
+      workflowCritical: true,
+    });
   };
 
   // Helper to load audit events from localStorage
   const loadAuditEventsFromStorage = (batchId: string): AuditEvent[] => {
-    try {
-      const stored = localStorage.getItem(`batch_audit_${batchId}`);
-      if (stored) {
-        const events = JSON.parse(stored);
-        // Restore Date objects
-        return events.map((e: any) => ({
-          ...e,
-          timestamp: new Date(e.timestamp),
-        }));
-      }
-    } catch (e) {
-      console.error('Failed to load audit events from localStorage:', e);
+    const stored = safeGetJson<Array<AuditEvent & { timestamp: string }>>(
+      () => window.localStorage,
+      buildBatchAuditStorageKey(batchId),
+      {
+        owner: 'batch',
+        workflowCritical: true,
+      },
+    );
+    if (stored.ok && stored.value) {
+      return stored.value.map((e) => ({
+        ...e,
+        timestamp: new Date(e.timestamp),
+      }));
     }
     return [];
   };
 
   // Helper to clear audit events from localStorage
   const clearAuditEventsFromStorage = (batchId: string) => {
-    try {
-      localStorage.removeItem(`batch_audit_${batchId}`);
-    } catch (e) {
-      console.error('Failed to clear audit events from localStorage:', e);
-    }
+    safeRemoveItem(() => window.localStorage, buildBatchAuditStorageKey(batchId), {
+      owner: 'batch',
+      workflowCritical: true,
+    });
   };
 
   // Toast notification state
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
-    severity: 'success' | 'error' | 'info';
+    severity: 'success' | 'error' | 'info' | 'warning';
   }>({ open: false, message: '', severity: 'info' });
 
   // Document actions menu state
@@ -353,6 +430,7 @@ const BatchPage: React.FC = () => {
             const docId = data.document_id ?? data.data?.document_id;
             const docPosition = data.position ?? data.data?.position ?? 0;
             const docTitle = `Document ${docPosition + 1}`; // Default title
+            const eventPayload = data.data && typeof data.data === 'object' ? data.data : data;
 
             // CR-7: Add audit events outside state setter to avoid stale closure issues
             // State setter callbacks should be pure functions
@@ -403,9 +481,20 @@ const BatchPage: React.FC = () => {
                     ...d,
                     status: docStatus,
                     result_file_path: data.result_file_path ?? data.data?.result_file_path ?? d.result_file_path,
+                    result_files: data.result_files ?? data.data?.result_files ?? d.result_files,
+                    output_status: data.output_status ?? data.data?.output_status ?? d.output_status,
+                    output_branches: data.output_branches ?? data.data?.output_branches ?? d.output_branches,
                     error_message: data.error_message ?? data.data?.error_message ?? d.error_message,
                     processing_time_ms: data.processing_time_ms ?? data.data?.processing_time_ms ?? d.processing_time_ms,
                     trace_id: data.trace_id ?? data.data?.trace_id ?? d.trace_id,
+                    adapter_keys: eventPayload.adapter_keys ?? d.adapter_keys,
+                    extraction_result_ids: eventPayload.extraction_result_ids ?? d.extraction_result_ids,
+                    extraction_result_refs: eventPayload.extraction_result_refs ?? d.extraction_result_refs,
+                    flow_run_id: eventPayload.flow_run_id ?? d.flow_run_id,
+                    origin_session_id: eventPayload.origin_session_id ?? d.origin_session_id,
+                    review_session_ids: Object.prototype.hasOwnProperty.call(eventPayload, 'review_session_ids')
+                      ? (Array.isArray(eventPayload.review_session_ids) ? eventPayload.review_session_ids : [])
+                      : d.review_session_ids,
                   };
                 }
                 return d;
@@ -418,7 +507,9 @@ const BatchPage: React.FC = () => {
             const status = data.status ?? data.data?.status;
             const completedDocs = data.completed_documents ?? data.data?.completed_documents ?? 0;
             const failedDocs = data.failed_documents ?? data.data?.failed_documents ?? 0;
+            const partialDocs = data.partial_documents ?? data.data?.partial_documents ?? 0;
             const totalDocs = data.total_documents ?? data.data?.total_documents ?? 0;
+            const fullySuccessfulDocs = Math.max(0, completedDocs - partialDocs);
 
             // Add completion audit event
             addAuditEvent({
@@ -428,7 +519,7 @@ const BatchPage: React.FC = () => {
               details: {
                 message: status === 'cancelled'
                   ? 'Batch processing cancelled'
-                  : `Batch completed: ${completedDocs} successful, ${failedDocs} failed`,
+                  : `Batch completed: ${fullySuccessfulDocs} successful, ${partialDocs} partial, ${failedDocs} failed`,
                 totalSteps: totalDocs,
               },
             });
@@ -451,8 +542,14 @@ const BatchPage: React.FC = () => {
             } else if (failedDocs > 0) {
               setSnackbar({
                 open: true,
-                message: `Batch completed: ${completedDocs} succeeded, ${failedDocs} failed`,
+                message: `Batch completed: ${fullySuccessfulDocs} complete, ${partialDocs} partial, ${failedDocs} failed`,
                 severity: 'error',
+              });
+            } else if (partialDocs > 0) {
+              setSnackbar({
+                open: true,
+                message: `Batch completed with partial output: ${fullySuccessfulDocs} complete, ${partialDocs} partial`,
+                severity: 'warning',
               });
             } else {
               setSnackbar({
@@ -481,6 +578,24 @@ const BatchPage: React.FC = () => {
             break;
 
           default:
+            if (data.type === 'CURATION_HANDOFF_READY') {
+              const handoff = data.details && typeof data.details === 'object' ? data.details : {};
+              const handoffDocumentId = data.document_id ?? handoff.document_id;
+              setBatchState(prev => ({
+                ...prev,
+                documents: prev.documents.map(d => d.document_id === handoffDocumentId
+                  ? {
+                      ...d,
+                      adapter_keys: Array.isArray(handoff.adapter_keys) ? handoff.adapter_keys : [],
+                      origin_session_id: data.origin_session_id ?? data.session_id ?? d.origin_session_id,
+                      review_session_ids: Array.isArray(handoff.review_session_ids)
+                        ? handoff.review_session_ids
+                        : [],
+                    }
+                  : d),
+              }));
+            }
+
             // Capture trace_id from RUN_STARTED event and associate with document
             if (data.type === 'RUN_STARTED' && data.trace_id && data.document_id) {
               setBatchState(prev => ({
@@ -543,16 +658,7 @@ const BatchPage: React.FC = () => {
           setActiveBatchId(runningBatch.id);
           setBatchState({
             status: 'running',
-            documents: batch.documents.map((doc: any) => ({
-              id: doc.id,
-              document_id: doc.document_id,
-              title: doc.document_title || `Document ${doc.position + 1}`,
-              status: doc.status,
-              result_file_path: doc.result_file_path,
-              error_message: doc.error_message,
-              processing_time_ms: doc.processing_time_ms,
-              trace_id: doc.trace_id,
-            })),
+            documents: batch.documents.map(mapBatchDocument),
             selectedFlowId: batch.flow_id,
             flowValidation: null,
             completedCount: batch.completed_documents,
@@ -666,14 +772,30 @@ const BatchPage: React.FC = () => {
     navigate('/weaviate/documents');
   };
 
-  // Download a single result file
-  const handleDownloadFile = (doc: BatchDocument) => {
-    if (!doc.result_file_path) {
-      console.error('No result file path for document:', doc.document_id);
-      return;
+  const getResultFiles = (doc: BatchDocument): BatchResultFile[] => {
+    if (doc.result_files?.length) {
+      return doc.result_files;
     }
-    // result_file_path is the download URL from the file output tool
-    window.open(doc.result_file_path, '_blank');
+    return doc.result_file_path
+      ? [{ download_url: doc.result_file_path }]
+      : [];
+  };
+
+  const getMissingOutputSummary = (doc: BatchDocument): string => {
+    return (doc.output_branches ?? [])
+      .filter((branch) => branch.status === 'missing')
+      .map((branch) => {
+        const label = branch.formatter_label ?? branch.output_node_id;
+        return branch.failure_reason
+          ? `${label}: ${branch.failure_reason}`
+          : `${label}: no output`;
+      })
+      .join(' · ');
+  };
+
+  // Download one formatter branch result.
+  const handleDownloadFile = (resultFile: BatchResultFile) => {
+    window.open(resultFile.download_url, '_blank');
   };
 
   // Download all results as ZIP
@@ -799,16 +921,7 @@ const BatchPage: React.FC = () => {
       setBatchState({
         status: batch.status === 'running' ? 'running' :
                 batch.status === 'cancelled' ? 'cancelled' : 'completed',
-        documents: batch.documents.map((doc: any) => ({
-          id: doc.id,
-          document_id: doc.document_id,
-          title: doc.document_title || `Document ${doc.position + 1}`,
-          status: doc.status,
-          result_file_path: doc.result_file_path,
-          error_message: doc.error_message,
-          processing_time_ms: doc.processing_time_ms,
-          trace_id: doc.trace_id,
-        })),
+        documents: batch.documents.map(mapBatchDocument),
         selectedFlowId: batch.flow_id,
         flowValidation: null,
         completedCount: batch.completed_documents,
@@ -1072,9 +1185,13 @@ const BatchPage: React.FC = () => {
               secondaryAction={
                 <Box sx={{ display: 'flex', gap: 0.5 }}>
                   {doc.status === 'completed' && activeBatchId && (
-                    <PreparedReviewAndCurateButton
+                    <AuthoritativeReviewAndCurateButton
+                      authoritativeReviewSessionIds={doc.review_session_ids}
+                      disabledReason="No prepared review sessions are available for this completed document."
                       documentId={doc.document_id}
-                      flowRunId={activeBatchId}
+                      flowRunId={doc.flow_run_id}
+                      originSessionId={doc.origin_session_id}
+                      adapterKeys={doc.adapter_keys}
                       iconOnly={true}
                       size="small"
                     />
@@ -1164,9 +1281,13 @@ const BatchPage: React.FC = () => {
               secondaryAction={
                 <Box sx={{ display: 'flex', gap: 0.5 }}>
                   {doc.status === 'completed' && activeBatchId && (
-                    <PreparedReviewAndCurateButton
+                    <AuthoritativeReviewAndCurateButton
+                      authoritativeReviewSessionIds={doc.review_session_ids}
+                      disabledReason="No prepared review sessions are available for this completed document."
                       documentId={doc.document_id}
-                      flowRunId={activeBatchId}
+                      flowRunId={doc.flow_run_id}
+                      originSessionId={doc.origin_session_id}
+                      adapterKeys={doc.adapter_keys}
                       iconOnly={true}
                       size="small"
                     />
@@ -1178,17 +1299,21 @@ const BatchPage: React.FC = () => {
                   >
                     <MoreVertIcon fontSize="small" />
                   </IconButton>
-                  {doc.status === 'completed' && doc.result_file_path && (
-                    <Tooltip title="Download">
+                  {doc.status === 'completed' && getResultFiles(doc).map((resultFile, index) => (
+                    <Tooltip
+                      key={resultFile.file_id ?? resultFile.download_url}
+                      title={`${resultFile.filename ? `Download ${resultFile.filename}` : `Download result ${index + 1}`}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`}
+                    >
                       <IconButton
                         edge="end"
                         size="small"
-                        onClick={() => handleDownloadFile(doc)}
+                        aria-label={resultFile.filename ? `Download ${resultFile.filename}` : `Download result ${index + 1}`}
+                        onClick={() => handleDownloadFile(resultFile)}
                       >
                         <DownloadIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
-                  )}
+                  ))}
                 </Box>
               }
             >
@@ -1198,7 +1323,13 @@ const BatchPage: React.FC = () => {
               <ListItemText
                 primary={doc.title}
                 secondary={
-                  doc.status === 'failed' ? doc.error_message : undefined
+                  doc.status === 'failed'
+                    ? doc.error_message
+                    : getResultFiles(doc).length
+                      ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${getResultFiles(doc)
+                        .map((resultFile, index) => `${resultFile.filename ?? `Result ${index + 1}`}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
+                        .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}`
+                      : undefined
                 }
                 primaryTypographyProps={{ noWrap: true }}
                 sx={{ pr: 2 }}

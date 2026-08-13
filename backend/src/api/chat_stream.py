@@ -2,6 +2,17 @@
 """Chat response, streaming, cancellation, and assistant rescue endpoints."""
 
 from .chat_common import *
+from src.lib.executable_runs import (
+    ExecutableRunAccessError,
+    ExecutableRunConflictError,
+    executable_run_manager,
+)
+from src.lib.observability.sentry import (
+    gen_ai_workflow_transaction,
+    hash_sentry_identifier,
+    set_redacted_ai_span_data,
+    set_sentry_span_status,
+)
 
 _LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
 
@@ -17,6 +28,8 @@ async def chat_endpoint(
     session_id = chat_message.session_id or str(uuid.uuid4())
     user_id = _require_user_sub(user)
     repository = _get_chat_history_repository(db)
+    requested_turn_id = chat_message.turn_id
+    turn_id = requested_turn_id or str(uuid.uuid4())
 
     # Set context variables for file output tools
     set_current_session_id(session_id)
@@ -56,8 +69,8 @@ async def chat_endpoint(
         )
 
     try:
-        if chat_message.turn_id:
-            turn_claim_key = f"non-stream-turn:{session_id}:{chat_message.turn_id}"
+        if requested_turn_id:
+            turn_claim_key = f"non-stream-turn:{session_id}:{requested_turn_id}"
             # Use a per-request claim token so same-turn retries stay exclusive across workers.
             turn_claim_token = uuid.uuid4().hex
 
@@ -89,7 +102,7 @@ async def chat_endpoint(
             chat_kind=ASSISTANT_CHAT_KIND,
             role="user",
             content=chat_message.message,
-            turn_id=chat_message.turn_id,
+            turn_id=turn_id,
         )
         db.commit()
     except HTTPException:
@@ -110,7 +123,7 @@ async def chat_endpoint(
         logger.error(
             "Failed to persist durable non-stream user turn for session %s",
             session_id,
-            extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
             exc_info=True,
         )
         _rollback_and_raise(
@@ -120,13 +133,13 @@ async def chat_endpoint(
             exc=exc,
         )
 
-    if chat_message.turn_id and not user_turn.created:
+    if requested_turn_id and not user_turn.created:
         effective_user_message = user_turn.message.content
         try:
             assistant_turn = repository.get_message_by_turn_id(
                 session_id=session_id,
                 user_auth_sub=user_id,
-                turn_id=chat_message.turn_id,
+                turn_id=requested_turn_id,
                 role="assistant",
             )
         except ValueError as exc:
@@ -152,151 +165,202 @@ async def chat_endpoint(
             )
             logger.info(
                 "Returning durable replay for non-stream chat turn %s",
-                chat_message.turn_id,
-                extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+                requested_turn_id,
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
             )
             await _release_non_stream_turn_claim()
             return ChatResponse(response=assistant_turn.content, session_id=session_id)
 
         logger.info(
             "Retrying incomplete non-stream chat turn %s after prior request ended",
-            chat_message.turn_id,
-            extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+            requested_turn_id,
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
         )
         if effective_user_message != chat_message.message:
             logger.info(
                 "Reusing stored user content for retried non-stream turn %s",
-                chat_message.turn_id,
-                extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+                requested_turn_id,
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
             )
 
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
     except Exception as exc:
         await _release_non_stream_turn_claim()
-        logger.error(
-            "Supervisor tool-map resolution failed; aborting chat run to prevent silent extraction data loss",
-            extra={"session_id": session_id, "user_id": user_id},
-            exc_info=True,
-        )
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
             detail="Internal configuration error: unable to process chat request",
-        ) from exc
+            log_message="Supervisor tool-map resolution failed; aborting chat run",
+            exc=exc,
+        )
 
     try:
-        context_messages = _build_context_messages_from_durable_messages(
-            repository,
-            user_id=user_id,
-            session_id=session_id,
-            user_message=effective_user_message,
-        )
-        if context_messages:
-            logger.info(
-                "Including %s durable context messages for session %s",
-                len(context_messages),
-                session_id,
-                extra={"session_id": session_id, "user_id": user_id},
-            )
+        context_messages = [{"role": "user", "content": effective_user_message}]
 
         # Collect full response from streaming generator
         full_response = ""
         error_message = None
         trace_id = None
         run_finished = False
+        sentry_error_event_count = 0
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
 
-        async for event in run_agent_streamed(
-            context_messages=context_messages,
-            user_id=user_id,
-            session_id=session_id,
+        with gen_ai_workflow_transaction(
+            name="/api/chat",
+            workflow="assistant_chat",
+            conversation_id=session_id,
             document_id=document_id,
-            document_name=document_name,
-            active_groups=active_groups,
-            supervisor_model=chat_message.model,
-            specialist_model=chat_message.specialist_model,
-            supervisor_temperature=chat_message.supervisor_temperature,
-            specialist_temperature=chat_message.specialist_temperature,
-            supervisor_reasoning=chat_message.supervisor_reasoning,
-            specialist_reasoning=chat_message.specialist_reasoning,
-        ):
-            event_type = event.get("type")
-            event_data = event.get("data", {}) or {}
+            document_present=bool(document_id),
+            input_preview=effective_user_message,
+        ) as sentry_transaction:
+            async for event in run_agent_streamed(
+                context_messages=context_messages,
+                user_id=user_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                document_id=document_id,
+                document_name=document_name,
+                active_groups=active_groups,
+                supervisor_model=chat_message.model,
+                specialist_model=chat_message.specialist_model,
+                supervisor_temperature=chat_message.supervisor_temperature,
+                specialist_temperature=chat_message.specialist_temperature,
+                supervisor_reasoning=chat_message.supervisor_reasoning,
+                specialist_reasoning=chat_message.specialist_reasoning,
+            ):
+                event_type = event.get("type")
+                event_data = event.get("data", {}) or {}
 
-            if event_type == "RUN_STARTED" and "trace_id" in event_data:
-                trace_id = event_data.get("trace_id")
+                if event_type == "RUN_STARTED" and "trace_id" in event_data:
+                    trace_id = event_data.get("trace_id")
+                    trace_id_hash = hash_sentry_identifier(trace_id)
+                    if trace_id_hash:
+                        set_redacted_ai_span_data(
+                            sentry_transaction,
+                            "ai_curation.trace.id_hash",
+                            trace_id_hash,
+                        )
 
-            persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
-                event,
-                tool_agent_map=tool_agent_map,
+                if str(event_type or "").endswith("_ERROR"):
+                    sentry_error_event_count += 1
+                    set_redacted_ai_span_data(
+                        sentry_transaction,
+                        "ai_curation.error.detail",
+                        {
+                            "event_type": event_type,
+                            "details": event.get("details") or event_data,
+                        },
+                    )
+
+                persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
+                    event,
+                    tool_agent_map=tool_agent_map,
+                )
+                if persisted_ref:
+                    persisted_extraction_refs.append(persisted_ref)
+
+                candidate = _build_extraction_candidate_from_tool_event(
+                    event,
+                    tool_agent_map=tool_agent_map,
+                    conversation_summary=effective_user_message,
+                    metadata={"document_name": document_name} if document_name else None,
+                )
+                if candidate:
+                    extraction_candidates.append(candidate)
+
+                if event_type == "RUN_FINISHED":
+                    full_response = event_data.get("response", "")
+                    run_finished = True
+                    continue
+                elif event_type == "RUN_ERROR":
+                    # Capture error and stop processing
+                    error_message = event_data.get("message", "Unknown error")
+                    logger.error(
+                        "Agent error during non-streaming chat: %s",
+                        error_message,
+                        extra={"session_id": session_id, "user_id": user_id},
+                    )
+                    break
+
+            set_redacted_ai_span_data(
+                sentry_transaction,
+                "ai_curation.error.event_count",
+                sentry_error_event_count,
             )
-            if persisted_ref:
-                persisted_extraction_refs.append(persisted_ref)
 
-            candidate = _build_extraction_candidate_from_tool_event(
-                event,
-                tool_agent_map=tool_agent_map,
-                conversation_summary=effective_user_message,
-                metadata={"document_name": document_name} if document_name else None,
-            )
-            if candidate:
-                extraction_candidates.append(candidate)
+            # If we got an error, raise it
+            if error_message:
+                set_sentry_span_status(sentry_transaction, "internal_error")
+                raise HTTPException(status_code=500, detail="Failed to process chat request")
 
-            if event_type == "RUN_FINISHED":
-                full_response = event_data.get("response", "")
-                run_finished = True
-                continue
-            elif event_type == "RUN_ERROR":
-                # Capture error and stop processing
-                error_message = event_data.get("message", "Unknown error")
-                logger.error(
-                    "Agent error during non-streaming chat: %s",
-                    error_message,
-                    extra={"session_id": session_id, "user_id": user_id},
+            if run_finished:
+                set_sentry_span_status(sentry_transaction, "ok")
+                set_redacted_ai_span_data(
+                    sentry_transaction,
+                    "ai_curation.finalization.status",
+                    "completed",
                 )
-                break
-
-        # If we got an error, raise it
-        if error_message:
-            raise HTTPException(status_code=500, detail="Failed to process chat request")
-
-        if run_finished:
-            try:
-                _persist_extraction_candidates(
-                    candidates=extraction_candidates,
-                    document_id=document_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    trace_id=trace_id,
-                    source_kind=CurationExtractionSourceKind.CHAT,
-                    db=db,
+                set_redacted_ai_span_data(
+                    sentry_transaction,
+                    "ai_curation.agent.output",
+                    full_response,
                 )
-                assistant_turn = repository.append_message(
-                    session_id=session_id,
-                    user_auth_sub=user_id,
-                    chat_kind=ASSISTANT_CHAT_KIND,
-                    role="assistant",
-                    content=full_response,
-                    turn_id=chat_message.turn_id,
-                    trace_id=trace_id,
-                )
-                if chat_message.turn_id and not assistant_turn.created:
-                    db.rollback()
+                try:
+                    _persist_extraction_candidates(
+                        candidates=extraction_candidates,
+                        document_id=document_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        trace_id=trace_id,
+                        source_kind=CurationExtractionSourceKind.CHAT,
+                        db=db,
+                    )
+                    assistant_turn = repository.append_message(
+                        session_id=session_id,
+                        user_auth_sub=user_id,
+                        chat_kind=ASSISTANT_CHAT_KIND,
+                        role="assistant",
+                        content=full_response,
+                        turn_id=turn_id,
+                        trace_id=trace_id,
+                    )
+                    if requested_turn_id and not assistant_turn.created:
+                        db.rollback()
+                        _link_persisted_extraction_results_to_chat_turn(
+                            refs=persisted_extraction_refs,
+                            session_id=session_id,
+                            turn_id=requested_turn_id,
+                            trace_id=trace_id,
+                            assistant_message_id=str(assistant_turn.message.message_id),
+                            db=db,
+                        )
+                        db.commit()
+                        logger.info(
+                            "Discarding duplicate non-stream completion for replayed turn %s",
+                            requested_turn_id,
+                            extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
+                        )
+                        _queue_chat_title_backfill(
+                            background_tasks,
+                            session_id=session_id,
+                            user_id=user_id,
+                            preferred_generated_title=_generate_title_from_turn(
+                                user_message=effective_user_message,
+                                assistant_message=assistant_turn.message.content,
+                            ),
+                        )
+                        return ChatResponse(response=assistant_turn.message.content, session_id=session_id)
                     _link_persisted_extraction_results_to_chat_turn(
                         refs=persisted_extraction_refs,
                         session_id=session_id,
-                        turn_id=chat_message.turn_id,
+                        turn_id=assistant_turn.message.turn_id or turn_id,
                         trace_id=trace_id,
                         assistant_message_id=str(assistant_turn.message.message_id),
                         db=db,
                     )
                     db.commit()
-                    logger.info(
-                        "Discarding duplicate non-stream completion for replayed turn %s",
-                        chat_message.turn_id,
-                        extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
-                    )
                     _queue_chat_title_backfill(
                         background_tasks,
                         session_id=session_id,
@@ -306,62 +370,46 @@ async def chat_endpoint(
                             assistant_message=assistant_turn.message.content,
                         ),
                     )
-                    return ChatResponse(response=assistant_turn.message.content, session_id=session_id)
-                _link_persisted_extraction_results_to_chat_turn(
-                    refs=persisted_extraction_refs,
-                    session_id=session_id,
-                    turn_id=assistant_turn.message.turn_id or chat_message.turn_id or "",
-                    trace_id=trace_id,
-                    assistant_message_id=str(assistant_turn.message.message_id),
-                    db=db,
-                )
-                db.commit()
-                _queue_chat_title_backfill(
-                    background_tasks,
-                    session_id=session_id,
-                    user_id=user_id,
-                    preferred_generated_title=_generate_title_from_turn(
-                        user_message=effective_user_message,
-                        assistant_message=assistant_turn.message.content,
-                    ),
-                )
-            except ValueError as exc:
-                _rollback_and_raise(
-                    db,
-                    status_code=400,
-                    detail="Invalid chat response state",
-                    exc=exc,
-                    log_message=f"Failed to persist durable non-stream assistant turn for session {session_id}",
-                    level=logging.WARNING,
-                )
-            except Exception as exc:
-                logger.error(
-                    "Failed to persist durable non-stream assistant turn for session %s",
-                    session_id,
-                    extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
-                    exc_info=True,
-                )
-                _rollback_and_raise(
-                    db,
-                    status_code=500,
-                    detail="Failed to persist chat response",
-                    exc=exc,
-                )
-        else:
-            raise HTTPException(status_code=500, detail="Chat run did not complete")
+                except ValueError as exc:
+                    set_sentry_span_status(sentry_transaction, "invalid_argument")
+                    _rollback_and_raise(
+                        db,
+                        status_code=400,
+                        detail="Invalid chat response state",
+                        exc=exc,
+                        log_message=f"Failed to persist durable non-stream assistant turn for session {session_id}",
+                        level=logging.WARNING,
+                    )
+                except Exception as exc:
+                    set_sentry_span_status(sentry_transaction, "internal_error")
+                    logger.error(
+                        "Failed to persist durable non-stream assistant turn for session %s",
+                        session_id,
+                        extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
+                        exc_info=True,
+                    )
+                    _rollback_and_raise(
+                        db,
+                        status_code=500,
+                        detail="Failed to persist chat response",
+                        exc=exc,
+                    )
+            else:
+                set_sentry_span_status(sentry_transaction, "internal_error")
+                raise HTTPException(status_code=500, detail="Chat run did not complete")
 
         return ChatResponse(response=full_response, session_id=session_id)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Chat error: %s",
-            e,
-            extra={"session_id": session_id, "user_id": user_id},
-            exc_info=True,
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to process chat request",
+            log_message="Chat error while processing non-stream request",
+            exc=e,
         )
-        raise HTTPException(status_code=500, detail="Failed to process chat request") from e
     finally:
         await _release_non_stream_turn_claim()
 
@@ -404,22 +452,45 @@ async def chat_stream_endpoint(
             extra={"session_id": session_id, "user_id": user_id},
         )
 
+    active_executable_run = await executable_run_manager.get_active_session_run(session_id)
+    if active_executable_run is not None:
+        if active_executable_run.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+        expected_run_id = (
+            f"assistant_chat_turn:{session_id}:{chat_message.turn_id}"
+            if chat_message.turn_id
+            else None
+        )
+        if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
+            return StreamingResponse(
+                executable_run_manager.observe(active_executable_run),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        raise HTTPException(status_code=409, detail="Session is already active")
+
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
     except Exception as exc:
-        logger.error(
-            "Supervisor tool-map resolution failed; aborting chat stream to prevent silent extraction data loss",
-            extra={"session_id": session_id, "user_id": user_id},
-            exc_info=True,
-        )
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
             detail="Internal configuration error: unable to process chat request",
-        ) from exc
+            log_message="Supervisor tool-map resolution failed; aborting chat stream",
+            exc=exc,
+        )
 
-    stream_lifecycle = await _claim_active_stream_lifecycle(session_id=session_id, user_id=user_id)
-    cancel_event = stream_lifecycle.cancel_event
     generated_title_candidate: str | None = None
+    stream_lifecycle = await _claim_active_stream_lifecycle(
+        session_id=session_id,
+        user_id=user_id,
+    )
 
     try:
         active_document_id, _ = _resolve_session_create_active_document(
@@ -439,10 +510,10 @@ async def chat_stream_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
-        await stream_lifecycle.cleanup(session_id)
+        await stream_lifecycle.cleanup()
         raise
     except ValueError as exc:
-        await stream_lifecycle.cleanup(session_id)
+        await stream_lifecycle.cleanup()
         _rollback_and_raise(
             db,
             status_code=400,
@@ -451,8 +522,9 @@ async def chat_stream_endpoint(
             log_message=f"Failed to prepare durable stream user turn for session {session_id}",
             level=logging.WARNING,
         )
+        raise AssertionError("unreachable")
     except Exception as exc:
-        await stream_lifecycle.cleanup(session_id)
+        await stream_lifecycle.cleanup()
         logger.error(
             "Failed to persist durable stream user turn for session %s",
             session_id,
@@ -466,47 +538,36 @@ async def chat_stream_endpoint(
             exc=exc,
         )
 
-    if prepared_turn.context_messages:
-        logger.info(
-            "Including %s durable context messages for session %s",
-            len(prepared_turn.context_messages),
-            session_id,
-            extra={"session_id": session_id, "user_id": user_id, "turn_id": prepared_turn.turn_id},
-        )
-
     if prepared_turn.replay_assistant_turn is not None:
         generated_title_candidate = _generate_title_from_turn(
             user_message=prepared_turn.effective_user_message,
             assistant_message=prepared_turn.replay_assistant_turn.content,
         )
+        await stream_lifecycle.finalize(generated_title_candidate)
 
         async def replay_stream():
-            try:
-                yield _stream_event_sse(
-                    _stream_event_payload(
-                        "TEXT_MESSAGE_CONTENT",
-                        session_id=session_id,
-                        turn_id=prepared_turn.turn_id,
-                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                        content=prepared_turn.replay_assistant_turn.content,
-                    )
+            yield _stream_event_sse(
+                _stream_event_payload(
+                    "TEXT_MESSAGE_CONTENT",
+                    session_id=session_id,
+                    turn_id=prepared_turn.turn_id,
+                    trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                    content=prepared_turn.replay_assistant_turn.content,
                 )
-                yield _stream_event_sse(
-                    _build_terminal_turn_event(
-                        "turn_completed",
-                        session_id=session_id,
-                        turn_id=prepared_turn.turn_id,
-                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                        message="Chat turn completed.",
-                    )
+            )
+            yield _stream_event_sse(
+                _build_terminal_turn_event(
+                    "turn_completed",
+                    session_id=session_id,
+                    turn_id=prepared_turn.turn_id,
+                    trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                    message="Chat turn completed.",
                 )
-            finally:
-                await stream_lifecycle.cleanup(session_id)
+            )
 
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=stream_lifecycle.background_task(lambda: generated_title_candidate),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -519,6 +580,7 @@ async def chat_stream_endpoint(
         nonlocal generated_title_candidate
         current_session_id = session_id
         current_turn_id = prepared_turn.turn_id
+        cancel_event = stream_lifecycle.cancel_event
         full_response = ""
         trace_id = None
         run_finished = False
@@ -529,12 +591,26 @@ async def chat_stream_endpoint(
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
         evidence_records: List[Dict[str, Any]] = []
         evidence_summary_event_received = False
+        sentry_error_event_count = 0
+        sentry_terminal_status = "incomplete"
+        sentry_transaction_context_manager = gen_ai_workflow_transaction(
+            name="/api/chat/stream",
+            workflow="assistant_chat_stream",
+            conversation_id=current_session_id,
+            document_id=document_id,
+            document_present=bool(document_id),
+            input_preview=prepared_turn.effective_user_message,
+        )
+        sentry_transaction = sentry_transaction_context_manager.__enter__()
 
         try:
             async for event in run_agent_streamed(
-                context_messages=prepared_turn.context_messages,
+                context_messages=[
+                    {"role": "user", "content": prepared_turn.effective_user_message}
+                ],
                 user_id=user_id,
                 session_id=current_session_id,
+                turn_id=current_turn_id,
                 document_id=document_id,
                 document_name=document_name,
                 active_groups=active_groups,
@@ -564,6 +640,13 @@ async def chat_stream_endpoint(
 
                 if "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
+                    trace_id_hash = hash_sentry_identifier(trace_id)
+                    if trace_id_hash:
+                        set_redacted_ai_span_data(
+                            sentry_transaction,
+                            "ai_curation.trace.id_hash",
+                            trace_id_hash,
+                        )
 
                 flat_event = _stream_event_payload(
                     str(event_type),
@@ -579,6 +662,23 @@ async def chat_stream_endpoint(
                     flat_event["timestamp"] = event["timestamp"]
                 if "details" in event:
                     flat_event["details"] = event["details"]
+
+                if str(event_type or "").endswith("_ERROR"):
+                    sentry_error_event_count += 1
+                    set_redacted_ai_span_data(
+                        sentry_transaction,
+                        "ai_curation.error.detail",
+                        {
+                            "event_type": event_type,
+                            "details": event.get("details") or event_data,
+                        },
+                    )
+                    if event_type == "SPECIALIST_ERROR":
+                        set_redacted_ai_span_data(
+                            sentry_transaction,
+                            "ai_curation.validation.status",
+                            "warning",
+                        )
 
                 if event_type == "CHUNK_PROVENANCE":
                     for key in ["chunk_id", "doc_items", "message_id", "source_tool"]:
@@ -672,6 +772,8 @@ async def chat_stream_endpoint(
                 yield _stream_event_sse(flat_event)
 
             if interrupted_message:
+                sentry_terminal_status = "cancelled"
+                set_sentry_span_status(sentry_transaction, "cancelled")
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
                         "turn_interrupted",
@@ -684,6 +786,8 @@ async def chat_stream_endpoint(
                 return
 
             if runner_error_message:
+                sentry_terminal_status = "error"
+                set_sentry_span_status(sentry_transaction, "internal_error")
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
                         "turn_failed",
@@ -697,6 +801,8 @@ async def chat_stream_endpoint(
                 return
 
             if run_finished:
+                sentry_terminal_status = "completed"
+                set_sentry_span_status(sentry_transaction, "ok")
                 if evidence_records and not evidence_summary_event_received:
                     evidence_curation_metadata = _build_candidate_evidence_curation_metadata(
                         extraction_candidates,
@@ -726,6 +832,8 @@ async def chat_stream_endpoint(
                         document_id=document_id,
                     )
                 except ChatHistorySessionNotFoundError:
+                    sentry_terminal_status = "session_gone"
+                    set_sentry_span_status(sentry_transaction, "not_found")
                     yield _stream_event_sse(
                         _build_terminal_turn_event(
                             "session_gone",
@@ -737,6 +845,8 @@ async def chat_stream_endpoint(
                     )
                     return
                 except ChatStreamAssistantSaveFailedError as exc:
+                    sentry_terminal_status = "save_failed"
+                    set_sentry_span_status(sentry_transaction, "internal_error")
                     root_exc = exc.__cause__ or exc
                     logger.error(
                         "Failed to persist durable stream assistant turn for session %s",
@@ -775,6 +885,8 @@ async def chat_stream_endpoint(
                     )
                     return
                 except Exception as exc:
+                    sentry_terminal_status = "error"
+                    set_sentry_span_status(sentry_transaction, "internal_error")
                     logger.error(
                         "Failed to persist durable stream completion side effects for session %s",
                         current_session_id,
@@ -818,6 +930,20 @@ async def chat_stream_endpoint(
                     user_message=prepared_turn.effective_user_message,
                     assistant_message=assistant_turn.content,
                 )
+                set_redacted_ai_span_data(
+                    sentry_transaction,
+                    "ai_curation.finalization.status",
+                    (
+                        "completed_with_warnings"
+                        if sentry_error_event_count
+                        else "completed"
+                    ),
+                )
+                set_redacted_ai_span_data(
+                    sentry_transaction,
+                    "ai_curation.agent.output",
+                    assistant_turn.content,
+                )
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
                         "turn_completed",
@@ -829,6 +955,8 @@ async def chat_stream_endpoint(
                 )
                 return
 
+            sentry_terminal_status = "incomplete"
+            set_sentry_span_status(sentry_transaction, "internal_error")
             yield _stream_event_sse(
                 _build_terminal_turn_event(
                     "turn_failed",
@@ -840,6 +968,8 @@ async def chat_stream_endpoint(
                 )
             )
         except asyncio.CancelledError:
+            sentry_terminal_status = "cancelled"
+            set_sentry_span_status(sentry_transaction, "cancelled")
             logger.warning(
                 "Chat stream cancelled unexpectedly for session %s",
                 current_session_id,
@@ -879,6 +1009,8 @@ async def chat_stream_endpoint(
                 )
             )
         except Exception as exc:
+            sentry_terminal_status = "error"
+            set_sentry_span_status(sentry_transaction, "internal_error")
             logger.error(
                 "Stream error: %s",
                 exc,
@@ -917,12 +1049,66 @@ async def chat_stream_endpoint(
                 )
             )
         finally:
-            await stream_lifecycle.cleanup(current_session_id)
+            set_redacted_ai_span_data(
+                sentry_transaction,
+                "ai_curation.error.event_count",
+                sentry_error_event_count,
+            )
+            set_redacted_ai_span_data(
+                sentry_transaction,
+                "ai_curation.finalization.status",
+                (
+                    "completed_with_warnings"
+                    if sentry_terminal_status == "completed" and sentry_error_event_count
+                    else sentry_terminal_status
+                ),
+            )
+            try:
+                await stream_lifecycle.finalize(generated_title_candidate)
+            finally:
+                sentry_transaction_context_manager.__exit__(None, None, None)
+
+    run_id = f"assistant_chat_turn:{session_id}:{prepared_turn.turn_id}"
+
+    def terminal_error_event(exc: Exception) -> str:
+        detail = getattr(exc, "detail", None)
+        message = str(detail or exc or "Chat turn failed to start.")
+        return _stream_event_sse(
+            _build_terminal_turn_event(
+                "turn_failed",
+                session_id=session_id,
+                turn_id=prepared_turn.turn_id,
+                message=message,
+                error_type=type(exc).__name__,
+            )
+        )
+
+    try:
+        executable_run, created = await executable_run_manager.get_or_start_stream(
+            run_id=run_id,
+            kind="assistant_chat_turn",
+            owner_user_id=user_id,
+            session_id=session_id,
+            turn_id=prepared_turn.turn_id,
+            stream_factory=generate_stream,
+            terminal_error_event_factory=terminal_error_event,
+        )
+    except ExecutableRunAccessError as exc:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        await stream_lifecycle.cleanup()
+        raise
+
+    if not created:
+        await stream_lifecycle.cleanup()
 
     return StreamingResponse(
-        generate_stream(),
+        executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
-        background=stream_lifecycle.background_task(lambda: generated_title_candidate),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -946,6 +1132,9 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
     owner_id = _LOCAL_SESSION_OWNERS.get(session_id)
     if owner_id is None:
         owner_id = await get_stream_owner(session_id)
+    active_run = await executable_run_manager.get_active_session_run(session_id)
+    if owner_id is None and active_run is not None:
+        owner_id = active_run.owner_user_id
     if owner_id and owner_id != requester_id:
         raise HTTPException(status_code=403, detail="You do not have permission to cancel this session")
 
@@ -956,7 +1145,20 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
     if stream_active and owner_id is None:
         raise HTTPException(status_code=403, detail="Unable to verify stream ownership for cancellation")
 
-    if not local_event and not stream_active:
+    executable_run_cancel_requested = False
+    if active_run is not None:
+        try:
+            executable_run_cancel_requested = (
+                await executable_run_manager.request_cancel_for_session(
+                    session_id=session_id,
+                    owner_user_id=requester_id,
+                )
+                is not None
+            )
+        except ExecutableRunAccessError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    if not local_event and not stream_active and not executable_run_cancel_requested:
         return {"status": "ok", "message": "No running chat for this session."}
 
     # Signal cancellation via Redis (cross-worker) and local event (same-worker)

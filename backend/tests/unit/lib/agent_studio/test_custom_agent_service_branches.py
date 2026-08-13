@@ -290,6 +290,7 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
         id=uuid.uuid4(),
         custom_prompt="current prompt",
         group_prompt_overrides={" wb ": "keep"},
+        template_source="gene",
         version=4,
     )
 
@@ -303,6 +304,11 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
     target = SimpleNamespace(custom_prompt="old prompt", group_prompt_overrides={"mgi": "m rules"})
     db = _FakeDB([_FakeQuery(first_value=target)])
     monkeypatch.setattr(service, "_get_next_version", lambda _db, _id: 10)
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
+    )
     updated = service.revert_custom_agent_to_version(db, custom_agent=custom_agent, version=3, notes=None)
     assert updated.custom_prompt == "old prompt"
     assert updated.group_prompt_overrides == {"MGI": "m rules"}
@@ -313,6 +319,75 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
     assert snapshot.custom_prompt == "current prompt"
     assert snapshot.mod_prompt_overrides == {"WB": "keep"}
     assert snapshot.notes == "Snapshot before revert to v3"
+
+
+def test_revert_custom_agent_to_version_strips_exact_locked_parent_layers(monkeypatch):
+    custom_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        custom_prompt="current prompt",
+        group_prompt_overrides={"WB": "current rules"},
+        template_source="gene",
+        version=4,
+    )
+    target = SimpleNamespace(
+        custom_prompt="LOCKED CORE\n\nPARENT BASE\n\nKeep historical curator guidance.",
+        group_prompt_overrides={"mgi": "historical rules"},
+    )
+    db = _FakeDB([_FakeQuery(first_value=target)])
+    monkeypatch.setattr(service, "_get_next_version", lambda _db, _id: 10)
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            layers=(
+                SimpleNamespace(kind="core_static", content="LOCKED CORE"),
+                SimpleNamespace(kind="base_prompt", content="PARENT BASE"),
+            )
+        ),
+    )
+
+    updated = service.revert_custom_agent_to_version(
+        db,
+        custom_agent=custom_agent,  # type: ignore[arg-type]
+        version=3,
+    )
+
+    assert updated.custom_prompt == "Keep historical curator guidance."
+    assert updated.group_prompt_overrides == {"MGI": "historical rules"}
+    assert db.added[0].custom_prompt == "current prompt"
+    assert db.added[0].mod_prompt_overrides == {"WB": "current rules"}
+
+
+def test_revert_custom_agent_to_version_rejects_ambiguous_locked_prompt(monkeypatch):
+    custom_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        custom_prompt="current prompt",
+        group_prompt_overrides={"WB": "current rules"},
+        template_source="gene",
+        version=4,
+    )
+    target = SimpleNamespace(
+        custom_prompt="Edited Platform Runtime Contract with historical curator changes.",
+        group_prompt_overrides={"mgi": "historical rules"},
+    )
+    db = _FakeDB([_FakeQuery(first_value=target)])
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
+    )
+
+    with pytest.raises(ValueError, match="locked/core prompt markers"):
+        service.revert_custom_agent_to_version(
+            db,
+            custom_agent=custom_agent,  # type: ignore[arg-type]
+            version=3,
+        )
+
+    assert custom_agent.custom_prompt == "current prompt"
+    assert custom_agent.group_prompt_overrides == {"WB": "current rules"}
+    assert custom_agent.version == 4
+    assert db.added == []
 
 
 def test_custom_agent_runtime_info_and_to_dict(monkeypatch):

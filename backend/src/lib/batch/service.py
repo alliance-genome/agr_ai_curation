@@ -1,16 +1,25 @@
 """Batch processing service layer."""
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.pdf_document import PDFDocument
+from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+from src.lib.curation_workspace.models import (
+    CurationExtractionResultRecord,
+    CurationReviewSession,
+)
 from src.schemas.batch import BatchResponse, BatchDocumentResponse
+from .status import (
+    require_batch_document_status_transition,
+    require_batch_status_transition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +148,7 @@ class BatchService:
         """Update batch status and timestamps."""
         batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
         if batch:
+            require_batch_status_transition(batch.status, status)
             batch.status = status
             if started_at:
                 batch.started_at = started_at
@@ -152,15 +162,25 @@ class BatchService:
         batch_doc_id: UUID,
         status: BatchDocumentStatus,
         result_file_path: Optional[str] = None,
+        result_files: Optional[List[dict]] = None,
+        output_status: Optional[str] = None,
+        output_branches: Optional[List[dict]] = None,
         error_message: Optional[str] = None,
         processing_time_ms: Optional[int] = None,
     ) -> None:
         """Update a batch document's status and results."""
         batch_doc = self.db.query(BatchDocument).filter(BatchDocument.id == batch_doc_id).first()
         if batch_doc:
+            require_batch_document_status_transition(batch_doc.status, status)
             batch_doc.status = status
             if result_file_path:
                 batch_doc.result_file_path = result_file_path
+            if result_files is not None:
+                batch_doc.result_files = result_files or None
+            if output_status is not None:
+                batch_doc.output_status = output_status
+            if output_branches is not None:
+                batch_doc.output_branches = output_branches or None
             if error_message:
                 batch_doc.error_message = error_message
             if processing_time_ms is not None:
@@ -169,24 +189,213 @@ class BatchService:
                 batch_doc.processed_at = datetime.now(timezone.utc)
             self.db.commit()
 
-    def increment_batch_completed(self, batch_id: UUID) -> None:
-        """Increment the completed document count."""
-        batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
-        if batch:
-            batch.completed_documents += 1
-            self.db.commit()
-
-    def increment_batch_failed(self, batch_id: UUID) -> None:
-        """Increment the failed document count."""
-        batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
-        if batch:
-            batch.failed_documents += 1
-            self.db.commit()
+    def recompute_batch_counters(self, batch: Batch) -> None:
+        """Derive progress counters from durable terminal document rows."""
+        self.db.flush()
+        total, completed, failed = self.db.execute(
+            select(
+                func.count(BatchDocument.id),
+                func.count(BatchDocument.id).filter(
+                    BatchDocument.status == BatchDocumentStatus.COMPLETED
+                ),
+                func.count(BatchDocument.id).filter(
+                    BatchDocument.status == BatchDocumentStatus.FAILED
+                ),
+            ).where(BatchDocument.batch_id == batch.id)
+        ).one()
+        batch.total_documents = total
+        batch.completed_documents = completed
+        batch.failed_documents = failed
 
     def is_batch_cancelled(self, batch_id: UUID) -> bool:
         """Check if batch has been cancelled."""
         batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
         return batch is not None and batch.status == BatchStatus.CANCELLED
+
+    def claim_recoverable_batch(
+        self,
+        batch_id: UUID,
+        lease_owner: UUID,
+        lease_seconds: int,
+    ) -> Optional[Batch]:
+        """Atomically claim pending or stale running work for one worker.
+
+        A stale ``PROCESSING`` document is failed rather than re-executed because
+        its external flow side effects may already have occurred. Terminal rows
+        and their artifact/review references are never modified.
+        """
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=lease_seconds)
+        claimed_id = self.db.execute(
+            update(Batch)
+            .where(
+                Batch.id == batch_id,
+                or_(
+                    Batch.status == BatchStatus.PENDING,
+                    (
+                        (Batch.status == BatchStatus.RUNNING)
+                        & or_(
+                            Batch.lease_expires_at.is_(None),
+                            Batch.lease_expires_at <= now,
+                        )
+                    ),
+                ),
+            )
+            .values(
+                status=BatchStatus.RUNNING,
+                started_at=func.coalesce(Batch.started_at, now),
+                lease_owner=lease_owner,
+                lease_expires_at=expires_at,
+                lease_heartbeat_at=now,
+            )
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
+
+        if claimed_id is None:
+            self.db.rollback()
+            return None
+
+        batch = self.db.scalars(
+            select(Batch)
+            .where(Batch.id == claimed_id)
+            .with_for_update()
+            .options(selectinload(Batch.documents))
+        ).first()
+        assert batch is not None
+
+        interrupted_at = datetime.now(timezone.utc)
+        for document in batch.documents:
+            if document.status == BatchDocumentStatus.PROCESSING:
+                document.status = BatchDocumentStatus.FAILED
+                document.error_message = (
+                    "Worker lease expired during processing; document was not re-run"
+                )
+                document.processed_at = interrupted_at
+        self.recompute_batch_counters(batch)
+        self.db.commit()
+        return self.db.scalars(
+            select(Batch)
+            .where(Batch.id == claimed_id)
+            .options(selectinload(Batch.documents))
+        ).one()
+
+    def heartbeat_batch_lease(
+        self,
+        batch_id: UUID,
+        lease_owner: UUID,
+        lease_seconds: int,
+    ) -> bool:
+        """Extend a lease only while the caller remains the exclusive owner."""
+        now = datetime.now(timezone.utc)
+        renewed_id = self.db.execute(
+            update(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.status == BatchStatus.RUNNING,
+                Batch.lease_owner == lease_owner,
+                Batch.lease_expires_at > now,
+            )
+            .values(
+                lease_heartbeat_at=now,
+                lease_expires_at=now + timedelta(seconds=lease_seconds),
+            )
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
+        self.db.commit()
+        return renewed_id is not None
+
+    def list_recoverable_batch_ids(self) -> list[UUID]:
+        """Return durable pending and expired-running work for startup dispatch."""
+        now = datetime.now(timezone.utc)
+        return list(
+            self.db.scalars(
+                select(Batch.id)
+                .where(
+                    or_(
+                        Batch.status == BatchStatus.PENDING,
+                        (
+                            (Batch.status == BatchStatus.RUNNING)
+                            & or_(
+                                Batch.lease_expires_at.is_(None),
+                                Batch.lease_expires_at <= now,
+                            )
+                        ),
+                    )
+                )
+                .order_by(Batch.created_at)
+            ).all()
+        )
+
+    def cancel_running_batch_for_lease(
+        self,
+        batch_id: UUID,
+        lease_owner: UUID,
+    ) -> bool:
+        """Cancel a running batch only while the caller owns its live lease."""
+        now = datetime.now(timezone.utc)
+        cancelled_id = self.db.execute(
+            update(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.status == BatchStatus.RUNNING,
+                Batch.lease_owner == lease_owner,
+                Batch.lease_expires_at > now,
+            )
+            .values(
+                status=BatchStatus.CANCELLED,
+                completed_at=now,
+                lease_owner=None,
+                lease_expires_at=None,
+                lease_heartbeat_at=None,
+            )
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
+        self.db.commit()
+        return cancelled_id is not None
+
+    def complete_running_batch(self, batch_id: UUID, lease_owner: UUID) -> bool:
+        """Complete a fully terminal batch only for its current lease owner."""
+        now = datetime.now(timezone.utc)
+        batch = self.db.scalars(
+            select(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.status == BatchStatus.RUNNING,
+                Batch.lease_owner == lease_owner,
+                Batch.lease_expires_at > now,
+            )
+            .with_for_update()
+        ).first()
+        if batch is None:
+            self.db.rollback()
+            return False
+        self.recompute_batch_counters(batch)
+        if batch.completed_documents + batch.failed_documents != batch.total_documents:
+            self.db.commit()
+            return False
+        completed_id = self.db.execute(
+            update(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.status == BatchStatus.RUNNING,
+                Batch.lease_owner == lease_owner,
+                Batch.lease_expires_at > now,
+            )
+            .values(
+                status=BatchStatus.COMPLETED,
+                completed_at=now,
+                lease_owner=None,
+                lease_expires_at=None,
+                lease_heartbeat_at=None,
+            )
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
+        self.db.commit()
+        return completed_id is not None
 
     def cancel_batch(self, batch_id: UUID, user_id: int) -> Optional[Batch]:
         """Cancel a batch if it's in a cancellable state.
@@ -201,23 +410,38 @@ class BatchService:
         Raises:
             ValueError: If batch is not in a cancellable state
         """
-        batch = self.get_batch(batch_id, user_id)
-        if not batch:
-            return None
+        now = datetime.now(timezone.utc)
+        cancelled_id = self.db.execute(
+            update(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.user_id == user_id,
+                Batch.status.in_((BatchStatus.PENDING, BatchStatus.RUNNING)),
+            )
+            .values(
+                status=BatchStatus.CANCELLED,
+                completed_at=now,
+                lease_owner=None,
+                lease_expires_at=None,
+                lease_heartbeat_at=None,
+            )
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
 
-        # Check if batch can be cancelled
-        if batch.status not in (BatchStatus.PENDING, BatchStatus.RUNNING):
+        if cancelled_id is None:
+            batch = self.get_batch(batch_id, user_id)
+            if not batch:
+                self.db.rollback()
+                return None
+            self.db.rollback()
             raise ValueError(
                 f"Cannot cancel batch with status '{batch.status.value}'. "
                 "Only PENDING or RUNNING batches can be cancelled."
             )
 
-        logger.info("Cancelling batch: batch_id=%s, current_status=%s", batch_id, batch.status)
-
-        batch.status = BatchStatus.CANCELLED
-        batch.completed_at = datetime.now(timezone.utc)
         self.db.commit()
-        self.db.refresh(batch)
+        batch = self.get_batch(cancelled_id, user_id)
 
         logger.info("Batch cancelled: batch_id=%s", batch_id)
         return batch
@@ -268,6 +492,10 @@ class BatchService:
         # Build document responses with titles
         document_responses = []
         for d in batch.documents:
+            handoff_metadata = self.get_document_handoff_metadata(batch, d)
+            stored_result_files = getattr(d, "result_files", None)
+            stored_output_status = getattr(d, "output_status", None)
+            stored_output_branches = getattr(d, "output_branches", None)
             doc_dict = {
                 "id": d.id,
                 "document_id": d.document_id,
@@ -275,7 +503,19 @@ class BatchService:
                 "position": d.position,
                 "status": d.status,
                 "result_file_path": d.result_file_path,
+                "result_files": (
+                    stored_result_files if isinstance(stored_result_files, list) else []
+                ),
+                "output_status": (
+                    stored_output_status
+                    if stored_output_status in {"complete", "partial", "none", "failed"}
+                    else None
+                ),
+                "output_branches": (
+                    stored_output_branches if isinstance(stored_output_branches, list) else []
+                ),
                 "review_session_ids": getattr(d, "review_session_ids", None),
+                **handoff_metadata,
                 "error_message": d.error_message,
                 "processing_time_ms": d.processing_time_ms,
                 "processed_at": d.processed_at,
@@ -295,3 +535,90 @@ class BatchService:
             completed_at=batch.completed_at,
             documents=document_responses,
         )
+
+    def get_document_handoff_metadata(
+        self,
+        batch: Batch,
+        document: BatchDocument,
+    ) -> dict[str, object]:
+        """Return authoritative curation identities for one persisted batch result."""
+
+        if document.status != BatchDocumentStatus.COMPLETED:
+            return {
+                "adapter_keys": [],
+                "extraction_result_ids": [],
+                "extraction_result_refs": [],
+                "flow_run_id": str(batch.id),
+                "origin_session_id": None,
+            }
+
+        review_session_ids = list(document.review_session_ids or [])
+        try:
+            session_ids = [UUID(session_id) for session_id in review_session_ids]
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError(
+                f"Batch document {document.id} has an invalid authoritative review-session ID"
+            ) from exc
+
+        sessions_by_id: dict[UUID, CurationReviewSession] = {}
+        if session_ids:
+            sessions_by_id = {
+                session.id: session
+                for session in self.db.scalars(
+                    select(CurationReviewSession).where(CurationReviewSession.id.in_(session_ids))
+                ).all()
+            }
+            missing_session_ids = [
+                str(session_id) for session_id in session_ids if session_id not in sessions_by_id
+            ]
+            if missing_session_ids:
+                raise ValueError(
+                    f"Batch document {document.id} references missing authoritative review "
+                    f"sessions: {', '.join(missing_session_ids)}"
+                )
+
+        extraction_results = list(
+            self.db.scalars(
+                select(CurationExtractionResultRecord)
+                .where(
+                    CurationExtractionResultRecord.document_id == document.document_id,
+                    CurationExtractionResultRecord.flow_run_id == str(batch.id),
+                    CurationExtractionResultRecord.agent_key != CURATION_PREP_AGENT_ID,
+                )
+                .order_by(
+                    CurationExtractionResultRecord.created_at.asc(),
+                    CurationExtractionResultRecord.id.asc(),
+                )
+            ).all()
+        )
+        extraction_result_refs = [
+            {
+                "result_ref": f"extraction-result:{record.id}",
+                "extraction_result_id": str(record.id),
+                "adapter_key": record.adapter_key,
+                "agent_key": record.agent_key,
+                "candidate_count": record.candidate_count,
+                "trace_id": record.trace_id,
+            }
+            for record in extraction_results
+        ]
+
+        return {
+            "adapter_keys": [
+                sessions_by_id[session_id].adapter_key
+                for session_id in session_ids
+            ],
+            "extraction_result_ids": [
+                ref["extraction_result_id"] for ref in extraction_result_refs
+            ],
+            "extraction_result_refs": extraction_result_refs,
+            "flow_run_id": str(batch.id),
+            "origin_session_id": next(
+                (
+                    record.origin_session_id
+                    for record in extraction_results
+                    if record.origin_session_id
+                ),
+                None,
+            ),
+        }

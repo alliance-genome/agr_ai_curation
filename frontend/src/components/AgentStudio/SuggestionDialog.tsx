@@ -149,6 +149,8 @@ function SuggestionDialog({
       title="Submit Prompt Suggestion"
       titleIcon={<LightbulbIcon color="primary" />}
       width="md"
+      moveControlLabel="Move suggestion popup"
+      closeControlLabel="Close suggestion popup"
       actions={(
         <>
           <Button onClick={handleClose} disabled={isSubmitting}>

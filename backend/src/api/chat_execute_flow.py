@@ -21,6 +21,14 @@ from .chat_common import (
     _stream_event_payload,
     _stream_event_sse,
 )
+from src.lib.executable_runs import (
+    ExecutableRunAccessError,
+    ExecutableRunConflictError,
+    executable_run_manager,
+)
+from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.observability.runtime import report_runtime_exception
+from src.lib.flows.outcome import FlowRunOutcome, FlowRunOutcomeNotDurableError
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -82,6 +90,41 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
         seen.add(value)
         ordered.append(value)
     return ordered
+
+
+def _file_output_identity(file_output: Dict[str, Any]) -> tuple[str, str] | None:
+    """Return a stable identity for one surfaced file output, when available."""
+
+    file_id = str(file_output.get("file_id") or "").strip()
+    if file_id:
+        return ("file_id", file_id)
+    filename = str(file_output.get("filename") or "").strip()
+    file_format = str(file_output.get("format") or file_output.get("file_type") or "").strip()
+    if filename and file_format:
+        return ("filename_format", f"{file_format}:{filename}")
+    return None
+
+
+def _append_deduped_file_output(
+    file_outputs: List[Dict[str, Any]],
+    file_output: Dict[str, Any],
+) -> bool:
+    """Append or replace a file output by identity, keeping the latest details.
+
+    Returns True when the file output is new and should be surfaced, False when
+    it replaced a previously surfaced identity.
+    """
+
+    identity = _file_output_identity(file_output)
+    if identity is None:
+        file_outputs.append(file_output)
+        return True
+    for index, existing in enumerate(file_outputs):
+        if _file_output_identity(existing) == identity:
+            file_outputs[index] = file_output
+            return False
+    file_outputs.append(file_output)
+    return True
 
 
 def _flow_ref_lines(
@@ -298,6 +341,17 @@ def _build_execute_flow_transcript_row_from_event(
             created_at=created_at,
         )
 
+    if event_type == "FLOW_ERROR":
+        failure_message = details.get("message") or details.get("error")
+        content = str(failure_message or "Flow failure diagnostic missing message metadata.")
+        return ExecuteFlowTranscriptRow(
+            content=content,
+            message_type="flow_diagnostic",
+            payload_json=dict(event_payload),
+            trace_id=trace_id,
+            created_at=created_at,
+        )
+
     return None
 
 
@@ -383,6 +437,19 @@ def _build_execute_flow_turn_replay(
     if isinstance(run_started_event, dict) and isinstance(run_started_event.get("type"), str):
         replay_events.append(dict(run_started_event))
 
+    raw_terminal_events = summary_payload.get(
+        _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY
+    ) or []
+    terminal_events = (
+        [
+            dict(event)
+            for event in raw_terminal_events
+            if isinstance(event, dict) and isinstance(event.get("type"), str)
+        ]
+        if isinstance(raw_terminal_events, list)
+        else []
+    )
+
     for message in messages:
         if message.message_id == summary_message.message_id:
             continue
@@ -391,15 +458,14 @@ def _build_execute_flow_turn_replay(
         event_type = message.payload_json.get("type")
         if not isinstance(event_type, str) or not event_type.strip():
             continue
+        # FILE_READY events also have first-class ``file_download`` history
+        # rows. The summary retains the same payloads so terminal output order
+        # can be replayed exactly; do not publish those durable copies twice.
+        if any(message.payload_json == event for event in terminal_events):
+            continue
         replay_events.append(dict(message.payload_json))
 
-    terminal_events = summary_payload.get(_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY) or []
-    if isinstance(terminal_events, list):
-        replay_events.extend(
-            dict(event)
-            for event in terminal_events
-            if isinstance(event, dict) and isinstance(event.get("type"), str)
-        )
+    replay_events.extend(terminal_events)
 
     return replay_events, assistant_message
 
@@ -703,12 +769,36 @@ async def execute_flow_endpoint(
         extra={"session_id": request.session_id, "user_id": user_id, "turn_id": request.turn_id},
     )
 
+    active_executable_run = await executable_run_manager.get_active_session_run(
+        request.session_id,
+    )
+    if active_executable_run is not None:
+        if active_executable_run.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+        expected_run_id = (
+            f"curation_flow_run:{request.session_id}:{request.turn_id}"
+            if request.turn_id
+            else None
+        )
+        if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
+            return StreamingResponse(
+                executable_run_manager.observe(active_executable_run),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        raise HTTPException(status_code=409, detail="Session is already active")
+
+    generated_title_candidate: str | None = None
     stream_lifecycle = await _claim_active_stream_lifecycle(
         session_id=request.session_id,
         user_id=user_id,
     )
-    cancel_event = stream_lifecycle.cancel_event
-    generated_title_candidate: str | None = None
 
     try:
         active_document_id, _ = _resolve_session_create_active_document(
@@ -729,10 +819,10 @@ async def execute_flow_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
-        await stream_lifecycle.cleanup(request.session_id)
+        await stream_lifecycle.cleanup()
         raise
     except ValueError as exc:
-        await stream_lifecycle.cleanup(request.session_id)
+        await stream_lifecycle.cleanup()
         _rollback_and_raise(
             db,
             status_code=400,
@@ -741,16 +831,17 @@ async def execute_flow_endpoint(
             log_message=f"Failed to prepare execute-flow request for session {request.session_id}",
             level=logging.WARNING,
         )
+        raise AssertionError("unreachable")
     except Exception as exc:
-        logger.error(
-            "Failed to persist execute-flow request for session %s",
-            request.session_id,
-            extra={"session_id": request.session_id, "user_id": user_id, "turn_id": request.turn_id},
-            exc_info=True,
-        )
+        await stream_lifecycle.cleanup()
         db.rollback()
-        await stream_lifecycle.cleanup(request.session_id)
-        raise HTTPException(status_code=500, detail="Failed to start flow execution") from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to start flow execution",
+            log_message=f"Failed to persist execute-flow request for session {request.session_id}",
+            exc=exc,
+        )
 
     if prepared_turn.replay_events:
         if prepared_turn.replay_assistant_message is not None:
@@ -758,6 +849,7 @@ async def execute_flow_endpoint(
                 user_message=prepared_turn.effective_user_message,
                 assistant_message=prepared_turn.replay_assistant_message,
             )
+        await stream_lifecycle.finalize(generated_title_candidate)
 
         async def replay_stream():
             for event_payload in prepared_turn.replay_events:
@@ -766,7 +858,6 @@ async def execute_flow_endpoint(
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=stream_lifecycle.background_task(lambda: generated_title_candidate),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -779,11 +870,9 @@ async def execute_flow_endpoint(
         nonlocal generated_title_candidate
         current_session_id = request.session_id
         current_turn_id = prepared_turn.turn_id
+        cancel_event = stream_lifecycle.cancel_event
         trace_id = None
-        flow_status: Optional[str] = None
-        flow_failure_reason: Optional[str] = None
-        run_finished_response = ""
-        chat_output_response = ""
+        outcome = FlowRunOutcome()
         agents_used: List[str] = []
         extraction_result_refs: List[Dict[str, Any]] = []
         review_session_ids: List[str] = []
@@ -792,9 +881,6 @@ async def execute_flow_endpoint(
         file_outputs: List[Dict[str, Any]] = []
         transcript_rows: List[ExecuteFlowTranscriptRow] = []
         run_started_event: Optional[Dict[str, Any]] = None
-        chat_output_ready_event: Optional[Dict[str, Any]] = None
-        run_error_event: Optional[Dict[str, Any]] = None
-        buffered_flow_finished_event: Optional[Dict[str, Any]] = None
 
         try:
             async for event in execute_flow(
@@ -854,13 +940,10 @@ async def execute_flow_endpoint(
                     )
 
                 if event_type == "RUN_FINISHED":
-                    run_finished_response = str(event_data.get("response") or "")
                     agents_used.extend([
                         str(agent_name) for agent_name in (event_data.get("agents_used") or [])
                         if agent_name
                     ])
-                elif event_type == "CHAT_OUTPUT_READY":
-                    chat_output_response = str(event_details.get("output") or event_data.get("output") or "")
                 elif event_type == "CREW_START":
                     crew_name = event_details.get("crewDisplayName") or event_details.get("crewName")
                     if crew_name:
@@ -868,10 +951,9 @@ async def execute_flow_endpoint(
                 elif event_type == "DOMAIN_WARNING":
                     domain_warning_count += 1
                 elif event_type == "FILE_READY":
-                    file_outputs.append(dict(event_details))
+                    if not _append_deduped_file_output(file_outputs, dict(event_details)):
+                        continue
                 elif event_type == "FLOW_FINISHED":
-                    flow_status = event_data.get("status")
-                    flow_failure_reason = event_data.get("failure_reason")
                     extraction_result_refs = [
                         dict(ref)
                         for ref in (event_data.get("extraction_result_refs") or [])
@@ -920,8 +1002,6 @@ async def execute_flow_endpoint(
 
                 if event_type == "RUN_STARTED":
                     run_started_event = dict(flat_event)
-                elif event_type == "CHAT_OUTPUT_READY":
-                    chat_output_ready_event = dict(flat_event)
                 elif event_type == "RUN_ERROR":
                     raw_message = str(flat_event.get("message") or "").strip()
                     if raw_message:
@@ -949,79 +1029,103 @@ async def execute_flow_endpoint(
                     details = flat_event.get("details")
                     if isinstance(details, dict) and "error" in details:
                         flat_event["details"] = {**details, "error": "Flow execution failed unexpectedly."}
-                    run_error_event = dict(flat_event)
-                elif event_type == "FLOW_FINISHED":
-                    buffered_flow_finished_event = dict(flat_event)
+
+                outcome.observe(flat_event)
+
+                if event_type in {"RUN_FINISHED", "CHAT_OUTPUT_READY", "FILE_READY", "RUN_ERROR", "FLOW_FINISHED"}:
+                    continue
 
                 transcript_row = _build_execute_flow_transcript_row_from_event(flat_event)
                 if transcript_row is not None:
                     transcript_rows.append(transcript_row)
 
-                if event_type == "FLOW_FINISHED":
-                    continue
-
                 yield _stream_event_sse(flat_event)
 
-            if flow_status:
+            if outcome.terminal:
+                terminal_events = outcome.events_for_persistence()
+                terminal_transcript_rows = [
+                    row
+                    for event_payload in terminal_events
+                    if (row := _build_execute_flow_transcript_row_from_event(event_payload))
+                    is not None
+                ]
                 history_assistant_message = _build_flow_memory_assistant_message(
                     flow_name=flow.name,
                     flow_id=str(flow.id),
                     flow_run_id=str(
-                        (buffered_flow_finished_event or {}).get("flow_run_id")
+                        next(
+                            (
+                                event_payload.get("flow_run_id")
+                                for event_payload in reversed(terminal_events)
+                                if event_payload.get("type") == "FLOW_FINISHED"
+                            ),
+                            None,
+                        )
                         or prepared_turn.flow_run_id
                         or ""
                     ).strip() or None,
                     session_id=current_session_id,
                     document_id=str(request.document_id) if request.document_id else None,
-                    status=flow_status,
+                    status=outcome.status,
                     trace_id=trace_id,
-                    final_user_output=chat_output_response or run_finished_response,
+                    final_user_output=outcome.final_user_visible_text,
                     agents_used=agents_used,
                     extraction_result_refs=extraction_result_refs,
                     review_session_ids=review_session_ids,
                     adapter_keys=adapter_keys,
                     domain_warning_count=domain_warning_count,
-                    file_outputs=file_outputs,
-                    failure_reason=flow_failure_reason,
+                    file_outputs=file_outputs if outcome.status == "completed" else [],
+                    failure_reason=outcome.failure_reason,
                 )
                 summary_row = _build_execute_flow_summary_row(
                     flow_id=str(flow.id),
                     flow_name=flow.name,
                     flow_run_id=str(
-                        (buffered_flow_finished_event or {}).get("flow_run_id") or ""
+                        next(
+                            (
+                                event_payload.get("flow_run_id")
+                                for event_payload in reversed(terminal_events)
+                                if event_payload.get("type") == "FLOW_FINISHED"
+                            ),
+                            None,
+                        )
+                        or ""
                     ).strip() or None,
                     session_id=current_session_id,
                     document_id=str(request.document_id) if request.document_id else None,
-                    status=flow_status,
+                    status=outcome.status,
                     trace_id=trace_id,
-                    final_user_output=chat_output_response or run_finished_response,
-                    failure_reason=flow_failure_reason,
+                    final_user_output=outcome.final_user_visible_text,
+                    failure_reason=outcome.failure_reason,
                     assistant_message=history_assistant_message,
                     run_started_event=run_started_event,
-                    terminal_events=[
-                        event_payload
-                        for event_payload in [
-                            chat_output_ready_event,
-                            run_error_event,
-                            buffered_flow_finished_event,
-                        ]
-                        if event_payload is not None
-                    ],
+                    terminal_events=terminal_events,
                 )
                 _persist_completed_execute_flow_turn(
                     session_id=current_session_id,
                     user_id=user_id,
                     turn_id=current_turn_id,
                     user_message=prepared_turn.effective_user_message,
-                    transcript_rows=[*transcript_rows, summary_row],
+                    transcript_rows=[*transcript_rows, *terminal_transcript_rows, summary_row],
+                )
+                outcome.mark_persisted(
+                    transcript=True,
+                    extraction_result_refs=extraction_result_refs,
+                )
+                authoritative_run_status = (
+                    "completed" if outcome.status == "completed" else "failed"
+                )
+                await executable_run_manager.set_outcome_status(
+                    run_id,
+                    authoritative_run_status,
                 )
                 generated_title_candidate = _generate_title_from_turn(
                     user_message=prepared_turn.effective_user_message,
-                    assistant_message=chat_output_response or run_finished_response or history_assistant_message,
+                    assistant_message=outcome.final_user_visible_text or history_assistant_message,
                 )
 
-            if buffered_flow_finished_event is not None:
-                yield _stream_event_sse(buffered_flow_finished_event)
+                for terminal_event in outcome.publishable_terminal_events():
+                    yield _stream_event_sse(terminal_event)
 
         except asyncio.CancelledError:
             logger.warning(
@@ -1063,7 +1167,20 @@ async def execute_flow_endpoint(
                 if isinstance(exc, ValueError)
                 else "Flow execution failed unexpectedly."
             )
-            logger.error(
+            report_runtime_exception(
+                exc,
+                component="execute_flow_stream",
+                operation="event_generator_failed",
+                context={
+                    "session_id": current_session_id,
+                    "turn_id": current_turn_id,
+                    "trace_id": trace_id,
+                    "flow_id": str(flow.id),
+                    "flow_run_id": prepared_turn.flow_run_id,
+                    "document_id": str(request.document_id) if request.document_id else None,
+                },
+            )
+            logger.warning(
                 "Flow execution error: %s",
                 exc,
                 extra={
@@ -1074,36 +1191,148 @@ async def execute_flow_endpoint(
                 },
                 exc_info=True,
             )
-            yield _stream_event_sse(
-                _stream_event_payload(
-                    "SUPERVISOR_ERROR",
-                    session_id=current_session_id,
-                    turn_id=current_turn_id,
-                    trace_id=trace_id,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    details=_stream_error_details(
-                        error="Flow execution failed unexpectedly.",
-                        exc=exc,
-                    ),
-                )
+            supervisor_error_event = _stream_event_payload(
+                "SUPERVISOR_ERROR",
+                session_id=current_session_id,
+                turn_id=current_turn_id,
+                trace_id=trace_id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                details=_stream_error_details(
+                    error="Flow execution failed unexpectedly.",
+                    exc=exc,
+                ),
             )
-            yield _stream_event_sse(
-                _stream_event_payload(
-                    "RUN_ERROR",
-                    session_id=current_session_id,
-                    turn_id=current_turn_id,
-                    trace_id=trace_id,
-                    message=run_error_message,
-                    error_type=type(exc).__name__,
-                )
+            run_error_event = _stream_event_payload(
+                "RUN_ERROR",
+                session_id=current_session_id,
+                turn_id=current_turn_id,
+                trace_id=trace_id,
+                message=run_error_message,
+                error_type=type(exc).__name__,
             )
+            outcome.replace_with_persistence_failure(
+                "Flow execution failed before its terminal outcome was durable.",
+                terminal_events=[supervisor_error_event, run_error_event],
+            )
+            await executable_run_manager.set_outcome_status(run_id, "failed")
+
+            failure_terminal_events = outcome.events_for_persistence()
+            failure_assistant_message = _build_flow_memory_assistant_message(
+                flow_name=flow.name,
+                flow_id=str(flow.id),
+                flow_run_id=prepared_turn.flow_run_id,
+                session_id=current_session_id,
+                document_id=str(request.document_id) if request.document_id else None,
+                status=outcome.status,
+                trace_id=trace_id,
+                final_user_output=outcome.final_user_visible_text,
+                agents_used=agents_used,
+                extraction_result_refs=extraction_result_refs,
+                review_session_ids=review_session_ids,
+                adapter_keys=adapter_keys,
+                domain_warning_count=domain_warning_count,
+                file_outputs=file_outputs if outcome.status == "completed" else [],
+                failure_reason=outcome.failure_reason,
+            )
+            failure_summary_row = _build_execute_flow_summary_row(
+                flow_id=str(flow.id),
+                flow_name=flow.name,
+                flow_run_id=prepared_turn.flow_run_id,
+                session_id=current_session_id,
+                document_id=str(request.document_id) if request.document_id else None,
+                status=outcome.status,
+                trace_id=trace_id,
+                final_user_output=outcome.final_user_visible_text,
+                failure_reason=outcome.failure_reason,
+                assistant_message=failure_assistant_message,
+                run_started_event=run_started_event,
+                terminal_events=failure_terminal_events,
+            )
+            try:
+                _persist_completed_execute_flow_turn(
+                    session_id=current_session_id,
+                    user_id=user_id,
+                    turn_id=current_turn_id,
+                    user_message=prepared_turn.effective_user_message,
+                    transcript_rows=[*transcript_rows, failure_summary_row],
+                )
+            except Exception as recovery_exc:
+                report_runtime_exception(
+                    recovery_exc,
+                    component="execute_flow_stream",
+                    operation="failure_outcome_persistence_failed",
+                    context={
+                        "session_id": current_session_id,
+                        "turn_id": current_turn_id,
+                        "trace_id": trace_id,
+                        "flow_id": str(flow.id),
+                        "flow_run_id": prepared_turn.flow_run_id,
+                    },
+                )
+                logger.error(
+                    "Failed to persist recoverable execute-flow failure outcome",
+                    extra={
+                        "session_id": current_session_id,
+                        "user_id": user_id,
+                        "trace_id": trace_id,
+                        "turn_id": current_turn_id,
+                    },
+                    exc_info=True,
+                )
+                raise FlowRunOutcomeNotDurableError(
+                    "Flow terminal outcome could not be persisted."
+                ) from recovery_exc
+
+            outcome.mark_persisted(transcript=True, recovered_failure=True)
+            for terminal_event in outcome.publishable_terminal_events():
+                yield _stream_event_sse(terminal_event)
         finally:
-            await stream_lifecycle.cleanup(current_session_id)
+            await stream_lifecycle.finalize(generated_title_candidate)
+
+    run_id = f"curation_flow_run:{request.session_id}:{prepared_turn.turn_id}"
+
+    def terminal_error_event(exc: Exception) -> str | None:
+        if isinstance(exc, FlowRunOutcomeNotDurableError):
+            return None
+        detail = getattr(exc, "detail", None)
+        message = str(detail or exc or "Flow execution failed to start.")
+        return _stream_event_sse(
+            _stream_event_payload(
+                "RUN_ERROR",
+                session_id=request.session_id,
+                turn_id=prepared_turn.turn_id,
+                message=message,
+                error_type=type(exc).__name__,
+            )
+        )
+
+    try:
+        executable_run, created = await executable_run_manager.get_or_start_stream(
+            run_id=run_id,
+            kind="curation_flow_run",
+            owner_user_id=user_id,
+            session_id=request.session_id,
+            turn_id=prepared_turn.turn_id,
+            flow_run_id=prepared_turn.flow_run_id,
+            stream_factory=event_generator,
+            terminal_error_event_factory=terminal_error_event,
+        )
+    except ExecutableRunAccessError as exc:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        await stream_lifecycle.cleanup()
+        raise
+
+    if not created:
+        await stream_lifecycle.cleanup()
 
     return StreamingResponse(
-        event_generator(),
+        executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
-        background=stream_lifecycle.background_task(lambda: generated_title_candidate),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

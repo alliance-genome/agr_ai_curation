@@ -1,6 +1,6 @@
 """Pydantic schemas for batch processing API."""
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +16,41 @@ class BatchCreateRequest(BaseModel):
     document_ids: List[UUID] = Field(..., min_length=1, max_length=MAX_BATCH_DOCUMENTS)
 
 
+class BatchResultFile(BaseModel):
+    """One formatter artifact produced for a batch document."""
+
+    file_id: Optional[str] = None
+    filename: Optional[str] = None
+    download_url: str
+    format: Optional[str] = None
+    formatter_node_id: Optional[str] = None
+    source_node_id: Optional[str] = None
+    source_node_ids: List[str] = Field(default_factory=list)
+    formatter_label: Optional[str] = None
+    source_label: Optional[str] = None
+    source_labels: List[str] = Field(default_factory=list)
+    source_extraction_result_ids: List[str] = Field(default_factory=list)
+    source_keys: List[str] = Field(default_factory=list)
+    source_envelope_ids: List[str] = Field(default_factory=list)
+
+
+class BatchOutputBranch(BaseModel):
+    """Durable outcome for one configured output attachment."""
+
+    edge_id: Optional[str] = None
+    sources: List[Dict[str, str]] = Field(default_factory=list)
+    source_node_id: str
+    source_node_ids: List[str] = Field(default_factory=list)
+    output_node_id: str
+    agent_id: Optional[str] = None
+    formatter_label: Optional[str] = None
+    source_label: Optional[str] = None
+    source_labels: List[str] = Field(default_factory=list)
+    status: Literal["completed", "missing"]
+    output: Optional[dict[str, Any]] = None
+    failure_reason: Optional[str] = None
+
+
 class BatchDocumentResponse(BaseModel):
     """Per-document status in a batch."""
     model_config = ConfigDict(from_attributes=True)
@@ -26,7 +61,15 @@ class BatchDocumentResponse(BaseModel):
     position: int
     status: BatchDocumentStatus
     result_file_path: Optional[str] = None
+    result_files: List[BatchResultFile] = Field(default_factory=list)
+    output_status: Optional[Literal["complete", "partial", "none", "failed"]] = None
+    output_branches: List[BatchOutputBranch] = Field(default_factory=list)
     review_session_ids: Optional[List[str]] = None
+    adapter_keys: List[str] = Field(default_factory=list)
+    extraction_result_ids: List[str] = Field(default_factory=list)
+    extraction_result_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    flow_run_id: Optional[str] = None
+    origin_session_id: Optional[str] = None
     error_message: Optional[str] = None
     processing_time_ms: Optional[int] = None
     processed_at: Optional[datetime] = None

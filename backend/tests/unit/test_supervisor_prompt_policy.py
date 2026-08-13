@@ -50,6 +50,7 @@ def test_config_supervisor_prompt_keeps_alliance_specific_handoffs():
     assert "Alliance Chemical Database" in content
     assert "primary_external_id" in content
     assert "validator-materialized scalar fields" in content
+    assert "runtime formatter bundle contains extraction results from the active session" in content
     assert "normalized IDs" not in content
     assert "Gene assertions/normalized IDs" not in content
     assert "evidence and normalization" not in content

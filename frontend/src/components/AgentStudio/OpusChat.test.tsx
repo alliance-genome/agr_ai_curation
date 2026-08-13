@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 
-import OpusChat from './OpusChat'
+import OpusChat, { resetSharedOpusChatStateForTests } from './OpusChat'
 import type { ChatContext } from '@/types/promptExplorer'
 
 const serviceMocks = vi.hoisted(() => ({
@@ -14,6 +14,7 @@ vi.mock('@/services/agentStudioService', () => serviceMocks)
 
 describe('OpusChat', () => {
   beforeEach(() => {
+    resetSharedOpusChatStateForTests()
     vi.clearAllMocks()
     serviceMocks.createAgentStudioSession.mockResolvedValue({
       session_id: 'agent-studio-session-12345678',
@@ -212,6 +213,58 @@ describe('OpusChat', () => {
     expect(serviceMocks.streamOpusChat.mock.calls[1][2]).toBe('agent-studio-session-12345678')
   })
 
+  it('reattaches to an active Opus turn after unmount without starting a duplicate stream', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    let releaseCompletion: () => void = () => {}
+    const completionGate = new Promise<void>((resolve) => {
+      releaseCompletion = resolve
+    })
+
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'Partial reply' }
+      await completionGate
+      yield { type: 'TEXT_DELTA', delta: ' completed' }
+      yield { type: 'DONE' }
+    })
+
+    const first = render(
+      <OpusChat
+        context={{ active_tab: 'agents' }}
+        onDurableSessionIdChange={vi.fn()}
+      />
+    )
+
+    const input = screen.getByPlaceholderText('Ask about prompts...')
+    fireEvent.change(input, { target: { value: 'Keep this running across navigation.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    expect(await screen.findByText('Partial reply')).toBeInTheDocument()
+    expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(1)
+
+    first.unmount()
+
+    render(
+      <OpusChat
+        context={{ active_tab: 'agents', session_id: 'agent-studio-session-12345678' }}
+        durableSessionId="agent-studio-session-12345678"
+        sourceSessionId="agent-studio-session-12345678"
+      />
+    )
+
+    expect(screen.getByText('Partial reply')).toBeInTheDocument()
+    expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(1)
+
+    releaseCompletion()
+
+    expect(await screen.findByText('Partial reply completed')).toBeInTheDocument()
+    expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(1)
+  })
+
   it('reuses an existing durable Agent Studio session instead of minting another one', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
@@ -301,6 +354,8 @@ describe('OpusChat', () => {
     const dialog = screen.getByRole('dialog', { name: 'Submit Feedback to Developers?' })
     expect(dialog).toHaveAttribute('aria-modal', 'false')
     expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Move feedback popup' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close feedback popup' })).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText(/add any additional comments/i), {
       target: { value: 'Please include the prior trace context.' },

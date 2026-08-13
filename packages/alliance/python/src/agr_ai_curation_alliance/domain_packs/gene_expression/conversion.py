@@ -1268,7 +1268,7 @@ def gene_expression_extraction_output_to_pending_envelope(
     )
     timestamp = produced_at or datetime.now(timezone.utc)
 
-    objects = [
+    extracted_objects = [
         _pending_object_from_extraction_object(obj)
         for obj in source.curatable_objects
     ]
@@ -1286,7 +1286,7 @@ def gene_expression_extraction_output_to_pending_envelope(
         )
     ]
     validation_findings: list[ValidationFinding] = []
-    for obj in objects:
+    for obj in extracted_objects:
         object_ref = _object_ref(obj)
         validation_findings.append(
             ValidationFinding(
@@ -1316,7 +1316,7 @@ def gene_expression_extraction_output_to_pending_envelope(
     metadata: dict[str, Any] = {
         "source_agent": produced_by,
         "conversion": "gene_expression_extraction_output_to_pending_envelope",
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "legacy_semantic_lists": [],
         "extraction_summary": source.summary,
         "extraction_metadata": source.metadata.model_dump(mode="python"),
@@ -1331,7 +1331,7 @@ def gene_expression_extraction_output_to_pending_envelope(
         domain_pack_version=GENE_EXPRESSION_DOMAIN_PACK_VERSION,
         status=DomainEnvelopeStatus.EXTRACTED,
         schema_ref=_gene_expression_schema_ref(),
-        objects=objects,
+        extracted_objects=extracted_objects,
         validation_findings=validation_findings,
         history=history,
         metadata=metadata,
@@ -1876,7 +1876,7 @@ def validate_pending_gene_expression_envelope(
         )
 
     expression_objects = [
-        obj for obj in envelope.objects if obj.object_type == GENE_EXPRESSION_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == GENE_EXPRESSION_OBJECT_TYPE
     ]
     if not expression_objects:
         findings.append(

@@ -16,7 +16,7 @@ fixtures:
         name: Demo record
         version: draft-2020-12
         uri: https://schemas.example.test/demo/record.schema.json
-      objects:
+      extracted_objects:
         - object_type: DemoRecord
           pending_ref_id: demo-record-1
           model_ref: DemoRecordPayload
@@ -50,7 +50,7 @@ fixtures:
           actor_type: system
           message: Loaded org.custom demo record fixture.
       metadata:
-        semantic_source: domain_envelope.objects
+        semantic_source: domain_envelope.extracted_objects
         extraction_metadata:
           evidence_records:
             - evidence_record_id: evidence-demo-record-1

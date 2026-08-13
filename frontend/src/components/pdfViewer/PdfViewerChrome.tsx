@@ -551,9 +551,9 @@ export function PdfViewerChrome({
                   Drop a PDF here to upload and load it for chat.
                 </li>
                 <li style={{ marginBottom: '0.75rem' }}>
-                  For one or multiple uploads, open <strong>Documents</strong> and use Upload.
+                  For one or multiple uploads, open <strong>Add Literature</strong> and use Upload PDFs.
                 </li>
-                <li>To load a PDF you already uploaded, open <strong>Documents</strong> and click the green file icon in that row.</li>
+                <li>To load a PDF you already uploaded, open <strong>Documents</strong>, choose Library, and click the green file icon in that row.</li>
               </ul>
             </Typography>
           </Box>

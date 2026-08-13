@@ -189,6 +189,11 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
   const pipelineStatus = details?.pipelineStatus;
   const embeddingStatusCurrent = details?.document.embeddingStatus ?? documentSummary?.embeddingStatus ?? null;
   const processingStatusCurrent = details?.document.processingStatus ?? documentSummary?.processingStatus ?? null;
+  const detailSourceProvenance = details?.document.sourceProvenance;
+  const sourceProvenance =
+    detailSourceProvenance !== undefined
+      ? detailSourceProvenance
+      : documentSummary?.sourceProvenance ?? null;
 
   const disableReembed = disableActions || actionLoading || isFetching || embeddingStatusCurrent === 'processing';
   const disableDelete = disableActions || actionLoading || isFetching || processingStatusCurrent === 'processing';
@@ -231,6 +236,45 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
   const metadataAuthor = getMetadataValue('author');
   const metadataTitle = getMetadataValue('title');
   const metadataLastProcessedStage = getMetadataValue('last_processed_stage');
+
+  const formatProviderLabel = (provider?: string | null): string => {
+    if (!provider) {
+      return 'Local PDF';
+    }
+    if (provider === 'abc_literature') {
+      return 'ABC Literature';
+    }
+    return provider
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  };
+
+  const externalIdsText = React.useMemo(() => {
+    const externalIds = sourceProvenance?.externalIds;
+    if (!externalIds) {
+      return null;
+    }
+    return Object.entries(externalIds)
+      .map(([key, value]) => `${key.toUpperCase()}: ${Array.isArray(value) ? value.join(', ') : value}`)
+      .join(' · ');
+  }, [sourceProvenance]);
+
+  const accessModsText = React.useMemo(() => {
+    const accessMods = sourceProvenance?.accessMods;
+    if (!accessMods) {
+      return null;
+    }
+    return Object.entries(accessMods)
+      .map(([key, values]) => `${key}: ${values.join(', ')}`)
+      .join(' · ');
+  }, [sourceProvenance]);
+
+  const sourceReferenceText =
+    sourceProvenance?.referenceCurie ||
+    sourceProvenance?.referenceId ||
+    externalIdsText ||
+    sourceProvenance?.sourceMd5 ||
+    (sourceProvenance ? 'Provider import' : 'Uploaded PDF');
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
@@ -384,6 +428,40 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                       </Typography>
                     </Box>
                   )}
+                </Paper>
+              </Grid>
+              <Grid item xs={12}>
+                <Paper variant="outlined" sx={{ p: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Source
+                  </Typography>
+                  <Divider sx={{ mb: 2 }} />
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      {renderInfoItem('Provider', formatProviderLabel(sourceProvenance?.provider))}
+                      {renderInfoItem(
+                        'Reference',
+                        sourceReferenceText
+                      )}
+                      {renderInfoItem('External IDs', externalIdsText ?? '—')}
+                      {renderInfoItem('Source MD5', sourceProvenance?.sourceMd5 ?? '—')}
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      {renderInfoItem('Source File', sourceProvenance?.sourceFileId ?? '—')}
+                      {renderInfoItem('PDF Artifact', sourceProvenance?.pdfArtifactId ?? '—')}
+                      {renderInfoItem('Converted Artifact', sourceProvenance?.convertedArtifactId ?? '—')}
+                      {renderInfoItem(
+                        'Converted File',
+                        [sourceProvenance?.fileClass, sourceProvenance?.fileExtension]
+                          .filter(Boolean)
+                          .join(' / ') || '—'
+                      )}
+                      {renderInfoItem('Import Status', sourceProvenance?.importStatus ?? sourceProvenance?.artifactStatus ?? '—')}
+                      {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessModsText ?? '—')}
+                      {accessModsText && renderInfoItem('Access MODs', accessModsText)}
+                      {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode ?? 'local_pdf')}
+                    </Grid>
+                  </Grid>
                 </Paper>
               </Grid>
             </Grid>

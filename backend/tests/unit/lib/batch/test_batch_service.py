@@ -2,10 +2,16 @@
 import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 from src.lib.batch.service import BatchService
-from src.models.sql.batch import BatchDocument, BatchStatus, BatchDocumentStatus
+from src.lib.batch.status import (
+    require_batch_document_status_transition,
+    require_batch_status_transition,
+)
+from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 
 
 class TestBatchService:
@@ -48,6 +54,7 @@ class TestBatchService:
         mock_db = Mock()
         service = BatchService(mock_db)
 
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
         with patch.object(service, 'get_batch', return_value=None):
             result = service.cancel_batch(uuid4(), user_id=1)
 
@@ -90,8 +97,51 @@ class TestBatchStatusValues:
         assert BatchDocumentStatus.FAILED.value == "failed"
 
 
+class TestBatchStatusTransitions:
+    """Canonical transition rules reject terminal-state resurrection."""
+
+    def test_cancelled_batch_cannot_return_to_running(self):
+        with pytest.raises(ValueError, match="cancelled -> running"):
+            require_batch_status_transition(BatchStatus.CANCELLED, BatchStatus.RUNNING)
+
+    def test_completed_document_cannot_return_to_processing(self):
+        with pytest.raises(ValueError, match="completed -> processing"):
+            require_batch_document_status_transition(
+                BatchDocumentStatus.COMPLETED,
+                BatchDocumentStatus.PROCESSING,
+            )
+
+
 class TestBatchServiceMocked:
     """Tests for BatchService using mocks to avoid DB constraints."""
+
+    def test_claim_recoverable_batch_returns_none_when_conditional_update_loses(self):
+        mock_db = Mock()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        result = BatchService(mock_db).claim_recoverable_batch(uuid4(), uuid4(), 120)
+
+        assert result is None
+        mock_db.rollback.assert_called_once()
+        mock_db.scalars.assert_not_called()
+
+    def test_complete_running_batch_returns_false_after_cancellation(self):
+        mock_db = Mock()
+        mock_db.scalars.return_value.first.return_value = None
+
+        result = BatchService(mock_db).complete_running_batch(uuid4(), uuid4())
+
+        assert result is False
+        mock_db.rollback.assert_called_once()
+
+    def test_cancel_running_batch_for_lease_returns_false_after_lease_loss(self):
+        mock_db = Mock()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        result = BatchService(mock_db).cancel_running_batch_for_lease(uuid4(), uuid4())
+
+        assert result is False
+        mock_db.commit.assert_called_once()
 
     def test_cancel_batch_validates_cancellable_status(self):
         """Cancel batch should only work for pending/running batches."""
@@ -102,6 +152,7 @@ class TestBatchServiceMocked:
         # Create a mock batch that's already completed
         mock_batch = Mock()
         mock_batch.status = BatchStatus.COMPLETED
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
 
         # Mock get_batch to return our mock batch
         with patch.object(service, 'get_batch', return_value=mock_batch):
@@ -116,43 +167,28 @@ class TestBatchServiceMocked:
         # Create a mock batch that's running
         mock_batch = Mock()
         mock_batch.status = BatchStatus.RUNNING
+        batch_id = uuid4()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = batch_id
+        mock_db.scalars.return_value.first.return_value = mock_batch
 
-        # Mock get_batch to return our mock batch
-        with patch.object(service, 'get_batch', return_value=mock_batch):
-            result = service.cancel_batch(uuid4(), user_id=1)
+        result = service.cancel_batch(batch_id, user_id=1)
 
-            assert result.status == BatchStatus.CANCELLED
-            assert result.completed_at is not None
-            mock_db.commit.assert_called_once()
-            mock_db.refresh.assert_called_once_with(mock_batch)
-
-    def test_increment_batch_completed(self):
-        """Increment batch completed should increase count by 1."""
-        mock_db = Mock()
-        service = BatchService(mock_db)
-
-        mock_batch = Mock()
-        mock_batch.completed_documents = 0
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_batch
-
-        service.increment_batch_completed(uuid4())
-
-        assert mock_batch.completed_documents == 1
+        assert result is mock_batch
         mock_db.commit.assert_called_once()
 
-    def test_increment_batch_failed(self):
-        """Increment batch failed should increase count by 1."""
+    def test_recompute_batch_counters(self):
+        """Counters are derived from terminal document rows."""
         mock_db = Mock()
         service = BatchService(mock_db)
-
         mock_batch = Mock()
-        mock_batch.failed_documents = 0
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_batch
+        mock_db.execute.return_value.one.return_value = (6, 3, 2)
 
-        service.increment_batch_failed(uuid4())
+        service.recompute_batch_counters(mock_batch)
 
-        assert mock_batch.failed_documents == 1
-        mock_db.commit.assert_called_once()
+        assert mock_batch.total_documents == 6
+        assert mock_batch.completed_documents == 3
+        assert mock_batch.failed_documents == 2
+        mock_db.flush.assert_called_once()
 
     def test_update_batch_status(self):
         """Update batch status should change status and timestamps."""
@@ -185,13 +221,24 @@ class TestBatchServiceMocked:
 
         service.update_document_status(
             uuid4(),
-            status=BatchDocumentStatus.COMPLETED,
+            status=BatchDocumentStatus.PROCESSING,
             result_file_path="/path/to/result.json",
+            result_files=[
+                {
+                    "file_id": "file-1",
+                    "download_url": "/path/to/result.json",
+                }
+            ],
+            output_status="partial",
             processing_time_ms=1500,
         )
 
-        assert mock_doc.status == BatchDocumentStatus.COMPLETED
+        assert mock_doc.status == BatchDocumentStatus.PROCESSING
         assert mock_doc.result_file_path == "/path/to/result.json"
+        assert mock_doc.result_files == [
+            {"file_id": "file-1", "download_url": "/path/to/result.json"}
+        ]
+        assert mock_doc.output_status == "partial"
         assert mock_doc.processing_time_ms == 1500
         mock_db.commit.assert_called_once()
 
@@ -228,14 +275,14 @@ class TestBatchServiceMocked:
         # Create a mock batch that's pending
         mock_batch = Mock()
         mock_batch.status = BatchStatus.PENDING
+        batch_id = uuid4()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = batch_id
+        mock_db.scalars.return_value.first.return_value = mock_batch
 
-        # Mock get_batch to return our mock batch
-        with patch.object(service, 'get_batch', return_value=mock_batch):
-            result = service.cancel_batch(uuid4(), user_id=1)
+        result = service.cancel_batch(batch_id, user_id=1)
 
-            assert result.status == BatchStatus.CANCELLED
-            assert result.completed_at is not None
-            mock_db.commit.assert_called_once()
+        assert result is mock_batch
+        mock_db.commit.assert_called_once()
 
     # CR-10: Test that processed_at is set for completed/failed status
     def test_update_document_status_sets_processed_at_for_completed(self):
@@ -244,7 +291,7 @@ class TestBatchServiceMocked:
         service = BatchService(mock_db)
 
         mock_doc = Mock()
-        mock_doc.status = BatchDocumentStatus.PENDING
+        mock_doc.status = BatchDocumentStatus.PROCESSING
         mock_doc.processed_at = None
         mock_db.query.return_value.filter.return_value.first.return_value = mock_doc
 
@@ -374,6 +421,94 @@ class TestCreateBatchMocked:
 class TestBatchToResponseMocked:
     """CR-5: Tests for batch_to_response method using mocks."""
 
+    def test_document_handoff_metadata_preserves_authoritative_ids_and_refs(self):
+        review_session_id = uuid4()
+        second_review_session_id = uuid4()
+        extraction_result_id = uuid4()
+        mock_db = Mock()
+        mock_db.scalars.side_effect = [
+            SimpleNamespace(
+                all=lambda: [
+                    SimpleNamespace(id=second_review_session_id, adapter_key="allele"),
+                    SimpleNamespace(id=review_session_id, adapter_key="gene"),
+                ]
+            ),
+            SimpleNamespace(
+                all=lambda: [
+                    SimpleNamespace(
+                        id=extraction_result_id,
+                        adapter_key="gene",
+                        agent_key="gene_extractor",
+                        candidate_count=2,
+                        trace_id="trace-1",
+                        origin_session_id="origin-1",
+                    )
+                ]
+            ),
+        ]
+        service = BatchService(mock_db)
+        batch = SimpleNamespace(id=uuid4())
+        document = SimpleNamespace(
+            id=uuid4(),
+            document_id=uuid4(),
+            status=BatchDocumentStatus.COMPLETED,
+            review_session_ids=[str(review_session_id), str(second_review_session_id)],
+        )
+
+        result = service.get_document_handoff_metadata(
+            cast("Batch", batch),
+            cast(BatchDocument, document),
+        )
+
+        assert result["adapter_keys"] == ["gene", "allele"]
+        assert result["extraction_result_ids"] == [str(extraction_result_id)]
+        assert result["extraction_result_refs"] == [
+            {
+                "result_ref": f"extraction-result:{extraction_result_id}",
+                "extraction_result_id": str(extraction_result_id),
+                "adapter_key": "gene",
+                "agent_key": "gene_extractor",
+                "candidate_count": 2,
+                "trace_id": "trace-1",
+            }
+        ]
+        assert result["flow_run_id"] == str(batch.id)
+        assert result["origin_session_id"] == "origin-1"
+
+    def test_document_handoff_metadata_rejects_invalid_review_session_id(self):
+        service = BatchService(Mock())
+        batch = SimpleNamespace(id=uuid4())
+        document = SimpleNamespace(
+            id=uuid4(),
+            document_id=uuid4(),
+            status=BatchDocumentStatus.COMPLETED,
+            review_session_ids=["not-a-uuid"],
+        )
+
+        with pytest.raises(ValueError, match="invalid authoritative review-session ID"):
+            service.get_document_handoff_metadata(
+                cast("Batch", batch),
+                cast(BatchDocument, document),
+            )
+
+    def test_document_handoff_metadata_rejects_missing_review_session(self):
+        mock_db = Mock()
+        mock_db.scalars.return_value = SimpleNamespace(all=lambda: [])
+        service = BatchService(mock_db)
+        batch = SimpleNamespace(id=uuid4())
+        document = SimpleNamespace(
+            id=uuid4(),
+            document_id=uuid4(),
+            status=BatchDocumentStatus.COMPLETED,
+            review_session_ids=[str(uuid4())],
+        )
+
+        with pytest.raises(ValueError, match="references missing authoritative review sessions"):
+            service.get_document_handoff_metadata(
+                cast("Batch", batch),
+                cast(BatchDocument, document),
+            )
+
     def test_batch_to_response_converts_batch_model(self):
         """batch_to_response should convert Batch model to response schema."""
         mock_db = Mock()
@@ -409,7 +544,18 @@ class TestBatchToResponseMocked:
         mock_db.query.return_value.filter.return_value.first.return_value = None
 
         # Mock document titles lookup
-        with patch.object(service, 'get_document_titles', return_value={}):
+        handoff_metadata = {
+            "adapter_keys": ["gene"],
+            "extraction_result_ids": ["extract-gene"],
+            "extraction_result_refs": [{"extraction_result_id": "extract-gene"}],
+            "flow_run_id": str(mock_batch.id),
+            "origin_session_id": "origin-1",
+        }
+        with patch.object(service, 'get_document_titles', return_value={}), patch.object(
+            service,
+            'get_document_handoff_metadata',
+            return_value=handoff_metadata,
+        ):
             result = service.batch_to_response(mock_batch, flow_name="Test Flow")
 
         assert result.id == mock_batch.id
@@ -420,6 +566,9 @@ class TestBatchToResponseMocked:
         assert result.completed_documents == 2
         assert len(result.documents) == 1
         assert result.documents[0].review_session_ids == ["session-gene"]
+        assert result.documents[0].adapter_keys == ["gene"]
+        assert result.documents[0].extraction_result_ids == ["extract-gene"]
+        assert result.documents[0].origin_session_id == "origin-1"
 
     def test_batch_to_response_looks_up_flow_name(self):
         """batch_to_response should look up flow name if not provided."""
@@ -480,7 +629,17 @@ class TestBatchToResponseMocked:
         mock_batch.documents = [mock_doc]
 
         # Mock document titles lookup
-        with patch.object(service, 'get_document_titles', return_value={doc_id: "My Document"}) as mock_titles:
+        with patch.object(service, 'get_document_titles', return_value={doc_id: "My Document"}) as mock_titles, patch.object(
+            service,
+            'get_document_handoff_metadata',
+            return_value={
+                "adapter_keys": [],
+                "extraction_result_ids": [],
+                "extraction_result_refs": [],
+                "flow_run_id": str(mock_batch.id),
+                "origin_session_id": None,
+            },
+        ):
             result = service.batch_to_response(mock_batch, flow_name="Flow")
 
         mock_titles.assert_called_once()

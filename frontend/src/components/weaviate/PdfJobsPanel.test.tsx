@@ -81,6 +81,31 @@ describe('PdfJobsPanel', () => {
     expect(onCancelJob).toHaveBeenCalledWith(job.job_id);
   });
 
+  it('shows provider conversion progress details from job metadata', () => {
+    const job = {
+      ...buildJobs(1)[0],
+      message: 'ABC Literature conversion running',
+      metadata: {
+        document_source: {
+          conversion_status: 'running',
+          per_file_progress: [
+            {
+              source: { display_name: 'paper', file_class: 'main' },
+              converted: { display_name: 'paper_merged', file_class: 'converted_merged_main' },
+              status: 'pending',
+              error: null,
+            },
+          ],
+        },
+      },
+    };
+
+    render(<PdfJobsPanel jobs={[job]} />);
+
+    expect(screen.getByText('10% • ABC Literature conversion running')).toBeInTheDocument();
+    expect(screen.getByText('paper pending')).toBeInTheDocument();
+  });
+
   it('shows disabled gray cancel button when cancellation is unavailable', () => {
     const onCancelJob = vi.fn().mockResolvedValue(undefined);
     const job = {

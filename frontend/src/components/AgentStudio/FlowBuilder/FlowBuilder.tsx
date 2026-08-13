@@ -66,6 +66,7 @@ import TaskInputEditor from './TaskInputEditor'
 import PromptViewer from './PromptViewer'
 import DomainEnvelopeViewer from './DomainEnvelopeViewer'
 import { validationAttachmentForPersistence } from './types'
+import { projectExecutableFlowGraph } from './executableFlowGraph'
 import type {
   FlowBuilderProps,
   FlowState,
@@ -76,6 +77,8 @@ import type {
   FlowResponse,
   FlowEdge,
   FlowEdgeRole,
+  NodeType,
+  OutputBindingView,
   ValidationAttachmentGroup,
   ValidationAttachmentSelection,
 } from './types'
@@ -90,7 +93,10 @@ import type { FlowSummaryResponse } from './types'
 import logger from '@/services/logger'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 import {
+  canSourceOutputAttachmentFromMetadata,
+  isFileOutputFormatterAgentFromMetadata,
   resolveOutputFormatterIncludeEvidence,
+  isOutputFormatterAgentFromMetadata,
   isValidationAgentFromMetadata,
 } from './agentMetadataUtils'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
@@ -174,6 +180,9 @@ const activeValidationBindingOptions = (
 const edgeRole = (edge: FlowEdge): FlowEdgeRole =>
   edge.data?.role ?? 'control_flow'
 
+const isAnimatedEdgeRole = (role: FlowEdgeRole): boolean =>
+  role !== 'validation_attachment'
+
 const validationEdgeLabel = (binding: ValidationAttachmentSelection): string =>
   binding.target_label || binding.label
 
@@ -187,6 +196,25 @@ const nextValidationEdgeId = (existingEdges: FlowEdge[]): string => {
   }
   return candidate
 }
+
+const nextOutputEdgeId = (existingEdges: FlowEdge[]): string => {
+  let index = existingEdges.length + 1
+  let candidate = `output_${index}`
+  const existingIds = new Set(existingEdges.map((edge) => edge.id))
+  while (existingIds.has(candidate)) {
+    index += 1
+    candidate = `output_${index}`
+  }
+  return candidate
+}
+
+const unsupportedFlowVersionMessage = (
+  flowName: string,
+  version: string,
+): string => (
+  `Flow '${flowName}' uses unsupported schema version '${version}'. `
+  + 'Upgrade or archive it before editing.'
+)
 
 export const rebuildValidationGroupsFromEdges = (
   currentNodes: AgentNode[],
@@ -324,7 +352,7 @@ export const rebuildValidationGroupsFromEdges = (
  */
 const computeValidationErrors = (
   currentNodes: AgentNode[],
-  _currentEdges: { source: string; target: string }[],
+  currentEdges: FlowEdge[],
 ): Array<{ nodeId: string; message: string }> => {
   const errors: Array<{ nodeId: string; message: string }> = []
 
@@ -334,6 +362,32 @@ const computeValidationErrors = (
     errors.push({
       nodeId: taskInputNode.id,
       message: 'Initial instructions are required',
+    })
+  }
+
+  if (taskInputNode) {
+    const topology = projectExecutableFlowGraph(
+      currentNodes.map(node => ({
+        id: node.id,
+        type: node.type ?? (node.data.agent_id === 'task_input' ? 'task_input' : 'agent'),
+        data: node.data,
+      })),
+      currentEdges.map(edge => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        role: edgeRole(edge),
+        satisfies_binding_id: edge.data?.satisfies_binding_id,
+        replaces_attachment_id: edge.data?.replaces_attachment_id,
+      })),
+      taskInputNode.id,
+      '1.1',
+    )
+    topology.issues.forEach(topologyIssue => {
+      errors.push({
+        nodeId: topologyIssue.node_ids[0] ?? taskInputNode.id,
+        message: `[${topologyIssue.code}] ${topologyIssue.message}`,
+      })
     })
   }
 
@@ -361,10 +415,13 @@ const Toolbar = styled(Box)(({ theme }) => ({
 }))
 
 // Menu trigger button (File, Edit)
-const MenuTrigger = styled(Box)(({ theme }) => ({
+const MenuTrigger = styled('button')(({ theme }) => ({
   display: 'inline-flex',
   alignItems: 'center',
   padding: theme.spacing(0.25, 1),
+  border: 0,
+  background: 'transparent',
+  fontFamily: 'inherit',
   fontSize: '0.8rem',
   fontWeight: 500,
   cursor: 'pointer',
@@ -375,6 +432,10 @@ const MenuTrigger = styled(Box)(({ theme }) => ({
   '&:hover': {
     backgroundColor: alpha(theme.palette.action.hover, 0.8),
     color: theme.palette.text.primary,
+  },
+  '&:focus-visible': {
+    outline: `2px solid ${theme.palette.primary.main}`,
+    outlineOffset: 1,
   },
 }))
 
@@ -467,8 +528,27 @@ const CanvasArea = styled(Box)(({ theme }) => ({
   flex: 1,
   position: 'relative',
   backgroundColor: alpha(theme.palette.background.default, 0.5),
+  '&:focus-visible': {
+    outline: `2px solid ${theme.palette.primary.main}`,
+    outlineOffset: -2,
+  },
   '& .react-flow__attribution': {
     display: 'none',
+  },
+  // React Flow applies a second white card around nodes registered as `output`.
+  // FlowNode owns the visible surface, so keep the library wrapper layout-only.
+  '& .react-flow__node-output': {
+    padding: 0,
+    borderRadius: 0,
+    width: 'auto',
+    fontSize: 'inherit',
+    color: 'inherit',
+    textAlign: 'initial',
+    border: 'none',
+    backgroundColor: 'transparent',
+  },
+  '& .react-flow__node-output.selectable:hover, & .react-flow__node-output.selectable.selected, & .react-flow__node-output.selectable:focus, & .react-flow__node-output.selectable:focus-visible': {
+    boxShadow: 'none',
   },
 }))
 
@@ -510,6 +590,7 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
 // Custom node types for React Flow
 const nodeTypes = {
   agent: FlowNode,
+  output: FlowNode,
   task_input: FlowNode,  // Uses same component with conditional styling
 }
 
@@ -537,6 +618,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     (agentId: string): boolean => isValidationAgentFromMetadata(agentId, agentMetadata),
     [agentMetadata]
   )
+  const canSourceOutputAttachmentDynamic = useCallback(
+    (agentId: string): boolean => canSourceOutputAttachmentFromMetadata(agentId, agentMetadata),
+    [agentMetadata]
+  )
+  const isOutputFormatterAgentDynamic = useCallback(
+    (agentId: string): boolean => isOutputFormatterAgentFromMetadata(agentId, agentMetadata),
+    [agentMetadata]
+  )
 
   // React Flow state
   const builderRootRef = useRef<HTMLDivElement>(null)
@@ -553,11 +642,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // UI state
   const [flowName, setFlowName] = useState('New Flow')
   const [flowDescription, setFlowDescription] = useState('')
+  const [taskInstructionsDefaultOnly, setTaskInstructionsDefaultOnly] = useState(false)
   const [selectedNode, setSelectedNode] = useState<AgentNode | null>(null)
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [snackbar, setSnackbar] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
+  const [snackbar, setSnackbar] = useState<{
+    message: string
+    severity: 'success' | 'warning' | 'error'
+  } | null>(null)
 
   // Prompt viewer state
   const [promptViewerOpen, setPromptViewerOpen] = useState(false)
@@ -601,10 +694,93 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     [edges, handleDeleteEdge]
   )
 
+  const outputBindingsByNodeId = useMemo(() => {
+    const bindings = new Map<string, OutputBindingView>()
+    const flowNodes = nodes as AgentNode[]
+    const flowEdges = edges as FlowEdge[]
+    const flowNodeById = new Map(flowNodes.map((node) => [node.id, node]))
+
+    for (const node of flowNodes) {
+      if (node.type !== 'output' && !isOutputFormatterAgentDynamic(node.data.agent_id)) continue
+
+      const attachmentEdges = flowEdges.filter(
+        (edge) => edge.target === node.id && edgeRole(edge) === 'output_attachment'
+      )
+      if (attachmentEdges.length === 0) {
+        bindings.set(node.id, { status: 'missing', sources: [] })
+        continue
+      }
+
+      const sourceTargetKeys = new Set<string>()
+      const hasDuplicateSource = attachmentEdges.some((edge) => {
+        const key = `${edge.source}\u0000${edge.target}`
+        if (sourceTargetKeys.has(key)) return true
+        sourceTargetKeys.add(key)
+        return false
+      })
+      const sources = attachmentEdges.map((edge) => {
+        const source = flowNodeById.get(edge.source)
+        return {
+          node: source,
+          sourceNodeId: edge.source,
+          sourceLabel: source?.data.agent_display_name ?? edge.source,
+        }
+      })
+      if (hasDuplicateSource) {
+        bindings.set(node.id, {
+          status: 'duplicate',
+          sources: sources.map(({ sourceNodeId, sourceLabel }) => ({ sourceNodeId, sourceLabel })),
+        })
+        continue
+      }
+
+      const incompatibleSource = sources.find(({ node: source }) => (
+        !source || !canSourceOutputAttachmentDynamic(source.data.agent_id)
+      ))
+      if (incompatibleSource) {
+        bindings.set(node.id, {
+          status: 'incompatible',
+          sources: sources.map(({ sourceNodeId, sourceLabel }) => ({ sourceNodeId, sourceLabel })),
+        })
+        continue
+      }
+
+      const sourceViews = sources.map(({ sourceNodeId, sourceLabel }) => ({
+        sourceNodeId,
+        sourceLabel,
+      }))
+      bindings.set(node.id, {
+        status: 'bound',
+        sources: sourceViews,
+        ...(sourceViews.length === 1
+          ? {
+              sourceNodeId: sourceViews[0].sourceNodeId,
+              sourceLabel: sourceViews[0].sourceLabel,
+            }
+          : {}),
+      })
+    }
+
+    return bindings
+  }, [nodes, edges, canSourceOutputAttachmentDynamic, isOutputFormatterAgentDynamic])
+
+  const canvasNodes = useMemo(
+    () => (nodes as AgentNode[]).map((node) => {
+      const outputBinding = outputBindingsByNodeId.get(node.id)
+      if (!outputBinding) return node
+      return { ...node, data: { ...node.data, outputBinding } }
+    }),
+    [nodes, outputBindingsByNodeId]
+  )
+
   const selectedEditorNode = useMemo(() => {
     if (!selectedNode) return null
     return (nodes.find((node) => node.id === selectedNode.id) as AgentNode | undefined) ?? null
   }, [nodes, selectedNode])
+
+  const selectedOutputBinding = selectedEditorNode
+    ? outputBindingsByNodeId.get(selectedEditorNode.id)
+    : undefined
 
   // Manage Flows Dialog state
   const [manageDialogOpen, setManageDialogOpen] = useState(false)
@@ -632,15 +808,28 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setLoading(true)
     try {
       const flow = await getFlow(id)
+      if (flow.flow_definition.version !== '1.1') {
+        setSnackbar({
+          message: unsupportedFlowVersionMessage(flow.name, flow.flow_definition.version),
+          severity: 'error',
+        })
+        return
+      }
       setFlowName(flow.name)
       setFlowDescription(flow.description || '')
+      setTaskInstructionsDefaultOnly(flow.flow_definition.task_instructions_default_only === true)
       setCurrentFlowId(flow.id)
 
       // Convert flow definition to React Flow format
       const flowNodes = flow.flow_definition.nodes.map((n) => (
         {
           id: n.id,
-          type: n.type === 'task_input' ? 'task_input' : 'agent',
+          type: n.type === 'task_input'
+            ? 'task_input'
+            : n.type === 'output'
+              || isOutputFormatterAgentFromMetadata(n.data.agent_id, agentMetadata)
+              ? 'output'
+              : 'agent',
           position: n.position,
           data: n.data,
         }
@@ -650,7 +839,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         source: e.source,
         target: e.target,
         type: 'deletable',
-        animated: e.role !== 'validation_attachment',
+        animated: isAnimatedEdgeRole(e.role ?? 'control_flow'),
         data: {
           role: e.role ?? 'control_flow',
           satisfies_binding_id: e.satisfies_binding_id,
@@ -660,6 +849,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
       setNodes(flowNodes)
       setEdges(flowEdges)
+      if (flow.validation_warnings?.length) {
+        const warningMessages = flow.validation_warnings.map((warning) => warning.message).join(' ')
+        const hasCriticalWarning = flow.has_critical_issues
+        setSnackbar({
+          message: `Flow loaded with validation ${hasCriticalWarning ? 'issue' : 'warning'}: ${warningMessages}`,
+          severity: hasCriticalWarning ? 'error' : 'warning',
+        })
+      }
 
       // Update nodeId counter to avoid collisions
       const maxId = Math.max(...flowNodes.map((n) => parseInt(n.id.replace('node_', '')) || 0), 0)
@@ -690,7 +887,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     } finally {
       setLoading(false)
     }
-  }, [setNodes, setEdges, reactFlowInstance])
+  }, [setNodes, setEdges, reactFlowInstance, agentMetadata])
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -736,18 +933,24 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     if (onFlowChange) {
       const flowState: FlowState = {
         flowName,
+        version: '1.1',
+        entry_node_id: nodes.find(node => node.data.agent_id === 'task_input')?.id,
         nodes: nodes.map((n) => ({
           id: n.id,
+          type: (n.type ?? 'agent') as NodeType,
           agent_id: n.data.agent_id,
           agent_display_name: n.data.agent_display_name,
           task_instructions: n.data.task_instructions,
           custom_instructions: n.data.custom_instructions,
+          include_evidence: n.data.include_evidence,
           output_filename_template: n.data.output_filename_template,
+          projection_plan: n.data.projection_plan,
           output_key: n.data.output_key,
           validation_attachments: n.data.validation_attachments,
           validation_groups: n.data.validation_groups,
         })),
         edges: edges.map((e) => ({
+          id: e.id,
           source: e.source,
           target: e.target,
           role: edgeRole(e as FlowEdge),
@@ -764,10 +967,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Uses setNodes functional update to access current state and avoid stale closures
   const revalidateValidators = useCallback(() => {
     setNodes(currentNodes => {
-      const edgeData = edges.map(e => ({ source: e.source, target: e.target }))
       const errors = computeValidationErrors(
         currentNodes as AgentNode[],
-        edgeData
+        edges as FlowEdge[],
       )
       const errorsByNodeId = new Map(errors.map(e => [e.nodeId, e.message]))
 
@@ -806,7 +1008,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Stable key for edge topology - triggers revalidation when edges are rewired (not just added/removed)
   // Includes handles to catch rewires between different connection points on the same nodes
   const edgeTopologyKey = useMemo(
-    () => edges.map(e => `${e.source}:${e.sourceHandle ?? ''}-${e.target}:${e.targetHandle ?? ''}`).sort().join(','),
+    () => edges.map((edge) => (
+      `${edgeRole(edge as FlowEdge)}:${edge.source}:${edge.sourceHandle ?? ''}-${edge.target}:${edge.targetHandle ?? ''}`
+    )).sort().join(','),
     [edges]
   )
 
@@ -846,29 +1050,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       return
     }
 
-    // Check for parallel/branching flows (not yet supported)
-    // Count ordinary outgoing control-flow edges per node. Validation attachment
-    // sidecars may fan out from one extractor without creating parallel flow.
-    const outgoingEdgeCounts = new Map<string, number>()
-    edges.forEach(e => {
-      if (edgeRole(e as FlowEdge) !== 'control_flow') return
-      outgoingEdgeCounts.set(e.source, (outgoingEdgeCounts.get(e.source) || 0) + 1)
-    })
-    const parallelNode = nodes.find(n => (outgoingEdgeCounts.get(n.id) || 0) > 1)
-    if (parallelNode) {
-      setSelectedNode(parallelNode as AgentNode)
-      setSnackbar({
-        message: `Parallel flows not yet supported. "${parallelNode.data.agent_display_name}" has multiple outgoing connections. This feature will be available in a future update.`,
-        severity: 'error'
-      })
-      return
-    }
-
     // Compute validation errors fresh (don't rely on stale hasError state)
-    const edgeData = edges.map(e => ({ source: e.source, target: e.target }))
     const validationErrors = computeValidationErrors(
       nodes as AgentNode[],
-      edgeData
+      edges as FlowEdge[],
     )
     if (validationErrors.length > 0) {
       // Find the first error node and select it
@@ -891,10 +1076,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       const entryNodeId = taskInputNode.id
 
       const flowDefinition: FlowDefinition = {
-        version: '1.0',
+        version: '1.1',
+        ...(taskInstructionsDefaultOnly ? { task_instructions_default_only: true } : {}),
         nodes: nodes.map((n) => ({
           id: n.id,
-          type: n.data.agent_id === 'task_input' ? 'task_input' : 'agent',
+          type: n.data.agent_id === 'task_input'
+            ? 'task_input'
+            : n.type === 'output'
+              ? 'output'
+              : 'agent',
           position: n.position,
           data: flowNodeDataForPersistence(n.data),
         })),
@@ -938,6 +1128,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       // Update flowName state to match saved name
       setFlowName(savedFlow.name)
       setFlowDescription(savedFlow.description || '')
+      setTaskInstructionsDefaultOnly(
+        savedFlow.flow_definition.task_instructions_default_only === true
+      )
       notifyFlowListInvalidated({
         flowId: savedFlow.id,
         reason: flowMutationReason,
@@ -962,6 +1155,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setEdges([])
     setFlowName('New Flow')
     setFlowDescription('')
+    setTaskInstructionsDefaultOnly(false)
     setCurrentFlowId(null)
     setSelectedNode(null)
     nodeIdRef.current = 1  // Start from 1 since node_0 is used
@@ -1037,6 +1231,54 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         return
       }
 
+      if (sourceNode?.type === 'output') {
+        setSnackbar({
+          message: 'Output formatters are terminal attachments and cannot connect to another step.',
+          severity: 'error',
+        })
+        return
+      }
+
+      if (targetNode?.type === 'output') {
+        if (!sourceNode || !canSourceOutputAttachmentDynamic(sourceNode.data.agent_id)) {
+          setSnackbar({
+            message: (
+              'Attach this formatter to an extraction result or to an active validation '
+              + 'result with a declared output schema.'
+            ),
+            severity: 'error',
+          })
+          return
+        }
+        const duplicateAttachment = (edges as FlowEdge[]).some((edge) => (
+          edgeRole(edge) === 'output_attachment'
+          && edge.source === sourceNode.id
+          && edge.target === targetNode.id
+        ))
+        if (duplicateAttachment) {
+          setSnackbar({
+            message: 'This source step is already attached to the formatter.',
+            severity: 'error',
+          })
+          return
+        }
+        setEdges((currentEdges) => [
+          ...currentEdges,
+          {
+            ...params,
+            id: nextOutputEdgeId(currentEdges as FlowEdge[]),
+            source: sourceNode.id,
+            target: targetNode.id,
+            type: 'deletable',
+            // This is still a terminal attachment semantically; motion simply
+            // keeps the visible data path consistent with the rest of the flow.
+            animated: isAnimatedEdgeRole('output_attachment'),
+            data: { role: 'output_attachment' },
+          } as FlowEdge,
+        ])
+        return
+      }
+
       const bindingOptions = activeValidationBindingOptions(sourceNode)
       const shouldCreateValidationAttachmentEdge = Boolean(
         sourceNode
@@ -1056,12 +1298,19 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
       setEdges((eds) => addEdge({
         ...params,
-        animated: true,
+        animated: isAnimatedEdgeRole('control_flow'),
         type: 'deletable',
         data: { role: 'control_flow' },
       } as FlowEdge, eds))
     },
-    [setEdges, nodes, isValidationAgentDynamic, addValidationAttachmentEdge]
+    [
+      setEdges,
+      nodes,
+      edges,
+      canSourceOutputAttachmentDynamic,
+      isValidationAgentDynamic,
+      addValidationAttachmentEdge,
+    ]
   )
 
   // Handle node selection
@@ -1125,6 +1374,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         }
 
         const isTaskInput = type === 'task_input' || agentId === 'task_input'
+        const isOutputFormatter = !isTaskInput
+          && isOutputFormatterAgentDynamic(agentId)
         const validationAttachments = isTaskInput
           ? []
           : buildDefaultValidationSelections(agentId, agentMetadata)
@@ -1133,7 +1384,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
         const newNode: AgentNode = {
           id: newNodeId,
-          type: isTaskInput ? 'task_input' : 'agent',
+          type: isTaskInput ? 'task_input' : isOutputFormatter ? 'output' : 'agent',
           position,
           data: {
             agent_id: agentId,
@@ -1145,6 +1396,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             include_evidence: isTaskInput
               ? undefined
               : resolveOutputFormatterIncludeEvidence(agentId, agentMetadata),
+            output_filename_template: isFileOutputFormatterAgentFromMetadata(agentId, agentMetadata)
+              ? '{{input_filename_stem}}'
+              : undefined,
             output_key: isTaskInput ? 'task_input' : `${agentId.replace(/-/g, '_')}_output`,
             validation_attachments: validationAttachments.length > 0
               ? validationAttachments
@@ -1157,7 +1411,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         logger.error('Failed to parse drag data', err as Error, { component: 'FlowBuilder' })
       }
     },
-    [reactFlowInstance, setNodes, getNodeId, agentMetadata]
+    [
+      reactFlowInstance,
+      setNodes,
+      getNodeId,
+      agentMetadata,
+      isOutputFormatterAgentDynamic,
+    ]
   )
 
   // Handle node data update from editor
@@ -1365,6 +1625,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     try {
       // First fetch the full flow to get its definition
       const fullFlow = await getFlow(editingFlowId)
+      if (fullFlow.flow_definition.version !== '1.1') {
+        throw new Error(unsupportedFlowVersionMessage(
+          fullFlow.name,
+          fullFlow.flow_definition.version,
+        ))
+      }
       // Update with new name
       const updatedFlow = await updateFlow(editingFlowId, {
         name: editingFlowName.trim(),
@@ -1573,7 +1839,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       {/* Unified Toolbar */}
       <Toolbar>
         {/* File Menu */}
-        <MenuTrigger onClick={handleFileMenuOpen}>File</MenuTrigger>
+        <MenuTrigger
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={Boolean(fileMenuAnchor)}
+          onClick={handleFileMenuOpen}
+        >
+          File
+        </MenuTrigger>
         <StyledMenu
           anchorEl={fileMenuAnchor}
           open={Boolean(fileMenuAnchor)}
@@ -1607,7 +1880,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         </StyledMenu>
 
         {/* Edit Menu */}
-        <MenuTrigger onClick={handleEditMenuOpen}>Edit</MenuTrigger>
+        <MenuTrigger
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={Boolean(editMenuAnchor)}
+          onClick={handleEditMenuOpen}
+        >
+          Edit
+        </MenuTrigger>
         <StyledMenu
           anchorEl={editMenuAnchor}
           open={Boolean(editMenuAnchor)}
@@ -1751,7 +2031,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           <Panel defaultSize={72} minSize={60}>
             <CanvasArea
               ref={reactFlowWrapper}
-              tabIndex={-1}
+              role="region"
+              aria-label="Flow canvas"
+              tabIndex={0}
               onMouseDown={() => reactFlowWrapper.current?.focus()}
             >
               {loading ? (
@@ -1760,7 +2042,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                 </Box>
               ) : (
                 <ReactFlow
-                  nodes={nodes}
+                  nodes={canvasNodes}
                   edges={canvasEdges}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
@@ -1792,11 +2074,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                   node={selectedEditorNode}
                   onSave={handleNodeDataUpdate}
                   onClose={() => setSelectedNode(null)}
+                  onTaskInstructionsAuthored={() => setTaskInstructionsDefaultOnly(false)}
                   onDelete={handleDeleteNode}
                 />
               ) : selectedEditorNode ? (
                 <NodeEditor
                   node={selectedEditorNode}
+                  outputBinding={selectedOutputBinding}
                   onSave={handleNodeDataUpdate}
                   onClose={() => setSelectedNode(null)}
                   onDelete={handleDeleteNode}

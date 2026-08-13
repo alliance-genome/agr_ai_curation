@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 def _flow_definition(*, agent_id: str, agent_display_name: str, output_key: str = "final_output") -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -56,7 +56,7 @@ def _flow_definition(*, agent_id: str, agent_display_name: str, output_key: str 
 
 def _sample_pdf_projection_flow_definition() -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -83,7 +83,7 @@ def _sample_pdf_projection_flow_definition() -> dict:
             },
             {
                 "id": "agent_2",
-                "type": "agent",
+                "type": "output",
                 "position": {"x": 520, "y": 0},
                 "data": {
                     "agent_id": "json_formatter",
@@ -123,7 +123,12 @@ def _sample_pdf_projection_flow_definition() -> dict:
         ],
         "edges": [
             {"id": "edge_1", "source": "task_input_1", "target": "agent_1"},
-            {"id": "edge_2", "source": "agent_1", "target": "agent_2"},
+            {
+                "id": "edge_2",
+                "source": "agent_1",
+                "target": "agent_2",
+                "role": "output_attachment",
+            },
         ],
     }
 
@@ -177,7 +182,7 @@ def _sample_pdf_gene_envelope() -> dict:
     return {
         "envelope_id": "sample-fly-publication-gene-envelope",
         "domain_pack_id": "gene",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "Gene",
                 "pending_ref_id": "gene-crumb",
@@ -202,13 +207,6 @@ def _sample_pdf_gene_envelope() -> dict:
             }
         ],
     }
-
-
-def _tool_by_name(agent, tool_name: str):
-    for tool in getattr(agent, "tools", []) or []:
-        if getattr(tool, "name", "") == tool_name:
-            return tool
-    raise AssertionError(f"Flow supervisor did not expose tool {tool_name!r}")
 
 
 @contextmanager
@@ -285,8 +283,8 @@ def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClien
         "name": flow_name,
         "description": "integration lifecycle test",
         "flow_definition": _flow_definition(
-            agent_id="chat_output",
-            agent_display_name="Chat Output Agent",
+            agent_id="orthologs",
+            agent_display_name="Ortholog Lookup",
         ),
     }
     create_resp = client.post("/api/flows", json=create_payload)
@@ -298,8 +296,8 @@ def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClien
     update_payload = {
         "description": "integration lifecycle test (updated)",
         "flow_definition": _flow_definition(
-            agent_id="chat_output",
-            agent_display_name="Chat Output Agent",
+            agent_id="orthologs",
+            agent_display_name="Ortholog Lookup",
             output_key="final_output_updated",
         ),
     }
@@ -353,8 +351,8 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
             "name": flow_name,
             "description": "integration durable replay test",
             "flow_definition": _flow_definition(
-                agent_id="chat_output",
-                agent_display_name="Chat Output Agent",
+                agent_id="orthologs",
+                agent_display_name="Ortholog Lookup",
             ),
         },
     )
@@ -431,7 +429,7 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
     assert fetched["execution_count"] == 1
 
 
-def test_execute_flow_emits_stream_error_for_unresolvable_agent(client: TestClient):
+def test_create_flow_rejects_unresolvable_agent(client: TestClient):
     flow_name = f"it-fail-flow-{uuid4().hex[:12]}"
     create_payload = {
         "name": flow_name,
@@ -442,25 +440,11 @@ def test_execute_flow_emits_stream_error_for_unresolvable_agent(client: TestClie
         ),
     }
     create_resp = client.post("/api/flows", json=create_payload)
-    assert create_resp.status_code == 201, create_resp.text
-    flow_id = create_resp.json()["id"]
-
-    execute_payload = {
-        "flow_id": flow_id,
-        "session_id": f"session-{uuid4().hex[:10]}",
-        "user_query": "Run flow with invalid agent",
-    }
-    with client.stream("POST", "/api/chat/execute-flow", json=execute_payload) as stream_resp:
-        events = _sse_events(stream_resp)
-        assert stream_resp.status_code == 200
-
-    event_types = [event.get("type") for event in events]
-    assert "SUPERVISOR_ERROR" in event_types
-    assert "RUN_ERROR" in event_types
-
-    run_error = next(event for event in events if event.get("type") == "RUN_ERROR")
-    run_error_text = (run_error.get("message") or "").lower()
-    assert "no agent tools" in run_error_text or "could be created" in run_error_text
+    assert create_resp.status_code == 422, create_resp.text
+    detail = create_resp.json()["detail"]
+    assert "Flow references unavailable agent(s)" in detail
+    assert "unknown_agent_for_failure_path" in detail
+    assert "Re-select an available agent before saving or running this flow" in detail
 
 
 def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
@@ -471,6 +455,12 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
 ):
     from src.lib.context import set_current_trace_id
     from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
+    from src.lib.flows.executor import _build_terminal_flow_artifact_bundle
+    from src.lib.flows.output_projection import (
+        FlowOutputProjectionPlan,
+        finalize_output_projection,
+    )
+    from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
     from src.models.sql.database import Base
     from src.models.sql.file_output import FileOutput
     from src.models.sql.pdf_document import PDFDocument
@@ -563,11 +553,12 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
                 "agent_name": "Gene Extractor",
             },
         )
-        evidence_records = payload["objects"][0]["evidence_records"]
+        evidence_records = payload["extracted_objects"][0]["evidence_records"]
         execution_state["evidence_registry"].add_many(evidence_records)
         execution_state["completed_steps"].append(
             {
                 "step": 1,
+                "node_id": "agent_1",
                 "agent_id": "gene_extractor",
                 "agent_name": "Gene Extractor",
                 "tool_name": ordered_tool_names[0],
@@ -581,17 +572,54 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
         execution_state["next_tool_index"] = 1
         yield {"type": "TOOL_COMPLETE", "details": {"toolName": ordered_tool_names[0]}}
 
-        formatter_tool = _tool_by_name(agent, ordered_tool_names[1])
-        formatter_result = await formatter_tool.on_invoke_tool(
-            SimpleNamespace(tool_name=ordered_tool_names[1]),
-            json.dumps({"query": "Export the projected gene rows as JSON."}),
+        projection_flow_definition = _sample_pdf_projection_flow_definition()
+        projection_plan = FlowOutputProjectionPlan.model_validate(
+            projection_flow_definition["nodes"][2]["data"]["projection_plan"]
         )
-        file_info = json.loads(formatter_result)
+        bundle = _build_terminal_flow_artifact_bundle(
+            agent_id="json_formatter",
+            output_format="json",
+            completed_steps=execution_state["completed_steps"],
+            flow_name=flow_name,
+            flow_run_id=None,
+            document_id=str(document_id),
+        )
+        projection = finalize_output_projection(bundle, projection_plan)
+        file_info = await save_projected_file_output(
+            "json",
+            projection,
+            "sample_pdf_gene_export",
+            "json_formatter",
+        )
+        formatter_result = json.dumps(file_info)
+        execution_state["completed_steps"].append(
+            {
+                "step": 2,
+                "node_id": "agent_2",
+                "agent_id": "json_formatter",
+                "agent_name": "JSON File Formatter",
+                "tool_name": ordered_tool_names[1],
+                "output": formatter_result,
+                "output_preview": formatter_result,
+                "evidence_records": [],
+                "evidence_count": 0,
+            }
+        )
+        execution_state["next_tool_index"] = 2
         yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": ordered_tool_names[1]},
         }
-        yield {"type": "FILE_READY", "details": file_info}
+        yield {
+            "type": "FILE_READY",
+            "details": {
+                **file_info,
+                "formatter_node_id": "agent_2",
+                "source_node_id": "agent_1",
+                "formatter_label": "JSON File Formatter",
+                "source_label": "Gene Extractor",
+            },
+        }
 
     execute_payload = {
         "flow_id": flow_id,

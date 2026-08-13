@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from types import SimpleNamespace
+from typing import Any, cast
+
 import pytest
 
 import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 from src.lib.curation_workspace import curation_prep_service as module
+from src.lib.curation_workspace.domain_envelope_normalization import (
+    domain_envelope_from_extraction_result,
+    normalized_optional_string,
+)
 from src.schemas.curation_prep import CurationPrepEnvelopeRef, CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import (
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
+)
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopePersistenceError,
+    domain_envelope_payload_hash,
 )
 
 
@@ -240,10 +252,134 @@ def _make_allele_domain_payload(
     }
 
 
+def test_domain_envelope_normalizer_promotes_extraction_result_to_objects_payload():
+    extraction_result = _make_domain_envelope_extraction_result()
+
+    envelope = domain_envelope_from_extraction_result(extraction_result)
+    dumped = envelope.model_dump(mode="json")
+
+    assert envelope.envelope_id == "extraction-result:extract-domain-1"
+    assert envelope.domain_pack_id == "gene"
+    assert dumped["extracted_objects"][0]["object_id"] == "gene-row-1"
+    assert "curatable_objects" not in dumped
+    assert envelope.metadata["semantic_source"] == "domain_envelope.extracted_objects"
+    assert envelope.metadata["source_extraction_result_id"] == "extract-domain-1"
+    assert envelope.metadata["source_adapter_key"] == "gene"
+
+
+def test_domain_envelope_normalizer_rejects_mixed_canonical_and_extractor_shapes():
+    extraction_result = _make_domain_envelope_extraction_result()
+    payload_json = extraction_result.payload_json
+    assert isinstance(payload_json, dict)
+    curatable_objects = list(payload_json["curatable_objects"])
+    mixed_payload = {
+        "envelope_id": "env-mixed-1",
+        "domain_pack_id": "gene",
+        "domain_pack_version": "0.1.0",
+        "status": "extracted",
+        "extracted_objects": curatable_objects,
+        "curatable_objects": curatable_objects,
+        "history": [],
+        "validation_findings": [],
+        "metadata": {},
+    }
+    mixed_result = extraction_result.model_copy(
+        update={"payload_json": mixed_payload},
+    )
+
+    with pytest.raises(ValueError, match="mixes DomainEnvelope.extracted_objects"):
+        domain_envelope_from_extraction_result(mixed_result)
+
+
+def test_existing_envelope_id_rejects_cross_document_scope_collision():
+    extraction_result = _make_domain_envelope_extraction_result(document_id="document-2")
+    envelope = domain_envelope_from_extraction_result(extraction_result)
+    row = SimpleNamespace(
+        envelope_id=envelope.envelope_id,
+        project_key="agr",
+        document_id="document-1",
+        flow_run_id=None,
+        adapter_key="gene",
+        domain_pack_key=envelope.domain_pack_id,
+        domain_pack_version=envelope.domain_pack_version,
+        source_extraction_result_id="extract-domain-1",
+        source_payload_hash=domain_envelope_payload_hash(envelope),
+    )
+
+    with pytest.raises(DomainEnvelopePersistenceError, match="document_id"):
+        module._validate_existing_materialization_scope(
+            cast(module.DomainEnvelopeModel, row),
+            extraction_result=extraction_result,
+            envelope=envelope,
+            project_key="agr",
+            adapter_key="gene",
+            source_payload_hash=domain_envelope_payload_hash(envelope),
+        )
+
+
+def test_existing_envelope_id_rejects_changed_source_payload():
+    extraction_result = _make_domain_envelope_extraction_result()
+    envelope = domain_envelope_from_extraction_result(extraction_result)
+    row = SimpleNamespace(
+        envelope_id=envelope.envelope_id,
+        project_key="agr",
+        document_id="document-1",
+        flow_run_id=None,
+        adapter_key="gene",
+        domain_pack_key=envelope.domain_pack_id,
+        domain_pack_version=envelope.domain_pack_version,
+        source_extraction_result_id="extract-domain-1",
+        source_payload_hash="0" * 64,
+    )
+
+    with pytest.raises(DomainEnvelopePersistenceError, match="source_payload_hash"):
+        module._validate_existing_materialization_scope(
+            cast(module.DomainEnvelopeModel, row),
+            extraction_result=extraction_result,
+            envelope=envelope,
+            project_key="agr",
+            adapter_key="gene",
+            source_payload_hash=domain_envelope_payload_hash(envelope),
+        )
+
+
+def test_existing_envelope_id_accepts_identical_extraction_retry():
+    extraction_result = _make_domain_envelope_extraction_result()
+    first_envelope = domain_envelope_from_extraction_result(extraction_result)
+    retry_envelope = domain_envelope_from_extraction_result(extraction_result)
+    source_payload_hash = domain_envelope_payload_hash(first_envelope)
+    row = SimpleNamespace(
+        envelope_id=first_envelope.envelope_id,
+        project_key="agr",
+        document_id="document-1",
+        flow_run_id=None,
+        adapter_key="gene",
+        domain_pack_key=first_envelope.domain_pack_id,
+        domain_pack_version=first_envelope.domain_pack_version,
+        source_extraction_result_id="extract-domain-1",
+        source_payload_hash=source_payload_hash,
+    )
+
+    assert domain_envelope_payload_hash(retry_envelope) == source_payload_hash
+    module._validate_existing_materialization_scope(
+        cast(module.DomainEnvelopeModel, row),
+        extraction_result=extraction_result,
+        envelope=retry_envelope,
+        project_key="agr",
+        adapter_key="gene",
+        source_payload_hash=domain_envelope_payload_hash(retry_envelope),
+    )
+
+
+def test_normalized_optional_string_preserves_string_only_behavior():
+    assert normalized_optional_string(" gene ") == "gene"
+    assert normalized_optional_string(123) is None
+
+
 @pytest.mark.asyncio
 async def test_run_curation_prep_selects_envelope_refs_and_persists_output(monkeypatch):
     extraction_result = _make_domain_envelope_extraction_result()
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_ensure_domain_envelope_materialization(record, *, persist, db=None):
         assert record is extraction_result
@@ -300,6 +436,103 @@ async def test_run_curation_prep_selects_envelope_refs_and_persists_output(monke
         persisted_request.metadata["final_run_metadata"]["model_name"]
         == "deterministic_programmatic_mapper_v1"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_records_sentry_success_metadata(monkeypatch):
+    extraction_result = _make_domain_envelope_extraction_result()
+    captured: dict[str, Any] = {"span_data": {}, "statuses": []}
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            captured["span_data"][key] = value
+
+        def set_status(self, status):
+            captured["statuses"].append(status)
+
+    @contextmanager
+    def _fake_sentry_span(**kwargs):
+        captured["span_kwargs"] = kwargs
+        yield FakeSpan()
+
+    monkeypatch.setattr(module, "gen_ai_invoke_agent_span", _fake_sentry_span)
+    monkeypatch.setattr(
+        module,
+        "ensure_domain_envelope_materialization",
+        lambda *_args, **_kwargs: CurationPrepEnvelopeRef(
+            envelope_id="env-gene-1",
+            envelope_revision=1,
+            source_extraction_result_id="extract-domain-1",
+            domain_pack_id="gene",
+            review_row_count=2,
+        ),
+    )
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    prep_output = await module.run_curation_prep(
+        [extraction_result],
+        scope_confirmation=_make_scope_confirmation(),
+        persistence_context=module.CurationPrepPersistenceContext(
+            source_kind=CurationExtractionSourceKind.CHAT,
+            origin_session_id="chat-session-1",
+            trace_id="trace-upstream",
+            user_id="user-upstream",
+            workflow="curation_prep_chat",
+        ),
+    )
+
+    assert prep_output.review_row_count == 2
+    assert captured["span_kwargs"]["agent_key"] == "curation_prep"
+    assert captured["span_kwargs"]["provider_name"] == "ai_curation"
+    assert captured["span_kwargs"]["response_streaming"] is False
+    assert captured["span_kwargs"]["workflow"] == "curation_prep_chat"
+    assert captured["span_kwargs"]["conversation_id"] == "chat-session-1"
+    assert captured["span_kwargs"]["trace_id"] == "trace-upstream"
+    assert captured["statuses"] == ["ok"]
+    assert captured["span_data"]["ai_curation.curation_prep.status"] == "success"
+    assert captured["span_data"]["ai_curation.curation_prep.envelope_ref_count"] == 1
+    assert captured["span_data"]["ai_curation.curation_prep.review_row_count"] == 2
+    assert captured["span_data"]["ai_curation.curation_prep.warning_count"] == 0
+    assert captured["span_data"]["ai_curation.agent.output"]["review_row_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_records_sentry_error_metadata(monkeypatch):
+    captured: dict[str, Any] = {"span_data": {}, "statuses": []}
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            captured["span_data"][key] = value
+
+        def set_status(self, status):
+            captured["statuses"].append(status)
+
+    @contextmanager
+    def _fake_sentry_span(**kwargs):
+        captured["span_kwargs"] = kwargs
+        yield FakeSpan()
+
+    monkeypatch.setattr(module, "gen_ai_invoke_agent_span", _fake_sentry_span)
+
+    with pytest.raises(ValueError, match="No extraction results matched"):
+        await module.run_curation_prep(
+            [],
+            scope_confirmation=_make_scope_confirmation(),
+            persistence_context=module.CurationPrepPersistenceContext(
+                source_kind=CurationExtractionSourceKind.CHAT,
+                origin_session_id="chat-session-1",
+                workflow="curation_prep_chat",
+            ),
+        )
+
+    assert captured["span_kwargs"]["workflow"] == "curation_prep_chat"
+    assert captured["statuses"] == ["invalid_argument"]
+    assert captured["span_data"]["ai_curation.curation_prep.status"] == "error"
+    assert captured["span_data"]["ai_curation.error.detail"] == {
+        "phase": "curation_prep",
+        "error_type": "ValueError",
+        "message": "No extraction results matched the confirmed prep scope.",
+    }
 
 
 @pytest.mark.asyncio
@@ -389,11 +622,13 @@ def test_curation_prep_persistence_context_keeps_optional_fields():
         flow_run_id="flow-1",
         user_id="user-1",
         conversation_summary="Conversation summary.",
+        workflow="curation_prep_chat",
     )
 
     assert context.document_id == "document-1"
     assert context.source_kind is CurationExtractionSourceKind.CHAT
     assert context.flow_run_id == "flow-1"
+    assert context.workflow == "curation_prep_chat"
 
 
 @pytest.mark.asyncio
@@ -441,7 +676,7 @@ async def test_run_curation_prep_allele_scope_uses_envelope_refs_not_prep_candid
             review_row_count=2,
         )
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_persist(request, *, db=None):
         captured["request"] = request

@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-query';
 import { logger } from './logger';
 import { clearAllNamespacedChatLocalStorage } from '../lib/chatCacheKeys';
+import { safeSetItem } from '../lib/browserStorage';
 
 const API_BASE_URL = '/api/weaviate';
 
@@ -60,7 +61,10 @@ interface DocumentChunk {
 
 export interface DocumentListResponse {
   documents: PDFDocument[];
-  pagination: {
+  total?: number;
+  limit?: number;
+  offset?: number;
+  pagination?: {
     currentPage: number;
     totalPages: number;
     totalItems: number;
@@ -70,7 +74,7 @@ export interface DocumentListResponse {
 }
 
 export interface RawDocumentDetailResponse {
-  document: Record<string, unknown>;
+  document?: Record<string, unknown>;
   chunks?: Array<Record<string, unknown>>;
   chunks_preview?: Array<Record<string, unknown>>;
   total_chunks?: number;
@@ -79,6 +83,26 @@ export interface RawDocumentDetailResponse {
   pipeline_status?: Record<string, unknown> | null;
   related_documents?: Array<Record<string, unknown>>;
   schema_version?: string;
+  [key: string]: unknown;
+}
+
+export interface DocumentSourceProvenance {
+  provider?: string | null;
+  referenceId?: string | null;
+  referenceCurie?: string | null;
+  sourceFileId?: string | null;
+  pdfArtifactId?: string | null;
+  convertedArtifactId?: string | null;
+  externalIds?: Record<string, string | string[]> | null;
+  sourceMd5?: string | null;
+  fileClass?: string | null;
+  fileExtension?: string | null;
+  artifactStatus?: string | null;
+  importStatus?: string | null;
+  importedAt?: string | null;
+  accessScope?: string | null;
+  accessMods?: Record<string, string[]> | null;
+  viewerMode?: string | null;
 }
 
 export interface DocumentSummary {
@@ -90,9 +114,11 @@ export interface DocumentSummary {
   lastAccessedDate: string | null;
   processingStatus: string | null;
   embeddingStatus: string | null;
+  errorMessage?: string | null;
   chunkCount: number | null;
   vectorCount: number | null;
   metadata?: Record<string, unknown> | null;
+  sourceProvenance?: DocumentSourceProvenance | null;
 }
 
 export interface EmbeddingModelBreakdown {
@@ -219,28 +245,140 @@ const toStringOrNull = (value: unknown): string | null => {
   return null;
 };
 
+const toRecordOrNull = (value: unknown): Record<string, unknown> | null => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+};
+
+const toStringArrayRecordOrNull = (value: unknown): Record<string, string[]> | null => {
+  const record = toRecordOrNull(value);
+  if (!record) {
+    return null;
+  }
+
+  const normalized = Object.entries(record).reduce<Record<string, string[]>>((acc, [key, item]) => {
+    if (Array.isArray(item)) {
+      const values = item
+        .map((entry) => (typeof entry === 'string' ? entry : null))
+        .filter((entry): entry is string => Boolean(entry));
+      if (values.length > 0) {
+        acc[key] = values;
+      }
+    }
+    return acc;
+  }, {});
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
+};
+
+const toExternalIdsOrNull = (value: unknown): Record<string, string | string[]> | null => {
+  const record = toRecordOrNull(value);
+  if (!record) {
+    return null;
+  }
+
+  const normalized = Object.entries(record).reduce<Record<string, string | string[]>>(
+    (acc, [key, item]) => {
+      if (typeof item === 'string' && item.trim()) {
+        acc[key] = item;
+      } else if (Array.isArray(item)) {
+        const values = item
+          .map((entry) => (typeof entry === 'string' ? entry : null))
+          .filter((entry): entry is string => Boolean(entry));
+        if (values.length > 0) {
+          acc[key] = values;
+        }
+      }
+      return acc;
+    },
+    {}
+  );
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
+};
+
+export const normalizeDocumentSourceProvenance = (
+  raw: unknown,
+  fallback?: DocumentSourceProvenance | null
+): DocumentSourceProvenance | null => {
+  if (raw === null) {
+    return null;
+  }
+  if (raw === undefined) {
+    return fallback ?? null;
+  }
+
+  const source = toRecordOrNull(raw);
+  if (!source) {
+    return fallback ?? null;
+  }
+
+  const normalized: DocumentSourceProvenance = {
+    provider: toStringOrNull(source.provider) ?? fallback?.provider ?? null,
+    referenceId: toStringOrNull(source.reference_id ?? source.referenceId) ?? fallback?.referenceId ?? null,
+    referenceCurie: toStringOrNull(source.reference_curie ?? source.referenceCurie) ?? fallback?.referenceCurie ?? null,
+    sourceFileId: toStringOrNull(source.source_file_id ?? source.sourceFileId) ?? fallback?.sourceFileId ?? null,
+    pdfArtifactId: toStringOrNull(source.pdf_artifact_id ?? source.pdfArtifactId) ?? fallback?.pdfArtifactId ?? null,
+    convertedArtifactId:
+      toStringOrNull(source.converted_artifact_id ?? source.convertedArtifactId) ??
+      fallback?.convertedArtifactId ??
+      null,
+    externalIds: toExternalIdsOrNull(source.external_ids ?? source.externalIds) ?? fallback?.externalIds ?? null,
+    sourceMd5: toStringOrNull(source.source_md5 ?? source.sourceMd5) ?? fallback?.sourceMd5 ?? null,
+    fileClass: toStringOrNull(source.file_class ?? source.fileClass) ?? fallback?.fileClass ?? null,
+    fileExtension: toStringOrNull(source.file_extension ?? source.fileExtension) ?? fallback?.fileExtension ?? null,
+    artifactStatus: toStringOrNull(source.artifact_status ?? source.artifactStatus) ?? fallback?.artifactStatus ?? null,
+    importStatus: toStringOrNull(source.import_status ?? source.importStatus) ?? fallback?.importStatus ?? null,
+    importedAt: toStringOrNull(source.imported_at ?? source.importedAt) ?? fallback?.importedAt ?? null,
+    accessScope: toStringOrNull(source.access_scope ?? source.accessScope) ?? fallback?.accessScope ?? null,
+    accessMods: toStringArrayRecordOrNull(source.access_mods ?? source.accessMods) ?? fallback?.accessMods ?? null,
+    viewerMode: toStringOrNull(source.viewer_mode ?? source.viewerMode) ?? fallback?.viewerMode ?? null,
+  };
+
+  return normalized.provider ? normalized : null;
+};
+
 const normalizeDocumentSummary = (
   raw: Record<string, unknown> | undefined,
   fallback?: DocumentSummary,
   fallbackId?: string
 ): DocumentSummary => {
   const metadata = (raw?.metadata ?? raw?.['metadata']) as Record<string, unknown> | undefined;
+  const processingStatus = raw?.processing_status ?? raw?.processingStatus ?? raw?.status;
+  const hasSnakeCaseProvenance =
+    raw != null && Object.prototype.hasOwnProperty.call(raw, 'source_provenance');
+  const hasCamelCaseProvenance =
+    raw != null && Object.prototype.hasOwnProperty.call(raw, 'sourceProvenance');
+  const rawSourceProvenance = hasSnakeCaseProvenance
+    ? raw?.source_provenance
+    : hasCamelCaseProvenance
+      ? raw?.sourceProvenance
+      : undefined;
 
   return {
-    id: String(raw?.id ?? fallback?.id ?? fallbackId ?? ''),
+    id: String(raw?.id ?? raw?.document_id ?? raw?.documentId ?? fallback?.id ?? fallbackId ?? ''),
     filename: String(raw?.filename ?? fallback?.filename ?? 'Untitled'),
-    fileSize: (raw?.file_size ?? raw?.fileSize ?? fallback?.fileSize ?? null) as number | null,
+    title: (raw?.title ?? fallback?.title ?? null) as string | null,
+    fileSize: (raw?.file_size_bytes ?? raw?.file_size ?? raw?.fileSize ?? fallback?.fileSize ?? null) as number | null,
     creationDate: toStringOrNull(
-      raw?.creation_date ?? raw?.creationDate ?? fallback?.creationDate ?? null
+      raw?.upload_timestamp ?? raw?.creation_date ?? raw?.creationDate ?? fallback?.creationDate ?? null
     ),
     lastAccessedDate: toStringOrNull(
       raw?.last_accessed_date ?? raw?.lastAccessedDate ?? fallback?.lastAccessedDate ?? null
     ),
-    processingStatus: (raw?.processing_status ?? raw?.processingStatus ?? fallback?.processingStatus ?? null) as string | null,
+    processingStatus: (typeof processingStatus === 'string'
+      ? processingStatus.toLowerCase()
+      : fallback?.processingStatus ?? null) as string | null,
     embeddingStatus: (raw?.embedding_status ?? raw?.embeddingStatus ?? fallback?.embeddingStatus ?? null) as string | null,
     chunkCount: (raw?.chunk_count ?? raw?.chunkCount ?? fallback?.chunkCount ?? null) as number | null,
     vectorCount: (raw?.vector_count ?? raw?.vectorCount ?? fallback?.vectorCount ?? null) as number | null,
     metadata: metadata ?? fallback?.metadata ?? null,
+    sourceProvenance: normalizeDocumentSourceProvenance(
+      rawSourceProvenance,
+      fallback?.sourceProvenance
+    ),
   };
 };
 
@@ -333,8 +471,9 @@ export const normalizeDocumentDetailResponse = (
   options: NormalizeDocumentDetailOptions = {}
 ): DocumentDetailData => {
   const { fallbackSummary, documentId } = options;
-  const document = normalizeDocumentSummary(payload.document, fallbackSummary, documentId);
-  const totalChunks = (payload.total_chunks ?? fallbackSummary?.chunkCount ?? 0) as number;
+  const rawDocument = payload.document ?? (payload as Record<string, unknown>);
+  const document = normalizeDocumentSummary(rawDocument, fallbackSummary, documentId);
+  const totalChunks = (payload.total_chunks ?? rawDocument.chunk_count ?? rawDocument.chunkCount ?? fallbackSummary?.chunkCount ?? 0) as number;
   const embeddedChunks = document.vectorCount ?? 0;
 
   const embeddingSummary =
@@ -447,7 +586,11 @@ export const fetchApi = async <T>(
 
         // Clear auth-bound browser state before redirecting to login.
         clearAllNamespacedChatLocalStorage();
-        sessionStorage.setItem('intendedPath', window.location.pathname + window.location.search);
+        safeSetItem(() => window.sessionStorage, 'intendedPath', window.location.pathname + window.location.search, {
+          owner: 'auth',
+          key: 'intendedPath',
+          workflowCritical: true,
+        });
 
         // Redirect to login endpoint (backend will redirect to Cognito)
         window.location.href = '/api/auth/login';
@@ -559,7 +702,10 @@ export const wakePdfExtractionWorker = async (): Promise<PdfExtractionWakeRespon
 };
 
 export const usePdfExtractionHealth = (
-  options?: UseQueryOptions<PdfExtractionHealthStatus>
+  options?: Omit<
+    UseQueryOptions<PdfExtractionHealthStatus, Error, PdfExtractionHealthStatus, QueryKey>,
+    'queryKey' | 'queryFn'
+  >
 ) =>
   useQuery<PdfExtractionHealthStatus>({
     queryKey: ['pdf-extraction-health'],

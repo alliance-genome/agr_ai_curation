@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.lib.domain_envelope_payload_hash import canonical_domain_envelope_payload_hash
 from src.lib.curation_workspace.models import (
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
@@ -97,13 +98,16 @@ class DomainEnvelopeCheckpointRequest:
     document_id: str | UUID | None = None
     session_id: str | UUID | None = None
     flow_run_id: str | None = None
+    adapter_key: str | None = None
+    source_extraction_result_id: str | UUID | None = None
+    source_payload_hash: str | None = None
     object_model_ref_json: Mapping[str, Any] = field(default_factory=dict)
     model_field_ref_json: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class DomainEnvelopeCheckpointResult:
-    """Summary returned after a successful checkpoint commit."""
+    """Summary returned after a successful checkpoint flush."""
 
     envelope_id: str
     revision: int
@@ -116,18 +120,15 @@ class DomainEnvelopeCheckpointResult:
 def write_domain_envelope_checkpoint(
     db: Session,
     request: DomainEnvelopeCheckpointRequest,
-    *,
-    manage_transaction: bool = True,
 ) -> DomainEnvelopeCheckpointResult:
     """Persist a completed envelope checkpoint and regenerate current indexes.
 
     The caller supplies the fully patched ``DomainEnvelope`` for the next
-    revision. By default this service commits exactly one transaction: it locks
-    the current envelope row, verifies the expected revision, writes the new
-    envelope JSON, regenerates object/finding/projection indexes from that
-    stored JSON, appends unseen history events by event_id, then commits.
-    Callers that are already composing a larger unit of work may pass
-    ``manage_transaction=False`` and commit or roll back themselves.
+    revision. It locks the current envelope row, verifies the expected revision,
+    writes the new envelope JSON, regenerates object/finding/projection indexes from that
+    stored JSON, and appends unseen history events by event_id. The supplied
+    session is flushed but never committed or rolled back; the caller owns the
+    transaction boundary.
     """
 
     envelope = request.envelope
@@ -137,65 +138,106 @@ def write_domain_envelope_checkpoint(
     project_key = _required_string(request.project_key, field_name="project_key")
     flow_run_id = _optional_non_empty_string(request.flow_run_id, field_name="flow_run_id")
     envelope_json = envelope.model_dump(mode="json")
+    requested_source_payload_hash = request.source_payload_hash
     now = datetime.now(timezone.utc)
 
-    try:
-        envelope_row = db.scalars(
-            select(DomainEnvelopeModel)
-            .where(DomainEnvelopeModel.envelope_id == envelope.envelope_id)
-            .with_for_update()
-        ).first()
+    envelope_row = db.scalars(
+        select(DomainEnvelopeModel)
+        .where(DomainEnvelopeModel.envelope_id == envelope.envelope_id)
+        .with_for_update()
+    ).first()
 
-        if envelope_row is None:
-            if request.expected_revision != 0:
-                raise StaleDomainEnvelopeRevisionError(
-                    envelope_id=envelope.envelope_id,
-                    expected_revision=request.expected_revision,
-                    actual_revision=None,
-                )
-            next_revision = 1
-            envelope_row = DomainEnvelopeModel(
+    if envelope_row is None:
+        if request.expected_revision != 0:
+            raise StaleDomainEnvelopeRevisionError(
                 envelope_id=envelope.envelope_id,
-                revision=next_revision,
-                created_at=now,
+                expected_revision=request.expected_revision,
+                actual_revision=None,
             )
-            db.add(envelope_row)
-        else:
-            if envelope_row.revision != request.expected_revision:
-                raise StaleDomainEnvelopeRevisionError(
-                    envelope_id=envelope.envelope_id,
-                    expected_revision=request.expected_revision,
-                    actual_revision=envelope_row.revision,
-                )
-            next_revision = envelope_row.revision + 1
-            envelope_row.revision = next_revision
-
-        envelope_row.project_key = project_key
-        envelope_row.domain_pack_key = envelope.domain_pack_id
-        envelope_row.domain_pack_version = envelope.domain_pack_version
-        envelope_row.status = envelope.status
-        envelope_row.document_id = _optional_uuid(request.document_id, field_name="document_id")
-        envelope_row.session_id = _optional_uuid(request.session_id, field_name="session_id")
-        envelope_row.flow_run_id = flow_run_id
-        envelope_row.schema_provider = (
-            envelope.schema_ref.provider if envelope.schema_ref is not None else None
+        next_revision = 1
+        envelope_row = DomainEnvelopeModel(
+            envelope_id=envelope.envelope_id,
+            revision=next_revision,
+            created_at=now,
         )
-        envelope_row.schema_ref_json = _schema_ref_json(envelope.schema_ref)
-        envelope_row.object_model_ref_json = dict(request.object_model_ref_json)
-        envelope_row.model_field_ref_json = dict(request.model_field_ref_json)
-        envelope_row.envelope_json = envelope_json
-        envelope_row.updated_at = now
-        envelope_row.checkpointed_at = now
-        db.flush()
+        adapter_key = _required_string(request.adapter_key, field_name="adapter_key")
+        document_id = _optional_uuid(request.document_id, field_name="document_id")
+        if document_id is None:
+            raise DomainEnvelopePersistenceError("A new domain envelope requires document_id")
+        source_payload_hash = (
+            _required_string(requested_source_payload_hash, field_name="source_payload_hash")
+            if requested_source_payload_hash is not None
+            else domain_envelope_payload_hash(envelope)
+        )
+        source_extraction_result_id = _optional_non_empty_string(
+            None
+            if request.source_extraction_result_id is None
+            else str(request.source_extraction_result_id),
+            field_name="source_extraction_result_id",
+        )
+        session_id = _optional_uuid(request.session_id, field_name="session_id")
+        if source_extraction_result_id is None and session_id is None:
+            raise DomainEnvelopePersistenceError(
+                "A new domain envelope requires a source extraction result or review session"
+            )
+        db.add(envelope_row)
+    else:
+        if envelope_row.revision != request.expected_revision:
+            raise StaleDomainEnvelopeRevisionError(
+                envelope_id=envelope.envelope_id,
+                expected_revision=request.expected_revision,
+                actual_revision=envelope_row.revision,
+            )
+        adapter_key = envelope_row.adapter_key
+        source_extraction_result_id = envelope_row.source_extraction_result_id
+        session_id = envelope_row.session_id
+        source_payload_hash = envelope_row.source_payload_hash
+        _validate_checkpoint_scope(
+            envelope_row,
+            project_key=project_key,
+            domain_pack_key=envelope.domain_pack_id,
+            domain_pack_version=envelope.domain_pack_version,
+            document_id=_optional_uuid(request.document_id, field_name="document_id"),
+            flow_run_id=flow_run_id,
+            adapter_key=request.adapter_key,
+            source_extraction_result_id=_optional_non_empty_string(
+                None
+                if request.source_extraction_result_id is None
+                else str(request.source_extraction_result_id),
+                field_name="source_extraction_result_id",
+            ),
+            session_id=_optional_uuid(request.session_id, field_name="session_id"),
+            source_payload_hash=requested_source_payload_hash,
+        )
+        if session_id is None and request.session_id is not None:
+            session_id = _optional_uuid(request.session_id, field_name="session_id")
+        next_revision = envelope_row.revision + 1
+        envelope_row.revision = next_revision
 
-        index_counts = _regenerate_indexes_for_row(db, envelope_row)
-        inserted_history_event_count = _append_history_events_for_row(db, envelope_row)
-        if manage_transaction:
-            db.commit()
-    except Exception:
-        if manage_transaction:
-            db.rollback()
-        raise
+    envelope_row.project_key = project_key
+    envelope_row.domain_pack_key = envelope.domain_pack_id
+    envelope_row.domain_pack_version = envelope.domain_pack_version
+    envelope_row.status = envelope.status
+    envelope_row.document_id = _optional_uuid(request.document_id, field_name="document_id")
+    envelope_row.session_id = session_id
+    envelope_row.flow_run_id = flow_run_id
+    envelope_row.adapter_key = adapter_key
+    envelope_row.source_extraction_result_id = source_extraction_result_id
+    envelope_row.source_payload_hash = source_payload_hash
+    envelope_row.schema_provider = (
+        envelope.schema_ref.provider if envelope.schema_ref is not None else None
+    )
+    envelope_row.schema_ref_json = _schema_ref_json(envelope.schema_ref)
+    envelope_row.object_model_ref_json = dict(request.object_model_ref_json)
+    envelope_row.model_field_ref_json = dict(request.model_field_ref_json)
+    envelope_row.envelope_json = envelope_json
+    envelope_row.updated_at = now
+    envelope_row.checkpointed_at = now
+    db.flush()
+
+    index_counts = _regenerate_indexes_for_row(db, envelope_row)
+    inserted_history_event_count = _append_history_events_for_row(db, envelope_row)
+    db.flush()
 
     return DomainEnvelopeCheckpointResult(
         envelope_id=envelope.envelope_id,
@@ -205,6 +247,50 @@ def write_domain_envelope_checkpoint(
         projection_count=index_counts.projection_count,
         inserted_history_event_count=inserted_history_event_count,
     )
+
+
+def domain_envelope_payload_hash(envelope: DomainEnvelope) -> str:
+    """Return the canonical hash for the materialized source payload."""
+
+    return canonical_domain_envelope_payload_hash(envelope.model_dump(mode="json"))
+
+
+def _validate_checkpoint_scope(
+    row: DomainEnvelopeModel,
+    *,
+    project_key: str,
+    domain_pack_key: str,
+    domain_pack_version: str | None,
+    document_id: UUID | None,
+    flow_run_id: str | None,
+    adapter_key: str | None,
+    source_extraction_result_id: str | None,
+    session_id: UUID | None,
+    source_payload_hash: str | None,
+) -> None:
+    expected = {
+        "project_key": project_key,
+        "domain_pack_key": domain_pack_key,
+        "domain_pack_version": domain_pack_version,
+        "document_id": document_id,
+        "flow_run_id": flow_run_id,
+    }
+    if adapter_key is not None:
+        expected["adapter_key"] = _required_string(adapter_key, field_name="adapter_key")
+    if source_extraction_result_id is not None:
+        expected["source_extraction_result_id"] = source_extraction_result_id
+    if source_payload_hash is not None:
+        expected["source_payload_hash"] = source_payload_hash
+    for field_name, expected_value in expected.items():
+        if getattr(row, field_name) != expected_value:
+            raise DomainEnvelopePersistenceError(
+                f"Domain envelope {row.envelope_id} cannot be reused with a different "
+                f"{field_name}"
+            )
+    if row.session_id is not None and session_id != row.session_id:
+        raise DomainEnvelopePersistenceError(
+            f"Domain envelope {row.envelope_id} belongs to a different review session"
+        )
 
 
 def load_domain_envelope(
@@ -233,7 +319,7 @@ def regenerate_domain_envelope_indexes(
     db: Session,
     envelope_id: str,
 ) -> DomainEnvelopeIndexCounts:
-    """Regenerate object/finding/projection indexes from stored envelope_json."""
+    """Regenerate indexes and flush without committing the supplied session."""
 
     normalized_envelope_id = _required_string(envelope_id, field_name="envelope_id")
     envelope_row = db.scalars(
@@ -246,12 +332,8 @@ def regenerate_domain_envelope_indexes(
             f"Domain envelope {normalized_envelope_id} was not found"
         )
 
-    try:
-        counts = _regenerate_indexes_for_row(db, envelope_row)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+    counts = _regenerate_indexes_for_row(db, envelope_row)
+    db.flush()
     return counts
 
 
@@ -282,7 +364,7 @@ def _regenerate_indexes_for_row(
     db.flush()
 
     object_count = 0
-    for object_index, domain_object in enumerate(envelope.objects):
+    for object_index, domain_object in enumerate(envelope.extracted_objects):
         object_id = _stable_object_id(domain_object)
         schema_ref_json = _schema_ref_json(domain_object.schema_ref)
         object_metadata = dict(domain_object.metadata)
@@ -407,7 +489,7 @@ def _projection_rows(
 ) -> list[DomainEnvelopeProjectionIndex]:
     rows: list[DomainEnvelopeProjectionIndex] = []
 
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         object_id = _stable_object_id(domain_object)
         object_metadata = dict(domain_object.metadata)
         rows.append(
@@ -590,7 +672,7 @@ def _projection_json(entry: Mapping[str, Any]) -> dict[str, Any] | list[Any]:
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_id_by_ref: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         stable_object_id = _stable_object_id(domain_object)
         if domain_object.object_id is not None:
             object_id_by_ref[("object_id", domain_object.object_id)] = stable_object_id
@@ -615,7 +697,7 @@ def _validation_state_by_object(
 ) -> dict[str, str]:
     validation_state_by_object = {
         _stable_object_id(domain_object): OBJECT_VALIDATION_STATE_CLEAR
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
     }
 
     for finding in envelope.validation_findings:
@@ -751,6 +833,7 @@ __all__ = [
     "OBJECT_VALIDATION_STATE_INFO",
     "OBJECT_VALIDATION_STATE_WARNING",
     "StaleDomainEnvelopeRevisionError",
+    "domain_envelope_payload_hash",
     "load_domain_envelope",
     "regenerate_domain_envelope_indexes",
     "write_domain_envelope_checkpoint",

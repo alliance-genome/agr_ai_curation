@@ -45,6 +45,37 @@ export function resolveEnvelopeFieldPath(field: CurationDraftField): string {
     : field.field_key
 }
 
+function addEnvelopeFieldPathCandidate(candidates: Set<string>, rawPath: string): void {
+  const path = rawPath.trim()
+  if (!path) {
+    return
+  }
+  candidates.add(path)
+
+  const selectorLeafMatch = path.match(/\.(curie|name)$/)
+  if (selectorLeafMatch) {
+    candidates.add(path.slice(0, -selectorLeafMatch[0].length))
+  }
+}
+
+export function resolveEnvelopeFieldPathCandidates(field: CurationDraftField): Set<string> {
+  const candidates = new Set<string>()
+
+  addEnvelopeFieldPathCandidate(candidates, field.field_key)
+  addEnvelopeFieldPathCandidate(candidates, resolveEnvelopeFieldPath(field))
+
+  const materializesTo = field.metadata.materializes_to_field_paths
+  if (Array.isArray(materializesTo)) {
+    for (const rawPath of materializesTo) {
+      if (typeof rawPath === 'string') {
+        addEnvelopeFieldPathCandidate(candidates, rawPath)
+      }
+    }
+  }
+
+  return candidates
+}
+
 function applyDraftFieldChange(
   field: CurationDraftField,
   change: CurationDraftFieldChange,

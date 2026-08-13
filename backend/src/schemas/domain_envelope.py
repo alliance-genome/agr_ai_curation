@@ -529,9 +529,11 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
         default=None,
         description="Optional top-level schema ref for the envelope contract",
     )
-    objects: list[CuratableObjectEnvelope] = Field(
+    # Extractors produce DomainEnvelopeExtractionResult.curatable_objects[] first.
+    # This canonical downstream list is post-conversion and ready for review/export.
+    extracted_objects: list[CuratableObjectEnvelope] = Field(
         default_factory=list,
-        description="Curatable objects carried by this envelope",
+        description="Post-conversion extracted objects carried by this envelope",
     )
     validation_findings: list[ValidationFinding] = Field(
         default_factory=list,
@@ -558,27 +560,29 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
         objects_by_key: dict[tuple[str, str], CuratableObjectEnvelope] = {}
         errors: list[str] = []
 
-        for index, obj in enumerate(self.objects):
+        for index, obj in enumerate(self.extracted_objects):
             for ref_key in obj.ref_keys():
                 if ref_key in objects_by_key:
                     kind, value = ref_key
-                    errors.append(f"objects[{index}] duplicates {kind} '{value}'")
+                    errors.append(
+                        f"extracted_objects[{index}] duplicates {kind} '{value}'"
+                    )
                     continue
                 objects_by_key[ref_key] = obj
 
-        for index, obj in enumerate(self.objects):
+        for index, obj in enumerate(self.extracted_objects):
             for ref_index, object_ref in enumerate(obj.object_refs):
                 self._validate_object_ref(
                     object_ref,
                     objects_by_key,
-                    f"objects[{index}].object_refs[{ref_index}]",
+                    f"extracted_objects[{index}].object_refs[{ref_index}]",
                     errors,
                 )
             for ref_index, field_ref in enumerate(obj.field_refs):
                 self._validate_field_ref(
                     field_ref,
                     objects_by_key,
-                    f"objects[{index}].field_refs[{ref_index}]",
+                    f"extracted_objects[{index}].field_refs[{ref_index}]",
                     errors,
                 )
 

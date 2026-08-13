@@ -79,7 +79,7 @@ def _resolved_allele_association_envelope():
 
     resolved_objects = []
     allele_ref = ObjectRef(pending_ref_id="allele-reference-1", object_type="Allele")
-    for obj in envelope.objects:
+    for obj in envelope.extracted_objects:
         payload = dict(obj.payload)
         metadata = dict(obj.metadata)
         definition_state = obj.definition_state
@@ -124,7 +124,7 @@ def _resolved_allele_association_envelope():
         )
     )
     return envelope.model_copy(
-        update={"objects": resolved_objects, "validation_findings": []}
+        update={"extracted_objects": resolved_objects, "validation_findings": []}
     )
 
 
@@ -283,7 +283,7 @@ def test_allele_mention_binding_selects_crb_examples_for_validation():
         envelope = DomainEnvelope(
             envelope_id=f"allele-crb-fixture-{index}",
             domain_pack_id=ALLELE_DOMAIN_PACK_ID,
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="AlleleMention",
                     pending_ref_id=f"allele-mention-{index}",
@@ -343,7 +343,7 @@ def test_allele_mention_binding_does_not_use_envelope_evidence_without_object_id
     envelope = DomainEnvelope(
         envelope_id="allele-missing-object-evidence-fixture",
         domain_pack_id=ALLELE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="AlleleMention",
                 pending_ref_id="allele-mention-1",
@@ -414,7 +414,7 @@ def test_allele_mention_binding_uses_only_explicit_object_evidence_ids():
     envelope = DomainEnvelope(
         envelope_id="allele-explicit-object-evidence-fixture",
         domain_pack_id=ALLELE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="AlleleMention",
                 pending_ref_id="allele-mention-1",
@@ -486,7 +486,7 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
     envelope = DomainEnvelope(
         envelope_id="allele-crb-resolution-fixture",
         domain_pack_id=ALLELE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="AlleleMention",
                 pending_ref_id="allele-mention-resolved",
@@ -564,13 +564,10 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
                     resolved_values=resolved_values,
                     resolved_objects=[
                         {
-                            "object_type": "Allele",
-                            "canonical_id": resolved_values["curie"],
-                            "payload": {
-                                "primary_external_id": resolved_values["curie"],
-                                "allele_symbol": resolved_values["symbol"],
-                                "taxon": resolved_values["taxon"],
-                            },
+                            "allele_id": resolved_values["curie"],
+                            "symbol": resolved_values["symbol"],
+                            "species": "Drosophila melanogaster",
+                            "data_provider": "FB",
                         }
                     ],
                     missing_expected_fields=[],
@@ -642,6 +639,10 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
         "allele_symbol": "resolved",
         "taxon": "resolved",
     }
+    assert not any(
+        finding.code == "domain_pack.validator_expected_field_unmapped"
+        for finding in result.appended_findings
+    )
     unresolved_finding = next(
         finding
         for finding in result.appended_findings
@@ -759,9 +760,9 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
 
     assert validate_pending_allele_envelope(envelope) == ()
     assert envelope.domain_pack_id == ALLELE_DOMAIN_PACK_ID
-    assert {obj.status for obj in envelope.objects} == {CuratableObjectStatus.PENDING}
+    assert {obj.status for obj in envelope.extracted_objects} == {CuratableObjectStatus.PENDING}
 
-    counts = Counter(obj.object_type for obj in envelope.objects)
+    counts = Counter(obj.object_type for obj in envelope.extracted_objects)
     assert counts == {
         "Reference": 1,
         "AlleleMention": 1,
@@ -771,7 +772,7 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
 
     association = next(
         obj
-        for obj in envelope.objects
+        for obj in envelope.extracted_objects
         if obj.object_type == "AllelePaperEvidenceAssociation"
     )
     assert "allele_identifier" not in association.payload
@@ -785,7 +786,7 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
     )
     assert association.metadata["write_behavior"]["status"] == "blocked"
 
-    mention = next(obj for obj in envelope.objects if obj.object_type == "AlleleMention")
+    mention = next(obj for obj in envelope.extracted_objects if obj.object_type == "AlleleMention")
     assert mention.payload["mention"] == {
         "text": "daf-2(m41)",
         "normalized_hint": "WB:WBVar00000001",
@@ -796,7 +797,7 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         "daf-2-m41-evidence-1",
         "daf-2-m41-evidence-2",
     ]
-    assert all(obj.object_type != "Allele" for obj in envelope.objects)
+    assert all(obj.object_type != "Allele" for obj in envelope.extracted_objects)
 
     finding_codes = [finding.code for finding in envelope.validation_findings]
     assert finding_codes == [
@@ -997,14 +998,14 @@ def test_allele_export_adapter_preserves_verified_operations_from_workspace_snap
     resolved_envelope = _resolved_allele_association_envelope()
     association = next(
         obj
-        for obj in resolved_envelope.objects
+        for obj in resolved_envelope.extracted_objects
         if obj.object_type == "AllelePaperEvidenceAssociation"
     )
     selected_object_id = _stable_object_id(association)
     referenced_keys = {ref.ref_key() for ref in association.object_refs}
     snapshot_objects = [
         obj.model_dump(mode="json")
-        for obj in resolved_envelope.objects
+        for obj in resolved_envelope.extracted_objects
         if _stable_object_id(obj) == selected_object_id
         or any(ref_key in referenced_keys for ref_key in obj.ref_keys())
     ]
@@ -1030,7 +1031,7 @@ def test_allele_export_adapter_preserves_verified_operations_from_workspace_snap
                         else None
                     ),
                     "selected_object_ids": [selected_object_id],
-                    "objects": snapshot_objects,
+                    "extracted_objects": snapshot_objects,
                     "validation_findings": [],
                     "metadata": {},
                 }

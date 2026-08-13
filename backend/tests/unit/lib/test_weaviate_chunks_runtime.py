@@ -73,6 +73,7 @@ def test_store_chunks_success_with_preview_and_doc_items():
     assert inserted_objects[0].properties["contentPreview"].endswith("...")
     assert "docItemProvenance" in inserted_objects[0].properties
     assert inserted_objects[1].properties["elementType"] == "NarrativeText"
+    assert inserted_objects[1].properties["pageNumber"] is None
     pdf_collection.data.update.assert_called_once()
 
 

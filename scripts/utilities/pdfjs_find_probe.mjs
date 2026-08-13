@@ -56,11 +56,11 @@ Options:
 
 Examples:
   node scripts/utilities/pdfjs_find_probe.mjs \\
-    --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \\
+    --pdf ./sample_fly_publication.pdf \\
     --query "Absolute Quantification of Proteins in the Eye of"
 
   node scripts/utilities/pdfjs_find_probe.mjs \\
-    --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \\
+    --pdf ./sample_fly_publication.pdf \\
     --query-file /tmp/queries.txt --output /tmp/pdf-probe.json`)
 }
 

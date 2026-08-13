@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -24,6 +25,16 @@ from typing import Any
 
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "agr-ai-curation" / "agent-lsp"
 SOURCE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
+# Agents may run this helper from lightweight workspaces that do not have the
+# backend virtualenv installed. Missing third-party imports are allowed
+# to remain dependency noise, but repo-local missing imports must still fail.
+PYRIGHT_DEPENDENCY_RESOLUTION_RULES = {
+    "reportMissingImports",
+    "reportMissingModuleSource",
+}
+PYRIGHT_MISSING_IMPORT_PATTERN = re.compile(r'Import "([^"]+)" could not be resolved')
+TYPESCRIPT_PREP_TIMEOUT_ENV = "AGENT_LSP_TYPESCRIPT_PREP_TIMEOUT_SECONDS"
+TYPESCRIPT_PREP_TIMEOUT_DEFAULT = 300.0
 
 
 def run_command(
@@ -131,7 +142,9 @@ def workspace_lock(cache_dir: Path, timeout: float):
             break
         except FileExistsError:
             if time.monotonic() >= deadline:
-                raise TimeoutError(f"Timed out waiting for LSP workspace lock: {lock_dir}")
+                raise TimeoutError(
+                    f"Timed out waiting for LSP workspace lock: {lock_dir}"
+                )
             time.sleep(0.1)
     try:
         yield
@@ -185,9 +198,106 @@ def detect_languages(root: Path) -> list[str]:
     languages: list[str] = []
     if (root / "backend").is_dir() or any(root.glob("*.py")):
         languages.append("python")
-    if (root / "frontend" / "tsconfig.json").is_file() or (root / "package.json").is_file():
+    if (root / "frontend" / "tsconfig.json").is_file() or (
+        root / "package.json"
+    ).is_file():
         languages.append("typescript")
     return languages
+
+
+def typescript_dependency_state(root: Path) -> dict[str, Any]:
+    frontend = root / "frontend"
+    lockfile = frontend / "package-lock.json"
+    tsserver = frontend / "node_modules" / "typescript" / "lib" / "tsserver.js"
+    if not (frontend / "tsconfig.json").is_file():
+        return {"status": "not_applicable", "reason": "typescript_workspace_missing"}
+    if not lockfile.is_file():
+        return {"status": "unavailable", "reason": "package_lock_missing"}
+    if not shutil.which("npm"):
+        return {"status": "unavailable", "reason": "npm_missing"}
+    if not shutil.which("typescript-language-server"):
+        return {"status": "unavailable", "reason": "language_server_missing"}
+    if not tsserver.is_file():
+        return {"status": "dependencies_missing", "reason": "typescript_not_installed"}
+    return {"status": "ready", "reason": "dependencies_installed"}
+
+
+def typescript_prep_timeout() -> float:
+    raw = os.getenv(
+        TYPESCRIPT_PREP_TIMEOUT_ENV, str(int(TYPESCRIPT_PREP_TIMEOUT_DEFAULT))
+    )
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{TYPESCRIPT_PREP_TIMEOUT_ENV} must be numeric, got {raw!r}"
+        ) from exc
+    if value <= 0:
+        raise RuntimeError(f"{TYPESCRIPT_PREP_TIMEOUT_ENV} must be greater than zero")
+    return value
+
+
+def ensure_typescript_dependencies(root: Path) -> dict[str, Any]:
+    """Lazily install pinned frontend dependencies for TypeScript LSP queries."""
+    root = root.resolve()
+    frontend = root / "frontend"
+    lockfile = frontend / "package-lock.json"
+    dependency_state = typescript_dependency_state(root)
+    if dependency_state["status"] not in {"ready", "dependencies_missing"}:
+        raise RuntimeError(
+            "TypeScript LSP unavailable: "
+            + str(dependency_state.get("reason", "unknown"))
+        )
+
+    lock_digest = file_hash(lockfile)
+    if lock_digest is None:
+        raise RuntimeError("TypeScript LSP unavailable: package_lock_missing")
+    cache_dir = cache_dir_for(root)
+    marker = cache_dir / "typescript-dependencies.json"
+
+    def marker_matches() -> bool:
+        try:
+            payload = json.loads(marker.read_text())
+        except (OSError, json.JSONDecodeError):
+            return False
+        return payload.get("package_lock_sha256") == lock_digest
+
+    if dependency_state["status"] == "ready" and marker_matches():
+        return dependency_state
+
+    with workspace_lock(cache_dir, timeout=typescript_prep_timeout()):
+        current_state = typescript_dependency_state(root)
+        if current_state["status"] == "ready" and marker_matches():
+            return current_state
+
+        completed = run_command(
+            ["npm", "ci"],
+            cwd=frontend,
+            timeout=typescript_prep_timeout(),
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip().splitlines()
+            tail = " | ".join(detail[-3:]) if detail else f"exit {completed.returncode}"
+            raise RuntimeError(f"TypeScript dependency preparation failed: {tail}")
+
+        ready_state = typescript_dependency_state(root)
+        if ready_state["status"] != "ready":
+            raise RuntimeError(
+                "TypeScript dependency preparation completed but TypeScript is still unavailable: "
+                + str(ready_state.get("reason", "unknown"))
+            )
+        marker.write_text(
+            json.dumps(
+                {
+                    "package_lock_sha256": lock_digest,
+                    "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return {**ready_state, "prepared": True, "marker": str(marker)}
 
 
 def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
@@ -197,6 +307,15 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
     fingerprint = workspace_fingerprint(root)
     digest = fingerprint_digest(fingerprint)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    languages = detect_languages(root)
+    typescript_state: dict[str, Any] | None = None
+
+    if "typescript" in languages:
+        # This also reconciles the lockfile marker when node_modules already exists,
+        # so the first semantic query never inherits deferred dependency work.
+        typescript_state = typescript_dependency_state(root)
+        if typescript_state["status"] in {"ready", "dependencies_missing"}:
+            typescript_state = ensure_typescript_dependencies(root)
 
     with workspace_lock(cache_dir, timeout=max(1.0, min(timeout, 30.0))):
         previous: dict[str, Any] = {}
@@ -212,7 +331,9 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
             "pyright": pyright_version,
             "pyright-langserver": command_available(
                 "pyright-langserver",
-                pyright_version.get("version") if pyright_version.get("available") else None,
+                pyright_version.get("version")
+                if pyright_version.get("available")
+                else None,
             ),
             "ruff": command_version("ruff", ["--version"]),
             "typescript-language-server": command_version(
@@ -220,14 +341,37 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
             ),
         }
 
+        language_status: dict[str, Any] = {}
+        if "python" in languages:
+            pyright_available = tool_versions["pyright-langserver"]["available"]
+            language_status["python"] = {
+                "status": "ready" if pyright_available else "unavailable",
+                "reason": (
+                    "language_server_available"
+                    if pyright_available
+                    else "language_server_missing"
+                ),
+            }
+        if typescript_state is not None:
+            language_status["typescript"] = typescript_state
+        overall_status = (
+            "ready"
+            if all(
+                item.get("status") in {"ready", "not_applicable"}
+                for item in language_status.values()
+            )
+            else "partial"
+        )
+
         state = {
-            "status": "ready",
+            "status": overall_status,
             "reason": "fingerprint_changed" if refreshed else "fingerprint_unchanged",
             "workspace_root": str(root),
             "cache_dir": str(cache_dir),
             "fingerprint_digest": digest,
             "fingerprint": fingerprint,
-            "languages": detect_languages(root),
+            "languages": languages,
+            "language_status": language_status,
             "tool_versions": tool_versions,
             "refreshed": refreshed,
             "updated_at": now,
@@ -276,13 +420,17 @@ class LspClient:
     def send(self, payload: dict[str, Any]) -> None:
         assert self.proc.stdin is not None
         raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self.proc.stdin.write(f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw)
+        self.proc.stdin.write(
+            f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw
+        )
         self.proc.stdin.flush()
 
     def request(self, method: str, params: Any, timeout: float) -> Any:
         self._next_id += 1
         request_id = self._next_id
-        self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        self.send(
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        )
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -350,6 +498,8 @@ def lsp_command_for(path: Path) -> list[str]:
 
 def open_lsp_document(root: Path, path: Path, timeout: float) -> tuple[LspClient, Path]:
     lsp_root = lsp_root_for(root, path)
+    if path.suffix in {".ts", ".tsx", ".js", ".jsx"}:
+        ensure_typescript_dependencies(root)
     client = LspClient(lsp_command_for(path), lsp_root)
     client.request(
         "initialize",
@@ -454,9 +604,231 @@ def zero_based_position(line: int, character: int, zero_based: bool) -> dict[str
     return {"line": max(0, line - 1), "character": max(0, character - 1)}
 
 
+def pyright_missing_import_name(diagnostic: dict[str, Any]) -> str | None:
+    message = diagnostic.get("message")
+    if not isinstance(message, str):
+        return None
+    match = PYRIGHT_MISSING_IMPORT_PATTERN.search(message)
+    if not match:
+        return None
+    imported = match.group(1).strip()
+    return imported or None
+
+
+def python_source_roots(root: Path, diagnostics: list[dict[str, Any]]) -> list[Path]:
+    candidates = [
+        root,
+        root / "backend",
+        root / "backend" / "src",
+        root / "backend" / "tests",
+        root / "scripts",
+        root / "trace_review" / "backend",
+        root / "trace_review" / "backend" / "src",
+        root / "trace_review" / "backend" / "tests",
+    ]
+    packages_dir = root / "packages"
+    if packages_dir.is_dir():
+        candidates.extend(packages_dir.glob("*/python/src"))
+
+    for diagnostic in diagnostics:
+        file_name = diagnostic.get("file")
+        if not isinstance(file_name, str) or not file_name:
+            continue
+        path = Path(file_name)
+        if not path.is_absolute():
+            path = root / path
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root.resolve())
+        except ValueError:
+            continue
+        for parent in resolved.parents:
+            candidates.append(parent)
+            if parent == root:
+                break
+
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not resolved.is_dir():
+            continue
+        seen.add(resolved)
+        result.append(resolved)
+    return result
+
+
+def path_contains_python_sources(path: Path) -> bool:
+    if (path / "__init__.py").is_file():
+        return True
+    try:
+        next(path.rglob("*.py"))
+    except StopIteration:
+        return False
+    return True
+
+
+def is_repo_local_python_import(imported: str, source_roots: list[Path]) -> bool:
+    top_level = imported.split(".", 1)[0]
+    if not top_level.isidentifier():
+        return False
+
+    for source_root in source_roots:
+        if (source_root / f"{top_level}.py").is_file():
+            return True
+        package_dir = source_root / top_level
+        if package_dir.is_dir() and path_contains_python_sources(package_dir):
+            return True
+    return False
+
+
+def is_pyright_dependency_resolution_noise(
+    diagnostic: dict[str, Any],
+    source_roots: list[Path],
+) -> bool:
+    if diagnostic.get("rule") not in PYRIGHT_DEPENDENCY_RESOLUTION_RULES:
+        return False
+
+    imported = pyright_missing_import_name(diagnostic)
+    if imported is None:
+        return False
+
+    # Blanket missing-import suppression hides broken repo-local imports; only
+    # unresolved imports proven external to this repo stay classified as noise.
+    return not is_repo_local_python_import(imported, source_roots)
+
+
+def classify_pyright_diagnostics(
+    root: Path,
+    diagnostics: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    dependency_resolution: list[dict[str, Any]] = []
+    actionable: list[dict[str, Any]] = []
+    source_roots = python_source_roots(root, diagnostics)
+    for diagnostic in diagnostics:
+        if is_pyright_dependency_resolution_noise(diagnostic, source_roots):
+            dependency_resolution.append(diagnostic)
+        else:
+            actionable.append(diagnostic)
+    return dependency_resolution, actionable
+
+
+def diagnostic_location(diagnostic: dict[str, Any]) -> str:
+    file_name = diagnostic.get("file") or "<unknown>"
+    start = (diagnostic.get("range") or {}).get("start") or {}
+    line = int(start.get("line") or 0) + 1
+    character = int(start.get("character") or 0) + 1
+    return f"{file_name}:{line}:{character}"
+
+
+def summarize_pyright_diagnostic(diagnostic: dict[str, Any]) -> dict[str, Any]:
+    start = (diagnostic.get("range") or {}).get("start") or {}
+    line = start.get("line")
+    character = start.get("character")
+    return {
+        "file": diagnostic.get("file"),
+        "line": int(line) + 1 if line is not None else None,
+        "character": int(character) + 1 if character is not None else None,
+        "severity": diagnostic.get("severity"),
+        "message": diagnostic.get("message"),
+        "rule": diagnostic.get("rule"),
+    }
+
+
+def render_pyright_actionable_output(
+    actionable_diagnostics: list[dict[str, Any]],
+    dependency_resolution_count: int,
+) -> str:
+    lines: list[str] = []
+    if actionable_diagnostics:
+        lines.append("Pyright actionable diagnostics:")
+        for diagnostic in actionable_diagnostics:
+            severity = diagnostic.get("severity") or "diagnostic"
+            message = diagnostic.get("message") or ""
+            rule = diagnostic.get("rule")
+            suffix = f" ({rule})" if rule else ""
+            lines.append(
+                f"  {diagnostic_location(diagnostic)} - {severity}: {message}{suffix}"
+            )
+    else:
+        lines.append("Pyright actionable diagnostics: none")
+
+    if dependency_resolution_count:
+        lines.append(
+            "Dependency-resolution diagnostics classified as baseline noise: "
+            f"{dependency_resolution_count}"
+        )
+
+    counts = {"error": 0, "warning": 0, "information": 0}
+    for diagnostic in actionable_diagnostics:
+        severity = diagnostic.get("severity")
+        if severity in counts:
+            counts[severity] += 1
+    lines.append(
+        f"{counts['error']} errors, {counts['warning']} warnings, "
+        f"{counts['information']} informations"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def run_pyright_diagnostics(
+    root: Path, py_files: list[str], timeout: float
+) -> dict[str, Any]:
+    completed = run_command(
+        ["pyright", *py_files, "--outputjson"], cwd=root, timeout=timeout
+    )
+    command: dict[str, Any] = {
+        "name": "pyright",
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+    }
+
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return command
+
+    diagnostics = payload.get("generalDiagnostics")
+    if not isinstance(diagnostics, list):
+        return command
+
+    dependency_resolution, actionable = classify_pyright_diagnostics(
+        root, [diagnostic for diagnostic in diagnostics if isinstance(diagnostic, dict)]
+    )
+    actionable_error_count = sum(
+        1 for diagnostic in actionable if diagnostic.get("severity") == "error"
+    )
+    if completed.returncode in (0, 1):
+        command["returncode"] = 1 if actionable_error_count else 0
+    command.update(
+        {
+            "raw_returncode": completed.returncode,
+            "raw_stdout": completed.stdout,
+            "stdout": render_pyright_actionable_output(
+                actionable,
+                len(dependency_resolution),
+            ),
+            "actionable_diagnostic_count": len(actionable),
+            "actionable_error_count": actionable_error_count,
+            "dependency_resolution_noise_count": len(dependency_resolution),
+            "dependency_resolution_noise": [
+                summarize_pyright_diagnostic(diagnostic)
+                for diagnostic in dependency_resolution
+            ],
+        }
+    )
+    return command
+
+
 def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, Any]:
     py_files = [name for name in files if Path(name).suffix == ".py"]
-    ts_files = [name for name in files if Path(name).suffix in {".ts", ".tsx", ".js", ".jsx"}]
+    ts_files = [
+        name for name in files if Path(name).suffix in {".ts", ".tsx", ".js", ".jsx"}
+    ]
     commands: list[dict[str, Any]] = []
 
     if py_files and shutil.which("ruff"):
@@ -470,15 +842,7 @@ def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, A
             }
         )
     if py_files and shutil.which("pyright"):
-        completed = run_command(["pyright", *py_files], cwd=root, timeout=timeout)
-        commands.append(
-            {
-                "name": "pyright",
-                "returncode": completed.returncode,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
-            }
-        )
+        commands.append(run_pyright_diagnostics(root, py_files, timeout))
     if ts_files and (root / "frontend" / "package.json").is_file():
         completed = run_command(
             ["npm", "run", "type-check:changed", "--", "--base", "origin/main"],
@@ -494,7 +858,9 @@ def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, A
             }
         )
     return {
-        "status": "ok" if all(command["returncode"] == 0 for command in commands) else "failed",
+        "status": "ok"
+        if all(command["returncode"] == 0 for command in commands)
+        else "failed",
         "files": files,
         "commands": commands,
     }
@@ -537,21 +903,32 @@ Commands:
   references   Find known references for the symbol at a file position.
   diagnostics  Run scoped Ruff/Pyright/frontend changed-file diagnostics.
   cleanup      Remove old per-workspace LSP cache state.
-  warm         Refresh workspace LSP state. Usually automatic in Symphony lanes;
-               run manually only for local smoke testing or stale-state recovery.
+  warm         Prepare pinned TypeScript dependencies when needed, then refresh
+               workspace LSP state for lane startup or stale-state recovery.
 
 Use rg first for broad text/file discovery. Use this helper when symbol identity
 matters: definitions, references, imports/exports, large-file outlines, or
 reviewing shared API changes.
 
-In Symphony In Progress and In Review lanes, LSP warmup is automatic through the
-lane brief helpers. Run `warm` manually only for local smoke testing or recovery
-after a clearly stale or missing LSP state.
+Automated lane warm-up invokes `warm` before agent work begins. Run it manually
+only for local smoke testing or recovery after clearly stale or missing state.
 """,
     )
-    parser.add_argument("--root", default=".", help="Workspace root. Default: current directory.")
-    parser.add_argument("--timeout", type=float, default=30.0, help="Command timeout in seconds.")
-    parser.add_argument("--format", choices=("json", "env"), default="json", help="Output format.")
+    parser.add_argument(
+        "--root", default=".", help="Workspace root. Default: current directory."
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help=(
+            "LSP request and cache-lock timeout in seconds. TypeScript dependency "
+            f"preparation uses {TYPESCRIPT_PREP_TIMEOUT_ENV}."
+        ),
+    )
+    parser.add_argument(
+        "--format", choices=("json", "env"), default="json", help="Output format."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser(
@@ -561,11 +938,11 @@ after a clearly stale or missing LSP state.
     )
     subparsers.add_parser(
         "warm",
-        help="Refresh workspace LSP state; normally automatic in Symphony lanes.",
+        help="Prepare dependencies and refresh workspace LSP state.",
         description=(
-            "Refresh workspace LSP state. In Symphony In Progress and In Review lanes, "
-            "the lane helpers run this automatically; run it manually only for local "
-            "smoke testing or recovery after stale/missing state."
+            "Prepare pinned TypeScript dependencies when needed, then refresh "
+            "workspace LSP state for lane startup, local smoke testing, or recovery "
+            "after stale or missing state."
         ),
     )
 
@@ -585,7 +962,9 @@ after a clearly stale or missing LSP state.
             ),
         )
         request_parser.add_argument("file", help="File path relative to --root.")
-        request_parser.add_argument("line", type=int, help="Line number, 1-based by default.")
+        request_parser.add_argument(
+            "line", type=int, help="Line number, 1-based by default."
+        )
         request_parser.add_argument(
             "character", type=int, help="Character number, 1-based by default."
         )
@@ -648,11 +1027,18 @@ after a clearly stale or missing LSP state.
             if not child.is_dir():
                 continue
             state_file = child / "state.json"
-            mtime = state_file.stat().st_mtime if state_file.exists() else child.stat().st_mtime
+            mtime = (
+                state_file.stat().st_mtime
+                if state_file.exists()
+                else child.stat().st_mtime
+            )
             if mtime < cutoff:
                 shutil.rmtree(child, ignore_errors=True)
                 removed += 1
-        emit({"status": "ok", "removed": removed, "cache_root": str(DEFAULT_CACHE_ROOT)}, args.format)
+        emit(
+            {"status": "ok", "removed": removed, "cache_root": str(DEFAULT_CACHE_ROOT)},
+            args.format,
+        )
         return 0
 
     if args.command == "diagnostics":
@@ -721,3 +1107,14 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         raise SystemExit(130)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                sort_keys=True,
+            )
+        )
+        raise SystemExit(2)

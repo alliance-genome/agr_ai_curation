@@ -840,8 +840,10 @@ def _iter_mapping_keys(value: Any) -> Iterator[str]:
 
 
 def _legacy_keys_in_envelope(envelope: DomainEnvelope) -> set[str]:
-    return FORBIDDEN_LEGACY_COLLECTIONS.intersection(
-        _iter_mapping_keys(envelope.model_dump(mode="python"))
+    return set(
+        FORBIDDEN_LEGACY_COLLECTIONS.intersection(
+            _iter_mapping_keys(envelope.model_dump(mode="python"))
+        )
     )
 
 
@@ -860,7 +862,7 @@ def tool_verified_disease_output_to_pending_envelope(
         for evidence in source.evidence_records
     }
 
-    objects: list[CuratableObjectEnvelope] = []
+    extracted_objects: list[CuratableObjectEnvelope] = []
     validation_findings: list[ValidationFinding] = []
     history: list[HistoryEvent] = [
         HistoryEvent(
@@ -878,7 +880,7 @@ def tool_verified_disease_output_to_pending_envelope(
             pending_ref_id=pending_ref_id,
             object_type=DISEASE_OBJECT_TYPE,
         )
-        objects.append(
+        extracted_objects.append(
             CuratableObjectEnvelope(
                 object_type=DISEASE_OBJECT_TYPE,
                 pending_ref_id=pending_ref_id,
@@ -913,14 +915,14 @@ def tool_verified_disease_output_to_pending_envelope(
         domain_pack_version=DISEASE_DOMAIN_PACK_VERSION,
         status=DomainEnvelopeStatus.EXTRACTED,
         schema_ref=_disease_schema_ref(),
-        objects=objects,
+        extracted_objects=extracted_objects,
         validation_findings=validation_findings,
         history=history,
         metadata={
             "source_document_id": source.document_id,
             "source_agent": source.produced_by,
             "conversion": "tool_verified_disease_output_to_pending_envelope",
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "normalization_notes": source.normalization_notes,
             "write_behavior": {"status": "blocked"},
         },
@@ -944,7 +946,7 @@ def disease_extraction_output_to_pending_envelope(
     )
     timestamp = produced_at or datetime.now(timezone.utc)
 
-    objects = [
+    extracted_objects = [
         _pending_object_from_extraction_object(obj)
         for obj in source.curatable_objects
     ]
@@ -959,7 +961,7 @@ def disease_extraction_output_to_pending_envelope(
         )
     ]
     validation_findings: list[ValidationFinding] = []
-    for obj in objects:
+    for obj in extracted_objects:
         object_ref = _object_ref(obj)
         validation_findings.append(
             ValidationFinding(
@@ -992,7 +994,7 @@ def disease_extraction_output_to_pending_envelope(
     metadata: dict[str, Any] = {
         "source_agent": produced_by,
         "conversion": "disease_extraction_output_to_pending_envelope",
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "legacy_semantic_lists": [],
         "extraction_summary": source.summary,
         "extraction_metadata": source.metadata.model_dump(mode="python"),
@@ -1008,7 +1010,7 @@ def disease_extraction_output_to_pending_envelope(
         domain_pack_version=DISEASE_DOMAIN_PACK_VERSION,
         status=DomainEnvelopeStatus.EXTRACTED,
         schema_ref=_disease_schema_ref(),
-        objects=objects,
+        extracted_objects=extracted_objects,
         validation_findings=validation_findings,
         history=history,
         metadata=metadata,
@@ -1048,7 +1050,7 @@ def validate_pending_disease_envelope(
         )
 
     disease_objects = [
-        obj for obj in envelope.objects if obj.object_type == DISEASE_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == DISEASE_OBJECT_TYPE
     ]
     if not disease_objects:
         findings.append(

@@ -42,6 +42,17 @@ class _FakeFailingRunResult:
         raise TimeoutError("Responses websocket connect timed out after 5.0 seconds.")
 
 
+class _FakeContextManager:
+    def __init__(self, value=None):
+        self.value = value
+
+    def __enter__(self):
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+
 class _FakeTextDelta:
     def __init__(self, delta):
         self.delta = delta
@@ -187,6 +198,7 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
             ],
             user_id="user-1",
             session_id="session-1",
+            turn_id="turn-1",
             document_id="11111111-1111-1111-1111-111111111111",
             document_name="Paper A",
         )
@@ -203,7 +215,74 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
         {"role": "assistant", "content": "previous answer"},
         {"role": "user", "content": "hello"},
     ]
+    assert captured["run_kwargs"]["chat_session_id"] == "session-1"
+    assert captured["run_kwargs"]["chat_turn_id"] == "turn-1"
     assert captured["logged"][0][0] == fallback_trace
+
+
+@pytest.mark.asyncio
+async def test_run_agent_with_tracing_compacts_standard_chat_session_before_provider_call(monkeypatch):
+    captured = {}
+    order = []
+
+    class _FakeCompactionSession:
+        async def run_compaction(self, args):
+            order.append("compact")
+            captured["compaction_args"] = args
+
+    class _FakeProvider:
+        async def aclose(self):
+            captured["provider_closed"] = True
+
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "_build_request_openai_provider", lambda _client: _FakeProvider())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
+    monkeypatch.setattr(runner, "provider_context_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(runner, "write_extraction_trace_event", lambda **event: event)
+    monkeypatch.setattr(runner, "write_stream_event", lambda *args, **kwargs: None)
+
+    def _build_session(**kwargs):
+        captured["session_kwargs"] = kwargs
+        return _FakeCompactionSession()
+
+    monkeypatch.setattr(runner, "build_standard_chat_compaction_session", _build_session)
+
+    def _run_streamed(*args, **kwargs):
+        order.append("run")
+        captured["runner_kwargs"] = kwargs
+        return _FakeRunResult(
+            [_raw_response_stream_event(_FakeTextDelta("precall compacted"))],
+            final_output="precall compacted",
+        )
+
+    monkeypatch.setattr(runner.Runner, "run_streamed", _run_streamed)
+
+    events = await _collect_events(
+        runner._run_agent_with_tracing(
+            agent=SimpleNamespace(name="Supervisor", model="gpt-5.5", tools=[]),
+            input_items=[{"role": "user", "content": "current"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="current",
+            trace_id="trace-compact",
+            chat_session_id="session-1",
+            chat_turn_id="turn-1",
+        )
+    )
+
+    assert order == ["compact", "run"]
+    assert captured["compaction_args"] == {"compaction_mode": "input"}
+    assert captured["session_kwargs"]["session_id"] == "session-1"
+    assert captured["session_kwargs"]["current_turn_id"] == "turn-1"
+    assert captured["runner_kwargs"]["session"].__class__.__name__ == "_FakeCompactionSession"
+    assert events[-1]["type"] == "RUN_FINISHED"
+    assert events[-1]["data"]["response"] == "precall compacted"
 
 
 @pytest.mark.asyncio
@@ -308,6 +387,9 @@ async def test_run_agent_streamed_passes_model_overrides_to_supervisor_builder(m
     assert captured["supervisor_kwargs"]["specialist_temperature_override"] == 0.0
     assert captured["supervisor_kwargs"]["reasoning_override"] == "minimal"
     assert captured["supervisor_kwargs"]["specialist_reasoning_override"] == "minimal"
+    # The runner owns the full current-turn message. Passing it explicitly prevents
+    # isolated specialists from seeing only a lossy supervisor-authored summary.
+    assert captured["supervisor_kwargs"]["current_user_request"] == "hello"
 
 
 @pytest.mark.asyncio
@@ -580,7 +662,7 @@ async def test_run_agent_streamed_core_only_round_trip_does_not_require_speciali
         lambda **_kwargs: SimpleNamespace(
             name="Query Supervisor",
             model="gpt-4o",
-            tools=[SimpleNamespace(name="export_to_file", description="Export data")],
+            tools=[SimpleNamespace(name="inspect_results", description="Inspect results")],
         ),
     )
     monkeypatch.setattr(
@@ -685,13 +767,130 @@ async def test_runner_traces_impossible_top_level_curation_shaped_output(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_runner_propagates_sdk_stream_errors(monkeypatch):
+async def test_run_agent_with_tracing_skips_sentry_span_for_unlabeled_custom_agent(monkeypatch):
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: pytest.fail("custom Agent Studio-style runs must not bind Sentry conversations"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "gen_ai_invoke_agent_span",
+        lambda **_kwargs: pytest.fail("custom Agent Studio-style runs must not start Sentry AI spans"),
+    )
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult([], final_output="ok"),
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=SimpleNamespace(
+                name="Agent Studio Custom Agent",
+                tools=[],
+                model="gpt-5.5",
+                output_type=None,
+            ),
+            input_items=[{"role": "user", "content": "hello"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="hello",
+            trace_id="trace-custom-agent",
+        )
+    ]
+
+    assert any(event.get("type") == "RUN_FINISHED" for event in emitted_events)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_with_tracing_starts_sentry_span_for_explicit_workflow(monkeypatch):
+    calls = []
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSpan())
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "gen_ai_conversation_scope", lambda _conversation_id: _FakeContextManager())
+    monkeypatch.setattr(runner, "gen_ai_invoke_agent_span", _fake_sentry_span)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult([], final_output="ok"),
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=SimpleNamespace(
+                name="Flow Supervisor",
+                tools=[],
+                model="gpt-5.5",
+                output_type=None,
+            ),
+            input_items=[{"role": "user", "content": "run flow"}],
+            user_id="user-1",
+            document_id="doc-1",
+            document_name="paper.pdf",
+            user_message="run flow",
+            trace_id="trace-flow",
+            sentry_workflow="execute_flow",
+            sentry_span_data={"ai_curation.flow.total_steps": 2},
+        )
+    ]
+
+    assert any(event.get("type") == "RUN_FINISHED" for event in emitted_events)
+    assert calls[0][0] == "span"
+    assert calls[0][1]["workflow"] == "execute_flow"
+    assert calls[0][1]["span_data"]["ai_curation.flow.total_steps"] == 2
+    assert ("data", "ai_curation.tool_call.count", 0) in calls
+    post_stream_span = next(
+        call
+        for call in calls
+        if call[0] == "span" and call[1]["workflow"] == "execute_flow_post_stream"
+    )
+    assert post_stream_span[1]["output_preview"] == "ok"
+    assert post_stream_span[1]["finalization_status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_runner_propagates_sdk_stream_errors(monkeypatch):
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "gen_ai_conversation_scope", lambda _conversation_id: _FakeContextManager())
+    monkeypatch.setattr(runner, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setattr(
         runner.Runner,
         "run_streamed",
@@ -715,8 +914,20 @@ async def test_runner_propagates_sdk_stream_errors(monkeypatch):
             document_name=None,
             user_message="run flow",
             trace_id="trace-sdk-timeout",
+            sentry_workflow="execute_flow",
         ):
             pass
+
+    error_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "execute_flow_post_stream"
+    )
+    assert error_span[1]["finalization_status"] == "error"
+    assert error_span[1]["validation_status"] == "error"
+    assert error_span[1]["span_data"]["ai_curation.error.detail"]["error_type"] == "TimeoutError"
+    assert error_span[1]["span_data"]["ai_curation.error.detail"]["phase"] == "runner_stream"
+    assert ("data", "ai_curation.finalization.status", "error") in sentry_calls
 
 
 @pytest.mark.asyncio

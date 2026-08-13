@@ -11,6 +11,10 @@ from ..models.api_schemas import (
     ReembedRequest,
 )
 from ..lib.http_errors import raise_sanitized_http_exception
+from ..lib.observability.background_tasks import (
+    add_observed_background_task,
+    report_background_task_exception,
+)
 from ..models.document import ProcessingStatus
 from ..lib.weaviate_client.documents import get_document, update_document_status, re_embed_document
 from ..lib.pipeline.tracker import PipelineTracker
@@ -178,9 +182,25 @@ async def reprocess_document_endpoint(
                 logger.info('Document %s reprocessing completed: %s', document_id, result)
             except Exception as e:
                 logger.error('Error reprocessing document %s: %s', document_id, e, exc_info=True)
+                report_background_task_exception(
+                    e,
+                    task_name="documents.reprocess",
+                    tags={
+                        "component": "documents",
+                        "document_id": document_id,
+                    },
+                )
                 await update_document_status(document_id, user_id, ProcessingStatus.FAILED)
 
-        background_tasks.add_task(process_document)
+        add_observed_background_task(
+            background_tasks,
+            process_document,
+            task_name="documents.reprocess",
+            tags={
+                "component": "documents",
+                "document_id": document_id,
+            },
+        )
 
         # Invalidate document metadata cache - reprocessing will produce fresh data
         from src.lib.document_cache import invalidate_cache

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -68,7 +69,7 @@ class _FakeSuccessfulStream:
 
 
 class _FakeMessagesApi:
-    def __init__(self, captured: dict[str, object]):
+    def __init__(self, captured: dict[str, Any]):
         self._captured = captured
 
     def stream(self, **kwargs):
@@ -111,7 +112,7 @@ class _FakeMessagesApi:
 
 
 class _FakeAnthropicClient:
-    def __init__(self, captured: dict[str, object]):
+    def __init__(self, captured: dict[str, Any]):
         self.beta = SimpleNamespace(messages=_FakeMessagesApi(captured))
 
 
@@ -293,9 +294,12 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     monkeypatch,
 ):
     custom_agent_uuid = uuid4()
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("AGENT_STUDIO_OPUS_CONTEXT_EDITING_TRIGGER_TOKENS", "140000")
+    monkeypatch.setenv("AGENT_STUDIO_OPUS_CONTEXT_EDITING_KEEP_TOOL_USES", "3")
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     monkeypatch.setattr(
         api_module,
         "_resolve_prompt_explorer_model",
@@ -399,6 +403,17 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     ]
     first_call = captured["api_calls"][0]
     second_call = captured["api_calls"][1]
+    assert first_call["betas"] == ["effort-2025-11-24", "context-management-2025-06-27"]
+    assert first_call["context_management"] == {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 140000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_tool_inputs": False,
+            }
+        ]
+    }
     assert first_call["tool_choice"] == {
         "type": "tool",
         "name": "refresh_workshop_prompt",

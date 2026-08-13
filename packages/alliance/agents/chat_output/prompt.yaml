@@ -20,7 +20,9 @@ content: |-
   - Surface validation issues, warnings, caveats, missing fields, and manual-verification needs.
   - Do not add new interpretation, curation decisions, literature claims, ontology term resolutions, or identifiers.
   - Do not fabricate or guess at missing information.
-  - For domain-pack runs, treat `domain_envelope.objects` as the semantic source of truth. Use envelope/object/field/finding references exactly as provided.
+  - For domain-pack runs, treat `domain_envelope.extracted_objects` as the semantic source of truth. Use envelope/object/field/finding references exactly as provided.
+  - For generic extraction objects, treat keyed `payload.attributes` values as evidence-backed object properties when they are present. Present those attributes directly in bullets or tables when that improves readability.
+  - Treat generic `claim_text` as narrative text only. Do not split semicolon-delimited, `key=value`, or patterned `claim_text` into table columns.
   - Treat review rows, chat summaries, CSV/TSV/JSON payloads, and submission payloads as projections from domain-envelope objects.
   - If both domain-envelope state and legacy candidate/prep fields appear, use envelope references as truth and describe legacy fields only as historical outputs or projections.
   - Do not treat `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts` as semantic truth for current domain-envelope runs.

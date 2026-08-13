@@ -341,6 +341,7 @@ def update_progress(
     progress_percentage: Optional[int] = None,
     message: Optional[str] = None,
     status: Optional[str] = None,
+    metadata: Optional[dict] = None,
 ) -> Optional[PdfJobResponse]:
     """Update job progress details while it is active."""
     session = SessionLocal()
@@ -361,6 +362,10 @@ def update_progress(
             job.progress_percentage = clamped
         if message:
             job.message = message
+        if metadata is not None:
+            current_metadata = dict(job.metadata_json or {})
+            current_metadata.update(metadata)
+            job.metadata_json = current_metadata
 
         requested_status = (status or "").strip().lower() or PdfJobStatus.RUNNING.value
         if job.cancel_requested and requested_status == PdfJobStatus.RUNNING.value:

@@ -4,6 +4,7 @@
 
 import type {
   PromptCatalog,
+  CombinedPromptResponse,
   PromptPreviewResponse,
   CustomAgent,
   CustomAgentVersion,
@@ -168,6 +169,10 @@ export interface AgentMetadata {
   icon: string
   category: string
   subcategory?: string
+  output_schema_key?: string | null
+  is_active?: boolean
+  visible?: boolean
+  produces_flow_artifacts?: boolean
   supervisor_tool?: string
   validation_attachments?: ValidationAttachmentOption[]
   domain_envelope?: DomainEnvelopeMetadata | null
@@ -232,7 +237,7 @@ export async function refreshPromptCatalog(): Promise<PromptCatalog> {
 export async function fetchCombinedPrompt(
   agentId: string,
   groupId: string
-): Promise<string> {
+): Promise<CombinedPromptResponse> {
   const response = await fetch(`${BASE_URL}/catalog/combined`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -241,8 +246,7 @@ export async function fetchCombinedPrompt(
   if (!response.ok) {
     throw new Error(`Failed to fetch combined prompt: ${response.status}`)
   }
-  const data = await response.json()
-  return data.combined_prompt
+  return response.json()
 }
 
 /**

@@ -4,6 +4,7 @@ import type { CurationWorkspace, DomainEnvelopeReviewRowsResponse } from '@/feat
 import {
   buildCurationWorkspaceEnvelopeReviewRowsRequests,
   buildDomainEnvelopeReviewRowsPath,
+  CurationWorkspaceRequestError,
   executeCurationSubmission,
   fetchCurationWorkspaceEnvelopeReviewRows,
   fetchDomainEnvelopeReviewRows,
@@ -238,6 +239,27 @@ describe('curationWorkspaceService envelope review rows', () => {
       'env-chemical',
     ])
     expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves the HTTP status on workspace request failures', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(
+        { detail: 'Draft version conflict' },
+        { status: 409 },
+      )),
+    )
+
+    const error = await fetchDomainEnvelopeReviewRows({
+      envelope_id: 'env-gene',
+      envelope_revision: 2,
+    }).catch((requestError: unknown) => requestError)
+
+    expect(error).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Draft version conflict',
+    })
   })
 
   it('sends explicit envelope field patch operations unchanged', async () => {

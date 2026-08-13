@@ -332,13 +332,13 @@ def test_disease_builder_golden_fixture_loads_with_relative_refs():
     assert envelope.domain_pack_id == DISEASE_DOMAIN_PACK_ID
 
     annotation = next(
-        obj for obj in envelope.objects if obj.object_type == DISEASE_GENE_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == DISEASE_GENE_OBJECT_TYPE
     )
     assert annotation.pending_ref_id == "disease-annotation-1"
 
     extraction_metadata = envelope.metadata.get("extraction_metadata")
     assert isinstance(extraction_metadata, Mapping)
-    for obj in envelope.objects:
+    for obj in envelope.extracted_objects:
         for ref in obj.metadata_refs:
             assert not ref.metadata_path.startswith("extraction_metadata")
             assert field_path_exists(extraction_metadata, ref.metadata_path)

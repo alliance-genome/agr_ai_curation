@@ -497,7 +497,6 @@ def _dispatch_workspace_envelope_validation(
                 object_model_ref_json=dict(envelope_row.object_model_ref_json),
                 model_field_ref_json=dict(envelope_row.model_field_ref_json),
             ),
-            manage_transaction=False,
         )
     except DomainEnvelopePersistenceError as exc:
         raise HTTPException(
@@ -579,6 +578,11 @@ def validate_candidate(
     *,
     user_id: str | None = None,
 ) -> CurationCandidateValidationResponse:
+    """Validate a candidate within the transaction owned by the caller.
+
+    The supplied session is flushed but never committed or rolled back here.
+    """
+
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     request_candidate_id = _normalize_uuid(request.candidate_id, field_name="candidate_id")
     if normalized_candidate_id != request_candidate_id:
@@ -626,7 +630,7 @@ def validate_candidate(
         db.add(candidate.session)
         db.add(candidate)
         db.add(candidate.draft)
-        db.commit()
+        db.flush()
 
     updated_candidate = _load_candidate_for_write(
         db,
@@ -646,6 +650,11 @@ def validate_session(
     *,
     user_id: str | None = None,
 ) -> CurationSessionValidationResponse:
+    """Validate a review session within the transaction owned by the caller.
+
+    The supplied session is flushed but never committed or rolled back here.
+    """
+
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     if normalized_session_id != request_session_id:
@@ -701,11 +710,11 @@ def validate_session(
         session_row.updated_at = validated_at
         db.add(session_snapshot_row)
         db.add(session_row)
-        db.commit()
+        db.flush()
         session_validation = _validation_snapshot(session_snapshot_row)
     else:
         if changed:
-            db.commit()
+            db.flush()
         session_validation = _prepared_validation_snapshot_schema(
             session_id=session_row.id,
             candidate_id=None,

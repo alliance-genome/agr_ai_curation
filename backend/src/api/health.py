@@ -9,6 +9,7 @@ import os
 from ..lib.weaviate_helpers import get_connection
 from ..lib.http_errors import log_exception
 from ..config import is_cognito_configured
+from ..lib.document_sources.health import check_configured_document_source_health
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
@@ -20,6 +21,14 @@ _WEAVIATE_HEALTH_DETAIL = {
 _READINESS_NOT_READY_DETAIL = {
     "ready": False,
     "reason": "Weaviate connection not ready",
+}
+_READINESS_DOCUMENT_SOURCE_NOT_READY_DETAIL = {
+    "ready": False,
+    "reason": "Document-source provider not ready",
+    "document_source": {
+        "provider": "unknown",
+        "enabled": False,
+    },
 }
 
 
@@ -38,7 +47,8 @@ async def health_check_endpoint() -> Dict[str, Any]:
         "cognito_configured": is_cognito_configured(),
         "checks": {
             "api": "healthy",
-            "weaviate": "unknown"
+            "weaviate": "unknown",
+            "document_source": "unknown",
         },
         "details": {}
     }
@@ -72,6 +82,32 @@ async def health_check_endpoint() -> Dict[str, Any]:
         health_status["checks"]["weaviate"] = "unhealthy"
         health_status["status"] = "degraded"
         health_status["details"]["weaviate"] = dict(_WEAVIATE_HEALTH_DETAIL)
+
+    try:
+        document_source_health = await check_configured_document_source_health()
+        health_status["checks"]["document_source"] = (
+            "healthy" if document_source_health.ok else "unhealthy"
+        )
+        health_status["details"]["document_source"] = {
+            "provider": document_source_health.provider,
+            "enabled": bool(document_source_health.metadata.get("enabled")),
+            "message": document_source_health.message,
+        }
+        if not document_source_health.ok:
+            health_status["status"] = "degraded"
+    except Exception as e:
+        log_exception(
+            logger,
+            message="Error checking document-source health",
+            exc=e,
+        )
+        health_status["checks"]["document_source"] = "unhealthy"
+        health_status["status"] = "degraded"
+        health_status["details"]["document_source"] = {
+            "provider": "unknown",
+            "enabled": False,
+            "message": "Document-source health check failed",
+        }
 
     health_status["details"]["environment"] = {
         "python_version": os.getenv("PYTHON_VERSION", "3.11+"),
@@ -109,6 +145,32 @@ async def readiness_check_endpoint() -> Dict[str, Any]:
             raise HTTPException(
                 status_code=503,
                 detail=dict(_READINESS_NOT_READY_DETAIL)
+            )
+
+        try:
+            document_source_health = await check_configured_document_source_health()
+        except Exception as e:
+            log_exception(
+                logger,
+                message="Document-source readiness check failed",
+                exc=e,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=dict(_READINESS_DOCUMENT_SOURCE_NOT_READY_DETAIL),
+            ) from e
+
+        if not document_source_health.ok:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "ready": False,
+                    "reason": "Document-source provider not ready",
+                    "document_source": {
+                        "provider": document_source_health.provider,
+                        "enabled": bool(document_source_health.metadata.get("enabled")),
+                    },
+                },
             )
 
         return {

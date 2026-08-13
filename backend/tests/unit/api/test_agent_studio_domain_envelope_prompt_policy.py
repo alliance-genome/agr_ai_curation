@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS = (
@@ -14,7 +13,6 @@ VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS = (
     "backend/src/schemas/flows.py",
     "backend/src/api/agent_studio.py",
     "backend/src/api/agent_studio_opus_tools.py",
-    "backend/src/api/agent_studio_system_prompt.md",
     "backend/src/lib/agent_studio/domain_envelope_metadata.py",
     "backend/src/lib/agent_studio/domain_envelope_tools.py",
     "backend/src/lib/agent_studio/flow_tools.py",
@@ -106,11 +104,6 @@ ALLOWED_VALIDATOR_DISPATCH_CLEANUP_CONTEXTS = (
         re.compile(r"blockedCount|Blocked"),
     ),
     (
-        "docs/developer/guides/SYMPHONY_FLOW_AND_OPTIMIZATION.md",
-        "Linear workflow state names include Blocked outside validator capability metadata",
-        re.compile(r"`Blocked`"),
-    ),
-    (
         "docs/curator/AGENT_STUDIO.md",
         "lookup attempt statuses may be blocked without being validator buckets",
         re.compile(r"ambiguous, not found, transient, blocked, or under development"),
@@ -120,6 +113,30 @@ ALLOWED_VALIDATOR_DISPATCH_CLEANUP_CONTEXTS = (
 
 def _read_repo_text(relative_path: str) -> str:
     return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _display_prompt_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _read_runtime_agent_studio_system_prompt() -> tuple[str, str]:
+    from src.api import agent_studio as api_module
+
+    for candidate in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES:
+        if candidate.exists():
+            return _display_prompt_path(candidate), candidate.read_text(encoding="utf-8")
+
+    candidate_list = ", ".join(
+        _display_prompt_path(candidate)
+        for candidate in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES
+    )
+    raise AssertionError(
+        "No Agent Studio system prompt template candidate exists: "
+        f"{candidate_list}"
+    )
 
 
 def _validator_dispatch_cleanup_surface_paths() -> tuple[str, ...]:
@@ -149,9 +166,11 @@ def _package_agent_prompt_paths(agent_name: str | None = None) -> tuple[str, ...
 
 
 def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
-    prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
+    source_path, prompt = _read_runtime_agent_studio_system_prompt()
 
     assert "domain envelopes are the semantic source of truth" in prompt
+    assert "domain_envelope.extracted_objects" in prompt, source_path
+    assert "domain_envelope.objects" not in prompt, source_path
     assert "call the relevant tools" in prompt
     assert "get_domain_envelope_state" in prompt
     assert "bounded validator request/result summaries" in prompt
@@ -195,7 +214,7 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
 
 
 def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
-    prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
+    _, prompt = _read_runtime_agent_studio_system_prompt()
 
     assert "PDF evidence is span-backed" in prompt
     assert "Do not tell curators or prompt authors that extraction agents should invent" in prompt
@@ -208,17 +227,15 @@ def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
     assert "Do not recommend fuzzy quote repair" in prompt
 
 
-def test_agent_studio_system_prompt_canonical_and_packaged_copies_match():
+def test_agent_studio_system_prompt_has_no_backend_core_copy():
+    from src.api import agent_studio as api_module
+
     canonical_path = REPO_ROOT / "alliance_config" / "agent_studio_system_prompt.md"
-    if not canonical_path.exists():
-        # The backend unit-test image may include only /app/backend. Local and
-        # full-repo runs still guard the canonical runtime copy.
-        return
+    backend_core_path = REPO_ROOT / "backend/src/api/agent_studio_system_prompt.md"
 
-    canonical_prompt = canonical_path.read_text(encoding="utf-8")
-    packaged_prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
-
-    assert canonical_prompt == packaged_prompt
+    assert canonical_path.exists()
+    assert not backend_core_path.exists()
+    assert backend_core_path not in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES
 
 
 def test_validator_dispatch_cleanup_guardrail_rejects_stale_active_surface_terms():
@@ -253,7 +270,7 @@ def test_chat_output_prompts_match_and_preserve_domain_envelope_refs():
     assert package_prompt_paths
     for package_prompt_path in package_prompt_paths:
         assert config_prompt == _read_repo_text(package_prompt_path)
-    assert "domain_envelope.objects" in config_prompt
+    assert "domain_envelope.extracted_objects" in config_prompt
     assert "review rows" in config_prompt
     assert "lookup attempts" in config_prompt
     assert "export/submission blockers" in config_prompt

@@ -15,6 +15,7 @@ from src.schemas.domain_envelope import (
 from src.schemas.models.base import EvidenceRecord
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
+from .attributes import normalize_generic_attributes
 from .catalog import GenericClassCatalogEntry, load_generic_class_catalog
 from .constants import GENERIC_MATERIALIZER_ID
 
@@ -204,6 +205,38 @@ def materialize_generic_builder_state(
                     )
                 )
             continue
+
+        raw_attributes = staged_fields.get("attributes")
+        if raw_attributes not in (None, "", []) and not isinstance(raw_attributes, Mapping):
+            issues.append(
+                _issue(
+                    field_path="attributes",
+                    reason="invalid_attributes",
+                    message="Generic attributes must be an object of keyed values.",
+                    candidate_id=candidate_id,
+                    class_key=class_key,
+                )
+            )
+            continue
+        normalized_attributes, attribute_issues = normalize_generic_attributes(
+            raw_attributes if isinstance(raw_attributes, Mapping) else {}
+        )
+        if attribute_issues:
+            for issue in attribute_issues:
+                issues.append(
+                    _issue(
+                        field_path=str(issue.get("field_path") or "attributes"),
+                        reason=str(issue.get("reason") or "invalid_attribute"),
+                        message=str(issue.get("message") or "Invalid generic attribute."),
+                        candidate_id=candidate_id,
+                        class_key=class_key,
+                    )
+                )
+            continue
+        if normalized_attributes:
+            staged_fields["attributes"] = normalized_attributes
+        else:
+            staged_fields.pop("attributes", None)
 
         first_evidence_record = evidence_records_by_id.get(evidence_ids[0])
         payload = _payload_for_entry(

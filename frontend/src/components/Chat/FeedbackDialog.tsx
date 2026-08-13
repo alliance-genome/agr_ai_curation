@@ -86,8 +86,10 @@ function FeedbackDialog({
   }, [])
 
   const handleCancel = () => {
-    clearAutoCloseTimeout()
-    onClose()
+    if (!isSubmitting) {
+      clearAutoCloseTimeout()
+      onClose()
+    }
   }
 
   const handleSend = async () => {
@@ -116,6 +118,7 @@ function FeedbackDialog({
       })
 
       // Show success animation
+      setIsSubmitting(false)
       setSuccess(true)
 
       // Auto-close after 2 seconds
@@ -139,6 +142,8 @@ function FeedbackDialog({
       onClose={handleCancel}
       title="Provide Feedback"
       width="sm"
+      moveControlLabel="Move feedback popup"
+      closeControlLabel="Close feedback popup"
       actions={!success && (
         <>
           <Button

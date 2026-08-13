@@ -7,6 +7,7 @@ describe('EditDocumentDialog', () => {
     open: true,
     documentId: 'test-doc-123',
     currentTitle: 'Original Title',
+    originalFilename: 'original-paper.pdf',
     onClose: vi.fn(),
     onSave: vi.fn(),
   };
@@ -19,7 +20,7 @@ describe('EditDocumentDialog', () => {
     render(<EditDocumentDialog {...defaultProps} />);
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText('Edit Document')).toBeInTheDocument();
+    expect(screen.getByText('Edit display title')).toBeInTheDocument();
   });
 
   it('does not render the dialog when closed', () => {
@@ -31,14 +32,15 @@ describe('EditDocumentDialog', () => {
   it('displays the current title in the text field', () => {
     render(<EditDocumentDialog {...defaultProps} />);
 
-    const titleInput = screen.getByLabelText(/title/i);
+    const titleInput = screen.getByLabelText(/^display title$/i);
     expect(titleInput).toHaveValue('Original Title');
+    expect(screen.getByText('Original filename remains original-paper.pdf')).toBeInTheDocument();
   });
 
   it('displays empty text field when currentTitle is null', () => {
     render(<EditDocumentDialog {...defaultProps} currentTitle={null} />);
 
-    const titleInput = screen.getByLabelText(/title/i);
+    const titleInput = screen.getByLabelText(/^display title$/i);
     expect(titleInput).toHaveValue('');
   });
 
@@ -63,7 +65,7 @@ describe('EditDocumentDialog', () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     render(<EditDocumentDialog {...defaultProps} onSave={onSave} />);
 
-    const titleInput = screen.getByLabelText(/title/i);
+    const titleInput = screen.getByLabelText(/^display title$/i);
     fireEvent.change(titleInput, { target: { value: 'New Title' } });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
@@ -76,7 +78,7 @@ describe('EditDocumentDialog', () => {
     const onSave = vi.fn().mockImplementation(() => new Promise(() => {})); // Never resolves
     render(<EditDocumentDialog {...defaultProps} onSave={onSave} />);
 
-    const titleInput = screen.getByLabelText(/title/i);
+    const titleInput = screen.getByLabelText(/^display title$/i);
     fireEvent.change(titleInput, { target: { value: 'New Title' } });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
@@ -89,7 +91,7 @@ describe('EditDocumentDialog', () => {
     const onSave = vi.fn().mockRejectedValue(new Error('Save failed'));
     render(<EditDocumentDialog {...defaultProps} onSave={onSave} />);
 
-    const titleInput = screen.getByLabelText(/title/i);
+    const titleInput = screen.getByLabelText(/^display title$/i);
     fireEvent.change(titleInput, { target: { value: 'New Title' } });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
@@ -102,7 +104,7 @@ describe('EditDocumentDialog', () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     render(<EditDocumentDialog {...defaultProps} onSave={onSave} />);
 
-    const titleInput = screen.getByLabelText(/title/i);
+    const titleInput = screen.getByLabelText(/^display title$/i);
     fireEvent.change(titleInput, { target: { value: 'New Title' } });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
@@ -114,7 +116,7 @@ describe('EditDocumentDialog', () => {
   it('enforces max length of 255 characters', () => {
     render(<EditDocumentDialog {...defaultProps} />);
 
-    const titleInput = screen.getByLabelText(/title/i);
+    const titleInput = screen.getByLabelText(/^display title$/i);
     expect(titleInput).toHaveAttribute('maxLength', '255');
   });
 
@@ -124,7 +126,7 @@ describe('EditDocumentDialog', () => {
     // Open dialog with different title
     rerender(<EditDocumentDialog {...defaultProps} open={true} currentTitle="Different Title" />);
 
-    const titleInput = screen.getByLabelText(/title/i);
+    const titleInput = screen.getByLabelText(/^display title$/i);
     expect(titleInput).toHaveValue('Different Title');
   });
 });

@@ -85,7 +85,7 @@ Chat currently:
 
 #### Curation-side command construction
 
-- [frontend/src/features/curation/entityTable/entityTagNavigation.ts](../../frontend/src/features/curation/entityTable/entityTagNavigation.ts)
+- Historical module: `frontend/src/features/curation/entityTable/entityTagNavigation.ts` (later removed)
 
 Curation review currently:
 
@@ -249,19 +249,19 @@ If a mismatch remains after canonical input alignment, then and only then should
 Primary implementation files:
 
 - [frontend/src/components/Chat/chatEvidenceNavigation.ts](../../frontend/src/components/Chat/chatEvidenceNavigation.ts)
-- [frontend/src/features/curation/entityTable/entityTagNavigation.ts](../../frontend/src/features/curation/entityTable/entityTagNavigation.ts)
+- Historical module: `frontend/src/features/curation/entityTable/entityTagNavigation.ts` (later removed)
 - [frontend/src/features/curation/evidence/navigationCommandBuilder.ts](../../frontend/src/features/curation/evidence/navigationCommandBuilder.ts)
 - [frontend/src/features/curation/evidence/useEvidenceNavigation.ts](../../frontend/src/features/curation/evidence/useEvidenceNavigation.ts)
 
 Primary regression targets:
 
-- [frontend/src/features/curation/entityTable/entityTagNavigation.test.ts](../../frontend/src/features/curation/entityTable/entityTagNavigation.test.ts)
+- Historical test: `frontend/src/features/curation/entityTable/entityTagNavigation.test.ts` (later removed)
 - chat evidence-navigation tests to be added or expanded
 - [frontend/src/components/pdfViewer/PdfViewer.evidence.test.tsx](../../frontend/src/components/pdfViewer/PdfViewer.evidence.test.tsx)
 
 Reference runtime files:
 
-- [frontend/src/features/curation/entityTable/EntityTagTable.tsx](../../frontend/src/features/curation/entityTable/EntityTagTable.tsx)
+- Historical component: `frontend/src/features/curation/entityTable/EntityTagTable.tsx` (later removed)
 - [frontend/src/components/Chat/EvidenceQuote.tsx](../../frontend/src/components/Chat/EvidenceQuote.tsx)
 
 ## Explicit Non-Goals For This Hotfix

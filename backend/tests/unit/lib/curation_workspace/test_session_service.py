@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 import logging
@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -23,7 +24,10 @@ from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGE
 from src.lib.curation_workspace import session_queries as query_module
 from src.lib.curation_workspace import session_serializers as serializer_module
 from src.lib.curation_workspace import session_mutation_service as mutation_module
-from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
+from src.lib.curation_workspace.submission_adapters import (
+    NoOpSubmissionAdapter,
+    SubmissionTransportError,
+)
 from src.lib.curation_workspace import session_service as module
 from src.lib.curation_workspace import session_submission_service as submission_module
 from src.lib.curation_workspace import session_validation_service as validation_module
@@ -47,6 +51,7 @@ from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.user import User
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
@@ -61,6 +66,7 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
     CurationFlowRunListRequest,
     CurationFlowRunSessionsRequest,
+    CurationInventoryScope,
     CurationManualCandidateCreateRequest,
     CurationSessionFilters,
     CurationSessionListRequest,
@@ -107,6 +113,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 
 
 TEST_TABLES = [
+    User.__table__,
     PDFDocument.__table__,
     ReviewSessionModel.__table__,
     ExtractionResultModel.__table__,
@@ -163,6 +170,38 @@ def db_session():
 
 def _now() -> datetime:
     return datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc)
+
+
+def test_document_ref_uses_protected_document_id_url():
+    document_id = uuid4()
+    document = SimpleNamespace(
+        id=document_id,
+        title=None,
+        filename="paper.pdf",
+        page_count=5,
+        viewer_mode="local_pdf",
+    )
+
+    reference = serializer_module._document_ref(document)
+
+    protected_url = f"/api/pdf-viewer/documents/{document_id}/content"
+    assert reference.pdf_url == protected_url
+    assert reference.viewer_url == protected_url
+
+
+def test_document_ref_omits_pdf_url_for_text_only_document():
+    document = SimpleNamespace(
+        id=uuid4(),
+        title="Imported article",
+        filename="article.md",
+        page_count=1,
+        viewer_mode="text_only",
+    )
+
+    reference = serializer_module._document_ref(document)
+
+    assert reference.pdf_url is None
+    assert reference.viewer_url is None
 
 
 def _create_document(db_session):
@@ -289,6 +328,8 @@ def _create_review_session(
     last_worked_at: datetime | None,
     reviewed_candidates: int,
     pending_candidates: int,
+    assigned_curator_id: str | None = None,
+    created_by_id: str | None = None,
 ) -> ReviewSessionModel:
     session_row = ReviewSessionModel(
         id=uuid4(),
@@ -297,6 +338,8 @@ def _create_review_session(
         profile_key="primary",
         document_id=UUID(document_id),
         flow_run_id=flow_run_id,
+        assigned_curator_id=assigned_curator_id,
+        created_by_id=created_by_id,
         session_version=1,
         notes="Prepared session.",
         tags=["triage"],
@@ -712,7 +755,7 @@ def _create_domain_envelope_submission_session(
         envelope_id="museum-envelope-1",
         domain_pack_id="museum.catalog",
         status=DomainEnvelopeStatus.VALIDATED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="MuseumArtifact",
                 object_id="artifact-1",
@@ -733,6 +776,8 @@ def _create_domain_envelope_submission_session(
             project_key="museum",
             domain_pack_key=envelope.domain_pack_id,
             domain_pack_version=envelope.domain_pack_version,
+            adapter_key="museum",
+            source_payload_hash="0" * 64,
             status=envelope.status,
             document_id=document.id,
             session_id=session_row.id,
@@ -758,7 +803,7 @@ def _create_domain_envelope_submission_session(
             schema_ref_json={},
             object_model_ref_json={},
             model_field_ref_json={},
-            projection_json=envelope.objects[0].model_dump(mode="json"),
+            projection_json=envelope.extracted_objects[0].model_dump(mode="json"),
             created_at=now,
             updated_at=now,
         )
@@ -777,7 +822,7 @@ def _create_domain_envelope_submission_session(
         envelope_id=envelope.envelope_id,
         object_id="artifact-1",
         envelope_revision=envelope_revision,
-        candidate_metadata={"semantic_source": "domain_envelope.objects"},
+        candidate_metadata={"semantic_source": "domain_envelope.extracted_objects"},
         normalized_payload={"artifact": {"title": "POISONED LEGACY NORMALIZED PAYLOAD"}},
         created_at=now,
         updated_at=now,
@@ -1309,7 +1354,10 @@ def test_list_sessions_filters_by_origin_session_id_via_candidate_extractions(db
     response = module.list_sessions(
         db_session,
         CurationSessionListRequest(
-            filters=CurationSessionFilters(origin_session_id="chat-session-1"),
+            filters=CurationSessionFilters(
+                inventory_scope=CurationInventoryScope.SHOW_ALL,
+                origin_session_id="chat-session-1",
+            ),
             sort_by=CurationSessionSortField.PREPARED_AT,
             sort_direction=CurationSortDirection.DESC,
             page=1,
@@ -1318,6 +1366,177 @@ def test_list_sessions_filters_by_origin_session_id_via_candidate_extractions(db
     )
 
     assert [session.session_id for session in response.sessions] == [str(session_one.id)]
+
+
+def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_session):
+    document = _create_document(db_session)
+    document_id = str(document.id)
+    now = _now()
+    current_user_id = "curator-1"
+    other_user_id = "curator-2"
+
+    db_session.add_all(
+        [
+            User(
+                auth_sub=current_user_id,
+                email="curator-1@example.org",
+                display_name="Curator One",
+                is_active=True,
+                created_at=now,
+                last_login=now,
+            ),
+            User(
+                auth_sub=other_user_id,
+                email="curator-2@example.org",
+                display_name="Curator Two",
+                is_active=True,
+                created_at=now,
+                last_login=now,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    assigned_to_current = _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.NEW,
+        prepared_at=now.replace(hour=10),
+        last_worked_at=now.replace(hour=10),
+        reviewed_candidates=0,
+        pending_candidates=1,
+        assigned_curator_id=current_user_id,
+        created_by_id=other_user_id,
+    )
+    unassigned_created_by_current = _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.IN_PROGRESS,
+        prepared_at=now.replace(hour=11),
+        last_worked_at=now.replace(hour=11),
+        reviewed_candidates=1,
+        pending_candidates=0,
+        assigned_curator_id=None,
+        created_by_id=current_user_id,
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-beta",
+        status=CurationSessionStatus.NEW,
+        prepared_at=now.replace(hour=12),
+        last_worked_at=now.replace(hour=12),
+        reviewed_candidates=0,
+        pending_candidates=1,
+        assigned_curator_id=other_user_id,
+        created_by_id=current_user_id,
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-beta",
+        status=CurationSessionStatus.SUBMITTED,
+        prepared_at=now.replace(hour=13),
+        last_worked_at=now.replace(hour=13),
+        reviewed_candidates=1,
+        pending_candidates=0,
+        assigned_curator_id=None,
+        created_by_id=other_user_id,
+    )
+
+    my_inventory_response = module.list_sessions(
+        db_session,
+        CurationSessionListRequest(page=1, page_size=1),
+        current_user_id=current_user_id,
+    )
+
+    assert my_inventory_response.applied_filters.inventory_scope == CurationInventoryScope.MY_INVENTORY
+    assert my_inventory_response.page_info.total_items == 2
+    assert my_inventory_response.page_info.total_pages == 2
+    assert [session.session_id for session in my_inventory_response.sessions] == [
+        str(unassigned_created_by_current.id)
+    ]
+
+    second_page = module.list_sessions(
+        db_session,
+        CurationSessionListRequest(page=2, page_size=1),
+        current_user_id=current_user_id,
+    )
+    assert [session.session_id for session in second_page.sessions] == [
+        str(assigned_to_current.id)
+    ]
+
+    show_all_response = module.list_sessions(
+        db_session,
+        CurationSessionListRequest(
+            filters=CurationSessionFilters(
+                inventory_scope=CurationInventoryScope.SHOW_ALL,
+            ),
+            page=1,
+            page_size=10,
+        ),
+        current_user_id=current_user_id,
+    )
+    assert show_all_response.page_info.total_items == 4
+
+
+def test_explicit_curator_filter_composes_with_inventory_scope(db_session):
+    document = _create_document(db_session)
+    document_id = str(document.id)
+    now = _now()
+
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id=None,
+        status=CurationSessionStatus.NEW,
+        prepared_at=now,
+        last_worked_at=now,
+        reviewed_candidates=0,
+        pending_candidates=1,
+        assigned_curator_id="curator-1",
+        created_by_id="creator-1",
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id=None,
+        status=CurationSessionStatus.NEW,
+        prepared_at=now.replace(hour=16),
+        last_worked_at=now.replace(hour=16),
+        reviewed_candidates=0,
+        pending_candidates=1,
+        assigned_curator_id="curator-2",
+        created_by_id="curator-1",
+    )
+
+    response = module.list_sessions(
+        db_session,
+        CurationSessionListRequest(
+            filters=CurationSessionFilters(curator_ids=["curator-2"]),
+        ),
+        current_user_id="curator-1",
+    )
+
+    assert response.page_info.total_items == 0
+
+
+def test_my_organization_scope_fails_without_persisted_session_group_source(db_session):
+    with pytest.raises(HTTPException) as exc:
+        module.list_sessions(
+            db_session,
+            CurationSessionListRequest(
+                filters=CurationSessionFilters(
+                    inventory_scope=CurationInventoryScope.MY_ORGANIZATION,
+                )
+            ),
+            current_user_id="curator-1",
+        )
+
+    assert exc.value.status_code == 400
+    assert "organization or group metadata" in exc.value.detail
 
 
 def test_list_flow_runs_returns_aggregated_summaries(db_session):
@@ -1368,7 +1587,11 @@ def test_list_flow_runs_returns_aggregated_summaries(db_session):
 
     response = module.list_flow_runs(
         db_session,
-        CurationFlowRunListRequest(filters=CurationSessionFilters()),
+        CurationFlowRunListRequest(
+            filters=CurationSessionFilters(
+                inventory_scope=CurationInventoryScope.SHOW_ALL,
+            )
+        ),
     )
 
     assert [flow_run.flow_run_id for flow_run in response.flow_runs] == [
@@ -1422,6 +1645,9 @@ def test_list_flow_run_sessions_returns_paginated_summaries(db_session):
         db_session,
         CurationFlowRunSessionsRequest(
             flow_run_id="flow-alpha",
+            filters=CurationSessionFilters(
+                inventory_scope=CurationInventoryScope.SHOW_ALL,
+            ),
             page=1,
             page_size=1,
         ),
@@ -1483,6 +1709,9 @@ def test_list_flow_run_sessions_reuses_flow_run_summary_count_for_page_info(
         db_session,
         CurationFlowRunSessionsRequest(
             flow_run_id="flow-alpha",
+            filters=CurationSessionFilters(
+                inventory_scope=CurationInventoryScope.SHOW_ALL,
+            ),
             page=1,
             page_size=1,
         ),
@@ -1512,7 +1741,12 @@ def test_list_flow_run_sessions_raises_not_found_for_unknown_group(db_session):
     with pytest.raises(HTTPException) as exc:
         module.list_flow_run_sessions(
             db_session,
-            CurationFlowRunSessionsRequest(flow_run_id="flow-missing"),
+            CurationFlowRunSessionsRequest(
+                flow_run_id="flow-missing",
+                filters=CurationSessionFilters(
+                    inventory_scope=CurationInventoryScope.SHOW_ALL,
+                ),
+            ),
         )
 
     assert exc.value.status_code == 404
@@ -1718,7 +1952,7 @@ def test_decide_candidate_reset_reverts_draft_and_keeps_existing_audit_entries(d
     assert action_logs[1].action_type == CurationActionType.CANDIDATE_RESET
 
 
-def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
+def test_validate_candidate_only_refreshes_requested_field_subset(db_session, monkeypatch):
     document = _create_document(db_session)
     session_row = _create_review_session(
         db_session,
@@ -1795,6 +2029,14 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
     db_session.add(draft)
     db_session.commit()
 
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
+
     response = module.validate_candidate(
         db_session,
         candidate.id,
@@ -1821,6 +2063,7 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
     assert response.validation_snapshot.field_results["field_b"].status == "ambiguous"
     assert response.candidate.validation is not None
     assert response.candidate.validation.stale_field_keys == ["field_b"]
+    assert commit_calls == 0
 
 
 def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
@@ -1842,7 +2085,7 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
     envelope = DomainEnvelope(
         envelope_id="env-validation-on-demand",
         domain_pack_id="fixture.pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 pending_ref_id="object-1",
@@ -1880,7 +2123,11 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
             revision=1,
             project_key="fixture",
             domain_pack_key="fixture.pack",
+            adapter_key="test",
+            source_payload_hash="0" * 64,
             status=envelope.status,
+            document_id=session_row.document_id,
+            session_id=session_row.id,
             envelope_json=envelope.model_dump(mode="json"),
             created_at=_now(),
             updated_at=_now(),
@@ -1900,7 +2147,7 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
         object_id="object-1",
         envelope_revision=1,
         normalized_payload={},
-        candidate_metadata={"semantic_source": "domain_envelope.objects"},
+        candidate_metadata={"semantic_source": "domain_envelope.extracted_objects"},
         created_at=_now(),
         updated_at=_now(),
     )
@@ -1939,7 +2186,7 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
             ],
             created_at=_now(),
             updated_at=_now(),
-            draft_metadata={"semantic_source": "domain_envelope.objects"},
+            draft_metadata={"semantic_source": "domain_envelope.extracted_objects"},
         )
     )
     db_session.commit()
@@ -2049,7 +2296,7 @@ def _patch_workspace_validation_dispatch(
         assert domain_pack is loaded_pack
         assert kwargs["source_envelope_revision"] == expected_source_revision
         if expected_title is not None:
-            assert envelope.objects[0].payload["artifact"]["title"] == expected_title
+            assert envelope.extracted_objects[0].payload["artifact"]["title"] == expected_title
         if finding is None:
             return SimpleNamespace(envelope=envelope, appended_findings=())
         updated_envelope, appended_findings = append_validation_findings_to_envelope(
@@ -2163,7 +2410,17 @@ def test_workspace_validation_passes_document_user_runtime_context(
     assert captured_contexts[0].document_id == str(session_row.document_id)
     assert captured_contexts[0].user_id == "curator-42"
 
+    # The caller completes the candidate-validation transaction before starting
+    # the next unit of work.
+    db_session.commit()
     captured_contexts.clear()
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
     module.validate_session(
         db_session,
         seeded["session_id"],
@@ -2178,6 +2435,7 @@ def test_workspace_validation_passes_document_user_runtime_context(
     assert len(captured_contexts) == 1
     assert captured_contexts[0].document_id == str(session_row.document_id)
     assert captured_contexts[0].user_id == "curator-43"
+    assert commit_calls == 0
 
 
 def test_workspace_validation_runs_package_domain_envelope_validator_before_bindings(
@@ -2941,7 +3199,7 @@ def test_submission_export_reads_domain_envelope_at_expected_revision(
     assert payload["candidates"] == []
     envelope_candidate = payload["domain_envelope_candidates"][0]
     assert envelope_candidate["candidate_id"] == seeded["candidate_id"]
-    assert envelope_candidate["semantic_source"] == "domain_envelope.objects"
+    assert envelope_candidate["semantic_source"] == "domain_envelope.extracted_objects"
     assert envelope_candidate["payload"]["artifact"]["title"] == "Bronze astrolabe"
     assert "POISONED" not in json.dumps(payload)
 
@@ -2951,7 +3209,7 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
         envelope_id="museum-envelope-1",
         domain_pack_id="museum.catalog",
         status=DomainEnvelopeStatus.VALIDATED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="MuseumSource",
                 object_id="source-1",
@@ -3017,7 +3275,7 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
     )
 
     assert snapshot["selected_object_ids"] == ["artifact-1"]
-    assert [item["object_id"] for item in snapshot["objects"]] == [
+    assert [item["object_id"] for item in snapshot["extracted_objects"]] == [
         "source-1",
         "quote-1",
         "artifact-1",
@@ -3025,21 +3283,20 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
     assert [finding["code"] for finding in snapshot["validation_findings"]] == [
         "museum.artifact.checked"
     ]
-    DomainEnvelope.model_validate(
-        {
-            key: snapshot[key]
-            for key in (
-                "envelope_id",
-                "domain_pack_id",
-                "domain_pack_version",
-                "status",
-                "schema_ref",
-                "objects",
-                "validation_findings",
-                "metadata",
-            )
-        }
-    )
+    validation_payload = {
+        key: snapshot[key]
+        for key in (
+            "envelope_id",
+            "domain_pack_id",
+            "domain_pack_version",
+            "status",
+            "schema_ref",
+            "extracted_objects",
+            "validation_findings",
+            "metadata",
+        )
+    }
+    DomainEnvelope.model_validate(validation_payload)
 
 
 def test_session_serializer_preserves_materialized_validator_findings_and_refs(
@@ -3099,8 +3356,8 @@ def test_session_serializer_preserves_materialized_validator_findings_and_refs(
     envelope = serializer_module._candidate_domain_envelope(candidate)
 
     assert envelope is not None
-    assert envelope.objects[0].object_refs == [reference_ref]
-    assert envelope.objects[1].metadata["validator_materialization"] == {
+    assert envelope.extracted_objects[0].object_refs == [reference_ref]
+    assert envelope.extracted_objects[1].metadata["validator_materialization"] == {
         "source": "domain_validator_result",
         "validator_binding_id": "fixture.gene_lookup",
     }
@@ -3287,6 +3544,7 @@ def test_execute_submission_rejects_domain_envelope_readiness_blockers(
             seeded["session_id"],
             CurationSubmissionExecuteRequest(
                 session_id=seeded["session_id"],
+                idempotency_key=str(uuid4()),
                 target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
             ),
             actor_claims={"sub": "user-1"},
@@ -3356,6 +3614,7 @@ def test_execute_submission_rejects_adapter_domain_envelope_readiness_blockers(
             seeded["session_id"],
             CurationSubmissionExecuteRequest(
                 session_id=seeded["session_id"],
+                idempotency_key=str(uuid4()),
                 target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
             ),
             actor_claims={"sub": "user-1"},
@@ -3391,9 +3650,10 @@ def test_execute_submission_records_domain_envelope_submission_history(
     response = module.execute_submission(
         db_session,
         seeded["session_id"],
-        CurationSubmissionExecuteRequest(
-            session_id=seeded["session_id"],
-            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            CurationSubmissionExecuteRequest(
+                session_id=seeded["session_id"],
+                idempotency_key=str(uuid4()),
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1"},
     )
@@ -3653,6 +3913,7 @@ def test_submission_export_blocks_open_blocking_validation_findings(
             seeded["session_id"],
             CurationSubmissionExecuteRequest(
                 session_id=seeded["session_id"],
+                idempotency_key=str(uuid4()),
                 target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
             ),
             actor_claims={"sub": "curator-1"},
@@ -4108,7 +4369,7 @@ def test_waive_validation_finding_records_audit_action(
     assert response.envelope_revision == 2
     assert response.previous_status == "open"
     assert response.new_status == "waived"
-    assert stored_envelope.objects[0].payload == {
+    assert stored_envelope.extracted_objects[0].payload == {
         "artifact": {
             "accession_id": "A-1",
             "title": "Bronze astrolabe",
@@ -4355,7 +4616,7 @@ def test_validation_rerun_keeps_waiver_only_for_identical_finding_identity():
     envelope = DomainEnvelope(
         envelope_id="museum-envelope-1",
         domain_pack_id="museum.catalog",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="MuseumArtifact",
                 object_id="artifact-1",
@@ -4538,7 +4799,10 @@ def test_build_submission_execute_payload_sanitizes_adapter_errors(caplog, monke
     assert "payload builder exploded" in caplog.text.lower()
 
 
-def test_execute_submission_persists_submission_updates_session_and_logs_action(db_session):
+def test_execute_submission_stages_submission_updates_session_and_logs_action(
+    db_session,
+    monkeypatch,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
@@ -4548,12 +4812,20 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     session_row.adapter_key = REFERENCE_ADAPTER_KEY
     db_session.add(session_row)
     db_session.commit()
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
 
     response = module.execute_submission(
         db_session,
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
@@ -4578,6 +4850,7 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     assert response.action_log_entry.action_type == CurationActionType.SUBMISSION_EXECUTED
     assert response.action_log_entry.new_session_status == CurationSessionStatus.SUBMITTED
     assert response.action_log_entry.metadata["submitted_candidate_count"] == 1
+    assert commit_calls == 2
 
     persisted_submission = db_session.scalars(
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
@@ -4612,6 +4885,279 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     assert session_detail.latest_submission.payload.payload_text is not None
     assert session_detail.latest_submission.payload.content_type == "application/json"
     assert session_detail.latest_submission.payload.filename is not None
+
+
+def test_submission_retry_reconciles_after_local_finalization_rollback_without_resend(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+
+    class ReconciliableAdapter:
+        transport_key = "reconciliable"
+
+        def __init__(self):
+            self.submit_calls = 0
+            self.reconcile_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            persisted = db_session.scalar(
+                select(SubmissionModel).where(
+                    SubmissionModel.idempotency_key == idempotency_key
+                )
+            )
+            assert persisted is not None
+            assert persisted.attempt_state == "sending"
+            return {"status": "accepted", "external_reference": "target:accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            self.reconcile_calls += 1
+            return {"status": "accepted", "external_reference": "target:accepted"}
+
+    adapter = ReconciliableAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    idempotency_key = str(uuid4())
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=idempotency_key,
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    first_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.rollback()  # Inject failure of the caller-owned finalization commit.
+
+    durable_attempt = db_session.scalar(
+        select(SubmissionModel).where(SubmissionModel.idempotency_key == idempotency_key)
+    )
+    assert durable_attempt is not None
+    assert durable_attempt.attempt_state == "sending"
+
+    retried_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert retried_response.submission.submission_id == first_response.submission.submission_id
+    assert retried_response.submission.attempt_state == "succeeded"
+    assert adapter.submit_calls == 1
+    assert adapter.reconcile_calls == 1
+
+
+def test_unknown_submission_outcome_is_not_blindly_resent(db_session, monkeypatch):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+
+    class UnknownOutcomeAdapter:
+        transport_key = "unknown_outcome"
+
+        def __init__(self):
+            self.submit_calls = 0
+            self.reconcile_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            raise TimeoutError("outcome unavailable")
+
+        def reconcile(self, *, payload, idempotency_key):
+            self.reconcile_calls += 1
+            return None
+
+    adapter = UnknownOutcomeAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=str(uuid4()),
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    first_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+    second_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert first_response.submission.attempt_state == "unknown"
+    assert second_response.submission.submission_id == first_response.submission.submission_id
+    assert second_response.submission.attempt_state == "unknown"
+    assert adapter.submit_calls == 1
+    assert adapter.reconcile_calls == 1
+
+
+def test_confirmed_failure_retry_reuses_attempt_and_idempotency_key(db_session, monkeypatch):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+
+    class FailThenAcceptAdapter:
+        transport_key = "fail_then_accept"
+
+        def __init__(self):
+            self.keys = []
+
+        def submit(self, *, payload, idempotency_key):
+            self.keys.append(idempotency_key)
+            if len(self.keys) == 1:
+                raise SubmissionTransportError("Confirmed rejection")
+            return {"status": "accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("Confirmed failures are safe to retry directly")
+
+    adapter = FailThenAcceptAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    idempotency_key = str(uuid4())
+    execute_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            idempotency_key=idempotency_key,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+
+    retry_response = module.retry_submission(
+        db_session,
+        seeded["session_id"],
+        execute_response.submission.submission_id,
+        CurationSubmissionRetryRequest(
+            submission_id=execute_response.submission.submission_id,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert retry_response.submission.submission_id == execute_response.submission.submission_id
+    assert retry_response.submission.attempt_state == "succeeded"
+    assert adapter.keys == [idempotency_key, idempotency_key]
+
+
+def test_submission_attempt_idempotency_key_is_database_unique(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    duplicate_key = str(uuid4())
+
+    def _attempt() -> SubmissionModel:
+        return SubmissionModel(
+            id=uuid4(),
+            session_id=UUID(seeded["session_id"]),
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            status=CurationSubmissionStatus.PENDING,
+            idempotency_key=duplicate_key,
+            attempt_state="pending",
+            attempt_state_history=[],
+            readiness=[],
+            payload={"candidate_ids": [seeded["first_candidate_id"]]},
+            validation_errors=[],
+            warnings=[],
+            submission_state={},
+            target_result_history=[],
+            requested_at=_now(),
+        )
+
+    db_session.add(_attempt())
+    db_session.commit()
+    db_session.add(_attempt())
+
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
+def test_submission_attempt_cleanup_deletes_only_expired_terminal_rows(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    now = _now()
+
+    def _attempt(*, state: str, retention_expires_at: datetime) -> SubmissionModel:
+        return SubmissionModel(
+            id=uuid4(),
+            session_id=UUID(seeded["session_id"]),
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            status=(
+                CurationSubmissionStatus.ACCEPTED
+                if state == "succeeded"
+                else CurationSubmissionStatus.PENDING
+            ),
+            idempotency_key=str(uuid4()),
+            attempt_state=state,
+            attempt_state_history=[],
+            retention_expires_at=retention_expires_at,
+            readiness=[],
+            payload={"candidate_ids": [seeded["first_candidate_id"]]},
+            validation_errors=[],
+            warnings=[],
+            submission_state={},
+            target_result_history=[],
+            requested_at=now,
+        )
+
+    db_session.add(_attempt(state="succeeded", retention_expires_at=now - timedelta(days=1)))
+    unresolved = _attempt(state="unknown", retention_expires_at=now - timedelta(days=1))
+    db_session.add(unresolved)
+    db_session.commit()
+
+    deleted_count = submission_module.purge_expired_submission_attempts(
+        db_session,
+        before=now,
+    )
+
+    assert deleted_count == 1
+    assert db_session.get(SubmissionModel, unresolved.id) is not None
 
 
 def test_execute_submission_preserves_payload_warnings_across_reload(db_session, monkeypatch):
@@ -4657,6 +5203,7 @@ def test_execute_submission_preserves_payload_warnings_across_reload(db_session,
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
@@ -4725,7 +5272,8 @@ def test_execute_submission_records_target_submission_state_and_history(
     class StatefulSubmissionAdapter:
         transport_key = "stateful_submission"
 
-        def submit(self, *, payload):
+        def submit(self, *, payload, idempotency_key):
+            assert idempotency_key
             assert payload.mode == SubmissionMode.DIRECT_SUBMIT
             return {
                 "status": CurationSubmissionStatus.ACCEPTED,
@@ -4754,6 +5302,7 @@ def test_execute_submission_records_target_submission_state_and_history(
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1"},
@@ -4802,7 +5351,8 @@ def test_execute_submission_persists_validation_errors_without_marking_session_s
     class StubSubmissionAdapter:
         transport_key = "stub_submission"
 
-        def submit(self, *, payload):
+        def submit(self, *, payload, idempotency_key):
+            assert idempotency_key
             assert payload.mode == SubmissionMode.DIRECT_SUBMIT
             return {
                 "status": CurationSubmissionStatus.VALIDATION_ERRORS,
@@ -4821,6 +5371,7 @@ def test_execute_submission_persists_validation_errors_without_marking_session_s
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1"},
@@ -4839,7 +5390,7 @@ def test_execute_submission_persists_validation_errors_without_marking_session_s
     assert persisted_submission.validation_errors == ["Field A is empty."]
 
 
-def test_execute_submission_normalizes_transport_errors_to_failed_submission_record(
+def test_execute_submission_records_untyped_transport_errors_as_unknown(
     db_session,
     monkeypatch,
     caplog,
@@ -4857,7 +5408,8 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     class ExplodingSubmissionAdapter:
         transport_key = "exploding_submission"
 
-        def submit(self, *, payload):
+        def submit(self, *, payload, idempotency_key):
+            assert idempotency_key
             assert payload.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
             raise RuntimeError("timeout talking to downstream submitter")
 
@@ -4874,13 +5426,15 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1"},
     )
 
-    assert response.submission.status == CurationSubmissionStatus.FAILED
-    assert response.submission.response_message == module.SUBMISSION_TRANSPORT_FAILURE_MESSAGE
+    assert response.submission.status == CurationSubmissionStatus.PENDING
+    assert response.submission.attempt_state == "unknown"
+    assert response.submission.response_message is not None
     assert "timeout talking to downstream submitter" not in (
         response.submission.response_message or ""
     )
@@ -4894,14 +5448,18 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     persisted_submission = db_session.scalars(
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
     ).one()
-    assert persisted_submission.status == CurationSubmissionStatus.FAILED
-    assert persisted_submission.response_message == module.SUBMISSION_TRANSPORT_FAILURE_MESSAGE
+    assert persisted_submission.status == CurationSubmissionStatus.PENDING
+    assert persisted_submission.attempt_state == "unknown"
+    assert persisted_submission.response_message is not None
     assert "timeout talking to downstream submitter" not in (
         persisted_submission.response_message or ""
     )
 
 
-def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_session):
+def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
+    db_session,
+    monkeypatch,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
@@ -4919,6 +5477,9 @@ def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_se
         mode=SubmissionMode.DIRECT_SUBMIT,
         target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         status=CurationSubmissionStatus.FAILED,
+        idempotency_key=str(uuid4()),
+        attempt_state="failed",
+        attempt_state_history=[],
         readiness=[
             {
                 "candidate_id": seeded["first_candidate_id"],
@@ -4945,6 +5506,13 @@ def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_se
     )
     db_session.add(original_submission)
     db_session.commit()
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
 
     response = module.retry_submission(
         db_session,
@@ -4957,7 +5525,7 @@ def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_se
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
     )
 
-    assert response.submission.submission_id != str(original_submission.id)
+    assert response.submission.submission_id == str(original_submission.id)
     assert response.submission.status == CurationSubmissionStatus.ACCEPTED
     assert response.submission.adapter_key == REFERENCE_ADAPTER_KEY
     assert response.submission.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
@@ -4970,17 +5538,17 @@ def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_se
     assert response.action_log_entry.metadata["retry_reason"] == (
         "Retry after transient downstream failure."
     )
+    assert commit_calls == 1
 
     persisted_submissions = db_session.scalars(
         select(SubmissionModel)
         .where(SubmissionModel.session_id == UUID(seeded["session_id"]))
         .order_by(SubmissionModel.requested_at.asc(), SubmissionModel.id.asc())
     ).all()
-    assert len(persisted_submissions) == 2
+    assert len(persisted_submissions) == 1
     assert persisted_submissions[0].id == original_submission.id
-    assert persisted_submissions[0].status == CurationSubmissionStatus.FAILED
-    assert persisted_submissions[1].status == CurationSubmissionStatus.ACCEPTED
-    assert persisted_submissions[1].adapter_key == REFERENCE_ADAPTER_KEY
+    assert persisted_submissions[0].status == CurationSubmissionStatus.ACCEPTED
+    assert persisted_submissions[0].adapter_key == REFERENCE_ADAPTER_KEY
 
     action_log_rows = db_session.scalars(
         select(SessionActionLogModel)
@@ -5049,7 +5617,7 @@ def test_retry_submission_rejects_non_failed_original_submission(db_session):
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail == "Only failed submissions may be retried"
+    assert exc.value.detail == "Only failed or unresolved submission attempts may be retried"
 
     persisted_submissions = db_session.scalars(
         select(SubmissionModel)

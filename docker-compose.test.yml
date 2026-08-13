@@ -100,6 +100,7 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
+      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
       - ./frontend:/app/frontend:ro
@@ -107,11 +108,14 @@ services:
       - ./packages:/workspace/packages:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
+      - ./Makefile:/workspace/Makefile:ro
       - ./promtail-config.yml:/workspace/promtail-config.yml:ro
       - ./scripts/install:/workspace/scripts/install:ro
       - ./scripts/testing:/app/scripts/testing:ro
+      - ./scripts/testing:/workspace/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DEV_MODE=false
       - OPENAI_API_KEY=test-key
       - EVIDENCE_CONFIRMATION_ENABLED=true
       - EVIDENCE_CONFIRMATION_MODEL=gpt-5-nano
@@ -156,6 +160,7 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config
+      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
       - ./frontend:/app/frontend:ro
@@ -163,11 +168,14 @@ services:
       - ./packages:/workspace/packages:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
+      - ./Makefile:/workspace/Makefile:ro
       - ./promtail-config.yml:/workspace/promtail-config.yml:ro
       - ./scripts/install:/workspace/scripts/install:ro
       - ./scripts/testing:/app/scripts/testing:ro
+      - ./scripts/testing:/workspace/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - OPENAI_API_KEY=test-key-for-unit-tests
       - EVIDENCE_CONFIRMATION_ENABLED=true
@@ -212,10 +220,12 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
+      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./scripts/testing:/app/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
@@ -293,9 +303,11 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
+      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
@@ -333,10 +345,12 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
+      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./scripts/testing:/app/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080

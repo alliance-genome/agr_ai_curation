@@ -6,24 +6,27 @@ import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-route
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurationQueueNavigationRequest, CurationQueueNavigationState } from '../services/curationQueueNavigationService'
-import type { CurationNextSessionResponse, CurationSessionSummary } from '../types'
+import type { CurationNextSessionResponse, CurationSessionFilters, CurationSessionSummary } from '../types'
 import QueueNavigationButton from './QueueNavigationButton'
 
 const theme = createTheme()
 
+const queueFilters: CurationSessionFilters = {
+  inventory_scope: 'my_inventory',
+  statuses: ['in_progress'],
+  adapter_keys: ['gene'],
+  curator_ids: [],
+  tags: [],
+  flow_run_id: null,
+  document_id: null,
+  search: 'APOE',
+  prepared_between: null,
+  last_worked_between: null,
+  saved_view_id: null,
+}
+
 const queueRequest: CurationQueueNavigationRequest = {
-  filters: {
-    statuses: ['in_progress'],
-    adapter_keys: ['gene'],
-    curator_ids: [],
-    tags: [],
-    flow_run_id: null,
-    document_id: null,
-    search: 'APOE',
-    prepared_between: null,
-    last_worked_between: null,
-    saved_view_id: null,
-  },
+  filters: queueFilters,
   sort_by: 'prepared_at',
   sort_direction: 'desc',
 }
@@ -135,7 +138,7 @@ describe('QueueNavigationButton', () => {
     const response: CurationNextSessionResponse = {
       session: buildSessionSummary('session-2'),
       queue_context: {
-        filters: queueRequest.filters ?? undefined,
+        filters: queueFilters,
         sort_by: 'prepared_at',
         sort_direction: 'desc',
         position: 1,
@@ -170,7 +173,7 @@ describe('QueueNavigationButton', () => {
     const response: CurationNextSessionResponse = {
       session: null,
       queue_context: {
-        filters: queueRequest.filters ?? undefined,
+        filters: queueFilters,
         sort_by: 'prepared_at',
         sort_direction: 'desc',
         total_sessions: 0,

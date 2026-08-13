@@ -166,7 +166,7 @@ class DomainPackMetadataReviewRowMaterializer:
         )
         rows: list[DomainEnvelopeReviewRow] = []
 
-        for object_index, domain_object in enumerate(envelope.objects):
+        for object_index, domain_object in enumerate(envelope.extracted_objects):
             object_definition = object_definitions.get(domain_object.object_type)
             object_id = stable_object_id(domain_object)
             object_role = _object_role(
@@ -206,10 +206,12 @@ class DomainPackMetadataReviewRowMaterializer:
             )
 
             metadata = {
-                "semantic_source": "domain_envelope.objects",
+                "semantic_source": "domain_envelope.extracted_objects",
                 "materializer": type(self).__name__,
                 "object_index": object_index,
-                "payload_path": f"objects[{object_index}].payload",
+                # The legacy objects[n] review metadata path was dropped after
+                # the downstream contract renamed the list to extracted_objects.
+                "payload_path": f"extracted_objects[{object_index}].payload",
                 "evidence_record_ids": list(
                     domain_object.evidence_record_ids
                 ),
@@ -538,9 +540,9 @@ def _patch_target_object_from_resolved_values(
     )
     objects = [
         patched_target if _same_object_identity(candidate, target) else candidate
-        for candidate in envelope.objects
+        for candidate in envelope.extracted_objects
     ]
-    return envelope.model_copy(update={"objects": objects}), None
+    return envelope.model_copy(update={"extracted_objects": objects}), None
 
 
 def _original_materialized_values(
@@ -573,7 +575,7 @@ def _current_object_for_match(
 ) -> CuratableObjectEnvelope | None:
     """Return the current envelope object corresponding to a match target."""
 
-    for candidate in envelope.objects:
+    for candidate in envelope.extracted_objects:
         if _same_object_identity(candidate, target):
             return candidate
     return None
@@ -606,16 +608,24 @@ def _materialized_objects_for_result(
     result = item.result
     if result.status != "resolved":
         return [], None
-    if not result.resolved_objects:
-        return [], None
-
     resolved_objects = [
         raw_object
         for raw_object in result.resolved_objects
         if _looks_like_materializable_object(raw_object)
     ]
     if not resolved_objects:
-        return [], None
+        inferred_object, inference_problem = (
+            _materializable_object_from_qualified_resolved_values(
+                item,
+                object_definitions=object_definitions,
+                object_role_key=object_role_key,
+            )
+        )
+        if inference_problem is not None:
+            return [], inference_problem
+        if inferred_object is None:
+            return [], None
+        resolved_objects = [inferred_object]
 
     materialized_objects: list[CuratableObjectEnvelope] = []
     for object_index, raw_object in enumerate(resolved_objects):
@@ -700,6 +710,72 @@ def _materialized_objects_for_result(
         )
 
     return materialized_objects, None
+
+
+def _materializable_object_from_qualified_resolved_values(
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    object_role_key: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Build a validated reference when a binding names its target object type.
+
+    Validator prompts define ``resolved_objects`` as database facts, so those objects
+    do not necessarily carry the materializer-only ``canonical_id``/``payload``
+    wrapper. A binding can instead declare qualified result paths such as
+    ``allele.primary_external_id``. When that qualifier unambiguously names a
+    validated-reference object and the resolved scalar values fill its required
+    fields, the domain-pack contract contains enough information to materialize it
+    without relying on the model to invent an internal envelope shape.
+    """
+
+    qualified_prefixes: set[str] = set()
+    for result_field, raw_field_path in item.request.expected_result_fields.items():
+        if missing_resolved_value(item.result.resolved_values.get(result_field)):
+            continue
+        if not isinstance(raw_field_path, str) or "." not in raw_field_path:
+            return None, None
+        prefix, _ = raw_field_path.strip().split(".", 1)
+        if not prefix:
+            return None, None
+        qualified_prefixes.add(prefix.casefold())
+
+    if len(qualified_prefixes) != 1:
+        return None, None
+    qualified_prefix = next(iter(qualified_prefixes))
+    candidates = [
+        definition
+        for definition in object_definitions.values()
+        if definition.object_type.casefold() == qualified_prefix
+        and _definition_object_role(
+            definition,
+            object_role_key=object_role_key,
+        )
+        == "validated_reference"
+    ]
+    if len(candidates) != 1:
+        return None, None
+
+    object_definition = candidates[0]
+    payload, problem = _validated_reference_payload(
+        item,
+        {},
+        object_definition=object_definition,
+    )
+    if problem is not None:
+        return None, problem
+
+    canonical_id = _optional_string(payload.get("primary_external_id"))
+    if canonical_id is None:
+        return None, (
+            "qualified resolved values for validated-reference object "
+            f"{object_definition.object_type!r} do not include primary_external_id"
+        )
+    return {
+        "object_type": object_definition.object_type,
+        "canonical_id": canonical_id,
+        "payload": payload,
+    }, None
 
 
 def _looks_like_materializable_object(raw_object: Any) -> bool:
@@ -884,10 +960,10 @@ def _append_materialized_objects(
 
     existing_object_ids = {
         domain_object.object_id
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
         if domain_object.object_id is not None
     }
-    objects = list(envelope.objects)
+    objects = list(envelope.extracted_objects)
     appended: list[CuratableObjectEnvelope] = []
     for new_object in new_objects:
         if (
@@ -905,7 +981,7 @@ def _append_materialized_objects(
             referenced_objects=new_objects,
         )
 
-    return envelope.model_copy(update={"objects": objects}), tuple(appended)
+    return envelope.model_copy(update={"extracted_objects": objects}), tuple(appended)
 
 
 def _objects_with_target_refs(
@@ -1565,7 +1641,7 @@ def _find_existing_object(
     *,
     object_id: str,
 ) -> CuratableObjectEnvelope | None:
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if domain_object.object_id == object_id:
             return domain_object
     return None
@@ -1671,7 +1747,7 @@ def project_evidence_anchor_projections(
     )
     projections: list[DomainEnvelopeEvidenceAnchorProjection] = []
 
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         domain_object_id = stable_object_id(domain_object)
         if object_id is not None and domain_object_id != object_id:
             continue
@@ -1724,7 +1800,7 @@ def project_validation_summary_projections(
     object_id_by_ref = _object_id_by_ref(envelope)
     object_type_by_id = {
         stable_object_id(domain_object): domain_object.object_type
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
     }
     grouped: dict[
         tuple[str | None, str | None],
@@ -2295,7 +2371,7 @@ def _validation_state_by_object(envelope: DomainEnvelope) -> dict[str, str]:
     object_id_by_ref = _object_id_by_ref(envelope)
     state_by_object = {
         stable_object_id(domain_object): OBJECT_VALIDATION_STATE_CLEAR
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
     }
     for finding in envelope.validation_findings:
         if finding.status is not ValidationFindingStatus.OPEN:
@@ -2710,7 +2786,7 @@ def _chunk_ids(evidence_record: Mapping[str, Any]) -> list[str]:
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_id_by_ref: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         object_id = stable_object_id(domain_object)
         if domain_object.object_id is not None:
             object_id_by_ref[("object_id", domain_object.object_id)] = object_id

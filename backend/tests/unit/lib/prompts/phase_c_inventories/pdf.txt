@@ -67,7 +67,7 @@ Use `stage_generic_object` once per retained object:
 `payload` and `attributes`: only evidence-backed fields useful for curation or export.
 For reagent inventories, prefer `generic:generic_reagent_candidate` when available.
 Put reagent-specific values such as `source`, `source_identifier`, `count`, and `reagent_type` in `payload` when the paper supports them.
-For paper-level answers, methods, results, or figure/table findings, prefer `generic:generic_claim`.
+For paper-level sentence-like answers, methods, results, or conclusions, prefer `generic:generic_claim` and keep `claim_text` as narrative claim text only.
 For anything else, choose the most specific stageable class returned by the catalog, or explicitly choose `generic:generic_object`.
 Use `patch_generic_object`, `discard_generic_object`, `list_staged_generic_objects`, and `find_staged_generic_objects` as needed to keep the staged set accurate.
 Before your final chat response, call `finalize_generic_extraction(candidate_ids=[...])` with the staged candidate IDs you intend to keep.

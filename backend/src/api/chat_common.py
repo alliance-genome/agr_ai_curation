@@ -18,14 +18,13 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Literal, Mapping, NoReturn, Optional, Sequence
+from typing import Any, Dict, List, Literal, Mapping, NoReturn, Optional, Sequence
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from starlette.background import BackgroundTask
 from sqlalchemy.exc import SQLAlchemyError
 
 from .auth import get_auth_dependency
@@ -46,7 +45,6 @@ from ..lib.chat_transcript import (
     FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY,
     count_session_text_messages,
     extract_flow_assistant_message,
-    list_session_text_exchanges,
 )
 from ..lib.chat_title_generator import (
     ChatTitleSource,
@@ -63,11 +61,15 @@ from ..lib.curation_workspace.models import (
 )
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
 from ..lib.openai_agents import run_agent_streamed
+from ..lib.observability.background_tasks import (
+    add_observed_background_task,
+    report_background_task_exception,
+)
+from ..lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 from ..lib.openai_agents.config import (
     get_flow_memory_max_visible_output_chars,
     get_title_backfill_message_limit,
 )
-from ..lib.openai_agents.runner import normalize_context_message_role
 from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
 from ..lib.openai_agents.evidence_summary import (
     build_record_evidence_summary_record,
@@ -112,51 +114,6 @@ class PersistedExtractionResultRef:
     result_ref: str
     tool_name: str | None = None
     agent_key: str | None = None
-
-
-def _build_context_messages_from_history(
-    history_messages: List[Dict[str, str]],
-    *,
-    user_message: str,
-) -> List[Dict[str, str]]:
-    """Convert exchange-style history plus the current turn into runner context."""
-
-    context_messages: List[Dict[str, str]] = []
-    for index, message in enumerate(history_messages):
-        role = normalize_context_message_role(message.get("role"))
-        content = str(message.get("content") or "")
-        if not role:
-            raise ValueError(f"history_messages[{index}] is missing a role")
-        if not content.strip():
-            raise ValueError(f"history_messages[{index}] must include non-empty content")
-        context_messages.append({"role": role, "content": content})
-
-    context_messages.append({"role": "user", "content": user_message})
-    return context_messages
-
-
-def _build_context_messages_from_durable_messages(
-    repository: ChatHistoryRepository,
-    *,
-    user_id: str,
-    session_id: str,
-    user_message: str,
-) -> List[Dict[str, str]]:
-    """Build runner context from durable rows while preserving completed-exchange semantics."""
-
-    history_messages: List[Dict[str, str]] = []
-    for durable_user_message, durable_assistant_message in list_session_text_exchanges(
-        session_id=session_id,
-        user_id=user_id,
-        repository=repository,
-    ):
-        history_messages.append({"role": "user", "content": durable_user_message})
-        history_messages.append({"role": "assistant", "content": durable_assistant_message})
-
-    return _build_context_messages_from_history(
-        history_messages,
-        user_message=user_message,
-    )
 
 
 def _build_extraction_candidate_from_tool_event(
@@ -575,20 +532,6 @@ class _ActiveStreamLifecycle:
             generated_title_candidate,
         )
 
-    def background_task(
-        self,
-        generated_title_getter: Callable[[], str | None],
-    ) -> BackgroundTask:
-        """Return the shared background finalize task for SSE responses."""
-
-        return BackgroundTask(self._finalize_with_title_getter, generated_title_getter)
-
-    async def _finalize_with_title_getter(
-        self,
-        generated_title_getter: Callable[[], str | None],
-    ) -> None:
-        await self.finalize(generated_title_getter())
-
 
 async def _claim_active_stream_lifecycle(
     *,
@@ -844,6 +787,8 @@ def _build_title_sources_from_messages(
 
     title_sources: List[ChatTitleSource] = []
     for message in messages:
+        if message.message_type == CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE:
+            continue
         normalized_content = (message.content or "").strip()
         if message.role == "flow":
             assistant_message = extract_flow_assistant_message(message)
@@ -948,12 +893,20 @@ def _backfill_chat_session_generated_title(
             "Skipping durable chat title backfill because session is no longer available",
             extra={"session_id": session_id, "user_id": user_id},
         )
-    except (SQLAlchemyError, ValueError):
+    except (SQLAlchemyError, ValueError) as exc:
         completion_db.rollback()
         logger.warning(
             "Failed to generate durable chat title",
             extra={"session_id": session_id, "user_id": user_id},
             exc_info=True,
+        )
+        report_background_task_exception(
+            exc,
+            task_name="chat.backfill_session_title",
+            tags={
+                "component": "chat",
+                "session_id": session_id,
+            },
         )
     finally:
         completion_db.close()
@@ -975,11 +928,17 @@ def _queue_chat_title_backfill(
         )
         return
 
-    background_tasks.add_task(
+    add_observed_background_task(
+        background_tasks,
         _backfill_chat_session_generated_title,
         session_id,
         user_id,
         preferred_generated_title,
+        task_name="chat.backfill_session_title",
+        tags={
+            "component": "chat",
+            "session_id": session_id,
+        },
     )
 
 
@@ -1241,7 +1200,6 @@ def _prepare_chat_stream_turn(
             return PreparedChatStreamTurn(
                 turn_id=turn_id,
                 effective_user_message=effective_user_message,
-                context_messages=[],
                 replay_assistant_turn=replay_assistant_turn,
             )
 
@@ -1257,16 +1215,9 @@ def _prepare_chat_stream_turn(
                 extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
             )
 
-    context_messages = _build_context_messages_from_durable_messages(
-        repository,
-        user_id=user_id,
-        session_id=session_id,
-        user_message=effective_user_message,
-    )
     return PreparedChatStreamTurn(
         turn_id=turn_id,
         effective_user_message=effective_user_message,
-        context_messages=context_messages,
     )
 
 

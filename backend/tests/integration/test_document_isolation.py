@@ -308,6 +308,50 @@ startxref
 class TestDocumentIsolation:
     """Integration tests for user-specific document isolation."""
 
+    def test_pdf_viewer_metadata_and_bytes_share_two_user_isolation(
+        self, client, test_pdf
+    ):
+        """Viewer list, metadata, URL resolution, and bytes enforce one owner."""
+        client.switch_to_user_a()
+        test_pdf.seek(0)
+        upload = client.post(
+            "/weaviate/documents/upload",
+            files={"file": ("test_viewer_owner.pdf", test_pdf, "application/pdf")},
+        )
+        assert upload.status_code == 201
+        document_id = upload.json()["document_id"]
+
+        own_list = client.get("/api/pdf-viewer/documents")
+        assert own_list.status_code == 200
+        assert document_id in {
+            document["id"] for document in own_list.json()["documents"]
+        }
+        viewer_url = (
+            f"/api/pdf-viewer/documents/{document_id}/content"
+        )
+        assert client.get(f"/api/pdf-viewer/documents/{document_id}").json()[
+            "viewer_url"
+        ] == viewer_url
+        assert client.get(f"/api/pdf-viewer/documents/{document_id}/url").json()[
+            "viewer_url"
+        ] == viewer_url
+        own_bytes = client.get(viewer_url)
+        assert own_bytes.status_code == 200
+        assert own_bytes.headers["content-type"] == "application/pdf"
+
+        client.switch_to_user_b()
+        other_list = client.get("/api/pdf-viewer/documents")
+        assert other_list.status_code == 200
+        assert document_id not in {
+            document["id"] for document in other_list.json()["documents"]
+        }
+        for path in (
+            f"/api/pdf-viewer/documents/{document_id}",
+            f"/api/pdf-viewer/documents/{document_id}/url",
+            viewer_url,
+        ):
+            assert client.get(path).status_code == 403
+
     def test_upload_as_user_a_list_as_user_b_sees_nothing(
         self, client, test_pdf
     ):

@@ -596,13 +596,13 @@ def test_tool_verified_disease_fixture_converts_to_pending_envelope():
     assert validate_pending_disease_envelope(converted_envelope) == ()
     assert converted_envelope.domain_pack_id == DISEASE_DOMAIN_PACK_ID
     assert converted_envelope.schema_ref.schema_id == DISEASE_LINKML_SCHEMA_ID
-    assert converted_envelope.objects[0].pending_ref_id == "disease-assertion-1"
-    assert converted_envelope.objects[0].status is CuratableObjectStatus.PENDING
-    assert converted_envelope.objects[0].metadata[OBJECT_ROLE_METADATA_KEY] == (
+    assert converted_envelope.extracted_objects[0].pending_ref_id == "disease-assertion-1"
+    assert converted_envelope.extracted_objects[0].status is CuratableObjectStatus.PENDING
+    assert converted_envelope.extracted_objects[0].metadata[OBJECT_ROLE_METADATA_KEY] == (
         "curatable_unit"
     )
 
-    payload = converted_envelope.objects[0].payload
+    payload = converted_envelope.extracted_objects[0].payload
     assert payload["disease_annotation_object"] == {
         "curie": "DOID:0050434",
         "name": "Andersen-Tawil syndrome",
@@ -669,7 +669,7 @@ def test_disease_evidence_code_lookup_validates_every_staged_element():
     envelope = DomainEnvelope(
         envelope_id="disease-multivalued-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
@@ -720,7 +720,7 @@ def test_disease_qualifier_cv_lookup_validates_every_staged_element():
     envelope = DomainEnvelope(
         envelope_id="disease-qualifier-multivalued-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
@@ -769,7 +769,7 @@ def test_disease_relation_lookup_projects_sibling_expected_result_fields():
     envelope = DomainEnvelope(
         envelope_id="disease-relation-projection-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
@@ -832,7 +832,7 @@ def test_disease_relation_lookup_projects_sibling_expected_result_fields():
         ],
     )
 
-    payload = result.envelope.objects[0].payload
+    payload = result.envelope.extracted_objects[0].payload
     assert payload["disease_relation_name"] == "is_implicated_in"
     assert payload["disease_relation_vocabulary"] == "Gene Disease Relation"
     assert payload["disease_relation_id"] == "4011"
@@ -858,7 +858,7 @@ def test_disease_condition_relation_lookup_projects_indexed_sibling_fields():
     envelope = DomainEnvelope(
         envelope_id="disease-condition-relation-projection-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
@@ -937,7 +937,7 @@ def test_disease_condition_relation_lookup_projects_indexed_sibling_fields():
         ],
     )
 
-    relation_type = result.envelope.objects[0].payload["condition_relations"][0][
+    relation_type = result.envelope.extracted_objects[0].payload["condition_relations"][0][
         "condition_relation_type"
     ]
     assert relation_type == {
@@ -971,7 +971,7 @@ def test_disease_with_gene_validation_validates_every_staged_element():
     envelope = DomainEnvelope(
         envelope_id="disease-with-gene-multivalued-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-1",
@@ -1100,7 +1100,7 @@ def test_evidence_code_multivalued_field_groups_into_one_batch():
     envelope = DomainEnvelope(
         envelope_id="disease-evidence-batch-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneDiseaseAnnotation",
                 pending_ref_id="gene-disease-batch-1",
@@ -1210,7 +1210,7 @@ def test_experimental_condition_binding_fans_out_one_composite_per_condition():
     envelope = DomainEnvelope(
         envelope_id="disease-conditions-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="DiseaseAnnotation",
                 pending_ref_id="disease-conditions-1",
@@ -1303,7 +1303,7 @@ def test_two_relations_fan_out_per_relation_and_per_condition():
     envelope = DomainEnvelope(
         envelope_id="disease-conditions-2rel-env",
         domain_pack_id=DISEASE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="DiseaseAnnotation",
                 pending_ref_id="disease-conditions-2rel-1",

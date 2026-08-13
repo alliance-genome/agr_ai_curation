@@ -52,7 +52,7 @@ def build_extraction_manifest_page(
     }
     manifest_objects = [
         domain_object
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
         if _include_object_in_manifest(domain_object, object_definitions)
     ]
 
@@ -118,7 +118,7 @@ def build_extraction_manifest_object(
     if not normalized_ref:
         raise ExtractionManifestError("object_ref is required")
 
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if _object_ref(domain_object) != normalized_ref:
             continue
         if not _include_object_in_manifest(domain_object, object_definitions):
@@ -492,9 +492,9 @@ def _next_actions(
             f'Use inspect_results(result_ref="{result_ref}", action="evidence", object_ref="<object_ref>") for evidence.'
         )
         actions.append(
-            "Use export_to_file(format_type=..., data=..., filename_hint=...) "
-            "only if the user asks for a file/export; inspect this result first "
-            "to choose the bounded rows or fields to export."
+            "Use the matching CSV/TSV/JSON formatter specialist only if the user "
+            "asks for a file/export; the formatter is bound to saved extraction "
+            "results and must build the file through source-backed projection tools."
         )
     actions.append('Ask "Ready to prepare these for curation?" before prepare_for_curation.')
     return actions

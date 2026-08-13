@@ -9,6 +9,10 @@ import {
   validatePdfSelection,
   waitForDocumentProcessing,
 } from '@/features/documents/pdfUploadFlow'
+import {
+  beginChatDocumentIntent,
+  invalidateChatDocumentIntent,
+} from '@/features/documents/chatDocumentIntent'
 import { usePdfViewerUpload } from './usePdfViewerUpload'
 
 vi.mock('@/features/documents/pdfUploadFlow', () => ({
@@ -125,7 +129,11 @@ describe('usePdfViewerUpload', () => {
       expect(uploadPdfDocument).toHaveBeenCalledWith(pdfFile)
     })
     await waitFor(() => {
-      expect(loadDocumentForChat).toHaveBeenCalledWith('doc-1')
+      expect(loadDocumentForChat).toHaveBeenCalledWith('doc-1', {
+        signal: expect.any(AbortSignal),
+        intentOwner: expect.stringMatching(/^latest-intent-/),
+        intentGeneration: expect.any(Number),
+      })
     })
 
     expect(sessionStorage.getItem('document-loading')).toBe('true')
@@ -190,5 +198,33 @@ describe('usePdfViewerUpload', () => {
         documentId: 'doc-1',
       })
     })
+  })
+
+  it('ignores a completed load after another document source takes ownership', async () => {
+    const staleLoad = makeDeferred<Record<string, unknown>>()
+    vi.mocked(loadDocumentForChat).mockReturnValueOnce(staleLoad.promise)
+    const { result } = renderHook(() => usePdfViewerUpload({ disabled: false }))
+
+    act(() => {
+      result.current.handleDrop(makeDropEvent())
+    })
+
+    await waitFor(() => {
+      expect(loadDocumentForChat).toHaveBeenCalledTimes(1)
+    })
+
+    const newerOperation = beginChatDocumentIntent()
+    staleLoad.resolve({
+      active: true,
+      document: { id: 'doc-1', filename: 'paper.pdf' },
+    })
+
+    await waitFor(() => {
+      expect(result.current.uploadInFlight).toBe(false)
+    })
+
+    expect(dispatchChatDocumentChanged).not.toHaveBeenCalled()
+    expect(result.current.uploadDialog.stage).not.toBe('error')
+    invalidateChatDocumentIntent(newerOperation)
   })
 })

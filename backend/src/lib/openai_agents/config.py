@@ -87,6 +87,34 @@ def _get_env_int_with_fallback(key: str, default: int) -> int:
         return default
 
 
+def get_batch_worker_lease_seconds() -> int:
+    """Duration of an exclusive batch worker lease before crash recovery."""
+    return max(1, _get_env_int_with_fallback("BATCH_WORKER_LEASE_SECONDS", 120))
+
+
+def get_batch_worker_heartbeat_seconds() -> int:
+    """Interval between durable batch worker lease heartbeats."""
+    return max(1, _get_env_int_with_fallback("BATCH_WORKER_HEARTBEAT_SECONDS", 30))
+
+
+def get_batch_recovery_max_concurrency() -> int:
+    """Maximum persisted batches processed concurrently during startup recovery."""
+    return max(1, _get_env_int_with_fallback("BATCH_RECOVERY_MAX_CONCURRENCY", 4))
+
+
+def get_submission_attempt_retention_days() -> int:
+    """Days to retain terminal direct-submission attempts for audit and deduplication."""
+    return max(1, _get_env_int_with_fallback("SUBMISSION_ATTEMPT_RETENTION_DAYS", 90))
+
+
+def get_submission_attempt_cleanup_interval_seconds() -> int:
+    """Seconds between periodic submission-attempt retention cleanup passes."""
+    return max(
+        1,
+        _get_env_int_with_fallback("SUBMISSION_ATTEMPT_CLEANUP_INTERVAL_SECONDS", 3600),
+    )
+
+
 def is_retryable_groq_tool_call_error(exc: Exception) -> bool:
     """Return True when an exception matches known transient Groq tool-call parse failures."""
     text = str(exc or "").lower()
@@ -320,7 +348,7 @@ ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 # can carry values the model's Reasoning schema rejects (notably "disabled"/"none"
 # emitted by the AI flow builder). Treat anything else as "no reasoning" and
 # normalize to None rather than letting it crash Reasoning(effort=...) downstream
-# (e.g. in the flow terminal-formatter projection planner). KANBAN-1346 / 0.7.2.
+# (e.g. in flow terminal formatter agents). KANBAN-1346 / 0.7.2.
 _VALID_REASONING_EFFORTS: frozenset = frozenset(
     {"minimal", "low", "medium", "high", "xhigh"}
 )
@@ -706,6 +734,11 @@ def get_supervisor_max_calls_per_specialist() -> int:
     return max(1, limit)
 
 
+def get_flow_supervisor_parallel_tool_calls_enabled() -> bool:
+    """Whether flow supervisors may request parallel tool calls from the provider."""
+    return _get_env_bool("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", False)
+
+
 # =============================================================================
 # Operational limits (turns, batches, caps, timeouts)
 #
@@ -714,6 +747,146 @@ def get_supervisor_max_calls_per_specialist() -> int:
 # fallback, so behavior is unchanged unless the env var is set. See .env.example
 # for the documented rationale and consequences of each.
 # =============================================================================
+
+# --- Document source / ABC Literature ---
+
+
+def get_document_source_import_enabled() -> bool:
+    """Feature flag for external document-source import."""
+    return _get_env_bool("DOCUMENT_SOURCE_IMPORT_ENABLED", False)
+
+
+def get_document_source_provider() -> str:
+    """Primary document-source provider identifier (DOCUMENT_SOURCE_PROVIDER)."""
+    return os.getenv("DOCUMENT_SOURCE_PROVIDER", "local_pdf").strip() or "local_pdf"
+
+
+def get_abc_literature_api_base_url() -> str:
+    """ABC Literature REST API base URL (ABC_LITERATURE_API_BASE_URL)."""
+    return os.getenv("ABC_LITERATURE_API_BASE_URL", "")
+
+
+def get_abc_literature_auth_mode() -> str:
+    """ABC Literature auth mode (ABC_LITERATURE_AUTH_MODE)."""
+    return os.getenv("ABC_LITERATURE_AUTH_MODE", "none")
+
+
+def get_abc_literature_bearer_token() -> str | None:
+    """Static bearer token for ABC Literature auth (ABC_LITERATURE_BEARER_TOKEN)."""
+    return os.getenv("ABC_LITERATURE_BEARER_TOKEN")
+
+
+def get_abc_literature_cognito_token_url() -> str | None:
+    """Cognito token endpoint for ABC Literature auth."""
+    return os.getenv("ABC_LITERATURE_COGNITO_TOKEN_URL")
+
+
+def get_abc_literature_cognito_client_id() -> str | None:
+    """Cognito client id for ABC Literature auth (ABC_LITERATURE_COGNITO_CLIENT_ID)."""
+    return os.getenv("ABC_LITERATURE_COGNITO_CLIENT_ID")
+
+
+def get_abc_literature_cognito_client_secret() -> str | None:
+    """Cognito client secret for ABC Literature auth."""
+    return os.getenv("ABC_LITERATURE_COGNITO_CLIENT_SECRET")
+
+
+def get_abc_literature_cognito_scope() -> str | None:
+    """Cognito client-credentials scope for ABC Literature auth."""
+    return os.getenv("ABC_LITERATURE_COGNITO_SCOPE")
+
+
+def get_document_source_request_timeout_seconds() -> float:
+    """HTTP timeout for document-source provider calls."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", 10.0),
+    )
+
+
+def get_document_source_import_batch_limit() -> int:
+    """Maximum documents accepted by one source import request."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT", 10))
+
+
+def get_document_source_poll_interval_seconds() -> float:
+    """Status-poll interval for provider-backed document imports."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", 2.0),
+    )
+
+
+def get_document_source_import_timeout_seconds() -> float:
+    """Wall-clock timeout for one provider-backed import job."""
+    return max(
+        1.0,
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 300.0),
+    )
+
+
+# --- Agent / turn limits ---
+
+
+def _get_single_shot_output_agent_max_turns(key: str) -> int:
+    """Read a one-shot structured-output agent turn budget with the SDK-default bound."""
+    return max(1, _get_env_int_with_fallback(key, 10))
+
+
+def get_guardrail_single_shot_max_turns() -> int:
+    """Turn budget for single-shot guardrail structured-output agents (GUARDRAIL_SINGLE_SHOT_MAX_TURNS).
+
+    These agents have no tools and only emit structured safety/topic decisions.
+    Default 10 matches the Agents SDK default they previously inherited while
+    making the bound explicit at every Runner call site.
+    """
+    return _get_single_shot_output_agent_max_turns("GUARDRAIL_SINGLE_SHOT_MAX_TURNS")
+
+
+def get_hierarchy_resolution_max_turns() -> int:
+    """Turn budget for the one-shot document hierarchy classifier (HIERARCHY_RESOLUTION_MAX_TURNS).
+
+    The hierarchy agent has no tools and returns structured section metadata.
+    Default 10 matches the Agents SDK default it previously inherited while
+    making the bound explicit at the Runner call site.
+    """
+    return _get_single_shot_output_agent_max_turns("HIERARCHY_RESOLUTION_MAX_TURNS")
+
+
+def get_standard_chat_context_token_budget() -> int:
+    """Model-live context budget for standard assistant chat (STANDARD_CHAT_CONTEXT_TOKEN_BUDGET).
+
+    This is the budget the standard-chat compaction trigger compares against.
+    Default 400000 matches the current GPT-5 family context target used by the
+    supervisor; tune lower to compact sooner or higher when moving to a larger
+    context model.
+    """
+    return max(1, _get_env_int_with_fallback("STANDARD_CHAT_CONTEXT_TOKEN_BUDGET", 400_000))
+
+
+def get_standard_chat_compaction_threshold_percent() -> int:
+    """Percent of context budget that triggers standard-chat compaction.
+
+    STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT defaults to 70 so compaction runs
+    before the model-live transcript approaches the full context window.
+    """
+    return min(
+        100,
+        max(1, _get_env_int_with_fallback("STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT", 70)),
+    )
+
+
+def get_standard_chat_compaction_token_threshold() -> int:
+    """Estimated token threshold for standard-chat compaction.
+
+    Derived from STANDARD_CHAT_CONTEXT_TOKEN_BUDGET and
+    STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT so the threshold stays tied to
+    the configured context budget.
+    """
+    budget = get_standard_chat_context_token_budget()
+    percent = get_standard_chat_compaction_threshold_percent()
+    return max(1, (budget * percent) // 100)
+
 
 # --- Validator dispatch ---
 
@@ -953,6 +1126,36 @@ def get_supervisor_max_list_limit() -> int:
     return max(1, _get_env_int_with_fallback("SUPERVISOR_MAX_LIST_LIMIT", 20))
 
 
+def get_supervisor_recall_chat_history_default_limit() -> int:
+    """Default page size for recall_chat_history (SUPERVISOR_RECALL_CHAT_HISTORY_DEFAULT_LIMIT).
+
+    Bounds how many exact transcript messages recall_chat_history returns when
+    no explicit limit is supplied. Default 5.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "SUPERVISOR_RECALL_CHAT_HISTORY_DEFAULT_LIMIT",
+            5,
+        ),
+    )
+
+
+def get_supervisor_inspect_chat_traces_default_limit() -> int:
+    """Default page size for inspect_chat_traces (SUPERVISOR_INSPECT_CHAT_TRACES_DEFAULT_LIMIT).
+
+    Bounds how many trace inventory rows inspect_chat_traces returns when no
+    explicit limit is supplied. Default 5.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "SUPERVISOR_INSPECT_CHAT_TRACES_DEFAULT_LIMIT",
+            5,
+        ),
+    )
+
+
 def get_validation_detail_string_limit() -> int:
     """Char limit per string when materializing validation detail (VALIDATION_DETAIL_STRING_LIMIT).
 
@@ -994,14 +1197,53 @@ def get_flow_step_evidence_preview_limit() -> int:
     return max(1, _get_env_int_with_fallback("FLOW_STEP_EVIDENCE_PREVIEW_LIMIT", 10))
 
 
-def get_flow_output_projection_planner_preview_limit() -> int:
-    """Rows previewed for the flow output projection planner (FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT).
+def get_flow_output_projection_preview_limit() -> int:
+    """Rows previewed by flow/formatter projection tools (FLOW_OUTPUT_PROJECTION_PREVIEW_LIMIT).
 
-    Bounds the preview row count the projection planner inspects. Default 5.
+    Bounds the preview row count visible formatter tools inspect. Default 5.
     """
     return max(
         1,
-        _get_env_int_with_fallback("FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT", 5),
+        _get_env_int_with_fallback("FLOW_OUTPUT_PROJECTION_PREVIEW_LIMIT", 5),
+    )
+
+
+def get_flow_output_branch_descriptor_prefix_chars() -> int:
+    """Readable descriptor characters retained before branch identity. Default 55."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_BRANCH_DESCRIPTOR_PREFIX_CHARS", 55),
+    )
+
+
+def get_flow_output_branch_node_suffix_chars() -> int:
+    """Formatter-node characters retained in branched output filenames. Default 25."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_BRANCH_NODE_SUFFIX_CHARS", 25),
+    )
+
+
+def get_flow_output_branch_identity_hash_chars() -> int:
+    """SHA-256 characters used to distinguish output branches. Default 12."""
+
+    return min(
+        64,
+        max(
+            1,
+            _get_env_int_with_fallback("FLOW_OUTPUT_BRANCH_IDENTITY_HASH_CHARS", 12),
+        ),
+    )
+
+
+def get_flow_output_branch_storage_descriptor_chars() -> int:
+    """Maximum branched storage descriptor length. Default 100."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_BRANCH_STORAGE_DESCRIPTOR_CHARS", 100),
     )
 
 
@@ -1084,6 +1326,54 @@ def get_agent_studio_endpoint_timeout_seconds() -> float:
     Applies to trace tools that do not override it. Default 30.
     """
     return max(1.0, _get_env_float_with_fallback("AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS", 30.0))
+
+
+def get_agent_studio_opus_context_editing_trigger_tokens() -> int:
+    """Input-token threshold for Anthropic tool context editing.
+
+    Agent Studio Opus asks Anthropic to clear stale tool uses/results after the
+    live request context crosses this threshold. Default 140000, approximately
+    70% of the 200K-token Opus context budget used by Agent Studio.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_OPUS_CONTEXT_EDITING_TRIGGER_TOKENS",
+            140_000,
+        ),
+    )
+
+
+def get_agent_studio_opus_context_editing_keep_tool_uses() -> int:
+    """Recent tool-use count Anthropic should keep when context editing triggers.
+
+    Keeping a small tail preserves local tool-loop continuity while older tool
+    results can be rehydrated through durable chat/TraceReview recall tools.
+    Default 3.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_OPUS_CONTEXT_EDITING_KEEP_TOOL_USES",
+            3,
+        ),
+    )
+
+
+def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
+    """Max raw tool-result JSON chars replayed to provider continuation.
+
+    Larger Agent Studio tool results are replaced with compact provider-only
+    summaries and recall instructions while the frontend still receives the full
+    result event. Default 12000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
+            12_000,
+        ),
+    )
 
 
 def get_trace_review_export_timeout_seconds() -> float:
@@ -1318,6 +1608,45 @@ def get_chat_recent_message_scan_size_max() -> int:
     return max(1, _get_env_int_with_fallback("CHAT_RECENT_MESSAGE_SCAN_SIZE_MAX", 5000))
 
 
+def get_executable_run_event_replay_limit() -> int:
+    """Replay buffer size per active executable run (EXECUTABLE_RUN_EVENT_REPLAY_LIMIT).
+
+    Bounds in-memory event replay for observers that detach and reattach to a
+    running chat, flow, or Agent Studio turn. Default 1000.
+    """
+    return max(1, _get_env_int_with_fallback("EXECUTABLE_RUN_EVENT_REPLAY_LIMIT", 1000))
+
+
+def get_executable_run_retention_seconds() -> int:
+    """Seconds to retain terminal in-memory executable runs (EXECUTABLE_RUN_RETENTION_SECONDS).
+
+    Retention lets a route remount replay terminal events shortly after a run
+    finishes while durable chat history remains the long-lived source. Default 900.
+    """
+    return max(1, _get_env_int_with_fallback("EXECUTABLE_RUN_RETENTION_SECONDS", 900))
+
+
+def get_runtime_observability_tag_value_max_chars() -> int:
+    """Char cap for runtime observability tag values (RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS).
+
+    Bounds low-cardinality Sentry tag values emitted by caught runtime exception
+    reporting. Default 200.
+    """
+    return max(1, _get_env_int_with_fallback("RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS", 200))
+
+
+def get_runtime_observability_context_value_max_chars() -> int:
+    """Char cap for runtime observability context values (RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS).
+
+    Bounds custom Sentry context values emitted by caught runtime exception
+    reporting before the global redaction hook applies. Default 500.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS", 500),
+    )
+
+
 def get_flow_list_page_size_default() -> int:
     """Default page size for flow listings (FLOW_LIST_PAGE_SIZE_DEFAULT).
 
@@ -1326,22 +1655,22 @@ def get_flow_list_page_size_default() -> int:
     return max(1, _get_env_int_with_fallback("FLOW_LIST_PAGE_SIZE_DEFAULT", 50))
 
 
-# --- Flow output projection planner ---
+# --- Flow output projection tooling ---
 
-def get_flow_planner_max_text_chars() -> int:
-    """Char cap on planner text fields in flow output projection (FLOW_PLANNER_MAX_TEXT_CHARS).
+def get_flow_projection_max_text_chars() -> int:
+    """Char cap on text fields in flow output projection (FLOW_PROJECTION_MAX_TEXT_CHARS).
 
-    Truncates per-field text the projection planner inspects. Default 180.
+    Truncates per-field text visible formatter/projection tools inspect. Default 180.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_TEXT_CHARS", 180))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_TEXT_CHARS", 180))
 
 
-def get_flow_planner_max_row_chars() -> int:
-    """Char cap on planner row previews in flow output projection (FLOW_PLANNER_MAX_ROW_CHARS).
+def get_flow_projection_max_row_chars() -> int:
+    """Char cap on row previews in flow output projection (FLOW_PROJECTION_MAX_ROW_CHARS).
 
-    Truncates per-row preview text the projection planner inspects. Default 2000.
+    Truncates per-row preview text visible formatter/projection tools inspect. Default 2000.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_ROW_CHARS", 2_000))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_ROW_CHARS", 2_000))
 
 
 def get_flow_projection_max_rows() -> int:
@@ -1361,28 +1690,48 @@ def get_flow_chat_max_rows() -> int:
     return max(1, _get_env_int_with_fallback("FLOW_CHAT_MAX_ROWS", 50))
 
 
-def get_flow_planner_max_field_examples() -> int:
-    """Example values shown per field to the projection planner (FLOW_PLANNER_MAX_FIELD_EXAMPLES).
+def get_flow_projection_max_field_examples() -> int:
+    """Example values shown per field to projection tools (FLOW_PROJECTION_MAX_FIELD_EXAMPLES).
 
     Default 3.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_FIELD_EXAMPLES", 3))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_FIELD_EXAMPLES", 3))
 
 
-def get_flow_planner_max_list_items() -> int:
-    """List items previewed per field to the projection planner (FLOW_PLANNER_MAX_LIST_ITEMS).
+def get_flow_projection_max_list_items() -> int:
+    """List items previewed per field by projection tools (FLOW_PROJECTION_MAX_LIST_ITEMS).
 
     Default 5.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_LIST_ITEMS", 5))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_LIST_ITEMS", 5))
 
 
-def get_flow_planner_max_object_items() -> int:
-    """Object keys previewed per field to the projection planner (FLOW_PLANNER_MAX_OBJECT_ITEMS).
+def get_flow_projection_max_object_items() -> int:
+    """Object keys previewed per field by projection tools (FLOW_PROJECTION_MAX_OBJECT_ITEMS).
 
     Default 12.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_OBJECT_ITEMS", 12))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_OBJECT_ITEMS", 12))
+
+
+def get_flow_output_projection_preview_max_depth() -> int:
+    """Max nested depth shown in flow output projection previews (FLOW_OUTPUT_PROJECTION_PREVIEW_MAX_DEPTH).
+
+    Bounds nested JSON/list previews returned by deterministic flow projection
+    previews. Default 4.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_PROJECTION_PREVIEW_MAX_DEPTH", 4),
+    )
+
+
+def get_formatter_preview_max_depth() -> int:
+    """Max nested depth shown in formatter preview values (FORMATTER_PREVIEW_MAX_DEPTH).
+
+    Bounds nested JSON/list previews returned to formatter agents. Default 4.
+    """
+    return max(1, _get_env_int_with_fallback("FORMATTER_PREVIEW_MAX_DEPTH", 4))
 
 
 # --- Curation / pipeline ---
@@ -1453,12 +1802,20 @@ def get_file_output_max_size_bytes() -> int:
 def get_pdf_max_file_size_bytes() -> int:
     """Max byte size of an uploaded/processed PDF (PDF_MAX_FILE_SIZE_BYTES).
 
-    Rejects oversized PDF uploads. Default 157286400 (150 MB).
+    Rejects oversized PDF uploads. Default 524288000 (500 MB).
     """
     return max(
         1,
-        _get_env_int_with_fallback("PDF_MAX_FILE_SIZE_BYTES", 150 * 1024 * 1024),
+        _get_env_int_with_fallback("PDF_MAX_FILE_SIZE_BYTES", 500 * 1024 * 1024),
     )
+
+
+def get_pdf_upload_max_page_count() -> int:
+    """Max page count admitted for PDF uploads (PDF_UPLOAD_MAX_PAGE_COUNT).
+
+    Rejects oversized PDFs before durable intake side effects. Default 100.
+    """
+    return max(1, _get_env_int_with_fallback("PDF_UPLOAD_MAX_PAGE_COUNT", 100))
 
 
 def get_evidence_page_only_degraded_ratio_threshold() -> float:

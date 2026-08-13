@@ -42,6 +42,7 @@ describe('curation workspace substrate types', () => {
     expect(CURATION_SUBMISSION_STATUSES).toEqual([
       'preview_ready',
       'export_ready',
+      'pending',
       'queued',
       'accepted',
       'validation_errors',
@@ -94,7 +95,7 @@ describe('curation workspace substrate types', () => {
           object_model_ref: {},
           model_field_ref: {},
           metadata: {
-            semantic_source: 'domain_envelope.objects',
+            semantic_source: 'domain_envelope.extracted_objects',
           },
         },
       ],

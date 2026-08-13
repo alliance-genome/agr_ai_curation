@@ -92,9 +92,9 @@ structured_finalization:
       - controlled_vocabulary_candidates[].vocabulary_label
 
 model_config:
-  model: "${AGENT_CONTROLLED_VOCABULARY_MODEL:-gpt-5.4-mini}"
+  model: "${AGENT_CONTROLLED_VOCABULARY_MODEL:-gpt-5.6-terra}"
   temperature: 0.1
-  reasoning: "high"
+  reasoning: "medium"
 
 requires_document: false
 required_params: []

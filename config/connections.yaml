@@ -19,6 +19,7 @@
 #       - env: Environment variable name to inspect
 #       - equals: Value that makes the service required
 #       - default: Value assumed when the env var is unset
+#   - active: Optional boolean/env flag controlling whether health checks run
 #   - timeout_seconds: Timeout for health check requests
 # =============================================================================
 

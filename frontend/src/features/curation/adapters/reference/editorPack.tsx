@@ -7,12 +7,15 @@ import {
 
 import type { CurationDraftField } from '@/features/curation/types'
 import type { FieldRowInputProps } from '@/features/curation/editor'
-import { areDraftFieldValuesEqual } from '@/features/curation/workspace/workspaceState'
+import {
+  areDraftFieldValuesEqual,
+  resolveEnvelopeFieldPath,
+} from '@/features/curation/workspace/workspaceState'
 import type { CurationAdapterEditorPack } from '../types'
 import {
   REFERENCE_ADAPTER_KEY,
   REFERENCE_FIELD_LAYOUT,
-  REFERENCE_FIELD_LAYOUT_BY_KEY,
+  REFERENCE_FIELD_LAYOUT_BY_PATH,
 } from './fieldLayout'
 
 interface ResolvedFieldOption {
@@ -280,7 +283,7 @@ function renderDefaultReferenceInput({
 }
 
 export function renderReferenceFieldInput(props: FieldRowInputProps): ReactNode {
-  const layout = REFERENCE_FIELD_LAYOUT_BY_KEY.get(props.field.field_key)
+  const layout = REFERENCE_FIELD_LAYOUT_BY_PATH.get(resolveEnvelopeFieldPath(props.field))
   const widget = layout?.widget
     ?? (typeof props.field.metadata.widget === 'string' ? props.field.metadata.widget : undefined)
 

@@ -26,10 +26,29 @@ def _load_prompt_content(relative_path: str) -> str:
 def test_csv_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
     content = _load_prompt_content(relative_path)
 
-    assert "`data_json` (required)" in content
-    assert "`filename` (required)" in content
-    assert "`columns` (optional)" in content
-    assert "Do not pass raw CSV text." in content
-    assert "Do not paste CSV into the assistant response" in content
-    assert "filename_hint" not in content
+    for required in (
+        "inspect_output_artifacts",
+        "inspect_output_rows",
+        "inspect_field_values",
+        "build_default_projection_plan",
+        "validate_output_projection",
+        "preview_output_projection",
+        "finalize_and_save",
+        "formatter_cannot_complete",
+        "source-backed",
+        "filename_hint",
+        "source_ref",
+        "latest `extraction-result:<uuid>`",
+        "Do not build replacement row arrays",
+    ):
+        assert required in content
+
+    for forbidden in (
+        "save_csv_file",
+        "data_json",
+        "JSON array string",
+    ):
+        assert forbidden not in content
+
+    assert "Do not paste CSV content" in content
     assert "\nFormatted CSV output:\n" not in content

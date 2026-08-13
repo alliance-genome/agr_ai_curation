@@ -1,5 +1,7 @@
 """Unit tests for feedback submission API."""
 
+import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -68,15 +70,25 @@ def test_submit_feedback_returns_400_on_validation_error(monkeypatch):
     assert b"Validation error" in response.body
 
 
-def test_submit_feedback_returns_500_on_unexpected_error(monkeypatch):
+def test_submit_feedback_returns_500_on_unexpected_error(monkeypatch, caplog):
+    report_calls = []
+    secret_text = "SECRET_FEEDBACK_TEXT_SHOULD_NOT_APPEAR"
+
     class _FakeService:
         def __init__(self, _db):
             pass
 
         def create_feedback_payload(self, **_kwargs):
-            raise RuntimeError("db unavailable")
+            raise RuntimeError(f"db unavailable {secret_text}")
 
     monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        report_calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(feedback_api, "report_runtime_exception", _fake_report_runtime_exception)
+    caplog.set_level(logging.ERROR, logger=feedback_api.logger.name)
 
     response = feedback_api.submit_feedback(
         submission=_submission(),
@@ -85,7 +97,54 @@ def test_submit_feedback_returns_500_on_unexpected_error(monkeypatch):
     )
     assert isinstance(response, JSONResponse)
     assert response.status_code == 500
-    assert b"Failed to save feedback to database" in response.body
+    assert json.loads(response.body) == {
+        "status": "error",
+        "error": "Failed to save feedback to database",
+    }
+    assert len(report_calls) == 1
+    assert isinstance(report_calls[0][0], feedback_api._FeedbackApiError)
+    assert "RuntimeError" in str(report_calls[0][0])
+    assert report_calls[0][0].__traceback__ is not None
+    assert secret_text not in str(report_calls[0][0])
+    assert report_calls[0][1]["component"] == "api"
+    assert report_calls[0][1]["operation"] == "feedback_submission_failed"
+    assert report_calls[0][1]["context"]["logger_name"] == feedback_api.logger.name
+    assert report_calls[0][1]["context"]["status_code"] == 500
+    assert secret_text not in caplog.text
+
+
+def test_submit_feedback_returns_500_when_sentry_reporter_fails(monkeypatch, caplog):
+    secret_text = "SECRET_FEEDBACK_TEXT_SHOULD_NOT_APPEAR"
+
+    class _FakeService:
+        def __init__(self, _db):
+            pass
+
+        def create_feedback_payload(self, **_kwargs):
+            raise RuntimeError(f"db unavailable {secret_text}")
+
+    monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+    monkeypatch.setattr(
+        feedback_api,
+        "report_runtime_exception",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("sentry down")),
+    )
+    caplog.set_level(logging.WARNING, logger=feedback_api.logger.name)
+
+    response = feedback_api.submit_feedback(
+        submission=_submission(),
+        db=object(),
+        user={"sub": "user-123"},
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 500
+    assert json.loads(response.body) == {
+        "status": "error",
+        "error": "Failed to save feedback to database",
+    }
+    assert "Failed to report feedback API error to Sentry" in caplog.text
+    assert secret_text not in caplog.text
 
 
 def test_submit_feedback_logs_dispatch_failures_but_returns_success(monkeypatch):
@@ -417,6 +476,50 @@ def test_get_feedback_debug_detail_returns_404_when_missing(monkeypatch):
     assert isinstance(response, JSONResponse)
     assert response.status_code == 404
     assert b"Feedback report not found" in response.body
+
+
+def test_get_feedback_debug_detail_returns_500_on_unexpected_error(monkeypatch, caplog):
+    report_calls = []
+    secret_text = "SECRET_DEBUG_TEXT_SHOULD_NOT_APPEAR"
+
+    class _FakeService:
+        def __init__(self, _db):
+            pass
+
+        def get_feedback_debug_detail(self, _feedback_id, **_kwargs):
+            raise RuntimeError(f"debug load failed {secret_text}")
+
+    monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        report_calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(feedback_api, "report_runtime_exception", _fake_report_runtime_exception)
+    caplog.set_level(logging.ERROR, logger=feedback_api.logger.name)
+
+    response = feedback_api.get_feedback_debug_detail(
+        feedback_id="feedback-123",
+        db=object(),
+        user={"sub": "user-123"},
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 500
+    assert json.loads(response.body) == {
+        "status": "error",
+        "error": "Failed to load feedback debug detail",
+    }
+    assert len(report_calls) == 1
+    assert isinstance(report_calls[0][0], feedback_api._FeedbackApiError)
+    assert "RuntimeError" in str(report_calls[0][0])
+    assert report_calls[0][0].__traceback__ is not None
+    assert secret_text not in str(report_calls[0][0])
+    assert report_calls[0][1]["component"] == "api"
+    assert report_calls[0][1]["operation"] == "feedback_debug_detail_failed"
+    assert report_calls[0][1]["context"]["logger_name"] == feedback_api.logger.name
+    assert report_calls[0][1]["context"]["status_code"] == 500
+    assert secret_text not in caplog.text
 
 
 def test_get_feedback_trace_artifacts_returns_internal_trace_data(monkeypatch):

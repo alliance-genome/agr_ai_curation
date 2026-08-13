@@ -9,13 +9,14 @@ import type {
   CurationWorkspace,
   DomainEnvelopeReviewRowsResponse,
 } from '@/features/curation/types'
+import { dispatchPDFViewerEvidenceAnchorSelected } from '@/components/pdfViewer/pdfEvents'
+import { PDF_TO_FORM_HIGHLIGHT_CLASSNAME } from '@/features/curation/workspace/usePdfToFormLinking'
 import theme from '@/theme'
 import CurationWorkspacePage from './CurationWorkspacePage'
 
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
   createManualCurationCandidate: vi.fn(),
-  deleteCurationCandidate: vi.fn(),
   executeCurationSubmission: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
   fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
@@ -25,7 +26,10 @@ const serviceMocks = vi.hoisted(() => ({
   renderPdfViewer: vi.fn(),
   submitCurationCandidateDecision: vi.fn(),
   updateCurationSession: vi.fn(),
+  validateAllCurationSessionCandidates: vi.fn(),
   validateCurationCandidate: vi.fn(),
+  focusGrid: vi.fn(),
+  showPdf: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
@@ -49,7 +53,6 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
     return Array.from(requestsByKey.values())
   },
   createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
-  deleteCurationCandidate: serviceMocks.deleteCurationCandidate,
   executeCurationSubmission: serviceMocks.executeCurationSubmission,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
   fetchCurationWorkspaceEnvelopeReviewRows: serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
@@ -57,7 +60,16 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   patchCurationEnvelopeField: serviceMocks.patchCurationEnvelopeField,
   submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
   updateCurationSession: serviceMocks.updateCurationSession,
+  validateAllCurationSessionCandidates: serviceMocks.validateAllCurationSessionCandidates,
   validateCurationCandidate: serviceMocks.validateCurationCandidate,
+}))
+
+vi.mock('@/components/pdfViewer/PersistentPdfWorkspaceLayout', () => ({
+  usePersistentPdfWorkspaceLayout: () => ({
+    focusGrid: serviceMocks.focusGrid,
+    isPdfVisible: true,
+    showPdf: serviceMocks.showPdf,
+  }),
 }))
 
 vi.mock('@/components/pdfViewer/pdfEvents', async () => {
@@ -443,7 +455,7 @@ function buildEnvelopeReviewRows(): DomainEnvelopeReviewRowsResponse {
         object_model_ref: {},
         model_field_ref: {},
         metadata: {
-          semantic_source: 'domain_envelope.objects',
+          semantic_source: 'domain_envelope.extracted_objects',
         },
       },
     ],
@@ -501,10 +513,12 @@ function renderPage(initialEntry: string | { pathname: string; state?: unknown }
 }
 
 describe('CurationWorkspacePage', () => {
+  const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+
   beforeEach(() => {
+    HTMLElement.prototype.scrollIntoView = vi.fn()
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.createManualCurationCandidate.mockReset()
-    serviceMocks.deleteCurationCandidate.mockReset()
     serviceMocks.executeCurationSubmission.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReset()
@@ -514,15 +528,19 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.submitCurationCandidateDecision.mockReset()
     serviceMocks.updateCurationSession.mockReset()
+    serviceMocks.validateAllCurationSessionCandidates.mockReset()
     serviceMocks.validateCurationCandidate.mockReset()
+    serviceMocks.focusGrid.mockReset()
+    serviceMocks.showPdf.mockReset()
   })
 
   afterEach(() => {
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     vi.useRealTimers()
     vi.clearAllMocks()
   })
 
-  it('renders workspace candidates on the selector-over-form review surface', async () => {
+  it('renders workspace candidates on the production horizontal-grid review surface', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 
     renderPage('/curation/session-1')
@@ -537,14 +555,21 @@ describe('CurationWorkspacePage', () => {
 
     expect(screen.getByRole('region', { name: /review work pane/i })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /envelope object table panel/i })).not.toBeInTheDocument()
-    expect(screen.getByTestId('object-selector-strip')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-field-editor')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Horizontally scrollable curation grid' })).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-shell-work-pane-content')).toBeInTheDocument()
+    expect(screen.queryByTestId('object-selector-strip')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('candidate-field-editor')).not.toBeInTheDocument()
     expect(screen.getByText('Review objects')).toBeInTheDocument()
+    expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent(
+      '1 validated · 1 blocking · 0 stale · 0 open findings',
+    )
 
     expect(screen.getAllByText('Accepted candidate').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Focus grid' }))
+    expect(serviceMocks.focusGrid).toHaveBeenCalledTimes(1)
   })
 
-  it('uses persisted review-row projections in the object selector and field editor', async () => {
+  it('uses persisted review-row projections in the horizontal grid', async () => {
     const workspace = buildEnvelopeWorkspace()
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
@@ -575,27 +600,41 @@ describe('CurationWorkspacePage', () => {
 
     renderPage('/curation/session-1')
 
-    expect(await screen.findByTestId('object-selector-strip')).toBeInTheDocument()
+    expect(await screen.findByRole('region', {
+      name: 'Horizontally scrollable curation grid',
+    })).toBeInTheDocument()
 
     await waitFor(() => {
       expect(serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows).toHaveBeenCalledTimes(1)
     })
 
     expect(screen.getAllByText('TMEM67').length).toBeGreaterThan(0)
-    expect(screen.getByText('Gene Assertion')).toBeInTheDocument()
-    expect(screen.getByLabelText('Gene symbol')).toHaveValue('TMEM67')
-    expect(screen.getByTestId('field-evidence-projection-projection-anchor-1')).toBeInTheDocument()
+    expect(screen.getByText('Needs curator review')).toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: 'Select Gene symbol for gene.symbol',
+    })).toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: 'Show evidence 1 for Gene symbol',
+    })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
-
-    await waitFor(() => {
-      expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
-        session_id: 'session-1',
-        candidate_id: 'candidate-tmem67',
-        action: 'accept',
-        advance_queue: false,
-      })
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'projection-anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
     })
+    await waitFor(() => {
+      expect(screen.getByRole('button', {
+        name: 'Select Gene symbol for gene.symbol',
+      })).toHaveFocus()
+      expect(screen.getByTestId('horizontal-grid-field-gene.symbol')).toHaveClass(
+        PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
+      )
+    })
+
+    expect(screen.getByRole('button', { name: 'Accept Legacy candidate label' })).toBeDisabled()
+    expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
   })
 
   it('creates a manual object from the envelope work pane toolbar', async () => {
@@ -730,8 +769,11 @@ describe('CurationWorkspacePage', () => {
     await waitFor(() => {
       expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
         session_id: 'session-1',
+        expected_session_version: 1,
+        intent_owner: expect.any(String),
+        intent_generation: expect.any(Number),
         current_candidate_id: 'candidate-manual-1',
-      })
+      }, { signal: expect.any(AbortSignal) })
     })
     await waitFor(() => {
       expect(screen.getByTestId('location')).toHaveTextContent(
@@ -741,9 +783,9 @@ describe('CurationWorkspacePage', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Add object' })).not.toBeInTheDocument()
     })
-    await user.click(screen.getByRole('button', { name: /all objects/i }))
-    expect(screen.getByRole('option', { name: /manual gene/i })).toBeInTheDocument()
-    expect(screen.getAllByText('Manual object').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('horizontal-grid-context-candidate-manual-1')).toHaveTextContent(
+      'manual gene',
+    )
   })
 
   it('surfaces non-Error domain-envelope review row query failures', async () => {
@@ -755,6 +797,49 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1')
 
     expect(await screen.findByText('review rows unavailable')).toBeInTheDocument()
+  })
+
+  it('keeps a successful decision when the following review-row refresh fails', async () => {
+    const workspace = buildEnvelopeWorkspace()
+    const refreshedWorkspace: CurationWorkspace = {
+      ...workspace,
+      candidates: workspace.candidates.map((candidate) => ({
+        ...candidate,
+        status: 'rejected',
+        projection_ref: candidate.projection_ref
+          ? { ...candidate.projection_ref, envelope_revision: 5 }
+          : null,
+      })),
+    }
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspace)
+      .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows
+      .mockResolvedValueOnce([buildEnvelopeReviewRows()])
+      .mockRejectedValue(new Error('review row refresh failed'))
+    serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
+      candidate: refreshedWorkspace.candidates[0],
+      session: refreshedWorkspace.session,
+      next_candidate_id: null,
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-tmem67')
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Reject Legacy candidate label',
+    }))
+
+    expect(await screen.findByText('review row refresh failed')).toBeInTheDocument()
+    await waitFor(() => {
+      const contextCell = screen.getByTestId('horizontal-grid-context-candidate-tmem67')
+      expect(contextCell).toHaveTextContent('Legacy candidate label')
+      expect(contextCell).not.toHaveTextContent('Gene assertion')
+      expect(screen.getByText('rejected')).toBeInTheDocument()
+      expect(screen.queryByRole('button', {
+        name: 'Reject Legacy candidate label',
+      })).not.toBeInTheDocument()
+    })
   })
 
   it('renders the workspace header with document info', async () => {
@@ -813,7 +898,7 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('restores the route-selected candidate into the field editor', async () => {
+  it('restores the route-selected candidate into the horizontal grid', async () => {
     const workspace = buildWorkspace()
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.updateCurationSession.mockResolvedValue({
@@ -826,16 +911,139 @@ describe('CurationWorkspacePage', () => {
 
     renderPage('/curation/session-1/candidate-pending')
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
-    })
+    await waitFor(() => expect(
+      screen.getByTestId('horizontal-grid-context-candidate-pending'),
+    ).toHaveAttribute('aria-pressed', 'true'))
     expect(screen.getAllByText('Pending candidate').length).toBeGreaterThan(0)
     expect(screen.getByTestId('location')).toHaveTextContent(
       '/curation/session-1/candidate-pending',
     )
   })
 
-  it('patches active envelope fields from the field editor with revision and before value', async () => {
+  it('links a scoped PDF highlight action to candidate selection, field scrolling, focus, and highlight', async () => {
+    const workspace = buildWorkspace()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    expect(await screen.findByTestId('horizontal-grid-context-candidate-accepted')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
+    })
+
+    const pendingField = document.querySelector<HTMLElement>(
+      'tr[data-candidate-id="candidate-pending"] [data-field-key="gene_symbol"]',
+    )
+    expect(pendingField).not.toBeNull()
+    await waitFor(() => {
+      expect(pendingField).toHaveFocus()
+      expect(pendingField).toHaveClass(PDF_TO_FORM_HIGHLIGHT_CLASSNAME)
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'center',
+        inline: 'nearest',
+      })
+    })
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/curation/session-1/candidate-pending',
+    )
+  })
+
+  it('ignores stale workspace events and anchors without an authoritative field mapping', async () => {
+    const workspace = buildWorkspace()
+    workspace.candidates[1].evidence_anchors[0].field_keys = ['removed_field']
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    expect(await screen.findByTestId('horizontal-grid-context-candidate-accepted')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-2',
+        'document-from-previous-session',
+        'curation:previous-session',
+      )
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
+    })
+
+    expect(screen.getByTestId('horizontal-grid-context-candidate-accepted')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/curation/session-1/candidate-accepted',
+    )
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('keeps one evidence listener across candidate route changes and removes it on unmount', async () => {
+    const workspace = buildWorkspace()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+    const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
+    const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener')
+    const rendered = renderPage('/curation/session-1/candidate-accepted')
+
+    expect(await screen.findByTestId('horizontal-grid-context-candidate-accepted')).toBeInTheDocument()
+    const evidenceListenerAdds = () => addEventListenerSpy.mock.calls.filter(
+      ([eventName]) => eventName === 'pdf-viewer-evidence-anchor-selected',
+    )
+    const evidenceListenerRemovals = () => removeEventListenerSpy.mock.calls.filter(
+      ([eventName]) => eventName === 'pdf-viewer-evidence-anchor-selected',
+    )
+    expect(evidenceListenerAdds()).toHaveLength(1)
+
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-pending',
+      )
+    })
+    expect(evidenceListenerAdds()).toHaveLength(1)
+    expect(evidenceListenerRemovals()).toHaveLength(0)
+
+    rendered.unmount()
+
+    expect(evidenceListenerRemovals()).toHaveLength(1)
+    expect(evidenceListenerRemovals()[0][1]).toBe(evidenceListenerAdds()[0][1])
+  })
+
+  it('patches active envelope fields from the horizontal grid editor with revision and before value', async () => {
     const workspace = buildWorkspace()
     const envelopeCandidate = {
       ...workspace.candidates[0],
@@ -909,9 +1117,9 @@ describe('CurationWorkspacePage', () => {
 
     renderPage('/curation/session-1/candidate-accepted')
 
-    await waitFor(() => {
-      expect(screen.getByTestId('candidate-field-editor')).toBeInTheDocument()
-    })
+    const activeRow = await screen.findByRole('row', { name: /Accepted candidate/i })
+    fireEvent.click(within(activeRow).getByRole('button', { name: 'Edit Gene symbol' }))
+    expect(await screen.findByRole('dialog', { name: 'Edit Gene symbol' })).toBeInTheDocument()
 
     vi.useFakeTimers()
     fireEvent.change(screen.getByLabelText('Gene symbol'), {
@@ -938,8 +1146,25 @@ describe('CurationWorkspacePage', () => {
     expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
   })
 
-  it('submits inline accept actions through the workspace decision service', async () => {
+  it('submits the row Accept action through the workspace decision service', async () => {
     const workspace = buildWorkspace()
+    workspace.candidates[1] = {
+      ...workspace.candidates[1],
+      validation: {
+        state: 'completed',
+        counts: {
+          validated: 1,
+          ambiguous: 0,
+          not_found: 0,
+          invalid_format: 0,
+          conflict: 0,
+          skipped: 0,
+          overridden: 0,
+        },
+        stale_field_keys: [],
+        warnings: [],
+      },
+    }
     const refreshedWorkspace: CurationWorkspace = {
       ...workspace,
       candidates: workspace.candidates.map((candidate) =>
@@ -983,16 +1208,44 @@ describe('CurationWorkspacePage', () => {
         metadata: {},
       },
     })
+    const savedPendingCandidate = {
+      ...workspace.candidates[1],
+      draft: {
+        ...workspace.candidates[1].draft,
+        version: 2,
+        fields: workspace.candidates[1].draft.fields.map((field) => ({
+          ...field,
+          value: 'APOE2',
+          dirty: false,
+        })),
+      },
+    }
+    serviceMocks.autosaveCurationCandidateDraft.mockResolvedValue({
+      candidate: savedPendingCandidate,
+      draft: savedPendingCandidate.draft,
+      validation_snapshot: null,
+      action_log_entry: null,
+    })
 
     renderPage('/curation/session-1/candidate-pending')
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
+      expect(screen.getByRole('button', { name: 'Accept Pending candidate' })).toBeEnabled()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
+    const pendingRow = screen.getByRole('row', { name: /Pending candidate/i })
+    fireEvent.click(within(pendingRow).getByRole('button', { name: 'Edit Gene symbol' }))
+    fireEvent.change(await screen.findByLabelText('Gene symbol'), {
+      target: { value: 'APOE2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Edit/ })).not.toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Accept Pending candidate' }))
 
     await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalled()
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
         session_id: 'session-1',
         candidate_id: 'candidate-pending',
@@ -1003,26 +1256,34 @@ describe('CurationWorkspacePage', () => {
         '/curation/session-1/candidate-pending',
       )
     })
+    expect(serviceMocks.submitCurationCandidateDecision.mock.invocationCallOrder[0]).toBeGreaterThan(
+      serviceMocks.autosaveCurationCandidateDraft.mock.invocationCallOrder[0],
+    )
   })
 
-  it('confirms and deletes a curation row through the workspace delete service', async () => {
+  it('keeps row Accept disabled until authoritative validation refreshes the grid', async () => {
     const workspace = buildWorkspace()
     const refreshedWorkspace: CurationWorkspace = {
       ...workspace,
-      candidates: workspace.candidates.filter((candidate) => candidate.candidate_id !== 'candidate-pending'),
-      active_candidate_id: 'candidate-accepted',
-      session: {
-        ...workspace.session,
-        current_candidate_id: 'candidate-accepted',
-        progress: {
-          total_candidates: 1,
-          reviewed_candidates: 1,
-          pending_candidates: 0,
-          accepted_candidates: 1,
-          rejected_candidates: 0,
-          manual_candidates: 0,
-        },
-      },
+      candidates: workspace.candidates.map((candidate) => candidate.candidate_id === 'candidate-pending'
+        ? {
+            ...candidate,
+            validation: {
+              state: 'completed' as const,
+              counts: {
+                validated: 1,
+                ambiguous: 0,
+                not_found: 0,
+                invalid_format: 0,
+                conflict: 0,
+                skipped: 0,
+                overridden: 0,
+              },
+              stale_field_keys: [],
+              warnings: [],
+            },
+          }
+        : candidate),
     }
     serviceMocks.fetchCurationWorkspace
       .mockResolvedValueOnce(workspace)
@@ -1034,48 +1295,146 @@ describe('CurationWorkspacePage', () => {
       },
       action_log_entry: null,
     })
-    serviceMocks.deleteCurationCandidate.mockResolvedValue({
-      deleted_candidate_id: 'candidate-pending',
-      session: refreshedWorkspace.session,
-      action_log_entry: {
-        action_id: 'action-delete-1',
-        session_id: workspace.session.session_id,
-        action_type: 'candidate_deleted',
-        actor_type: 'user',
-        occurred_at: '2026-03-30T12:10:00Z',
-        changed_field_keys: [],
-        evidence_anchor_ids: ['anchor-1', 'anchor-2'],
-        metadata: {
-          deleted_candidate_id: 'candidate-pending',
-        },
+    serviceMocks.validateCurationCandidate.mockResolvedValue({
+      candidate: refreshedWorkspace.candidates[1],
+      validation_snapshot: {
+        snapshot_id: 'snapshot-row-1',
+        scope: 'candidate',
+        session_id: 'session-1',
+        candidate_id: 'candidate-pending',
+        state: 'completed',
+        field_results: {},
+        summary: refreshedWorkspace.candidates[1].validation,
+        warnings: [],
       },
     })
 
     renderPage('/curation/session-1/candidate-pending')
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
+    const acceptButton = await screen.findByRole('button', { name: 'Accept Pending candidate' })
+    expect(acceptButton).toBeDisabled()
+    fireEvent.click(acceptButton)
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
+    expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: /all objects/i }))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete object Pending candidate' }))
-
-    expect(screen.getByText('Delete object?')).toBeInTheDocument()
-    expect(serviceMocks.deleteCurationCandidate).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete object' }))
+    const validateButton = await screen.findByRole('button', { name: 'Validate Pending candidate' })
+    fireEvent.click(validateButton)
 
     await waitFor(() => {
-      expect(serviceMocks.deleteCurationCandidate).toHaveBeenCalledWith({
+      expect(serviceMocks.validateCurationCandidate).toHaveBeenCalledWith({
         session_id: 'session-1',
         candidate_id: 'candidate-pending',
       })
     })
+    expect(serviceMocks.fetchCurationWorkspace.mock.invocationCallOrder[1]).toBeGreaterThan(
+      serviceMocks.validateCurationCandidate.mock.invocationCallOrder[0],
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Accept Pending candidate' })).toBeEnabled()
+    })
+  })
+
+  it('shows session validation progress and refreshes authoritative aggregate counts', async () => {
+    const workspace = buildWorkspace()
+    const refreshedWorkspace: CurationWorkspace = {
+      ...workspace,
+      candidates: workspace.candidates.map((candidate) => ({
+        ...candidate,
+        validation: {
+          state: 'completed',
+          counts: {
+            validated: 1,
+            ambiguous: 0,
+            not_found: 0,
+            invalid_format: 0,
+            conflict: 0,
+            skipped: 0,
+            overridden: 0,
+          },
+          stale_field_keys: [],
+          warnings: [],
+        },
+      })),
+    }
+    const validationDeferred = createDeferredPromise<unknown>()
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspace)
+      .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.validateAllCurationSessionCandidates.mockReturnValue(validationDeferred.promise)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: workspace.session,
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Validate all' }))
+    expect(screen.getByRole('button', { name: 'Validating all…' })).toBeDisabled()
+    await waitFor(() => {
+      expect(serviceMocks.validateAllCurationSessionCandidates).toHaveBeenCalledWith({
+        session_id: 'session-1',
+      })
+    })
+
+    validationDeferred.resolve({
+      session: refreshedWorkspace.session,
+      session_validation: {
+        snapshot_id: 'snapshot-session-1',
+        scope: 'session',
+        session_id: 'session-1',
+        state: 'completed',
+        field_results: {},
+        summary: refreshedWorkspace.candidates[0].validation,
+        warnings: [],
+      },
+      candidate_validations: [],
+    })
 
     await waitFor(() => {
-      expect(screen.getByTestId('location')).toHaveTextContent(
-        '/curation/session-1/candidate-accepted',
+      expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent(
+        '2 validated · 0 blocking · 0 stale · 0 open findings',
       )
+    })
+  })
+
+  it('submits row rejection through the existing decision owner', async () => {
+    const workspace = buildWorkspace()
+    const refreshedWorkspace: CurationWorkspace = {
+      ...workspace,
+      candidates: workspace.candidates.map((candidate) =>
+        candidate.candidate_id === 'candidate-pending'
+          ? { ...candidate, status: 'rejected' as const }
+          : candidate),
+    }
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspace)
+      .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
+      candidate: refreshedWorkspace.candidates[1],
+      session: refreshedWorkspace.session,
+      next_candidate_id: null,
+      action_log_entry: null,
+    })
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-pending')
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject Pending candidate' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        candidate_id: 'candidate-pending',
+        action: 'reject',
+        advance_queue: false,
+      })
     })
   })
 

@@ -91,3 +91,30 @@ def test_get_session_detail_preserves_explicit_assistant_chat_kind(monkeypatch):
 
     assert detail is not None
     assert detail.session.chat_kind == ASSISTANT_CHAT_KIND
+
+
+def test_list_messages_passes_after_created_at_to_message_query(monkeypatch):
+    repository = ChatHistoryRepository(MagicMock())
+    session = _session_model()
+    session.chat_kind = ASSISTANT_CHAT_KIND
+    after_created_at = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+    captured_kwargs = {}
+
+    monkeypatch.setattr(repository, "_require_active_session_for_kind", lambda **_kwargs: session)
+
+    def _list_messages_for_session(**kwargs):
+        captured_kwargs.update(kwargs)
+        return ChatMessagePage(items=[], next_cursor=None)
+
+    monkeypatch.setattr(repository, "_list_messages_for_session", _list_messages_for_session)
+
+    page = repository.list_messages(
+        session_id="session-1",
+        user_auth_sub="auth-sub-1",
+        chat_kind=ASSISTANT_CHAT_KIND,
+        limit=25,
+        after_created_at=after_created_at,
+    )
+
+    assert page.items == []
+    assert captured_kwargs["after_created_at"] == after_created_at

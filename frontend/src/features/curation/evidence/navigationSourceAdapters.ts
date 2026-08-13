@@ -1,4 +1,8 @@
-import type { EvidenceRecord, CurationEvidenceRecord } from '../types'
+import type {
+  CurationEvidenceRecord,
+  DomainEnvelopeEvidenceAnchorProjection,
+  EvidenceRecord,
+} from '../types'
 import type { EvidenceAnchor } from '../contracts'
 import type { EvidenceNavigationCommand } from './types'
 import {
@@ -120,6 +124,49 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
     quote,
     pageNumber: evidenceRecord.anchor.page_number ?? null,
     sectionTitle: evidenceRecord.anchor.section_title ?? null,
+    mode,
+  })
+}
+
+export function deriveNavigationQuoteFromEnvelopeEvidenceProjection(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+): string | null {
+  return normalizeEvidenceNavigationText(projection.quote)
+    ?? normalizeEvidenceNavigationText(projection.anchor.sentence_text)
+    ?? normalizeEvidenceNavigationText(projection.anchor.snippet_text)
+    ?? normalizeEvidenceNavigationText(projection.anchor.normalized_text)
+}
+
+export function buildNavigationCommandFromEnvelopeEvidenceProjection(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+  mode: EvidenceNavigationCommand['mode'] = 'select',
+): EvidenceNavigationCommand | null {
+  const anchor: EvidenceAnchor = {
+    ...projection.anchor,
+    page_number: projection.page_number ?? projection.anchor.page_number ?? null,
+    section_title:
+      normalizeEvidenceNavigationText(projection.section_title)
+      ?? projection.anchor.section_title,
+    subsection_title:
+      normalizeEvidenceNavigationText(projection.subsection_title)
+      ?? projection.anchor.subsection_title,
+  }
+  const quote = deriveNavigationQuoteFromEnvelopeEvidenceProjection(projection)
+
+  if (!quote) {
+    return buildAnchorContextNavigationCommand({
+      anchorId: projection.anchor_id,
+      anchor,
+      mode,
+    })
+  }
+
+  return buildQuoteCentricEvidenceNavigationCommand({
+    anchorId: projection.anchor_id,
+    anchor,
+    quote,
+    pageNumber: anchor.page_number,
+    sectionTitle: anchor.section_title,
     mode,
   })
 }

@@ -66,11 +66,8 @@ from src.schemas.curation_workspace import (
     SubmissionPayloadContract,
 )
 from src.schemas.domain_envelope import DomainEnvelope
+from src.services.document_access import protected_pdf_url
 
-def _viewer_url(file_path: str | None) -> str | None:
-    if not file_path:
-        return None
-    return f"/uploads/{file_path.lstrip('/')}"
 
 def _load_documents(db: Session, document_ids: Iterable[UUID]) -> dict[UUID, PDFDocument]:
     ids = list({document_id for document_id in document_ids})
@@ -121,7 +118,11 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
             detail="Session document metadata is missing",
         )
 
-    viewer_url = _viewer_url(document.file_path)
+    viewer_url = (
+        None
+        if str(document.viewer_mode or "").strip().lower() == "text_only"
+        else protected_pdf_url(document.id)
+    )
     return CurationDocumentRef(
         document_id=str(document.id),
         title=document.title or document.filename,
@@ -471,6 +472,10 @@ def _submission_record(record: SubmissionModel) -> CurationSubmissionRecord:
         mode=record.mode,
         target_key=record.target_key,
         status=record.status,
+        idempotency_key=record.idempotency_key,
+        attempt_state=record.attempt_state,
+        attempt_state_history=[dict(item) for item in (record.attempt_state_history or [])],
+        retention_expires_at=record.retention_expires_at,
         readiness=list(record.readiness or []),
         payload=_submission_payload_model_input(_submission_payload(record)),
         requested_at=record.requested_at,

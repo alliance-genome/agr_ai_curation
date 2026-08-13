@@ -111,6 +111,7 @@ def _agent_definition_to_registry_entry(
         "factory": None,
         "requires_document": agent_def.requires_document,
         "required_params": agent_def.required_params,
+        "output_schema_key": agent_def.output_schema,
         "batch_capabilities": agent_def.batch_capabilities,
         "config_defaults": _build_config_defaults(agent_def.model_config),
         "supervisor": {

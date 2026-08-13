@@ -71,7 +71,7 @@ def build_gene_mention_evidence_export(
     verified_object_ids = _tool_verified_gene_object_ids(envelope)
     records = [
         _gene_evidence_record(domain_object, verified_object_ids=verified_object_ids)
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
         if domain_object.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
         and (not selected or stable_object_id(domain_object) in selected)
     ]
@@ -230,7 +230,7 @@ def _tool_verified_gene_object_ids(envelope: DomainEnvelope) -> set[str]:
 
 def _object_ids_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     by_ref: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         object_id = stable_object_id(domain_object)
         if domain_object.object_id is not None:
             by_ref[("object_id", domain_object.object_id)] = object_id

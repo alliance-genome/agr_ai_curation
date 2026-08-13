@@ -94,6 +94,13 @@ def main(argv: list[str] | None = None) -> int:
             db,
             options=options,
         )
+        if options.dry_run:
+            db.rollback()
+        else:
+            db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

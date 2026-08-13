@@ -2,7 +2,7 @@
 
 ## Status
 
-This note documents a real production-like failure mode seen in the Symphony main sandbox and the intended fix direction. It is written to survive a context reset and to be explicit enough that a fresh agent can continue the work without rediscovering the architecture.
+This note documents a real production-like failure mode seen in the local development stack and the intended fix direction. It is written to survive a context reset and to be explicit enough that a fresh agent can continue the work without rediscovering the architecture.
 
 ## Why This Exists
 
@@ -129,9 +129,9 @@ When configured, the backend should eagerly prepare package tool environments du
 This needs to work in both startup paths:
 
 1. the production runtime entrypoint path
-2. the FastAPI startup path used by the dev-compose/Symphony sandbox backend
+2. the FastAPI startup path used by the dev-compose/local development stack backend
 
-If startup prewarm is only wired through the production entrypoint, the Symphony main sandbox still misses the benefit.
+If startup prewarm is only wired through the production entrypoint, the local development stack still misses the benefit.
 
 ## Existing Architecture Notes
 
@@ -157,7 +157,7 @@ There was already an opt-in environment variable:
 
 and the production runtime entrypoint already had logic to bootstrap package environments when that variable is true.
 
-However, the Symphony main sandbox backend path is driven by `docker-compose.yml` and `backend/main.py`, not only by the production runtime entrypoint.
+However, the local development stack backend path is driven by `docker-compose.yml` and `backend/main.py`, not only by the production runtime entrypoint.
 
 So the prewarm logic needed to be reachable from the FastAPI lifespan startup too.
 
@@ -205,7 +205,7 @@ In `backend/main.py`:
 - fail fast if startup prewarm is enabled and package bootstrap cannot complete
 - if the production/runtime entrypoint already performed prewarm, skip the FastAPI-side prewarm via a sentinel environment variable rather than doing the work twice
 
-This is how the Symphony sandbox backend actually benefits from the prewarm.
+This is how the local development stack backend actually benefits from the prewarm.
 
 ### 4. Enable prewarm in compose configs
 
@@ -289,7 +289,7 @@ python3 -m py_compile backend/main.py
 python3 -m py_compile backend/src/lib/openai_agents/tools/agr_curation.py
 ```
 
-### Symphony sandbox validation
+### local development stack validation
 
 After commit/push and sandbox refresh:
 
@@ -354,6 +354,6 @@ The correct long-term behavior is:
 
 1. packaged tool environments are safe under concurrency
 2. the backend can prewarm them before the first real query
-3. both production and Symphony/dev startup paths share that behavior
+3. both production and development startup paths share that behavior
 
 That is the full intended change set.

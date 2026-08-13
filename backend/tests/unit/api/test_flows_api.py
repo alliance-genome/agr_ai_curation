@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from src.schemas.flows import FlowDefinition
 
@@ -117,7 +118,7 @@ def test_verify_flow_ownership_returns_404_for_missing_or_deleted_flow(monkeypat
 
 def _minimal_flow_definition_payload() -> dict:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "nodes": [
             {
                 "id": "task_1",
@@ -154,7 +155,7 @@ def test_flow_definition_payload_defaults_saved_edges_to_control_flow():
     assert payload["edges"][0]["role"] == "control_flow"
 
 
-def test_flow_response_defaults_legacy_saved_edge_roles():
+def test_flow_response_defaults_legacy_saved_edge_roles(monkeypatch):
     flow_id = uuid4()
     now = datetime.now(timezone.utc)
     stored_flow = SimpleNamespace(
@@ -168,10 +169,390 @@ def test_flow_response_defaults_legacy_saved_edge_roles():
         created_at=now,
         updated_at=now,
     )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {
+            "name": "Fixture Agent",
+            "category": "Extraction",
+            "supervisor": {"enabled": True},
+        },
+    )
 
     response = flows._flow_to_response(stored_flow)
 
     assert response.flow_definition.edges[0].role == "control_flow"
+    assert response.validation_warnings == []
+    assert response.has_critical_issues is False
+
+
+def test_flow_response_rejects_legacy_formatter_control_step(
+    monkeypatch,
+):
+    payload = _minimal_flow_definition_payload()
+    payload["nodes"][1]["data"].update(
+        {
+            "agent_id": "csv_formatter",
+            "agent_display_name": "CSV Formatter",
+            "output_key": "csv_output",
+        }
+    )
+    now = datetime.now(timezone.utc)
+    stored_flow = SimpleNamespace(
+        id=uuid4(),
+        user_id=7,
+        name="Legacy formatter flow",
+        description=None,
+        flow_definition=payload,
+        execution_count=0,
+        last_executed_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {
+            "name": "CSV Formatter",
+            "category": "Output",
+            "subcategory": "File Formatter",
+            "supervisor": {"enabled": True},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="formatter_in_control_flow"):
+        flows._flow_to_response(stored_flow)
+
+
+def _output_attachment_flow_payload() -> dict:
+    payload = _minimal_flow_definition_payload()
+    payload["version"] = "1.1"
+    payload["nodes"][1]["data"].update(
+        {
+            "agent_id": "allele_extractor",
+            "agent_display_name": "Allele Extraction",
+        }
+    )
+    payload["nodes"].append(
+        {
+            "id": "output_1",
+            "type": "output",
+            "position": {"x": 300, "y": 100},
+            "data": {
+                "agent_id": "csv_formatter",
+                "agent_display_name": "CSV Formatter",
+                "output_key": "csv_output",
+            },
+        }
+    )
+    payload["edges"].append(
+        {
+            "id": "output_edge_1",
+            "source": "extract_1",
+            "target": "output_1",
+            "role": "output_attachment",
+        }
+    )
+    return payload
+
+
+def test_flow_definition_payload_enforces_output_attachment_agent_roles(monkeypatch):
+    payload = _output_attachment_flow_payload()
+
+    def _entry(agent_id, **_kwargs):
+        return {
+            "name": agent_id,
+            "category": {
+                "allele_extractor": "Extraction",
+                "csv_formatter": "Output",
+            }.get(agent_id, "Input"),
+            "supervisor": {"enabled": True},
+        }
+
+    monkeypatch.setattr(flows, "_flow_agent_policy_entry", _entry)
+    saved = flows._validated_flow_definition_payload(
+        FlowDefinition.model_validate(payload),
+        db_user_id=7,
+        enforce_agent_references=True,
+        enforce_agent_step_policy=True,
+    )
+    assert saved["edges"][-1]["role"] == "output_attachment"
+
+    payload["edges"][-1]["source"] = "task_1"
+    with pytest.raises(HTTPException, match="not an extraction agent or a typed validation agent"):
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload),
+            db_user_id=7,
+            enforce_agent_references=True,
+            enforce_agent_step_policy=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("source_category", "output_schema_key", "is_active", "allowed"),
+    [
+        ("Validation", "AlleleResultEnvelope", True, True),
+        ("Validation", "", True, False),
+        ("Validation", "AlleleResultEnvelope", False, False),
+        ("Custom", "AlleleResultEnvelope", True, False),
+        ("General", "AlleleResultEnvelope", True, False),
+    ],
+)
+def test_flow_definition_payload_requires_typed_validation_formatter_sources(
+    monkeypatch,
+    source_category,
+    output_schema_key,
+    is_active,
+    allowed,
+):
+    payload = _output_attachment_flow_payload()
+
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: {
+            "name": agent_id,
+            "category": (
+                "Output" if agent_id == "csv_formatter" else source_category
+            ),
+            "subcategory": "Formatter" if agent_id == "csv_formatter" else "",
+            "output_schema_key": (
+                None if agent_id == "csv_formatter" else output_schema_key
+            ),
+            "is_active": True if agent_id == "csv_formatter" else is_active,
+            "supervisor": {"enabled": agent_id == "csv_formatter"},
+        },
+    )
+
+    definition = FlowDefinition.model_validate(payload)
+    if allowed:
+        saved = flows._validated_flow_definition_payload(
+            definition,
+            db_user_id=7,
+            enforce_agent_references=True,
+            enforce_agent_step_policy=True,
+        )
+        assert saved["edges"][-1]["role"] == "output_attachment"
+    else:
+        with pytest.raises(HTTPException, match="typed validation agent"):
+            flows._validated_flow_definition_payload(
+                definition,
+                db_user_id=7,
+                enforce_agent_references=True,
+                enforce_agent_step_policy=True,
+            )
+
+
+def test_flow_agent_policy_entry_rejects_unresolvable_validation_schema(monkeypatch):
+    monkeypatch.setattr(
+        flows,
+        "get_active_visible_agent_metadata",
+        lambda _agent_id, **_kwargs: {
+            "display_name": "Broken Validator",
+            "category": "Validation",
+            "output_schema_key": "MissingValidatorResult",
+            "is_active": True,
+        },
+    )
+    monkeypatch.setattr(flows, "resolve_output_schema", lambda _schema_key: None)
+
+    entry = flows._flow_agent_policy_entry("broken_validator", db_user_id=7)
+
+    assert entry is not None
+    assert entry["produces_flow_artifacts"] is False
+    assert flows.agent_can_source_output_attachment(entry) is False
+
+
+def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypatch):
+    payload = _output_attachment_flow_payload()
+    payload["nodes"].insert(
+        -1,
+        {
+            "id": "extract_2",
+            "type": "agent",
+            "position": {"x": 200, "y": 100},
+            "data": {
+                "agent_id": "gene_extractor",
+                "agent_display_name": "Gene Extractor",
+                "output_key": "gene_output",
+            },
+        },
+    )
+    payload["edges"].insert(
+        -1,
+        {
+            "id": "control_extract_2",
+            "source": "extract_1",
+            "target": "extract_2",
+            "role": "control_flow",
+        },
+    )
+    payload["edges"].append(
+        {
+            "id": "output_edge_2",
+            "source": "extract_2",
+            "target": "output_1",
+            "role": "output_attachment",
+        }
+    )
+
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: {
+            "name": agent_id,
+            "category": (
+                "Output"
+                if agent_id == "csv_formatter"
+                else "Extraction"
+                if agent_id in {"allele_extractor", "gene_extractor"}
+                else "Input"
+            ),
+            "supervisor": {"enabled": True},
+        },
+    )
+
+    saved = flows._validated_flow_definition_payload(
+        FlowDefinition.model_validate(payload),
+        db_user_id=7,
+        enforce_agent_references=True,
+        enforce_agent_step_policy=True,
+    )
+
+    assert [
+        edge["source"]
+        for edge in saved["edges"]
+        if edge["role"] == "output_attachment"
+    ] == ["extract_1", "extract_2"]
+
+    payload["nodes"][-2]["data"]["agent_id"] = "gene_validator"
+    with pytest.raises(
+        HTTPException,
+        match="Gene Extractor.*not an extraction agent or a typed validation agent",
+    ):
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload),
+            db_user_id=7,
+            enforce_agent_references=True,
+            enforce_agent_step_policy=True,
+        )
+
+
+def test_flow_definition_payload_rejects_non_formatter_output_target(monkeypatch):
+    payload = _output_attachment_flow_payload()
+    payload["nodes"][-1]["data"].update(
+        {
+            "agent_id": "gene_validator",
+            "agent_display_name": "Gene Validator",
+        }
+    )
+
+    def _entry(agent_id, **_kwargs):
+        return {
+            "name": agent_id,
+            "category": {
+                "allele_extractor": "Extraction",
+                "gene_validator": "Validation",
+            }.get(agent_id, "Input"),
+            "supervisor": {"enabled": True},
+        }
+
+    monkeypatch.setattr(flows, "_flow_agent_policy_entry", _entry)
+    with pytest.raises(HTTPException, match="is not an output formatter"):
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload),
+            db_user_id=7,
+            enforce_agent_references=True,
+            enforce_agent_step_policy=True,
+        )
+
+
+def test_flow_definition_payload_rejects_custom_output_without_runtime_formatter(
+    monkeypatch,
+):
+    payload = _output_attachment_flow_payload()
+    payload["nodes"][-1]["data"].update(
+        {
+            "agent_id": "custom_output",
+            "agent_display_name": "Custom Output",
+        }
+    )
+
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: {
+            "name": agent_id,
+            "category": "Extraction" if agent_id == "allele_extractor" else "Output",
+            "supervisor": {"enabled": True},
+        },
+    )
+
+    with pytest.raises(HTTPException, match="is not an output formatter"):
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload),
+            db_user_id=7,
+            enforce_agent_references=True,
+            enforce_agent_step_policy=True,
+        )
+
+
+def test_flow_definition_payload_rejects_missing_agent_reference(monkeypatch):
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(_minimal_flow_definition_payload()),
+            db_user_id=7,
+            enforce_agent_references=True,
+        )
+
+    assert exc.value.status_code == 422
+    assert "references unavailable agent" in str(exc.value.detail)
+    assert "fixture_agent_without_pack" in str(exc.value.detail)
+
+
+def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
+    flow_id = uuid4()
+    now = datetime.now(timezone.utc)
+    stored_flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Broken saved flow",
+        description=None,
+        flow_definition=_minimal_flow_definition_payload(),
+        execution_count=0,
+        last_executed_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = flows._flow_to_response(stored_flow)
+
+    assert response.id == flow_id
+    assert response.has_critical_issues is True
+    assert response.validation_warnings[0].type == "CRITICAL"
+    assert "references unavailable agent" in response.validation_warnings[0].message
+    assert "fixture_agent_without_pack" in response.validation_warnings[0].message
 
 
 def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(
@@ -192,13 +573,11 @@ def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(
     )
     monkeypatch.setattr(
         flows,
-        "AGENT_REGISTRY",
-        {
-            "allele_validation": {
-                "name": "Allele Validation",
-                "category": "Validation",
-                "supervisor": {"enabled": False},
-            }
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {
+            "name": "Allele Validation",
+            "category": "Validation",
+            "supervisor": {"enabled": False},
         },
     )
 
@@ -245,14 +624,16 @@ def test_flow_definition_payload_allows_attachment_only_validator_sidecar(
     )
     monkeypatch.setattr(
         flows,
-        "AGENT_REGISTRY",
-        {
-            "allele_validation": {
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: (
+            {
                 "name": "Allele Validation",
                 "category": "Validation",
                 "supervisor": {"enabled": False},
             }
-        },
+            if agent_id == "allele_validation"
+            else None
+        ),
     )
 
     result = flows._validated_flow_definition_payload(
@@ -281,13 +662,11 @@ def test_flow_definition_payload_allows_supervisor_enabled_validator_step(
     )
     monkeypatch.setattr(
         flows,
-        "AGENT_REGISTRY",
-        {
-            "ontology_term_validation": {
-                "name": "Ontology Term Validation",
-                "category": "Validation",
-                "supervisor": {"enabled": True},
-            }
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {
+            "name": "Ontology Term Validation",
+            "category": "Validation",
+            "supervisor": {"enabled": True},
         },
     )
 

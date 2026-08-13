@@ -400,7 +400,7 @@ def _phenotype_registry_stub() -> SimpleNamespace:
         version="0.1.0",
         status=_value("in_development"),
         metadata_api_version="1.0.0",
-        metadata={"semantic_source": "domain_envelope.objects"},
+        metadata={"semantic_source": "domain_envelope.extracted_objects"},
         schema_refs=[
             SimpleNamespace(
                 provider="alliance_linkml",

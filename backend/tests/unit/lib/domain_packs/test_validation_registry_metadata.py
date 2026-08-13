@@ -509,7 +509,7 @@ def _envelope(
     return DomainEnvelope(
         envelope_id="env-1",
         domain_pack_id="fixture.validation",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_role=object_role,

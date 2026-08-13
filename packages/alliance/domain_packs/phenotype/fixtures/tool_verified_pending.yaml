@@ -17,7 +17,7 @@ fixtures:
         name: Alliance Phenotype Domain Pack
         version: 0.1.0
         definition_state: in_development
-      objects:
+      extracted_objects:
         - object_type: Reference
           object_role: validated_reference
           pending_ref_id: paper-reference-1
@@ -236,12 +236,12 @@ fixtures:
           actor_id: phenotype_extractor
           message: Converted tool-verified phenotype extraction output to a pending domain envelope.
           details:
-            semantic_source: domain_envelope.objects
+            semantic_source: domain_envelope.extracted_objects
             retained_phenotype_count: 1
             excluded_count: 1
             ambiguous_count: 1
       metadata:
-        semantic_source: domain_envelope.objects
+        semantic_source: domain_envelope.extracted_objects
         legacy_semantic_lists: []
         source_fixture_id: tool_verified_phenotype_paper
         source_agent: phenotype_extractor

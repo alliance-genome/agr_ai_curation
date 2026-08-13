@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useState } from 'react'
 
 import type {
+  CurationInventoryScope,
   CurationSavedView,
   CurationSessionFilters,
   CurationSessionSortField,
@@ -8,6 +9,7 @@ import type {
   CurationSessionSummary,
   CurationSortDirection,
 } from '../types'
+import { DEFAULT_CURATION_INVENTORY_SCOPE } from '../types'
 import { type InventoryFilterOption } from './inventoryPresentation'
 import {
   useCurationSessionList,
@@ -18,6 +20,7 @@ const DEFAULT_SORT_BY: CurationSessionSortField = 'prepared_at'
 const DEFAULT_SORT_DIRECTION: CurationSortDirection = 'desc'
 const DEFAULT_PAGE_SIZE = 25
 const EMPTY_FILTERS: CurationSessionFilters = {
+  inventory_scope: DEFAULT_CURATION_INVENTORY_SCOPE,
   statuses: [],
   adapter_keys: [],
   curator_ids: [],
@@ -47,6 +50,7 @@ function defaultSortDirectionForField(field: CurationSessionSortField): Curation
 
 function normalizeFilters(filters?: CurationSessionFilters): CurationSessionFilters {
   return {
+    inventory_scope: filters?.inventory_scope ?? DEFAULT_CURATION_INVENTORY_SCOPE,
     statuses: [...(filters?.statuses ?? [])],
     adapter_keys: [...(filters?.adapter_keys ?? [])],
     curator_ids: [...(filters?.curator_ids ?? [])],
@@ -125,6 +129,7 @@ function hasActiveFilters(filters: CurationSessionFilters, searchInput: string):
     (filters.adapter_keys?.length ?? 0) > 0 ||
     (filters.curator_ids?.length ?? 0) > 0 ||
     (filters.tags?.length ?? 0) > 0 ||
+    (filters.inventory_scope ?? DEFAULT_CURATION_INVENTORY_SCOPE) !== DEFAULT_CURATION_INVENTORY_SCOPE ||
     Boolean(filters.flow_run_id) ||
     Boolean(filters.origin_session_id) ||
     Boolean(filters.document_id) ||
@@ -179,6 +184,7 @@ export function useCurationInventory() {
 
   const statuses = baseFilters.statuses ?? []
   const adapterKeys = baseFilters.adapter_keys ?? []
+  const inventoryScope = baseFilters.inventory_scope ?? DEFAULT_CURATION_INVENTORY_SCOPE
   const adapterOptions = ensureSelectedOptions(knownAdapterOptions, adapterKeys)
   const pageInfo = listQuery.data?.page_info
 
@@ -215,6 +221,13 @@ export function useCurationInventory() {
     applyManualFilterChange((currentFilters) => ({
       ...currentFilters,
       adapter_keys: [],
+    }))
+  }
+
+  function handleInventoryScopeChange(nextScope: CurationInventoryScope) {
+    applyManualFilterChange((currentFilters) => ({
+      ...currentFilters,
+      inventory_scope: nextScope,
     }))
   }
 
@@ -274,6 +287,7 @@ export function useCurationInventory() {
   return {
     statuses,
     adapterKeys,
+    inventoryScope,
     searchInput,
     page,
     pageSize,
@@ -290,6 +304,7 @@ export function useCurationInventory() {
     clearStatuses,
     toggleAdapterKey,
     clearAdapterKeys,
+    handleInventoryScopeChange,
     clearAllFilters,
     clearSavedViewSelection,
     applySavedView,

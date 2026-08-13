@@ -8,7 +8,7 @@ envelope:
     name: Alliance Phenotype Domain Pack
     version: 0.1.0
     definition_state: in_development
-  objects:
+  extracted_objects:
     - object_type: Reference
       payload:
         title: Brood size phenotype evidence fixture paper
@@ -221,7 +221,7 @@ envelope:
         skipped_without_evidence: 1
   metadata:
     source_fixture_id: tool_verified_phenotype_paper
-    semantic_source: domain_envelope.objects
+    semantic_source: domain_envelope.extracted_objects
     export_behavior:
       status: blocked
     write_behavior:

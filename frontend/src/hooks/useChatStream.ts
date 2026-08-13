@@ -12,7 +12,7 @@
  * Note: Uses POST fetch with ReadableStream, NOT EventSource API
  */
 
-import { useState, useRef, useCallback } from 'react'
+import { useEffect, useCallback, useSyncExternalStore } from 'react'
 import { debug } from '@/utils/env'
 
 export interface SSEEvent {
@@ -26,11 +26,37 @@ export interface SendChatMessageOptions {
   turnId?: string
 }
 
+export interface ExecuteFlowOptions {
+  turnId?: string
+}
+
+export type ChatRunTerminalStatus = 'completed' | 'error'
+export type ChatRunKind = 'chat' | 'flow'
+
+export interface ChatRunTerminalEventDetail {
+  sessionId: string
+  runKind: ChatRunKind
+  status: ChatRunTerminalStatus
+  eventStreamVersion: number
+}
+
+export const CHAT_RUN_TERMINAL_EVENT = 'agr-chat-run-terminal'
+
 export interface UseChatStreamReturn {
   /**
    * All SSE events received in this session
    */
   events: SSEEvent[]
+
+  /**
+   * Version for the current retained event stream. Increments when the stream is replaced.
+   */
+  eventStreamVersion: number
+
+  /**
+   * Number of events the chat renderer has already consumed for this stream version.
+   */
+  processedEventCount: number
 
   /**
    * Whether a stream request is currently in progress
@@ -53,7 +79,8 @@ export interface UseChatStreamReturn {
     flowId: string,
     sessionId: string,
     documentId?: string,
-    userQuery?: string
+    userQuery?: string,
+    options?: ExecuteFlowOptions,
   ) => Promise<void>
 
   /**
@@ -67,35 +94,204 @@ export interface UseChatStreamReturn {
   clearEvents: () => void
 
   /**
+   * Record how many retained events the chat renderer has consumed.
+   */
+  markEventsProcessed: (eventStreamVersion: number, count: number) => void
+
+  /**
    * Abort the current stream (if any)
    */
   stopStream: (sessionId: string) => Promise<void>
 }
 
+interface SharedChatStreamState {
+  events: SSEEvent[]
+  eventStreamVersion: number
+  processedEventCount: number
+  isLoading: boolean
+  error: Error | null
+}
+
+interface ActiveStreamRun {
+  runId: number
+  controller: AbortController
+  sessionId: string
+}
+
+const sharedListeners = new Set<() => void>()
+let sharedState: SharedChatStreamState = {
+  events: [],
+  eventStreamVersion: 0,
+  processedEventCount: 0,
+  isLoading: false,
+  error: null,
+}
+let nextRunId = 0
+let activeStreamRun: ActiveStreamRun | null = null
+let retainedEventSessionId: string | null = null
+
+function emitSharedState(nextState: Partial<SharedChatStreamState>) {
+  sharedState = { ...sharedState, ...nextState }
+  sharedListeners.forEach((listener) => listener())
+}
+
+function subscribeSharedState(listener: () => void): () => void {
+  sharedListeners.add(listener)
+  return () => sharedListeners.delete(listener)
+}
+
+function getSharedStateSnapshot(): SharedChatStreamState {
+  return sharedState
+}
+
+function updateSharedEvents(updater: (events: SSEEvent[]) => SSEEvent[]) {
+  emitSharedState({ events: updater(sharedState.events) })
+}
+
+function replaceSharedEvents(events: SSEEvent[]) {
+  emitSharedState({
+    events,
+    eventStreamVersion: sharedState.eventStreamVersion + 1,
+    processedEventCount: 0,
+  })
+}
+
+function buildClientTurnId(): string {
+  return globalThis.crypto.randomUUID()
+}
+
+function getRunTerminalStatus(events: SSEEvent[]): ChatRunTerminalStatus {
+  return events.some((event) => event.type.toUpperCase().includes('ERROR'))
+    ? 'error'
+    : 'completed'
+}
+
+function emitChatRunTerminal(detail: ChatRunTerminalEventDetail) {
+  window.dispatchEvent(new CustomEvent<ChatRunTerminalEventDetail>(CHAT_RUN_TERMINAL_EVENT, {
+    detail,
+  }))
+}
+
+function startStreamRun(
+  sessionId: string,
+): ActiveStreamRun | null {
+  // Restart policy: reject starts while a run is active. A user stop releases
+  // that run synchronously, so a replacement need not wait for stale work to settle.
+  if (activeStreamRun) {
+    return null
+  }
+
+  const run = {
+    runId: ++nextRunId,
+    controller: new AbortController(),
+    sessionId,
+  }
+  activeStreamRun = run
+  emitSharedState({ isLoading: true, error: null })
+  return run
+}
+
+function replaceRunEvents(
+  run: ActiveStreamRun,
+  events: SSEEvent[],
+) {
+  retainedEventSessionId = run.sessionId
+  replaceSharedEvents(events)
+}
+
+function ownsActiveRun(run: ActiveStreamRun): boolean {
+  return activeStreamRun?.runId === run.runId
+}
+
+function releaseStreamRun(
+  run: ActiveStreamRun,
+  nextState: Partial<SharedChatStreamState> = {},
+): boolean {
+  if (!ownsActiveRun(run)) {
+    return false
+  }
+
+  activeStreamRun = null
+  emitSharedState({ ...nextState, isLoading: false })
+  return true
+}
+
+function cleanupStreamSession(sessionId: string) {
+  const run = activeStreamRun
+  if (run?.sessionId === sessionId) {
+    run.controller.abort()
+    releaseStreamRun(run)
+  }
+
+  if (retainedEventSessionId === sessionId) {
+    retainedEventSessionId = null
+    replaceSharedEvents([])
+    emitSharedState({ error: null })
+  }
+}
+
 /**
  * Hook for managing chat SSE stream
  *
+ * The durable chat session owns its stream. Route unmounts leave the request
+ * alive so Home can observe the same run after navigation; selecting a different
+ * session still aborts and clears the prior session before it can leak state.
+ *
+ * @param activeSessionId Session whose stream state should be observed.
  * @returns Stream state and control functions
  */
-export function useChatStream(): UseChatStreamReturn {
-  const [events, setEvents] = useState<SSEEvent[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<Error | null>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
+export function useChatStream(activeSessionId?: string | null): UseChatStreamReturn {
+  // The request may finish between a route remount's render and subscription.
+  // React's external-store contract rechecks the snapshot across that window.
+  const snapshot = useSyncExternalStore(
+    subscribeSharedState,
+    getSharedStateSnapshot,
+    getSharedStateSnapshot,
+  )
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      return
+    }
+
+    const priorSessionId = activeStreamRun?.sessionId ?? retainedEventSessionId
+    if (priorSessionId && priorSessionId !== activeSessionId) {
+      cleanupStreamSession(priorSessionId)
+    }
+  }, [activeSessionId])
 
   const clearEvents = useCallback(() => {
-    setEvents([])
-    setError(null)
+    retainedEventSessionId = null
+    replaceSharedEvents([])
+    emitSharedState({ error: null })
+  }, [])
+
+  const markEventsProcessed = useCallback((eventStreamVersion: number, count: number) => {
+    if (eventStreamVersion !== sharedState.eventStreamVersion) {
+      return
+    }
+
+    const nextCount = Math.min(Math.max(0, count), sharedState.events.length)
+    if (nextCount <= sharedState.processedEventCount) {
+      return
+    }
+
+    emitSharedState({ processedEventCount: nextCount })
   }, [])
 
   const stopStream = useCallback(async (sessionId: string) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
+    const run = activeStreamRun
+    if (!run || run.sessionId !== sessionId) {
+      return
     }
-    setIsLoading(false)
+
+    run.controller.abort()
+    if (!releaseStreamRun(run)) {
+      return
+    }
+
     // Emit a synthetic event so Audit/Chat can show a stop notice even without SSE
-    setEvents(prev => [
+    updateSharedEvents(prev => [
       ...prev,
       {
         type: 'STOP_CONFIRMED',
@@ -127,28 +323,24 @@ export function useChatStream(): UseChatStreamReturn {
 
     if (!sessionId) {
       const err = new Error('No session ID available')
-      setError(err)
+      emitSharedState({ error: err })
       console.error(err)
       return
     }
 
-    // Abort any existing stream
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    const run = startStreamRun(sessionId)
+    if (!run) {
+      console.warn('Cannot start a new chat message while another stream is active')
+      return
     }
-
-    // Create new abort controller
-    abortControllerRef.current = new AbortController()
-
-    setIsLoading(true)
-    setError(null)
 
     // Start each run with a fresh stream so consumers do not have to reconcile
     // stale events from prior turns before processing the new audit trail.
-    setEvents([
+    replaceRunEvents(run, [
       {
         type: 'AGENT_GENERATING',
         session_id: sessionId,
+        turn_id: options?.turnId,
         timestamp: new Date().toISOString(),
         details: {
           agentRole: 'System',
@@ -169,7 +361,7 @@ export function useChatStream(): UseChatStreamReturn {
           session_id: sessionId,
           turn_id: options?.turnId,
         }),
-        signal: abortControllerRef.current.signal
+        signal: run.controller.signal
       })
 
       if (!response.ok) {
@@ -188,6 +380,7 @@ export function useChatStream(): UseChatStreamReturn {
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
+        if (!ownsActiveRun(run)) return
 
         // Append new chunk to buffer
         buffer += decoder.decode(value, { stream: true })
@@ -214,7 +407,9 @@ export function useChatStream(): UseChatStreamReturn {
                 debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
 
                 // Add event to events array
-                setEvents(prev => [...prev, parsed])
+                if (ownsActiveRun(run)) {
+                  updateSharedEvents(prev => [...prev, parsed])
+                }
               } catch (parseError) {
                 console.error('Failed to parse SSE event:', parseError, data)
               }
@@ -223,19 +418,32 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
-      setIsLoading(false)
+      if (!ownsActiveRun(run)) return
+
+      const terminalStatus = getRunTerminalStatus(sharedState.events)
+      const eventStreamVersion = sharedState.eventStreamVersion
+      releaseStreamRun(run)
+      emitChatRunTerminal({
+        sessionId,
+        runKind: 'chat',
+        status: terminalStatus,
+        eventStreamVersion,
+      })
     } catch (err) {
+      if (!ownsActiveRun(run)) return
+
       // Ignore abort errors (user cancelled)
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Stream aborted by user')
-        setIsLoading(false)
+        releaseStreamRun(run)
         return
       }
 
       const error = err instanceof Error ? err : new Error('Unknown error during streaming')
-      setError(error)
-      setIsLoading(false)
+      releaseStreamRun(run, { error })
       console.error('Error in chat stream:', error)
+    } finally {
+      releaseStreamRun(run)
     }
   }, [])
 
@@ -246,30 +454,30 @@ export function useChatStream(): UseChatStreamReturn {
     flowId: string,
     sessionId: string,
     documentId?: string,
-    userQuery?: string
+    userQuery?: string,
+    options?: ExecuteFlowOptions,
   ) => {
     if (!sessionId) {
       const err = new Error('No session ID available')
-      setError(err)
+      emitSharedState({ error: err })
       console.error(err)
       return
     }
 
-    // Abort any existing stream
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    const turnId = options?.turnId ?? buildClientTurnId()
+    const run = startStreamRun(sessionId)
+    if (!run) {
+      console.warn('Cannot start a new flow execution while another stream is active')
+      return
     }
-
-    abortControllerRef.current = new AbortController()
-    setIsLoading(true)
-    setError(null)
 
     // Start each flow execution with a fresh stream for the same reason as
     // normal chat sends: right-panel consumers should only process this run.
-    setEvents([
+    replaceRunEvents(run, [
       {
         type: 'AGENT_GENERATING',
         session_id: sessionId,
+        turn_id: turnId,
         timestamp: new Date().toISOString(),
         details: {
           agentRole: 'System',
@@ -286,10 +494,11 @@ export function useChatStream(): UseChatStreamReturn {
         body: JSON.stringify({
           flow_id: flowId,
           session_id: sessionId,
+          turn_id: turnId,
           document_id: documentId || null,
           user_query: userQuery || null
         }),
-        signal: abortControllerRef.current.signal
+        signal: run.controller.signal
       })
 
       if (!response.ok) {
@@ -307,6 +516,7 @@ export function useChatStream(): UseChatStreamReturn {
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
+        if (!ownsActiveRun(run)) return
 
         buffer += decoder.decode(value, { stream: true })
         const eventBoundary = '\n\n'
@@ -324,7 +534,9 @@ export function useChatStream(): UseChatStreamReturn {
               try {
                 const parsed: SSEEvent = JSON.parse(data)
                 debug.log('🔍 [useChatStream] Flow SSE event:', parsed.type, parsed)
-                setEvents(prev => [...prev, parsed])
+                if (ownsActiveRun(run)) {
+                  updateSharedEvents(prev => [...prev, parsed])
+                }
               } catch (parseError) {
                 console.error('Failed to parse SSE event:', parseError, data)
               }
@@ -333,27 +545,43 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
-      setIsLoading(false)
+      if (!ownsActiveRun(run)) return
+
+      const terminalStatus = getRunTerminalStatus(sharedState.events)
+      const eventStreamVersion = sharedState.eventStreamVersion
+      releaseStreamRun(run)
+      emitChatRunTerminal({
+        sessionId,
+        runKind: 'flow',
+        status: terminalStatus,
+        eventStreamVersion,
+      })
     } catch (err) {
+      if (!ownsActiveRun(run)) return
+
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Flow execution aborted by user')
-        setIsLoading(false)
+        releaseStreamRun(run)
         return
       }
       const error = err instanceof Error ? err : new Error('Unknown error during flow execution')
-      setError(error)
-      setIsLoading(false)
+      releaseStreamRun(run, { error })
       console.error('Error in flow execution:', error)
+    } finally {
+      releaseStreamRun(run)
     }
   }, [])
 
   return {
-    events,
-    isLoading,
+    events: snapshot.events,
+    eventStreamVersion: snapshot.eventStreamVersion,
+    processedEventCount: snapshot.processedEventCount,
+    isLoading: snapshot.isLoading,
     sendMessage,
     executeFlow,
-    error,
+    error: snapshot.error,
     clearEvents,
+    markEventsProcessed,
     stopStream
   }
 }

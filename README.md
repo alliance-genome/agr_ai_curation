@@ -91,7 +91,10 @@ For local product development in a repository checkout:
 ### Verify Installation
 
 ```bash
-# Standalone install
+# Supported production launch (renders and validates effective Compose first)
+make prod
+
+# Inspect the running production stack
 docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml ps
 
 # Source development

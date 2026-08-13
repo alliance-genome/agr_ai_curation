@@ -3,21 +3,43 @@
 import logging
 import time
 from collections import Counter
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from uuid import UUID
 import asyncio
 import json
 from weaviate.classes.query import Filter
 
-from .connection import get_connection, WeaviateConnection
+from .connection import get_connection
 from ..weaviate_helpers import get_user_collections
 from ..document_cleanup import cleanup_document_curation_dependencies
+from ..document_sources.provenance import (
+    build_document_source_provenance,
+    sanitize_document_source_provenance,
+)
 from src.models.sql.database import get_db
 from src.models.sql.pdf_document import PDFDocument as PdfDocumentModel
-from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+def _effective_list_processing_status(sql_status: Any, weaviate_status: Any) -> str:
+    """Prefer durable terminal state over a stale status in either store."""
+
+    durable_status = str(sql_status or "").strip().lower()
+    indexed_status = str(weaviate_status or "pending").strip().lower()
+    active_statuses = {"processing", "parsing", "chunking", "embedding", "storing"}
+    if durable_status == "failed":
+        return durable_status
+    if indexed_status in active_statuses:
+        return indexed_status
+    if durable_status in active_statuses:
+        return durable_status
+    if durable_status in {"completed", "failed"}:
+        return durable_status
+    if indexed_status in {"completed", "failed"}:
+        return indexed_status
+    return durable_status or indexed_status
 
 
 async def async_list_documents(
@@ -89,11 +111,19 @@ async def async_list_documents(
 
             # Build where filter if needed
             where_filter = None
+            search_term = getattr(filter_obj, "search_term", None)
+            embedding_status = getattr(filter_obj, "embedding_status", None)
+            date_from = getattr(filter_obj, "date_from", None)
+            date_to = getattr(filter_obj, "date_to", None)
+            min_vector_count = getattr(filter_obj, "min_vector_count", None)
+            max_vector_count = getattr(filter_obj, "max_vector_count", None)
             has_filters = filter_obj and (
-                filter_obj.search_term or
-                filter_obj.embedding_status or
-                filter_obj.min_vector_count is not None or
-                filter_obj.max_vector_count is not None
+                search_term or
+                embedding_status or
+                date_from is not None or
+                date_to is not None or
+                min_vector_count is not None or
+                max_vector_count is not None
             )
             logger.debug(
                 "Filter check: has_filters=%s, min_vector_count=%s, max_vector_count=%s",
@@ -104,16 +134,16 @@ async def async_list_documents(
             if has_filters:
                 conditions = []
 
-                if filter_obj.search_term:
+                if search_term:
                     conditions.append(
-                        Filter.by_property("filename").like(f"*{filter_obj.search_term}*")
+                        Filter.by_property("filename").like(f"*{search_term}*")
                     )
 
-                if filter_obj.embedding_status:
+                if embedding_status:
                     # Build OR condition for multiple statuses
                     status_filters = [
                         Filter.by_property("embeddingStatus").equal(status)
-                        for status in filter_obj.embedding_status
+                        for status in embedding_status
                     ]
                     if len(status_filters) > 1:
                         conditions.append(Filter.any_of(status_filters))
@@ -121,13 +151,26 @@ async def async_list_documents(
                         conditions.append(status_filters[0])
 
                 # Filter by chunk count (UI shows "Chunks" but params still use vector naming)
-                if filter_obj.min_vector_count is not None:
+                if min_vector_count is not None:
                     conditions.append(
-                        Filter.by_property("chunkCount").greater_or_equal(filter_obj.min_vector_count)
+                        Filter.by_property("chunkCount").greater_or_equal(min_vector_count)
                     )
-                if filter_obj.max_vector_count is not None:
+                if max_vector_count is not None:
                     conditions.append(
-                        Filter.by_property("chunkCount").less_or_equal(filter_obj.max_vector_count)
+                        Filter.by_property("chunkCount").less_or_equal(max_vector_count)
+                    )
+
+                if date_from is not None:
+                    conditions.append(
+                        Filter.by_property("creationDate").greater_or_equal(
+                            date_from.isoformat()
+                        )
+                    )
+                if date_to is not None:
+                    conditions.append(
+                        Filter.by_property("creationDate").less_or_equal(
+                            date_to.isoformat()
+                        )
                     )
 
                 if len(conditions) == 1:
@@ -199,13 +242,21 @@ async def async_list_documents(
 
                 pg_doc = pg_doc_map[doc_id]
                 doc_props = obj.properties
+                # PostgreSQL is authoritative for provider-ingestion failures
+                # and display metadata. Prefer either store's terminal state so
+                # a stale Weaviate "pending" value cannot strand a failed row.
+                processing_status = _effective_list_processing_status(
+                    pg_doc.status,
+                    doc_props.get("processingStatus"),
+                )
 
                 # Map to contract Document schema (document_endpoints.yaml)
                 doc = {
                     "document_id": doc_id,  # Contract field name
                     "user_id": user_id,  # Required by contract
                     "filename": doc_props.get("filename"),
-                    "status": doc_props.get("processingStatus", "pending").upper(),  # Contract requires uppercase enum
+                    "title": pg_doc.title,
+                    "status": processing_status.upper(),  # Contract requires uppercase enum
                     "upload_timestamp": pg_doc.upload_timestamp.isoformat() if pg_doc.upload_timestamp else doc_props.get("creationDate"),
                     "processing_started_at": None,  # TODO: track in PostgreSQL
                     "processing_completed_at": None,  # TODO: track in PostgreSQL
@@ -213,7 +264,8 @@ async def async_list_documents(
                     "weaviate_tenant": tenant_name,  # Required by contract
                     "chunk_count": doc_props.get("chunkCount"),
                     "embedding_status": doc_props.get("embeddingStatus", "pending"),  # Frontend expects this field
-                    "error_message": None  # TODO: track processing errors
+                    "error_message": pg_doc.error_message,
+                    "source_provenance": build_document_source_provenance(pg_doc),
                 }
                 documents.append(doc)
 
@@ -381,24 +433,20 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
             # Parse metadata if it's a JSON string
             if isinstance(document["metadata"], str):
                 try:
-                    import json
                     document["metadata"] = json.loads(document["metadata"])
-                except:
+                except json.JSONDecodeError:
                     pass
 
             # Get first 10 chunks for preview using v4 API
             from weaviate.classes.query import Sort
 
-            filter_by_doc = Filter.by_property("documentId").equal(document_id)
-
             logger.info("Fetching chunks for document %s", document_id)
 
             # Try different approaches to fetch chunks
-            chunks_response = None
+            chunks_response: Any = None
 
             # Try with UUID conversion
             try:
-                from uuid import UUID
                 doc_uuid = UUID(document_id) if isinstance(document_id, str) else document_id
                 filter_by_uuid = Filter.by_property("documentId").equal(str(doc_uuid))
 
@@ -1063,6 +1111,14 @@ async def create_document(user_id: str, document: Any) -> Dict[str, Any]:
                     return dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')[:-3] + 'Z'  # Remove microseconds, keep only milliseconds
                 return datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')[:-3] + 'Z'
 
+            metadata_payload = _document_metadata_payload(document)
+            metadata_payload.pop("source_provenance", None)
+            source_provenance = sanitize_document_source_provenance(
+                getattr(document, "source_provenance", None)
+            )
+            if source_provenance:
+                metadata_payload["source_provenance"] = source_provenance
+
             properties = {
                 "filename": document.filename,
                 "fileSize": document.file_size,
@@ -1073,7 +1129,7 @@ async def create_document(user_id: str, document: Any) -> Dict[str, Any]:
                 "embeddingStatus": document.embedding_status,
                 "chunkCount": document.chunk_count,
                 "vectorCount": document.vector_count,
-                "metadata": document.metadata.model_dump_json() if hasattr(document.metadata, 'model_dump_json') else str(document.metadata)
+                "metadata": json.dumps(metadata_payload, default=str),
             }
 
             # Create object with specified UUID
@@ -1096,3 +1152,26 @@ async def create_document(user_id: str, document: Any) -> Dict[str, Any]:
         except Exception as e:
             logger.error("Failed to create document: %s", e)
             raise
+
+
+def _document_metadata_payload(document: Any) -> Dict[str, Any]:
+    metadata = getattr(document, "metadata", None)
+    if metadata is None:
+        return {}
+    if hasattr(metadata, "model_dump"):
+        return dict(metadata.model_dump())
+    if hasattr(metadata, "model_dump_json"):
+        loaded = json.loads(metadata.model_dump_json())
+        if isinstance(loaded, dict):
+            return loaded
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    if isinstance(metadata, str):
+        try:
+            loaded = json.loads(metadata)
+            if isinstance(loaded, dict):
+                return loaded
+        except json.JSONDecodeError:
+            pass
+        return {"value": metadata}
+    return {"value": str(metadata)}

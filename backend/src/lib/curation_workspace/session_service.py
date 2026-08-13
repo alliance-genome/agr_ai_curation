@@ -14,6 +14,7 @@ from src.lib.curation_workspace.session_common import (
     normalize_uuid,
 )
 from src.lib.curation_workspace.session_mutation_service import (
+    RejectedEnvelopeFieldPatchError,
     create_manual_candidate,
     decide_candidate,
     delete_candidate,
@@ -102,6 +103,7 @@ __all__ = [
     "PreparedSessionUpsertResult",
     "ReusablePreparedSessionContext",
     "PreparedValidationSnapshotInput",
+    "RejectedEnvelopeFieldPatchError",
     "retry_submission",
     "submission_preview",
     "upsert_prepared_session",

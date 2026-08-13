@@ -28,6 +28,6 @@ data_sources:
     data_types: ["Allele mention hints", "Associated-gene hints", "Taxon hints", "Validator lookup results"]
 limitations:
   - "Requires an uploaded PDF document — cannot extract alleles from chat text alone"
-  - "Transgene constructs (e.g., GFP reporters, Cre drivers) are excluded unless they are the experimental variable"
+  - "Transgene handling follows organism-specific rules: MGI retains stable inherited Cre-driver, reporter, and other transgenic lines as alleles, while transient expression and unlinked construct/reagent mentions are excluded"
   - "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles"
   - "Confirming each allele against the Alliance database is the Allele Validation Agent's job; any unconfirmed or conflicting alleles stay visible to you as validator findings."
