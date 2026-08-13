@@ -393,9 +393,6 @@ def _process_single_document(
         )
         batch_doc.status = BatchDocumentStatus.COMPLETED
         batch_doc.result_files = result_files or None
-        batch_doc.result_file_path = (
-            result_files[0]["download_url"] if result_files else None
-        )
         batch_doc.review_session_ids = review_session_ids or None
         batch_doc.output_status = output_status
         batch_doc.output_branches = output_branches or None
@@ -406,7 +403,7 @@ def _process_single_document(
 
         logger.info(
             "Document completed: batch_id=%s, doc_id=%s, time_ms=%d, result=%s",
-            batch.id, batch_doc.document_id, processing_time_ms, batch_doc.result_file_path
+            batch.id, batch_doc.document_id, processing_time_ms, batch_doc.result_files
         )
 
     except BatchCancelled:
@@ -423,7 +420,6 @@ def _process_single_document(
             batch_doc.status, BatchDocumentStatus.FAILED
         )
         batch_doc.status = BatchDocumentStatus.FAILED
-        batch_doc.result_file_path = None
         batch_doc.result_files = None
         batch_doc.output_status = "failed"
         failure_output_branches = getattr(e, "output_branches", None)
@@ -445,7 +441,6 @@ def _process_single_document(
                 "batch_document_id": str(batch_doc.id),
                 "position": batch_doc.position,
                 "status": BatchDocumentStatus.FAILED.value,
-                "result_file_path": None,
                 "result_files": [],
                 "output_status": "failed",
                 "output_branches": batch_doc.output_branches or [],
@@ -535,7 +530,9 @@ async def _execute_flow_for_document(
                 download_url = file_ready_details.get("download_url")
                 file_id = file_ready_details.get("file_id")
 
-                if download_url and file_id:
+                filename = file_ready_details.get("filename")
+
+                if download_url and file_id and filename:
                     # GUARDRAIL: Validate file ownership before capturing
                     # This prevents cross-user file leakage even if event routing has bugs
                     # (defense-in-depth for KANBAN-935 race condition fix)
@@ -575,8 +572,9 @@ async def _execute_flow_for_document(
                         )
                 elif download_url:
                     logger.warning(
-                        "FILE_READY event missing file_id, ignoring unverified output: %s",
-                        download_url
+                        "FILE_READY event missing canonical file_id or filename, "
+                        "ignoring output: %s",
+                        download_url,
                     )
                 continue
 

@@ -88,8 +88,8 @@ type BatchStatus = 'setup' | 'running' | 'completed' | 'cancelled';
 type DocumentStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 interface BatchResultFile {
-  file_id?: string;
-  filename?: string;
+  file_id: string;
+  filename: string;
   download_url: string;
   format?: string;
   formatter_node_id?: string;
@@ -115,8 +115,7 @@ export interface BatchDocument {
   document_id: string;
   title: string;
   status: DocumentStatus;
-  result_file_path?: string;
-  result_files?: BatchResultFile[];
+  result_files: BatchResultFile[];
   output_status?: 'complete' | 'partial' | 'none' | 'failed';
   output_branches?: BatchOutputBranch[];
   error_message?: string;
@@ -136,7 +135,6 @@ interface BatchDocumentPayload {
   document_title?: string | null;
   position: number;
   status: DocumentStatus;
-  result_file_path?: string;
   result_files?: BatchResultFile[];
   output_status?: 'complete' | 'partial' | 'none' | 'failed';
   output_branches?: BatchOutputBranch[];
@@ -157,8 +155,7 @@ export function mapBatchDocument(doc: BatchDocumentPayload): BatchDocument {
     document_id: doc.document_id,
     title: doc.document_title || `Document ${doc.position + 1}`,
     status: doc.status,
-    result_file_path: doc.result_file_path,
-    result_files: doc.result_files,
+    result_files: doc.result_files ?? [],
     output_status: doc.output_status,
     output_branches: doc.output_branches,
     error_message: doc.error_message,
@@ -212,6 +209,7 @@ const BatchPage: React.FC = () => {
       document_id: doc.id,
       title: doc.title,
       status: 'pending',
+      result_files: [],
       review_session_ids: [],
     })),
     selectedFlowId: null,
@@ -480,7 +478,6 @@ const BatchPage: React.FC = () => {
                   return {
                     ...d,
                     status: docStatus,
-                    result_file_path: data.result_file_path ?? data.data?.result_file_path ?? d.result_file_path,
                     result_files: data.result_files ?? data.data?.result_files ?? d.result_files,
                     output_status: data.output_status ?? data.data?.output_status ?? d.output_status,
                     output_branches: data.output_branches ?? data.data?.output_branches ?? d.output_branches,
@@ -773,12 +770,7 @@ const BatchPage: React.FC = () => {
   };
 
   const getResultFiles = (doc: BatchDocument): BatchResultFile[] => {
-    if (doc.result_files?.length) {
-      return doc.result_files;
-    }
-    return doc.result_file_path
-      ? [{ download_url: doc.result_file_path }]
-      : [];
+    return doc.result_files;
   };
 
   const getMissingOutputSummary = (doc: BatchDocument): string => {

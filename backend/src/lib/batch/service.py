@@ -161,7 +161,6 @@ class BatchService:
         self,
         batch_doc_id: UUID,
         status: BatchDocumentStatus,
-        result_file_path: Optional[str] = None,
         result_files: Optional[List[dict]] = None,
         output_status: Optional[str] = None,
         output_branches: Optional[List[dict]] = None,
@@ -173,8 +172,6 @@ class BatchService:
         if batch_doc:
             require_batch_document_status_transition(batch_doc.status, status)
             batch_doc.status = status
-            if result_file_path:
-                batch_doc.result_file_path = result_file_path
             if result_files is not None:
                 batch_doc.result_files = result_files or None
             if output_status is not None:
@@ -502,7 +499,6 @@ class BatchService:
                 "document_title": document_titles.get(d.document_id),
                 "position": d.position,
                 "status": d.status,
-                "result_file_path": d.result_file_path,
                 "result_files": (
                     stored_result_files if isinstance(stored_result_files, list) else []
                 ),

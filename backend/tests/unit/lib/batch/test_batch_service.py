@@ -222,10 +222,10 @@ class TestBatchServiceMocked:
         service.update_document_status(
             uuid4(),
             status=BatchDocumentStatus.PROCESSING,
-            result_file_path="/path/to/result.json",
             result_files=[
                 {
                     "file_id": "file-1",
+                    "filename": "result.json",
                     "download_url": "/path/to/result.json",
                 }
             ],
@@ -234,9 +234,12 @@ class TestBatchServiceMocked:
         )
 
         assert mock_doc.status == BatchDocumentStatus.PROCESSING
-        assert mock_doc.result_file_path == "/path/to/result.json"
         assert mock_doc.result_files == [
-            {"file_id": "file-1", "download_url": "/path/to/result.json"}
+            {
+                "file_id": "file-1",
+                "filename": "result.json",
+                "download_url": "/path/to/result.json",
+            }
         ]
         assert mock_doc.output_status == "partial"
         assert mock_doc.processing_time_ms == 1500
@@ -532,7 +535,7 @@ class TestBatchToResponseMocked:
         mock_doc1.document_id = uuid4()
         mock_doc1.position = 0
         mock_doc1.status = BatchDocumentStatus.COMPLETED
-        mock_doc1.result_file_path = "/path/to/result1.json"
+        mock_doc1.result_files = []
         mock_doc1.error_message = None
         mock_doc1.processing_time_ms = 1000
         mock_doc1.processed_at = datetime.now(timezone.utc)
@@ -620,7 +623,7 @@ class TestBatchToResponseMocked:
         mock_doc.document_id = doc_id
         mock_doc.position = 0
         mock_doc.status = BatchDocumentStatus.COMPLETED
-        mock_doc.result_file_path = "/path/to/result.json"
+        mock_doc.result_files = []
         mock_doc.error_message = None
         mock_doc.processing_time_ms = 500
         mock_doc.processed_at = datetime.now(timezone.utc)

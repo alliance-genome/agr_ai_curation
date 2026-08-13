@@ -376,7 +376,6 @@ describe('BatchPage', () => {
                 document_title: 'Alpha paper',
                 position: 1,
                 status: 'completed',
-                result_file_path: '/api/files/file-csv/download',
                 result_files: [
                   {
                     file_id: 'file-csv',

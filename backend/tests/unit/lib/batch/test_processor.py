@@ -34,7 +34,6 @@ def _build_batch_context() -> tuple[Any, Any, Any]:
         document_id=uuid4(),
         position=0,
         status=BatchDocumentStatus.PENDING,
-        result_file_path=None,
         result_files=None,
         output_status=None,
         review_session_ids=None,
@@ -113,7 +112,6 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     assert batch_doc.status == BatchDocumentStatus.FAILED
     assert batch.failed_documents == 1
     assert batch.completed_documents == 0
-    assert batch_doc.result_file_path is None
     assert batch_doc.output_status == "failed"
     assert batch_doc.review_session_ids is None
     assert published_events == [
@@ -124,7 +122,6 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
             "batch_document_id": str(batch_doc.id),
             "position": batch_doc.position,
             "status": BatchDocumentStatus.FAILED.value,
-            "result_file_path": None,
             "result_files": [],
             "output_status": "failed",
             "output_branches": [],
@@ -193,7 +190,15 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
 
     async def _fake_execute_flow_for_document(**_kwargs):
         return (
-            [{"download_url": "/api/weaviate/documents/download/abc123"}],
+            [
+                {
+                    "file_id": "00000000-0000-0000-0000-000000000123",
+                    "filename": "result.json",
+                    "download_url": (
+                        "/api/files/00000000-0000-0000-0000-000000000123/download"
+                    ),
+                }
+            ],
             [],
             "partial",
             [],
@@ -212,9 +217,12 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     assert batch_doc.status == BatchDocumentStatus.COMPLETED
     assert batch.completed_documents == 1
     assert batch.failed_documents == 0
-    assert batch_doc.result_file_path == "/api/weaviate/documents/download/abc123"
     assert batch_doc.result_files == [
-        {"download_url": "/api/weaviate/documents/download/abc123"}
+        {
+            "file_id": "00000000-0000-0000-0000-000000000123",
+            "filename": "result.json",
+            "download_url": "/api/files/00000000-0000-0000-0000-000000000123/download",
+        }
     ]
     assert batch_doc.output_status == "partial"
     assert batch_doc.review_session_ids is None
@@ -240,7 +248,7 @@ def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):
     assert batch_doc.status == BatchDocumentStatus.COMPLETED
     assert batch.completed_documents == 1
     assert batch.failed_documents == 0
-    assert batch_doc.result_file_path is None
+    assert batch_doc.result_files is None
     assert batch_doc.review_session_ids == ["session-gene", "session-gene_expression"]
 
 
@@ -267,7 +275,7 @@ def test_batch_processor_does_not_persist_success_when_cancelled_during_flow(mon
     assert batch.completed_documents == 0
     assert batch.failed_documents == 0
     assert batch_doc.status == BatchDocumentStatus.PROCESSING
-    assert batch_doc.result_file_path is None
+    assert batch_doc.result_files is None
     assert batch_doc.review_session_ids is None
 
 
@@ -421,7 +429,13 @@ def test_recovered_batch_processes_only_pending_document(monkeypatch):
         document_id=uuid4(),
         position=0,
         status=BatchDocumentStatus.COMPLETED,
-        result_file_path="/files/completed",
+        result_files=[
+            {
+                "file_id": "00000000-0000-0000-0000-000000000123",
+                "filename": "completed.json",
+                "download_url": "/api/files/00000000-0000-0000-0000-000000000123/download",
+            }
+        ],
         review_session_ids=["existing-review"],
         processing_time_ms=10,
         processed_at=datetime.now(timezone.utc),
@@ -458,7 +472,7 @@ def test_recovered_batch_processes_only_pending_document(monkeypatch):
     )
 
     assert processed == [pending_document]
-    assert completed_document.result_file_path == "/files/completed"
+    assert completed_document.result_files[0]["filename"] == "completed.json"
     assert completed_document.review_session_ids == ["existing-review"]
 
 
@@ -644,11 +658,24 @@ def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatc
     assert str(exc_info.value) == formatter_reason
 
 
-def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatch):
+@pytest.mark.parametrize(
+    "details",
+    [
+        {"download_url": "/api/files/missing-id/download", "filename": "result.json"},
+        {
+            "download_url": "/api/files/missing-filename/download",
+            "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
+        },
+    ],
+)
+def test_execute_flow_for_document_ignores_file_ready_without_canonical_identity(
+    monkeypatch,
+    details,
+):
     async def _fake_execute_flow(**_kwargs):
         yield {
             "type": "FILE_READY",
-            "details": {"download_url": "/api/weaviate/documents/download/no-file-id"},
+            "details": details,
         }
 
     published_events = []
@@ -685,8 +712,9 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
         yield {
             "type": "FILE_READY",
             "details": {
-                "download_url": "/api/weaviate/documents/download/file-1",
+                "download_url": "/api/files/c0ffee00-cafe-cafe-cafe-c0ffeec0ffee/download",
                 "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
+                "filename": "genes.csv",
             },
         }
         yield {
@@ -731,7 +759,8 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
         [
             {
                 "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
-                "download_url": "/api/weaviate/documents/download/file-1",
+                "filename": "genes.csv",
+                "download_url": "/api/files/c0ffee00-cafe-cafe-cafe-c0ffeec0ffee/download",
             },
             {
                 "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0fff2",

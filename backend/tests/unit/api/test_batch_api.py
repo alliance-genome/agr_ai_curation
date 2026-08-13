@@ -17,7 +17,12 @@ from pydantic import ValidationError
 
 from src.api import batch as batch_api
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
-from src.schemas.batch import BatchCreateRequest, BatchResponse, BatchValidationResponse
+from src.schemas.batch import (
+    BatchCreateRequest,
+    BatchResponse,
+    BatchResultFile,
+    BatchValidationResponse,
+)
 
 
 _TEST_REQUEST = cast(Request, object())
@@ -52,7 +57,7 @@ def test_batch_document_status_event_includes_review_session_ids():
         id=uuid4(),
         position=0,
         status=BatchDocumentStatus.COMPLETED,
-        result_file_path=None,
+        result_files=[],
         review_session_ids=["session-gene"],
         error_message=None,
         processing_time_ms=1200,
@@ -102,6 +107,19 @@ def test_batch_create_request_limits_document_ids_to_ten():
 
     with pytest.raises(ValidationError):
         BatchCreateRequest(flow_id=flow_id, document_ids=doc_ids)
+
+
+@pytest.mark.parametrize("missing_field", ["file_id", "filename", "download_url"])
+def test_batch_result_file_requires_canonical_identity_fields(missing_field):
+    payload = {
+        "file_id": str(uuid4()),
+        "filename": "result.json",
+        "download_url": "/api/files/example/download",
+    }
+    payload.pop(missing_field)
+
+    with pytest.raises(ValidationError):
+        BatchResultFile.model_validate(payload)
 
 
 @pytest.mark.asyncio
@@ -346,7 +364,9 @@ async def test_download_batch_zip_404_when_batch_missing(monkeypatch):
 @pytest.mark.asyncio
 async def test_download_batch_zip_400_when_no_completed_docs(monkeypatch):
     _mock_auth(monkeypatch, user_id=8)
-    batch = SimpleNamespace(documents=[SimpleNamespace(status=BatchDocumentStatus.PENDING, result_file_path=None)])
+    batch = SimpleNamespace(
+        documents=[SimpleNamespace(status=BatchDocumentStatus.PENDING, result_files=[])]
+    )
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
@@ -368,17 +388,16 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
 
     completed_doc = SimpleNamespace(
         status=BatchDocumentStatus.COMPLETED,
-        result_file_path=f"/api/files/{file_id}/download",
         result_files=[
             {
                 "file_id": str(file_id),
                 "filename": "result.csv",
-                "download_url": f"/api/files/{file_id}/download",
+                "download_url": "/downloads/result.csv",
             },
             {
                 "file_id": str(second_file_id),
                 "filename": "result.json",
-                "download_url": f"/api/files/{second_file_id}/download",
+                "download_url": "/downloads/result.json",
             },
         ],
         document_id=uuid4(),
@@ -452,7 +471,6 @@ async def test_download_batch_zip_preserves_custom_filenames_for_multiple_docume
         documents.append(
             SimpleNamespace(
                 status=BatchDocumentStatus.COMPLETED,
-                result_file_path=f"/api/files/{file_id}/download",
                 result_files=[
                     {
                         "file_id": str(file_id),
@@ -515,7 +533,13 @@ async def test_download_batch_zip_400_when_completed_docs_exist_but_none_downloa
 
     completed_doc = SimpleNamespace(
         status=BatchDocumentStatus.COMPLETED,
-        result_file_path=f"/api/files/{file_id}/download",
+        result_files=[
+            {
+                "file_id": str(file_id),
+                "filename": "result.csv",
+                "download_url": f"/api/files/{file_id}/download",
+            }
+        ],
         document_id=uuid4(),
         position=0,
     )
@@ -642,7 +666,7 @@ async def test_stream_batch_progress_replays_completed_document_snapshot_on_reco
         document_id=document_id,
         position=0,
         status=BatchDocumentStatus.COMPLETED,
-        result_file_path=None,
+        result_files=[],
         review_session_ids=["review-gene"],
         error_message=None,
         processing_time_ms=1200,
@@ -716,7 +740,6 @@ async def test_stream_batch_progress_replays_completed_document_snapshot_on_reco
             "batch_document_id": str(batch_document_id),
             "position": 0,
             "status": "completed",
-            "result_file_path": None,
             "result_files": [],
             "output_status": None,
             "output_branches": [],
