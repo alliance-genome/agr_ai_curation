@@ -1701,6 +1701,13 @@ def test_reused_submission_key_rejects_changed_draft_intent(
         json=request_json,
     )
     assert first_response.status_code == 200, first_response.text
+    persisted_attempt = (
+        test_db.query(CurationSubmissionRecord)
+        .filter(CurationSubmissionRecord.idempotency_key == request_json["idempotency_key"])
+        .one()
+    )
+    assert persisted_attempt.payload is not None
+    assert len(persisted_attempt.payload["intent_fingerprint"]) == 64
 
     draft = test_db.get(CurationDraft, UUID(seeded_review_sessions["draft_beta_id"]))
     assert draft is not None

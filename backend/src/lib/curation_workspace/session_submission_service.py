@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -19,6 +18,9 @@ from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import get_submission_attempt_retention_days
 from src.lib.curation_workspace.export_adapters import build_default_export_adapter_registry
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+from src.lib.curation_workspace.extraction_results import (
+    canonical_extraction_payload_hash,
+)
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -27,9 +29,6 @@ from src.lib.curation_workspace.models import (
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
     DomainEnvelopeProjectionIndex,
-)
-from src.lib.curation_workspace.extraction_results import (
-    canonical_extraction_payload_hash,
 )
 from src.lib.curation_workspace.session_common import (
     _actor_claims_payload,
@@ -119,16 +118,7 @@ SUBMISSION_TRANSPORT_FAILURE_MESSAGE = "Submission failed unexpectedly. Please t
 _BLOCKING_EXPORT_STATUSES = {"blocked", "not_supported", "unsupported"}
 _NON_EXPORTABLE_FLAGS = ("exportable", "submit", "submittable")
 _MISSING = object()
-_SUBMISSION_VALIDATION_GENERATED_KEYS = frozenset(
-    {"snapshot_id", "requested_at", "completed_at"}
-)
-_SUBMISSION_CANDIDATE_GENERATED_KEYS = frozenset(
-    {"created_at", "updated_at", "last_reviewed_at"}
-)
-_SUBMISSION_DRAFT_GENERATED_KEYS = frozenset(
-    {"created_at", "updated_at", "last_saved_at"}
-)
-_SUBMISSION_EVIDENCE_GENERATED_KEYS = frozenset({"created_at", "updated_at"})
+_SUBMISSION_INTENT_FINGERPRINT_KEY = "intent_fingerprint"
 
 
 @lru_cache(maxsize=1)
@@ -1942,78 +1932,87 @@ def _submission_candidate_ids(record: SubmissionModel) -> list[str]:
     )
 
 
-def _submission_intent_generated_keys(path: tuple[str | int, ...]) -> frozenset[str]:
-    """Return generated fields only for known payload-contract wrapper paths."""
+def _non_envelope_candidate_submission_intent(
+    candidate: CurationCandidate,
+) -> dict[str, Any]:
+    """Return core-owned curator content without derived validation/lifecycle state."""
 
-    if len(path) == 2 and path[1] == "session_validation":
-        return _SUBMISSION_VALIDATION_GENERATED_KEYS
-    if len(path) == 3 and path[1:] == ("session_validation", "summary"):
-        return frozenset({"last_validated_at"})
-    if len(path) == 3 and path[1] == "candidates" and isinstance(path[2], int):
-        return _SUBMISSION_CANDIDATE_GENERATED_KEYS
-    if (
-        len(path) == 4
-        and path[1] == "candidates"
-        and isinstance(path[2], int)
-        and path[3] == "draft"
-    ):
-        return _SUBMISSION_DRAFT_GENERATED_KEYS
-    if (
-        len(path) == 5
-        and path[1] == "candidates"
-        and isinstance(path[2], int)
-        and path[3] == "evidence_anchors"
-        and isinstance(path[4], int)
-    ):
-        return _SUBMISSION_EVIDENCE_GENERATED_KEYS
-    if (
-        len(path) == 4
-        and path[1] == "candidates"
-        and isinstance(path[2], int)
-        and path[3] == "validation"
-    ):
-        return frozenset({"last_validated_at"})
-    return frozenset()
+    material = _candidate_payload(candidate).model_dump(mode="json")
+    for key in ("created_at", "updated_at", "last_reviewed_at"):
+        material.pop(key, None)
+    material.pop("validation", None)
+    material.pop("validation_summary_projections", None)
+
+    draft = material["draft"]
+    for key in ("created_at", "updated_at", "last_saved_at"):
+        draft.pop(key, None)
+    for field_payload in draft["fields"]:
+        for key in ("dirty", "stale_validation", "validation_result"):
+            field_payload.pop(key, None)
+    for evidence_payload in material["evidence_anchors"]:
+        evidence_payload.pop("created_at", None)
+        evidence_payload.pop("updated_at", None)
+    return material
 
 
-def _semantic_submission_intent_value(
-    value: Any,
+def _submission_intent_fingerprint(
     *,
-    path: tuple[str | int, ...] = (),
-) -> Any:
-    """Remove generated wrapper metadata while preserving arbitrary semantic JSON."""
+    db: Session,
+    session_row: ReviewSessionModel,
+    adapter_key: str,
+    mode: SubmissionMode,
+    target_key: str,
+    ready_candidates: Sequence[CurationCandidate],
+    domain_context: _DomainEnvelopeSubmissionContext | None,
+) -> str:
+    """Hash curator-authored candidate content and bound envelope revisions."""
 
-    if isinstance(value, Mapping):
-        generated_keys = _submission_intent_generated_keys(path)
-        return {
-            str(key): _semantic_submission_intent_value(
-                item,
-                path=(*path, str(key)),
+    document = db.get(PDFDocument, session_row.document_id)
+    candidates: list[dict[str, Any]] = []
+    for candidate in ready_candidates:
+        context = (
+            domain_context.object_contexts.get(str(candidate.id))
+            if domain_context is not None
+            else None
+        )
+        if (
+            context is not None
+            and context.envelope_row is not None
+            and context.domain_object is not None
+        ):
+            candidates.append(
+                {
+                    "candidate_id": str(candidate.id),
+                    "envelope_id": context.envelope_row.envelope_id,
+                    "object_id": _stable_object_id(context.domain_object),
+                    "envelope_revision": context.envelope_row.revision,
+                }
             )
-            for key, item in value.items()
-            if key not in generated_keys
-        }
-    if isinstance(value, (list, tuple)):
-        return [
-            _semantic_submission_intent_value(item, path=(*path, index))
-            for index, item in enumerate(value)
-        ]
-    return value
+            continue
+        candidates.append(_non_envelope_candidate_submission_intent(candidate))
 
-
-def _submission_intent_fingerprint(payload: SubmissionPayloadContract) -> str:
-    """Hash the stable outbound intent represented by a submission contract."""
-
-    material = payload.model_dump(mode="json", exclude={"warnings"})
-    payload_text = material.get("payload_text")
-    if isinstance(payload_text, str):
-        try:
-            material["payload_text"] = json.loads(payload_text)
-        except (TypeError, ValueError):
-            pass
     return canonical_extraction_payload_hash(
-        _semantic_submission_intent_value(material)
+        {
+            "session_id": str(session_row.id),
+            "document": (
+                _document_ref(document).model_dump(mode="json")
+                if document is not None
+                else None
+            ),
+            "adapter_key": adapter_key,
+            "mode": mode.value,
+            "target_key": target_key,
+            "candidates": candidates,
+        }
     )
+
+
+def _stored_submission_intent_fingerprint(record: SubmissionModel) -> str | None:
+    payload = record.payload
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(_SUBMISSION_INTENT_FINGERPRINT_KEY)
+    return value if isinstance(value, str) and value else None
 
 
 def _reject_direct_submit_with_domain_blockers(
@@ -2048,6 +2047,7 @@ def _execute_direct_submission_attempt(
     actor_claims: dict[str, Any],
     action_type: CurationActionType,
     idempotency_key: str,
+    intent_fingerprint: str,
     retry_confirmed_failure: bool = False,
     reuse_persisted_intent: bool = False,
     action_metadata: Mapping[str, Any] | None = None,
@@ -2057,6 +2057,7 @@ def _execute_direct_submission_attempt(
     transport_adapter = _resolve_submission_transport_adapter(target_key)
     requested_at = datetime.now(timezone.utc)
     serialized_payload = _serialize_submission_payload_contract(payload)
+    serialized_payload[_SUBMISSION_INTENT_FINGERPRINT_KEY] = intent_fingerprint
     submission_row = db.scalar(
         select(SubmissionModel).where(SubmissionModel.idempotency_key == idempotency_key)
     )
@@ -2113,6 +2114,10 @@ def _execute_direct_submission_attempt(
         raise RuntimeError("Durable submission attempt disappeared before delivery")
 
     persisted_payload = _submission_payload(submission_row)
+    reconcile_only = submission_row.attempt_state in {
+        CurationSubmissionAttemptState.SENDING,
+        CurationSubmissionAttemptState.UNKNOWN,
+    }
     if (
         submission_row.session_id != session_row.id
         or submission_row.adapter_key != adapter_key
@@ -2122,8 +2127,9 @@ def _execute_direct_submission_attempt(
         or persisted_payload.candidate_ids != payload.candidate_ids
         or (
             not reuse_persisted_intent
-            and _submission_intent_fingerprint(persisted_payload)
-            != _submission_intent_fingerprint(payload)
+            and not reconcile_only
+            and _stored_submission_intent_fingerprint(submission_row)
+            != intent_fingerprint
         )
     ):
         raise HTTPException(
@@ -2146,10 +2152,6 @@ def _execute_direct_submission_attempt(
         result = _result_from_submission_row(submission_row)
         replayed_terminal_attempt = True
     else:
-        reconcile_only = submission_row.attempt_state in {
-            CurationSubmissionAttemptState.SENDING,
-            CurationSubmissionAttemptState.UNKNOWN,
-        }
         if reconcile_only:
             db.commit()
         if not reconcile_only:
@@ -2536,6 +2538,15 @@ def execute_submission(
         domain_context=domain_context,
         readiness=readiness,
     )
+    intent_fingerprint = _submission_intent_fingerprint(
+        db=db,
+        session_row=session_row,
+        adapter_key=payload.adapter_key,
+        mode=request.mode,
+        target_key=request.target_key,
+        ready_candidates=ready_candidates,
+        domain_context=domain_context,
+    )
     response_submission, action_log_entry = _execute_direct_submission_attempt(
         db=db,
         session_row=session_row,
@@ -2548,6 +2559,7 @@ def execute_submission(
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_EXECUTED,
         idempotency_key=request.idempotency_key,
+        intent_fingerprint=intent_fingerprint,
     )
     db.expire_all()
 
@@ -2668,6 +2680,15 @@ def retry_submission(
         domain_context=domain_context,
         readiness=readiness,
     )
+    intent_fingerprint = _submission_intent_fingerprint(
+        db=db,
+        session_row=session_row,
+        adapter_key=original_submission.adapter_key,
+        mode=original_submission.mode,
+        target_key=original_submission.target_key,
+        ready_candidates=ready_candidates,
+        domain_context=domain_context,
+    )
     retry_reason = _normalized_optional_string(request.reason, field_name="reason")
     response_submission, action_log_entry = _execute_direct_submission_attempt(
         db=db,
@@ -2681,6 +2702,7 @@ def retry_submission(
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_RETRIED,
         idempotency_key=original_submission.idempotency_key,
+        intent_fingerprint=intent_fingerprint,
         retry_confirmed_failure=(
             original_submission.attempt_state == CurationSubmissionAttemptState.FAILED
         ),

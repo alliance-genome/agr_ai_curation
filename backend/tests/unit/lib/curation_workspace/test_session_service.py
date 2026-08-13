@@ -4962,94 +4962,57 @@ def test_submission_retry_reconciles_after_local_finalization_rollback_without_r
     assert adapter.reconcile_calls == 1
 
 
-def test_submission_intent_fingerprint_ignores_generated_validation_metadata():
-    def payload(
-        *,
-        snapshot_id: str,
-        requested_at: str,
-        candidate_updated_at: str,
-        envelope_revision: int,
-        semantic_created_at: str,
-    ):
-        body = {
-            "candidate_ids": ["candidate-1"],
-            "candidates": [
-                {
-                    "candidate_id": "candidate-1",
-                    "session_id": "session-1",
-                    "updated_at": candidate_updated_at,
-                    "draft": {
-                        "draft_id": "draft-1",
-                        "candidate_id": "candidate-1",
-                        "updated_at": candidate_updated_at,
-                        "fields": [],
-                    },
-                }
-            ],
-            "domain_envelope_candidates": [
-                {
-                    "candidate_id": "candidate-1",
-                    "envelope_id": "envelope-1",
-                    "envelope_revision": envelope_revision,
-                    "payload": {"created_at": semantic_created_at},
-                }
-            ],
-            "session_validation": {
-                "snapshot_id": snapshot_id,
-                "requested_at": requested_at,
-                "completed_at": requested_at,
-                "summary": {"last_validated_at": requested_at},
-            },
-        }
-        return SubmissionPayloadContract(
+def test_submission_intent_fingerprint_uses_authored_content_not_derived_state(
+    db_session,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    assert session_row is not None
+    assert candidate is not None
+    assert candidate.draft is not None
+
+    fields = [dict(field) for field in candidate.draft.fields]
+    fields[0]["value"] = {"created_at": "1980-01-01"}
+    candidate.draft.fields = fields
+    db_session.add(candidate.draft)
+    db_session.commit()
+
+    def fingerprint() -> str:
+        return submission_module._submission_intent_fingerprint(
+            db=db_session,
+            session_row=session_row,
+            adapter_key=REFERENCE_ADAPTER_KEY,
             mode=SubmissionMode.DIRECT_SUBMIT,
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
-            adapter_key=REFERENCE_ADAPTER_KEY,
-            candidate_ids=["candidate-1"],
-            payload_json=body,
-            payload_text=json.dumps(body, sort_keys=True),
-            content_type="application/json",
-            filename="submission.json",
+            ready_candidates=[candidate],
+            domain_context=None,
         )
 
-    first = payload(
-        snapshot_id="snapshot-1",
-        requested_at="2026-08-13T10:00:00Z",
-        candidate_updated_at="2026-08-13T10:00:00Z",
-        envelope_revision=1,
-        semantic_created_at="1980-01-01",
-    )
-    refreshed_validation = payload(
-        snapshot_id="snapshot-2",
-        requested_at="2026-08-13T10:05:00Z",
-        candidate_updated_at="2026-08-13T10:05:00Z",
-        envelope_revision=1,
-        semantic_created_at="1980-01-01",
-    )
-    changed_envelope = payload(
-        snapshot_id="snapshot-2",
-        requested_at="2026-08-13T10:05:00Z",
-        candidate_updated_at="2026-08-13T10:05:00Z",
-        envelope_revision=2,
-        semantic_created_at="1980-01-01",
-    )
-    changed_semantic_timestamp = payload(
-        snapshot_id="snapshot-2",
-        requested_at="2026-08-13T10:05:00Z",
-        candidate_updated_at="2026-08-13T10:05:00Z",
-        envelope_revision=1,
-        semantic_created_at="1981-01-01",
-    )
+    initial = fingerprint()
+    later = _now() + timedelta(minutes=5)
+    candidate.updated_at = later
+    candidate.last_reviewed_at = later
+    candidate.draft.updated_at = later
+    candidate.draft.last_saved_at = later
+    refreshed_fields = [dict(field) for field in candidate.draft.fields]
+    refreshed_fields[0]["stale_validation"] = False
+    refreshed_fields[0]["validation_result"] = {
+        "status": "validated",
+        "resolver": "fixture",
+        "candidate_matches": [],
+        "warnings": [],
+    }
+    candidate.draft.fields = refreshed_fields
+    assert fingerprint() == initial
 
-    assert submission_module._submission_intent_fingerprint(first) == (
-        submission_module._submission_intent_fingerprint(refreshed_validation)
-    )
-    assert submission_module._submission_intent_fingerprint(first) != (
-        submission_module._submission_intent_fingerprint(changed_envelope)
-    )
-    assert submission_module._submission_intent_fingerprint(first) != (
-        submission_module._submission_intent_fingerprint(changed_semantic_timestamp)
-    )
+    changed_fields = [dict(field) for field in candidate.draft.fields]
+    changed_fields[0]["value"] = {"created_at": "1981-01-01"}
+    candidate.draft.fields = changed_fields
+    assert fingerprint() != initial
 
 
 def test_reused_submission_key_rejects_changed_domain_envelope_revision(
@@ -5166,6 +5129,15 @@ def test_unknown_submission_outcome_is_not_blindly_resent(db_session, monkeypatc
         request,
         actor_claims={"sub": "user-1"},
     )
+    db_session.commit()
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    assert candidate is not None
+    assert candidate.draft is not None
+    changed_fields = [dict(field) for field in candidate.draft.fields]
+    changed_fields[0]["value"] = "changed-after-unknown-outcome"
+    candidate.draft.fields = changed_fields
+    candidate.draft.version += 1
+    db_session.add(candidate.draft)
     db_session.commit()
     second_response = module.execute_submission(
         db_session,
