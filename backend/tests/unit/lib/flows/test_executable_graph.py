@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
@@ -16,9 +17,59 @@ from src.lib.executable_flow_graph import (
     ExecutableFlowTopologyError,
     project_executable_flow_graph,
 )
+from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 from src.lib.flows import executor
 from src.models.sql import CurationFlow
 from src.schemas.flows import CreateFlowRequest, FlowDefinition
+
+
+PARITY_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[5]
+    / "docs"
+    / "testing"
+    / "executable-flow-graph-parity.json"
+)
+
+
+def _load_parity_fixture() -> dict[str, Any]:
+    fixture = json.loads(PARITY_FIXTURE_PATH.read_text(encoding="utf-8"))
+    assert fixture["schema_version"] == 1
+    return cast(dict[str, Any], fixture)
+
+
+def _parity_projection(flow: dict[str, Any]) -> dict[str, Any]:
+    graph = project_executable_flow_graph(flow, raise_on_invalid=False).to_dict()
+    issues = graph.pop("issues")
+    graph["validation_sidecars"] = [
+        {
+            key: value
+            for key, value in sidecar.items()
+            if key != "replaces_attachment_id" or value is not None
+        }
+        for sidecar in graph["validation_sidecars"]
+    ]
+    graph["issue_codes"] = [issue["code"] for issue in issues]
+    return graph
+
+
+def test_language_neutral_formatter_classification_parity():
+    fixture = _load_parity_fixture()
+
+    assert set(fixture["formatter_agent_ids"]) == set(
+        SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+    )
+    assert fixture["non_formatter_agent_id"] not in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+
+
+@pytest.mark.parametrize(
+    "case",
+    _load_parity_fixture()["cases"],
+    ids=lambda case: case["name"],
+)
+def test_language_neutral_executable_graph_parity_fixture(case: dict[str, Any]):
+    projection = _parity_projection(case["flow"])
+
+    assert projection == case["expected"]
 
 
 def _node(node_id: str, agent_id: str, *, node_type: str = "agent") -> dict:

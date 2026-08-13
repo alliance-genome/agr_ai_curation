@@ -4,7 +4,7 @@ import { isExtractionAgent, isValidationAgent } from './smartDefaultUtils'
 
 type AgentMetadataLookup = Record<string, AgentMetadata>
 
-const SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS = new Set([
+export const SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS: ReadonlySet<string> = new Set([
   'chat_output',
   'chat_output_formatter',
   'csv_formatter',
