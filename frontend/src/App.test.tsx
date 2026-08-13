@@ -3,7 +3,12 @@ import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Outlet, useLocation } from 'react-router-dom';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AppContent, ProtectedRoutes, queryClient } from './App';
+import {
+  AppContent,
+  getRunCompletionToastAutoHideMs,
+  ProtectedRoutes,
+  queryClient,
+} from './App';
 import { ThemeModeProvider, THEME_MODE_STORAGE_KEY } from './contexts/ThemeModeContext';
 import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
 import { CHAT_RUN_TERMINAL_EVENT } from './hooks/useChatStream';
@@ -112,8 +117,30 @@ describe('AppContent global notifications', () => {
 
   afterEach(() => {
     queryClient.clear();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
+
+  it('defaults the run completion toast duration to 6000 milliseconds', () => {
+    vi.stubEnv('VITE_RUN_COMPLETION_TOAST_AUTO_HIDE_MS', '');
+
+    expect(getRunCompletionToastAutoHideMs()).toBe(6000);
+  });
+
+  it('uses a valid run completion toast duration override', () => {
+    vi.stubEnv('VITE_RUN_COMPLETION_TOAST_AUTO_HIDE_MS', '8250');
+
+    expect(getRunCompletionToastAutoHideMs()).toBe(8250);
+  });
+
+  it.each(['not-a-number', '125.5', '0', '-1'])(
+    'falls back when the run completion toast duration is invalid (%s)',
+    (configuredDuration) => {
+      vi.stubEnv('VITE_RUN_COMPLETION_TOAST_AUTO_HIDE_MS', configuredDuration);
+
+      expect(getRunCompletionToastAutoHideMs()).toBe(6000);
+    },
+  );
 
   it('shows a global snackbar when a global toast event is emitted', async () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
