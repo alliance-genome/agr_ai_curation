@@ -19,9 +19,9 @@ class BatchCreateRequest(BaseModel):
 class BatchResultFile(BaseModel):
     """One formatter artifact produced for a batch document."""
 
-    file_id: Optional[str] = None
-    filename: Optional[str] = None
-    download_url: str
+    file_id: str = Field(..., min_length=1)
+    filename: str = Field(..., min_length=1)
+    download_url: str = Field(..., min_length=1)
     format: Optional[str] = None
     formatter_node_id: Optional[str] = None
     source_node_id: Optional[str] = None
@@ -60,7 +60,6 @@ class BatchDocumentResponse(BaseModel):
     document_title: Optional[str] = None  # Populated from Weaviate lookup
     position: int
     status: BatchDocumentStatus
-    result_file_path: Optional[str] = None
     result_files: List[BatchResultFile] = Field(default_factory=list)
     output_status: Optional[Literal["complete", "partial", "none", "failed"]] = None
     output_branches: List[BatchOutputBranch] = Field(default_factory=list)

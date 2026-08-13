@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from .auth import get_auth_dependency
 from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.batch.service import BatchService
+from ..lib.batch.result_files import canonical_result_files as _batch_document_result_files
 from ..lib.batch.validation import validate_flow_for_batch
 from ..lib.batch.processor import process_batch_task
 from ..lib.batch.events import get_batch_broadcaster
@@ -62,7 +63,6 @@ def _batch_document_status_event(
     doc: Any,
     handoff_metadata: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    stored_result_files = getattr(doc, "result_files", None)
     stored_output_branches = getattr(doc, "output_branches", None)
     return {
         "type": "DOCUMENT_STATUS",
@@ -71,8 +71,7 @@ def _batch_document_status_event(
         "batch_document_id": str(doc.id),
         "position": doc.position,
         "status": doc.status.value,
-        "result_file_path": doc.result_file_path,
-        "result_files": stored_result_files if isinstance(stored_result_files, list) else [],
+        "result_files": _batch_document_result_files(doc),
         "output_status": getattr(doc, "output_status", None),
         "output_branches": (
             stored_output_branches if isinstance(stored_output_branches, list) else []
@@ -92,22 +91,6 @@ def _batch_partial_document_count(batch: Any) -> int:
         for doc in (getattr(batch, "documents", None) or [])
         if getattr(doc, "output_status", None) == "partial"
     )
-
-
-def _batch_document_result_files(doc: Any) -> list[dict[str, str]]:
-    """Return the authoritative manifest, with a legacy single-file fallback."""
-
-    raw_result_files = getattr(doc, "result_files", None)
-    if isinstance(raw_result_files, list):
-        result_files = [
-            dict(item)
-            for item in raw_result_files
-            if isinstance(item, dict) and item.get("download_url")
-        ]
-        if result_files:
-            return result_files
-    result_file_path = getattr(doc, "result_file_path", None)
-    return [{"download_url": result_file_path}] if result_file_path else []
 
 
 def _unique_zip_member_name(filename: str, used_names: set[str]) -> str:
@@ -348,7 +331,6 @@ async def download_batch_zip(
         400: If batch has no completed documents
     """
     import io
-    import re
     import tempfile
     import zipfile
     from ..models.sql.file_output import FileOutput
@@ -382,22 +364,15 @@ async def download_batch_zip(
         for doc in completed_docs:
             for result_file in _batch_document_result_files(doc):
                 try:
-                    # Format: /api/files/{file_id}/download
-                    result_file_path = result_file["download_url"]
-                    match = re.search(
-                        r'/api/files/([a-f0-9-]+)/download',
-                        result_file_path,
-                    )
-                    if not match:
+                    try:
+                        file_id = UUID(result_file["file_id"])
+                    except (KeyError, TypeError, ValueError):
                         logger.warning(
-                            "Could not extract file_id from batch result: "
-                            "doc_id=%s, path=%s",
+                            "Invalid file_id in batch result manifest: doc_id=%s, file_id=%r",
                             doc.document_id,
-                            result_file_path,
+                            result_file.get("file_id"),
                         )
                         continue
-
-                    file_id = match.group(1)
 
                     file_output = db.query(FileOutput).filter(
                         FileOutput.id == file_id

@@ -3256,7 +3256,17 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                         str(document_result.get("status", "")).lower() == "completed",
                         f"Batch document did not complete successfully: {document_result}",
                     )
-                    require(document_result.get("result_file_path"), f"Missing result_file_path: {document_result}")
+                    result_files = document_result.get("result_files") or []
+                    require(result_files, f"Missing canonical result_files: {document_result}")
+                    require(
+                        all(
+                            result_file.get("file_id")
+                            and result_file.get("filename")
+                            and result_file.get("download_url")
+                            for result_file in result_files
+                        ),
+                        f"Incomplete canonical result_files: {document_result}",
+                    )
 
                 print_step(f"Downloading and checking the batch plumbing {output_format.upper()} ZIP")
                 plumbing_zip = download_batch_zip_payloads(
@@ -3319,7 +3329,20 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                     str(document_result.get("status", "")).lower() == "completed",
                     f"Batch extraction document did not complete successfully: {document_result}",
                 )
-                require(document_result.get("result_file_path"), f"Missing extraction result_file_path: {document_result}")
+                result_files = document_result.get("result_files") or []
+                require(
+                    result_files,
+                    f"Missing canonical extraction result_files: {document_result}",
+                )
+                require(
+                    all(
+                        result_file.get("file_id")
+                        and result_file.get("filename")
+                        and result_file.get("download_url")
+                        for result_file in result_files
+                    ),
+                    f"Incomplete canonical extraction result_files: {document_result}",
+                )
 
             print_step("Downloading and checking the real batch extraction ZIP")
             extraction_zip = download_batch_zip_payloads(

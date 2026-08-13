@@ -496,7 +496,8 @@ must-adds if we need to split implementation.
 2. Batch artifact verification beyond ZIP presence.
    - ZIP existence alone is too weak.
    - We should confirm:
-     - each completed batch document has a `result_file_path`
+     - each completed batch document has at least one canonical `result_files`
+       entry with `file_id`, `filename`, and `download_url`
      - at least one underlying file artifact can be downloaded successfully
 
 ### 7.3 Nice-to-have gaps

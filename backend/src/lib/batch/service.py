@@ -16,8 +16,8 @@ from src.lib.curation_workspace.models import (
     CurationReviewSession,
 )
 from src.schemas.batch import BatchResponse, BatchDocumentResponse
+from .result_files import canonical_result_files
 from .status import (
-    require_batch_document_status_transition,
     require_batch_status_transition,
 )
 
@@ -156,38 +156,6 @@ class BatchService:
                 batch.completed_at = completed_at
             self.db.commit()
             logger.debug("Updated batch_id=%s status to %s", batch_id, status)
-
-    def update_document_status(
-        self,
-        batch_doc_id: UUID,
-        status: BatchDocumentStatus,
-        result_file_path: Optional[str] = None,
-        result_files: Optional[List[dict]] = None,
-        output_status: Optional[str] = None,
-        output_branches: Optional[List[dict]] = None,
-        error_message: Optional[str] = None,
-        processing_time_ms: Optional[int] = None,
-    ) -> None:
-        """Update a batch document's status and results."""
-        batch_doc = self.db.query(BatchDocument).filter(BatchDocument.id == batch_doc_id).first()
-        if batch_doc:
-            require_batch_document_status_transition(batch_doc.status, status)
-            batch_doc.status = status
-            if result_file_path:
-                batch_doc.result_file_path = result_file_path
-            if result_files is not None:
-                batch_doc.result_files = result_files or None
-            if output_status is not None:
-                batch_doc.output_status = output_status
-            if output_branches is not None:
-                batch_doc.output_branches = output_branches or None
-            if error_message:
-                batch_doc.error_message = error_message
-            if processing_time_ms is not None:
-                batch_doc.processing_time_ms = processing_time_ms
-            if status in (BatchDocumentStatus.COMPLETED, BatchDocumentStatus.FAILED):
-                batch_doc.processed_at = datetime.now(timezone.utc)
-            self.db.commit()
 
     def recompute_batch_counters(self, batch: Batch) -> None:
         """Derive progress counters from durable terminal document rows."""
@@ -493,7 +461,6 @@ class BatchService:
         document_responses = []
         for d in batch.documents:
             handoff_metadata = self.get_document_handoff_metadata(batch, d)
-            stored_result_files = getattr(d, "result_files", None)
             stored_output_status = getattr(d, "output_status", None)
             stored_output_branches = getattr(d, "output_branches", None)
             doc_dict = {
@@ -502,10 +469,7 @@ class BatchService:
                 "document_title": document_titles.get(d.document_id),
                 "position": d.position,
                 "status": d.status,
-                "result_file_path": d.result_file_path,
-                "result_files": (
-                    stored_result_files if isinstance(stored_result_files, list) else []
-                ),
+                "result_files": canonical_result_files(d),
                 "output_status": (
                     stored_output_status
                     if stored_output_status in {"complete", "partial", "none", "failed"}

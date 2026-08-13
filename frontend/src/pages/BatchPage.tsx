@@ -88,8 +88,8 @@ type BatchStatus = 'setup' | 'running' | 'completed' | 'cancelled';
 type DocumentStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 interface BatchResultFile {
-  file_id?: string;
-  filename?: string;
+  file_id: string;
+  filename: string;
   download_url: string;
   format?: string;
   formatter_node_id?: string;
@@ -100,6 +100,25 @@ interface BatchResultFile {
   source_keys?: string[];
   source_envelope_ids?: string[];
 }
+
+export const requireBatchResultFiles = (value: unknown, documentId: unknown): BatchResultFile[] => {
+  const isCanonicalResultFile = (item: unknown): item is BatchResultFile => {
+    if (typeof item !== 'object' || item === null) return false;
+    const candidate = item as Record<string, unknown>;
+    return (
+      typeof candidate.file_id === 'string' && candidate.file_id.trim().length > 0
+      && typeof candidate.filename === 'string' && candidate.filename.trim().length > 0
+      && typeof candidate.download_url === 'string' && candidate.download_url.trim().length > 0
+    );
+  };
+
+  if (!Array.isArray(value) || !value.every(isCanonicalResultFile)) {
+    throw new Error(
+      `DOCUMENT_STATUS event for ${String(documentId)} omitted or corrupted the canonical result_files manifest`,
+    );
+  }
+  return value;
+};
 
 interface BatchOutputBranch {
   source_node_id: string;
@@ -115,8 +134,7 @@ export interface BatchDocument {
   document_id: string;
   title: string;
   status: DocumentStatus;
-  result_file_path?: string;
-  result_files?: BatchResultFile[];
+  result_files: BatchResultFile[];
   output_status?: 'complete' | 'partial' | 'none' | 'failed';
   output_branches?: BatchOutputBranch[];
   error_message?: string;
@@ -136,8 +154,7 @@ interface BatchDocumentPayload {
   document_title?: string | null;
   position: number;
   status: DocumentStatus;
-  result_file_path?: string;
-  result_files?: BatchResultFile[];
+  result_files: BatchResultFile[];
   output_status?: 'complete' | 'partial' | 'none' | 'failed';
   output_branches?: BatchOutputBranch[];
   error_message?: string;
@@ -157,7 +174,6 @@ export function mapBatchDocument(doc: BatchDocumentPayload): BatchDocument {
     document_id: doc.document_id,
     title: doc.document_title || `Document ${doc.position + 1}`,
     status: doc.status,
-    result_file_path: doc.result_file_path,
     result_files: doc.result_files,
     output_status: doc.output_status,
     output_branches: doc.output_branches,
@@ -212,6 +228,7 @@ const BatchPage: React.FC = () => {
       document_id: doc.id,
       title: doc.title,
       status: 'pending',
+      result_files: [],
       review_session_ids: [],
     })),
     selectedFlowId: null,
@@ -431,6 +448,7 @@ const BatchPage: React.FC = () => {
             const docPosition = data.position ?? data.data?.position ?? 0;
             const docTitle = `Document ${docPosition + 1}`; // Default title
             const eventPayload = data.data && typeof data.data === 'object' ? data.data : data;
+            const resultFiles = requireBatchResultFiles(eventPayload.result_files, docId);
 
             // CR-7: Add audit events outside state setter to avoid stale closure issues
             // State setter callbacks should be pure functions
@@ -480,8 +498,7 @@ const BatchPage: React.FC = () => {
                   return {
                     ...d,
                     status: docStatus,
-                    result_file_path: data.result_file_path ?? data.data?.result_file_path ?? d.result_file_path,
-                    result_files: data.result_files ?? data.data?.result_files ?? d.result_files,
+                    result_files: resultFiles,
                     output_status: data.output_status ?? data.data?.output_status ?? d.output_status,
                     output_branches: data.output_branches ?? data.data?.output_branches ?? d.output_branches,
                     error_message: data.error_message ?? data.data?.error_message ?? d.error_message,
@@ -770,15 +787,6 @@ const BatchPage: React.FC = () => {
   // Navigate to documents page to select documents
   const handleChangeDocuments = () => {
     navigate('/weaviate/documents');
-  };
-
-  const getResultFiles = (doc: BatchDocument): BatchResultFile[] => {
-    if (doc.result_files?.length) {
-      return doc.result_files;
-    }
-    return doc.result_file_path
-      ? [{ download_url: doc.result_file_path }]
-      : [];
   };
 
   const getMissingOutputSummary = (doc: BatchDocument): string => {
@@ -1299,15 +1307,15 @@ const BatchPage: React.FC = () => {
                   >
                     <MoreVertIcon fontSize="small" />
                   </IconButton>
-                  {doc.status === 'completed' && getResultFiles(doc).map((resultFile, index) => (
+                  {doc.status === 'completed' && doc.result_files.map((resultFile) => (
                     <Tooltip
-                      key={resultFile.file_id ?? resultFile.download_url}
-                      title={`${resultFile.filename ? `Download ${resultFile.filename}` : `Download result ${index + 1}`}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`}
+                      key={resultFile.file_id}
+                      title={`Download ${resultFile.filename}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`}
                     >
                       <IconButton
                         edge="end"
                         size="small"
-                        aria-label={resultFile.filename ? `Download ${resultFile.filename}` : `Download result ${index + 1}`}
+                        aria-label={`Download ${resultFile.filename}`}
                         onClick={() => handleDownloadFile(resultFile)}
                       >
                         <DownloadIcon fontSize="small" />
@@ -1325,9 +1333,9 @@ const BatchPage: React.FC = () => {
                 secondary={
                   doc.status === 'failed'
                     ? doc.error_message
-                    : getResultFiles(doc).length
-                      ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${getResultFiles(doc)
-                        .map((resultFile, index) => `${resultFile.filename ?? `Result ${index + 1}`}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
+                    : doc.result_files.length
+                      ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${doc.result_files
+                        .map((resultFile) => `${resultFile.filename}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
                         .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}`
                       : undefined
                 }

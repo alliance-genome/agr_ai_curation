@@ -101,8 +101,6 @@ class BatchDocument(Base):
         Enum(BatchDocumentStatus, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False, default=BatchDocumentStatus.PENDING
     )
-    # Compatibility alias for clients that only understand the first result.
-    result_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Authoritative ordered manifest for all formatter branches.
     result_files: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     output_status: Mapped[str | None] = mapped_column(String(20), nullable=True)

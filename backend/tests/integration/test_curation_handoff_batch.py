@@ -528,7 +528,7 @@ def _patched_file_ready_execute_flow(file_id: UUID):
         yield {
             "type": "FILE_READY",
             "details": {
-                "download_url": f"/api/weaviate/documents/download/{file_id}",
+                "download_url": f"/api/files/{file_id}/download",
                 "file_id": str(file_id),
                 "filename": "handoff-regression.json",
             },
@@ -584,7 +584,7 @@ def test_batch_flow_ending_in_curation_handoff_creates_owned_sessions(handoff_db
     handoff_db.expire_all()
     batch_doc = _batch_document(handoff_db, batch.id)
     assert batch_doc.status == BatchDocumentStatus.COMPLETED
-    assert batch_doc.result_file_path is None
+    assert batch_doc.result_files is None
     assert batch_doc.review_session_ids
 
     sessions = _review_sessions(handoff_db, batch_doc.review_session_ids)
@@ -859,7 +859,7 @@ def test_completed_handoff_batch_is_not_rerun(handoff_db):
     assert {session.session_version for session in sessions} == {1}
 
 
-def test_file_output_batch_flow_still_completes_with_result_file_path(handoff_db):
+def test_file_output_batch_flow_persists_canonical_result_manifest(handoff_db):
     from src.models.sql.batch import BatchDocumentStatus
     from src.models.sql.file_output import FileOutput
 
@@ -889,5 +889,11 @@ def test_file_output_batch_flow_still_completes_with_result_file_path(handoff_db
     handoff_db.expire_all()
     batch_doc = _batch_document(handoff_db, batch.id)
     assert batch_doc.status == BatchDocumentStatus.COMPLETED
-    assert batch_doc.result_file_path == f"/api/weaviate/documents/download/{file_output.id}"
+    assert batch_doc.result_files == [
+        {
+            "file_id": str(file_output.id),
+            "filename": "handoff-regression.json",
+            "download_url": f"/api/files/{file_output.id}/download",
+        }
+    ]
     assert batch_doc.review_session_ids is None

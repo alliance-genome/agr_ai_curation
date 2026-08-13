@@ -87,12 +87,23 @@ def _create_batch_with_statuses(
         db.flush()
         batch_document_ids = []
         for position, status in enumerate(document_statuses):
+            result_file_id = uuid4()
             document = BatchDocument(
                 batch_id=batch.id,
                 document_id=uuid4(),
                 position=position,
                 status=status,
-                result_file_path=(f"/files/{position}" if status == BatchDocumentStatus.COMPLETED else None),
+                result_files=(
+                    [
+                        {
+                            "file_id": str(result_file_id),
+                            "filename": f"result-{position}.json",
+                            "download_url": f"/api/files/{result_file_id}/download",
+                        }
+                    ]
+                    if status == BatchDocumentStatus.COMPLETED
+                    else None
+                ),
                 review_session_ids=([f"review-{position}"] if status == BatchDocumentStatus.COMPLETED else None),
                 processed_at=(
                     datetime.now(timezone.utc)
@@ -345,7 +356,7 @@ def test_restart_claim_preserves_terminal_outputs_and_fails_only_interrupted_wor
                 BatchDocumentStatus.FAILED,
                 BatchDocumentStatus.FAILED,
             ]
-            assert documents[0].result_file_path == "/files/0"
+            assert documents[0].result_files[0]["filename"] == "result-0.json"
             assert documents[0].review_session_ids == ["review-0"]
             assert documents[2].error_message == (
                 "Worker lease expired during processing; document was not re-run"

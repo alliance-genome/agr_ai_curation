@@ -307,7 +307,14 @@ def test_live_batch_processing_two_pdfs_openai(monkeypatch: pytest.MonkeyPatch):
             assert len(batch_docs) == len(uploaded_doc_ids), terminal_batch
             for batch_doc in batch_docs:
                 assert str(batch_doc.get("status", "")).lower() == "completed", batch_doc
-                assert batch_doc.get("result_file_path"), batch_doc
+                result_files = batch_doc.get("result_files") or []
+                assert result_files, batch_doc
+                assert all(
+                    result_file.get("file_id")
+                    and result_file.get("filename")
+                    and result_file.get("download_url")
+                    for result_file in result_files
+                ), batch_doc
 
             zip_resp = live_client.get(f"/api/batches/{batch_id}/download-zip", headers=headers)
             assert zip_resp.status_code == 200, zip_resp.text

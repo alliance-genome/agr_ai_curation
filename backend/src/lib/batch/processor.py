@@ -393,9 +393,6 @@ def _process_single_document(
         )
         batch_doc.status = BatchDocumentStatus.COMPLETED
         batch_doc.result_files = result_files or None
-        batch_doc.result_file_path = (
-            result_files[0]["download_url"] if result_files else None
-        )
         batch_doc.review_session_ids = review_session_ids or None
         batch_doc.output_status = output_status
         batch_doc.output_branches = output_branches or None
@@ -406,7 +403,7 @@ def _process_single_document(
 
         logger.info(
             "Document completed: batch_id=%s, doc_id=%s, time_ms=%d, result=%s",
-            batch.id, batch_doc.document_id, processing_time_ms, batch_doc.result_file_path
+            batch.id, batch_doc.document_id, processing_time_ms, batch_doc.result_files
         )
 
     except BatchCancelled:
@@ -423,7 +420,6 @@ def _process_single_document(
             batch_doc.status, BatchDocumentStatus.FAILED
         )
         batch_doc.status = BatchDocumentStatus.FAILED
-        batch_doc.result_file_path = None
         batch_doc.result_files = None
         batch_doc.output_status = "failed"
         failure_output_branches = getattr(e, "output_branches", None)
@@ -445,7 +441,6 @@ def _process_single_document(
                 "batch_document_id": str(batch_doc.id),
                 "position": batch_doc.position,
                 "status": BatchDocumentStatus.FAILED.value,
-                "result_file_path": None,
                 "result_files": [],
                 "output_status": "failed",
                 "output_branches": batch_doc.output_branches or [],
@@ -526,57 +521,56 @@ async def _execute_flow_for_document(
             if event_type == "FILE_READY":
                 file_ready_details: Any = event.get("details")
                 if not isinstance(file_ready_details, dict):
-                    logger.warning(
-                        "FILE_READY event ignored - malformed details payload: %r",
-                        file_ready_details
+                    raise BatchFlowExecutionError(
+                        "FILE_READY event did not provide a canonical result-file payload"
                     )
-                    continue
 
                 download_url = file_ready_details.get("download_url")
                 file_id = file_ready_details.get("file_id")
+                filename = file_ready_details.get("filename")
 
-                if download_url and file_id:
-                    # GUARDRAIL: Validate file ownership before capturing
-                    # This prevents cross-user file leakage even if event routing has bugs
-                    # (defense-in-depth for KANBAN-935 race condition fix)
-                    if _validate_file_ownership(file_id, cognito_sub):
-                        result_file = {
-                            key: file_ready_details[key]
-                            for key in (
-                                "file_id",
-                                "filename",
-                                "download_url",
-                                "format",
-                                "formatter_node_id",
-                                "source_node_id",
-                                "source_node_ids",
-                                "formatter_label",
-                                "source_label",
-                                "source_labels",
-                                "source_extraction_result_ids",
-                                "source_keys",
-                                "source_envelope_ids",
-                            )
-                            if file_ready_details.get(key) is not None
-                        }
-                        result_files.append(result_file)
-                        enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
-                        broadcaster.publish_sync(batch_uuid, enriched_event)
-                        logger.info(
-                            "Found file output in flow: %s (filename: %s)",
-                            download_url,
-                            file_ready_details.get("filename")
+                if not (download_url and file_id and filename):
+                    raise BatchFlowExecutionError(
+                        "FILE_READY event is missing required canonical fields: "
+                        "file_id, filename, and download_url"
+                    )
+
+                # GUARDRAIL: Validate file ownership before capturing
+                # This prevents cross-user file leakage even if event routing has bugs
+                # (defense-in-depth for KANBAN-935 race condition fix)
+                if _validate_file_ownership(file_id, cognito_sub):
+                    result_file = {
+                        key: file_ready_details[key]
+                        for key in (
+                            "file_id",
+                            "filename",
+                            "download_url",
+                            "format",
+                            "formatter_node_id",
+                            "source_node_id",
+                            "source_node_ids",
+                            "formatter_label",
+                            "source_label",
+                            "source_labels",
+                            "source_extraction_result_ids",
+                            "source_keys",
+                            "source_envelope_ids",
                         )
-                    else:
-                        logger.warning(
-                            "FILE_READY event ignored - file %s not owned by user %s "
-                            "(possible race condition or event routing bug)",
-                            file_id, cognito_sub
-                        )
-                elif download_url:
+                        if file_ready_details.get(key) is not None
+                    }
+                    result_files.append(result_file)
+                    enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
+                    broadcaster.publish_sync(batch_uuid, enriched_event)
+                    logger.info(
+                        "Found file output in flow: %s (filename: %s)",
+                        download_url,
+                        file_ready_details.get("filename")
+                    )
+                else:
                     logger.warning(
-                        "FILE_READY event missing file_id, ignoring unverified output: %s",
-                        download_url
+                        "FILE_READY event ignored - file %s not owned by user %s "
+                        "(possible race condition or event routing bug)",
+                        file_id, cognito_sub
                     )
                 continue
 
