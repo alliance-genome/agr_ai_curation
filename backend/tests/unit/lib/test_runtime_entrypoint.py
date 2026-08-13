@@ -340,8 +340,13 @@ def test_bootstrap_package_environments_marks_startup_sentinel(monkeypatch, tmp_
 
 def test_refresh_identifier_prefixes_writes_runtime_state_file(monkeypatch, tmp_path: Path):
     runtime_root = tmp_path / "runtime"
+    canonical_url = "postgresql://user:pass@localhost:5432/curation"
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
-    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/curation")
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=lambda: canonical_url),
+    )
 
     class FakeCursor:
         def __init__(self):
@@ -433,15 +438,9 @@ def test_refresh_identifier_prefixes_prefers_canonical_curation_url(
     assert connected_urls == [canonical_url]
 
 
-def test_refresh_identifier_prefixes_falls_back_when_curation_resolution_fails(
-    monkeypatch, tmp_path: Path
-):
-    application_url = "postgresql://application.example/app"
-    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
-    monkeypatch.setenv("DATABASE_URL", application_url)
-
+def test_refresh_identifier_prefixes_propagates_curation_resolution_failure(monkeypatch):
     def fail_resolution():
-        raise ValueError("optional curation config unavailable")
+        raise ValueError("curation config is invalid")
 
     monkeypatch.setattr(
         runtime_entrypoint,
@@ -449,39 +448,25 @@ def test_refresh_identifier_prefixes_falls_back_when_curation_resolution_fails(
         lambda: SimpleNamespace(get_connection_url=fail_resolution),
     )
 
-    connected_urls = []
+    with pytest.raises(ValueError, match="curation config is invalid"):
+        runtime_entrypoint.refresh_identifier_prefixes()
 
-    class FakeCursor:
-        def __enter__(self):
-            return self
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+def test_refresh_identifier_prefixes_skips_when_curation_is_unconfigured(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=lambda: None),
+    )
 
-        def execute(self, _query):
-            return None
+    def unexpected_connect(*_args, **_kwargs):
+        raise AssertionError("unconfigured curation must not connect")
 
-        def fetchall(self):
-            return []
+    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", unexpected_connect)
 
-    class FakeConnection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def cursor(self):
-            return FakeCursor()
-
-    def connect(url):
-        connected_urls.append(url)
-        return FakeConnection()
-
-    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", connect)
-
-    assert runtime_entrypoint.refresh_identifier_prefixes() is True
-    assert connected_urls == [application_url]
+    assert runtime_entrypoint.refresh_identifier_prefixes() is False
 
 
 def test_write_json_atomically_uses_replace_in_target_directory(monkeypatch, tmp_path: Path):

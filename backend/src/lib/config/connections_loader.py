@@ -549,6 +549,27 @@ def get_optional_connections() -> List[ConnectionDefinition]:
     return [c for c in _connection_registry.values() if not c.required]
 
 
+def get_connection_display_url(conn: ConnectionDefinition) -> str:
+    """Return the effective connection URL with credentials redacted."""
+    if not conn.credentials:
+        return conn.display_url
+
+    try:
+        from src.lib.database.postgres_connection_resolver import (
+            get_postgres_connection_resolver,
+        )
+
+        resolved_url = get_postgres_connection_resolver(
+            conn.service_id
+        ).get_connection_url()
+    except Exception:
+        # Health checks record resolver failures separately. Status rendering
+        # must preserve that diagnostic response without retrying it into a 500.
+        return conn.display_url
+
+    return _redact_url_credentials(resolved_url or "")
+
+
 def get_connection_status() -> Dict[str, Dict[str, Any]]:
     """
     Get health status of all connections.
@@ -565,7 +586,7 @@ def get_connection_status() -> Dict[str, Dict[str, Any]]:
         status[service_id] = {
             "service_id": service_id,
             "description": conn.description,
-            "url": conn.display_url,  # Use display_url to prevent credential exposure
+            "url": get_connection_display_url(conn),
             "required": conn.required,
             "is_healthy": conn.is_healthy,
             "last_error": sanitize_error_message(conn.last_error),  # Sanitize error messages

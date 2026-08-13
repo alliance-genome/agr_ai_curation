@@ -142,6 +142,7 @@ def test_check_single_connection_returns_sanitized_response(monkeypatch):
         service_id="postgres",
         description="Postgres DB",
         display_url="postgres://***@db:5432/app",
+        credentials=None,
         required=True,
         is_healthy=False,
         last_error="postgres://user:<redacted>@db:5432/app is down",
@@ -162,3 +163,37 @@ def test_check_single_connection_returns_sanitized_response(monkeypatch):
     assert result.url == "postgres://***@db:5432/app"
     assert result.last_error.startswith("sanitized:")
     assert calls["checked"] == ["postgres"]
+
+
+def test_check_single_connection_uses_effective_redacted_url(monkeypatch):
+    monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
+
+    conn = SimpleNamespace(
+        service_id="curation_db",
+        description="Curation DB",
+        display_url="",
+        credentials=SimpleNamespace(source="env"),
+        required=False,
+        is_healthy=True,
+        last_error=None,
+    )
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.get_connection",
+        lambda _service_id: conn,
+    )
+
+    async def _check_service_health(_service_id: str):
+        return True
+
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.check_service_health",
+        _check_service_health,
+    )
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.get_connection_display_url",
+        lambda _conn: "testdb://***:***@db.example:5432/curation",
+    )
+
+    result = asyncio.run(admin_connections.check_single_connection("curation_db"))
+
+    assert result.url == "testdb://***:***@db.example:5432/curation"

@@ -237,6 +237,7 @@ async def check_single_connection(service_id: str) -> ServiceHealthResponse:
     from src.lib.config.connections_loader import (
         check_service_health,
         get_connection,
+        get_connection_display_url,
         is_initialized,
         sanitize_error_message,
     )
@@ -260,7 +261,7 @@ async def check_single_connection(service_id: str) -> ServiceHealthResponse:
     return ServiceHealthResponse(
         service_id=conn.service_id,
         description=conn.description,
-        url=conn.display_url,  # Use display_url to prevent credential exposure
+        url=get_connection_display_url(conn),
         required=conn.required,
         is_healthy=conn.is_healthy,
         last_error=sanitize_error_message(conn.last_error),  # Sanitize error messages

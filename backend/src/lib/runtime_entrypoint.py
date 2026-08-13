@@ -328,20 +328,9 @@ def _redact_database_url(database_url: str) -> str:
 
 def refresh_identifier_prefixes() -> bool:
     """Refresh runtime identifier prefixes using the modular runtime path contract."""
-    try:
-        curation_database_url = get_curation_resolver().get_connection_url()
-    except Exception as exc:
-        logger.warning(
-            "Curation URL resolution failed for prefix refresh; "
-            "falling back to the application database: %s",
-            exc,
-        )
-        curation_database_url = None
-
-    database_url = curation_database_url or os.getenv("DATABASE_URL") or ""
-    database_url = database_url.strip()
+    database_url = (get_curation_resolver().get_connection_url() or "").strip()
     if not database_url:
-        logger.info("No curation or application database URL; skipping prefix refresh.")
+        logger.info("Curation database is not configured; skipping prefix refresh.")
         return False
 
     prefix_file = get_identifier_prefix_file_path()

@@ -743,6 +743,40 @@ class TestGetConnectionStatusRedaction:
             # but we can verify the URL field exists and is a string
             assert isinstance(url, str)
 
+    def test_get_connection_status_uses_resolved_credential_url(self):
+        """Credential-aware status reports the canonical URL without secrets."""
+        resolved_url = "testdb://reader:sensitive-value@db.example:5432/curation"
+        resolver = MagicMock()
+        resolver.get_connection_url.return_value = resolved_url
+
+        with patch(
+            "src.lib.database.postgres_connection_resolver."
+            "get_postgres_connection_resolver",
+            return_value=resolver,
+        ) as resolver_factory:
+            load_connections()
+            status = get_connection_status()
+
+        resolver_factory.assert_called_once_with("curation_db")
+        assert status["curation_db"]["url"] == (
+            "testdb://***:***@db.example:5432/curation"
+        )
+        assert "sensitive-value" not in str(status["curation_db"])
+
+    def test_get_connection_status_survives_credential_resolution_failure(self):
+        resolver = MagicMock()
+        resolver.get_connection_url.side_effect = ValueError("invalid secret")
+
+        with patch(
+            "src.lib.database.postgres_connection_resolver."
+            "get_postgres_connection_resolver",
+            return_value=resolver,
+        ):
+            load_connections()
+            status = get_connection_status()
+
+        assert status["curation_db"]["url"] == ""
+
     def test_credentials_never_leak_in_status(self):
         """Verify no credentials leak through get_connection_status."""
         load_connections()

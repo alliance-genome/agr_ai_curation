@@ -68,6 +68,51 @@ class TestInitializeWeaviateCollections:
         assert created_names == {"DocumentChunk", "PDFDocument"}
 
 
+class TestReadinessDatabaseResolution:
+    def test_curation_readiness_uses_canonical_resolver(self):
+        main = _main_module()
+        resolver = MagicMock()
+        resolver.get_connection_url.return_value = "postgresql://db.example/curation"
+
+        with patch.object(
+            main,
+            "get_postgres_connection_resolver",
+            return_value=resolver,
+        ) as resolver_factory, patch.object(
+            main,
+            "_check_database_connection",
+            return_value={"status": "connected", "required": True},
+        ) as connection_check:
+            result = main._check_curation_database(required=True)
+
+        resolver_factory.assert_called_once_with("curation_db")
+        connection_check.assert_called_once_with(
+            "Curation database",
+            "postgresql://db.example/curation",
+            required=True,
+        )
+        assert result == {"status": "connected", "required": True}
+
+    def test_curation_readiness_surfaces_invalid_resolver_config(self):
+        main = _main_module()
+        resolver = MagicMock()
+        resolver.get_connection_url.side_effect = ValueError("invalid credentials source")
+
+        with patch.object(
+            main,
+            "get_postgres_connection_resolver",
+            return_value=resolver,
+        ), patch.object(main, "_check_database_connection") as connection_check:
+            result = main._check_curation_database(required=False)
+
+        connection_check.assert_not_called()
+        assert result == {
+            "status": "invalid_config",
+            "required": False,
+            "error_type": "ValueError",
+        }
+
+
 class TestLifespan:
     """Tests for the application lifespan context manager.
 
