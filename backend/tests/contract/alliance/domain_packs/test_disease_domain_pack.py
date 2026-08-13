@@ -368,7 +368,11 @@ def test_disease_pack_records_db_projection_and_representative_rows():
     )
 
 
-def test_disease_pack_declares_validatable_disease_and_condition_fields():
+def test_disease_pack_declares_validatable_disease_and_condition_fields(monkeypatch):
+    monkeypatch.delenv(
+        "EXPERIMENTAL_CONDITION_VALIDATOR_BATCH_MAX_SIZE",
+        raising=False,
+    )
     disease_object = _disease_object_definition()
     fields_by_path = {field.field_path: field for field in disease_object.fields}
     raw_validator_bindings = _disease_pack().metadata.metadata["validator_bindings"]

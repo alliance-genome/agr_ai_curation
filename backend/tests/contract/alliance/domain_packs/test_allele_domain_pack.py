@@ -136,7 +136,11 @@ def _stable_object_id(domain_object) -> str:
     raise AssertionError("test object is missing object_id and pending_ref_id")
 
 
-def test_allele_pack_declares_object_roles_and_validator_bindings():
+def test_allele_pack_declares_object_roles_and_validator_bindings(monkeypatch):
+    monkeypatch.delenv(
+        "ALLELE_MENTION_REFERENCE_VALIDATOR_MAX_TOOL_CALLS",
+        raising=False,
+    )
     metadata = _allele_pack().metadata
 
     roles_by_object_type = {

@@ -1106,7 +1106,11 @@ def test_phenotype_pack_declares_condition_fields_multivalued_and_active():
     )
 
 
-def test_phenotype_condition_binding_scoped_and_shaped():
+def test_phenotype_condition_binding_scoped_and_shaped(monkeypatch):
+    monkeypatch.delenv(
+        "EXPERIMENTAL_CONDITION_VALIDATOR_BATCH_MAX_SIZE",
+        raising=False,
+    )
     raw_validator_bindings = _phenotype_pack().metadata.metadata["validator_bindings"]
     bindings = {
         binding["binding_id"]: binding
