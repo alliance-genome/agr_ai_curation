@@ -45,6 +45,9 @@ tools:
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
 output_schema: DiseaseValidationResult
+output_projection:
+  row_list_field: candidates
+  identity_fields: [value]
 
 structured_finalization:
   enabled: true

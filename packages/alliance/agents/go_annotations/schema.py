@@ -2,9 +2,25 @@
 
 from typing import Any, Optional
 
-from pydantic import Field
+from pydantic import Field, StrictBool, StrictStr
 
-from src.schemas.domain_validator import DomainValidatorResultBase
+from src.schemas.domain_validator import (  # type: ignore[reportMissingImports]
+    DomainValidatorBaseModel,
+    DomainValidatorResultBase,
+)
+
+
+class GOAnnotationResult(DomainValidatorBaseModel):
+    """One typed gene-to-GO annotation returned by the lookup."""
+
+    go_id: StrictStr
+    go_name: Optional[StrictStr] = None
+    aspect: Optional[StrictStr] = None
+    evidence_code: Optional[StrictStr] = None
+    evidence_label: Optional[StrictStr] = None
+    assigned_by: Optional[StrictStr] = None
+    is_manual: Optional[StrictBool] = None
+    qualifier: Any = None
 
 
 class GOAnnotationsResult(DomainValidatorResultBase):
@@ -17,7 +33,7 @@ class GOAnnotationsResult(DomainValidatorResultBase):
         description="Gene CURIE that was queried",
     )
     gene_symbol: Optional[str] = Field(default=None, description="Gene symbol")
-    annotations: list[dict[str, Any]] = Field(
+    annotations: list[GOAnnotationResult] = Field(
         default_factory=list,
         description="GO annotations returned for the queried gene",
     )

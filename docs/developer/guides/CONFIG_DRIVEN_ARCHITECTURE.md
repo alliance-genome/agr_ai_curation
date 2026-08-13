@@ -621,6 +621,14 @@ tools:
 
 output_schema: MyAgentEnvelope
 
+# Required for DomainValidatorResultBase output schemas. Names must match the
+# typed schema: row_list_field is a list of models, identity_fields belong to
+# that row model, and inherited_parent_fields belong to the result model.
+output_projection:
+  row_list_field: candidates
+  identity_fields: [value]
+  inherited_parent_fields: []
+
 model_config:
   model: "${AGENT_MY_AGENT_MODEL:-gpt-5.5}"
   temperature: 0.2

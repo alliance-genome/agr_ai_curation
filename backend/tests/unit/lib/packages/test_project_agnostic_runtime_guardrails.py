@@ -9,6 +9,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest  # type: ignore[reportMissingImports]
+import yaml
 from src.lib.agent_studio import runtime_validation
 from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
@@ -368,6 +369,67 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
             *registry.keys(),
         ]
     )
+
+
+@pytest.mark.parametrize(
+    ("projection", "message"),
+    [
+        (None, "must declare output_projection"),
+        (
+            {"row_list_field": "missing_rows", "identity_fields": ["record_key"]},
+            "must name a list field",
+        ),
+        (
+            {
+                "row_list_field": "projected_records",
+                "identity_fields": ["missing_key"],
+            },
+            "identity_fields are not declared",
+        ),
+        (
+            {
+                "row_list_field": "projected_records",
+                "identity_fields": ["record_key"],
+                "inherited_parent_fields": ["missing_source"],
+            },
+            "inherited_parent_fields are not declared",
+        ),
+    ],
+)
+def test_typed_validator_projection_metadata_is_validated_at_package_load(
+    monkeypatch,
+    tmp_path,
+    projection,
+    message,
+):
+    packages_dir = tmp_path / "runtime-packages"
+    _copy_runtime_package(REPO_ROOT / "packages" / "core", packages_dir, "agr.core")
+    package_dir = _copy_runtime_package(
+        ORG_CUSTOM_FIXTURE,
+        packages_dir,
+        "org.custom",
+    )
+    agent_yaml = package_dir / "agents" / "demo_agent" / "agent.yaml"
+    agent_data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
+    if projection is None:
+        agent_data.pop("output_projection")
+    else:
+        agent_data["output_projection"] = projection
+    agent_yaml.write_text(
+        yaml.safe_dump(agent_data, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
+    monkeypatch.setattr(
+        agent_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "runtime-config",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        agent_loader.load_agent_definitions(packages_dir, force_reload=True)
 
 
 def test_org_custom_validator_projection_uses_package_descriptor(

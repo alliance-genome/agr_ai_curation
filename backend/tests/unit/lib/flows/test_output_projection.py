@@ -1995,6 +1995,49 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
             "CHEM:0001",
         ),
         (
+            "ControlledVocabularyValidationResult",
+            "controlled_vocabulary_validation",
+            {
+                "controlled_vocabulary_candidates": [
+                    {
+                        "internal_id": 42,
+                        "vocabulary": "demo vocabulary",
+                        "term_name": "demo term",
+                        "obsolete": False,
+                    }
+                ]
+            },
+            "csv",
+            "42",
+        ),
+        (
+            "DataProviderValidationResult",
+            "data_provider_validation",
+            {
+                "data_provider_candidates": [
+                    {
+                        "abbreviation": "FB",
+                        "taxon_id": "NCBITaxon:7227",
+                    }
+                ]
+            },
+            "csv",
+            "FB",
+        ),
+        (
+            "ExperimentalConditionValidationResult",
+            "experimental_condition_validation",
+            {
+                "normalized_components": [
+                    {
+                        "component_type": "condition_class",
+                    }
+                ]
+            },
+            "csv",
+            "condition_class",
+        ),
+        (
             "GOTermResultEnvelope",
             "gene_ontology_lookup",
             {
@@ -2059,6 +2102,20 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
             "chat",
             "TERM:0001",
         ),
+        (
+            "SubjectEntityValidationResult",
+            "subject_entity_validation",
+            {
+                "subject_candidates": [
+                    {
+                        "subject_identifier": "FB:FBgn0000001",
+                        "subject_type": "gene",
+                    }
+                ]
+            },
+            "csv",
+            "FB:FBgn0000001",
+        ),
     ],
 )
 def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
@@ -2122,6 +2179,7 @@ def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
 
 def test_validator_like_payload_with_legacy_items_remains_non_structured():
     payload = _typed_validator_result_payload(
+        agent_id="allele_validation",
         items=[{"id": "legacy-row"}],
     )
     bundle = build_flow_output_artifact_bundle(
@@ -2132,6 +2190,26 @@ def test_validator_like_payload_with_legacy_items_remains_non_structured():
 
     assert bundle.artifacts == []
     assert bundle.rows_for_source("object") == []
+
+
+def test_typed_validator_result_with_unknown_package_agent_fails_loudly():
+    payload = _typed_validator_result_payload(
+        package_id="org.missing",
+        agent_id="missing_validation",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Unknown package-scoped validator agent "
+        "'org.missing:missing_validation'",
+    ):
+        build_flow_output_artifact_bundle(
+            completed_steps=[
+                {"step": 1, "agent_id": "custom", "output": payload}
+            ],
+            flow_name="Unknown validator",
+            output_format="csv",
+        )
 
 
 def test_raw_result_list_remains_non_structured():

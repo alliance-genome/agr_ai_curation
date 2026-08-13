@@ -31,6 +31,9 @@ tools:
   - agr_curation_query
 
 output_schema: SubjectEntityValidationResult
+output_projection:
+  row_list_field: subject_candidates
+  identity_fields: [subject_identifier]
 
 structured_finalization:
   enabled: true

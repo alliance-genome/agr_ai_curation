@@ -41,6 +41,9 @@ tools:
   - agr_curation_query
 
 output_schema: ExperimentalConditionValidationResult
+output_projection:
+  row_list_field: normalized_components
+  identity_fields: [component_type]
 
 structured_finalization:
   enabled: true

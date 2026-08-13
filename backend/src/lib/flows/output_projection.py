@@ -225,10 +225,6 @@ _STRUCTURED_VALIDATOR_REQUIRED_FIELDS = frozenset(
 _REJECTED_LEGACY_RESULT_LIST_FIELDS = frozenset(
     {"items", "objects", "curatable_objects"}
 )
-_DEFAULT_VALIDATOR_OUTPUT_PROJECTION = ValidatorOutputProjection(
-    row_list_field="candidates",
-    identity_fields=("value",),
-)
 _OBJECT_ATTRIBUTE_FIELD_PREFIX = "object.attribute."
 _ATTRIBUTE_KEY_PATTERN = re.compile(r"[^0-9a-zA-Z]+")
 
@@ -1074,14 +1070,42 @@ def _structured_validator_projection(
         return None
     agent = get_agent_definition_for_package(package_id, agent_id)
     if agent is None:
-        return None
-    projection = agent.output_projection or _DEFAULT_VALIDATOR_OUTPUT_PROJECTION
+        raise ValueError(
+            "Unknown package-scoped validator agent "
+            f"'{package_id}:{agent_id}' in typed validator result"
+        )
+    projection = agent.output_projection
+    if projection is None:
+        raise ValueError(
+            f"Validator agent '{package_id}:{agent_id}' does not declare "
+            "output_projection"
+        )
     value = payload.get(projection.row_list_field)
     if not isinstance(value, list) or not all(
         isinstance(item, Mapping) for item in value
     ):
-        return None
+        raise ValueError(
+            f"Typed validator result field '{projection.row_list_field}' for "
+            f"'{package_id}:{agent_id}' must be a list of object rows"
+        )
     return projection
+
+
+def _classify_payload(
+    payload: Any,
+) -> tuple[
+    Literal["domain_envelope", "structured_result", "non_structured"],
+    ValidatorOutputProjection | None,
+]:
+    if isinstance(payload, Mapping):
+        if _has_mixed_canonical_and_extractor_objects(payload):
+            return "non_structured", None
+        if is_canonical_domain_envelope_payload(payload):
+            return "domain_envelope", None
+        validator_projection = _structured_validator_projection(payload)
+        if validator_projection is not None:
+            return "structured_result", validator_projection
+    return "non_structured", None
 
 
 def _payload_shape(payload: Any) -> Literal[
@@ -1089,28 +1113,23 @@ def _payload_shape(payload: Any) -> Literal[
     "structured_result",
     "non_structured",
 ]:
-    if isinstance(payload, Mapping):
-        if _has_mixed_canonical_and_extractor_objects(payload):
-            return "non_structured"
-        if is_canonical_domain_envelope_payload(payload):
-            return "domain_envelope"
-        if _structured_validator_projection(payload) is not None:
-            return "structured_result"
-    return "non_structured"
+    return _classify_payload(payload)[0]
 
 
 def _payload_object_items(
     payload: Mapping[str, Any],
     *,
     shape: str,
+    validator_projection: ValidatorOutputProjection | None = None,
 ) -> tuple[list[Mapping[str, Any]], list[str]]:
     warnings: list[str] = []
     if shape == "domain_envelope":
         value = payload.get("extracted_objects")
     elif shape == "structured_result":
-        projection = _structured_validator_projection(payload)
-        list_field = projection.row_list_field if projection else None
-        value = payload.get(list_field) if list_field else None
+        if validator_projection is None:
+            raise ValueError("Structured validator result is missing projection metadata")
+        list_field = validator_projection.row_list_field
+        value = payload.get(list_field)
         if isinstance(value, list):
             target = payload.get("target")
             target_object_type = (
@@ -1120,9 +1139,7 @@ def _payload_object_items(
             )
             inherited_parent_fields = {
                 key: payload.get(key)
-                for key in (
-                    projection.inherited_parent_fields if projection else ()
-                )
+                for key in validator_projection.inherited_parent_fields
                 if payload.get(key) is not None
             }
             items: list[Mapping[str, Any]] = []
@@ -1132,7 +1149,7 @@ def _payload_object_items(
                 normalized = dict(item)
                 normalized.setdefault(
                     "object_type",
-                    target_object_type or str(list_field or "structured_result"),
+                    target_object_type or list_field,
                 )
                 for key, inherited_value in inherited_parent_fields.items():
                     normalized.setdefault(key, inherited_value)
@@ -1274,16 +1291,12 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
         "domain_envelope_extraction",
         "structured_result",
         "non_structured",
-    ] = _payload_shape(payload)
+    ]
+    shape, validator_projection = _classify_payload(payload)
     domain_pack_id = ""
     envelope_id = ""
     object_items: list[Mapping[str, Any]] = []
     warnings: list[str] = []
-    validator_projection = (
-        _structured_validator_projection(payload)
-        if shape == "structured_result" and isinstance(payload, Mapping)
-        else None
-    )
     if isinstance(payload, Mapping):
         domain_pack_id = _string_value(payload.get("domain_pack_id") or payload.get("adapter_key"))
         envelope_id = _string_value(payload.get("envelope_id"))
@@ -1294,7 +1307,11 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
             if trusted_candidate_shape is not None:
                 shape = trusted_candidate_shape
         else:
-            object_items, object_warnings = _payload_object_items(payload, shape=shape)
+            object_items, object_warnings = _payload_object_items(
+                payload,
+                shape=shape,
+                validator_projection=validator_projection,
+            )
         if shape == "non_structured":
             object_items = []
             if not object_warnings:

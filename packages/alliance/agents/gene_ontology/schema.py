@@ -1,10 +1,34 @@
 """Gene ontology lookup agent schema."""
 
-from typing import Any, Optional
+from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, StrictBool, StrictStr
 
-from src.schemas.domain_validator import DomainValidatorResultBase
+from src.schemas.domain_validator import (  # type: ignore[reportMissingImports]
+    DomainValidatorBaseModel,
+    DomainValidatorResultBase,
+)
+
+
+class GOHierarchyEntry(DomainValidatorBaseModel):
+    """One typed GO hierarchy relation returned with a term."""
+
+    go_id: StrictStr
+    name: StrictStr
+    relationship_type: StrictStr
+
+
+class GOTermResult(DomainValidatorBaseModel):
+    """One GO term row returned by the lookup."""
+
+    go_id: StrictStr
+    name: StrictStr
+    aspect: StrictStr
+    definition: Optional[StrictStr] = None
+    is_obsolete: Optional[StrictBool] = None
+    children: list[GOHierarchyEntry] = Field(default_factory=list)
+    ancestors: list[GOHierarchyEntry] = Field(default_factory=list)
+    synonyms: list[StrictStr] = Field(default_factory=list)
 
 
 class GOTermResultEnvelope(DomainValidatorResultBase):
@@ -12,7 +36,7 @@ class GOTermResultEnvelope(DomainValidatorResultBase):
 
     __envelope_class__ = True
 
-    results: list[dict[str, Any]] = Field(
+    results: list[GOTermResult] = Field(
         default_factory=list,
         description="Resolved GO term facts returned by the lookup",
     )

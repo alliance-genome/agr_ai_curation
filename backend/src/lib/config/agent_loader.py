@@ -24,11 +24,16 @@ import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Any
+from typing import Any, Callable, Dict, List, Optional, get_args, get_origin
 
 import yaml
+from pydantic import BaseModel
 
-from src.schemas.domain_validator import ValidatorOutputProjection
+from src.schemas.domain_validator import (
+    DomainValidatorResultBase,
+    ValidatorOutputProjection,
+    is_domain_validator_result_schema,
+)
 
 from .agent_sources import resolve_agent_config_sources
 
@@ -292,6 +297,68 @@ class AgentDefinition:
         )
 
 
+def _validate_output_projection_contract(
+    agent: AgentDefinition,
+    output_schema_resolver: Callable[[str], type[BaseModel] | None],
+) -> None:
+    """Fail package loading when typed-validator projection metadata is invalid."""
+
+    if not agent.output_schema:
+        return
+    output_schema = output_schema_resolver(agent.output_schema)
+    if output_schema is None:
+        return
+    is_validator_schema = is_domain_validator_result_schema(output_schema) or any(
+        base.__qualname__ == DomainValidatorResultBase.__qualname__
+        for base in output_schema.mro()
+    )
+    if not is_validator_schema:
+        return
+
+    projection = agent.output_projection
+    if projection is None:
+        raise ValueError(
+            f"Validator agent '{agent.agent_id}' must declare output_projection"
+        )
+
+    row_field = output_schema.model_fields.get(projection.row_list_field)
+    row_annotation = row_field.annotation if row_field is not None else None
+    if row_field is None or get_origin(row_annotation) is not list:
+        raise ValueError(
+            f"Validator agent '{agent.agent_id}' output_projection.row_list_field "
+            f"'{projection.row_list_field}' must name a list field on "
+            f"{agent.output_schema}"
+        )
+
+    row_args = get_args(row_annotation)
+    row_model = row_args[0] if len(row_args) == 1 else None
+    if not isinstance(row_model, type) or not issubclass(row_model, BaseModel):
+        raise ValueError(
+            f"Validator agent '{agent.agent_id}' projection row list "
+            f"'{projection.row_list_field}' must contain typed model rows"
+        )
+
+    unknown_identity_fields = sorted(
+        set(projection.identity_fields) - set(row_model.model_fields)
+    )
+    if unknown_identity_fields:
+        raise ValueError(
+            f"Validator agent '{agent.agent_id}' output_projection.identity_fields "
+            f"are not declared by {row_model.__name__}: "
+            f"{', '.join(unknown_identity_fields)}"
+        )
+
+    unknown_parent_fields = sorted(
+        set(projection.inherited_parent_fields) - set(output_schema.model_fields)
+    )
+    if unknown_parent_fields:
+        raise ValueError(
+            f"Validator agent '{agent.agent_id}' "
+            "output_projection.inherited_parent_fields are not declared by "
+            f"{agent.output_schema}: {', '.join(unknown_parent_fields)}"
+        )
+
+
 def canonical_system_agent_key(agent: AgentDefinition) -> str:
     """Return the unified-agents key for a shipped/package-owned system agent."""
     if agent.system_agent_key:
@@ -320,6 +387,9 @@ def _load_agent_definition_indexes(
     agent_registry: Dict[str, AgentDefinition] = {}
     agents_by_folder: Dict[str, AgentDefinition] = {}
     agents_by_package_and_id: Dict[tuple[str, str], AgentDefinition] = {}
+    from .schema_discovery import build_package_scoped_output_schema_resolver
+
+    output_schema_resolver = build_package_scoped_output_schema_resolver(agents_path)
 
     for source in resolve_agent_config_sources(agents_path):
         agent_yaml = source.agent_yaml
@@ -361,6 +431,7 @@ def _load_agent_definition_indexes(
                 package_id=source.package_id,
                 package_path=source.package_path,
             )
+            _validate_output_projection_contract(agent, output_schema_resolver)
             if docs_data is not None:
                 agent.documentation = docs_data
             agent_registry[agent.agent_id] = agent
