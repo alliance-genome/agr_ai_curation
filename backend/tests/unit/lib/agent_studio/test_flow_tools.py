@@ -114,7 +114,15 @@ def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
 
     assert result["valid"] is True
     assert any("Consider adding 'pdf_extraction'" in s for s in result["suggestions"])
-    assert any("Consider attaching 'chat_output'" in s for s in result["suggestions"])
+    output_suggestion = next(
+        suggestion
+        for suggestion in result["suggestions"]
+        if "Consider attaching 'chat_output'" in suggestion
+    )
+    assert (
+        "via ordered source_steps to one or more earlier Extraction or typed "
+        "Validation steps"
+    ) in output_suggestion
 
 
 def test_validate_flow_handler_only_mentions_installed_agent_ids(monkeypatch):
@@ -432,6 +440,28 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
         "GO Annotation Pipeline",
     ):
         assert validate(steps=templates[name]["steps"], name=name)["valid"] is True
+
+
+def test_flow_templates_do_not_advertise_rejected_output_bindings(monkeypatch):
+    installed_agent_ids = {
+        "pdf_extraction",
+        "gene_validation",
+        "chat_output",
+    }
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", sorted(installed_agent_ids))
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "gene_validation": {"category": "Validation"},
+            "chat_output": {"category": "Output"},
+        },
+    )
+
+    templates = flow_tools._filter_flow_templates(installed_agent_ids)
+
+    assert templates == []
 
 
 def test_get_flow_templates_handler_reports_core_only_install(monkeypatch):

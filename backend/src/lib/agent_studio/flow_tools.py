@@ -396,21 +396,31 @@ def _build_output_suggestion(
 
     primary_output = installed_output_agents[0]
     additional_outputs = installed_output_agents[1:]
+    source_guidance = (
+        "via ordered source_steps to one or more earlier Extraction or typed "
+        "Validation steps"
+    )
 
     if primary_output in _equivalent_agent_ids("chat_output"):
         if additional_outputs:
             formatted_outputs = ", ".join(additional_outputs)
             return (
-                f"Consider attaching '{primary_output}' to an Extraction step to display results, "
+                f"Consider attaching '{primary_output}' {source_guidance} to display results, "
                 f"or attach installed file formatters ({formatted_outputs}) for downloadable files"
             )
-        return f"Consider attaching '{primary_output}' to an Extraction step to display results"
+        return f"Consider attaching '{primary_output}' {source_guidance} to display results"
 
     if len(installed_output_agents) == 1:
-        return f"Consider attaching installed output agent '{primary_output}' to an Extraction step"
+        return (
+            f"Consider attaching installed output agent '{primary_output}' "
+            f"{source_guidance}"
+        )
 
     formatted_outputs = ", ".join(installed_output_agents)
-    return f"Consider attaching one of these installed output agents to an Extraction step: {formatted_outputs}"
+    return (
+        "Consider attaching one of these installed output agents "
+        f"{source_guidance}: {formatted_outputs}"
+    )
 
 
 def _filter_flow_templates(available_agent_ids: set[str]) -> List[Dict[str, Any]]:
@@ -435,6 +445,21 @@ def _filter_flow_templates(available_agent_ids: set[str]) -> List[Dict[str, Any]
             filtered_steps.append({**step, "agent_id": resolved_agent_id})
 
         if missing_required_step or not filtered_steps:
+            continue
+
+        invalid_output_binding = False
+        for output_index, step in enumerate(filtered_steps):
+            if not _is_output_agent_id(str(step["agent_id"])):
+                continue
+            _, source_error = _validated_output_source_steps(
+                filtered_steps,
+                output_index,
+            )
+            if source_error is not None:
+                invalid_output_binding = True
+                break
+
+        if invalid_output_binding:
             continue
 
         templates.append(
@@ -535,11 +560,12 @@ def _create_flow_handler():
                 "help": f"Valid agent IDs: {', '.join(FLOW_AGENT_IDS)}"
             }
 
+        output_source_steps: dict[int, tuple[int, ...]] = {}
         for i, step in enumerate(steps):
             agent_id = str(step["agent_id"])
             if not _is_output_agent_id(agent_id):
                 continue
-            _, source_error = _validated_output_source_steps(steps, i)
+            source_steps, source_error = _validated_output_source_steps(steps, i)
             if source_error is not None:
                 return {
                     "success": False,
@@ -549,6 +575,7 @@ def _create_flow_handler():
                         "or typed validation steps"
                     ),
                 }
+            output_source_steps[i] = source_steps
 
         # Convert simplified steps to full FlowDefinition format
         # Start with a task_input node (required by schema validation)
@@ -606,7 +633,7 @@ def _create_flow_handler():
             })
 
             if is_output:
-                source_steps, _ = _validated_output_source_steps(steps, i)
+                source_steps = output_source_steps[i]
                 edges.extend(
                     {
                         "id": f"output_edge_{i+1}_{source_position}",
@@ -1013,7 +1040,8 @@ def _get_available_agents_handler():
             message = (
                 f"Found {total_agents} matching agents (showing {len(page)}). "
                 f"Output agents on this page ({len(output_agents)}): {', '.join(output_agents)}. "
-                "Attach each Output agent to exactly one earlier Extraction step; "
+                "Attach each Output agent to one or more earlier Extraction or typed "
+                "Validation steps using ordered source_steps; "
                 "it is an output branch, not a control-path step."
             )
         else:
