@@ -114,6 +114,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
   // Load agent data
   useEffect(() => {
     if (!open || !agentId) return
+    let active = true
 
     async function loadAgent() {
       setLoading(true)
@@ -126,6 +127,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
 
       try {
         const catalog = await fetchPromptCatalog()
+        if (!active) return
         // Find the agent in the catalog
         let foundAgent: PromptInfo | null = null
         for (const cat of catalog.categories) {
@@ -149,14 +151,18 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
           setError(`Agent "${agentId}" not found in catalog`)
         }
       } catch (err) {
+        if (!active) return
         logger.error('Failed to load agent data', err as Error, { component: 'PromptViewer' })
         setError('Failed to load agent data')
       } finally {
-        setLoading(false)
+        if (active) setLoading(false)
       }
     }
 
     loadAgent()
+    return () => {
+      active = false
+    }
   }, [open, agentId])
 
   // Load the selected group's canonical effective bundle, including its layers.
