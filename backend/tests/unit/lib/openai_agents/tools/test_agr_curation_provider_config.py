@@ -6,9 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from src.lib import identifier_validation
-
 from agr_ai_curation_alliance.tools import agr_curation
+from src.lib import identifier_validation
 
 
 @pytest.fixture(autouse=True)
