@@ -65,7 +65,7 @@ export interface ToolResultParsed {
       full_content?: string;
     };
     json_data?: Record<string, any> | any[];
-    warnings?: null;
+    warnings?: string[] | null;
     message?: null;
   } | null;
   raw: string;

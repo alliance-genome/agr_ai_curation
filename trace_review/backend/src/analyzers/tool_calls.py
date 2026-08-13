@@ -8,12 +8,12 @@ Supports two trace formats:
    - Tool calls appear in output field with type="function_call"
    - Tool results appear in input arrays as type="function_call_output" with matching call_id
 """
-import re
-import sys
+import ast
 import json
-from typing import Dict, List, Optional, Any
-from datetime import datetime
+import re
 from collections import defaultdict
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from .domain_envelopes import DomainEnvelopeTraceAnalyzer
 
@@ -180,9 +180,21 @@ class ToolResultParser:
         if count_match:
             result["count"] = int(count_match.group(1))
 
-        # Extract warnings/message if None
-        if "warnings=None" in text:
-            result["warnings"] = None
+        # Extract warnings from agr_curation_query results.
+        warnings_match = re.search(r"warnings=(None|\[[^\]]*\])", text)
+        if warnings_match:
+            warnings_text = warnings_match.group(1)
+            if warnings_text == "None":
+                result["warnings"] = None
+            else:
+                try:
+                    warnings = ast.literal_eval(warnings_text)
+                except (SyntaxError, ValueError):
+                    warnings = None
+                if isinstance(warnings, list) and all(
+                    isinstance(warning, str) for warning in warnings
+                ):
+                    result["warnings"] = warnings
         if "message=None" in text:
             result["message"] = None
 
@@ -474,6 +486,19 @@ class ToolResultParser:
             elif "curie" in first:
                 parts.append(f"Curie: {first['curie']}")
 
+        for warning in parsed.get("warnings") or []:
+            warning_parts = warning.split(":", 2)
+            if (
+                len(warning_parts) == 3
+                and warning_parts[0] == "bulk_symbol_cap_applied"
+            ):
+                parts.append(
+                    "Bulk symbols truncated: "
+                    f"processed first {warning_parts[1]} of {warning_parts[2]}"
+                )
+            else:
+                parts.append(f"Warning: {warning}")
+
         return " | ".join(parts) if parts else raw[:100]
 
 
@@ -664,7 +689,7 @@ class ToolCallAnalyzer:
                     try:
                         import json
                         arguments = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
-                    except:
+                    except Exception:
                         arguments = {"raw": arguments_str}
 
                     call_key = str(

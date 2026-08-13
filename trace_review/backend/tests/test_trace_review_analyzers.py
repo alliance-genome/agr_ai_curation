@@ -4,7 +4,7 @@ import unittest
 from src.analyzers.conversation import ConversationAnalyzer
 from src.analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from src.analyzers.pdf_citations import PDFCitationsAnalyzer
-from src.analyzers.tool_calls import ToolCallAnalyzer
+from src.analyzers.tool_calls import ToolCallAnalyzer, ToolResultParser
 from src.analyzers.trace_summary import TraceSummaryAnalyzer
 from src.utils.trace_output import extract_trace_response_text, is_trace_output_cacheable
 
@@ -231,6 +231,22 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(by_call_id["call-read"]["name"], "read_section")
         self.assertIsNotNone(by_call_id["call-search"]["tool_result"])
         self.assertGreater(by_call_id["call-read"]["tool_result_length"], 0)
+
+    def test_tool_result_parser_surfaces_bulk_symbol_truncation_warning(self):
+        result = ToolResultParser.parse(
+            "status='ok' data=[{'symbol': 'wg'}] count=1 "
+            "warnings=['bulk_symbol_cap_applied:2:3'] message=None"
+        )
+
+        self.assertEqual(
+            result["parsed"]["warnings"],
+            ["bulk_symbol_cap_applied:2:3"],
+        )
+        self.assertIn(
+            "Bulk symbols truncated: processed first 2 of 3",
+            result["summary"],
+        )
+        self.assertEqual(result["parse_status"], "full")
 
     def test_tool_calls_keep_repeated_no_id_calls_from_separate_generations(self):
         observations = [
