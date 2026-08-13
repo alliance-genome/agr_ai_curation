@@ -15,6 +15,7 @@ from urllib.parse import unquote, urlparse
 import psycopg2
 from psycopg2 import sql
 
+from src.lib.database.curation_resolver import get_curation_resolver
 from src.lib.packages import (
     AgentBundleRegistrationError,
     ExportKind,
@@ -327,10 +328,20 @@ def _redact_database_url(database_url: str) -> str:
 
 def refresh_identifier_prefixes() -> bool:
     """Refresh runtime identifier prefixes using the modular runtime path contract."""
-    database_url = os.getenv("CURATION_DB_URL") or os.getenv("DATABASE_URL") or ""
+    try:
+        curation_database_url = get_curation_resolver().get_connection_url()
+    except Exception as exc:
+        logger.warning(
+            "Curation URL resolution failed for prefix refresh; "
+            "falling back to the application database: %s",
+            exc,
+        )
+        curation_database_url = None
+
+    database_url = curation_database_url or os.getenv("DATABASE_URL") or ""
     database_url = database_url.strip()
     if not database_url:
-        logger.info("No CURATION_DB_URL/DATABASE_URL set; skipping prefix refresh.")
+        logger.info("No curation or application database URL; skipping prefix refresh.")
         return False
 
     prefix_file = get_identifier_prefix_file_path()
@@ -355,7 +366,7 @@ def refresh_identifier_prefixes() -> bool:
         logger.warning("Prefix refresh failed; leaving existing prefixes in place: %s", exc)
         return False
 
-    payload = {"prefixes": sorted(prefixes)}
+    payload: dict[str, object] = {"prefixes": sorted(prefixes)}
     _write_json_atomically(prefix_file, payload)
     logger.info("Identifier prefix refresh complete with %s prefix(es).", len(prefixes))
     return True

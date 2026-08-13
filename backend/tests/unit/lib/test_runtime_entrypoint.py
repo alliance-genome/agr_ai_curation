@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -382,6 +383,105 @@ def test_refresh_identifier_prefixes_writes_runtime_state_file(monkeypatch, tmp_
     assert json.loads(prefix_file.read_text(encoding="utf-8")) == {
         "prefixes": ["FB", "GO", "MGI", "WB"]
     }
+
+
+def test_refresh_identifier_prefixes_prefers_canonical_curation_url(
+    monkeypatch, tmp_path: Path
+):
+    runtime_root = tmp_path / "runtime"
+    canonical_url = "postgresql://curation.example/curation"
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://application.example/app")
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=lambda: canonical_url),
+    )
+
+    connected_urls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, _query):
+            return None
+
+        def fetchall(self):
+            return []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    def connect(url):
+        connected_urls.append(url)
+        return FakeConnection()
+
+    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", connect)
+
+    assert runtime_entrypoint.refresh_identifier_prefixes() is True
+    assert connected_urls == [canonical_url]
+
+
+def test_refresh_identifier_prefixes_falls_back_when_curation_resolution_fails(
+    monkeypatch, tmp_path: Path
+):
+    application_url = "postgresql://application.example/app"
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setenv("DATABASE_URL", application_url)
+
+    def fail_resolution():
+        raise ValueError("optional curation config unavailable")
+
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=fail_resolution),
+    )
+
+    connected_urls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, _query):
+            return None
+
+        def fetchall(self):
+            return []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    def connect(url):
+        connected_urls.append(url)
+        return FakeConnection()
+
+    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", connect)
+
+    assert runtime_entrypoint.refresh_identifier_prefixes() is True
+    assert connected_urls == [application_url]
 
 
 def test_write_json_atomically_uses_replace_in_target_directory(monkeypatch, tmp_path: Path):

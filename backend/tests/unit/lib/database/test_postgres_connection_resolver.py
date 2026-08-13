@@ -6,6 +6,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from src.lib.config.connections_loader import CredentialsConfig
 from src.lib.database.postgres_connection_resolver import (
     PostgresConnectionResolver,
     get_postgres_connection_resolver,
@@ -51,7 +52,7 @@ def test_prefers_explicit_url_environment_variable(monkeypatch):
     environment_url = _db_url("env", "pw", "tunnel", "15432", "curation")
     connection = SimpleNamespace(
         url=_db_url("overlay", "pw", "private-db", "5432", "curation"),
-        credentials=SimpleNamespace(
+        credentials=CredentialsConfig(
             source="url",
             url_env_var="CURATION_DB_URL",
         ),
@@ -70,7 +71,7 @@ def test_uses_config_url_when_explicit_url_environment_variable_is_empty(monkeyp
     config_url = _db_url("overlay", "pw", "private-db", "5432", "curation")
     connection = SimpleNamespace(
         url=config_url,
-        credentials=SimpleNamespace(
+        credentials=CredentialsConfig(
             source="url",
             url_env_var="CURATION_DB_URL",
         ),
@@ -98,7 +99,7 @@ def test_env_source_without_resolved_url_is_unconfigured(monkeypatch):
     resolver = PostgresConnectionResolver("external_reporting_db")
     connection = SimpleNamespace(
         url="",
-        credentials=SimpleNamespace(source="env"),
+        credentials=CredentialsConfig(source="env"),
     )
     monkeypatch.setattr(
         "src.lib.config.connections_loader.get_connection",
@@ -113,7 +114,7 @@ def test_invalid_or_incomplete_credential_source_fails_fast(monkeypatch, source)
     resolver = PostgresConnectionResolver("external_reporting_db")
     connection = SimpleNamespace(
         url="",
-        credentials=SimpleNamespace(source=source),
+        credentials=CredentialsConfig(source=source),
     )
     monkeypatch.setattr(
         "src.lib.config.connections_loader.get_connection",
@@ -126,7 +127,7 @@ def test_invalid_or_incomplete_credential_source_fails_fast(monkeypatch, source)
 
 def test_fetches_and_escapes_aws_secret(monkeypatch):
     resolver = PostgresConnectionResolver("external_reporting_db")
-    credentials = SimpleNamespace(
+    credentials = CredentialsConfig(
         source="aws_secrets",
         aws_profile="dev",
         aws_region="us-east-1",
@@ -175,7 +176,7 @@ def test_fetches_and_escapes_aws_secret(monkeypatch):
 
 def test_invalid_aws_secret_raises_service_specific_error(monkeypatch):
     resolver = PostgresConnectionResolver("external_production_db")
-    credentials = SimpleNamespace(
+    credentials = CredentialsConfig(
         source="aws_secrets",
         aws_profile="",
         aws_region="us-east-1",
@@ -213,3 +214,8 @@ def test_singleton_registry_is_per_service():
 
     assert production is same_production
     assert production is not reporting
+
+    reset_postgres_connection_resolvers()
+
+    assert get_postgres_connection_resolver("external_production_db") is production
+    assert get_postgres_connection_resolver("external_reporting_db") is reporting

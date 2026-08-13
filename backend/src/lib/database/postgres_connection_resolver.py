@@ -59,13 +59,12 @@ class PostgresConnectionResolver:
             return None
 
         credentials = connection.credentials
-        url_env_var = getattr(credentials, "url_env_var", "") if credentials else ""
-        if url_env_var:
-            explicit_url = os.getenv(url_env_var)
+        if credentials and credentials.url_env_var:
+            explicit_url = os.getenv(credentials.url_env_var)
             if explicit_url:
                 logger.debug(
                     "Using %s environment variable for %s",
-                    url_env_var,
+                    credentials.url_env_var,
                     self.service_id,
                 )
                 return explicit_url
@@ -169,7 +168,5 @@ def get_postgres_connection_resolver(service_id: str) -> PostgresConnectionResol
 
 def reset_postgres_connection_resolvers() -> None:
     """Reset all generic resolver singletons (primarily for tests)."""
-    global _resolvers
     for resolver in _resolvers.values():
         resolver.reset()
-    _resolvers = {}

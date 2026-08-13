@@ -222,6 +222,7 @@ class CredentialsConfig:
 
         return cls(
             source=_substitute_env_vars(data.get("source", "env")),
+            # This is an environment variable name, not a substitutable value.
             url_env_var=str(data.get("url_env_var", "")).strip(),
             aws_secret_id=_substitute_env_vars(data.get("aws_secret_id", "")),
             aws_profile=_substitute_env_vars(data.get("aws_profile", "")),
@@ -751,15 +752,11 @@ async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[b
     # Credential-aware services always use the canonical resolver so health
     # checks and runtime clients share URL precedence and AWS URL construction.
     if conn.credentials:
-        try:
-            from src.lib.database.postgres_connection_resolver import (
-                get_postgres_connection_resolver,
-            )
-            url = get_postgres_connection_resolver(
-                conn.service_id
-            ).get_connection_url()
-        except ImportError:
-            pass
+        from src.lib.database.postgres_connection_resolver import (
+            get_postgres_connection_resolver,
+        )
+
+        url = get_postgres_connection_resolver(conn.service_id).get_connection_url()
 
     if not url:
         if conn.required:
