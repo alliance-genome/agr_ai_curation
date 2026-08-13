@@ -1663,6 +1663,79 @@ def test_post_submission_retry_reuses_original_submission_attempt(
     assert len(action_log_rows) == 1
 
 
+def test_reused_submission_key_rejects_changed_draft_intent(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+    monkeypatch,
+):
+    from src.lib.curation_workspace.export_adapters import JsonBundleExportAdapter
+    from src.lib.curation_workspace.models import CurationDraft, CurationSubmissionRecord
+
+    class CountingAdapter:
+        transport_key = "counting_submission"
+
+        def __init__(self) -> None:
+            self.submit_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            return {"status": "accepted", "external_reference": "target:one"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("A terminal accepted submission is not reconciled")
+
+    adapter = CountingAdapter()
+    _patch_submission_transport_adapter(monkeypatch, lambda _target_key: adapter)
+    _patch_export_adapter(monkeypatch, JsonBundleExportAdapter(adapter_key="gene"))
+    session_id = seeded_review_sessions["session_beta_id"]
+    request_json = {
+        "session_id": session_id,
+        "idempotency_key": str(uuid4()),
+        "candidate_ids": [seeded_review_sessions["candidate_beta_id"]],
+        "target_key": "review_export_bundle",
+    }
+
+    first_response = client.post(
+        f"/api/curation-workspace/sessions/{session_id}/submit",
+        json=request_json,
+    )
+    assert first_response.status_code == 200, first_response.text
+    persisted_attempt = (
+        test_db.query(CurationSubmissionRecord)
+        .filter(CurationSubmissionRecord.idempotency_key == request_json["idempotency_key"])
+        .one()
+    )
+    assert persisted_attempt.payload is not None
+    assert len(persisted_attempt.payload["intent_fingerprint"]) == 64
+
+    draft = test_db.get(CurationDraft, UUID(seeded_review_sessions["draft_beta_id"]))
+    assert draft is not None
+    changed_fields = [dict(field) for field in draft.fields]
+    changed_fields[0]["value"] = "BETA2"
+    draft.fields = changed_fields
+    draft.version += 1
+    test_db.add(draft)
+    test_db.commit()
+
+    second_response = client.post(
+        f"/api/curation-workspace/sessions/{session_id}/submit",
+        json=request_json,
+    )
+
+    assert second_response.status_code == 409, second_response.text
+    assert second_response.json()["detail"] == (
+        "Idempotency key is already bound to a different submission intent"
+    )
+    assert adapter.submit_calls == 1
+    assert (
+        test_db.query(CurationSubmissionRecord)
+        .filter(CurationSubmissionRecord.idempotency_key == request_json["idempotency_key"])
+        .count()
+        == 1
+    )
+
+
 def test_concurrent_duplicate_submission_requests_invoke_mutation_once(
     client: TestClient,
     seeded_review_sessions,

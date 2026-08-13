@@ -18,6 +18,9 @@ from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import get_submission_attempt_retention_days
 from src.lib.curation_workspace.export_adapters import build_default_export_adapter_registry
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+from src.lib.curation_workspace.extraction_results import (
+    canonical_extraction_payload_hash,
+)
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -115,6 +118,7 @@ SUBMISSION_TRANSPORT_FAILURE_MESSAGE = "Submission failed unexpectedly. Please t
 _BLOCKING_EXPORT_STATUSES = {"blocked", "not_supported", "unsupported"}
 _NON_EXPORTABLE_FLAGS = ("exportable", "submit", "submittable")
 _MISSING = object()
+_SUBMISSION_INTENT_FINGERPRINT_KEY = "intent_fingerprint"
 
 
 @lru_cache(maxsize=1)
@@ -1291,6 +1295,20 @@ def _domain_envelope_candidate_bundle(
     candidate: CurationCandidate,
     domain_context: _DomainEnvelopeSubmissionContext,
 ) -> dict[str, Any] | None:
+    context = _domain_envelope_object_context_for_submission(
+        candidate,
+        domain_context,
+    )
+    if context is None:
+        return None
+
+    return _domain_envelope_candidate_payload(candidate, context)
+
+
+def _domain_envelope_object_context_for_submission(
+    candidate: CurationCandidate,
+    domain_context: _DomainEnvelopeSubmissionContext,
+) -> _DomainEnvelopeObjectContext | None:
     context = domain_context.object_contexts.get(str(candidate.id))
     if (
         context is None
@@ -1300,8 +1318,7 @@ def _domain_envelope_candidate_bundle(
         or context.blockers
     ):
         return None
-
-    return _domain_envelope_candidate_payload(candidate, context)
+    return context
 
 
 def _domain_envelope_candidate_payload(
@@ -1928,6 +1945,89 @@ def _submission_candidate_ids(record: SubmissionModel) -> list[str]:
     )
 
 
+def _non_envelope_candidate_submission_intent(
+    candidate: CurationCandidate,
+) -> dict[str, Any]:
+    """Return core-owned curator content without derived validation/lifecycle state."""
+
+    material = _candidate_payload(candidate).model_dump(mode="json")
+    for key in ("created_at", "updated_at", "last_reviewed_at"):
+        material.pop(key, None)
+    material.pop("validation", None)
+    material.pop("validation_summary_projections", None)
+
+    draft = material["draft"]
+    for key in ("created_at", "updated_at", "last_saved_at"):
+        draft.pop(key, None)
+    for field_payload in draft["fields"]:
+        for key in ("dirty", "stale_validation", "validation_result"):
+            field_payload.pop(key, None)
+    for evidence_payload in material["evidence_anchors"]:
+        evidence_payload.pop("created_at", None)
+        evidence_payload.pop("updated_at", None)
+    return material
+
+
+def _submission_intent_fingerprint(
+    *,
+    db: Session,
+    session_row: ReviewSessionModel,
+    adapter_key: str,
+    mode: SubmissionMode,
+    target_key: str,
+    ready_candidates: Sequence[CurationCandidate],
+    domain_context: _DomainEnvelopeSubmissionContext | None,
+) -> str:
+    """Hash curator-authored candidate content and bound envelope revisions."""
+
+    document = db.get(PDFDocument, session_row.document_id)
+    candidates: list[dict[str, Any]] = []
+    for candidate in ready_candidates:
+        context = (
+            _domain_envelope_object_context_for_submission(candidate, domain_context)
+            if domain_context is not None
+            else None
+        )
+        if context is not None:
+            envelope_row = context.envelope_row
+            domain_object = context.domain_object
+            assert envelope_row is not None
+            assert domain_object is not None
+            candidates.append(
+                {
+                    "candidate_id": str(candidate.id),
+                    "envelope_id": envelope_row.envelope_id,
+                    "object_id": _stable_object_id(domain_object),
+                    "envelope_revision": envelope_row.revision,
+                }
+            )
+            continue
+        candidates.append(_non_envelope_candidate_submission_intent(candidate))
+
+    return canonical_extraction_payload_hash(
+        {
+            "session_id": str(session_row.id),
+            "document": (
+                _document_ref(document).model_dump(mode="json")
+                if document is not None
+                else None
+            ),
+            "adapter_key": adapter_key,
+            "mode": mode.value,
+            "target_key": target_key,
+            "candidates": candidates,
+        }
+    )
+
+
+def _stored_submission_intent_fingerprint(record: SubmissionModel) -> str | None:
+    payload = record.payload
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(_SUBMISSION_INTENT_FINGERPRINT_KEY)
+    return value if isinstance(value, str) and value else None
+
+
 def _reject_direct_submit_with_domain_blockers(
     readiness: Sequence[CurationCandidateSubmissionReadiness],
 ) -> None:
@@ -1960,6 +2060,7 @@ def _execute_direct_submission_attempt(
     actor_claims: dict[str, Any],
     action_type: CurationActionType,
     idempotency_key: str,
+    intent_fingerprint: str | None,
     retry_confirmed_failure: bool = False,
     action_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[CurationSubmissionRecord, CurationActionLogEntry]:
@@ -1968,6 +2069,8 @@ def _execute_direct_submission_attempt(
     transport_adapter = _resolve_submission_transport_adapter(target_key)
     requested_at = datetime.now(timezone.utc)
     serialized_payload = _serialize_submission_payload_contract(payload)
+    if intent_fingerprint is not None:
+        serialized_payload[_SUBMISSION_INTENT_FINGERPRINT_KEY] = intent_fingerprint
     submission_row = db.scalar(
         select(SubmissionModel).where(SubmissionModel.idempotency_key == idempotency_key)
     )
@@ -2024,6 +2127,10 @@ def _execute_direct_submission_attempt(
         raise RuntimeError("Durable submission attempt disappeared before delivery")
 
     persisted_payload = _submission_payload(submission_row)
+    reconcile_only = submission_row.attempt_state in {
+        CurationSubmissionAttemptState.SENDING,
+        CurationSubmissionAttemptState.UNKNOWN,
+    }
     if (
         submission_row.session_id != session_row.id
         or submission_row.adapter_key != adapter_key
@@ -2036,6 +2143,23 @@ def _execute_direct_submission_attempt(
             status_code=status.HTTP_409_CONFLICT,
             detail="Idempotency key is already bound to a different submission intent",
         )
+    persisted_intent_fingerprint = _stored_submission_intent_fingerprint(submission_row)
+    if intent_fingerprint is not None and not reconcile_only:
+        if persisted_intent_fingerprint is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Idempotency key predates submission intent fingerprinting; "
+                    "start a new submission"
+                ),
+            )
+        if persisted_intent_fingerprint != intent_fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Idempotency key is already bound to a different submission intent"
+                ),
+            )
     if not created_attempt:
         # Reconciliation and retries must use the exact body durably bound to
         # the key, even if mutable session metadata changed after first send.
@@ -2052,10 +2176,6 @@ def _execute_direct_submission_attempt(
         result = _result_from_submission_row(submission_row)
         replayed_terminal_attempt = True
     else:
-        reconcile_only = submission_row.attempt_state in {
-            CurationSubmissionAttemptState.SENDING,
-            CurationSubmissionAttemptState.UNKNOWN,
-        }
         if reconcile_only:
             db.commit()
         if not reconcile_only:
@@ -2442,6 +2562,15 @@ def execute_submission(
         domain_context=domain_context,
         readiness=readiness,
     )
+    intent_fingerprint = _submission_intent_fingerprint(
+        db=db,
+        session_row=session_row,
+        adapter_key=payload.adapter_key,
+        mode=request.mode,
+        target_key=request.target_key,
+        ready_candidates=ready_candidates,
+        domain_context=domain_context,
+    )
     response_submission, action_log_entry = _execute_direct_submission_attempt(
         db=db,
         session_row=session_row,
@@ -2454,6 +2583,7 @@ def execute_submission(
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_EXECUTED,
         idempotency_key=request.idempotency_key,
+        intent_fingerprint=intent_fingerprint,
     )
     db.expire_all()
 
@@ -2587,6 +2717,7 @@ def retry_submission(
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_RETRIED,
         idempotency_key=original_submission.idempotency_key,
+        intent_fingerprint=None,
         retry_confirmed_failure=(
             original_submission.attempt_state == CurationSubmissionAttemptState.FAILED
         ),

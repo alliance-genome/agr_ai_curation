@@ -4962,6 +4962,246 @@ def test_submission_retry_reconciles_after_local_finalization_rollback_without_r
     assert adapter.reconcile_calls == 1
 
 
+def test_submission_intent_fingerprint_uses_authored_content_not_derived_state(
+    db_session,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    assert session_row is not None
+    assert candidate is not None
+    assert candidate.draft is not None
+
+    fields = [dict(field) for field in candidate.draft.fields]
+    fields[0]["value"] = {"created_at": "1980-01-01"}
+    candidate.draft.fields = fields
+    db_session.add(candidate.draft)
+    db_session.commit()
+
+    def fingerprint() -> str:
+        return submission_module._submission_intent_fingerprint(
+            db=db_session,
+            session_row=session_row,
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            ready_candidates=[candidate],
+            domain_context=None,
+        )
+
+    initial = fingerprint()
+    later = _now() + timedelta(minutes=5)
+    candidate.updated_at = later
+    candidate.last_reviewed_at = later
+    candidate.draft.updated_at = later
+    candidate.draft.last_saved_at = later
+    refreshed_fields = [dict(field) for field in candidate.draft.fields]
+    refreshed_fields[0]["stale_validation"] = False
+    refreshed_fields[0]["validation_result"] = {
+        "status": "validated",
+        "resolver": "fixture",
+        "candidate_matches": [],
+        "warnings": [],
+    }
+    candidate.draft.fields = refreshed_fields
+    assert fingerprint() == initial
+
+    changed_fields = [dict(field) for field in candidate.draft.fields]
+    changed_fields[0]["value"] = {"created_at": "1981-01-01"}
+    candidate.draft.fields = changed_fields
+    assert fingerprint() != initial
+
+
+def test_reused_submission_key_replays_unchanged_non_envelope_intent(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+
+    class CountingAdapter:
+        transport_key = "counting"
+
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            return {"status": "accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("A terminal accepted submission is not reconciled")
+
+    adapter = CountingAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=str(uuid4()),
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    first_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+    second_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert second_response.submission.submission_id == first_response.submission.submission_id
+    assert adapter.submit_calls == 1
+
+
+def test_reused_submission_key_replays_unchanged_domain_envelope_intent(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+    )
+
+    class CountingAdapter:
+        transport_key = "counting"
+
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            return {"status": "accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("A terminal accepted submission is not reconciled")
+
+    adapter = CountingAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=str(uuid4()),
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    first_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+    second_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert second_response.submission.submission_id == first_response.submission.submission_id
+    assert adapter.submit_calls == 1
+
+
+def test_reused_submission_key_rejects_changed_domain_envelope_revision(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+    )
+
+    class CountingAdapter:
+        transport_key = "counting"
+
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            return {"status": "accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("A terminal accepted submission is not reconciled")
+
+    adapter = CountingAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=str(uuid4()),
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+
+    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
+    assert envelope_row is not None
+    envelope_row.revision = 2
+    db_session.add(envelope_row)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        module.execute_submission(
+            db_session,
+            seeded["session_id"],
+            request,
+            actor_claims={"sub": "user-1"},
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == (
+        "Idempotency key is already bound to a different submission intent"
+    )
+    assert adapter.submit_calls == 1
+
+
 def test_unknown_submission_outcome_is_not_blindly_resent(db_session, monkeypatch):
     seeded = _create_decision_session(
         db_session,
@@ -5006,6 +5246,15 @@ def test_unknown_submission_outcome_is_not_blindly_resent(db_session, monkeypatc
         actor_claims={"sub": "user-1"},
     )
     db_session.commit()
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    assert candidate is not None
+    assert candidate.draft is not None
+    changed_fields = [dict(field) for field in candidate.draft.fields]
+    changed_fields[0]["value"] = "changed-after-unknown-outcome"
+    candidate.draft.fields = changed_fields
+    candidate.draft.version += 1
+    db_session.add(candidate.draft)
+    db_session.commit()
     second_response = module.execute_submission(
         db_session,
         seeded["session_id"],
@@ -5035,9 +5284,15 @@ def test_confirmed_failure_retry_reuses_attempt_and_idempotency_key(db_session, 
 
         def __init__(self):
             self.keys = []
+            self.field_values = []
 
         def submit(self, *, payload, idempotency_key):
             self.keys.append(idempotency_key)
+            payload_json = payload.payload_json
+            assert isinstance(payload_json, dict)
+            self.field_values.append(
+                payload_json["candidates"][0]["draft"]["fields"][0]["value"]
+            )
             if len(self.keys) == 1:
                 raise SubmissionTransportError("Confirmed rejection")
             return {"status": "accepted"}
@@ -5064,6 +5319,16 @@ def test_confirmed_failure_retry_reuses_attempt_and_idempotency_key(db_session, 
     )
     db_session.commit()
 
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    assert candidate is not None
+    assert candidate.draft is not None
+    changed_fields = [dict(field) for field in candidate.draft.fields]
+    changed_fields[0]["value"] = "newer-draft-value"
+    candidate.draft.fields = changed_fields
+    candidate.draft.version += 1
+    db_session.add(candidate.draft)
+    db_session.commit()
+
     retry_response = module.retry_submission(
         db_session,
         seeded["session_id"],
@@ -5077,6 +5342,7 @@ def test_confirmed_failure_retry_reuses_attempt_and_idempotency_key(db_session, 
     assert retry_response.submission.submission_id == execute_response.submission.submission_id
     assert retry_response.submission.attempt_state == "succeeded"
     assert adapter.keys == [idempotency_key, idempotency_key]
+    assert adapter.field_values == ["edited-value", "edited-value"]
 
 
 def test_submission_attempt_idempotency_key_is_database_unique(db_session):
