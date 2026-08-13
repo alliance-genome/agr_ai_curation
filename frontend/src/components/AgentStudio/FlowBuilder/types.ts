@@ -128,8 +128,7 @@ export interface FlowResponse {
   user_id: number
   name: string
   description: string | null
-  // Removed v1.0 flow read compatibility — migration d6e7f8a9b0c1 guarantees
-  // persisted flows are v1.1.
+  // Migration d6e7f8a9b0c1 guarantees persisted flows are v1.1.
   flow_definition: FlowDefinition
   execution_count: number
   last_executed_at: string | null
