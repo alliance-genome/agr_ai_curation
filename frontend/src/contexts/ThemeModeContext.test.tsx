@@ -56,27 +56,19 @@ describe('ThemeModeProvider', () => {
     expect(screen.getByText('MUI mode: light')).toBeInTheDocument();
   });
 
-  it('surfaces storage read failures during bootstrap', () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  it('falls back to the default mode when storage reads fail during bootstrap', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage read failed');
     });
-    const handleError = (event: ErrorEvent) => {
-      event.preventDefault();
-    };
 
-    window.addEventListener('error', handleError);
-    try {
-      expect(() =>
-        render(
-          <ThemeModeProvider>
-            <ThemeModeProbe />
-          </ThemeModeProvider>,
-        ),
-      ).toThrow('storage read failed');
-    } finally {
-      window.removeEventListener('error', handleError);
-    }
+    render(
+      <ThemeModeProvider>
+        <ThemeModeProbe />
+      </ThemeModeProvider>,
+    );
+
+    expect(screen.getByText('Context mode: dark')).toBeInTheDocument();
   });
 
   it('persists toggled preferences', async () => {
@@ -94,15 +86,11 @@ describe('ThemeModeProvider', () => {
     expect(localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBe('light');
   });
 
-  it('surfaces storage write failures without updating mode', () => {
+  it('updates mode in memory when storage writes fail', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('storage write failed');
     });
-    let surfacedMessage = '';
-    const handleError = (event: ErrorEvent) => {
-      event.preventDefault();
-      surfacedMessage = event.error instanceof Error ? event.error.message : event.message;
-    };
 
     render(
       <ThemeModeProvider>
@@ -110,11 +98,8 @@ describe('ThemeModeProvider', () => {
       </ThemeModeProvider>,
     );
 
-    window.addEventListener('error', handleError);
     fireEvent.click(screen.getByRole('button', { name: 'Set light mode' }));
-    window.removeEventListener('error', handleError);
 
-    expect(surfacedMessage).toBe('storage write failed');
-    expect(screen.getByText('Context mode: dark')).toBeInTheDocument();
+    expect(screen.getByText('Context mode: light')).toBeInTheDocument();
   });
 });

@@ -35,6 +35,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
+    domain_envelope_payload_hash,
     write_domain_envelope_checkpoint,
 )
 from src.lib.domain_packs.loader import load_domain_pack_metadata
@@ -332,13 +333,50 @@ def _persist_matching_prep_result(
         user_id="user-1",
         candidate_count=prep_output.review_row_count,
         conversation_summary="Prep conversation summary.",
-        payload_json=prep_output.model_dump(mode="json"),
+        payload_json={},
         extraction_metadata={
             "final_run_metadata": prep_output.run_metadata.model_dump(mode="json"),
         },
         created_at=now,
     )
     db_session.add(record)
+    db_session.flush()
+    for envelope_ref in prep_output.envelope_refs:
+        envelope_ref.source_extraction_result_id = str(record.id)
+        envelope = DomainEnvelope(
+            envelope_id=envelope_ref.envelope_id,
+            domain_pack_id=envelope_ref.domain_pack_id,
+            extracted_objects=[],
+        )
+        envelope_row = db_session.get(DomainEnvelopeModel, envelope_ref.envelope_id)
+        if envelope_row is None:
+            envelope_row = DomainEnvelopeModel(
+                envelope_id=envelope_ref.envelope_id,
+                revision=envelope_ref.envelope_revision,
+                project_key="fixture",
+                domain_pack_key=envelope_ref.domain_pack_id,
+                domain_pack_version=None,
+                adapter_key=adapter_key,
+                source_extraction_result_id=str(record.id),
+                source_payload_hash=domain_envelope_payload_hash(envelope),
+                status=envelope.status,
+                document_id=UUID(document_id),
+                session_id=None,
+                flow_run_id="flow-1",
+                schema_provider=None,
+                schema_ref_json={},
+                object_model_ref_json={},
+                model_field_ref_json={},
+                envelope_json=envelope.model_dump(mode="json"),
+                created_at=now,
+                updated_at=now,
+                checkpointed_at=now,
+            )
+            db_session.add(envelope_row)
+        else:
+            envelope_row.adapter_key = adapter_key
+            envelope_row.source_extraction_result_id = str(record.id)
+        record.payload_json = prep_output.model_dump(mode="json")
     db_session.commit()
     return record
 
@@ -529,7 +567,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert candidate_row.object_id == "object-1"
     assert candidate_row.envelope_revision == 4
     assert candidate_row.normalized_payload == {}
-    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert candidate_row.candidate_metadata["projection_key"] == "object-1"
 
     evidence_rows = db_session.scalars(
@@ -545,7 +583,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert draft_row.fields[0]["validation_result"]["status"] == FieldValidationStatus.SKIPPED.value
     assert draft_row.fields[0]["evidence_anchor_ids"] == []
     assert "normalized_payload" not in draft_row.draft_metadata
-    assert draft_row.draft_metadata["semantic_source"] == "domain_envelope.objects"
+    assert draft_row.draft_metadata["semantic_source"] == "domain_envelope.extracted_objects"
 
     session_snapshots = db_session.scalars(
         select(ValidationSnapshotModel).where(
@@ -722,7 +760,7 @@ metadata:
     envelope = DomainEnvelope(
         envelope_id="env-validation-1",
         domain_pack_id="fixture.pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 pending_ref_id="object-1",
@@ -742,6 +780,9 @@ metadata:
             envelope=envelope,
             expected_revision=0,
             document_id=document.id,
+            flow_run_id="flow-1",
+            adapter_key="disease",
+            source_extraction_result_id=uuid4(),
         ),
     )
     assert checkpoint.revision == 1
@@ -939,7 +980,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                         }
                     },
                     metadata={
-                        "payload_path": "objects[0].payload",
+                        "payload_path": "extracted_objects[0].payload",
                         "evidence_record_ids": ["evidence-1"],
                         "metadata_refs": [
                             {
@@ -1019,7 +1060,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
     assert candidate_row.object_id == "object-1"
     assert candidate_row.envelope_revision == 4
     assert candidate_row.normalized_payload == {}
-    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert candidate_row.candidate_metadata["object_type"] == "GeneAssertion"
     assert candidate_row.candidate_metadata["schema_provider"] == "json-schema"
     assert candidate_row.candidate_metadata["schema_ref"] == {
@@ -1034,7 +1075,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
         }
     }
     assert candidate_row.candidate_metadata["review_row_metadata"] == {
-        "payload_path": "objects[0].payload",
+        "payload_path": "extracted_objects[0].payload",
         "evidence_record_ids": ["evidence-1"],
         "metadata_refs": [
             {

@@ -11,15 +11,18 @@ import {
   useCurationWorkspaceContext,
 } from './CurationWorkspaceContext'
 import { useAutosave } from './useAutosave'
+import { useSessionHydration } from './useSessionHydration'
 
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
+  fetchCurationWorkspace: vi.fn(),
   patchCurationEnvelopeField: vi.fn(),
   updateCurationSession: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
+  fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
   patchCurationEnvelopeField: serviceMocks.patchCurationEnvelopeField,
   updateCurationSession: serviceMocks.updateCurationSession,
 }))
@@ -341,12 +344,15 @@ function createWrapper(initialWorkspace: CurationWorkspace) {
 describe('useAutosave', () => {
   beforeEach(() => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
+    serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.patchCurationEnvelopeField.mockReset()
     serviceMocks.updateCurationSession.mockReset()
   })
 
   afterEach(() => {
     vi.clearAllMocks()
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
   })
 
   it('debounces autosave writes and marks a new session in progress on first edit', async () => {
@@ -360,6 +366,8 @@ describe('useAutosave', () => {
     serviceMocks.autosaveCurationCandidateDraft.mockResolvedValue(
       buildSavedWorkspaceResponse(),
     )
+    const initialWorkspace = buildWorkspace('new')
+    delete initialWorkspace.active_candidate_id
 
     const { result } = renderHook(
       () => ({
@@ -367,7 +375,7 @@ describe('useAutosave', () => {
         context: useCurationWorkspaceContext(),
       }),
       {
-        wrapper: createWrapper(buildWorkspace('new')),
+        wrapper: createWrapper(initialWorkspace),
       },
     )
 
@@ -383,7 +391,6 @@ describe('useAutosave', () => {
     expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
       session_id: 'session-1',
       status: 'in_progress',
-      current_candidate_id: 'candidate-1',
     })
 
     await act(async () => {
@@ -410,6 +417,8 @@ describe('useAutosave', () => {
       await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
     })
     expect(result.current.context.activeCandidate?.draft.version).toBe(2)
+    expect(result.current.context.workspace.active_candidate_id).toBe('candidate-1')
+    expect(result.current.context.workspace.session.current_candidate_id).toBe('candidate-1')
     expect(result.current.autosave.isDirty).toBe(false)
     expect(result.current.autosave.warning).toBeNull()
   })
@@ -770,6 +779,199 @@ describe('useAutosave', () => {
     })
   })
 
+  it('bounds an explicit draft flush and preserves failed work for the next pass', async () => {
+    serviceMocks.autosaveCurationCandidateDraft.mockRejectedValue(
+      new Error('persistent outage'),
+    )
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    let firstFlushSucceeded = true
+    await act(async () => {
+      firstFlushSucceeded = await result.current.flush()
+    })
+
+    expect(firstFlushSucceeded).toBe(false)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    expect(result.current.isDirty).toBe(true)
+
+    serviceMocks.autosaveCurationCandidateDraft.mockResolvedValueOnce(
+      buildSavedWorkspaceResponse(),
+    )
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(3)
+  })
+
+  it('bounds an explicit envelope flush and preserves failed work for the next pass', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(
+      new Error('persistent outage'),
+    )
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(envelopeWorkspace),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    let firstFlushSucceeded = true
+    await act(async () => {
+      firstFlushSucceeded = await result.current.flush()
+    })
+
+    expect(firstFlushSucceeded).toBe(false)
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+    expect(result.current.isDirty).toBe(true)
+
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValueOnce(
+      buildEnvelopePatchResponse({
+        workspace: envelopeWorkspace,
+        value: 'BRCA2',
+        before: 'BRCA1',
+        previousRevision: 7,
+        envelopeRevision: 8,
+      }),
+    )
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+  })
+
+  it('attempts mixed draft and envelope maps once per candidate in one flush pass', async () => {
+    const draftWorkspace = buildWorkspace()
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.autosaveCurationCandidateDraft.mockRejectedValue(
+      new Error('persistent draft outage'),
+    )
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(
+      new Error('persistent envelope outage'),
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 60_000 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(draftWorkspace),
+      },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+      result.current.context.setWorkspace(envelopeWorkspace)
+    })
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA3',
+      })
+    })
+
+    let firstFlushSucceeded = true
+    await act(async () => {
+      firstFlushSucceeded = await result.current.autosave.flush()
+    })
+
+    expect(firstFlushSucceeded).toBe(false)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+
+    serviceMocks.autosaveCurationCandidateDraft.mockResolvedValueOnce(
+      buildSavedWorkspaceResponse(),
+    )
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValueOnce(
+      buildEnvelopePatchResponse({
+        workspace: envelopeWorkspace,
+        value: 'BRCA3',
+        before: 'BRCA1',
+        previousRevision: 7,
+        envelopeRevision: 8,
+      }),
+    )
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(3)
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves an edit queued during an explicit flush for a later pass', async () => {
+    const firstAutosave = createDeferred<ReturnType<typeof buildSavedWorkspaceResponse>>()
+    serviceMocks.autosaveCurationCandidateDraft
+      .mockImplementationOnce(() => firstAutosave.promise)
+      .mockResolvedValueOnce(buildSavedWorkspaceResponse({ value: 'BRCA3', version: 3 }))
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    let firstFlush!: Promise<boolean>
+    act(() => {
+      firstFlush = result.current.flush()
+    })
+    await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+    })
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA3',
+      })
+    })
+
+    await act(async () => {
+      firstAutosave.resolve(buildSavedWorkspaceResponse({ value: 'BRCA2', version: 2 }))
+      expect(await firstFlush).toBe(true)
+    })
+
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+    expect(result.current.isDirty).toBe(true)
+    expect(result.current.dirtyFieldKeys).toEqual(['gene_symbol'])
+
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+  })
+
   it('flushes pending autosave work during unmount', async () => {
     serviceMocks.autosaveCurationCandidateDraft.mockResolvedValue(
       buildSavedWorkspaceResponse(),
@@ -794,6 +996,35 @@ describe('useAutosave', () => {
       await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
     })
     expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds a persistently failing unmount flush', async () => {
+    serviceMocks.autosaveCurationCandidateDraft.mockRejectedValue(
+      new Error('persistent outage'),
+    )
+
+    const { result, unmount } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    act(() => {
+      unmount()
+    })
+    await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    })
+    await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
   })
 
   it('pauses a new session on unmount after the in-progress transition settles', async () => {
@@ -831,7 +1062,6 @@ describe('useAutosave', () => {
     expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
       session_id: 'session-1',
       status: 'in_progress',
-      current_candidate_id: 'candidate-1',
     })
 
     act(() => {
@@ -857,12 +1087,107 @@ describe('useAutosave', () => {
       {
         session_id: 'session-1',
         status: 'paused',
-        current_candidate_id: 'candidate-1',
       },
       {
         keepalive: true,
       },
     ])
+  })
+
+  it('does not let a stale lifecycle response reclaim a newer candidate selection', async () => {
+    const inProgressRequest = createDeferred<{
+      session: CurationReviewSession
+      action_log_entry: null
+    }>()
+    const candidateRequest = createDeferred<{
+      session: CurationReviewSession
+      action_log_entry: null
+    }>()
+    const initialWorkspace = buildWorkspace('new')
+    initialWorkspace.candidates.push({
+      ...initialWorkspace.candidates[0],
+      candidate_id: 'candidate-2',
+      display_label: 'Candidate 2',
+      order: 1,
+      draft: {
+        ...initialWorkspace.candidates[0].draft,
+        draft_id: 'draft-2',
+        candidate_id: 'candidate-2',
+      },
+    })
+
+    serviceMocks.updateCurationSession.mockImplementation((request) => {
+      if (request.status === 'in_progress') {
+        return inProgressRequest.promise
+      }
+      if (request.current_candidate_id === 'candidate-2') {
+        return candidateRequest.promise
+      }
+      throw new Error('Unexpected session mutation')
+    })
+
+    const { result, rerender } = renderHook(
+      ({ routeCandidateId }: { routeCandidateId: string }) => ({
+        autosave: useAutosave({ debounceMs: 60_000 }),
+        hydration: useSessionHydration({ routeCandidateId }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(initialWorkspace),
+        initialProps: { routeCandidateId: 'candidate-1' },
+      },
+    )
+
+    await waitFor(() => expect(result.current.hydration.isHydrated).toBe(true))
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => expect(serviceMocks.updateCurationSession).toHaveBeenCalledTimes(1))
+
+    rerender({ routeCandidateId: 'candidate-2' })
+    await waitFor(() => expect(serviceMocks.updateCurationSession).toHaveBeenCalledTimes(2))
+
+    candidateRequest.resolve({
+      session: {
+        ...buildWorkspace('new').session,
+        current_candidate_id: 'candidate-2',
+        session_version: 2,
+      },
+      action_log_entry: null,
+    })
+    await act(async () => candidateRequest.promise)
+
+    inProgressRequest.resolve({
+      session: {
+        ...buildWorkspace('in_progress').session,
+        current_candidate_id: 'candidate-1',
+      },
+      action_log_entry: null,
+    })
+    await act(async () => inProgressRequest.promise)
+
+    expect(result.current.context.activeCandidateId).toBe('candidate-2')
+    expect(result.current.context.workspace.active_candidate_id).toBe('candidate-2')
+    expect(result.current.context.workspace.session.current_candidate_id).toBe('candidate-2')
+    expect(result.current.context.workspace.session.status).toBe('in_progress')
+    expect(result.current.context.workspace.session.session_version).toBe(2)
+
+    const requests = serviceMocks.updateCurationSession.mock.calls.map(([request]) => request)
+    expect(requests[0]).toEqual({
+      session_id: 'session-1',
+      status: 'in_progress',
+    })
+    expect(requests[1]).toMatchObject({
+      session_id: 'session-1',
+      expected_session_version: 1,
+      current_candidate_id: 'candidate-2',
+      intent_owner: expect.any(String),
+      intent_generation: expect.any(Number),
+    })
   })
 
   it('retries a failed autosave request once before succeeding', async () => {
@@ -891,7 +1216,331 @@ describe('useAutosave', () => {
     expect(result.current.warning).toBeNull()
   })
 
-  it('surfaces a non-blocking warning after the retry also fails', async () => {
+  it('refreshes a draft conflict and preserves a newer local edit for a fresh version', async () => {
+    vi.stubEnv('VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS', '25')
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
+    const authoritativeRefresh = createDeferred<CurationWorkspace>()
+    const authoritativeWorkspace = buildWorkspace()
+    authoritativeWorkspace.candidates[0] = {
+      ...authoritativeWorkspace.candidates[0],
+      draft: {
+        ...authoritativeWorkspace.candidates[0].draft,
+        version: 4,
+        fields: authoritativeWorkspace.candidates[0].draft.fields.map((field) => ({
+          ...field,
+          value: 'TP53',
+          seed_value: 'TP53',
+        })),
+      },
+    }
+    serviceMocks.autosaveCurationCandidateDraft.mockRejectedValueOnce({ status: 409 })
+    serviceMocks.fetchCurationWorkspace.mockImplementationOnce(
+      () => authoritativeRefresh.promise,
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      { wrapper: createWrapper(buildWorkspace()) },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => {
+      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledWith('session-1')
+    })
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA3',
+      })
+    })
+    await act(async () => {
+      authoritativeRefresh.resolve(authoritativeWorkspace)
+      await authoritativeRefresh.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.draft.version).toBe(4)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA3',
+        dirty: true,
+      })
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+    expect(timeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 25)
+    expect(result.current.autosave.warning).toContain('rebased onto the latest version')
+
+    serviceMocks.autosaveCurationCandidateDraft.mockResolvedValueOnce(
+      buildSavedWorkspaceResponse({ value: 'BRCA3', version: 5 }),
+    )
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.autosaveCurationCandidateDraft.mock.calls[1]?.[0]).toMatchObject({
+      expected_version: 4,
+      field_changes: [{ field_key: 'gene_symbol', value: 'BRCA3' }],
+    })
+  })
+
+  it('blocks a stale draft resend while authoritative conflict refresh fails', async () => {
+    serviceMocks.autosaveCurationCandidateDraft
+      .mockRejectedValueOnce({ status: 409 })
+      .mockResolvedValue(buildSavedWorkspaceResponse())
+    serviceMocks.fetchCurationWorkspace.mockRejectedValue(new Error('refresh unavailable'))
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 10 }),
+      { wrapper: createWrapper(buildWorkspace()) },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => {
+      expect(result.current.warning).toContain('latest version could not be loaded')
+    })
+
+    await act(async () => {
+      expect(await result.current.flush()).toBe(false)
+    })
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+    expect(result.current.isDirty).toBe(true)
+  })
+
+  it('uses an authoritative workspace replacement to unblock a draft conflict', async () => {
+    const authoritativeWorkspace = buildWorkspace()
+    authoritativeWorkspace.candidates[0] = {
+      ...authoritativeWorkspace.candidates[0],
+      draft: {
+        ...authoritativeWorkspace.candidates[0].draft,
+        version: 4,
+        fields: authoritativeWorkspace.candidates[0].draft.fields.map((field) => ({
+          ...field,
+          value: 'TP53',
+          seed_value: 'TP53',
+        })),
+      },
+    }
+    serviceMocks.autosaveCurationCandidateDraft
+      .mockRejectedValueOnce({ status: 409 })
+      .mockResolvedValueOnce(buildSavedWorkspaceResponse({ value: 'BRCA2', version: 5 }))
+    serviceMocks.fetchCurationWorkspace.mockRejectedValueOnce(
+      new Error('refresh unavailable'),
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      { wrapper: createWrapper(buildWorkspace()) },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => {
+      expect(result.current.autosave.warning).toContain('latest version could not be loaded')
+    })
+
+    act(() => {
+      result.current.context.setWorkspace(authoritativeWorkspace)
+    })
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.draft.version).toBe(4)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA2',
+        dirty: true,
+      })
+    })
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(1)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.autosaveCurationCandidateDraft.mock.calls[1]?.[0]).toMatchObject({
+      expected_version: 4,
+      field_changes: [{ field_key: 'gene_symbol', value: 'BRCA2' }],
+    })
+  })
+
+  it('refreshes an envelope conflict and preserves a newer local edit for a fresh revision', async () => {
+    const initialWorkspace = buildEnvelopeWorkspace()
+    const authoritativeRefresh = createDeferred<CurationWorkspace>()
+    const authoritativeWorkspace = buildEnvelopeWorkspace()
+    authoritativeWorkspace.candidates[0] = {
+      ...authoritativeWorkspace.candidates[0],
+      projection_ref: {
+        ...authoritativeWorkspace.candidates[0].projection_ref!,
+        envelope_revision: 9,
+      },
+      draft: {
+        ...authoritativeWorkspace.candidates[0].draft,
+        version: 9,
+        fields: authoritativeWorkspace.candidates[0].draft.fields.map((field) => ({
+          ...field,
+          value: 'TP53',
+          seed_value: 'TP53',
+        })),
+      },
+    }
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValueOnce({ status: 409 })
+    serviceMocks.fetchCurationWorkspace.mockImplementationOnce(
+      () => authoritativeRefresh.promise,
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      { wrapper: createWrapper(initialWorkspace) },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => {
+      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledWith('session-1')
+    })
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA3',
+      })
+    })
+    await act(async () => {
+      authoritativeRefresh.resolve(authoritativeWorkspace)
+      await authoritativeRefresh.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.projection_ref?.envelope_revision).toBe(9)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA3',
+        dirty: true,
+      })
+    })
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+    expect(result.current.autosave.warning).toContain('rebased onto the latest revision')
+
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValueOnce(
+      buildEnvelopePatchResponse({
+        workspace: authoritativeWorkspace,
+        value: 'BRCA3',
+        before: 'TP53',
+        previousRevision: 9,
+        envelopeRevision: 10,
+      }),
+    )
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.patchCurationEnvelopeField.mock.calls[1]?.[0]).toMatchObject({
+      expected_revision: 9,
+      before: 'TP53',
+      value: 'BRCA3',
+    })
+  })
+
+  it('uses an authoritative workspace replacement to unblock an envelope conflict', async () => {
+    const initialWorkspace = buildEnvelopeWorkspace()
+    const authoritativeWorkspace = buildEnvelopeWorkspace()
+    authoritativeWorkspace.candidates[0] = {
+      ...authoritativeWorkspace.candidates[0],
+      projection_ref: {
+        ...authoritativeWorkspace.candidates[0].projection_ref!,
+        envelope_revision: 9,
+      },
+      draft: {
+        ...authoritativeWorkspace.candidates[0].draft,
+        version: 9,
+        fields: authoritativeWorkspace.candidates[0].draft.fields.map((field) => ({
+          ...field,
+          value: 'TP53',
+          seed_value: 'TP53',
+        })),
+      },
+    }
+    serviceMocks.patchCurationEnvelopeField
+      .mockRejectedValueOnce({ status: 409 })
+      .mockResolvedValueOnce(
+        buildEnvelopePatchResponse({
+          workspace: authoritativeWorkspace,
+          value: 'BRCA2',
+          before: 'TP53',
+          previousRevision: 9,
+          envelopeRevision: 10,
+        }),
+      )
+    serviceMocks.fetchCurationWorkspace.mockRejectedValueOnce(
+      new Error('refresh unavailable'),
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      { wrapper: createWrapper(initialWorkspace) },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => {
+      expect(result.current.autosave.warning).toContain('latest revision could not be loaded')
+    })
+
+    act(() => {
+      result.current.context.setWorkspace(authoritativeWorkspace)
+    })
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.projection_ref?.envelope_revision).toBe(9)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA2',
+        dirty: true,
+      })
+    })
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(1)
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.patchCurationEnvelopeField.mock.calls[1]?.[0]).toMatchObject({
+      expected_revision: 9,
+      before: 'TP53',
+      value: 'BRCA2',
+    })
+  })
+
+  it('uses the default two draft autosave attempts before preserving local changes', async () => {
     serviceMocks.autosaveCurationCandidateDraft
       .mockRejectedValueOnce(new Error('still unavailable'))
       .mockRejectedValueOnce(new Error('still unavailable'))
@@ -914,10 +1563,41 @@ describe('useAutosave', () => {
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
     })
-    expect(serviceMocks.autosaveCurationCandidateDraft.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
     expect(result.current.warning).toBe(
       'Autosave could not reach the server. Your draft changes remain local and can be retried.',
     )
     expect(result.current.isDirty).toBe(true)
+  })
+
+  it('uses the configured draft autosave attempt limit for transient failures', async () => {
+    vi.stubEnv('VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS', '3')
+    vi.stubEnv('VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS', '25')
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
+    serviceMocks.autosaveCurationCandidateDraft
+      .mockRejectedValueOnce(new Error('temporarily unavailable'))
+      .mockRejectedValueOnce(new Error('still temporarily unavailable'))
+      .mockResolvedValueOnce(buildSavedWorkspaceResponse())
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 10 }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(3)
+      expect(result.current.isDirty).toBe(false)
+    })
+    expect(result.current.warning).toBeNull()
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 25)
   })
 })

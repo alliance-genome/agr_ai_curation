@@ -18,6 +18,7 @@ def _load_openapi_schema() -> Dict[str, Any]:
     spec = importlib.util.spec_from_file_location('tests.pdf_viewer', module_path)
     if spec is None or spec.loader is None:
         pytest.fail("Unable to load pdf_viewer module for contract tests")
+    assert spec is not None and spec.loader is not None
 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -32,6 +33,23 @@ def _resolve(schema: Dict[str, Any], components: Dict[str, Any]) -> Dict[str, An
         return schema
     ref_name = schema["$ref"].split("/")[-1]
     return components["schemas"][ref_name]
+
+
+def _assert_nullable_protected_viewer_url(viewer_url: Dict[str, Any]) -> None:
+    any_of = viewer_url.get("anyOf", [])
+    string_schema = next(
+        (item for item in any_of if item.get("type") == "string"),
+        None,
+    )
+    null_schema = next((item for item in any_of if item.get("type") == "null"), None)
+    assert string_schema is not None, "viewer_url must allow protected API URLs"
+    assert null_schema is not None, "viewer_url must allow null for text-only documents"
+    pattern = string_schema.get("pattern")
+    if pattern is not None:
+        assert pattern.startswith("^/api/pdf-viewer/documents/"), (
+            "viewer_url must use the authenticated PDF content endpoint"
+        )
+        assert "/uploads" not in pattern
 
 
 def test_pdf_viewer_detail_contract():
@@ -81,10 +99,7 @@ def test_pdf_viewer_detail_contract():
 
     properties = resolved.get("properties", {})
     viewer_url = properties.get("viewer_url", {})
-    assert viewer_url.get("type") == "string"
-    pattern = viewer_url.get("pattern")
-    if pattern is not None:
-        assert pattern.startswith("^/uploads/"), "viewer_url must live under /uploads"
+    _assert_nullable_protected_viewer_url(viewer_url)
 
     file_size = properties.get("file_size", {})
     assert file_size.get("exclusiveMinimum") == 0

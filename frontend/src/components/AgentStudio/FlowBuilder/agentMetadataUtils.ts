@@ -4,6 +4,20 @@ import { isExtractionAgent, isValidationAgent } from './smartDefaultUtils'
 
 type AgentMetadataLookup = Record<string, AgentMetadata>
 
+const SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS = new Set([
+  'chat_output',
+  'chat_output_formatter',
+  'csv_formatter',
+  'tsv_formatter',
+  'json_formatter',
+])
+
+const FILE_OUTPUT_FORMATTER_AGENT_IDS = new Set([
+  'csv_formatter',
+  'tsv_formatter',
+  'json_formatter',
+])
+
 interface MetadataClassification {
   categoryIncludes?: string[]
   subcategoryIncludes?: string[]
@@ -57,14 +71,32 @@ export const isValidationAgentFromMetadata = (
   })
 }
 
-export const isOutputFormatterAgentFromMetadata = (
+export const canSourceOutputAttachmentFromMetadata = (
   agentId: string,
   agentMetadata: AgentMetadataLookup
-): boolean =>
-  matchesMetadataClassification(agentId, agentMetadata, {
-    categoryIncludes: ['output'],
-    subcategoryIncludes: ['output', 'format'],
-  })
+): boolean => {
+  const metadata = agentMetadata[agentId]
+  if (metadata?.is_active === false || metadata?.visible === false) return false
+  if (metadata?.produces_flow_artifacts !== undefined) {
+    return metadata.produces_flow_artifacts
+  }
+  if (isExtractionAgentFromMetadata(agentId, agentMetadata)) return true
+
+  return (
+    isValidationAgentFromMetadata(agentId, agentMetadata)
+    && Boolean(metadata?.output_schema_key?.trim())
+  )
+}
+
+export const isOutputFormatterAgentFromMetadata = (
+  agentId: string,
+  _agentMetadata: AgentMetadataLookup
+): boolean => SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS.has(agentId)
+
+export const isFileOutputFormatterAgentFromMetadata = (
+  agentId: string,
+  _agentMetadata: AgentMetadataLookup
+): boolean => FILE_OUTPUT_FORMATTER_AGENT_IDS.has(agentId)
 
 export const resolveOutputFormatterIncludeEvidence = (
   agentId: string,

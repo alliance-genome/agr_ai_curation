@@ -8,6 +8,49 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from src.lib.agent_studio.models import ChatContext
 from src.lib.agent_studio.trace_agent_metadata import get_trace_agent_patterns
+from src.lib.prompts.assembly import PromptLayerBundle
+
+
+def format_prompt_layers_for_opus(bundle: PromptLayerBundle, *, group_id: Optional[str]) -> str:
+    """Render an effective prompt bundle with its inspection metadata and runtime order."""
+
+    separator = "\n\n"
+    combined_prompt = bundle.render(separator=separator)
+    layer_blocks = []
+    content_offset = 0
+    for order, layer in enumerate(bundle.layers, 1):
+        if layer.content:
+            content_start = str(content_offset)
+            content_offset += len(layer.content)
+            content_end = str(content_offset)
+            content_offset += len(separator)
+        else:
+            content_start = "omitted"
+            content_end = "omitted"
+
+        layer_blocks.append(f"""<prompt_layer order="{order}" kind="{layer.kind}" editable="{str(layer.editable).lower()}" locked="{str(layer.locked).lower()}" content_start="{content_start}" content_end="{content_end}">
+<title>{layer.title}</title>
+<provenance>{layer.provenance}</provenance>
+<source_ref>{layer.source_ref}</source_ref>
+</prompt_layer>""")
+
+    selected_group = group_id or "none"
+    return f"""### Effective Prompt Layers
+
+The curator is inspecting the canonical prompt layers below in runtime order. Each
+non-empty layer identifies its zero-based, end-exclusive character span in the
+combined runtime prompt. Empty layers are marked omitted. Separator characters
+between layers are not owned by either layer.
+
+<prompt_layers agent="{bundle.agent_id}" selected_group="{selected_group}">
+{chr(10).join(layer_blocks)}
+</prompt_layers>
+
+### Ordered Combined Runtime Prompt
+
+<combined_prompt agent="{bundle.agent_id}" selected_group="{selected_group}">
+{combined_prompt}
+</combined_prompt>"""
 
 
 def list_anthropic_catalog_models(
@@ -633,36 +676,24 @@ The curator is viewing the **{agent.agent_name}** agent.
 
 **Has group-specific rules:** {'Yes' if agent.has_group_rules else 'No'}""")
 
-                # Include the prompt content based on view mode
-                if context.selected_group_id and context.selected_group_id in agent.group_rules:
-                    group_rule = agent.group_rules[context.selected_group_id]
+                selected_group_id = (
+                    context.selected_group_id
+                    if context.selected_group_id in agent.group_rules
+                    else None
+                )
+                bundle = service.get_effective_prompt_bundle(
+                    context.selected_agent_id,
+                    group_id=selected_group_id,
+                )
+                if bundle is not None:
+                    additions.append(
+                        format_prompt_layers_for_opus(bundle, group_id=selected_group_id)
+                    )
+
+                if agent.has_group_rules:
+                    available_groups = list(agent.group_rules.keys())
                     additions.append(f"""
-### Currently Viewing: {context.selected_group_id}-Specific Rules
-
-The curator is looking at the group-specific rules for {context.selected_group_id}. Here are those rules:
-
-<group_rules group="{context.selected_group_id}">
-{group_rule.content}
-</group_rules>
-
-And here is the base prompt that these rules extend:
-
-<base_prompt agent="{agent.agent_id}">
-{agent.base_prompt}
-</base_prompt>""")
-                else:
-                    # Just viewing the base prompt
-                    additions.append(f"""
-### Currently Viewing: Base Prompt
-
-<base_prompt agent="{agent.agent_id}">
-{agent.base_prompt}
-</base_prompt>""")
-
-                    if agent.has_group_rules:
-                        available_groups = list(agent.group_rules.keys())
-                        additions.append(f"""
-This agent has group-specific rules available for: {', '.join(available_groups)}. The curator can select a group to see how the base prompt is customized.""")
+This agent has group-specific rules available for: {', '.join(available_groups)}. The selected group is {selected_group_id or 'None'}.""")
 
         if context.trace_id:
             # Provide lightweight trace context with tool usage instructions
@@ -727,7 +758,7 @@ This tool returns:
 1. **Initial Instructions** (REQUIRED FIRST STEP) - Define the curation task
 2. **Extraction/Verification agents** - Process the document
 3. **Automatic validation** - Domain-pack metadata and curator selections schedule active validators through runtime dispatch after extraction
-4. **Output agent** (if exporting data) - Shape runtime-owned projections as CSV, TSV, JSON, or chat
+4. **Output branches** (if exporting data) - Attach each CSV, TSV, JSON, or chat formatter directly to exactly one extraction node
 
 Each step receives the flow task, loaded document context, selected agent, and
 that node's custom instructions. Do not recommend custom input templates or
@@ -743,6 +774,10 @@ prompts.
 **When exporting to file (CSV/TSV/JSON):**
 - The Initial Instructions should define WHAT data to collect
 - Domain envelopes define the semantic objects; review rows and files are projections from those objects
+- Every formatter is a terminal output branch bound to one extraction result; it does not merge data from multiple extractors
+- Multiple formatters may attach to one extractor, and a flow may attach formatters to different extractors; each branch produces its own independent artifact
+- The ordinary control-flow chain may continue after an output branch. Do not describe an output attachment as passing data into the next extraction step
+- Filename metadata is runtime-owned. Use output_filename_template with built-ins such as {{input_filename_stem}} and {{timestamp}}; do not require document names or timestamps to exist as extraction fields
 - The formatter agent (chat_output, csv_formatter, tsv_formatter, json_formatter) should define HOW to present projected data
 - Formatter custom instructions should specify column headers, row source, filters, sorting, grouping, and omitted fields when needed
 - The runtime owns extraction, projection, serialization, file saving, and chat rendering; do not recommend model-authored file contents
@@ -752,7 +787,7 @@ prompts.
 2. **PDF Extraction**: Extract relevant sections
 3. **Allele Extraction**: Produce domain-envelope allele objects with field paths and schema/provider refs
 4. **Automatic Validation**: Scheduled validators write findings and lookup attempts back into the envelope
-5. **CSV Formatter**: "Export with columns: parent_gene, allele_id, phenotype"
+5. **CSV Formatter branch attached to Allele Extraction**: "Export with columns: parent_gene, allele_id, phenotype"
 </flow_design_guidance>
 
 <output_format>

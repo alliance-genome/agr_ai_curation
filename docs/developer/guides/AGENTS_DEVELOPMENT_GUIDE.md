@@ -243,15 +243,21 @@ is the minimal supervisor/startup package.
 | `chebi_api_call` | API | ChEBI chemical database API |
 | `quickgo_api_call` | API | QuickGO Gene Ontology API |
 | `go_api_call` | API | GO Consortium annotations API |
-| `save_csv_file` | Output | Persist data as downloadable CSV |
-| `save_tsv_file` | Output | Persist data as downloadable TSV |
-| `save_json_file` | Output | Persist data as downloadable JSON |
+| `explain_formatter_capabilities` | Output | Describe source-backed formatter projection capabilities |
+| `inspect_output_artifacts` | Output | Inspect saved extraction/result artifacts available for export |
+| `inspect_output_rows` | Output | Inspect bounded saved rows from a formatter bundle |
+| `inspect_field_values` | Output | Inspect distinct saved values for a bundle field |
+| `build_default_projection_plan` | Output | Build a source-backed default CSV/TSV/JSON projection plan |
+| `validate_output_projection` | Output | Validate a formatter projection plan without saving |
+| `preview_output_projection` | Output | Preview a validated formatter projection plan without saving |
+| `finalize_and_save` | Output | Save a validated source-backed projection as CSV/TSV/JSON |
+| `formatter_cannot_complete` | Output | Report an unsupported export request without fabricating rows |
 
-The `save_*_file` tools are ordinary formatter-agent tools. Flow terminal
-formatters use the executor's deterministic output-projection path instead:
-completed runtime artifacts are projected, validated, serialized, and saved by
-the runtime, and the terminal formatter must not fall back to model-authored
-`data_json`.
+The formatter tools are runtime-bound and require a saved extraction-result
+bundle plus output format context. They are not ordinary package-callable tools.
+Removed raw file writers such as `save_csv_file(data_json=...)` are hidden from
+curator attachment and rejected by catalog resolution; formatter agents must not
+receive model-authored row arrays or file bytes.
 
 ### Tool Bindings
 
@@ -557,7 +563,10 @@ See `packages/alliance/tools/bindings.yaml` and the normalized `TOOL_REGISTRY` /
 - `search_document`, `read_section`, `read_subsection` -- Weaviate PDF search
 - `curation_db_sql` -- Direct SQL for disease ontology
 - REST API wrappers: `alliance_api_call`, `chebi_api_call`, `quickgo_api_call`, `go_api_call`
-- File output: `save_csv_file`, `save_tsv_file`, `save_json_file`
+- File output: runtime-bound formatter projection tools such as
+  `build_default_projection_plan`, `validate_output_projection`,
+  `preview_output_projection`, `finalize_and_save`, and
+  `formatter_cannot_complete`
 
 ---
 

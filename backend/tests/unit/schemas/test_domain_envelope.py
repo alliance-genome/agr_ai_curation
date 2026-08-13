@@ -37,7 +37,7 @@ def test_envelope_validates_pending_object_and_field_refs_after_extraction():
     envelope = DomainEnvelope(
         envelope_id="env-1",
         domain_pack_id="fixture.core",
-        objects=[_pending_gene_object()],
+        extracted_objects=[_pending_gene_object()],
         validation_findings=[
             ValidationFinding(
                 severity=ValidationFindingSeverity.WARNING,
@@ -103,7 +103,7 @@ def test_envelope_schema_provider_accepts_non_linkml_json_schema_refs():
         envelope_id="museum-env-1",
         domain_pack_id="museum.catalog",
         schema_ref=envelope_schema,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="MuseumArtifact",
                 pending_ref_id="artifact-1",
@@ -114,8 +114,8 @@ def test_envelope_schema_provider_accepts_non_linkml_json_schema_refs():
     )
 
     assert envelope.schema_ref.provider == "json-schema"
-    assert envelope.objects[0].schema_ref.schema_id == "artifact.schema.json"
-    assert envelope.objects[0].object_type == "MuseumArtifact"
+    assert envelope.extracted_objects[0].schema_ref.schema_id == "artifact.schema.json"
+    assert envelope.extracted_objects[0].object_type == "MuseumArtifact"
 
 
 def test_envelope_rejects_unknown_pending_refs():
@@ -123,7 +123,7 @@ def test_envelope_rejects_unknown_pending_refs():
         DomainEnvelope(
             envelope_id="env-1",
             domain_pack_id="fixture.core",
-            objects=[_pending_gene_object()],
+            extracted_objects=[_pending_gene_object()],
             validation_findings=[
                 ValidationFinding(
                     severity=ValidationFindingSeverity.ERROR,
@@ -140,7 +140,7 @@ def test_validation_finding_field_refs_can_target_missing_fields():
     envelope = DomainEnvelope(
         envelope_id="env-1",
         domain_pack_id="fixture.core",
-        objects=[_pending_gene_object()],
+        extracted_objects=[_pending_gene_object()],
         validation_findings=[
             ValidationFinding(
                 severity=ValidationFindingSeverity.ERROR,
@@ -161,7 +161,7 @@ def test_object_field_refs_reject_missing_payload_paths():
         DomainEnvelope(
             envelope_id="env-1",
             domain_pack_id="fixture.core",
-            objects=[
+            extracted_objects=[
                 _pending_gene_object().model_copy(
                     update={
                         "field_refs": [
@@ -205,7 +205,7 @@ def test_validation_finding_persists_validator_request_and_result_details():
     envelope = DomainEnvelope(
         envelope_id="env-validator-details",
         domain_pack_id="fixture.core",
-        objects=[_pending_gene_object()],
+        extracted_objects=[_pending_gene_object()],
         validation_findings=[
             ValidationFinding(
                 severity=ValidationFindingSeverity.INFO,

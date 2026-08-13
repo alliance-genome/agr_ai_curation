@@ -268,11 +268,10 @@ export.
 
 5. If an agent should use the tool, add an agent bundle in the same package and
    reference the tool ID from that agent's `tools:` list.
-6. Restart the standalone stack:
+6. Rerun the guarded production start-and-verify stage:
 
    ```bash
-   docker compose --env-file ~/.agr_ai_curation/.env \
-     -f docker-compose.production.yml up -d
+   scripts/install/install.sh --from-stage 6
    ```
 
 7. Verify package loading in backend logs and, if you use the admin health

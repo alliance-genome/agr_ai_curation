@@ -116,16 +116,10 @@ For each type, ground the design in three real sources before writing code:
   from the existing `chemical_condition` pack.
 - reference: gene_expression → `expression.yaml` (already done).
 
-**AWS curation DB** (readonly, reachable from the backend container; 189 tables). Read 5–20 real
-curated rows per type to learn what curators actually fill, the real CURIE namespaces, reliably-
-present slots. SELECT-only, light queries, never print the URL:
-```
-incus exec symphony-main -- bash -lc 'docker exec agrmainsandbox-backend-1 bash -lc '"'"'python3 -c "
-import os, psycopg2
-c=psycopg2.connect(os.environ[\"CURATION_DB_URL\"]); cur=c.cursor()
-cur.execute(\"select table_name from information_schema.tables where table_schema=%s and table_name ilike %s order by 1\", (\"public\",\"%disease%\"))
-print([r[0] for r in cur.fetchall()]); c.close()"'"'"''
-```
+**Curation DB** (readonly, configured through `CURATION_DB_URL`). Read 5–20 real
+curated rows per type to learn what curators actually fill, the real CURIE
+namespaces, and reliably present slots. Use focused `SELECT` queries from the
+backend container and never print the connection URL or credentials.
 Discovered tables include `gene`, `genediseaseannotation`, `diseaseannotation_*`, `allele*`,
 `geneexpressionannotation`. Literature DB (`LITERATURE_DB_URL`) tunnel may be DOWN — note + skip;
 `ELASTICSEARCH` `references_index` is the PMID search index.
@@ -206,36 +200,27 @@ builder mapping → open questions). Commit it; it justifies the code.
 
 ---
 
-## 7. Sandbox deploy + test (the proven loop)
+## 7. Local deploy and test loop
 
-Sandbox = Incus VM `symphony-main`, compose project `agrmainsandbox`, backend `127.0.0.1:8900`
-(inside VM), worktree `WT=/home/ctabone/.symphony/sandboxes/agr_ai_curation/main` with uvicorn
-`--reload`. Backend mounts `backend/src`, `packages`, `backend/tests` (tests read-only) from WT.
+Use a clean checkout and the documented Compose development stack. Rebuild the
+affected service rather than copying source directly into a running container.
 
-**Deploy a changed file** (uvicorn reloads on any `backend/src` change, re-importing packages too):
+**Run unit/contract tests:**
 ```
-incus file push <relpath> symphony-main$WT/<relpath> --uid 1000 --gid 1000
-```
-**Run unit/contract tests** (push test files first; tests dir is mounted read-only from WT):
-```
-incus exec symphony-main -- bash -lc 'docker exec -w /app/backend agrmainsandbox-backend-1 \
-  python -m pytest tests/contract/alliance/domain_packs/test_<type>_domain_pack.py -q'
+bash scripts/testing/docker-test-compose.sh run --rm backend-contract-tests \
+  bash -lc 'python -m pytest tests/contract/alliance/domain_packs/test_<type>_domain_pack.py -q'
 ```
 **End-to-end** (one real extraction → findings). Harness pattern (adapt SID/DOC per type; each
 type needs a representative processed PDF — gene_expression used `DOC=a31b1ff3`; find/confirm a
 test doc per type and record it in the approach doc):
 ```
-BASE=http://127.0.0.1:8900; DOC=<doc_id>; SID=<type>-testNN-$(date +%s)
+BASE=${BACKEND_URL:-http://127.0.0.1:8000}; DOC=<doc_id>; SID=<type>-testNN-$(date +%s)
 curl -s -X POST $BASE/api/chat/document/load -d "{\"document_id\":\"$DOC\"}" -H 'Content-Type: application/json'
 curl -s -m600 -X POST $BASE/api/chat -d "{\"message\":\"Extract all <type> from this publication\",\"session_id\":\"$SID\"}" -H 'Content-Type: application/json'
 curl -s -m300 -X POST "$BASE/api/curation-workspace/documents/$DOC/bootstrap" -d "{\"origin_session_id\":\"$SID\"}" -H 'Content-Type: application/json'
 ```
-**Findings by code** (confirm structural findings are 0) — `/tmp/findings_by_code.sql` queries the
-latest envelope's revision, grouped by `code`, against `agrmainsandbox-postgres-1`:
-```
-incus exec symphony-main -- bash -lc 'docker exec -i agrmainsandbox-postgres-1 \
-  psql -U postgres -d ai_curation -At -F"  " < /tmp/findings_by_code.sql'
-```
+**Findings by code** (confirm structural findings are 0) — query the latest
+envelope revision grouped by `code` through the local Compose database service.
 PASS = no `entity_assayed_mismatch` / `object_not_pending` / `metadata_refs_missing` /
 `validator_materialization_invalid`; only `validator_resolved`/`validator_unresolved`/(maybe)
 `validator_error`. Builder workspace can be "finalized" if a doc was already extracted — use a

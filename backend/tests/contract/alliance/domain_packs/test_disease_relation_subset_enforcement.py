@@ -64,7 +64,7 @@ def _annotation_envelope(*, object_type: str, subject_type: str | None, relation
     return DomainEnvelope(
         envelope_id="disease-subset-env",
         domain_pack_id="agr.alliance.disease",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=object_type,
                 pending_ref_id="disease-annotation-1",

@@ -314,7 +314,7 @@ Add a `WorkspaceShell.test.tsx` (or extend) asserting the work pane renders the 
 
 - [ ] **Step 4: Manual check on dev**
 
-Open `http://10.79.64.167:3900/curation/a1419a0e-...` and confirm: full-height PDF left; object selector + grouped form right; selecting an object updates the form and the URL; clicking a field's evidence chip still highlights the PDF.
+Open `http://127.0.0.1:3900/curation/a1419a0e-...` and confirm: full-height PDF left; object selector + grouped form right; selecting an object updates the form and the URL; clicking a field's evidence chip still highlights the PDF.
 
 - [ ] **Step 5: Commit**
 

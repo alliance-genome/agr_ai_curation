@@ -3,8 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { onPDFViewerEvidenceAnchorSelected } from '@/components/pdfViewer/pdfEvents'
 import type {
   CurationCandidate,
-  CurationEvidenceRecord,
 } from '@/features/curation/types'
+import { resolveEnvelopeFieldPathCandidates } from './workspaceState'
 
 const FIELD_ROW_DATA_ATTRIBUTE = 'data-field-key'
 const PDF_TO_FORM_HIGHLIGHT_CLASSNAME = 'pdf-to-form-linked-field'
@@ -13,33 +13,49 @@ const PDF_TO_FORM_HIGHLIGHT_DURATION_MS = 1_800
 interface PdfToFormTarget {
   anchorId: string
   candidateId: string
-  fieldKey: string | null
+  fieldKey: string
+}
+
+interface ScopedPdfToFormTarget extends PdfToFormTarget {
+  documentId: string
+  ownerToken: string
 }
 
 export interface UsePdfToFormLinkingOptions {
   activeCandidateId: string | null
   candidates: CurationCandidate[]
-  evidenceByAnchorId: Record<string, CurationEvidenceRecord>
+  documentId: string
+  evidenceByAnchorId: Record<string, PdfToFormEvidence>
+  ownerToken: string
   setActiveCandidate: (
     candidateId: string | null,
     options?: { replace?: boolean },
   ) => void
 }
 
-function findFieldRowElement(fieldKey: string): HTMLElement | null {
+export interface PdfToFormEvidence {
+  anchorId: string
+  candidateId: string
+  fieldPaths: string[]
+}
+
+function findFieldRowElement(fieldKey: string, candidateId: string): HTMLElement | null {
   return Array.from(document.querySelectorAll<HTMLElement>(`[${FIELD_ROW_DATA_ATTRIBUTE}]`))
-    .find((element) => element.dataset.fieldKey === fieldKey) ?? null
+    .find((element) =>
+      element.dataset.fieldKey === fieldKey
+      && element.closest<HTMLElement>('[data-candidate-id]')?.dataset.candidateId === candidateId
+    ) ?? null
 }
 
 function findCandidateFieldKey(
   candidate: CurationCandidate,
-  evidence: CurationEvidenceRecord,
+  evidence: PdfToFormEvidence,
 ): string | null {
-  const fieldKeys = new Set(candidate.draft.fields.map((field) => field.field_key))
-
-  for (const fieldKey of evidence.field_keys) {
-    if (fieldKeys.has(fieldKey)) {
-      return fieldKey
+  for (const fieldPath of evidence.fieldPaths) {
+    for (const field of candidate.draft.fields) {
+      if (resolveEnvelopeFieldPathCandidates(field).has(fieldPath)) {
+        return field.field_key
+      }
     }
   }
 
@@ -49,7 +65,7 @@ function findCandidateFieldKey(
 export function resolvePdfToFormTarget(
   anchorId: string,
   candidates: CurationCandidate[],
-  evidenceByAnchorId: Record<string, CurationEvidenceRecord>,
+  evidenceByAnchorId: Record<string, PdfToFormEvidence>,
 ): PdfToFormTarget | null {
   const evidence = evidenceByAnchorId[anchorId]
   if (!evidence) {
@@ -57,28 +73,44 @@ export function resolvePdfToFormTarget(
   }
 
   const candidate = candidates.find(
-    (entry) => entry.candidate_id === evidence.candidate_id,
+    (entry) => entry.candidate_id === evidence.candidateId,
   )
   if (!candidate) {
     return null
   }
 
+  const fieldKey = findCandidateFieldKey(candidate, evidence)
+  if (!fieldKey) {
+    return null
+  }
+
   return {
-    anchorId: evidence.anchor_id,
+    anchorId: evidence.anchorId,
     candidateId: candidate.candidate_id,
-    fieldKey: findCandidateFieldKey(candidate, evidence),
+    fieldKey,
   }
 }
 
 export function usePdfToFormLinking({
   activeCandidateId,
   candidates,
+  documentId,
   evidenceByAnchorId,
+  ownerToken,
   setActiveCandidate,
 }: UsePdfToFormLinkingOptions): void {
-  const [pendingTarget, setPendingTarget] = useState<PdfToFormTarget | null>(null)
+  const [pendingTarget, setPendingTarget] = useState<ScopedPdfToFormTarget | null>(null)
   const highlightedElementRef = useRef<HTMLElement | null>(null)
   const highlightTimeoutRef = useRef<number | null>(null)
+  const optionsRef = useRef<UsePdfToFormLinkingOptions>()
+  optionsRef.current = {
+    activeCandidateId,
+    candidates,
+    documentId,
+    evidenceByAnchorId,
+    ownerToken,
+    setActiveCandidate,
+  }
 
   const clearHighlightedField = useCallback(() => {
     if (highlightTimeoutRef.current !== null) {
@@ -98,45 +130,58 @@ export function usePdfToFormLinking({
 
   useEffect(() => {
     const unsubscribe = onPDFViewerEvidenceAnchorSelected((event) => {
+      const current = optionsRef.current
       const anchorId = event.detail?.anchorId
-      if (!anchorId) {
+      if (
+        !current
+        || !anchorId
+        || event.detail.documentId !== current.documentId
+        || event.detail.ownerToken !== current.ownerToken
+      ) {
         return
       }
 
       const nextTarget = resolvePdfToFormTarget(
         anchorId,
-        candidates,
-        evidenceByAnchorId,
+        current.candidates,
+        current.evidenceByAnchorId,
       )
       if (!nextTarget) {
         return
       }
 
-      setPendingTarget(nextTarget)
-      if (nextTarget.candidateId !== activeCandidateId) {
-        setActiveCandidate(nextTarget.candidateId)
+      setPendingTarget({
+        ...nextTarget,
+        documentId: current.documentId,
+        ownerToken: current.ownerToken,
+      })
+      if (nextTarget.candidateId !== current.activeCandidateId) {
+        current.setActiveCandidate(nextTarget.candidateId)
       }
     })
 
     return unsubscribe
-  }, [
-    activeCandidateId,
-    candidates,
-    evidenceByAnchorId,
-    setActiveCandidate,
-  ])
+  }, [])
 
   useEffect(() => {
-    if (!pendingTarget || pendingTarget.candidateId !== activeCandidateId) {
+    setPendingTarget(null)
+    clearHighlightedField()
+  }, [clearHighlightedField, documentId, ownerToken])
+
+  useEffect(() => {
+    if (
+      !pendingTarget
+      || pendingTarget.candidateId !== activeCandidateId
+      || pendingTarget.documentId !== documentId
+      || pendingTarget.ownerToken !== ownerToken
+    ) {
       return
     }
 
-    if (!pendingTarget.fieldKey) {
-      setPendingTarget(null)
-      return
-    }
-
-    const targetField = findFieldRowElement(pendingTarget.fieldKey)
+    const targetField = findFieldRowElement(
+      pendingTarget.fieldKey,
+      pendingTarget.candidateId,
+    )
     if (!targetField) {
       setPendingTarget(null)
       return
@@ -149,6 +194,11 @@ export function usePdfToFormLinking({
       block: 'center',
       inline: 'nearest',
     })
+    const focusSelector = 'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusTarget = targetField.matches(focusSelector)
+      ? targetField
+      : targetField.querySelector<HTMLElement>(focusSelector)
+    focusTarget?.focus({ preventScroll: true })
     targetField.classList.add(PDF_TO_FORM_HIGHLIGHT_CLASSNAME)
     highlightedElementRef.current = targetField
     highlightTimeoutRef.current = window.setTimeout(() => {
@@ -159,7 +209,13 @@ export function usePdfToFormLinking({
       highlightTimeoutRef.current = null
     }, PDF_TO_FORM_HIGHLIGHT_DURATION_MS)
     setPendingTarget(null)
-  }, [activeCandidateId, clearHighlightedField, pendingTarget])
+  }, [
+    activeCandidateId,
+    clearHighlightedField,
+    documentId,
+    ownerToken,
+    pendingTarget,
+  ])
 }
 
 export {

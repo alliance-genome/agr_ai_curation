@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 from alembic import command
 from alembic.config import Config
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry,
@@ -27,6 +30,7 @@ from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     DomainEnvelopePersistenceError,
     StaleDomainEnvelopeRevisionError,
+    domain_envelope_payload_hash,
     load_domain_envelope,
     write_domain_envelope_checkpoint,
     _stable_object_id,
@@ -36,6 +40,8 @@ from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
+    CurationCandidateSource,
+    CurationCandidateStatus,
     CurationSessionStatus,
 )
 from src.schemas.domain_envelope import (
@@ -55,6 +61,8 @@ from src.schemas.domain_envelope import (
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
+OWNER_DOCUMENT_ID = UUID("00000000-0000-0000-0000-000000000697")
+OWNER_SESSION_ID = UUID("00000000-0000-0000-0000-000000006697")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -67,6 +75,12 @@ def migrated_database():
 def db_session():
     session = SessionLocal()
     _clean_domain_tables(session)
+    _create_review_session_for_action_log(
+        session,
+        session_id=OWNER_SESSION_ID,
+        document_id=OWNER_DOCUMENT_ID,
+    )
+    session.commit()
     try:
         yield session
     finally:
@@ -102,6 +116,9 @@ def _checkpoint_request(
         envelope=envelope,
         expected_revision=expected_revision,
         flow_run_id="flow-run-1290",
+        document_id=OWNER_DOCUMENT_ID,
+        session_id=OWNER_SESSION_ID,
+        adapter_key="fixture_adapter",
         object_model_ref_json={"registry": "domain-pack"},
         model_field_ref_json={"fields": "provider-neutral"},
     )
@@ -114,9 +131,14 @@ def _legacy_semantic_row_counts(session) -> dict[str, int]:
     }
 
 
-def _create_review_session_for_action_log(session) -> CurationReviewSession:
+def _create_review_session_for_action_log(
+    session,
+    *,
+    session_id: UUID | None = None,
+    document_id: UUID | None = None,
+) -> CurationReviewSession:
     document = PDFDocument(
-        id=uuid4(),
+        id=document_id or uuid4(),
         filename=f"field_patch_constraint_{uuid4()}.pdf",
         title="Field patch constraint paper",
         file_path=f"/tmp/field_patch_constraint_{uuid4()}.pdf",
@@ -131,7 +153,7 @@ def _create_review_session_for_action_log(session) -> CurationReviewSession:
     session.flush()
 
     review_session = CurationReviewSession(
-        id=uuid4(),
+        id=session_id or uuid4(),
         status=CurationSessionStatus.IN_PROGRESS,
         adapter_key="fixture_adapter",
         document_id=document.id,
@@ -219,7 +241,7 @@ def _envelope(*, include_second_object: bool = True, symbol: str = "ABC-1") -> D
         domain_pack_version="0.7.0",
         status=DomainEnvelopeStatus.EXTRACTED,
         schema_ref=schema_ref,
-        objects=objects,
+        extracted_objects=objects,
         validation_findings=[
             ValidationFinding(
                 finding_id="finding-symbol-case",
@@ -341,6 +363,10 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
     assert envelope_row.revision == 1
     assert envelope_row.domain_pack_key == "fixture.core"
     assert envelope_row.schema_provider == "json-schema"
+    persisted_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    assert envelope_row.source_payload_hash == domain_envelope_payload_hash(
+        persisted_envelope
+    )
     assert _legacy_semantic_row_counts(db_session) == legacy_counts_before
 
     object_rows = db_session.scalars(
@@ -377,7 +403,7 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
 
     unchanged = db_session.get(DomainEnvelopeModel, "env-persistence-test")
     assert unchanged.revision == 1
-    assert unchanged.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "ABC-1"
+    assert unchanged.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "ABC-1"
 
     update_result = write_domain_envelope_checkpoint(
         db_session,
@@ -394,13 +420,13 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
 
     refreshed = db_session.get(DomainEnvelopeModel, "env-persistence-test")
     assert refreshed.revision == 2
-    assert refreshed.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "XYZ-2"
+    assert refreshed.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "XYZ-2"
     assert _legacy_semantic_row_counts(db_session) == legacy_counts_before
     assert load_domain_envelope(
         db_session,
         "env-persistence-test",
         revision=2,
-    ).objects[0].payload["gene"]["symbol"] == "XYZ-2"
+    ).extracted_objects[0].payload["gene"]["symbol"] == "XYZ-2"
 
     assert db_session.scalar(
         select(DomainEnvelopeObject).where(DomainEnvelopeObject.object_id == "reference-1")
@@ -424,9 +450,171 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
 
 
 @pytest.mark.integration
+def test_candidate_cannot_link_owned_envelope_to_another_session(db_session):
+    write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(_envelope(), expected_revision=0),
+    )
+    other_session = _create_review_session_for_action_log(db_session)
+    candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=other_session.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=0,
+        adapter_key="fixture_adapter",
+        envelope_id="env-persistence-test",
+        object_id="gene-1",
+        envelope_revision=1,
+        normalized_payload={},
+        candidate_metadata={},
+    )
+    db_session.add(candidate)
+
+    with pytest.raises(IntegrityError, match="fk_curation_candidates_envelope_session_owner"):
+        db_session.commit()
+    db_session.rollback()
+
+
+@pytest.mark.integration
+def test_database_rejects_domain_envelope_scope_identity_changes(db_session):
+    write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(_envelope(), expected_revision=0),
+    )
+    db_session.commit()
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-persistence-test")
+    envelope_row.project_key = "different-project"
+
+    with pytest.raises(DBAPIError, match="identity scope is immutable"):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.integration
+def test_checkpoint_flushes_without_committing_caller_session(db_session, monkeypatch):
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
+
+    result = write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(_envelope(), expected_revision=0),
+    )
+
+    assert result.revision == 1
+    assert commit_calls == 0
+    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is not None
+    db_session.rollback()
+    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
+
+
+@pytest.mark.integration
+def test_validation_group_worker_commits_materialized_checkpoint(db_session, monkeypatch):
+    """The flow validator worker must commit the transaction for the session it opens."""
+    from src.lib.flows import executor
+
+    source_envelope = _envelope()
+    write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(source_envelope, expected_revision=0),
+    )
+    db_session.commit()
+
+    appended_finding = ValidationFinding(
+        severity=ValidationFindingSeverity.INFO,
+        message="Flow validator confirmed the symbol.",
+        code="fixture.flow_validator_confirmed",
+        field_ref=FieldRef(
+            object_ref=ObjectRef(object_id="gene-1"),
+            field_path="gene.symbol",
+        ),
+    )
+
+    async def _collect_materialization_inputs(**_kwargs):
+        return [], [appended_finding], []
+
+    monkeypatch.setattr(
+        executor,
+        "_persist_flow_extraction_candidates",
+        lambda **_kwargs: [SimpleNamespace(extraction_result_id="result-1")],
+    )
+    monkeypatch.setattr(
+        executor,
+        "ensure_domain_envelope_materialization",
+        lambda _record, *, persist: SimpleNamespace(
+            envelope_id=source_envelope.envelope_id
+        ),
+    )
+    monkeypatch.setattr(
+        executor,
+        "resolve_curation_domain_pack_by_id",
+        lambda _domain_pack_id: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        executor.DomainPackValidationRegistry,
+        "from_domain_pack",
+        lambda _domain_pack: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_collect_flow_validator_materialization_inputs",
+        _collect_materialization_inputs,
+    )
+
+    result = asyncio.run(
+        executor._execute_validation_groups_for_step(
+            flow=executor.CurationFlow(
+                user_id=1,
+                name="Validation persistence test",
+                flow_definition={"nodes": [], "edges": []},
+            ),
+            candidate=executor.ExtractionEnvelopeCandidate(
+                agent_key="fixture-extractor",
+                payload_json=source_envelope.model_dump(mode="json"),
+            ),
+            node_data={
+                "validation_groups": [
+                    {
+                        "group_id": "automatic-symbol-check",
+                        "state": "automatic",
+                        "binding_id": "fixture.symbol-check",
+                    }
+                ]
+            },
+            document_id=str(uuid4()),
+            user_id="curator-1",
+            session_id=str(uuid4()),
+            flow_run_id="flow-run-validator",
+            agent_context={"user_id": "curator-1"},
+            flow_conversation_summary="Validated the extracted symbol.",
+        )
+    )
+
+    assert result["validation_group_results"]["materialized_envelope_revision"] == 2
+    fresh_session = SessionLocal()
+    try:
+        persisted = fresh_session.get(DomainEnvelopeModel, source_envelope.envelope_id)
+        assert persisted is not None
+        assert persisted.revision == 2
+        assert {
+            finding["code"] for finding in persisted.envelope_json["validation_findings"]
+        } == {
+            "fixture.symbol_case",
+            "fixture.flow_validator_confirmed",
+        }
+    finally:
+        fresh_session.close()
+
+
+@pytest.mark.integration
 def test_projection_uniqueness_rolls_back_checkpoint(db_session):
     envelope = _envelope(include_second_object=False)
-    first_object = envelope.objects[0]
+    first_object = envelope.extracted_objects[0]
     duplicate_projection = {
         "projection_type": "workspace_row",
         "projection_key": "gene-1",
@@ -434,7 +622,7 @@ def test_projection_uniqueness_rolls_back_checkpoint(db_session):
     }
     envelope = envelope.model_copy(
         update={
-            "objects": [
+            "extracted_objects": [
                 first_object.model_copy(
                     update={
                         "metadata": {
@@ -456,16 +644,17 @@ def test_projection_uniqueness_rolls_back_checkpoint(db_session):
             _checkpoint_request(envelope, expected_revision=0),
         )
 
+    db_session.rollback()
     assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
 
 
 @pytest.mark.integration
 def test_malformed_projection_metadata_rolls_back_checkpoint(db_session):
     envelope = _envelope(include_second_object=False)
-    first_object = envelope.objects[0]
+    first_object = envelope.extracted_objects[0]
     envelope = envelope.model_copy(
         update={
-            "objects": [
+            "extracted_objects": [
                 first_object.model_copy(
                     update={
                         "metadata": {
@@ -487,16 +676,17 @@ def test_malformed_projection_metadata_rolls_back_checkpoint(db_session):
             _checkpoint_request(envelope, expected_revision=0),
         )
 
+    db_session.rollback()
     assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
 
 
 @pytest.mark.integration
 def test_projection_entries_require_projection_json(db_session):
     envelope = _envelope(include_second_object=False)
-    first_object = envelope.objects[0]
+    first_object = envelope.extracted_objects[0]
     envelope = envelope.model_copy(
         update={
-            "objects": [
+            "extracted_objects": [
                 first_object.model_copy(
                     update={
                         "metadata": {
@@ -524,12 +714,13 @@ def test_projection_entries_require_projection_json(db_session):
             _checkpoint_request(envelope, expected_revision=0),
         )
 
+    db_session.rollback()
     assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
 
 
 def test_missing_stable_object_id_fails_loudly():
     envelope = _envelope(include_second_object=False)
-    first_object = envelope.objects[0]
+    first_object = envelope.extracted_objects[0]
     object_without_identity = first_object.model_copy(
         update={
             "object_id": None,

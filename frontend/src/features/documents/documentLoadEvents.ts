@@ -1,3 +1,5 @@
+import { safeRemoveItem, safeSetItem } from '@/lib/browserStorage'
+
 export const DOCUMENT_LOADING_STORAGE_KEY = 'document-loading'
 export const DOCUMENT_LOAD_START_EVENT = 'document-load-start'
 export const DOCUMENT_LOAD_COMPLETE_EVENT = 'document-load-complete'
@@ -10,16 +12,25 @@ export interface DocumentLoadEventDetail {
 }
 
 export function startDocumentLoad(detail: DocumentLoadEventDetail): void {
-  sessionStorage.setItem(DOCUMENT_LOADING_STORAGE_KEY, 'true')
+  safeSetItem(() => window.sessionStorage, DOCUMENT_LOADING_STORAGE_KEY, 'true', {
+    owner: 'workflow',
+    workflowCritical: true,
+  })
   window.dispatchEvent(new CustomEvent(DOCUMENT_LOAD_START_EVENT, { detail }))
 }
 
 export function completeDocumentLoad(detail: DocumentLoadEventDetail): void {
-  sessionStorage.removeItem(DOCUMENT_LOADING_STORAGE_KEY)
+  safeRemoveItem(() => window.sessionStorage, DOCUMENT_LOADING_STORAGE_KEY, {
+    owner: 'workflow',
+    workflowCritical: true,
+  })
   window.dispatchEvent(new CustomEvent(DOCUMENT_LOAD_COMPLETE_EVENT, { detail }))
 }
 
 export function failDocumentLoad(detail: DocumentLoadEventDetail): void {
-  sessionStorage.removeItem(DOCUMENT_LOADING_STORAGE_KEY)
+  safeRemoveItem(() => window.sessionStorage, DOCUMENT_LOADING_STORAGE_KEY, {
+    owner: 'workflow',
+    workflowCritical: true,
+  })
   window.dispatchEvent(new CustomEvent(DOCUMENT_LOAD_ERROR_EVENT, { detail }))
 }

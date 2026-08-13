@@ -320,14 +320,14 @@ def test_allele_builder_golden_fixture_loads_with_relative_refs():
 
     association = next(
         obj
-        for obj in envelope.objects
+        for obj in envelope.extracted_objects
         if obj.object_type == ALLELE_ASSOCIATION_OBJECT_TYPE
     )
     assert association.pending_ref_id == "allele-paper-evidence-association-1"
 
     extraction_metadata = envelope.metadata.get("extraction_metadata")
     assert isinstance(extraction_metadata, Mapping)
-    for obj in envelope.objects:
+    for obj in envelope.extracted_objects:
         for ref in obj.metadata_refs:
             assert not ref.metadata_path.startswith("extraction_metadata")
             assert field_path_exists(extraction_metadata, ref.metadata_path)

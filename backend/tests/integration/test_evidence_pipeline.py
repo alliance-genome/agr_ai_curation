@@ -263,7 +263,7 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
         "pending_ref_id"
     ]
     assert workspace_candidate["normalized_payload"] == {}
-    assert workspace_candidate["metadata"]["semantic_source"] == "domain_envelope.objects"
+    assert workspace_candidate["metadata"]["semantic_source"] == "domain_envelope.extracted_objects"
     assert workspace_candidate["metadata"]["object_type"] == (
         expected_payload["curatable_objects"][0]["object_type"]
     )
@@ -353,7 +353,7 @@ async def test_fixture_scoped_prep_bootstrap_drops_legacy_profile_scope_from_sha
     workspace_candidate = workspace_response.json()["workspace"]["candidates"][0]
 
     assert "profile_key" not in workspace_candidate
-    assert workspace_candidate["metadata"]["semantic_source"] == "domain_envelope.objects"
+    assert workspace_candidate["metadata"]["semantic_source"] == "domain_envelope.extracted_objects"
 
 
 @pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)

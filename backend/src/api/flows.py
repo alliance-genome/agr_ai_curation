@@ -32,12 +32,18 @@ from ..lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
     apply_flow_validation_attachment_defaults,
 )
-from ..lib.agent_studio.catalog_service import AGENT_REGISTRY, get_agent_metadata
+from ..lib.agent_studio.catalog_service import get_active_visible_agent_metadata
 from ..lib.agent_studio.flow_agent_policy import (
     agent_allows_ordinary_flow_step,
     attachment_only_validator_reason,
 )
+from ..lib.config.schema_discovery import resolve_output_schema
 from ..lib.openai_agents.config import get_flow_list_page_size_default
+from ..lib.flow_edge_roles import (
+    OUTPUT_ATTACHMENT_EDGE_ROLE,
+    SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
+    agent_can_source_output_attachment,
+)
 from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import (
@@ -47,6 +53,7 @@ from ..schemas.flows import (
     FlowListResponse,
     FlowResponse,
     FlowSummaryResponse,
+    FlowValidationWarning,
     UpdateFlowRequest,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
 )
@@ -60,27 +67,54 @@ router = APIRouter(prefix="/api/flows")
 DEFAULT_FLOW_LIST_PAGE_SIZE = get_flow_list_page_size_default()
 
 
+class _FlowDatabaseError(RuntimeError):
+    """Sanitized flow database failure safe for logs and Sentry."""
+
+
+def _sanitized_flow_db_error(orig_type_name: str, *, operation: str) -> _FlowDatabaseError:
+    try:
+        raise _FlowDatabaseError(f"Flow {operation} failed ({orig_type_name})") from None
+    except _FlowDatabaseError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
 def _validated_flow_definition_payload(
     flow_definition: FlowDefinition,
     *,
     db_user_id: int | None = None,
     enforce_agent_step_policy: bool = False,
+    enforce_agent_references: bool = False,
 ) -> dict[str, Any]:
     """Return flow definition JSON with metadata-backed validation defaults."""
 
-    validated = _validated_flow_definition(flow_definition)
+    validated = _validated_flow_definition(
+        flow_definition,
+        db_user_id=db_user_id,
+        enforce_agent_references=enforce_agent_references,
+    )
     if enforce_agent_step_policy:
+        _validate_output_attachment_agent_roles(validated, db_user_id=db_user_id)
         _validate_flow_agent_step_policy(validated, db_user_id=db_user_id)
     return validated.model_dump()
 
 
-def _validated_flow_definition(flow_definition: FlowDefinition) -> FlowDefinition:
+def _validated_flow_definition(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None = None,
+    enforce_agent_references: bool = False,
+) -> FlowDefinition:
     """Return a flow definition hydrated with metadata-backed validation defaults."""
 
     try:
-        return apply_flow_validation_attachment_defaults(flow_definition)
+        validated = apply_flow_validation_attachment_defaults(flow_definition)
     except FlowValidationAttachmentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if enforce_agent_references:
+        _validate_flow_agent_references(validated, db_user_id=db_user_id)
+    return validated
 
 
 def _flow_agent_policy_entry(
@@ -90,24 +124,99 @@ def _flow_agent_policy_entry(
 ) -> dict[str, Any] | None:
     """Return the metadata needed to enforce ordinary-flow-step policy."""
 
-    registry_entry = AGENT_REGISTRY.get(agent_id)
-    if isinstance(registry_entry, dict):
-        return registry_entry
-
     metadata_kwargs: dict[str, Any] = {}
     if db_user_id is not None:
         metadata_kwargs["db_user_id"] = db_user_id
 
     try:
-        metadata = get_agent_metadata(agent_id, **metadata_kwargs)
+        metadata = get_active_visible_agent_metadata(agent_id, **metadata_kwargs)
     except ValueError:
         return None
+
+    if not isinstance(metadata, dict):
+        return None
+
+    category = str(metadata.get("category") or "").strip().lower()
+    subcategory = str(metadata.get("subcategory") or "").strip().lower()
+    output_schema_key = str(
+        metadata.get("output_schema_key") or metadata.get("output_schema") or ""
+    ).strip()
+    is_extraction = "extract" in category or "extract" in subcategory
+    is_typed_validation = bool(
+        "validation" in category
+        and output_schema_key
+        and resolve_output_schema(output_schema_key) is not None
+    )
 
     return {
         "name": metadata.get("display_name", agent_id),
         "category": metadata.get("category") or "",
+        "subcategory": metadata.get("subcategory") or "",
+        "output_schema_key": output_schema_key or None,
+        "is_active": metadata.get("is_active", True),
+        "visible": metadata.get("visible", True),
+        "visibility": metadata.get("visibility"),
+        "produces_flow_artifacts": is_extraction or is_typed_validation,
         "supervisor": metadata.get("supervisor") or {},
     }
+
+
+def _is_supported_output_formatter_agent(agent_id: str) -> bool:
+    """Return whether runtime has a scoped formatter implementation for this ID."""
+
+    return agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+
+
+def _validate_output_attachment_agent_roles(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None,
+) -> None:
+    """Enforce typed-source-to-formatter roles using catalog metadata."""
+
+    nodes_by_id = {node.id: node for node in flow_definition.nodes}
+    errors: list[str] = []
+    for edge in flow_definition.edges:
+        if edge.role != OUTPUT_ATTACHMENT_EDGE_ROLE:
+            continue
+        source = nodes_by_id.get(edge.source)
+        target = nodes_by_id.get(edge.target)
+        source_entry = (
+            _flow_agent_policy_entry(source.data.agent_id, db_user_id=db_user_id)
+            if source is not None and source.data.agent_id != "task_input"
+            else None
+        )
+        if source is None or not agent_can_source_output_attachment(source_entry):
+            source_label = source.data.agent_display_name if source is not None else edge.source
+            errors.append(
+                f"output attachment '{edge.id}' source '{source_label}' is not an "
+                "extraction agent or a typed validation agent"
+            )
+        if target is None or not _is_supported_output_formatter_agent(
+            target.data.agent_id
+        ):
+            target_label = target.data.agent_display_name if target is not None else edge.target
+            errors.append(
+                f"output attachment '{edge.id}' target '{target_label}' is not an output formatter"
+            )
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid output attachment role(s): " + "; ".join(errors),
+        )
+
+
+def _is_output_formatter_policy_entry(
+    agent_id: str,
+    entry: dict[str, Any] | None,
+) -> bool:
+    if agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS:
+        return True
+    if not isinstance(entry, dict):
+        return False
+    category = str(entry.get("category") or "").strip().lower()
+    subcategory = str(entry.get("subcategory") or "").strip().lower()
+    return "output" in category or "output" in subcategory or "format" in subcategory
 
 
 def _validate_flow_agent_step_policy(
@@ -122,6 +231,11 @@ def _validate_flow_agent_step_policy(
         for edge in flow_definition.edges
         if edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
     }
+    output_attachment_sources = {
+        edge.source
+        for edge in flow_definition.edges
+        if edge.role == OUTPUT_ATTACHMENT_EDGE_ROLE
+    }
     control_flow_edges_by_node: dict[str, list[str]] = {}
     for edge in flow_definition.edges:
         if edge.role != DEFAULT_FLOW_EDGE_ROLE:
@@ -135,10 +249,26 @@ def _validate_flow_agent_step_policy(
             continue
 
         entry = _flow_agent_policy_entry(agent_id, db_user_id=db_user_id)
+        control_flow_edge_ids = control_flow_edges_by_node.get(node.id, [])
+        if control_flow_edge_ids and _is_output_formatter_policy_entry(agent_id, entry):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Formatter node '{node.data.agent_display_name}' must be an explicit "
+                    "output node connected only by output_attachment edge(s). Remove "
+                    f"ordinary control-flow edge(s): {', '.join(control_flow_edge_ids)}."
+                ),
+            )
+        if (
+            node.id in output_attachment_sources
+            and agent_can_source_output_attachment(entry)
+        ):
+            # A typed validation result is a supported formatter input even when
+            # the validator is otherwise hidden from ordinary supervisor dispatch.
+            continue
         if entry is None or agent_allows_ordinary_flow_step(agent_id, entry):
             continue
 
-        control_flow_edge_ids = control_flow_edges_by_node.get(node.id, [])
         if node.id in validation_attachment_targets and not control_flow_edge_ids:
             continue
 
@@ -157,11 +287,76 @@ def _validate_flow_agent_step_policy(
         raise HTTPException(status_code=422, detail=reason)
 
 
+def _validate_flow_agent_references(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None,
+) -> None:
+    """Reject flows that reference agent_ids unavailable to the saving user."""
+
+    missing_references = _missing_flow_agent_reference_messages(
+        flow_definition,
+        db_user_id=db_user_id,
+    )
+    if missing_references:
+        raise HTTPException(
+            status_code=422,
+            detail=_missing_flow_agent_references_detail(missing_references),
+        )
+
+
+def _missing_flow_agent_reference_messages(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None,
+) -> list[str]:
+    """Return messages for flow nodes that reference unavailable agents."""
+
+    missing_references: list[str] = []
+    for node in flow_definition.nodes:
+        agent_id = str(node.data.agent_id or "").strip()
+        if not agent_id or agent_id == "task_input":
+            continue
+        if _flow_agent_policy_entry(agent_id, db_user_id=db_user_id) is not None:
+            continue
+        agent_name = str(node.data.agent_display_name or agent_id)
+        missing_references.append(
+            f"node '{node.id}' ({agent_name}) references missing agent_id '{agent_id}'"
+        )
+
+    return missing_references
+
+
+def _missing_flow_agent_references_detail(missing_references: list[str]) -> str:
+    """Build the curator-facing unavailable-agent validation message."""
+
+    return (
+        "Flow references unavailable agent(s): "
+        + "; ".join(missing_references)
+        + ". Re-select an available agent before saving or running this flow."
+    )
+
+
 def _flow_to_response(flow: CurationFlow) -> FlowResponse:
     """Convert a stored flow to an API response with validation defaults hydrated."""
 
     flow_definition = _validated_flow_definition(
-        FlowDefinition.model_validate(flow.flow_definition)
+        FlowDefinition.model_validate(flow.flow_definition),
+        db_user_id=flow.user_id,
+    )
+    missing_references = _missing_flow_agent_reference_messages(
+        flow_definition,
+        db_user_id=flow.user_id,
+    )
+    validation_warnings = (
+        [
+            FlowValidationWarning(
+                type="CRITICAL",
+                message=_missing_flow_agent_references_detail(missing_references),
+            )
+        ]
+        if missing_references
+        else []
     )
     return FlowResponse(
         id=flow.id,
@@ -173,6 +368,10 @@ def _flow_to_response(flow: CurationFlow) -> FlowResponse:
         last_executed_at=flow.last_executed_at,
         created_at=flow.created_at,
         updated_at=flow.updated_at,
+        validation_warnings=validation_warnings,
+        has_critical_issues=any(
+            warning.type == "CRITICAL" for warning in validation_warnings
+        ),
     )
 
 
@@ -416,6 +615,7 @@ async def create_flow(
         flow_definition=_validated_flow_definition_payload(
             request.flow_definition,
             db_user_id=db_user.id,
+            enforce_agent_references=True,
             enforce_agent_step_policy=True,
         ),
     )
@@ -433,10 +633,12 @@ async def create_flow(
                 detail="A flow with this name already exists"
             )
         # Wrap other integrity errors to avoid exposing database internals
-        logger.error('Unexpected IntegrityError creating flow: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail="Database error while creating flow"
+            detail="Database error while creating flow",
+            log_message="Unexpected database integrity error creating flow",
+            exc=_sanitized_flow_db_error(type(e.orig).__name__, operation="create"),
         )
 
     logger.info("Created flow %s '%s' for user %s", flow.id, flow.name, db_user.id)
@@ -493,6 +695,7 @@ async def update_flow(
         flow.flow_definition = _validated_flow_definition_payload(
             request.flow_definition,
             db_user_id=flow.user_id,
+            enforce_agent_references=True,
             enforce_agent_step_policy=True,
         )
         # CRITICAL: SQLAlchemy doesn't detect changes to mutable JSONB fields
@@ -509,7 +712,6 @@ async def update_flow(
             db.refresh(flow)
             logger.info('[Flow Update] Success - flow %s updated_at now: %s', flow_id, flow.updated_at)
         except IntegrityError as e:
-            logger.error('[Flow Update] IntegrityError during commit: %s', e)
             db.rollback()
             # Check if it's a unique constraint violation on name
             if "uq_user_flow_name_active" in str(e.orig).lower():
@@ -518,10 +720,12 @@ async def update_flow(
                     detail="A flow with this name already exists"
                 )
             # Wrap other integrity errors to avoid exposing database internals
-            logger.error('Unexpected IntegrityError updating flow %s: %s', flow_id, e)
-            raise HTTPException(
+            raise_sanitized_http_exception(
+                logger,
                 status_code=500,
-                detail="Database error while updating flow"
+                detail="Database error while updating flow",
+                log_message=f"Unexpected database integrity error updating flow {flow_id}",
+                exc=_sanitized_flow_db_error(type(e.orig).__name__, operation="update"),
             )
     else:
         logger.info('[Flow Update] No changes detected for flow %s', flow_id)

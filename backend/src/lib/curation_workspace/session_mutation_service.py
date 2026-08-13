@@ -50,6 +50,7 @@ from src.lib.curation_workspace.session_queries import (
     _session_context_maps,
     get_candidate_detail,
     get_session_detail,
+    load_envelope_candidates_for_patch,
     load_domain_envelope_row_for_patch,
     load_projection_candidates_for_patch,
 )
@@ -113,12 +114,17 @@ from src.schemas.domain_envelope import (
 _MISSING = object()
 
 
+class RejectedEnvelopeFieldPatchError(HTTPException):
+    """HTTP rejection whose audit checkpoint must be committed by the endpoint."""
+
+
 def update_session(
     db: Session,
     session_id: str | UUID,
     request: CurationSessionUpdateRequest,
     actor_claims: dict[str, Any],
 ) -> CurationSessionUpdateResponse:
+    """Apply a session mutation and flush without committing ``db``."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     if normalized_session_id != request_session_id:
@@ -134,6 +140,47 @@ def update_session(
             detail=f"Curation review session {normalized_session_id} not found",
         )
     session = sessions[0]
+
+    latest_candidate_intent = (
+        request.intent_owner is not None
+        and request.intent_generation is not None
+        and "current_candidate_id" in request.model_fields_set
+    )
+    intent_generation = request.intent_generation
+    if latest_candidate_intent:
+        assert intent_generation is not None
+    if request.expected_session_version is not None:
+        db.refresh(session, with_for_update=True)
+        if session.session_version != request.expected_session_version:
+            newer_intent = (
+                latest_candidate_intent
+                and intent_generation > (session.current_candidate_intent_generation or 0)
+            )
+            intent_only_request = request.model_fields_set <= {
+                "session_id",
+                "expected_session_version",
+                "intent_owner",
+                "intent_generation",
+                "current_candidate_id",
+            }
+            if not (newer_intent and intent_only_request):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Session version mismatch: expected "
+                        f"{request.expected_session_version}, found {session.session_version}"
+                    ),
+                )
+
+    if (
+        latest_candidate_intent
+        and session.current_candidate_intent_generation is not None
+        and intent_generation <= session.current_candidate_intent_generation
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Current candidate selection was superseded by a newer intent",
+        )
 
     now = datetime.now(timezone.utc)
     action_log_row: SessionActionLogModel | None = None
@@ -155,6 +202,15 @@ def update_session(
                 session.current_candidate_id = candidate_id
                 session.last_worked_at = now
                 changed = True
+            elif latest_candidate_intent:
+                # A latest-intent selection is also a fencing write when it
+                # reselects the persisted candidate while an older PATCH is in flight.
+                session.last_worked_at = now
+                changed = True
+        if latest_candidate_intent:
+            session.current_candidate_intent_owner = request.intent_owner
+            session.current_candidate_intent_generation = intent_generation
+            changed = True
 
     if "notes" in request.model_fields_set and request.notes != session.notes:
         session.notes = request.notes
@@ -199,7 +255,7 @@ def update_session(
         db.add(session)
         if action_log_row is not None:
             db.add(action_log_row)
-        db.commit()
+        db.flush()
 
     updated_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
     updated_session = updated_sessions[0]
@@ -304,6 +360,7 @@ def create_manual_candidate(
     *,
     actor_claims: dict[str, Any],
 ) -> CurationManualCandidateCreateResponse:
+    """Create a candidate and flush without committing the caller's session."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     if normalized_session_id != request_session_id:
@@ -469,7 +526,7 @@ def create_manual_candidate(
         session=get_session_detail(db, session_row.id),
         action_log_entry=build_action_log_entry(action_log_row),
     )
-    db.commit()
+    db.flush()
     return response
 
 def update_candidate_draft(
@@ -479,6 +536,7 @@ def update_candidate_draft(
     request: CurationCandidateDraftUpdateRequest,
     actor_claims: dict[str, Any],
 ) -> CurationCandidateDraftUpdateResponse:
+    """Update a draft and flush without committing the caller's session."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -625,7 +683,7 @@ def update_candidate_draft(
     db.add(candidate.session)
     db.add(candidate)
     db.add(draft_row)
-    db.commit()
+    db.flush()
 
     updated_candidate = _load_candidate_for_write(
         db,
@@ -673,7 +731,7 @@ def _materialize_candidate_draft_changes_into_envelope(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain envelope {envelope_id} not found",
         )
-    if envelope_row.session_id is not None and envelope_row.session_id != candidate.session_id:
+    if envelope_row.session_id != candidate.session_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Domain envelope does not belong to the candidate session",
@@ -774,6 +832,25 @@ def _materialize_candidate_draft_changes_into_envelope(
         changed_field_path=materialized_field_paths,
         updated_at=updated_at,
     )
+    for linked_candidate in load_envelope_candidates_for_patch(
+        db,
+        session_id=candidate.session_id,
+        envelope_id=envelope_id,
+    ):
+        if linked_candidate.id == candidate.id:
+            continue
+        if linked_candidate.object_id == object_id:
+            _refresh_candidate_projection_from_envelope(
+                linked_candidate,
+                updated_object,
+                envelope_revision=checkpoint_revision,
+                changed_field_path=materialized_field_paths,
+                updated_at=updated_at,
+            )
+        else:
+            linked_candidate.envelope_revision = checkpoint_revision
+            linked_candidate.updated_at = updated_at
+        db.add(linked_candidate)
 
 
 def patch_envelope_field(
@@ -782,7 +859,7 @@ def patch_envelope_field(
     request: CurationEnvelopeFieldPatchRequest,
     actor_claims: dict[str, Any],
 ) -> CurationEnvelopeFieldPatchResponse:
-    """Patch the persisted envelope source of truth and refresh workspace projections."""
+    """Patch an envelope and projections without committing the supplied session."""
 
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -806,10 +883,20 @@ def patch_envelope_field(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain envelope {request.envelope_id} not found",
         )
-    if envelope_row.session_id is not None and envelope_row.session_id != normalized_session_id:
+    if envelope_row.session_id != normalized_session_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Domain envelope does not belong to the requested session",
+        )
+    envelope_candidates = load_envelope_candidates_for_patch(
+        db,
+        session_id=normalized_session_id,
+        envelope_id=request.envelope_id,
+    )
+    if not envelope_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Domain envelope has no candidate linked to the requested session",
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
@@ -865,8 +952,13 @@ def patch_envelope_field(
             actor_claims=actor_claims,
             envelope_revision=rejected_checkpoint_revision,
         )
-        db.commit()
-        raise HTTPException(
+        now = datetime.now(timezone.utc)
+        for candidate in envelope_candidates:
+            candidate.envelope_revision = rejected_checkpoint_revision
+            candidate.updated_at = now
+            db.add(candidate)
+        db.flush()
+        raise RejectedEnvelopeFieldPatchError(
             status_code=_rejected_patch_status_code(patch_result),
             detail="; ".join(patch_result.errors),
         )
@@ -889,22 +981,22 @@ def patch_envelope_field(
         )
 
     now = datetime.now(timezone.utc)
-    projection_candidates = load_projection_candidates_for_patch(
-        db,
-        session_id=normalized_session_id,
-        envelope_id=request.envelope_id,
-        object_id=request.object_id,
-    )
     projection_candidate_ids: list[str] = []
-    for candidate in projection_candidates:
+    projection_candidates: list[CurationCandidate] = []
+    for candidate in envelope_candidates:
         projection_candidate_ids.append(str(candidate.id))
-        _refresh_candidate_projection_from_envelope(
-            candidate,
-            updated_object,
-            envelope_revision=checkpoint_revision,
-            changed_field_path=request.field_path,
-            updated_at=now,
-        )
+        if candidate.object_id == request.object_id:
+            projection_candidates.append(candidate)
+            _refresh_candidate_projection_from_envelope(
+                candidate,
+                updated_object,
+                envelope_revision=checkpoint_revision,
+                changed_field_path=request.field_path,
+                updated_at=now,
+            )
+        else:
+            candidate.envelope_revision = checkpoint_revision
+            candidate.updated_at = now
         db.add(candidate)
         if candidate.draft is not None:
             db.add(candidate.draft)
@@ -927,7 +1019,7 @@ def patch_envelope_field(
         envelope_revision=checkpoint_revision,
     )
     db.add(session_row)
-    db.commit()
+    db.flush()
 
     refreshed_candidates = load_projection_candidates_for_patch(
         db,
@@ -971,7 +1063,7 @@ def waive_validation_finding(
     request: CurationValidationFindingWaiveRequest,
     actor_claims: dict[str, Any],
 ) -> CurationValidationFindingWaiveResponse:
-    """Apply a curator waiver to one envelope validation finding."""
+    """Apply a curator waiver and flush without committing the supplied session."""
 
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -995,10 +1087,20 @@ def waive_validation_finding(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain envelope {request.envelope_id} not found",
         )
-    if envelope_row.session_id is not None and envelope_row.session_id != normalized_session_id:
+    if envelope_row.session_id != normalized_session_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Domain envelope does not belong to the requested session",
+        )
+    envelope_candidates = load_envelope_candidates_for_patch(
+        db,
+        session_id=normalized_session_id,
+        envelope_id=request.envelope_id,
+    )
+    if not envelope_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Domain envelope has no candidate linked to the requested session",
         )
     if envelope_row.revision != request.expected_revision:
         raise HTTPException(
@@ -1067,18 +1169,11 @@ def waive_validation_finding(
 
     now = datetime.now(timezone.utc)
     projection_candidate_ids: list[str] = []
-    if target["object_id"] is not None:
-        projection_candidates = load_projection_candidates_for_patch(
-            db,
-            session_id=normalized_session_id,
-            envelope_id=request.envelope_id,
-            object_id=target["object_id"],
-        )
-        for candidate in projection_candidates:
-            projection_candidate_ids.append(str(candidate.id))
-            candidate.envelope_revision = checkpoint_revision
-            candidate.updated_at = now
-            db.add(candidate)
+    for candidate in envelope_candidates:
+        projection_candidate_ids.append(str(candidate.id))
+        candidate.envelope_revision = checkpoint_revision
+        candidate.updated_at = now
+        db.add(candidate)
 
     session_row.session_version += 1
     session_row.updated_at = now
@@ -1105,7 +1200,7 @@ def waive_validation_finding(
     )
     db.add(session_row)
     db.add(action_log_row)
-    db.commit()
+    db.flush()
 
     refreshed_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
     refreshed_session = refreshed_sessions[0]
@@ -1154,7 +1249,7 @@ def _finding_curator_override_allowed(finding: ValidationFinding) -> bool:
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_ids: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         stable_object_id = _stable_envelope_object_id(domain_object)
         if domain_object.object_id is not None:
             object_ids[("object_id", domain_object.object_id)] = stable_object_id
@@ -1390,7 +1485,7 @@ def _envelope_object_by_stable_id(
     envelope: DomainEnvelope,
     object_id: str,
 ) -> CuratableObjectEnvelope | None:
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if object_id in {
             value
             for value in (domain_object.object_id, domain_object.pending_ref_id)
@@ -1584,7 +1679,7 @@ def _replace_envelope_object_payload_value(
 ) -> DomainEnvelope:
     object_index = None
     domain_object = None
-    for index, candidate_object in enumerate(envelope.objects):
+    for index, candidate_object in enumerate(envelope.extracted_objects):
         if object_id in {
             value
             for value in (candidate_object.object_id, candidate_object.pending_ref_id)
@@ -1608,11 +1703,11 @@ def _replace_envelope_object_payload_value(
             detail=str(exc),
         ) from exc
 
-    updated_objects = list(envelope.objects)
+    updated_objects = list(envelope.extracted_objects)
     updated_objects[object_index] = domain_object.model_copy(
         update={"payload": payload}
     )
-    return envelope.model_copy(update={"objects": updated_objects})
+    return envelope.model_copy(update={"extracted_objects": updated_objects})
 
 
 def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> None:
@@ -1698,6 +1793,7 @@ def delete_candidate(
     *,
     actor_claims: dict[str, Any],
 ) -> CurationCandidateDeleteResponse:
+    """Delete a candidate and flush without committing the supplied session."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
@@ -1783,7 +1879,7 @@ def delete_candidate(
     )
 
     db.add(action_log_row)
-    db.commit()
+    db.flush()
 
     action_log_entry = build_action_log_entry(action_log_row)
     db.expire_all()
@@ -1800,6 +1896,7 @@ def decide_candidate(
     request: CurationCandidateDecisionRequest,
     actor_claims: dict[str, Any],
 ) -> CurationCandidateDecisionResponse:
+    """Record a candidate decision without committing the supplied session."""
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     normalized_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
@@ -1905,7 +2002,7 @@ def decide_candidate(
         next_candidate_id=str(next_candidate_uuid) if next_candidate_uuid else None,
         action_log_entry=build_action_log_entry(action_log_row),
     )
-    db.commit()
+    db.flush()
     return response
 
 

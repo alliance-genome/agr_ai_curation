@@ -20,7 +20,7 @@ DOMAIN_ENVELOPE_SNAPSHOT_KEYS = (
     "domain_pack_version",
     "status",
     "schema_ref",
-    "objects",
+    "extracted_objects",
     "validation_findings",
     "history",
     "metadata",
@@ -245,10 +245,14 @@ def source_reference_id_from_context(
         return None
 
     for raw_envelope in domain_envelopes:
-        objects = raw_envelope.get("objects") if isinstance(raw_envelope, Mapping) else None
-        if not isinstance(objects, list):
+        extracted_objects = (
+            raw_envelope.get("extracted_objects")
+            if isinstance(raw_envelope, Mapping)
+            else None
+        )
+        if not isinstance(extracted_objects, list):
             continue
-        for raw_object in objects:
+        for raw_object in extracted_objects:
             if not isinstance(raw_object, Mapping):
                 continue
             if _object_ref_key(raw_object) not in reference_ref_keys:

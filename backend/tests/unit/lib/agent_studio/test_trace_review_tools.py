@@ -30,9 +30,10 @@ class _FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    async def get(self, url, params=None):
+    async def get(self, url, params=None, headers=None):
         self._capture["url"] = url
         self._capture["params"] = params
+        self._capture["headers"] = headers
         if self._exc:
             raise self._exc
         return self._response
@@ -57,6 +58,42 @@ def test_env_helpers(monkeypatch):
     assert tools.get_trace_source() == "prod"
     assert tools.get_trace_review_url() == "http://trace-review:9000"
     assert tools._get_claude_api_url() == "http://trace-review:9000/api/claude/traces"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_factory",
+    [
+        lambda: tools.search_traces(session_id="session-1"),
+        lambda: tools.get_trace_summary("856df16f1752cb53ee43dcb2f5ecfd16"),
+        lambda: tools.get_tool_calls_summary("856df16f1752cb53ee43dcb2f5ecfd16"),
+        lambda: tools.get_tool_calls_page("856df16f1752cb53ee43dcb2f5ecfd16"),
+        lambda: tools.get_tool_call_detail(
+            "856df16f1752cb53ee43dcb2f5ecfd16", "call-1"
+        ),
+        lambda: tools.get_trace_conversation("856df16f1752cb53ee43dcb2f5ecfd16"),
+        lambda: tools.get_trace_view(
+            "856df16f1752cb53ee43dcb2f5ecfd16", "trace_summary"
+        ),
+    ],
+)
+async def test_trace_review_requests_forward_internal_bearer(
+    monkeypatch,
+    request_factory,
+):
+    capture = {}
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "shared-service-token")
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {}, "token_info": {}}),
+        capture=capture,
+    )
+
+    await request_factory()
+
+    assert capture["headers"] == {
+        "Authorization": "Bearer shared-service-token"
+    }
 
 
 def test_validate_helpers():

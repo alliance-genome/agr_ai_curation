@@ -184,7 +184,7 @@ Expected: green; no dangling imports.
 
 - [ ] **Step 5: Manual regression on dev**
 
-On `http://10.79.64.167:3900/curation/<session>`: accept/reject, accept-all-validated, add object, delete object, edit a field + save, evidence highlight — all work on the single surface.
+On `http://127.0.0.1:3900/curation/<session>`: accept/reject, accept-all-validated, add object, delete object, edit a field + save, evidence highlight — all work on the single surface.
 
 - [ ] **Step 6: Commit**
 

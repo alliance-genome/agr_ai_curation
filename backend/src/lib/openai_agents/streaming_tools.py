@@ -62,6 +62,7 @@ from .evidence_summary import (
 from .event_types import (
     INTERNAL_EXTRACTION_RESULT_EVENT_TYPE as _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
 )
+from .models import file_ready_event_details
 from .extraction_manifest import (
     ExtractionManifestError,
     build_and_render_extraction_manifest,
@@ -105,6 +106,11 @@ from src.lib.context import (
     get_current_session_id,
     get_current_trace_id,
     get_current_user_id,
+)
+from src.lib.observability.sentry import (
+    gen_ai_conversation_scope,
+    gen_ai_invoke_agent_span,
+    set_redacted_ai_span_data,
 )
 from src.lib.curation_workspace.extraction_results import (
     InlineExtractionPersistenceResult,
@@ -398,7 +404,7 @@ def _looks_like_domain_envelope_payload(payload: Any) -> bool:
     if isinstance(payload.get("curatable_objects"), list):
         return True
     return isinstance(payload.get("domain_pack_id"), str) and isinstance(
-        payload.get("objects"),
+        payload.get("extracted_objects"),
         list,
     )
 
@@ -811,7 +817,7 @@ _BUILDER_FINALIZATION_METADATA_KEY = "builder_finalization"
 
 
 @lru_cache(maxsize=1)
-def _builder_finalization_tool_names() -> frozenset[str]:
+def builder_finalization_tool_names() -> frozenset[str]:
     """Return the registry-derived set of builder-materializer finalize-tool names.
 
     A tool is a builder finalize tool when its package tool-binding metadata
@@ -826,9 +832,9 @@ def _builder_finalization_tool_names() -> frozenset[str]:
     )
 
 
-def _is_builder_materializer_agent(agent: Agent) -> bool:
+def is_builder_materializer_agent(agent: Agent) -> bool:
     """Return whether an agent finalizes backend-materialized builder output."""
-    finalization_tool_names = _builder_finalization_tool_names()
+    finalization_tool_names = builder_finalization_tool_names()
     return any(
         _extract_tool_name(tool) in finalization_tool_names
         for tool in (getattr(agent, "tools", None) or [])
@@ -1365,7 +1371,7 @@ def _structured_specialist_finalization_required(
     if _structured_specialist_finalization_tool_name(finalization_config) is None:
         return False
     existing_tool_names = _agent_tool_names(agent)
-    if any(name in _builder_finalization_tool_names() for name in existing_tool_names):
+    if any(name in builder_finalization_tool_names() for name in existing_tool_names):
         return False
     return True
 
@@ -2735,8 +2741,8 @@ def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
     """Return a compact non-JSON summary for unusual domain-envelope payloads."""
 
     domain_pack_id = str(payload.get("domain_pack_id") or "domain envelope")
-    objects = payload.get("objects")
-    object_count = len(objects) if isinstance(objects, list) else 0
+    extracted_objects = payload.get("extracted_objects")
+    object_count = len(extracted_objects) if isinstance(extracted_objects, list) else 0
     lines = [
         (
             f"Validated domain envelope result for {domain_pack_id}. "
@@ -3104,7 +3110,7 @@ def _run_state_tool_impls() -> Dict[str, str]:
     the same module as the tool's public ``callable`` binding. Deriving this from binding metadata
     (rather than a hardcoded per-type literal) keeps run-state binding a domain-pack/registry
     concern, so adding a new builder data type needs no platform edit. (Mirrors Phase 0's
-    ``_builder_finalization_tool_names``.)
+    ``builder_finalization_tool_names``.)
     """
     from src.lib.packages.tool_registry import load_tool_registry
 
@@ -3553,8 +3559,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
     dispatch_phase_timings_ms: Dict[str, int] = {}
 
     try:
-        from src.lib.curation_workspace.curation_prep_service import (
-            _domain_envelope_from_extraction_result,
+        from src.lib.curation_workspace.domain_envelope_normalization import (
+            domain_envelope_from_extraction_result,
         )
         from src.lib.curation_workspace.extraction_results import (
             build_extraction_envelope_candidate,
@@ -3615,7 +3621,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
             created_at=datetime.now(timezone.utc),
             metadata=dict(candidate.metadata),
         )
-        envelope = _domain_envelope_from_extraction_result(extraction_record)
+        envelope = domain_envelope_from_extraction_result(extraction_record)
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
         dispatch_phase_timings_ms["envelope_materialization_ms"] = _elapsed_ms(
             envelope_started_at
@@ -3641,7 +3647,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
                 "agent": specialist_name,
                 "toolArgs": {
                     "domain_pack_id": envelope.domain_pack_id,
-                    "object_count": len(envelope.objects),
+                    "object_count": len(envelope.extracted_objects),
                 },
                 "phaseTimingsMs": dict(dispatch_phase_timings_ms),
                 "isSpecialistInternal": True,
@@ -4131,7 +4137,7 @@ def _builder_finalizer_tool_calls(
 ) -> List[SpecialistToolCall]:
     """Return builder finalizer tool calls observed in the specialist stream."""
 
-    finalizer_names = _builder_finalization_tool_names()
+    finalizer_names = builder_finalization_tool_names()
     return [
         call
         for call in tool_calls
@@ -4371,7 +4377,7 @@ async def run_specialist_with_events(
     expected_output_type = getattr(agent, "output_type", None)
     runtime_curation_adapter_key = _agent_runtime_curation_adapter_key(agent)
     runtime_canonical_agent_key = _agent_runtime_canonical_agent_key(agent)
-    builder_materializer_agent = _is_builder_materializer_agent(agent)
+    builder_materializer_agent = is_builder_materializer_agent(agent)
     if builder_materializer_agent and expected_output_type is not None:
         output_type_name = getattr(expected_output_type, "__name__", "response")
         raise SpecialistOutputError(
@@ -4573,12 +4579,133 @@ async def run_specialist_with_events(
 
     # Run with streaming to capture internal events
     runner_create_started_at = time.monotonic()
-    result = Runner.run_streamed(
-        runtime_agent,
-        input=input_text,
-        max_turns=max_turns,
-        run_config=effective_config
+    sentry_conversation_id = get_current_session_id()
+    conversation_context_manager = gen_ai_conversation_scope(sentry_conversation_id)
+    sentry_span_context_manager = gen_ai_invoke_agent_span(
+        agent_name=specialist_name,
+        model=str(getattr(runtime_agent, "model", "") or ""),
+        conversation_id=sentry_conversation_id,
+        workflow="specialist_tool",
+        tool_name=tool_name,
+        agent_key=runtime_canonical_agent_key,
+        agent_source="runtime",
+        specialist_name=specialist_name,
+        trace_id=get_current_trace_id() or builder_workspace.run_id,
+        document_id=builder_workspace.document_id,
+        document_present=bool(builder_workspace.document_id),
+        finalization_required=structured_finalization_state.required,
+        finalization_tool=structured_finalization_state.tool_name,
+        input_preview=input_text,
+        span_data={
+            "ai_curation.adapter.key": runtime_curation_adapter_key,
+            "ai_curation.domain_pack.id": builder_workspace.domain_pack_id,
+            "ai_curation.agent.output_type": structured_finalization_state.output_type_name,
+            "ai_curation.finalization.max_attempts": structured_finalization_state.max_attempts,
+            "ai_curation.tool.kind": (
+                "builder_materializer" if builder_materializer_agent else "specialist"
+            ),
+        },
     )
+    conversation_context_manager.__enter__()
+    sentry_span = sentry_span_context_manager.__enter__()
+    sentry_stream_finalization_status = "stream_finished"
+    total_event_count = 0
+    event_type_counts: dict = {}
+
+    def _record_sentry_post_stream_outcome(
+        *,
+        status: str,
+        output: Any | None = None,
+        error_detail: Any | None = None,
+        retained_evidence_count: int | None = None,
+        inline_persistence_result: InlineExtractionPersistenceResult | None = None,
+    ) -> None:
+        with gen_ai_conversation_scope(sentry_conversation_id):
+            with gen_ai_invoke_agent_span(
+                agent_name=specialist_name,
+                model=str(getattr(runtime_agent, "model", "") or ""),
+                conversation_id=sentry_conversation_id,
+                workflow="specialist_tool_post_stream",
+                tool_name=tool_name,
+                agent_key=runtime_canonical_agent_key,
+                agent_source="runtime",
+                specialist_name=specialist_name,
+                trace_id=get_current_trace_id() or builder_workspace.run_id,
+                document_id=builder_workspace.document_id,
+                document_present=bool(builder_workspace.document_id),
+                finalization_required=structured_finalization_state.required,
+                finalization_tool=structured_finalization_state.tool_name,
+                finalization_status=status,
+                validation_status=builder_workspace.state,
+                validation_error_count=len(builder_workspace.validation_errors),
+                tool_call_count=len(tool_calls),
+                candidate_count=len(builder_workspace.candidates),
+                output_preview=output,
+                span_data={
+                    "ai_curation.adapter.key": runtime_curation_adapter_key,
+                    "ai_curation.domain_pack.id": builder_workspace.domain_pack_id,
+                    "ai_curation.agent.events_collected": total_event_count,
+                    "ai_curation.finalization.detail": {
+                        "phase_timings_ms": dict(phase_timings_ms),
+                        "event_type_counts": dict(event_type_counts),
+                        "structured_finalization_call_count": len(
+                            structured_finalization_state.calls
+                        ),
+                        "retained_evidence_count": retained_evidence_count,
+                        "inline_persistence": (
+                            {
+                                "extraction_result_id": inline_persistence_result.extraction_result_id,
+                                "result_ref": inline_persistence_result.result_ref,
+                                "created_new": inline_persistence_result.created_new,
+                            }
+                            if inline_persistence_result is not None
+                            else None
+                        ),
+                        "tool_calls": [
+                            {
+                                "name": tc.tool_name,
+                                "args": tc.tool_args,
+                                "duration_ms": tc.duration_ms,
+                                "output_preview": tc.output_preview,
+                                "output_summary": tc.output_summary,
+                            }
+                            for tc in tool_calls
+                        ],
+                    },
+                    **({"ai_curation.error.detail": error_detail} if error_detail else {}),
+                },
+            ):
+                pass
+    try:
+        result = Runner.run_streamed(
+            runtime_agent,
+            input=input_text,
+            max_turns=max_turns,
+            run_config=effective_config
+        )
+    except BaseException as exc:
+        sentry_stream_finalization_status = (
+            "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
+        )
+        phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
+        try:
+            _record_sentry_post_stream_outcome(
+                status=sentry_stream_finalization_status,
+                error_detail={
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "phase": "specialist_start_streamed",
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record %s specialist stream-creation outcome",
+                specialist_name,
+            )
+        finally:
+            sentry_span_context_manager.__exit__(None, None, None)
+            conversation_context_manager.__exit__(None, None, None)
+        raise
     phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
     write_extraction_trace_event(
         event_type="model.reasoning_summary.request",
@@ -4587,8 +4714,6 @@ async def run_specialist_with_events(
     )
 
     # Event tracking for debugging
-    total_event_count = 0
-    event_type_counts: dict = {}
     is_generating = False  # Track if we've emitted AGENT_GENERATING
     reasoning_summary_chunks: List[str] = []
 
@@ -4998,8 +5123,8 @@ async def run_specialist_with_events(
                             },
                         })
 
-                        # Check if tool output contains FileInfo (file download)
-                        # File formatter tools (save_csv_file, etc.) return FileInfo as JSON
+                        # Check if tool output contains FileInfo (file download).
+                        # Runtime formatter projection tools return FileInfo as JSON.
                         if output:
                             try:
                                 output_data = json.loads(str(output)) if isinstance(output, str) else output
@@ -5020,15 +5145,7 @@ async def run_specialist_with_events(
                                     add_specialist_event({
                                         "type": "FILE_READY",
                                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                                        "details": {
-                                            "file_id": output_data.get("file_id"),
-                                            "filename": output_data.get("filename"),
-                                            "format": output_data.get("format"),
-                                            "size_bytes": output_data.get("size_bytes"),
-                                            "mime_type": output_data.get("mime_type"),
-                                            "download_url": output_data.get("download_url"),
-                                            "created_at": output_data.get("created_at"),
-                                        }
+                                        "details": file_ready_event_details(output_data),
                                     })
                             except (json.JSONDecodeError, TypeError, AttributeError) as e:
                                 # Not JSON or not FileInfo - this is normal for most tools
@@ -5046,12 +5163,22 @@ async def run_specialist_with_events(
         )
 
     except asyncio.CancelledError:
+        sentry_stream_finalization_status = "cancelled"
         phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
             stream_consume_started_at
+        )
+        _record_sentry_post_stream_outcome(
+            status="cancelled",
+            error_detail={
+                "message": "specialist stream cancelled",
+                "error_type": "CancelledError",
+                "phase": "specialist_stream",
+            },
         )
         builder_workspace.mark_cancelled(reason="specialist stream cancelled")
         raise
     except Exception as e:
+        sentry_stream_finalization_status = "error"
         phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
             stream_consume_started_at
         )
@@ -5070,6 +5197,14 @@ async def run_specialist_with_events(
                     "severity": "error",
                 }
             })
+        _record_sentry_post_stream_outcome(
+            status="error",
+            error_detail={
+                "message": str(e),
+                "error_type": type(e).__name__,
+                "phase": "specialist_stream",
+            },
+        )
         logger.error(
             "%s stream error: %s: %s. Events before error: %s, Event types: %s",
             specialist_name,
@@ -5081,6 +5216,53 @@ async def run_specialist_with_events(
         builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
         raise
     finally:
+        if sentry_span is not None:
+            set_redacted_ai_span_data(sentry_span, "ai_curation.tool_call.count", len(tool_calls))
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.agent.events_collected",
+                total_event_count,
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.validation.status",
+                builder_workspace.state,
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.validation.error_count",
+                len(builder_workspace.validation_errors),
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.candidate.count",
+                len(builder_workspace.candidates),
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.finalization.status",
+                sentry_stream_finalization_status,
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.finalization.detail",
+                {
+                    "phase_timings_ms": dict(phase_timings_ms),
+                    "event_type_counts": dict(event_type_counts),
+                    "tool_calls": [
+                        {
+                            "name": tc.tool_name,
+                            "args": tc.tool_args,
+                            "duration_ms": tc.duration_ms,
+                            "output_preview": tc.output_preview,
+                            "output_summary": tc.output_summary,
+                        }
+                        for tc in tool_calls
+                    ],
+                },
+            )
+        sentry_span_context_manager.__exit__(None, None, None)
+        conversation_context_manager.__exit__(None, None, None)
         reset_active_evidence_records(evidence_workspace_token)
         reset_active_resolver_call_ledger(resolver_call_ledger_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
@@ -5122,6 +5304,13 @@ async def run_specialist_with_events(
             message=required_tool_error,
             candidate_id=builder_candidate_id,
         )
+        _record_sentry_post_stream_outcome(
+            status="rejected",
+            error_detail={
+                "message": required_tool_error,
+                "reason": "required_tool_not_called",
+            },
+        )
         raise SpecialistOutputError(
             specialist_name=specialist_name,
             output_type_name=output_type_name,
@@ -5147,6 +5336,16 @@ async def run_specialist_with_events(
             structured_finalization_state.tool_name,
         )
     elif structured_finalization_state.required:
+        _record_sentry_post_stream_outcome(
+            status="rejected",
+            error_detail={
+                "message": (
+                    f"{specialist_name} did not complete mandatory "
+                    f"{structured_finalization_state.tool_name} with status accepted."
+                ),
+                "reason": "structured_finalization_missing",
+            },
+        )
         _raise_missing_structured_specialist_finalization(
             state=structured_finalization_state,
             specialist_name=specialist_name,
@@ -5945,6 +6144,12 @@ async def run_specialist_with_events(
         len(tool_calls),
         total_duration_ms,
         len(final_output),
+    )
+    _record_sentry_post_stream_outcome(
+        status="accepted" if not builder_workspace.validation_errors else "rejected",
+        output=final_output,
+        retained_evidence_count=len(retained_evidence_records),
+        inline_persistence_result=inline_persistence,
     )
 
     # Inject batching nudge if threshold was hit (exactly at threshold, not after)

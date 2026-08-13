@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from src.schemas.flows import FlowDefinition
+
 
 def _load_smoke_module():
     repo_root = Path(__file__).resolve().parents[4]
@@ -23,6 +25,7 @@ def _load_smoke_module():
 def test_compute_scope_limitations_includes_debug_relaxations():
     smoke = _load_smoke_module()
     args = SimpleNamespace(
+        skip_sdk_pin_check=False,
         skip_provider_health=False,
         skip_user_info=True,
         skip_chat=False,
@@ -44,17 +47,47 @@ def test_compute_scope_limitations_includes_debug_relaxations():
     ]
 
 
+def test_compute_scope_limitations_includes_sdk_pin_check_skip():
+    smoke = _load_smoke_module()
+    args = SimpleNamespace(
+        skip_sdk_pin_check=True,
+        skip_provider_health=False,
+        skip_user_info=False,
+        skip_chat=False,
+        skip_flow=False,
+        skip_workspace=False,
+        skip_batch=False,
+        include_rerank_provider_smoke=True,
+        allow_dev_mode_fallback=False,
+        allow_duplicate_reuse=False,
+    )
+
+    assert smoke.compute_scope_limitations(args) == ["sdk_pin_check"]
+
+
 def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
     smoke = _load_smoke_module()
 
     args = smoke.parse_args([])
 
+    assert args.auth_mode == "api-key"
+    assert args.skip_sdk_pin_check is False
     assert args.include_rerank_provider_smoke is False
     assert args.rerank_provider_smoke_base_url == "http://localhost:8000"
     assert args.rerank_provider_smoke_script == "scripts/testing/rerank_provider_smoke_local.sh"
     assert args.chat_message == smoke.DEFAULT_CHAT_MESSAGE
     assert args.stream_chat_message == smoke.DEFAULT_STREAM_CHAT_MESSAGE
-    assert "do not extract" in args.stream_chat_message
+    assert args.stream_chat_message == smoke.DEFAULT_CHAT_MESSAGE
+    assert "focus of the publication" in args.stream_chat_message
+
+
+def test_parse_args_accepts_auth_mode_env_default(monkeypatch):
+    monkeypatch.setenv("DEV_RELEASE_SMOKE_AUTH_MODE", "curator-cookie")
+    smoke = _load_smoke_module()
+
+    args = smoke.parse_args([])
+
+    assert args.auth_mode == "curator-cookie"
 
 
 def test_parse_args_allows_stream_chat_message_override():
@@ -64,6 +97,204 @@ def test_parse_args_allows_stream_chat_message_override():
 
     assert args.chat_message == smoke.DEFAULT_CHAT_MESSAGE
     assert args.stream_chat_message == "Stream this exact prompt."
+
+
+def test_resolve_auth_context_accepts_curator_id_token(tmp_path):
+    smoke = _load_smoke_module()
+    args = smoke.parse_args(
+        [
+            "--auth-mode",
+            "curator-cookie",
+            "--curator-id-token",
+            "unit-curator-token",
+            "--curator-username",
+            "smoke-curator@example.org",
+        ]
+    )
+
+    auth_context = smoke.resolve_auth_context(args, tmp_path / "missing.env")
+
+    assert auth_context.mode == "curator-cookie"
+    assert auth_context.used_api_key_auth is False
+    assert auth_context.headers["Cookie"] == "auth_token=unit-curator-token"
+    assert "X-API-Key" not in auth_context.headers
+    assert auth_context.evidence == {
+        "mode": "curator-cookie",
+        "auth_source": "curator_id_token",
+        "username": "smoke-curator@example.org",
+        "expected_provider_groups": ["FBStaff", "FlyBaseCurator"],
+    }
+
+
+def test_check_current_user_accepts_curator_cookie_principal(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+
+    def _fake_http_request(method, url, **kwargs):
+        assert method == "GET"
+        assert url == "http://backend.test/api/users/me"
+        assert kwargs["headers"]["Cookie"] == "auth_token=unit-curator-token"
+        return smoke.Response(
+            status_code=200,
+            body=b"{}",
+            text="{}",
+            json_body={
+                "auth_sub": "cognito-user-123",
+                "email": "smoke-curator@example.org",
+                "provider_groups": ["FBStaff"],
+            },
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    payload = smoke.check_current_user(
+        base_url="http://backend.test",
+        headers={"Cookie": "auth_token=unit-curator-token"},
+        checks=checks,
+        expected_auth_sub=None,
+        expected_email=None,
+        expected_auth_mode="curator-cookie",
+        expected_provider_groups=("FBStaff",),
+    )
+
+    assert payload["auth_sub"] == "cognito-user-123"
+    assert checks[0]["step"] == "current_user"
+
+
+def test_check_current_user_accepts_dev_mode_curator_cookie_group_context(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+
+    def _fake_http_request(method, url, **kwargs):
+        assert method == "GET"
+        assert url == "http://backend.test/api/users/me"
+        assert kwargs["headers"]["Cookie"] == "auth_token=unit-curator-token"
+        return smoke.Response(
+            status_code=200,
+            body=b"{}",
+            text="{}",
+            json_body={
+                "auth_sub": "dev-user-123",
+                "email": "dev@localhost",
+                "provider_groups": ["FBStaff"],
+            },
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    payload = smoke.check_current_user(
+        base_url="http://backend.test",
+        headers={"Cookie": "auth_token=unit-curator-token"},
+        checks=checks,
+        expected_auth_sub=None,
+        expected_email=None,
+        expected_auth_mode="curator-cookie",
+        expected_provider_groups=("FBStaff",),
+    )
+
+    assert payload["auth_sub"] == "dev-user-123"
+    assert checks[0]["step"] == "current_user"
+
+
+def test_check_current_user_rejects_api_key_when_curator_cookie_expected(monkeypatch):
+    smoke = _load_smoke_module()
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=b"{}",
+            text="{}",
+            json_body={
+                "auth_sub": "api-key-testuser",
+                "email": "testuser@example.org",
+                "provider_groups": ["FBStaff"],
+            },
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    with pytest.raises(smoke.SmokeFailure, match="real curator principal"):
+        smoke.check_current_user(
+            base_url="http://backend.test",
+            headers={"Cookie": "auth_token=unit-curator-token"},
+            checks=[],
+            expected_auth_sub=None,
+            expected_email=None,
+            expected_auth_mode="curator-cookie",
+            expected_provider_groups=("FBStaff",),
+        )
+
+
+def _write_openai_agents_lockfile(repo_root: Path, version: str) -> Path:
+    lockfile_path = repo_root / "backend" / "requirements.lock.txt"
+    lockfile_path.parent.mkdir(parents=True, exist_ok=True)
+    lockfile_path.write_text(
+        "\n".join(
+            [
+                "# generated lockfile fixture",
+                "openai==2.41.0",
+                f"openai-agents=={version}",
+                "openinference-instrumentation-openai-agents==1.6.1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return lockfile_path
+
+
+def test_check_sdk_version_pin_accepts_matching_installed_version(monkeypatch, tmp_path):
+    smoke = _load_smoke_module()
+    lockfile_path = _write_openai_agents_lockfile(tmp_path, "0.17.4")
+    checks = []
+
+    def _fake_version(distribution: str) -> str:
+        assert distribution == "openai-agents"
+        return "0.17.4"
+
+    monkeypatch.setattr(smoke.importlib.metadata, "version", _fake_version)
+
+    payload = smoke.check_sdk_version_pin(checks=checks, repo_root=tmp_path)
+
+    assert payload == {
+        "distribution": "openai-agents",
+        "installed_version": "0.17.4",
+        "lockfile_version": "0.17.4",
+        "lockfile_path": str(lockfile_path),
+    }
+    assert checks == [
+        {
+            "step": "sdk_version_pin",
+            "ok": True,
+            "status_code": 0,
+            "payload": payload,
+        }
+    ]
+
+
+def test_check_sdk_version_pin_rejects_installed_version_drift(monkeypatch, tmp_path):
+    smoke = _load_smoke_module()
+    lockfile_path = _write_openai_agents_lockfile(tmp_path, "0.17.4")
+    checks = []
+
+    monkeypatch.setattr(smoke.importlib.metadata, "version", lambda _distribution: "0.12.5")
+
+    with pytest.raises(smoke.SmokeFailure, match="does not match lockfile pin"):
+        smoke.check_sdk_version_pin(checks=checks, repo_root=tmp_path)
+
+    assert checks == [
+        {
+            "step": "sdk_version_pin",
+            "ok": False,
+            "status_code": 0,
+            "payload": {
+                "distribution": "openai-agents",
+                "installed_version": "0.12.5",
+                "lockfile_version": "0.17.4",
+                "lockfile_path": str(lockfile_path),
+            },
+        }
+    ]
 
 
 def test_batch_plumbing_flow_projects_canonical_object_rows():
@@ -76,6 +307,10 @@ def test_batch_plumbing_flow_projects_canonical_object_rows():
     formatter_goal = nodes["json_1"]["data"]["step_goal"]
     projection_plan = nodes["json_1"]["data"]["projection_plan"]
 
+    assert flow["version"] == "1.1"
+    assert nodes["json_1"]["type"] == "output"
+    assert flow["edges"][-1]["role"] == "output_attachment"
+    FlowDefinition.model_validate(flow)
     assert "record_evidence" in pdf_goal
     assert "exactly one curatable item" in pdf_goal
     assert "evidence_record_id" in pdf_goal
@@ -104,12 +339,34 @@ def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     # Canonical object rows carrying an evidence-record reference pass.
     smoke.require_batch_plumbing_payload(
         {
-            "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
+            "001_01_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json_json_1_6b19876eca52.json": [
                 {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
             ]
         },
         output_format="json",
     )
+
+    # Collision-unsafe pre-v1.1 names are no longer the runtime export shape.
+    with pytest.raises(smoke.SmokeFailure, match="runtime export naming shape"):
+        smoke.require_batch_plumbing_payload(
+            {
+                "001_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json.json": [
+                    {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
+                ]
+            },
+            output_format="json",
+        )
+
+    # Legacy timestamped names are also rejected.
+    with pytest.raises(smoke.SmokeFailure, match="runtime export naming shape"):
+        smoke.require_batch_plumbing_payload(
+            {
+                "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
+                    {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
+                ]
+            },
+            output_format="json",
+        )
 
     # Unparsed (string) artifact fails.
     with pytest.raises(smoke.SmokeFailure, match="parsed JSON"):
@@ -122,7 +379,7 @@ def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     with pytest.raises(smoke.SmokeFailure, match="evidence-record reference"):
         smoke.require_batch_plumbing_payload(
             {
-                "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
+                "001_01_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json_json_1_6b19876eca52.json": [
                     {"item": "crb", "evidence_record_ids": []}
                 ]
             },
@@ -141,6 +398,10 @@ def test_batch_extraction_flow_preserves_real_extraction_requirements():
     formatter_goal = nodes["json_1"]["data"]["step_goal"]
     projection_plan = nodes["json_1"]["data"]["projection_plan"]
 
+    assert flow["version"] == "1.1"
+    assert nodes["json_1"]["type"] == "output"
+    assert flow["edges"][-1]["role"] == "output_attachment"
+    FlowDefinition.model_validate(flow)
     assert "crb/Crumbs" in task_instructions
     assert "record_evidence" in task_instructions
     assert "Do not extract any other genes" in task_instructions
@@ -522,6 +783,221 @@ def test_ask_streaming_chat_question_accepts_structured_evidence_summary(monkeyp
     assert checks[-1]["step"] == "chat_stream"
 
 
+def test_ask_streaming_chat_question_accepts_nonfatal_validator_warning(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    warning_event = {
+        "type": "SPECIALIST_ERROR",
+        "details": {
+            "specialist": "Gene Extraction",
+            "reason": "domain_validator_dispatch_error",
+            "severity": "warning",
+            "fatal": False,
+            "error": "Validator dispatch recorded validator_error findings.",
+        },
+    }
+    sse_body = (
+        'data: {"type":"RUN_STARTED","trace_id":"trace-warning","model":"gpt-5.5"}\n'
+        "\n"
+        'data: {"type":"evidence_summary","evidence_records":[{"record_id":"evidence-1","quote":"Crb organizes the rhabdomere.","chunk_id":"chunk-1"}]}\n'
+        "\n"
+        f"data: {json.dumps(warning_event)}\n"
+        "\n"
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"The paper focuses on crb/Crumbs."}\n'
+        "\n"
+        'data: {"type":"turn_completed","trace_id":"trace-warning","message":"Chat turn completed."}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    summary = smoke.ask_streaming_chat_question(
+        base_url="http://example.test",
+        headers={"X-API-Key": "test-key"},
+        session_id="session-stream-warning",
+        message="What genes are the focus of the publication?",
+        chat_model=None,
+        specialist_model=None,
+        expected_model="gpt-5.5",
+        chat_timeout_seconds=5.0,
+        checks=checks,
+    )
+
+    assert summary["trace_id"] == "trace-warning"
+    assert summary["nonfatal_error_events"] == [warning_event]
+    assert smoke.collect_fatal_error_events([warning_event]) == []
+    assert smoke.error_event_is_nonfatal({
+        "type": "SPECIALIST_ERROR",
+        "details": {"reason": "unexpected_warning", "severity": "warning"},
+    }) is False
+    assert checks[-1]["payload"]["nonfatal_error_events"] == [warning_event]
+
+
+def test_ask_streaming_chat_question_rejects_fatal_specialist_error(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    fatal_event = {
+        "type": "SPECIALIST_ERROR",
+        "details": {
+            "specialist": "Gene Extraction",
+            "reason": "structured_finalization_missing",
+            "severity": "error",
+            "error": "Gene Extraction did not call mandatory finalization.",
+        },
+    }
+    sse_body = (
+        'data: {"type":"RUN_STARTED","trace_id":"trace-fatal","model":"gpt-5.5"}\n'
+        "\n"
+        'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
+        "\n"
+        f"data: {json.dumps(fatal_event)}\n"
+        "\n"
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"The paper focuses on crb/Crumbs."}\n'
+        "\n"
+        'data: {"type":"turn_completed","trace_id":"trace-fatal","message":"Chat turn completed."}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    with pytest.raises(smoke.SmokeFailure, match="fatal error events"):
+        smoke.ask_streaming_chat_question(
+            base_url="http://example.test",
+            headers={"X-API-Key": "test-key"},
+            session_id="session-stream-fatal",
+            message="What genes are the focus of the publication?",
+            chat_model=None,
+            specialist_model=None,
+            expected_model="gpt-5.5",
+            chat_timeout_seconds=5.0,
+            checks=checks,
+        )
+
+
+def test_execute_flow_accepts_nonfatal_validator_warning(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    warning_event = {
+        "type": "SPECIALIST_ERROR",
+        "details": {
+            "specialist": "Gene Extraction",
+            "reason": "domain_validator_dispatch_error",
+            "severity": "warning",
+            "fatal": False,
+            "error": "Validator dispatch recorded validator_error findings.",
+        },
+    }
+    sse_body = (
+        'data: {"type":"FLOW_STARTED","flow_id":"flow-1"}\n'
+        "\n"
+        'data: {"type":"RUN_STARTED","trace_id":"trace-flow","model":"gpt-5.5"}\n'
+        "\n"
+        f"data: {json.dumps(warning_event)}\n"
+        "\n"
+        'data: {"type":"FLOW_STEP_EVIDENCE","evidence_count":1}\n'
+        "\n"
+        'data: {"type":"RUN_FINISHED","response":"Extracted crb with one evidence record."}\n'
+        "\n"
+        'data: {"type":"FLOW_FINISHED","status":"completed","flow_run_id":"run-1","total_evidence_records":1}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    summary = smoke.execute_flow(
+        base_url="http://example.test",
+        headers={"X-API-Key": "test-key"},
+        flow_id="flow-1",
+        document_id="doc-1",
+        user_query="Extract crb.",
+        flow_timeout_seconds=5.0,
+        checks=checks,
+    )
+
+    assert summary["flow_run_id"] == "run-1"
+    assert summary["total_evidence_records"] == 1
+    assert summary["nonfatal_error_events"] == [warning_event]
+    assert checks[-1]["step"] == "execute_flow"
+    assert checks[-1]["payload"]["nonfatal_error_events"] == [warning_event]
+
+
+def test_execute_flow_rejects_fatal_specialist_error(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    fatal_event = {
+        "type": "SPECIALIST_ERROR",
+        "details": {
+            "specialist": "Gene Extraction",
+            "reason": "structured_finalization_missing",
+            "severity": "error",
+            "error": "Gene Extraction did not call mandatory finalization.",
+        },
+    }
+    sse_body = (
+        'data: {"type":"FLOW_STARTED","flow_id":"flow-1"}\n'
+        "\n"
+        'data: {"type":"RUN_STARTED","trace_id":"trace-flow","model":"gpt-5.5"}\n'
+        "\n"
+        f"data: {json.dumps(fatal_event)}\n"
+        "\n"
+        'data: {"type":"FLOW_STEP_EVIDENCE","evidence_count":1}\n'
+        "\n"
+        'data: {"type":"RUN_FINISHED","response":"Extracted crb with one evidence record."}\n'
+        "\n"
+        'data: {"type":"FLOW_FINISHED","status":"completed","flow_run_id":"run-1","total_evidence_records":1}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    with pytest.raises(smoke.SmokeFailure, match="fatal error events"):
+        smoke.execute_flow(
+            base_url="http://example.test",
+            headers={"X-API-Key": "test-key"},
+            flow_id="flow-1",
+            document_id="doc-1",
+            user_query="Extract crb.",
+            flow_timeout_seconds=5.0,
+            checks=checks,
+        )
+
+
 def test_ask_streaming_chat_question_rejects_weak_evidence_summary(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []
@@ -690,6 +1166,8 @@ def test_build_flow_definition_keeps_release_smoke_flow_narrow():
     task_instructions = flow_definition["nodes"][0]["data"]["task_instructions"]
     step_goal = flow_definition["nodes"][1]["data"]["step_goal"]
 
+    assert flow_definition["version"] == "1.1"
+    FlowDefinition.model_validate(flow_definition)
     assert "exactly one" in smoke.DEFAULT_FLOW_QUERY
     assert "crb/Crumbs" in smoke.DEFAULT_FLOW_QUERY
     assert "evidence record" in smoke.DEFAULT_FLOW_QUERY

@@ -13,6 +13,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
+from src.lib import http_errors
+
 
 class TestCustomAgentTestEndpoint:
     """Unit tests for POST /api/agent-studio/custom-agents/{id}/test."""
@@ -265,10 +267,16 @@ class TestCustomAgentCrudContract:
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
         )
+        validation_message = (
+            "Agents using an envelope output schema must include a builder finalize "
+            "tool before saving. Output schema 'gene_extraction' has no finalize_* "
+            "tool in tool_ids; add the appropriate builder-finalization tool or clear "
+            "the output schema."
+        )
         monkeypatch.setattr(
             api_module,
             "create_custom_agent",
-            lambda **_kwargs: (_ for _ in ()).throw(ValueError("Unknown model_id: not-real")),
+            lambda **_kwargs: (_ for _ in ()).throw(ValueError(validation_message)),
         )
 
         db = SimpleNamespace(
@@ -291,9 +299,9 @@ class TestCustomAgentCrudContract:
             )
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Custom agent request is invalid"
-        assert "Unknown model_id" not in str(exc_info.value.detail)
-        assert "Unknown model_id" in caplog.text
+        assert exc_info.value.detail == validation_message
+        assert "builder finalize tool" in str(exc_info.value.detail)
+        assert "builder finalize tool" in caplog.text
 
     def test_list_endpoint_filters_by_template_source_only(self, monkeypatch):
         import src.api.agent_studio_custom as api_module
@@ -448,7 +456,12 @@ class TestCustomAgentCrudErrorsAndBranches:
     def test_create_endpoint_returns_500_for_non_unique_integrity_error(self, monkeypatch):
         import src.api.agent_studio_custom as api_module
 
-        db_exc = IntegrityError(statement="insert", params={}, orig=Exception("db write failed"))
+        report_calls = []
+        db_exc = IntegrityError(
+            statement="insert",
+            params={"instructions": "secret prompt text"},
+            orig=Exception("db write failed secret prompt text"),
+        )
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -459,6 +472,12 @@ class TestCustomAgentCrudErrorsAndBranches:
             "create_custom_agent",
             lambda **_kwargs: (_ for _ in ()).throw(db_exc),
         )
+
+        def _fake_report_runtime_exception(exc, **kwargs):
+            report_calls.append((exc, kwargs))
+            return True
+
+        monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
 
         db = _db_mock()
         with pytest.raises(HTTPException) as exc_info:
@@ -472,6 +491,65 @@ class TestCustomAgentCrudErrorsAndBranches:
 
         assert exc_info.value.status_code == 500
         db.rollback.assert_called_once()
+        assert len(report_calls) == 1
+        assert isinstance(report_calls[0][0], api_module._CustomAgentDatabaseError)
+        assert "Exception" in str(report_calls[0][0])
+        assert "secret prompt text" not in str(report_calls[0][0])
+        assert report_calls[0][1]["component"] == "api"
+        assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+        assert report_calls[0][1]["context"]["logger_name"] == api_module.logger.name
+        assert report_calls[0][1]["context"]["status_code"] == 500
+
+    def test_update_endpoint_returns_500_for_non_unique_integrity_error(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        report_calls = []
+        custom_agent = SimpleNamespace(id=uuid.uuid4())
+        db_exc = IntegrityError(
+            statement="update",
+            params={"instructions": "secret prompt text"},
+            orig=Exception("db write failed secret prompt text"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
+        monkeypatch.setattr(
+            api_module,
+            "update_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(db_exc),
+        )
+
+        def _fake_report_runtime_exception(exc, **kwargs):
+            report_calls.append((exc, kwargs))
+            return True
+
+        monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+
+        db = _db_mock()
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.update_custom_agent_endpoint(
+                    custom_agent_id=custom_agent.id,
+                    request=api_module.UpdateCustomAgentRequest(name="Updated"),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == "Database error while updating custom agent"
+        db.rollback.assert_called_once()
+        assert len(report_calls) == 1
+        assert isinstance(report_calls[0][0], api_module._CustomAgentDatabaseError)
+        assert "Exception" in str(report_calls[0][0])
+        assert "secret prompt text" not in str(report_calls[0][0])
+        assert report_calls[0][1]["component"] == "api"
+        assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+        assert report_calls[0][1]["context"]["logger_name"] == api_module.logger.name
+        assert report_calls[0][1]["context"]["status_code"] == 500
 
     def test_list_endpoint_value_error_maps_to_400(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
@@ -614,6 +692,36 @@ class TestCustomAgentCrudErrorsAndBranches:
         assert conflict_exc.value.status_code == 409
         assert conflict_exc.value.detail == "A custom agent with this name already exists"
         assert "name already exists" in caplog.text
+        db.rollback.assert_called_once()
+
+        validation_message = (
+            "Agents using an envelope output schema must include a builder finalize "
+            "tool before saving. Output schema 'gene_extraction' has no finalize_* "
+            "tool in tool_ids; add the appropriate builder-finalization tool or clear "
+            "the output schema."
+        )
+        monkeypatch.setattr(
+            api_module,
+            "update_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(ValueError(validation_message)),
+        )
+        db = _db_mock()
+        with pytest.raises(HTTPException) as validation_exc:
+            asyncio.run(
+                api_module.update_custom_agent_endpoint(
+                    custom_agent_id=custom_agent.id,
+                    request=api_module.UpdateCustomAgentRequest(
+                        output_schema_key="gene_extraction",
+                        tool_ids=[],
+                        allow_empty_tool_ids=True,
+                    ),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+        assert validation_exc.value.status_code == 400
+        assert validation_exc.value.detail == validation_message
+        assert "builder finalize tool" in str(validation_exc.value.detail)
         db.rollback.assert_called_once()
 
         db_unique = IntegrityError(

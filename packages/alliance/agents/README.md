@@ -73,7 +73,7 @@ tools:
 output_schema: MyAgentEnvelope
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.5}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.6-sol}"
   temperature: 0.1
   reasoning: "medium"
 
@@ -131,11 +131,11 @@ content: |
 ### Step 3: Install and reload
 
 Copy the completed package directory into
-`~/.agr_ai_curation/runtime/packages/` and restart the backend:
+`~/.agr_ai_curation/runtime/packages/` and rerun the guarded production
+start-and-verify stage:
 
 ```bash
-docker compose --env-file ~/.agr_ai_curation/.env \
-  -f docker-compose.production.yml restart backend
+scripts/install/install.sh --from-stage 6
 ```
 
 ## Repo-local use in this checkout
@@ -213,7 +213,7 @@ Model configuration supports environment variable substitution:
 
 ```yaml
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-5.5}"
+  model: "${AGENT_GENE_MODEL:-gpt-5.6-sol}"
   temperature: ${AGENT_GENE_TEMP:-0.1}
 ```
 

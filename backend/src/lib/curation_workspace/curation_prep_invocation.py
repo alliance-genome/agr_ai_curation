@@ -105,6 +105,7 @@ async def run_chat_curation_prep(
                 origin_session_id=request.session_id,
                 user_id=user_id,
                 source_kind=CurationExtractionSourceKind.CHAT,
+                workflow="curation_prep_chat",
             ),
         )
         total_candidate_count += prep_output.review_row_count

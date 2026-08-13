@@ -201,7 +201,7 @@ object_definitions:
     metadata:
       object_role: curatable_unit
       assertion_kind: pending_disease_assertion
-      semantic_source: domain_envelope.objects
+      semantic_source: domain_envelope.extracted_objects
       validator_binding_id: disease_pending_envelope_validator
       supervisor_manifest:
         primary_label_field: disease_annotation_object.name
@@ -2398,7 +2398,7 @@ fixture_packs:
 metadata:
   object_role_key: object_role
   curatable_unit_object_type: DiseaseAnnotation
-  semantic_source: domain_envelope.objects
+  semantic_source: domain_envelope.extracted_objects
   legacy_semantic_lists: []
   supported_object_roles:
     - curatable_unit

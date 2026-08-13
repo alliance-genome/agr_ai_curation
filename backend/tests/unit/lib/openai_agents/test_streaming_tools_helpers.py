@@ -11,6 +11,7 @@ from agents import AgentOutputSchema
 from pydantic import BaseModel
 
 from src.lib.curation_workspace import adapter_registry
+import src.lib.curation_workspace.domain_envelope_normalization as domain_envelope_normalization
 from src.lib.config import schema_discovery
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.models import (
@@ -48,6 +49,30 @@ class _FakeRunResult:
 
     def to_input_list(self):
         return [{"role": "user", "content": "prior query"}]
+
+
+class _FakeFailingRunResult:
+    final_output = None
+    new_items = []
+
+    async def stream_events(self):
+        if False:
+            yield None
+        raise TimeoutError("Responses websocket connect timed out after 5.0 seconds.")
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "prior query"}]
+
+
+class _FakeContextManager:
+    def __init__(self, value=None):
+        self.value = value
+
+    def __enter__(self):
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
 
 
 def test_agent_runtime_curation_adapter_key_reads_attached_metadata():
@@ -111,6 +136,11 @@ def test_extract_model_identifier_handles_string_and_object():
 @pytest.mark.asyncio
 async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_data(monkeypatch):
     captured = {}
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
 
     def _run_streamed(_agent, *args, **kwargs):
         captured["run_config"] = kwargs["run_config"]
@@ -118,6 +148,17 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
 
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+    monkeypatch.setattr(
+        streaming_tools,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: _FakeContextManager(),
+    )
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(streaming_tools, "gen_ai_invoke_agent_span", _fake_sentry_span)
 
     parent_config = streaming_tools.RunConfig(
         tracing_disabled=False,
@@ -147,6 +188,226 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
     assert captured["run_config"].trace_include_sensitive_data is True
     assert captured["run_config"].workflow_name == "parent workflow"
     assert captured["run_config"].group_id == "session-1"
+    post_stream_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "specialist_tool_post_stream"
+    )
+    assert post_stream_span[1]["output_preview"] == "specialist output"
+    assert post_stream_span[1]["finalization_status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_records_sentry_error_for_stream_creation_failure(monkeypatch):
+    sentry_calls = []
+    context_exits = {"conversation": 0, "span": 0}
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
+
+    class RecordingContextManager(_FakeContextManager):
+        def __init__(self, kind, value=None):
+            super().__init__(value)
+            self.kind = kind
+
+        def __exit__(self, exc_type, exc, tb):
+            context_exits[self.kind] += 1
+            return None
+
+    def _raise_stream_creation_error(*args, **kwargs):
+        raise ConnectionError("Responses stream could not be created.")
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        _raise_stream_creation_error,
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: RecordingContextManager("conversation"),
+    )
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return RecordingContextManager("span", FakeSentrySpan())
+
+    monkeypatch.setattr(streaming_tools, "gen_ai_invoke_agent_span", _fake_sentry_span)
+
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(ConnectionError, match="Responses stream could not be created"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="summarize findings",
+            specialist_name="Plain Text Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    error_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "specialist_tool_post_stream"
+    )
+    assert error_span[1]["finalization_status"] == "error"
+    assert (
+        error_span[1]["span_data"]["ai_curation.error.detail"]["error_type"]
+        == "ConnectionError"
+    )
+    assert (
+        error_span[1]["span_data"]["ai_curation.error.detail"]["phase"]
+        == "specialist_start_streamed"
+    )
+    assert context_exits == {"conversation": 2, "span": 2}
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_preserves_stream_creation_error_when_sentry_recording_fails(
+    monkeypatch,
+):
+    context_managers = []
+    sentry_span_calls = 0
+
+    class RecordingContextManager(_FakeContextManager):
+        def __init__(self, kind, value=None, *, enter_error=None):
+            super().__init__(value)
+            self.kind = kind
+            self.enter_error = enter_error
+            self.exit_count = 0
+            context_managers.append(self)
+
+        def __enter__(self):
+            if self.enter_error is not None:
+                raise self.enter_error
+            return super().__enter__()
+
+        def __exit__(self, exc_type, exc, tb):
+            self.exit_count += 1
+            return None
+
+    def _raise_stream_creation_error(*args, **kwargs):
+        raise ConnectionError("Responses stream could not be created.")
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        _raise_stream_creation_error,
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: RecordingContextManager("conversation"),
+    )
+
+    def _fake_sentry_span(**kwargs):
+        nonlocal sentry_span_calls
+        sentry_span_calls += 1
+        return RecordingContextManager(
+            "span",
+            enter_error=(
+                RuntimeError("Sentry outcome span failed")
+                if sentry_span_calls == 2
+                else None
+            ),
+        )
+
+    monkeypatch.setattr(streaming_tools, "gen_ai_invoke_agent_span", _fake_sentry_span)
+
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(ConnectionError, match="Responses stream could not be created"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="summarize findings",
+            specialist_name="Plain Text Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    outer_contexts = [context_managers[0], context_managers[1]]
+    assert [context.kind for context in outer_contexts] == ["conversation", "span"]
+    assert [context.exit_count for context in outer_contexts] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_records_sentry_error_for_stream_failure(monkeypatch):
+    sentry_calls = []
+    context_exits = {"conversation": 0, "span": 0}
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
+
+    class RecordingContextManager(_FakeContextManager):
+        def __init__(self, kind, value=None):
+            super().__init__(value)
+            self.kind = kind
+
+        def __exit__(self, exc_type, exc, tb):
+            context_exits[self.kind] += 1
+            return None
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeFailingRunResult(),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: RecordingContextManager("conversation"),
+    )
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return RecordingContextManager("span", FakeSentrySpan())
+
+    monkeypatch.setattr(streaming_tools, "gen_ai_invoke_agent_span", _fake_sentry_span)
+
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(TimeoutError, match="Responses websocket connect timed out"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="summarize findings",
+            specialist_name="Plain Text Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    error_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "specialist_tool_post_stream"
+    )
+    assert error_span[1]["finalization_status"] == "error"
+    assert error_span[1]["span_data"]["ai_curation.error.detail"]["error_type"] == "TimeoutError"
+    assert error_span[1]["span_data"]["ai_curation.error.detail"]["phase"] == "specialist_stream"
+    assert ("data", "ai_curation.finalization.status", "error") in sentry_calls
+    assert context_exits == {"conversation": 2, "span": 2}
 
 
 @pytest.mark.asyncio
@@ -223,7 +484,7 @@ def test_non_domain_envelope_output_schema_keeps_default_sdk_strictness():
 
 
 def test_builder_materializer_agent_detection_uses_finalization_tool_name():
-    assert streaming_tools._is_builder_materializer_agent(
+    assert streaming_tools.is_builder_materializer_agent(
         SimpleNamespace(
             tools=[
                 SimpleNamespace(name="search_document"),
@@ -231,7 +492,7 @@ def test_builder_materializer_agent_detection_uses_finalization_tool_name():
             ]
         )
     )
-    assert not streaming_tools._is_builder_materializer_agent(
+    assert not streaming_tools.is_builder_materializer_agent(
         SimpleNamespace(tools=[SimpleNamespace(name="search_document")])
     )
 
@@ -1375,7 +1636,7 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
             "envelope_id": "env-test-gene",
             "domain_pack_id": "gene",
             "domain_pack_version": "0.1.0",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_mention_evidence",
                     "object_role": "validated_reference",
@@ -1427,7 +1688,7 @@ def test_domain_envelope_reduction_includes_materialized_validator_values_from_y
             "envelope_id": "env-test-allele",
             "domain_pack_id": "agr.alliance.allele",
             "domain_pack_version": "0.1.0",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "AllelePaperEvidenceAssociation",
                     "object_role": "curatable_unit",
@@ -1483,7 +1744,7 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
             "envelope_id": "env-test-builder",
             "domain_pack_id": "agr.alliance.gene_expression",
             "domain_pack_version": "0.1.0",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "GeneExpressionAnnotation",
                     "object_role": "curatable_unit",
@@ -1521,7 +1782,7 @@ def test_builder_domain_envelope_reduction_counts_curatable_objects():
             "envelope_id": "env-test-builder-curatable",
             "domain_pack_id": "agr.alliance.gene_expression",
             "domain_pack_version": "0.1.0",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "GeneExpressionAnnotation",
                     "object_role": "curatable_unit",
@@ -1556,7 +1817,7 @@ def test_domain_envelope_reduction_missing_policy_does_not_guess_payload_scalars
         {
             "envelope_id": "env-test-unusual",
             "domain_pack_id": "agr.alliance.unusual",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "UnusualObject",
                     "pending_ref_id": "unusual-1",
@@ -1590,7 +1851,7 @@ def test_domain_envelope_reduction_empty_objects_never_returns_raw_json():
         {
             "envelope_id": "env-test-empty",
             "domain_pack_id": "gene",
-            "objects": [],
+            "extracted_objects": [],
             "validation_findings": [],
         }
     )
@@ -1639,7 +1900,7 @@ def test_domain_envelope_shape_without_contract_does_not_fallback_to_validated_s
         {
             "envelope_id": "env-test-unaccepted",
             "domain_pack_id": "agr.alliance.gene_expression",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "GeneExpressionAnnotation",
                     "pending_ref_id": "gene-expression-1",
@@ -2162,7 +2423,7 @@ def _chat_dispatch_domain_cases():
             DomainEnvelope(
                 envelope_id="chat-allele-env",
                 domain_pack_id="agr.alliance.allele",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="AlleleMention",
                         pending_ref_id="allele-mention-1",
@@ -2198,7 +2459,7 @@ def _chat_dispatch_domain_cases():
             DomainEnvelope(
                 envelope_id="chat-disease-env",
                 domain_pack_id="agr.alliance.disease",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="DiseaseAnnotation",
                         pending_ref_id="disease-annotation-1",
@@ -2240,7 +2501,7 @@ def _chat_dispatch_domain_cases():
             DomainEnvelope(
                 envelope_id="chat-phenotype-env",
                 domain_pack_id="agr.alliance.phenotype",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="PhenotypeTerm",
                         object_role="validated_reference",
@@ -2268,7 +2529,7 @@ def _chat_dispatch_domain_cases():
             DomainEnvelope(
                 envelope_id="chat-gene-expression-env",
                 domain_pack_id="agr.alliance.gene_expression",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="GeneExpressionAnnotation",
                         pending_ref_id="gene-expression-annotation-1",
@@ -2303,7 +2564,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
     from src.lib.curation_workspace import adapter_registry
-    from src.lib.curation_workspace import curation_prep_service, extraction_results
+    from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 
     monkeypatch.setattr(
@@ -2314,19 +2575,19 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
     source_envelope = SimpleNamespace(
         domain_pack_id="gene",
-        objects=[SimpleNamespace()],
+        extracted_objects=[SimpleNamespace()],
     )
     observed_record = {}
 
-    def _fake_domain_envelope_from_extraction_result(record):
+    def fake_envelope_normalizer(record):
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
         return source_envelope
 
     monkeypatch.setattr(
-        curation_prep_service,
-        "_domain_envelope_from_extraction_result",
-        _fake_domain_envelope_from_extraction_result,
+        domain_envelope_normalization,
+        "domain_envelope_from_extraction_result",
+        fake_envelope_normalizer,
     )
     monkeypatch.setattr(
         adapter_registry,
@@ -2341,7 +2602,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
         model_dump=lambda mode="json": {
             "envelope_id": "chat-runtime",
             "domain_pack_id": "gene",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_mention_evidence",
                     "payload": {
@@ -2392,7 +2653,10 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
     payload = json.loads(result)
     assert payload["metadata"]["validated"] is True
-    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0259685"
+    assert (
+        payload["extracted_objects"][0]["payload"]["primary_external_id"]
+        == "FB:FBgn0259685"
+    )
     assert dispatched["envelope"] is source_envelope
     assert dispatched["domain_pack"].pack_id == "gene"
     assert dispatched["kwargs"]["source_envelope_revision"] == 1
@@ -2406,7 +2670,7 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
     from src.lib.curation_workspace import adapter_registry
-    from src.lib.curation_workspace import curation_prep_service, extraction_results
+    from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 
     monkeypatch.setattr(
@@ -2417,19 +2681,19 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
 
     source_envelope = SimpleNamespace(
         domain_pack_id="gene",
-        objects=[SimpleNamespace()],
+        extracted_objects=[SimpleNamespace()],
     )
     observed_record = {}
 
-    def _fake_domain_envelope_from_extraction_result(record):
+    def fake_envelope_normalizer(record):
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
         return source_envelope
 
     monkeypatch.setattr(
-        curation_prep_service,
-        "_domain_envelope_from_extraction_result",
-        _fake_domain_envelope_from_extraction_result,
+        domain_envelope_normalization,
+        "domain_envelope_from_extraction_result",
+        fake_envelope_normalizer,
     )
     monkeypatch.setattr(
         adapter_registry,
@@ -2442,7 +2706,7 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
         model_dump=lambda mode="json": {
             "envelope_id": "chat-runtime",
             "domain_pack_id": "gene",
-            "objects": [{"object_type": "gene_mention_evidence", "payload": {}}],
+            "extracted_objects": [{"object_type": "gene_mention_evidence", "payload": {}}],
             "validation_findings": [],
             "metadata": {},
         },
@@ -2529,9 +2793,12 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
     assert request.selected_inputs["data_provider_hint"] == "FB"
     assert request.selected_inputs["taxon_hint"] == "NCBITaxon:7227"
     assert request.selected_inputs["evidence_quote"].startswith("Crumbs protein")
-    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0259685"
-    assert payload["objects"][0]["payload"]["gene_symbol"] == "crb"
-    assert payload["objects"][0]["payload"]["taxon"] == "NCBITaxon:7227"
+    assert (
+        payload["extracted_objects"][0]["payload"]["primary_external_id"]
+        == "FB:FBgn0259685"
+    )
+    assert payload["extracted_objects"][0]["payload"]["gene_symbol"] == "crb"
+    assert payload["extracted_objects"][0]["payload"]["taxon"] == "NCBITaxon:7227"
     assert payload["validation_findings"]
     assert emitted[0]["details"]["toolArgs"]["domain_pack_id"] == "gene"
     lookup_events = [
@@ -2570,10 +2837,7 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     emitted = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
-    from src.lib.curation_workspace import (
-        curation_prep_service,
-        extraction_results,
-    )
+    from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 
     monkeypatch.setattr(
@@ -2588,8 +2852,8 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
         else None,
     )
     monkeypatch.setattr(
-        curation_prep_service,
-        "_domain_envelope_from_extraction_result",
+        domain_envelope_normalization,
+        "domain_envelope_from_extraction_result",
         lambda _record: envelope,
     )
 

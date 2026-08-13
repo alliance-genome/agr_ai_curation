@@ -2,27 +2,16 @@ import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'rea
 import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import {
-  cancelPdfJob,
-  fetchPdfJobs,
-} from '../../services/weaviate';
-import { emitGlobalToast } from '../../lib/globalNotifications';
-import { buildPdfTerminalNotification } from '@/features/documents/pdfTerminalNotifications';
+import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
+import { normalizeDocumentSourceProvenance } from '../../services/weaviate';
 import type {
   DocumentSummary,
   DocumentListResponse,
   DocumentFilter,
-  PdfProcessingJob,
 } from '../../services/weaviate';
 
 const DocumentList = lazy(() => import('../../components/weaviate/DocumentList'));
-const PdfJobsPanel = lazy(() => import('../../components/weaviate/PdfJobsPanel'));
 const InlineFilterBar = lazy(() => import('../../components/weaviate/InlineFilterBar'));
-
-type PipelineState = {
-  busy: boolean;
-  message?: string;
-};
 
 const readString = (value: unknown, defaultValue: string): string => (
   typeof value === 'string' && value.trim() ? value : defaultValue
@@ -39,6 +28,80 @@ const readNullableString = (value: unknown): string | null => {
 };
 
 const MAX_BATCH_DOCUMENT_SELECTION = 10;
+const DOCUMENTS_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
+
+const configuredDocumentsPageSize = Number(import.meta.env.VITE_DOCUMENTS_LIBRARY_DEFAULT_PAGE_SIZE ?? 20);
+const DEFAULT_DOCUMENTS_PAGE_SIZE = DOCUMENTS_PAGE_SIZE_OPTIONS.includes(
+  configuredDocumentsPageSize as (typeof DOCUMENTS_PAGE_SIZE_OPTIONS)[number],
+)
+  ? configuredDocumentsPageSize
+  : 20;
+const configuredDocumentsSearchDebounceMs = Number(
+  import.meta.env.VITE_DOCUMENTS_LIBRARY_SEARCH_DEBOUNCE_MS ?? 300,
+);
+const DOCUMENTS_SEARCH_DEBOUNCE_MS = Number.isFinite(configuredDocumentsSearchDebounceMs)
+  ? Math.max(0, configuredDocumentsSearchDebounceMs)
+  : 300;
+
+const sortFieldForApi = (field: string | undefined): string => {
+  switch (field) {
+    case 'filename':
+    case 'fileSize':
+    case 'vectorCount':
+      return field;
+    case 'creationDate':
+    default:
+      return 'creationDate';
+  }
+};
+
+export const buildDocumentListSearchParams = (
+  paginationModel: GridPaginationModel,
+  sortModel: GridSortModel,
+  filters: DocumentFilter,
+): URLSearchParams => {
+  const params = new URLSearchParams({
+    page: String(paginationModel.page + 1),
+    page_size: String(paginationModel.pageSize),
+    sort_by: sortFieldForApi(sortModel[0]?.field),
+    sort_order: sortModel[0]?.sort === 'asc' ? 'asc' : 'desc',
+  });
+  if (filters.searchTerm) {
+    params.set('search', filters.searchTerm);
+  }
+  filters.embeddingStatus?.forEach((status) => params.append('embedding_status', status));
+  if (filters.dateFrom) {
+    params.set('date_from', filters.dateFrom.toISOString());
+  }
+  if (filters.dateTo) {
+    params.set('date_to', filters.dateTo.toISOString());
+  }
+  if (filters.minVectorCount !== undefined) {
+    params.set('min_vector_count', String(filters.minVectorCount));
+  }
+  if (filters.maxVectorCount !== undefined) {
+    params.set('max_vector_count', String(filters.maxVectorCount));
+  }
+  return params;
+};
+
+export const lastDocumentPage = (totalDocuments: number, pageSize: number): number => (
+  Math.max(0, Math.ceil(totalDocuments / pageSize) - 1)
+);
+
+const useDebouncedDocumentSearchTerm = (searchTerm: string): string => {
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(searchTerm);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(
+      () => setDebouncedSearchTerm(searchTerm),
+      DOCUMENTS_SEARCH_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [searchTerm]);
+
+  return debouncedSearchTerm;
+};
 
 function DocumentsPageSectionFallback() {
   return (
@@ -50,122 +113,62 @@ function DocumentsPageSectionFallback() {
   );
 }
 
-const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[]): boolean => {
-  if (previous === next) {
-    return true;
-  }
-  if (previous.length !== next.length) {
-    return false;
-  }
-
-  for (let index = 0; index < previous.length; index += 1) {
-    const prevJob = previous[index];
-    const nextJob = next[index];
-
-    if (
-      prevJob.job_id !== nextJob.job_id ||
-      prevJob.status !== nextJob.status ||
-      prevJob.progress_percentage !== nextJob.progress_percentage ||
-      prevJob.current_stage !== nextJob.current_stage ||
-      prevJob.message !== nextJob.message ||
-      prevJob.error_message !== nextJob.error_message ||
-      prevJob.cancel_requested !== nextJob.cancel_requested ||
-      prevJob.updated_at !== nextJob.updated_at ||
-      prevJob.completed_at !== nextJob.completed_at
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-};
-
 const DocumentsPage: React.FC = () => {
   const navigate = useNavigate();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(false);
-  const [, setTotalCount] = useState(0);
-  const [pipelineState, setPipelineState] = useState<PipelineState>({ busy: false });
+  const [totalCount, setTotalCount] = useState(0);
   const [filters, setFilters] = useState<DocumentFilter>({});
+  const [paginationModel, setPaginationModel] = useState<GridPaginationModel>({
+    page: 0,
+    pageSize: DEFAULT_DOCUMENTS_PAGE_SIZE,
+  });
+  const [sortModel, setSortModel] = useState<GridSortModel>([
+    { field: 'creationDate', sort: 'desc' },
+  ]);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
-  const [jobs, setJobs] = useState<PdfProcessingJob[]>([]);
-  const [jobsLoading, setJobsLoading] = useState(false);
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
     severity: 'success' | 'error' | 'info';
   }>({ open: false, message: '', severity: 'info' });
-  const [pendingDocumentRefresh, setPendingDocumentRefresh] = useState(false);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const documentRequestIdRef = useRef(0);
+  const debouncedSearchTerm = useDebouncedDocumentSearchTerm(filters.searchTerm ?? '');
 
-  const jobsEventSourceRef = useRef<EventSource | null>(null);
-  const jobsPollingRef = useRef<number | null>(null);
-  const seenTerminalNotificationsRef = useRef<Set<string>>(new Set());
-  const seededTerminalNotificationsRef = useRef(false);
-
-  const notifyTerminalJobTransitions = React.useCallback((nextJobs: PdfProcessingJob[]) => {
-    const seedOnly = !seededTerminalNotificationsRef.current;
-
-    for (const job of nextJobs) {
-      const notification = buildPdfTerminalNotification(job);
-      if (!notification) {
-        continue;
-      }
-
-      const key = notification.key;
-      if (seenTerminalNotificationsRef.current.has(key)) {
-        continue;
-      }
-      seenTerminalNotificationsRef.current.add(key);
-      if (seedOnly) {
-        continue;
-      }
-
-      emitGlobalToast({ message: notification.message, severity: notification.severity });
-
-      setPendingDocumentRefresh(true);
-    }
-
-    if (!seededTerminalNotificationsRef.current) {
-      seededTerminalNotificationsRef.current = true;
-    }
-  }, []);
-
-  const applyJobsUpdate = React.useCallback(
-    (nextJobs: PdfProcessingJob[]) => {
-      setJobs((previousJobs) => (areJobsEquivalent(previousJobs, nextJobs) ? previousJobs : nextJobs));
-      notifyTerminalJobTransitions(nextJobs);
-    },
-    [notifyTerminalJobTransitions]
+  const queryFilters = useMemo(
+    () => ({
+      searchTerm: debouncedSearchTerm || undefined,
+      embeddingStatus: filters.embeddingStatus,
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+      minVectorCount: filters.minVectorCount,
+      maxVectorCount: filters.maxVectorCount,
+    }),
+    [
+      debouncedSearchTerm,
+      filters.dateFrom,
+      filters.dateTo,
+      filters.embeddingStatus,
+      filters.maxVectorCount,
+      filters.minVectorCount,
+    ],
   );
 
-  const refreshJobs = React.useCallback(async (silent = false) => {
-    if (!silent) {
-      setJobsLoading(true);
-    }
-
-    try {
-      const payload = await fetchPdfJobs({ windowDays: 7, limit: 50, offset: 0 });
-      applyJobsUpdate(payload.jobs);
-    } catch (error) {
-      console.error('Error fetching PDF jobs:', error);
-    } finally {
-      if (!silent) {
-        setJobsLoading(false);
-      }
-    }
-  }, [applyJobsUpdate]);
-
   const handleRefresh = React.useCallback(async () => {
+    requestControllerRef.current?.abort();
+    const requestController = new AbortController();
+    requestControllerRef.current = requestController;
+    const requestId = documentRequestIdRef.current + 1;
+    documentRequestIdRef.current = requestId;
     setLoading(true);
     try {
       console.log('[DocumentsPage] Refresh start');
-      const params = new URLSearchParams({
-        page: '1',
-        page_size: '100',
-      });
+      const params = buildDocumentListSearchParams(paginationModel, sortModel, queryFilters);
 
       const response = await fetch(`/api/weaviate/documents?${params.toString()}`, {
         credentials: 'include', // Include httpOnly cookies for authentication
+        signal: requestController.signal,
         headers: {
           Accept: 'application/json',
         },
@@ -176,6 +179,9 @@ const DocumentsPage: React.FC = () => {
       }
 
       const data = (await response.json()) as DocumentListResponse;
+      if (requestId !== documentRequestIdRef.current) {
+        return;
+      }
       const docs = (data.documents || []) as unknown as Array<Record<string, unknown>>;
       const normalizedDocs: DocumentSummary[] = docs.map((doc) => {
         const processingStatus = readString(
@@ -195,106 +201,45 @@ const DocumentsPage: React.FC = () => {
             doc.embedding_status ?? doc.embeddingStatus,
             'pending',
           ) as DocumentSummary['embeddingStatus'],
+          errorMessage: readNullableString(doc.error_message ?? doc.errorMessage),
           chunkCount: typeof doc.chunk_count === 'number' ? doc.chunk_count : (typeof doc.chunkCount === 'number' ? doc.chunkCount : 0),
           vectorCount: typeof doc.vector_count === 'number' ? doc.vector_count : (typeof doc.vectorCount === 'number' ? doc.vectorCount : 0),
+          sourceProvenance: normalizeDocumentSourceProvenance(
+            doc.source_provenance ?? doc.sourceProvenance,
+          ),
         };
       });
-      setDocuments(normalizedDocs);
       const totalItems =
-        data.pagination?.totalItems ?? (data.pagination as Record<string, unknown> | undefined)?.total_items as number ?? docs.length;
+        data.total ?? data.pagination?.totalItems ?? (data.pagination as Record<string, unknown> | undefined)?.total_items as number ?? docs.length;
+      const lastPage = lastDocumentPage(totalItems, paginationModel.pageSize);
+      if (paginationModel.page > lastPage) {
+        setPaginationModel((previous) => ({ ...previous, page: lastPage }));
+        return;
+      }
+      setDocuments(normalizedDocs);
       setTotalCount(totalItems);
-      setPipelineState((prev) => (prev.busy ? prev : { busy: false }));
-      await refreshJobs(true);
       console.log('[DocumentsPage] Refresh success', { count: normalizedDocs.length });
     } catch (error) {
+      if (requestController.signal.aborted || requestId !== documentRequestIdRef.current) {
+        return;
+      }
       console.error('Error fetching documents:', error);
       // For now, just set empty data to prevent errors
       setDocuments([]);
       setTotalCount(0);
-      setPipelineState({ busy: false });
     } finally {
-      setLoading(false);
+      if (requestId === documentRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, [refreshJobs]);
+  }, [paginationModel, queryFilters, sortModel]);
 
   useEffect(() => {
     console.log('[DocumentsPage] Mounted – triggering initial refresh');
     void handleRefresh();
   }, [handleRefresh]);
 
-  useEffect(() => {
-    if (!pendingDocumentRefresh) {
-      return;
-    }
-
-    setPendingDocumentRefresh(false);
-    void handleRefresh();
-  }, [handleRefresh, pendingDocumentRefresh]);
-
-  useEffect(() => {
-    const startJobsPolling = () => {
-      if (jobsPollingRef.current !== null) {
-        return;
-      }
-      jobsPollingRef.current = window.setInterval(() => {
-        void refreshJobs(true);
-      }, 5000);
-    };
-
-    try {
-      const source = new EventSource('/api/weaviate/pdf-jobs/stream?window_days=7&limit=50');
-      jobsEventSourceRef.current = source;
-
-      source.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data) as { jobs?: PdfProcessingJob[]; final?: boolean };
-          if (payload.final) {
-            return;
-          }
-          if (Array.isArray(payload.jobs)) {
-            applyJobsUpdate(payload.jobs);
-          }
-        } catch (parseError) {
-          console.error('Failed to parse PDF jobs stream payload:', parseError);
-        }
-      };
-
-      source.onerror = () => {
-        source.close();
-        jobsEventSourceRef.current = null;
-        startJobsPolling();
-      };
-    } catch (error) {
-      console.error('Failed to open PDF jobs stream:', error);
-      startJobsPolling();
-    }
-
-    return () => {
-      if (jobsEventSourceRef.current) {
-        jobsEventSourceRef.current.close();
-        jobsEventSourceRef.current = null;
-      }
-      if (jobsPollingRef.current !== null) {
-        window.clearInterval(jobsPollingRef.current);
-        jobsPollingRef.current = null;
-      }
-    };
-  }, [applyJobsUpdate, refreshJobs]);
-
-  const handleCancelJob = React.useCallback(async (jobId: string) => {
-    try {
-      const response = await cancelPdfJob(jobId);
-      setSnackbar({ open: true, message: response.message, severity: 'info' });
-      await refreshJobs(true);
-    } catch (error) {
-      console.error('Failed to cancel PDF job:', error);
-      setSnackbar({
-        open: true,
-        message: error instanceof Error ? error.message : 'Failed to cancel job',
-        severity: 'error',
-      });
-    }
-  }, [refreshJobs]);
+  useEffect(() => () => requestControllerRef.current?.abort(), []);
 
   const buildActionErrorMessage = React.useCallback(async (response: Response, fallback: string) => {
     try {
@@ -306,7 +251,7 @@ const DocumentsPage: React.FC = () => {
       if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
         return detail.message;
       }
-    } catch (_error) {
+    } catch {
       // Fall through to status-based fallback message.
     }
     return `${fallback} (${response.status})`;
@@ -367,62 +312,43 @@ const DocumentsPage: React.FC = () => {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.detail || 'Failed to update title');
     }
+    const payload = (await response.json()) as { title?: string | null };
+    const savedTitle = payload.title ?? null;
+    setDocuments((previousDocuments) => previousDocuments.map((document) => (
+      document.id === documentId
+        ? { ...document, title: savedTitle }
+        : document
+    )));
+    setSnackbar({
+      open: true,
+      message: savedTitle
+        ? 'Display title updated. The original filename was not changed.'
+        : 'Display title cleared. The original filename was not changed.',
+      severity: 'success',
+    });
   }, []);
 
-  // Client-side filtering
-  const filteredDocuments = useMemo(() => {
-    let result = documents;
-
-    // Filter by search term (filename or title)
-    if (filters.searchTerm) {
-      const searchLower = filters.searchTerm.toLowerCase();
-      result = result.filter(
-        (doc) =>
-          doc.filename.toLowerCase().includes(searchLower) ||
-          (doc.title && doc.title.toLowerCase().includes(searchLower))
-      );
-    }
-
-    // Filter by embedding status
-    if (filters.embeddingStatus && filters.embeddingStatus.length > 0) {
-      result = result.filter((doc) =>
-        filters.embeddingStatus!.includes(doc.embeddingStatus ?? 'pending')
-      );
-    }
-
-    // Filter by date range
-    if (filters.dateFrom) {
-      const fromDate = filters.dateFrom.getTime();
-      result = result.filter((doc) => {
-        if (!doc.creationDate) return false;
-        return new Date(doc.creationDate).getTime() >= fromDate;
-      });
-    }
-    if (filters.dateTo) {
-      const toDate = filters.dateTo.getTime();
-      result = result.filter((doc) => {
-        if (!doc.creationDate) return false;
-        return new Date(doc.creationDate).getTime() <= toDate;
-      });
-    }
-
-    // Filter by chunk count (UI shows "Chunks", filter params still named vectorCount for compatibility)
-    if (filters.minVectorCount !== undefined) {
-      result = result.filter((doc) => (doc.chunkCount ?? 0) >= filters.minVectorCount!);
-    }
-    if (filters.maxVectorCount !== undefined) {
-      result = result.filter((doc) => (doc.chunkCount ?? 0) <= filters.maxVectorCount!);
-    }
-
-    return result;
-  }, [documents, filters]);
-
   const handleFilterChange = React.useCallback((newFilters: DocumentFilter) => {
-    setFilters((prev) => ({ ...prev, ...newFilters }));
+    setFilters(newFilters);
+    setPaginationModel((previous) => ({ ...previous, page: 0 }));
+    setSelectedDocumentIds([]);
   }, []);
 
   const handleClearFilters = React.useCallback(() => {
     setFilters({});
+    setPaginationModel((previous) => ({ ...previous, page: 0 }));
+    setSelectedDocumentIds([]);
+  }, []);
+
+  const handlePaginationModelChange = React.useCallback((nextPaginationModel: GridPaginationModel) => {
+    setPaginationModel(nextPaginationModel);
+    setSelectedDocumentIds([]);
+  }, []);
+
+  const handleSortModelChange = React.useCallback((nextSortModel: GridSortModel) => {
+    setSortModel(nextSortModel);
+    setPaginationModel((previous) => ({ ...previous, page: 0 }));
+    setSelectedDocumentIds([]);
   }, []);
 
   // Navigate to batch page with selected documents
@@ -439,10 +365,6 @@ const DocumentsPage: React.FC = () => {
       },
     });
   }, [documents, navigate, selectedDocumentIds]);
-
-  const handlePipelineStateChange = React.useCallback((busy: boolean, message?: string) => {
-    setPipelineState({ busy, message });
-  }, []);
 
   const handleSelectionChange = React.useCallback((ids: string[]) => {
     if (ids.length <= MAX_BATCH_DOCUMENT_SELECTION) {
@@ -474,7 +396,17 @@ const DocumentsPage: React.FC = () => {
   );
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: '1 1 auto',
+        minHeight: 0,
+        height: '100%',
+        width: '100%',
+        overflow: 'hidden',
+      }}
+    >
       {/* Selection Bar - shows when documents are selected */}
       {selectedDocumentIds.length > 0 && (
         <Paper
@@ -517,24 +449,33 @@ const DocumentsPage: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <Box
+        sx={{
+          flex: '1 1 auto',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
         <Suspense fallback={<DocumentsPageSectionFallback />}>
-          <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
           <DocumentList
-            documents={filteredDocuments}
+            documents={documents}
             loading={loading}
-            totalCount={filteredDocuments.length}
+            totalCount={totalCount}
             onDelete={handleDelete}
             onReembed={handleReembed}
             onRefresh={handleRefresh}
             onTitleUpdate={handleTitleUpdate}
-            pipelineBusy={pipelineState.busy}
-            pipelineMessage={pipelineState.message}
-            onPipelineStateChange={handlePipelineStateChange}
+            showUploadControls={false}
             checkboxSelection={true}
             selectedIds={selectedDocumentIds}
             onSelectionChange={handleSelectionChange}
             filterBar={filterBar}
+            paginationModel={paginationModel}
+            onPaginationModelChange={handlePaginationModelChange}
+            sortModel={sortModel}
+            onSortModelChange={handleSortModelChange}
           />
         </Suspense>
       </Box>

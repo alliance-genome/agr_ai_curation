@@ -15,6 +15,7 @@ Documentation for the AI Curation Platform developers.
 |-----------|---------|
 | `api/` | API reference documentation |
 | `guides/` | Developer guides and how-tos |
+| `integrations/` | External service integration contracts and verification notes |
 | `traces/` | Langfuse trace analysis tools |
 
 ## Quick Navigation
@@ -32,6 +33,8 @@ Start here for new developers:
 7. **[DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md)** -- Forward-only development rules for fallbacks, compatibility, and migrations
 8. **[AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md)** -- Comprehensive agent/runtime architecture reference
 9. **[UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md)** -- Upload runtime contract (status/cancellation/rollback/idempotency; implementation in ALL-23)
+10. **[SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md)** -- Backend Sentry initialization, redaction, reporting facades, and dev smoke procedure
+11. **[BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md)** -- Durable worker leases, startup recovery, and idempotent document resume policy
 
 ### Developer Guides
 
@@ -50,10 +53,13 @@ Start here for new developers:
 | [2026-04-13-chat-curation-evidence-alignment-plan.md](../design/2026-04-13-chat-curation-evidence-alignment-plan.md) | Deep-dive plan for aligning chat and curation PDF evidence navigation before the production hotfix |
 | [PDF_EVIDENCE_CONSISTENCY_STRATEGY.md](PDF_EVIDENCE_CONSISTENCY_STRATEGY.md) | Deep-dive architecture strategy for replacing split Home/Curation PDF viewers with one persistent route-level PDF.js host |
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
-| [SYMPHONY_FLOW_AND_OPTIMIZATION.md](guides/SYMPHONY_FLOW_AND_OPTIMIZATION.md) | Current Symphony runtime flow, lane transition map, and prompt/context optimization audit based on the live `.symphony` implementation |
-| [SYMPHONY_INCUS_VM_REBUILD.md](guides/SYMPHONY_INCUS_VM_REBUILD.md) | Rebuild `symphony-main` from a tracked cloud-init source, including default git safety scanners |
-| [SYMPHONY_VM_CODEX_SHORTCUTS.md](guides/SYMPHONY_VM_CODEX_SHORTCUTS.md) | Interactive Codex shortcuts in the Symphony VM, including PAT-backed `co` and rebuild persistence |
+| [SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md) | Backend Sentry operating model: initialization, redaction, reporting facades, CloudWatch/Langfuse boundaries, and dev smoke testing |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
+| [BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md) | Durable batch worker leases, startup scan behavior, stale processing policy, and counter invariants |
+| [ABC Literature API Contract Verification](integrations/abc_literature/api_contract_verification.md) | Verified Literature OpenAPI hostnames, endpoint allowlist, forbidden endpoints, and fixture-backed live-check procedure |
+| [ABC Literature Conversion Handoff](integrations/abc_literature/conversion_handoff.md) | Boundary between AI Curation, ABC Literature conversion_request, nXML/TEI behavior, and local PDFX fallback |
+| [ABC Literature Import Lifecycle](integrations/abc_literature/import_lifecycle.md) | Provider-neutral ABC import lifecycle, conversion polling/status mapping, failures, cancellation, and timeout behavior |
+| [ABC Literature Release Configuration](integrations/abc_literature/release_config.md) | Env/config, health/readiness, smoke evidence, and disable procedure for the ABC Literature document-source integration |
 
 ### API Reference
 

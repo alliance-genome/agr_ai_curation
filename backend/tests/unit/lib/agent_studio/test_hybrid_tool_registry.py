@@ -105,42 +105,38 @@ def test_bindings_metadata_merges_with_introspected():
 
 
 @pytest.mark.parametrize(
-    ("tool_id", "expected_params"),
+    "tool_id",
     [
-        (
-            "save_csv_file",
-            [
-                ("data_json", "string", True),
-                ("filename", "string", True),
-                ("columns", "string", False),
-            ],
-        ),
-        (
-            "save_tsv_file",
-            [
-                ("data_json", "string", True),
-                ("filename", "string", True),
-                ("columns", "string", False),
-            ],
-        ),
-        (
-            "save_json_file",
-            [
-                ("data_json", "string", True),
-                ("filename", "string", True),
-                ("pretty", "boolean", False),
-            ],
-        ),
+        "save_csv_file",
+        "save_tsv_file",
+        "save_json_file",
     ],
 )
-def test_file_output_tool_docs_match_runtime_signature(tool_id, expected_params):
+def test_raw_file_output_tools_are_not_catalogued(tool_id):
     registry = get_tool_registry()
 
-    params = registry[tool_id]["documentation"]["parameters"]
-    param_names = [param["name"] for param in params]
-    params_by_name = {param["name"]: param for param in params}
+    assert tool_id not in registry
 
-    assert param_names == [name for name, _type, _required in expected_params]
-    for name, expected_type, expected_required in expected_params:
-        assert params_by_name[name]["type"] == expected_type
-        assert params_by_name[name]["required"] is expected_required
+
+def test_runtime_formatter_tool_docs_are_projection_based():
+    registry = get_tool_registry()
+
+    finalize_params = {
+        param["name"]: param
+        for param in registry["finalize_and_save"]["documentation"]["parameters"]
+    }
+    preview_params = {
+        param["name"]: param
+        for param in registry["preview_output_projection"]["documentation"]["parameters"]
+    }
+
+    assert registry["finalize_and_save"]["runtime_bound"] is True
+    assert registry["finalize_and_save"]["package_backed"] is False
+    assert finalize_params["plan_json"]["required"] is False
+    assert finalize_params["filename_hint"]["required"] is False
+    assert "Projection plan JSON" in finalize_params["plan_json"]["description"]
+    assert preview_params["plan_json"]["required"] is True
+
+    forbidden_params = {"data_json", "rows", "raw_csv", "raw_tsv", "raw_json"}
+    assert not forbidden_params & set(finalize_params)
+    assert not forbidden_params & set(preview_params)

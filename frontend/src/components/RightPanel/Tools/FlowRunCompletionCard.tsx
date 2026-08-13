@@ -16,18 +16,21 @@ import {
 } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
-import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurateButton'
+import AuthoritativeReviewAndCurateButton from '@/features/curation/components/AuthoritativeReviewAndCurateButton'
 
 export type FlowEvidenceExportFormat = 'csv' | 'tsv' | 'json'
 
 export interface FlowRunCompletionSummary {
   adapterKeys: string[]
   documentId: string | null
+  extractionResultIds: string[]
+  extractionResultRefs: Array<Record<string, unknown>>
   failureReason: string | null
   flowId: string | null
   flowName: string
   flowRunId: string
   originSessionId: string | null
+  reviewSessionIds: string[]
   status: string
   totalEvidenceRecords: number
 }
@@ -85,6 +88,42 @@ function parseAttachmentFilename(headerValue: string | null): string {
   throw new Error('Could not parse attachment filename from download response.')
 }
 
+function hasCompleteFlowBootstrapScope(run: FlowRunCompletionSummary): boolean {
+  const adapterKeys = [...new Set(run.adapterKeys.map((value) => value.trim()).filter(Boolean))]
+  const extractionResultIds = new Set(
+    run.extractionResultIds.map((value) => value.trim()).filter(Boolean),
+  )
+
+  if (
+    !run.documentId?.trim()
+    || !run.flowRunId.trim()
+    || !run.originSessionId?.trim()
+    || adapterKeys.length !== 1
+    || extractionResultIds.size === 0
+    || run.extractionResultRefs.length === 0
+  ) {
+    return false
+  }
+
+  const [adapterKey] = adapterKeys
+  return run.extractionResultRefs.every((ref) => {
+    const extractionResultId = typeof ref.extraction_result_id === 'string'
+      ? ref.extraction_result_id.trim()
+      : ''
+    const resultRef = typeof ref.result_ref === 'string' ? ref.result_ref.trim() : ''
+    const refAdapterKey = typeof ref.adapter_key === 'string' ? ref.adapter_key.trim() : ''
+    const candidateCount = typeof ref.candidate_count === 'number'
+      ? ref.candidate_count
+      : Number.NaN
+
+    return extractionResultIds.has(extractionResultId)
+      && resultRef === `extraction-result:${extractionResultId}`
+      && refAdapterKey === adapterKey
+      && Number.isFinite(candidateCount)
+      && candidateCount > 0
+  })
+}
+
 export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProps) {
   const theme = useTheme()
   const [menuAnchorEl, setMenuAnchorEl] = useState<HTMLElement | null>(null)
@@ -92,7 +131,14 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
   const [error, setError] = useState<string | null>(null)
 
   const exportReady = run.status === 'completed' && run.totalEvidenceRecords > 0
-  const reviewReady = run.status === 'completed' && Boolean(run.documentId)
+  const hasAuthoritativeReviewSession = run.reviewSessionIds.length > 0
+  const canBootstrapReviewSession = run.status === 'completed'
+    && !hasAuthoritativeReviewSession
+    && hasCompleteFlowBootstrapScope(run)
+  // Do not reduce this gate to reviewSessionIds.length > 0. Extraction-only
+  // flows persist candidates first and intentionally create the session on click.
+  const reviewReady = run.status === 'completed'
+    && (hasAuthoritativeReviewSession || canBootstrapReviewSession)
   const statusColor = run.status === 'completed'
     ? theme.palette.success.main
     : theme.palette.error.main
@@ -230,7 +276,10 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
         </Box>
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
-          <ReviewAndCurateButton
+          <AuthoritativeReviewAndCurateButton
+            authoritativeReviewSessionIds={run.reviewSessionIds}
+            allowBootstrapWithoutSession={canBootstrapReviewSession}
+            disabledReason="This run does not include complete, unambiguous extraction scope."
             documentId={run.documentId}
             flowRunId={run.flowRunId}
             originSessionId={run.originSessionId}
@@ -303,7 +352,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
             },
           }}
         >
-          This run can be exported, but it does not have enough document scope metadata to open the curation workspace directly.
+          This run does not include the complete, unambiguous extraction scope required to prepare a curation workspace.
         </Alert>
       )}
 

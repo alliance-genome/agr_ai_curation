@@ -203,11 +203,6 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
             CurationCandidate.id.in_(candidate_ids)
         ).delete(synchronize_session=False)
 
-    if session_ids:
-        test_db.query(CurationReviewSession).filter(
-            CurationReviewSession.id.in_(session_ids)
-        ).delete(synchronize_session=False)
-
     envelope_ids = [
         row[0]
         for row in (
@@ -231,6 +226,11 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
         ).delete(synchronize_session=False)
         test_db.query(DomainEnvelopeModel).filter(
             DomainEnvelopeModel.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+
+    if session_ids:
+        test_db.query(CurationReviewSession).filter(
+            CurationReviewSession.id.in_(session_ids)
         ).delete(synchronize_session=False)
 
     test_db.query(CurationExtractionResultRecord).filter(
@@ -274,12 +274,6 @@ def configure_chat_stream_mocks(
         SimpleNamespace(get_document=lambda _uid: {"id": document_id, "filename": filename}),
     )
     patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_cognito", lambda _groups: [])
-    patch_chat_impl(
-        monkeypatch,
-        chat_modules,
-        "_build_context_messages_from_durable_messages",
-        lambda *_args, **_kwargs: [{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else [],
-    )
     patch_chat_impl(monkeypatch, chat_modules, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map))
 
     async def _register_active_stream(

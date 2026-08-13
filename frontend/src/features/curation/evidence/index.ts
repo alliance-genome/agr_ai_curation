@@ -11,6 +11,10 @@ export {
 } from './useEvidenceNavigation'
 export { default as EvidenceNavigationQuoteCard } from './EvidenceNavigationQuoteCard'
 export {
+  buildNavigationCommandFromEnvelopeEvidenceProjection,
+  deriveNavigationQuoteFromEnvelopeEvidenceProjection,
+} from './navigationSourceAdapters'
+export {
   buildEvidenceLocationLabel,
   dispatchEvidenceNavigationCommand,
   normalizeEvidenceSectionHierarchy,

@@ -206,15 +206,36 @@ class TestAgentLoader:
         assert chemical_tool["batchable"] is True
         assert chemical_tool["agent_id"] == "chemical_validation"
 
-    def test_formatters_not_enabled(self):
-        """Test that formatter agents are not supervisor-enabled."""
+    def test_formatters_use_projection_tool_suite(self):
+        """Formatter agents must use source-backed projection tools, not raw savers."""
         from src.lib.config.agent_loader import load_agent_definitions, get_agent_definition
 
         load_agent_definitions(ALLIANCE_AGENTS_PATH)
 
-        csv_formatter = get_agent_definition("csv_output_formatter")
-        if csv_formatter:
-            assert csv_formatter.supervisor_routing.enabled is False
+        expected_tools = [
+            "explain_formatter_capabilities",
+            "inspect_output_artifacts",
+            "inspect_output_rows",
+            "inspect_field_values",
+            "build_default_projection_plan",
+            "validate_output_projection",
+            "preview_output_projection",
+            "finalize_and_save",
+            "formatter_cannot_complete",
+        ]
+        removed_tools = {"save_csv_file", "save_tsv_file", "save_json_file"}
+
+        csv_formatter = get_agent_definition("csv_formatter")
+        tsv_formatter = get_agent_definition("tsv_formatter")
+        json_formatter = get_agent_definition("json_formatter")
+
+        for formatter in (csv_formatter, tsv_formatter, json_formatter):
+            assert formatter is not None
+            assert formatter.tools == expected_tools
+            assert not removed_tools & set(formatter.tools)
+            assert formatter.model_config is not None
+            assert formatter.model_config.reasoning == "medium"
+            assert formatter.supervisor_routing.enabled is True
 
     def test_get_agent_by_folder(self):
         """Test getting agent by folder name."""
@@ -508,7 +529,7 @@ class TestErrorHandling:
 
         assert gene is not None
         # Should use the default from the gene agent.yaml.
-        assert gene.model_config.model == "gpt-5.4-mini"
+        assert gene.model_config.model == "gpt-5.6-terra"
 
     def test_force_reload_actually_reloads(self):
         """Test that force_reload=True actually reloads the definitions."""
@@ -1955,6 +1976,81 @@ class TestConnectionDefinitionDataclass:
         disabled_conn = ConnectionDefinition.from_yaml("reranker", data)
         assert disabled_conn.required is False
         assert disabled_conn.active is False
+
+    def test_from_yaml_with_env_controlled_active_flag(self, monkeypatch):
+        """Optional connections may be present but inactive until enabled."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        data = {
+            "required": False,
+            "active": "${TEST_CONNECTION_ENABLED:-false}",
+        }
+
+        disabled_conn = ConnectionDefinition.from_yaml("external_db", data)
+        assert disabled_conn.required is False
+        assert disabled_conn.active is False
+
+        monkeypatch.setenv("TEST_CONNECTION_ENABLED", "true")
+        enabled_conn = ConnectionDefinition.from_yaml("external_db", data)
+        assert enabled_conn.required is False
+        assert enabled_conn.active is True
+
+    def test_conditional_required_flag_overrides_inactive_flag(self, monkeypatch):
+        """A connection required in this environment must be health-checked."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        monkeypatch.setenv("TEST_PROVIDER", "external")
+        conn = ConnectionDefinition.from_yaml(
+            "external_db",
+            {
+                "required": False,
+                "active": False,
+                "required_when": {
+                    "env": "TEST_PROVIDER",
+                    "equals": "external",
+                },
+            },
+        )
+
+        assert conn.required is True
+        assert conn.active is True
+
+    def test_from_yaml_with_env_controlled_timeout(self, monkeypatch):
+        """Health timeouts accept positive env-substituted integer values."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        monkeypatch.setenv("TEST_CONNECTION_TIMEOUT_SECONDS", "17")
+        conn = ConnectionDefinition.from_yaml(
+            "external_db",
+            {
+                "timeout_seconds": "${TEST_CONNECTION_TIMEOUT_SECONDS:-10}",
+            },
+        )
+
+        assert conn.timeout_seconds == 17
+
+    def test_from_yaml_uses_env_controlled_default_timeout(self, monkeypatch):
+        """The default health timeout remains tunable without editing config."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        monkeypatch.setenv("CONNECTION_HEALTH_TIMEOUT_SECONDS", "23")
+
+        conn = ConnectionDefinition.from_yaml("external_db", {})
+
+        assert conn.timeout_seconds == 23
+
+    @pytest.mark.parametrize("value", ["0", "-1", "not-an-integer"])
+    def test_from_yaml_rejects_invalid_timeout(self, value):
+        """Health timeouts fail config loading rather than silently misbehaving."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        with pytest.raises(
+            ValueError, match="timeout_seconds must be a positive integer"
+        ):
+            ConnectionDefinition.from_yaml(
+                "external_db",
+                {"timeout_seconds": value},
+            )
 
 
 class TestHealthCheckDataclass:

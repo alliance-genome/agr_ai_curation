@@ -19,6 +19,8 @@ import {
   Tooltip,
   Alert,
   Chip,
+  Radio,
+  RadioGroup,
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
 import CloseIcon from '@mui/icons-material/Close'
@@ -35,6 +37,7 @@ import type {
   ValidationAttachmentSelection,
 } from './types'
 import {
+  isFileOutputFormatterAgentFromMetadata,
   isValidationAgentFromMetadata,
   isOutputFormatterAgentFromMetadata,
   resolveOutputFormatterIncludeEvidence,
@@ -129,6 +132,25 @@ const BUILT_IN_TEMPLATE_VARIABLES = [
   'timestamp',
 ] as const
 
+const SOURCE_PDF_FILENAME_TEMPLATE = '{{input_filename_stem}}'
+
+type OutputFilenameMode = 'source_pdf' | 'custom' | 'formatter_default'
+
+const resolveOutputFilenameMode = (template?: string): OutputFilenameMode => {
+  const normalized = template?.trim()
+  if (!normalized) return 'formatter_default'
+  if (/^\{\{input_filename_stem\}\}(?:\.(?:csv|tsv|json))?$/i.test(normalized)) {
+    return 'source_pdf'
+  }
+  return 'custom'
+}
+
+const outputFileExtension = (agentId: string): 'csv' | 'tsv' | 'json' => {
+  if (agentId === 'tsv_formatter') return 'tsv'
+  if (agentId === 'json_formatter') return 'json'
+  return 'csv'
+}
+
 const validationStateLabel = (state: ValidationAttachmentSelection['state']) => {
   if (state === 'under_development') return 'under development'
   return state
@@ -188,13 +210,22 @@ const supplementalGroupOwnerText = (group: ValidationAttachmentGroup) => {
   return parts.length > 0 ? parts.join(' / ') : 'Missing supplemental edge metadata'
 }
 
-function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDomainEnvelope }: NodeEditorProps) {
+function NodeEditor({
+  node,
+  outputBinding,
+  onSave,
+  onClose,
+  onDelete,
+  onViewPrompts,
+  onViewDomainEnvelope,
+}: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   // Form state
   const [customInstructions, setCustomInstructions] = useState('')
   const [includeEvidence, setIncludeEvidence] = useState(false)
   const [outputFilenameTemplate, setOutputFilenameTemplate] = useState('')
+  const [outputFilenameMode, setOutputFilenameMode] = useState<OutputFilenameMode>('formatter_default')
   const [outputKey, setOutputKey] = useState('')
   const [validationAttachments, setValidationAttachments] = useState<ValidationAttachmentSelection[]>([])
 
@@ -205,6 +236,9 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
     : false
   const supportsOutputFormatting = node
     ? isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
+    : false
+  const supportsFileOutputNaming = node
+    ? isFileOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
     : false
   const customInstructionsLabel = isValidationAgentNode
     ? 'Validation Steering Prompt (Optional)'
@@ -238,6 +272,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
         ) ?? false
       )
       setOutputFilenameTemplate(node.data.output_filename_template || '')
+      setOutputFilenameMode(resolveOutputFilenameMode(node.data.output_filename_template))
       setOutputKey(node.data.output_key || `${node.data.agent_id}_output`)
       setValidationAttachments(node.data.validation_attachments || [])
     }
@@ -258,9 +293,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
     onSave(node.id, {
       custom_instructions: customInstructions || undefined,
       include_evidence: nextIncludeEvidence,
-      output_filename_template: supportsOutputFormatting
-        ? outputFilenameTemplate.trim() || undefined
-        : undefined,
+      output_filename_template: supportsFileOutputNaming
+        ? outputFilenameMode === 'source_pdf'
+          ? SOURCE_PDF_FILENAME_TEMPLATE
+          : outputFilenameMode === 'custom'
+            ? outputFilenameTemplate.trim() || undefined
+            : undefined
+        : node.data.output_filename_template,
       output_key: outputKey,
       validation_attachments: validationAttachments.length > 0
         ? validationAttachments.map(validationAttachmentForPersistence)
@@ -293,6 +332,17 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
   const icon = useAgentIcon(node?.data.agent_id)
 
   if (!node) return null
+
+  const fileExtension = outputFileExtension(node.data.agent_id)
+  const filenamePreviewPrefix = outputFilenameMode === 'source_pdf'
+    ? '<PDF-name>'
+    : outputFilenameMode === 'custom'
+      ? outputFilenameTemplate.trim() || '<custom-prefix>'
+      : '<formatter-name>'
+  const filenamePreview = `${filenamePreviewPrefix}_<node>_<hash>_<trace-id>.${fileExtension}`
+  const customFilenameMissing = supportsFileOutputNaming
+    && outputFilenameMode === 'custom'
+    && !outputFilenameTemplate.trim()
 
   return (
     <EditorContainer elevation={4}>
@@ -771,6 +821,31 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
           <>
             <Divider />
 
+            {outputBinding?.status === 'bound' ? (
+              <Alert severity="info" icon={<SchemaIcon fontSize="inherit" />}>
+                {outputBinding.sources.length === 1 ? (
+                  <>
+                    Configuring output for <strong>{outputBinding.sourceLabel}</strong> extraction.
+                    This formatter receives only that extractor&apos;s result.
+                  </>
+                ) : (
+                  <>
+                    Configuring one output from <strong>{outputBinding.sources.length} source steps</strong>:{' '}
+                    {outputBinding.sources.map((source) => source.sourceLabel).join(', ')}.
+                    This formatter receives their results as one grouped input.
+                  </>
+                )}
+              </Alert>
+            ) : (
+              <Alert severity="error" icon={<SchemaIcon fontSize="inherit" />}>
+                {outputBinding?.status === 'duplicate'
+                  ? 'The same source step is attached to this formatter more than once. Remove the duplicate connection.'
+                  : outputBinding?.status === 'incompatible'
+                    ? 'This formatter is connected to an incompatible step. Connect it only to extraction results or typed validation results.'
+                    : 'This formatter is not configured. Connect at least one extraction result or typed validation result.'}
+              </Alert>
+            )}
+
             <Box>
               <FieldLabel>
                 <Typography variant="caption" fontWeight={600}>
@@ -802,39 +877,82 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
               />
             </Box>
 
-            <Box>
-              <FieldLabel>
-                <Typography variant="caption" fontWeight={600}>
-                  Output Filename Template
-                </Typography>
-                <Tooltip title="Controls the readable filename descriptor for formatter outputs using built-in placeholders. Stored files still keep the trace ID prefix and timestamp suffix.">
-                  <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
-                </Tooltip>
-              </FieldLabel>
-              <Box sx={{ mb: 1 }}>
-                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
-                  Built-in variables:
-                </Typography>
-                <Box sx={{ mt: 0.5 }}>
-                  {BUILT_IN_TEMPLATE_VARIABLES.map((variable) => (
-                    <VariableChip
-                      key={variable}
-                      onClick={() => handleInsertOutputFilenameVariable(variable)}
-                    >
-                      {`{{${variable}}}`}
-                    </VariableChip>
-                  ))}
+            {supportsFileOutputNaming && (
+              <Box>
+                <FieldLabel>
+                  <Typography id="file-naming-label" variant="caption" fontWeight={600}>
+                    File Naming
+                  </Typography>
+                  <Tooltip title="Choose the readable prefix. The runtime adds node, hash, and trace identifiers so every export remains unique.">
+                    <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
+                  </Tooltip>
+                </FieldLabel>
+                <RadioGroup
+                  aria-labelledby="file-naming-label"
+                  value={outputFilenameMode}
+                  onChange={(event) => setOutputFilenameMode(event.target.value as OutputFilenameMode)}
+                >
+                  <FormControlLabel
+                    value="source_pdf"
+                    control={<Radio size="small" />}
+                    label="Source PDF filename (recommended)"
+                  />
+                  <FormControlLabel
+                    value="custom"
+                    control={<Radio size="small" />}
+                    label="Custom filename prefix"
+                  />
+                  <FormControlLabel
+                    value="formatter_default"
+                    control={<Radio size="small" />}
+                    label="Formatter decides (existing behavior)"
+                  />
+                </RadioGroup>
+
+                {outputFilenameMode === 'custom' && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                      Built-in variables:
+                    </Typography>
+                    <Box sx={{ mt: 0.5, mb: 0.5 }}>
+                      {BUILT_IN_TEMPLATE_VARIABLES.map((variable) => (
+                        <VariableChip
+                          key={variable}
+                          onClick={() => handleInsertOutputFilenameVariable(variable)}
+                        >
+                          {`{{${variable}}}`}
+                        </VariableChip>
+                      ))}
+                    </Box>
+                    <TextField
+                      fullWidth
+                      required
+                      size="small"
+                      label="Custom filename prefix"
+                      placeholder="results_{{input_filename_stem}}"
+                      value={outputFilenameTemplate}
+                      onChange={(event) => setOutputFilenameTemplate(event.target.value)}
+                      error={customFilenameMissing}
+                      helperText={customFilenameMissing
+                        ? 'Enter a custom prefix before applying.'
+                        : 'Applied before filename sanitization; the file extension is added automatically.'}
+                    />
+                  </Box>
+                )}
+
+                <Box sx={{ mt: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Example filename
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}
+                  >
+                    {filenamePreview}
+                  </Typography>
                 </Box>
               </Box>
-              <TextField
-                fullWidth
-                size="small"
-                placeholder="{{input_filename_stem}}.tsv"
-                value={outputFilenameTemplate}
-                onChange={(e) => setOutputFilenameTemplate(e.target.value)}
-                helperText="Applies before sanitization. Example final file: traceid_input_filename_stem_20260410T120000Z.tsv"
-              />
-            </Box>
+            )}
 
             <Divider />
           </>
@@ -874,6 +992,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
           size="small"
           startIcon={<SaveIcon />}
           onClick={handleSave}
+          disabled={customFilenameMissing}
         >
           Apply
         </Button>

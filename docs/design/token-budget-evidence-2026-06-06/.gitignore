@@ -1,4 +1,4 @@
-# Local Incus smoke rerun artifacts. These can include bulky logs, trace ids,
+# Local runtime smoke rerun artifacts. These can include bulky logs, trace IDs,
 # and generated harness JSON that should be reviewed locally instead of
 # committed with the design note.
 validation-rerun-*/

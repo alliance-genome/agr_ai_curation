@@ -168,12 +168,23 @@ content: |
   browsing tool for those results:
   - Use `inspect_results(action="help")` when unsure which result-inspection action to call.
   - Use `inspect_results(target="latest")` for the newest extraction result in this chat.
+  - Use `inspect_results(action="search", target="this_chat" | "current_document" | "flow_run", query="<terms>")`
+    when the curator asks about earlier evidence, prior outputs, older results, or a
+    non-latest result. Select the intended `result_ref` from the bounded matches before
+    answering or exporting.
   - Use `inspect_results(result_ref="extraction-result:<uuid>", action="objects")`
     to browse more manifest objects.
   - Use `inspect_results(result_ref="extraction-result:<uuid>", action="object" | "field" | "validation")`
     for bounded object, field, or validation details.
   - Use `inspect_results(result_ref="extraction-result:<uuid>", action="evidence", object_ref="<object_ref>")`
     only when evidence text is needed. Evidence text is intentionally absent from default manifests.
+
+  For CSV/TSV/JSON export requests, formatter specialists are the only supported file
+  path. The runtime formatter bundle contains extraction results from the active session
+  and loaded document. Ordinary exports with no explicit result choice should use the
+  latest saved extraction result in that bundle. To select another result available in
+  the bundle, preserve its `source_ref="extraction-result:<uuid>"` in projection planning.
+  Do not silently export a different result than the curator requested.
 
   If an extractor returns zero retained objects, say that plainly. Then either ask the
   curator whether to try broader/narrower instructions, ask a clarifying question, or
@@ -290,6 +301,7 @@ content: |
   The supervisor output contract is prompt-only plain text, not JSON.
   - Keep the answer concise and curator-facing.
   - Exclude internal chunk_ids, trace IDs, raw tool names, and other system identifiers.
+  - If earlier conversation content appears summarized or missing because the chat was compacted, call recall_chat_history to fetch exact prior user/assistant text before answering. Do not guess and do not apologize for not remembering until recall has been tried.
   - When naming a source in prose, use the user-friendly label:
 
   | Tool | Display as |

@@ -639,7 +639,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         DomainEnvelope(
             envelope_id="disease-env",
             domain_pack_id="agr.alliance.disease",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="DiseaseAnnotation",
                     pending_ref_id="disease-annotation-1",
@@ -893,7 +893,7 @@ def test_subject_entity_selectors_require_type_and_omit_absent_optional_context(
     envelope = DomainEnvelope(
         envelope_id="phenotype-env",
         domain_pack_id="agr.alliance.phenotype",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
@@ -927,7 +927,7 @@ def test_subject_entity_selectors_require_type_and_omit_absent_optional_context(
     missing_type_envelope = DomainEnvelope(
         envelope_id="phenotype-env-missing-type",
         domain_pack_id="agr.alliance.phenotype",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
@@ -965,7 +965,7 @@ def test_subject_entity_selectors_reject_ambiguous_optional_taxon_context():
     envelope = DomainEnvelope(
         envelope_id="phenotype-env-ambiguous-taxon",
         domain_pack_id="agr.alliance.phenotype",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="PhenotypeSubject",
                 pending_ref_id="subject-1",
@@ -1011,7 +1011,7 @@ def test_under_development_validator_bindings_remain_metadata_only():
     envelope = DomainEnvelope(
         envelope_id="disease-env",
         domain_pack_id="agr.alliance.disease",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="DiseaseAnnotation",
                 pending_ref_id="disease-annotation-1",
@@ -1210,7 +1210,7 @@ def test_representative_alliance_active_validators_dispatch_unresolved_results()
             DomainEnvelope(
                 envelope_id="gene-env",
                 domain_pack_id="gene",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="gene_mention_evidence",
                         pending_ref_id="gene-1",
@@ -1237,7 +1237,7 @@ def test_representative_alliance_active_validators_dispatch_unresolved_results()
             DomainEnvelope(
                 envelope_id="phenotype-env",
                 domain_pack_id="agr.alliance.phenotype",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="PhenotypeTerm",
                         object_role="validated_reference",

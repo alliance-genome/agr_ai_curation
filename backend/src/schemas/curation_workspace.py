@@ -263,6 +263,14 @@ class CurationSessionStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class CurationInventoryScope(str, Enum):
+    """Server-resolved inventory visibility scope."""
+
+    MY_INVENTORY = "my_inventory"
+    MY_ORGANIZATION = "my_organization"
+    SHOW_ALL = "show_all"
+
+
 class CurationCandidateStatus(str, Enum):
     """Curator-facing decision state for an individual candidate."""
 
@@ -403,12 +411,23 @@ class CurationSubmissionStatus(str, Enum):
 
     PREVIEW_READY = "preview_ready"
     EXPORT_READY = "export_ready"
+    PENDING = "pending"
     QUEUED = "queued"
     ACCEPTED = "accepted"
     VALIDATION_ERRORS = "validation_errors"
     CONFLICT = "conflict"
     MANUAL_REVIEW_REQUIRED = "manual_review_required"
     FAILED = "failed"
+
+
+class CurationSubmissionAttemptState(str, Enum):
+    """Durable delivery state for a direct-submission outbox attempt."""
+
+    PENDING = "pending"
+    SENDING = "sending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
 
 
 class CurationExtractionSourceKind(str, Enum):
@@ -1301,6 +1320,10 @@ class CurationActionLogEntry(CurationWorkspaceBaseModel):
 class CurationSessionFilters(CurationWorkspaceBaseModel):
     """Reusable inventory and queue filter contract for session list APIs and saved views."""
 
+    inventory_scope: CurationInventoryScope = Field(
+        default=CurationInventoryScope.MY_INVENTORY,
+        description="Server-resolved inventory visibility scope",
+    )
     statuses: list[CurationSessionStatus] = Field(default_factory=list)
     adapter_keys: list[str] = Field(default_factory=list)
     curator_ids: list[str] = Field(default_factory=list)
@@ -1425,6 +1448,22 @@ class CurationSubmissionRecord(CurationWorkspaceBaseModel):
         description="Adapter-owned key naming the downstream target used for this record"
     )
     status: CurationSubmissionStatus = Field(description="Submission lifecycle status")
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        description="Stable request identity used for direct-submission deduplication",
+    )
+    attempt_state: Optional[CurationSubmissionAttemptState] = Field(
+        default=None,
+        description="Durable external-delivery state for direct submissions",
+    )
+    attempt_state_history: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Append-only audit history of durable delivery-state transitions",
+    )
+    retention_expires_at: Optional[datetime] = Field(
+        default=None,
+        description="Earliest time a terminal submission attempt is eligible for cleanup",
+    )
     readiness: list[CurationCandidateSubmissionReadiness] = Field(
         default_factory=list,
         description="Per-candidate readiness used for preview or submission gating",
@@ -1878,6 +1917,20 @@ class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):
     """Request contract for patching session status, ownership, or notes."""
 
     session_id: str = Field(description="Session identifier")
+    expected_session_version: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Session version that must still own this mutation",
+    )
+    intent_owner: Optional[str] = Field(
+        default=None,
+        description="Client operation owner for a monotonic latest-intent mutation",
+    )
+    intent_generation: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Monotonic generation within the client operation owner",
+    )
     status: Optional[CurationSessionStatus] = Field(
         default=None,
         description="New session status",
@@ -1891,6 +1944,16 @@ class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):
         default=None,
         description="Candidate to mark as currently active for resume flows",
     )
+
+    @model_validator(mode="after")
+    def validate_latest_intent(self) -> "CurationSessionUpdateRequest":
+        if (self.intent_owner is None) != (self.intent_generation is None):
+            raise ValueError("intent_owner and intent_generation must be provided together")
+        if self.intent_owner is not None and "current_candidate_id" not in self.model_fields_set:
+            raise ValueError("latest-intent fields require current_candidate_id")
+        if self.intent_owner is not None and self.expected_session_version is None:
+            raise ValueError("latest-intent fields require expected_session_version")
+        return self
 
 
 class CurationSessionUpdateResponse(CurationWorkspaceBaseModel):
@@ -2310,6 +2373,10 @@ class CurationSubmissionExecuteRequest(CurationWorkspaceBaseModel):
     """Request contract for executing a direct submission."""
 
     session_id: str = Field(description="Session identifier")
+    idempotency_key: str = Field(
+        min_length=1,
+        description="Stable unique identity that must be reused when this request is retried",
+    )
     target_key: SubmissionTargetKey = Field(
         description="Adapter-owned key naming the downstream submission target"
     )
@@ -2501,6 +2568,7 @@ __all__ = [
     "CurationSavedViewCreateResponse",
     "CurationSavedViewDeleteResponse",
     "CurationSavedViewListResponse",
+    "CurationInventoryScope",
     "CurationSessionCreateRequest",
     "CurationSessionCreateResponse",
     "CurationSessionFilters",
@@ -2524,6 +2592,7 @@ __all__ = [
     "CurationSubmissionRecord",
     "CurationSubmissionRetryRequest",
     "CurationSubmissionRetryResponse",
+    "CurationSubmissionAttemptState",
     "CurationSubmissionStatus",
     "CurationValidationCounts",
     "CurationValidationScope",

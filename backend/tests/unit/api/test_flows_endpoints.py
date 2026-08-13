@@ -1,15 +1,16 @@
 """Unit tests for flow CRUD endpoint handlers."""
 
-from datetime import datetime, timezone
-import inspect
 import importlib
+import inspect
+import logging
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
-
+from src.lib import http_errors
 from src.schemas.flows import (
     CreateFlowRequest,
     FlowValidationAttachmentSelection,
@@ -19,9 +20,30 @@ from src.schemas.flows import (
 flows = importlib.import_module("src.api.flows")
 
 
+@pytest.fixture(autouse=True)
+def _available_flow_agent_policy(monkeypatch):
+    """Keep CRUD tests independent of the runtime agent catalog and database."""
+
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: {
+            "name": agent_id,
+            "category": "Extraction",
+            "subcategory": "",
+            "output_schema_key": None,
+            "is_active": True,
+            "visible": True,
+            "visibility": None,
+            "produces_flow_artifacts": True,
+            "supervisor": {},
+        },
+    )
+
+
 def _flow_definition():
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": [
             {
@@ -48,6 +70,18 @@ def _flow_definition():
         ],
         "edges": [{"id": "e1", "source": "task_input_1", "target": "agent_1"}],
     }
+
+
+def test_create_flow_request_rejects_v1_0_definition():
+    definition = _flow_definition()
+    definition["version"] = "1.0"
+
+    with pytest.raises(ValueError, match="1.1"):
+        CreateFlowRequest(
+            name="Legacy flow",
+            description=None,
+            flow_definition=definition,
+        )
 
 
 def _flow(name="Flow A"):
@@ -143,6 +177,30 @@ async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_get_flow_reports_missing_agent_reference_on_read(monkeypatch):
+    owned = _flow(name="Owned")
+    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
+
+    assert response.id == owned.id
+    assert response.has_critical_issues is True
+    assert response.validation_warnings[0].type == "CRITICAL"
+    assert "references unavailable agent" in response.validation_warnings[0].message
+    assert "gene_expression" in response.validation_warnings[0].message
+
+
+@pytest.mark.asyncio
 async def test_create_flow_success(monkeypatch):
     class _DB:
         def __init__(self):
@@ -212,6 +270,7 @@ async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch)
         db=db,
     )
 
+    assert db.added is not None
     attachments = db.added.flow_definition["nodes"][1]["data"]["validation_attachments"]
     states = {attachment["state"] for attachment in attachments}
 
@@ -254,7 +313,10 @@ async def test_create_flow_maps_unique_integrity_error_to_409(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch):
+async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch, caplog):
+    report_calls = []
+    secret_text = "SECRET_FLOW_DEFINITION_SHOULD_NOT_APPEAR"
+
     class _DB:
         def add(self, _obj):
             return None
@@ -262,8 +324,8 @@ async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch):
         def commit(self):
             raise IntegrityError(
                 statement="insert into curation_flows",
-                params={},
-                orig=Exception("some other integrity error"),
+                params={"flow_definition": secret_text},
+                orig=Exception(f"some other integrity error {secret_text}"),
             )
 
         def rollback(self):
@@ -275,6 +337,13 @@ async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch):
     db = _DB()
     monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
 
+    def _fake_report_runtime_exception(exc, **kwargs):
+        report_calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+    caplog.set_level(logging.ERROR, logger=flows.logger.name)
+
     with pytest.raises(HTTPException) as exc:
         await flows.create_flow(
             request=CreateFlowRequest(name="Err", description=None, flow_definition=_flow_definition()),
@@ -282,6 +351,20 @@ async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch):
             db=db,
         )
     assert exc.value.status_code == 500
+    assert exc.value.detail == "Database error while creating flow"
+    assert db.rolled_back is True
+    assert len(report_calls) == 1
+    assert isinstance(report_calls[0][0], flows._FlowDatabaseError)
+    assert "Exception" in str(report_calls[0][0])
+    assert secret_text not in str(report_calls[0][0])
+    assert report_calls[0][0].__traceback__ is not None
+    assert report_calls[0][0].__context__ is None
+    assert report_calls[0][0].__cause__ is None
+    assert report_calls[0][1]["component"] == "api"
+    assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+    assert report_calls[0][1]["context"]["logger_name"] == flows.logger.name
+    assert report_calls[0][1]["context"]["status_code"] == 500
+    assert secret_text not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -378,6 +461,60 @@ async def test_update_flow_maps_unique_integrity_error_to_409(monkeypatch):
             db=db,
         )
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_update_flow_maps_other_integrity_error_to_500(monkeypatch, caplog):
+    report_calls = []
+    secret_text = "SECRET_FLOW_UPDATE_SHOULD_NOT_APPEAR"
+    flow_obj = _flow(name="Before")
+
+    class _DB:
+        def commit(self):
+            raise IntegrityError(
+                statement="update curation_flows",
+                params={"flow_definition": secret_text},
+                orig=Exception(f"some other integrity error {secret_text}"),
+            )
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def refresh(self, _obj):
+            return None
+
+    db = _DB()
+    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        report_calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+    caplog.set_level(logging.ERROR, logger=flows.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await flows.update_flow(
+            flow_id=flow_obj.id,
+            request=UpdateFlowRequest(name="After", description=None),
+            user={"sub": "u1"},
+            db=db,
+        )
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Database error while updating flow"
+    assert db.rolled_back is True
+    assert len(report_calls) == 1
+    assert isinstance(report_calls[0][0], flows._FlowDatabaseError)
+    assert "Exception" in str(report_calls[0][0])
+    assert secret_text not in str(report_calls[0][0])
+    assert report_calls[0][0].__traceback__ is not None
+    assert report_calls[0][0].__context__ is None
+    assert report_calls[0][0].__cause__ is None
+    assert report_calls[0][1]["component"] == "api"
+    assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+    assert report_calls[0][1]["context"]["logger_name"] == flows.logger.name
+    assert report_calls[0][1]["context"]["status_code"] == 500
+    assert secret_text not in caplog.text
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,8 @@
 # Test Strategy
 
-This repository is Docker-first for backend validation. In Symphony issue
-workspaces, run backend suites through `docker-compose.test.yml` so tests use
-the same service wiring and dependencies as CI.
+This repository is Docker-first for backend validation. Run isolated backend
+suites through `docker-compose.test.yml` so tests use the same service wiring
+and dependencies as CI.
 
 ## Default Commands
 
@@ -10,27 +10,41 @@ Use the narrowest suite that covers the change:
 
 ```bash
 # Backend unit suite
-docker compose -f docker-compose.test.yml run --rm backend-unit-tests
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests
 
 # Backend contract suite
-docker compose -f docker-compose.test.yml run --rm backend-contract-tests
+bash scripts/testing/docker-test-compose.sh run --rm backend-contract-tests
 
 # Full backend suite
-docker compose -f docker-compose.test.yml run --rm backend-tests
+bash scripts/testing/docker-test-compose.sh run --rm backend-tests
 
 # Specific backend test file
-docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
   bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"
 ```
+
+The generic Compose helper uses rootless Docker by default. Set
+`AI_CURATION_TEST_DOCKER_MODE=rootful` or pass `--rootful` when the local
+environment intentionally uses the system daemon. Run only one command against
+the same Compose project at a time, and inspect active containers before any
+manual cleanup.
 
 Frontend validation runs on the host Node toolchain:
 
 ```bash
 cd frontend
 npm ci
-npm run test:symphony
+npm run test -- --run src/path/to/File.test.tsx  # replace with the changed test file
 npm run type-check:changed -- --base origin/main
 ```
+
+Run the smallest frontend test selection that proves the changed behavior.
+The blocking GitHub `Frontend Tests` job owns the complete clean-checkout
+suite. Run `npm run test:stable` locally only for documented cross-cutting
+risk, not as routine pre-PR validation or review duplication.
+GitHub intentionally runs Vitest with its default parallel configuration for
+faster broad feedback. The low-concurrency `test:stable` script is a local
+diagnostic for concurrency-sensitive failures, not the CI-equivalent command.
 
 `FRONTEND_TYPECHECK_STATUS=baseline_only` means the TypeScript compiler found
 existing errors outside changed frontend files. Record the baseline debt, but do
@@ -39,7 +53,7 @@ not treat it as ticket-local failure.
 For syntax-only Python checks, keep cache artifacts outside the workspace:
 
 ```bash
-PYTHONPYCACHEPREFIX=/tmp/symphony-pycache \
+PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache \
   python3 -m py_compile backend/src/path/to/file.py
 ```
 
@@ -62,7 +76,7 @@ The 0.7.0 domain-envelope gates are recorded in
 The offline provider-agnostic release gate uses:
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
   bash -lc "bash tests/unit/run_ci_unit_tests.sh --suite domain-envelope-release"
 ```
 
@@ -71,13 +85,47 @@ The path list is `backend/tests/unit/.domain-envelope-release-test-paths`.
 The Alliance domain-pack contract gate uses:
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm backend-contract-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-contract-tests \
   bash -lc "bash tests/contract/run_ci_contract_core_tests.sh \
     --path-file tests/contract/.alliance-domain-pack-test-paths \
     --suite-label alliance-domain-pack"
 ```
 
 The path list is `backend/tests/contract/.alliance-domain-pack-test-paths`.
+
+## Guardrail Catalog
+
+Invariant, scan, and smoke guards are catalogued in
+`docs/testing/guardrail-catalog.md`. Any new guardrail test should add a catalog
+row in the same change, including what it protects, its trace or incident, and
+the repo-relative test module or guard file.
+
+The cheap structural catalog check is:
+
+```bash
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
+  bash -lc "python -m pytest tests/unit/test_guardrail_catalog.py -v --tb=short"
+```
+
+## Release Gate and Skill Alignment
+
+When adding or changing tests, smoke scripts, evidence runners, or guardrails
+that affect dev-release readiness, update the release skill in the same change
+or record why it does not apply. In practice, this means checking
+`$ai-curation-release`, especially its `references/dev-validation.md`, whenever
+the new coverage should be required before production release.
+
+Examples that should trigger a release-skill update:
+
+- a new deployed-backend smoke or live integration gate,
+- new required coverage for flows, batch, export/download artifacts, TraceReview,
+  Langfuse, ABC Literature, Add Literature, or agent evidence quality,
+- new required release evidence JSON or PR evidence marker,
+- any change to the order of full backend/frontend gates, deployed smoke,
+  agent evidence review, or browser/manual approval.
+
+Keep the skill, this document, `scripts/README.md`, and any release/runbook docs
+consistent so future agents run the same release gate humans expect.
 
 ## LinkML and Domain-Pack Fixtures
 
@@ -112,7 +160,7 @@ backend/tests/contract/.alliance-live-db-test-paths
 Run only with explicit enablement:
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm backend-contract-tests \
+bash scripts/testing/docker-test-compose.sh run --rm backend-contract-tests \
   bash -lc "ALLIANCE_LIVE_DB_CONTRACT_TESTS=1 \
     bash tests/contract/run_ci_contract_core_tests.sh \
       --path-file tests/contract/.alliance-live-db-test-paths \
@@ -163,8 +211,9 @@ cd frontend
 npm run type-check:changed -- --base origin/main
 ```
 
-Run broader frontend tests when the change affects runtime UI components, not
-only static changelog content.
+Run the focused tests for any runtime UI components affected by the change.
+Expand to `npm run test:stable` only when a documented cross-cutting or
+concurrency-sensitive risk requires it.
 
 Run the broader harness hygiene check when a docs change needs repository-wide
 link validation:
@@ -173,6 +222,4 @@ link validation:
 ./scripts/maintenance/harness_hygiene.sh
 ```
 
-The harness includes a Markdown link check and required-doc presence check. In
-local Symphony environments it may also report unrelated stale workspace
-hygiene; record that separately from ticket-local docs failures.
+The harness includes a Markdown link check and a required-doc presence check.

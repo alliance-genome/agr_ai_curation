@@ -1,5 +1,6 @@
 """Parity tests for shared processing status policy usage across APIs."""
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -104,3 +105,31 @@ def test_processing_status_policy_terminal_detection(current_stage, expected):
 )
 def test_processing_status_policy_job_status_mapping_covers_public_surface(job_status, expected):
     assert processing_status_policy.PDF_JOB_STATUS_TO_PROCESSING_STATUS[job_status] == expected
+
+
+def test_documents_job_status_payloads_preserve_job_metadata():
+    metadata = {
+        "document_source": {
+            "provider": "abc_literature",
+            "conversion_status": "running",
+        }
+    }
+    updated_at = datetime(2026, 6, 26, tzinfo=timezone.utc)
+    job = SimpleNamespace(
+        document_id="doc-1",
+        current_stage="provider_conversion",
+        started_at=updated_at,
+        updated_at=updated_at,
+        completed_at=None,
+        progress_percentage=42,
+        message="ABC Literature conversion running",
+        status=PdfJobStatus.RUNNING.value,
+        error_message=None,
+        metadata=metadata,
+    )
+
+    status_snapshot = documents._status_snapshot_from_job(job)
+    pipeline_payload = documents._pipeline_payload_from_job(job)
+
+    assert status_snapshot["metadata"] == metadata
+    assert pipeline_payload["metadata"] == metadata

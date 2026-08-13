@@ -91,9 +91,9 @@ structured_finalization:
       - subject_candidates[].data_provider
 
 model_config:
-  model: "${AGENT_SUBJECT_ENTITY_MODEL:-gpt-5.4-mini}"
+  model: "${AGENT_SUBJECT_ENTITY_MODEL:-gpt-5.6-terra}"
   temperature: 0.1
-  reasoning: "high"
+  reasoning: "medium"
 
 requires_document: false
 required_params: []

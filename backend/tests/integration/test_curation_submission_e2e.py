@@ -75,7 +75,7 @@ def _iter_mapping_keys(value):
 
 def _retag_envelope(envelope, *, envelope_id: str):
     metadata = dict(envelope.metadata or {})
-    metadata["semantic_source"] = "domain_envelope.objects"
+    metadata["semantic_source"] = "domain_envelope.extracted_objects"
     return envelope.model_copy(
         update={"envelope_id": envelope_id, "metadata": metadata}
     )
@@ -231,14 +231,14 @@ def _tmem67_missing_where_statement_envelope(*, envelope_id: str):
 
     envelope = _tmem67_gene_expression_envelope(envelope_id=envelope_id)
     objects = []
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if domain_object.object_type != GENE_EXPRESSION_OBJECT_TYPE:
             objects.append(domain_object)
             continue
         payload = dict(domain_object.payload)
         payload.pop("where_expressed_statement", None)
         objects.append(domain_object.model_copy(update={"payload": payload}))
-    return envelope.model_copy(update={"objects": objects, "validation_findings": []})
+    return envelope.model_copy(update={"extracted_objects": objects, "validation_findings": []})
 
 
 def _domain_envelope_extraction_record(
@@ -264,7 +264,7 @@ def _domain_envelope_extraction_record(
             "trace_id": f"trace-{case_key}",
             "flow_run_id": f"flow-{case_key}",
             "user_id": submission_e2e_context["current_user_auth_sub"],
-            "candidate_count": len(envelope.objects),
+            "candidate_count": len(envelope.extracted_objects),
             "conversation_summary": (
                 f"Prepared {adapter_key} domain-envelope gate fixture."
             ),
@@ -348,7 +348,7 @@ def _assert_workspace_candidates_use_persisted_envelopes(workspace_payload):
     for candidate in workspace_payload["candidates"]:
         assert candidate["projection_ref"] is not None
         assert candidate["normalized_payload"] == {}
-        assert candidate["metadata"]["semantic_source"] == "domain_envelope.objects"
+        assert candidate["metadata"]["semantic_source"] == "domain_envelope.extracted_objects"
         assert candidate["metadata"]["object_type"]
         assert candidate["metadata"]["object_role"]
 
@@ -542,11 +542,6 @@ def submission_e2e_context(client: TestClient, test_db):
             CurationCandidate.id.in_(candidate_ids)
         ).delete(synchronize_session=False)
 
-    if session_ids:
-        test_db.query(CurationReviewSession).filter(
-            CurationReviewSession.id.in_(session_ids)
-        ).delete(synchronize_session=False)
-
     envelope_ids = [
         row[0]
         for row in (
@@ -570,6 +565,11 @@ def submission_e2e_context(client: TestClient, test_db):
         ).delete(synchronize_session=False)
         test_db.query(DomainEnvelopeModel).filter(
             DomainEnvelopeModel.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+
+    if session_ids:
+        test_db.query(CurationReviewSession).filter(
+            CurationReviewSession.id.in_(session_ids)
         ).delete(synchronize_session=False)
 
     test_db.query(CurationExtractionResultRecord).filter(
@@ -835,7 +835,7 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
     )
     assert candidate.projection_ref.object_id == "gene-fixture-review-object-1"
     assert candidate.normalized_payload == {}
-    assert candidate.metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert candidate.metadata["projection_key"] == "gene-fixture-review-object-1"
     label_field = next(
         field for field in candidate.draft.fields if field.field_key == "gene_symbol"
@@ -972,6 +972,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
         f"/api/curation-workspace/sessions/{session_id}/submit",
         json={
             "session_id": session_id,
+            "idempotency_key": str(uuid4()),
             "target_key": gate_case["target_key"],
         },
     )
@@ -1011,7 +1012,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
     assert retry_response.status_code == 200, retry_response.text
     retry_payload = retry_response.json()
     retried_submission_id = retry_payload["submission"]["submission_id"]
-    assert retried_submission_id != failed_submission_id
+    assert retried_submission_id == failed_submission_id
     assert retry_payload["submission"]["status"] == "accepted"
     assert retry_payload["action_log_entry"]["action_type"] == "submission_retried"
     assert retry_payload["action_log_entry"]["metadata"]["original_submission_id"] == failed_submission_id
@@ -1037,8 +1038,17 @@ def test_submission_workflow_e2e_with_retry_and_history(
     assert final_workspace_response.status_code == 200, final_workspace_response.text
     final_workspace_payload = final_workspace_response.json()["workspace"]
     assert [entry["status"] for entry in final_workspace_payload["submission_history"]] == [
-        "failed",
         "accepted",
+    ]
+    attempt_states = final_workspace_payload["submission_history"][0][
+        "attempt_state_history"
+    ]
+    assert [event["state"] for event in attempt_states] == [
+        "pending",
+        "sending",
+        "failed",
+        "sending",
+        "succeeded",
     ]
 
     final_session_row = test_db.get(CurationReviewSession, UUID(session_id))
@@ -1102,7 +1112,7 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
     assert envelope_row is not None
     assert envelope_row.revision == expected_envelope_revision
     assert envelope_row.envelope_json["metadata"]["semantic_source"] == (
-        "domain_envelope.objects"
+        "domain_envelope.extracted_objects"
     )
     assert FORBIDDEN_LEGACY_SEMANTIC_KEYS.isdisjoint(
         set(_iter_mapping_keys(envelope_row.envelope_json))
@@ -1111,7 +1121,7 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
         test_db.query(DomainEnvelopeObject)
         .filter(DomainEnvelopeObject.envelope_id == envelope.envelope_id)
         .count()
-        == len(envelope.objects)
+        == len(envelope.extracted_objects)
     )
 
     target_candidate = _candidate_for_object_type(
@@ -1263,6 +1273,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
         f"/api/curation-workspace/sessions/{session_id}/submit",
         json={
             "session_id": session_id,
+            "idempotency_key": str(uuid4()),
             "candidate_ids": [candidate_id],
             "mode": "direct_submit",
             "target_key": GENE_EXPRESSION_TARGET_KEY,
@@ -1315,7 +1326,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     assert envelope_row.revision == exported_envelope_revision
     persisted_object = next(
         item
-        for item in envelope_row.envelope_json["objects"]
+        for item in envelope_row.envelope_json["extracted_objects"]
         if item["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
     )
     assert persisted_object["payload"]["where_expressed_statement"] == repaired_statement

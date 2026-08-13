@@ -17,8 +17,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.materialization import (
@@ -199,7 +197,7 @@ def test_object_grain_fan_out_emits_one_match_per_condition_with_relation_contex
     envelope = DomainEnvelope(
         envelope_id="object-grain-env",
         domain_pack_id="fixture.object_grain_composite",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="Annotation",
                 pending_ref_id="annotation-1",
@@ -257,7 +255,7 @@ def _envelope(payload: dict) -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="nested-env",
         domain_pack_id="fixture.nested_multivalued",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="Annotation",
                 pending_ref_id="annotation-1",

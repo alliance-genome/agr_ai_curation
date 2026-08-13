@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Paper, Typography } from '@mui/material';
+import { Box, Link, Paper, Typography } from '@mui/material';
 import { CHANGELOG_ENTRIES } from '../content/changelog';
 
 const ChangelogPage: React.FC = () => {
@@ -17,9 +17,16 @@ const ChangelogPage: React.FC = () => {
           <Typography variant="h6">
             {entry.title} v{entry.version}
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: entry.releaseUrl ? 0.5 : 2 }}>
             {entry.date}
           </Typography>
+          {entry.releaseUrl && (
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              <Link href={entry.releaseUrl} target="_blank" rel="noopener noreferrer">
+                View release tickets
+              </Link>
+            </Typography>
+          )}
 
           {entry.sections.map((section) => (
             <Box key={section.heading} sx={{ mb: 2 }}>

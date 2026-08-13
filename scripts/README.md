@@ -29,44 +29,16 @@ scripts/
 │   └── rerank_provider_smoke_local.sh  # Local rerank provider smoke across bedrock/local/none
 │   └── file_output_storage_preflight.sh # Deployment-stage probe for export temp/output writeability
 │   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, optional rerank smoke, cleanup
+│   └── abc_literature_live_smoke.py # ABC Literature stage smoke with ephemeral Cognito users and evidence JSON
 │
 └── utilities/
     ├── check_services.sh               # Health check all Docker services
     ├── cleanup_orphaned_pdf_records.py # Clean PostgreSQL records missing from Weaviate
-    ├── find_unused_files.py            # Static import analysis (AST-based)
     ├── pdfjs_find_probe.mjs            # Inspect raw PDF text, real PDF.js find internals, and whitespace-boundary drift
     ├── pdfjs_quote_benchmark.mjs       # Sample realistic quote-like passages from chunks and benchmark them against PDF.js
     ├── pdfjs_native_verifier_benchmark.py # Benchmark the frontend's native-highlight verifier against the 100-quote corpus
-    ├── pdf_text_matcher_bakeoff.py     # Compare Python fuzzy/local-alignment libraries against the same quote benchmark
-    ├── symphony_ensure_git_safety_tools.sh # Ensure Gitleaks + TruffleHog are installed in the Symphony VM user environment
-    ├── symphony_git_safety_tool_versions.sh # Shared pinned versions/checksums for VM git safety scanners
-    ├── symphony_install_vm_shell_shortcuts.sh # Install/update the managed ~/.bash_aliases block for Symphony VM Codex shortcuts
-    ├── symphony_materialize_linear_auth.sh # Materialize low-risk Linear helper files inside the Symphony VM user home
-    ├── symphony_prod_loki_status.sh     # VM-safe status probe for the host-owned production Loki read-only endpoint
-    ├── symphony_prod_loki_query.sh      # VM-safe helper for focused production Loki log searches
-    ├── symphony_print_incus_vm_cloud_init.sh # Print tracked cloud-init for rebuilding the Symphony Incus VM
-    ├── symphony_rebuild_incus_vm.sh    # Rebuild the Symphony Incus VM shell from the tracked cloud-init source
-    ├── symphony_ruff_tool_version.sh   # Shared pinned version/checksums for the VM-baked ruff install
-    ├── symphony_sync_codex_auth_to_vm.sh # Sync host ~/.codex/auth.json into the Symphony Incus VM when it changes
-    ├── symphony_vm_shell_shortcuts.sh  # Sourceable Codex helper functions (`co`, `comain`, `cor`) for Symphony VM shells
-    ├── validate_unused_files.py        # Multi-tool unused file detection
-    └── generate_coverage.sh            # Generate coverage data for validation
+    └── pdf_text_matcher_bakeoff.py     # Compare Python fuzzy/local-alignment libraries against the same quote benchmark
 ```
-
-### Symphony Production Loki Access
-
-Chris's host can expose production AI Curation logs to the Symphony VM through a
-host-owned SSH tunnel plus a read-only Loki proxy. Agents should use only the
-VM-safe helpers:
-
-```bash
-bash scripts/utilities/symphony_prod_loki_status.sh
-bash scripts/utilities/symphony_prod_loki_query.sh --services
-bash scripts/utilities/symphony_prod_loki_query.sh --service backend --since 1h --contains '<trace-or-feedback-id>' --limit 200
-```
-
-Host-only lifecycle helpers are named `symphony_prod_loki_host_*`. The generated
-`.symphony/prod_loki_endpoint.env` file contains only non-secret endpoint values.
 
 ### PDF Quote Matching Diagnostics
 
@@ -79,7 +51,7 @@ PDF_PATH="${REPO_ROOT}/sample_fly_publication.pdf"
 # Build a realistic quote benchmark from live chunk data
 node scripts/utilities/pdfjs_quote_benchmark.mjs \
   --pdf "${PDF_PATH}" \
-  --backend-url http://10.222.162.167:8900 \
+  --backend-url http://127.0.0.1:8000 \
   --document-id 64fa682e-a074-446c-821e-c4a605d102f0 \
   --sample-size 100 \
   --max-quotes-per-chunk 8 \
@@ -272,220 +244,6 @@ This runs on backend container startup and can also be invoked manually.
 make prefix-refresh
 ```
 
-### utilities/symphony_local_db_tunnel_start.sh
-
-Fire-and-forget DB tunnel lifecycle for Symphony Human Review Prep.
-Starts the SSM tunnel and `socat` forwarder in the background, writes
-`scripts/local_db_tunnel_env.sh`, and records state so it can be checked or stopped later.
-
-```bash
-# Start background tunnel for the current workspace
-./scripts/utilities/symphony_local_db_tunnel_start.sh
-
-# Check status
-./scripts/utilities/symphony_local_db_tunnel_status.sh
-
-# Stop and clean up
-./scripts/utilities/symphony_local_db_tunnel_stop.sh
-```
-
-### utilities/symphony_curation_db_psql.sh
-
-Thin launcher for real `psql` against the read-only AGR curation database from
-a Symphony workspace. It starts or reuses the Symphony DB tunnel, sources the
-workspace-local `scripts/local_db_tunnel_env.sh`, and runs `psql` with the
-read-only credentials from `ai-curation/db/curation-readonly`.
-
-```bash
-# Probe the connection
-./scripts/utilities/symphony_curation_db_psql.sh -- \
-  -c "select current_database(), current_user;"
-
-# Use normal psql flags for focused investigation
-./scripts/utilities/symphony_curation_db_psql.sh -- \
-  -c "select table_schema, table_name from information_schema.tables where table_schema not in ('pg_catalog','information_schema') order by 1,2 limit 50;"
-
-# Check the tunnel without running psql
-./scripts/utilities/symphony_curation_db_psql.sh --status
-```
-
-The helper does not parse or rewrite SQL. Keep curator-feedback investigations
-focused, prefer `SELECT`/schema-inspection queries with `LIMIT`, and never print
-or paste the generated tunnel env file because it contains credentials.
-
-### utilities/symphony_todo_lane.sh
-
-Script-only Symphony Todo lane handler. It prepares or verifies the issue branch,
-writes a `Todo Handoff` workpad section, and moves the issue from `Todo` to
-`In Progress` without launching Codex. If branch setup finds a dirty worktree or
-unexpected branch, it records the exact blocker context and moves the issue to
-`Blocked`.
-
-```bash
-./scripts/utilities/symphony_todo_lane.sh \
-  --issue-identifier ALL-49 \
-  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
-```
-
-### utilities/symphony_ready_for_pr_lane.sh
-
-Script-only Symphony Ready for PR lane handler. It verifies the workspace is
-clean, runs the canonical PR gate helper with GitHub checks before Claude review,
-lets failed checks or Claude feedback auto-bounce to `In Progress`, and moves
-clean PRs to `Human Review Prep` after writing `PR Handoff`.
-
-```bash
-./scripts/utilities/symphony_ready_for_pr_lane.sh \
-  --issue-identifier ALL-49 \
-  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
-  --delivery-mode pr
-```
-
-### utilities/symphony_human_review_prep_lane.sh
-
-Script-only Symphony Human Review Prep lane handler. It verifies that the
-workspace is clean for a no-code lane, runs the local prep wrapper below, writes
-an objective `Human Review Handoff` workpad section, and moves the issue to
-`Human Review`. It does not inspect GitHub PRs, run Claude sweeps, parse prior
-workpad sections, or triage human comments; `Ready for PR` owns PR and Claude
-readiness.
-
-```bash
-./scripts/utilities/symphony_human_review_prep_lane.sh \
-  --issue-identifier ALL-49 \
-  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
-```
-
-### utilities/symphony_finalizing_lane.sh
-
-Script-only Symphony Finalizing lane handler. It runs the canonical finalization
-helper, writes a `Finalization Summary` workpad section, and moves the issue to
-`Done`, `In Progress`, or `Blocked` based on the helper's machine-readable
-result. It does not launch Codex.
-
-```bash
-./scripts/utilities/symphony_finalizing_lane.sh \
-  --issue-identifier ALL-49 \
-  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
-  --delivery-mode pr
-```
-
-### utilities/symphony_human_review_prep.sh
-
-One-command Human Review Prep for a Symphony workspace. It derives issue-specific
-ports and prints stable summary lines. By default it skips container startup and
-reports `stack_startup=skipped_by_flag`. When called with
-`--start-test-containers true`, it starts the local curation DB tunnel, prepares
-a workspace-local Docker config, stages dependency startup with
-retry/diagnostics before bringing up the app services, rebuilds backend and
-frontend by default so the review stack reflects the workspace branch,
-force-recreates the backend so fresh tunnel env reaches the container, and
-prints review URLs plus health summaries.
-
-```bash
-# Prepare the current workspace without booting containers
-./scripts/utilities/symphony_human_review_prep.sh
-
-# Prepare a specific workspace with explicit review host and container startup
-./scripts/utilities/symphony_human_review_prep.sh \
-  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
-  --review-host 192.168.86.44 \
-  --start-test-containers true
-```
-
-### utilities/symphony_main_sandbox.sh
-
-Launches or cleans a dedicated latest-`main` sandbox checkout for manual work
-inside the Symphony VM. It creates a fresh git worktree, runs the same review
-prep wrapper used by Human Review Prep, automatically picks a free frontend /
-backend port pair from the existing Symphony review-proxy ranges unless you
-override them, and can tear the sandbox down when you are done.
-
-```bash
-# Launch or refresh the sandbox from origin/main
-./scripts/utilities/symphony_main_sandbox.sh prepare
-
-# Tear down the sandbox stack and remove the worktree
-./scripts/utilities/symphony_main_sandbox.sh cleanup
-```
-
-### utilities/symphony_install_vm_shell_shortcuts.sh
-
-Installs or refreshes the managed `~/.bash_aliases` block that sources the
-tracked Symphony VM Codex shortcuts. This is the durable way to keep `co`,
-`comain`, and `cor` working in rebuilt VM shells.
-
-```bash
-# Install/update the managed shell shortcut block
-./scripts/utilities/symphony_install_vm_shell_shortcuts.sh
-```
-
-### utilities/symphony_materialize_linear_auth.sh
-
-Materializes the low-risk Linear helper files under `~/.linear/` inside the
-Symphony VM user environment. This is useful when shell helpers need the
-traditional `~/.linear/api_key.txt` path even though Symphony itself already
-loaded `LINEAR_API_KEY` from the vault at startup.
-
-`.symphony/run.sh` now calls this automatically on startup, but you can also
-run it manually to repair a live VM without restarting Symphony.
-
-```bash
-# Recreate ~/.linear/api_key.txt and project_slug.txt from the current env/vault
-./scripts/utilities/symphony_materialize_linear_auth.sh
-```
-
-### utilities/symphony_ensure_git_safety_tools.sh
-
-Ensures `gitleaks` and `trufflehog` are available in the Symphony VM user
-environment. The script installs missing tools into `~/.local/bin`, which keeps
-the current repo `pre-commit` hook's secret scanning active for the source
-checkout, the main sandbox worktree, and issue workspaces that inherit the same
-hooks. The installer uses pinned release versions and checksum verification; the
-shared pins live in `utilities/symphony_git_safety_tool_versions.sh`.
-
-```bash
-# Verify the tools are already available
-./scripts/utilities/symphony_ensure_git_safety_tools.sh --check
-
-# Install missing tools into ~/.local/bin
-./scripts/utilities/symphony_ensure_git_safety_tools.sh
-```
-
-### utilities/symphony_print_incus_vm_cloud_init.sh
-
-Prints the tracked `cloud-init.user-data` payload for a fresh `symphony-main`
-VM build. The generated payload creates the VM user and installs pinned
-`gitleaks`, `trufflehog`, and `ruff` into `/usr/local/bin`.
-
-```bash
-./scripts/utilities/symphony_print_incus_vm_cloud_init.sh \
-  --ssh-key-file ~/.ssh/id_ed25519.pub
-```
-
-### utilities/symphony_rebuild_incus_vm.sh
-
-Rebuilds the base `symphony-main` Incus VM shell from the tracked cloud-init
-source. This is the supported way to make fresh VM builds include the git
-safety scanners by default rather than waiting for repo bootstrap.
-
-```bash
-# Preview only
-./scripts/utilities/symphony_rebuild_incus_vm.sh \
-  --ssh-key-file ~/.ssh/id_ed25519.pub \
-  --dry-run
-
-# Rebuild the VM shell
-./scripts/utilities/symphony_rebuild_incus_vm.sh \
-  --ssh-key-file ~/.ssh/id_ed25519.pub \
-  --replace
-```
-
-### local_db_tunnel.sh
-
-Interactive/manual version of the curation DB tunnel. This keeps the tunnel alive in the
-foreground until you stop it, which is useful for ad hoc debugging outside Symphony.
-
 ### maintenance_mode.sh
 
 Toggles maintenance mode which displays a banner in the UI warning users that the system is under maintenance.
@@ -648,6 +406,7 @@ Evidence:
 
 Runs the deep deployed-backend smoke for dev release validation:
 
+- checks the installed `openai-agents` package against the backend lockfile pin
 - verifies backend health
 - checks/wakes the PDF extraction worker
 - uploads a real sample PDF through the backend API
@@ -680,6 +439,9 @@ Notes:
   restarts the local Compose backend.
 - Evidence output:
   - `/tmp/agr_ai_curation_dev_release_smoke/dev_release_smoke_<timestamp>.json`
+- Any PR that changes the `openai-agents` pin must pass the full smoke and add a
+  PR body evidence line like:
+  `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>`
 
 Full local-stack coverage example:
 
@@ -689,49 +451,212 @@ python3 scripts/testing/dev_release_smoke.py \
   --include-rerank-provider-smoke
 ```
 
-## Code Analysis Utilities
+### testing/abc_literature_live_smoke.py
 
-### utilities/find_unused_files.py
+Runs the durable ABC Literature stage smoke for release evidence:
 
-Static import analysis using Python AST. Traces imports starting from `backend/main.py` to find files that are never imported.
+- creates one temporary authorized Cognito user and one temporary unauthorized
+  control user through boto3 using the selected AWS profile
+- gives the authorized user the configured Literature/MOD groups
+- obtains request-local bearer tokens through Cognito admin auth
+- runs `backend/tests/live_integration/test_abc_literature_live_smoke.py`
+  against the real Literature stage API
+- verifies `by_md5`, PMID/reference lookup, `show_all`, authorized
+  `download_file`, and unauthorized `download_file` -> `403`
+- deletes the temporary Cognito users in `finally`
+- writes non-secret evidence JSON under `file_outputs/temp/`
 
-```bash
-docker compose exec backend python scripts/utilities/find_unused_files.py
-```
-
-**Output:** List of potentially unused files with summary statistics.
-
-**Caveat:** May flag dynamically imported files (e.g., via `importlib`) as unused.
-
-### utilities/validate_unused_files.py
-
-Multi-tool validation that layers 4 analysis techniques:
-
-1. **Static Import Tracing** - AST-based (same as find_unused_files.py)
-2. **Runtime Coverage Analysis** - Shows which files actually execute
-3. **Test Collection** - Finds orphaned test files
-4. **Config File Usage** - Grep-based search for references
+Typical usage on the dev host:
 
 ```bash
-# First, generate coverage data
-./scripts/utilities/generate_coverage.sh
-
-# Then run validation
-docker compose exec backend python scripts/utilities/validate_unused_files.py
+python3 scripts/testing/abc_literature_live_smoke.py --aws-profile your-aws-profile
 ```
 
-**Confidence Levels:**
-- **HIGH** - Not imported AND 0% coverage (safe to remove)
-- **MEDIUM** - Not imported but HAS coverage (may be dynamic imports)
-- **LOW COVERAGE** - Imported but mostly dead code (<20% coverage)
+Useful environment/CLI overrides:
 
-### utilities/generate_coverage.sh
+- `ABC_LITERATURE_SMOKE_AWS_PROFILE` / `--aws-profile`
+- `ABC_LITERATURE_SMOKE_USER_POOL_ID` / `--user-pool-id`
+- `ABC_LITERATURE_SMOKE_CLIENT_ID` / `--client-id`
+- `ABC_LITERATURE_SMOKE_CLIENT_SECRET` / `--client-secret`, only if the
+  Cognito app client requires one and the runner cannot discover it through
+  `describe-user-pool-client`
+- `ABC_LITERATURE_SMOKE_AUTHORIZED_GROUPS` / `--authorized-groups`
+- `ABC_LITERATURE_SMOKE_EVIDENCE_DIR` / `--evidence-dir`
+- `ABC_LITERATURE_SMOKE_PYTEST_TIMEOUT_SECONDS` / `--pytest-timeout-seconds`
+- `ABC_LITERATURE_SMOKE_AWS_API_TIMEOUT_SECONDS` / `--aws-api-timeout-seconds`
+- `ABC_LITERATURE_SMOKE_EVIDENCE_TAIL_LIMIT` / `--evidence-tail-limit`
 
-Generates pytest coverage data for use with validate_unused_files.py.
+Evidence output:
+
+- `file_outputs/temp/abc_literature_live_smoke_<timestamp>.json`
+
+Do not use `--keep-users` for release evidence. It is a debugging escape hatch
+only; runs with retained users are marked `debug_keep_users` and exit nonzero.
+The normal smoke deletes the temporary Cognito users and does not write tokens,
+passwords, or Cognito client secrets into the evidence file.
+
+### testing/abc_literature_ready_upload_smoke.py
+
+Runs the durable end-to-end AI Curation upload smoke for an ABC Literature
+READY fixture:
+
+- authenticates as an existing test Cognito curator from local `.env` values
+  using either username/password or an already-issued IdToken
+- verifies the target backend is using real Cognito auth and an external
+  document-source provider, not the local PDF fallback
+- downloads the known ABC Literature source PDF fixture into a temporary
+  directory and verifies its MD5 before upload
+- posts the PDF to `/weaviate/documents/upload` using an `auth_token` cookie so
+  the backend can forward the request-local curator token to ABC
+- waits for provider Markdown ingestion to complete
+- verifies source provenance, PDF-backed download-info, chunks, source Markdown
+  download, and original-PDF download availability
+- deletes the uploaded document in `finally`
+- writes globally redacted, non-secret evidence JSON under `file_outputs/temp/`
+
+Typical usage on a backend configured with `AUTH_PROVIDER=cognito`,
+`ABC_LITERATURE_IMPORT_ENABLED=true`, and
+`DOCUMENT_SOURCE_PROVIDER=abc_literature`:
 
 ```bash
-./scripts/utilities/generate_coverage.sh
+python3 scripts/testing/abc_literature_ready_upload_smoke.py \
+  --aws-profile your-aws-profile \
+  --backend-base-url http://localhost:8000
 ```
+
+Docker-first usage against a running Compose backend:
+
+```bash
+./scripts/testing/abc_literature_ready_upload_smoke_docker.sh
+```
+
+The Docker wrapper runs the smoke from the Compose `backend` image, builds a
+temporary smoke-only env file plus a temporary AWS config containing only the
+selected profile chain, mounts both read-only, and defaults the backend URL to
+`http://backend:8000` so the runner talks to the backend service over the
+Compose network. It also mounts `scripts/` into the one-off runner container so
+production-style backend images that do not bake test scripts can still execute
+the smoke, mounts `file_outputs/` so evidence persists on the host, and
+overrides the one-off entrypoint to `python` so production startup/bootstrap
+hooks are not run by the smoke container. Curator password, IdToken, and
+Cognito client secrets are read from the mounted smoke env file rather than
+passed as `docker compose run -e NAME=value` arguments. If
+`ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_ID_TOKEN` is set, the wrapper skips
+AWS credential setup because the runner does not need Cognito admin auth for
+that mode.
+
+Useful environment/CLI overrides:
+
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_BASE_URL` / `--backend-base-url`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_LITERATURE_BASE_URL` /
+  `--literature-base-url`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_ENV_FILE` / `--env-file`, local
+  uncommitted env file loaded for smoke defaults, default
+  `${HOME}/.agr_ai_curation/.env`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_PROFILE` / `--aws-profile`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_DIR` for the Docker wrapper's source
+  AWS config directory, default `${HOME}/.aws`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_COMPOSE_FILE` for the Docker wrapper's
+  Compose file, default `docker-compose.yml`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_SERVICE` for the Docker wrapper's
+  running backend service preflight, default `backend`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_DOCKER_SERVICE` for the Docker wrapper's
+  runner image service, default `backend`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_DOCKER_BACKEND_BASE_URL` for the Docker
+  wrapper's in-network backend URL, default `http://backend:8000`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_DOCKER_USER` for the one-off runner user,
+  default the host UID:GID running the wrapper, so persisted evidence files stay
+  writable by the checkout owner
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_USER_POOL_ID` / `--user-pool-id`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CLIENT_ID` / `--client-id`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CLIENT_SECRET` / `--client-secret`, only if
+  the Cognito app client requires one and the runner cannot discover it through
+  `describe-user-pool-client`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_AUTHORIZED_GROUPS` / `--authorized-groups`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_USERNAME` /
+  `--curator-username`, existing test curator username
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_PASSWORD` /
+  `--curator-password`, existing test curator password from local `.env`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_ID_TOKEN` /
+  `--curator-id-token`, optional short-lived token for manual runs instead of
+  username/password
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_EVIDENCE_DIR` / `--evidence-dir`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_HTTP_TIMEOUT_SECONDS` /
+  `--http-timeout-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_UPLOAD_TIMEOUT_SECONDS` /
+  `--upload-timeout-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_PROCESSING_TIMEOUT_SECONDS` /
+  `--processing-timeout-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_POLL_INTERVAL_SECONDS` /
+  `--poll-interval-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_API_TIMEOUT_SECONDS` /
+  `--aws-api-timeout-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_EVIDENCE_TAIL_LIMIT` /
+  `--evidence-tail-limit`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_KNOWN_MD5` / `--known-md5`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_PMID` / `--pmid`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_REFERENCE` / `--reference`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_SOURCE_REFERENCEFILE_ID` /
+  `--source-referencefile-id`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CONVERTED_REFERENCEFILE_ID` /
+  `--converted-referencefile-id`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_SOURCE_PDF_FILENAME` /
+  `--source-pdf-filename`
+
+Evidence output:
+
+- `file_outputs/temp/abc_literature_ready_upload_smoke_<timestamp>.json`
+
+Do not use `--keep-document` for release evidence. It is a debugging escape
+hatch; successful runs with the uploaded document retained exit nonzero with a
+`debug_keep_document` status. Normal runs delete the uploaded document and do
+not write tokens, passwords, Cognito client secrets, or PDF contents into the
+evidence file.
+
+### testing/abc_literature_identifier_import_smoke.py
+
+Runs the durable AI Curation identifier-import smoke for the same ABC
+Literature READY fixture, but enters through the backend identifier endpoint
+instead of uploading the PDF:
+
+- authenticates as the existing test Cognito curator using the same local
+  `.env` values as the READY upload smoke
+- independently downloads the expected ABC source PDF and converted Markdown
+  fixture for byte/hash comparison
+- posts `{"identifiers": "<identifier>"}` to
+  `/weaviate/documents/import/source-identifiers`
+- verifies the import response is PDF-backed with `viewer_mode=local_pdf`, the
+  expected source PDF artifact ID, and the expected converted Markdown artifact
+  ID
+- waits for processing completion, then reuses the READY smoke checks for
+  provenance, PDF-backed download-info, chunks, source Markdown download,
+  original-PDF download, cleanup, and secret-redacted evidence
+
+Typical usage:
+
+```bash
+python3 scripts/testing/abc_literature_identifier_import_smoke.py \
+  --aws-profile your-aws-profile \
+  --backend-base-url http://localhost:8000
+```
+
+Docker-first usage against a running Compose backend:
+
+```bash
+./scripts/testing/abc_literature_identifier_import_smoke_docker.sh
+```
+
+The identifier Docker wrapper delegates to the READY upload wrapper's secure
+temporary-env/AWS-profile machinery and runs
+`abc_literature_identifier_import_smoke.py` inside the Compose backend image.
+It accepts the same overrides as `abc_literature_ready_upload_smoke.py`, plus:
+
+- `ABC_LITERATURE_IDENTIFIER_IMPORT_SMOKE_IDENTIFIER` / `--identifier`, default
+  `PMID:<ABC_LITERATURE_READY_UPLOAD_SMOKE_PMID>`
+
+Evidence output:
+
+- `file_outputs/temp/abc_literature_identifier_import_smoke_<timestamp>.json`
 
 ### utilities/check_services.sh
 

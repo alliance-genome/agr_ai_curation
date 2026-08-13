@@ -92,11 +92,19 @@ export interface TaskInputEditorProps {
   onSave: (nodeId: string, data: Partial<AgentNodeData>) => void
   /** Callback to close the editor */
   onClose: () => void
+  /** Marks a generated compatibility default as curator-authored after editing. */
+  onTaskInstructionsAuthored?: () => void
   /** Callback to delete the node */
   onDelete?: (nodeId: string) => void
 }
 
-function TaskInputEditor({ node, onSave, onClose, onDelete }: TaskInputEditorProps) {
+function TaskInputEditor({
+  node,
+  onSave,
+  onClose,
+  onTaskInstructionsAuthored,
+  onDelete,
+}: TaskInputEditorProps) {
   // Form state
   const [taskInstructions, setTaskInstructions] = useState('')
   const [outputKey, setOutputKey] = useState('')
@@ -136,6 +144,7 @@ function TaskInputEditor({ node, onSave, onClose, onDelete }: TaskInputEditorPro
       task_instructions: taskInstructions.trim(),
       output_key: trimmedKey,
     })
+    onTaskInstructionsAuthored?.()
     onClose()
   }
 

@@ -25,9 +25,21 @@ import ForceScrollFix from './components/ForceScrollFix'
 import MaintenanceBanner from './components/MaintenanceBanner'
 import ConnectionsHealthBanner from './components/ConnectionsHealthBanner'
 import { GLOBAL_TOAST_EVENT, GlobalToastEventDetail } from './lib/globalNotifications'
+import { clearAiCurationLocalCache } from './lib/aiCurationLocalCache'
+import {
+  BROWSER_STORAGE_PRESSURE_EVENT,
+  safeGetItem,
+  safeRemoveItem,
+  safeSetItem,
+  type BrowserStoragePressureEventDetail,
+} from './lib/browserStorage'
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
+import {
+  CHAT_RUN_TERMINAL_EVENT,
+  type ChatRunTerminalEventDetail,
+} from './hooks/useChatStream'
 import './App.css'
 
 export const queryClient = new QueryClient()
@@ -91,6 +103,7 @@ const PersistentPdfWorkspaceLayout = lazy(() => import('./components/pdfViewer/P
 const Settings = lazy(() => import('./pages/weaviate/Settings'))
 const DocumentDetail = lazy(() => import('./pages/weaviate/DocumentDetail'))
 const DocumentsPage = lazy(() => import('./pages/weaviate/DocumentsPage'))
+const AddLiteraturePage = lazy(() => import('./pages/weaviate/AddLiteraturePage'))
 const Dashboard = lazy(() => import('./pages/weaviate/Dashboard'))
 const EmbeddingsSettings = lazy(() => import('./pages/weaviate/settings/EmbeddingsSettings'))
 const DatabaseSettings = lazy(() => import('./pages/weaviate/settings/DatabaseSettings'))
@@ -208,9 +221,18 @@ export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Latch logout suppression in a ref so it survives the auth-state render sequence.
-    if (sessionStorage.getItem('justLoggedOut') === 'true') {
+    const justLoggedOut = safeGetItem(() => window.sessionStorage, 'justLoggedOut', {
+      owner: 'auth',
+      key: 'justLoggedOut',
+      workflowCritical: true,
+    });
+    if (justLoggedOut.ok && justLoggedOut.value === 'true') {
       pendingLogoutSuppressionRef.current = true;
-      sessionStorage.removeItem('justLoggedOut');
+      safeRemoveItem(() => window.sessionStorage, 'justLoggedOut', {
+        owner: 'auth',
+        key: 'justLoggedOut',
+        workflowCritical: true,
+      });
     }
 
     if (isAuthenticated) {
@@ -228,7 +250,11 @@ export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
     }
 
     // Save intended destination for redirect after login (future enhancement)
-    sessionStorage.setItem('intendedPath', location.pathname + location.search);
+    safeSetItem(() => window.sessionStorage, 'intendedPath', location.pathname + location.search, {
+      owner: 'auth',
+      key: 'intendedPath',
+      workflowCritical: true,
+    });
     login();
   }, [isLoading, isAuthenticated, login, location.pathname, location.search]);
 
@@ -261,6 +287,10 @@ export function AppContent() {
   const { user, logout, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const normalizedPathname = location.pathname.replace(/\/+$/, '');
+  const suppressChangelogDialog =
+    normalizedPathname === '/weaviate/add-literature' ||
+    normalizedPathname === '/weaviate/documents/import-mock';
   const lastAuthenticatedUserIdRef = React.useRef<string | null>(isAuthenticated ? user?.uid ?? null : null);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [changelogDialogOpen, setChangelogDialogOpen] = useState(false);
@@ -268,16 +298,20 @@ export function AppContent() {
     open: boolean;
     message: string;
     severity: 'success' | 'error' | 'warning' | 'info';
-    autoHideDurationMs?: number;
+    autoHideDurationMs?: number | null;
     anchorOrigin?: {
       vertical: 'top' | 'bottom';
       horizontal: 'left' | 'center' | 'right';
     };
+    showStorageRecoveryAction?: boolean;
+    actionLabel?: string;
+    actionPath?: string;
   }>({ open: false, message: '', severity: 'info' });
   const seededPdfJobsRef = React.useRef(false);
   const seededBatchesRef = React.useRef(false);
   const seenPdfTerminalRef = React.useRef<Set<string>>(new Set());
   const seenBatchTerminalRef = React.useRef<Set<string>>(new Set());
+  const seenRunCompletionToastKeysRef = React.useRef<Set<string>>(new Set());
   const changelogStorageKey = user?.uid ? `changelog:last-seen:${user.uid}` : null;
 
   /**
@@ -293,7 +327,10 @@ export function AppContent() {
     if (!changelogStorageKey || !POPUP_CHANGELOG_ENTRY) {
       return;
     }
-    localStorage.setItem(changelogStorageKey, POPUP_CHANGELOG_ENTRY.id);
+    safeSetItem(() => window.localStorage, changelogStorageKey, POPUP_CHANGELOG_ENTRY.id, {
+      owner: 'preferences',
+      key: changelogStorageKey,
+    });
   }, [changelogStorageKey]);
 
   const handleChangelogDialogClose = React.useCallback(() => {
@@ -308,17 +345,20 @@ export function AppContent() {
   }, [markLatestChangelogSeen, navigate]);
 
   useEffect(() => {
-    if (!isAuthenticated || !user?.uid || !POPUP_CHANGELOG_ENTRY) {
+    if (suppressChangelogDialog || !isAuthenticated || !user?.uid || !POPUP_CHANGELOG_ENTRY) {
       setChangelogDialogOpen(false);
       return;
     }
 
     const key = `changelog:last-seen:${user.uid}`;
-    const lastSeenId = localStorage.getItem(key);
-    if (lastSeenId !== POPUP_CHANGELOG_ENTRY.id) {
+    const lastSeenId = safeGetItem(() => window.localStorage, key, {
+      owner: 'preferences',
+      key,
+    });
+    if (!lastSeenId.ok || lastSeenId.value !== POPUP_CHANGELOG_ENTRY.id) {
       setChangelogDialogOpen(true);
     }
-  }, [isAuthenticated, user?.uid]);
+  }, [isAuthenticated, suppressChangelogDialog, user?.uid]);
 
   useEffect(() => {
     const onGlobalToast = (event: Event) => {
@@ -333,6 +373,9 @@ export function AppContent() {
         severity: detail.severity ?? 'info',
         autoHideDurationMs: detail.autoHideDurationMs,
         anchorOrigin: detail.anchorOrigin,
+        showStorageRecoveryAction: false,
+        actionLabel: detail.actionLabel,
+        actionPath: detail.actionPath,
       });
     };
 
@@ -341,6 +384,83 @@ export function AppContent() {
       window.removeEventListener(GLOBAL_TOAST_EVENT, onGlobalToast as EventListener);
     };
   }, []);
+
+  useEffect(() => {
+    const onStoragePressure = (event: Event) => {
+      const detail = (event as CustomEvent<BrowserStoragePressureEventDetail>).detail;
+      if (!detail?.workflowCritical) {
+        return;
+      }
+
+      setGlobalSnackbar({
+        open: true,
+        message: 'Browser storage is full or unavailable. Local AI Curation cache was not saved, but server-side documents and chat history are unchanged.',
+        severity: 'warning',
+        autoHideDurationMs: null,
+        anchorOrigin: DEFAULT_GLOBAL_SNACKBAR_ANCHOR,
+        showStorageRecoveryAction: true,
+        actionLabel: undefined,
+        actionPath: undefined,
+      });
+    };
+
+    window.addEventListener(BROWSER_STORAGE_PRESSURE_EVENT, onStoragePressure as EventListener);
+    return () => {
+      window.removeEventListener(BROWSER_STORAGE_PRESSURE_EVENT, onStoragePressure as EventListener);
+    };
+  }, []);
+
+  const handleClearLocalCache = React.useCallback(() => {
+    clearAiCurationLocalCache();
+    setGlobalSnackbar({
+      open: true,
+      message: 'AI Curation local cache was cleared. Uploaded PDFs and server-side chat history were not deleted.',
+      severity: 'success',
+      showStorageRecoveryAction: false,
+      actionLabel: undefined,
+      actionPath: undefined,
+    });
+  }, []);
+
+  useEffect(() => {
+    const onChatRunTerminal = (event: Event) => {
+      if (normalizedPathname === '') {
+        return;
+      }
+
+      const detail = (event as CustomEvent<ChatRunTerminalEventDetail>).detail;
+      if (!detail?.sessionId) {
+        return;
+      }
+
+      if (detail.status !== 'completed') {
+        return;
+      }
+
+      const completionToastKey = `${detail.runKind}:${detail.sessionId}:${detail.eventStreamVersion}:${detail.status}`;
+      if (seenRunCompletionToastKeysRef.current.has(completionToastKey)) {
+        return;
+      }
+      seenRunCompletionToastKeysRef.current.add(completionToastKey);
+
+      const isFlowRun = detail.runKind === 'flow';
+      setGlobalSnackbar({
+        open: true,
+        message: isFlowRun ? 'Curation flow finished.' : 'Curation chat finished.',
+        severity: 'success',
+        autoHideDurationMs: 6000,
+        anchorOrigin: DEFAULT_GLOBAL_SNACKBAR_ANCHOR,
+        showStorageRecoveryAction: false,
+        actionLabel: isFlowRun ? 'Open flow' : 'Open chat',
+        actionPath: `/?session=${encodeURIComponent(detail.sessionId)}`,
+      });
+    };
+
+    window.addEventListener(CHAT_RUN_TERMINAL_EVENT, onChatRunTerminal as EventListener);
+    return () => {
+      window.removeEventListener(CHAT_RUN_TERMINAL_EVENT, onChatRunTerminal as EventListener);
+    };
+  }, [normalizedPathname]);
 
   useEffect(() => {
     const currentUserId = isAuthenticated ? user?.uid ?? null : null
@@ -362,10 +482,11 @@ export function AppContent() {
     }
 
     const pollNotifications = async () => {
-      const onDocumentsPage = location.pathname.startsWith('/weaviate/documents');
+      const currentPathname = location.pathname.replace(/\/+$/, '');
+      const onPdfJobsPage = currentPathname === '/weaviate/add-literature';
       const onBatchPage = location.pathname.startsWith('/batch');
 
-      if (!onDocumentsPage) {
+      if (!onPdfJobsPage) {
         try {
           const response = await fetch('/api/weaviate/pdf-jobs?window_days=7&limit=50&offset=0', {
             credentials: 'include',
@@ -480,16 +601,29 @@ export function AppContent() {
       }}
     >
       <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
-        <Toolbar>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexGrow: 1 }}>
+        <Toolbar
+          sx={{
+            gap: { xs: 1, md: 0 },
+            overflowX: { xs: 'auto', md: 'visible' },
+            overflowY: 'hidden',
+            whiteSpace: 'nowrap',
+            '&::-webkit-scrollbar': {
+              display: 'none',
+            },
+            scrollbarWidth: 'none',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexGrow: { xs: 0, md: 1 }, flexShrink: 0 }}>
             <Typography
               variant="h1"
               component={Link}
               to="/"
+              noWrap
               sx={{
                 textDecoration: 'none',
                 color: 'inherit',
                 cursor: 'pointer',
+                maxWidth: { xs: 220, sm: 300 },
                 '&:hover': {
                   opacity: 0.9
                 }
@@ -724,6 +858,8 @@ export function AppContent() {
           <Route path="/weaviate/*" element={<WeaviateLayout />}>
             <Route index element={<Navigate to="/weaviate/documents" replace />} />
             <Route path="documents" element={renderLazyRoute(<DocumentsPage />)} />
+            <Route path="add-literature" element={renderLazyRoute(<AddLiteraturePage />)} />
+            <Route path="documents/import-mock" element={renderLazyRoute(<AddLiteraturePage />)} />
             <Route path="documents/:id" element={renderLazyRoute(<DocumentDetail />)} />
             <Route path="dashboard" element={renderLazyRoute(<Dashboard />)} />
             <Route path="settings" element={renderLazyRoute(<Settings />)} />
@@ -737,13 +873,40 @@ export function AppContent() {
 
       <Snackbar
         open={globalSnackbar.open}
-        autoHideDuration={globalSnackbar.autoHideDurationMs ?? DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS}
+        autoHideDuration={
+          globalSnackbar.autoHideDurationMs === null
+            ? null
+            : globalSnackbar.autoHideDurationMs ?? DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS
+        }
         onClose={() => setGlobalSnackbar((prev) => ({ ...prev, open: false }))}
         anchorOrigin={globalSnackbar.anchorOrigin ?? DEFAULT_GLOBAL_SNACKBAR_ANCHOR}
       >
         <Alert
           severity={globalSnackbar.severity}
           onClose={() => setGlobalSnackbar((prev) => ({ ...prev, open: false }))}
+          action={globalSnackbar.showStorageRecoveryAction ? (
+            <Button
+              color="inherit"
+              size="small"
+              onClick={handleClearLocalCache}
+            >
+              Clear local cache
+            </Button>
+          ) : globalSnackbar.actionLabel && globalSnackbar.actionPath ? (
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => {
+                const actionPath = globalSnackbar.actionPath;
+                setGlobalSnackbar((prev) => ({ ...prev, open: false }));
+                if (actionPath) {
+                  navigate(actionPath);
+                }
+              }}
+            >
+              {globalSnackbar.actionLabel}
+            </Button>
+          ) : undefined}
           sx={{ width: '100%' }}
         >
           {globalSnackbar.message}

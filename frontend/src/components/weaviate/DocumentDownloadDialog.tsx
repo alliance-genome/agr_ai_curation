@@ -20,6 +20,7 @@ import {
   Code,
   DataObject,
   Download,
+  Article,
 } from '@mui/icons-material';
 
 interface DocumentDownloadDialogProps {
@@ -29,7 +30,7 @@ interface DocumentDownloadDialogProps {
 }
 
 interface DownloadableFile {
-  type: 'pdf' | 'pdfx_json' | 'processed_json';
+  type: 'pdf' | 'pdfx_json' | 'processed_json' | 'source_markdown';
   label: string;
   description: string;
   icon: React.ReactNode;
@@ -66,12 +67,16 @@ const DocumentDownloadDialog: React.FC<DocumentDownloadDialogProps> = ({
       }
 
       const data = await response.json();
+      const viewerMode = typeof data.viewer_mode === 'string' ? data.viewer_mode : null;
+      const isTextOnly = viewerMode === 'text_only';
 
       const files: DownloadableFile[] = [
         {
           type: 'pdf',
           label: 'Original PDF',
-          description: 'The original uploaded PDF document',
+          description: isTextOnly
+            ? 'No local PDF is stored for this provider text import'
+            : 'The original uploaded PDF document',
           icon: <PictureAsPdf color="error" />,
           available: data.pdf_available || false,
           size: data.pdf_size,
@@ -91,6 +96,14 @@ const DocumentDownloadDialog: React.FC<DocumentDownloadDialogProps> = ({
           icon: <DataObject color="success" />,
           available: data.processed_json_available || false,
           size: data.processed_json_size,
+        },
+        {
+          type: 'source_markdown',
+          label: 'Source Markdown',
+          description: 'Provider-converted Markdown used for ingestion',
+          icon: <Article color="secondary" />,
+          available: data.source_markdown_available || false,
+          size: data.source_markdown_size,
         },
       ];
 

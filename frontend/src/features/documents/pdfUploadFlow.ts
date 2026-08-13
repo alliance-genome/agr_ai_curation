@@ -28,6 +28,8 @@ const STAGE_PROGRESS_FALLBACK: Record<string, number> = {
 const SSE_CONNECT_TIMEOUT_MS = 5000;
 
 interface UploadErrorDetail {
+  existing_document_id?: string;
+  existing_filename?: string;
   uploaded_at?: string;
   suggestion?: string;
   message?: string;
@@ -80,6 +82,13 @@ interface WaitForProcessingOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   pollingIntervalMs?: number;
+}
+
+interface ResolvedWaitForProcessingOptions {
+  onProgress: (update: UploadProgressUpdate) => void;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  pollingIntervalMs: number;
 }
 
 const createAbortError = (): Error => {
@@ -166,7 +175,10 @@ const parseDuplicateUploadMessage = (detail: UploadErrorDetail): string => {
   const uploadDate = detail.uploaded_at
     ? new Date(detail.uploaded_at).toLocaleDateString()
     : 'previously';
-  const suggestion = detail.suggestion || 'Delete the existing document and try again.';
+  const existingFilename = detail.existing_filename?.trim();
+  const suggestion = existingFilename
+    ? `The existing document is in Documents as "${existingFilename}". Search for that filename to load it.`
+    : detail.suggestion || 'The existing document is still available in Documents.';
   return `This file was already uploaded ${uploadDate}. ${suggestion}`;
 };
 
@@ -292,7 +304,7 @@ export const uploadPdfDocument = async (file: File): Promise<string> => {
 
 const pollDocumentProcessing = async (
   documentId: string,
-  options: Required<Pick<WaitForProcessingOptions, 'onProgress' | 'signal' | 'timeoutMs' | 'pollingIntervalMs'>>,
+  options: ResolvedWaitForProcessingOptions,
 ): Promise<UploadProgressUpdate> => {
   const startedAt = Date.now();
 
@@ -332,7 +344,7 @@ const pollDocumentProcessing = async (
 
 const streamDocumentProcessing = async (
   documentId: string,
-  options: Required<Pick<WaitForProcessingOptions, 'onProgress' | 'signal' | 'timeoutMs'>>,
+  options: ResolvedWaitForProcessingOptions,
 ): Promise<UploadProgressUpdate> => {
   return await new Promise<UploadProgressUpdate>((resolve, reject) => {
     const source = new EventSource(`/api/weaviate/documents/${documentId}/progress/stream`);
@@ -437,14 +449,28 @@ export const waitForDocumentProcessing = async (
   return pollDocumentProcessing(documentId, typedOptions);
 };
 
-export const loadDocumentForChat = async (documentId: string): Promise<Record<string, unknown>> => {
+export interface LoadDocumentForChatOptions {
+  signal?: AbortSignal;
+  intentOwner?: string;
+  intentGeneration?: number;
+}
+
+export const loadDocumentForChat = async (
+  documentId: string,
+  options: LoadDocumentForChatOptions = {},
+): Promise<Record<string, unknown>> => {
   const response = await fetch('/api/chat/document/load', {
     method: 'POST',
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ document_id: documentId }),
+    body: JSON.stringify({
+      document_id: documentId,
+      intent_owner: options.intentOwner,
+      intent_generation: options.intentGeneration,
+    }),
+    signal: options.signal,
   });
 
   const payload = await response.json().catch(() => ({}));

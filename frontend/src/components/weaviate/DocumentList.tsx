@@ -5,7 +5,6 @@ import {
   GridColDef,
   GridRenderCellParams,
   GridSortModel,
-  GridFilterModel,
   GridPaginationModel,
   GridRowSelectionModel,
 } from '@mui/x-data-grid';
@@ -42,6 +41,7 @@ import DocumentDownloadDialog from './DocumentDownloadDialog';
 import EditDocumentDialog from './EditDocumentDialog';
 import {
   DocumentSummary,
+  DocumentSourceProvenance,
   usePdfExtractionHealth,
 } from '../../services/weaviate';
 import { emitGlobalToast } from '../../lib/globalNotifications';
@@ -73,11 +73,155 @@ interface DocumentListProps {
   onTitleUpdate?: (documentId: string, title: string) => Promise<void>;
   /** Optional filter bar component to render above the table */
   filterBar?: React.ReactNode;
+  /** Show PDF upload and extraction-health controls above the inventory table */
+  showUploadControls?: boolean;
+  /** Server-backed page state for large document libraries. */
+  paginationModel?: GridPaginationModel;
+  /** Called when the user requests another page or page size. */
+  onPaginationModelChange?: (model: GridPaginationModel) => void;
+  /** Server-backed sort state for document fields supported by the API. */
+  sortModel?: GridSortModel;
+  /** Called when the user changes sort order. */
+  onSortModelChange?: (model: GridSortModel) => void;
 }
 
 const PDF_BACKGROUND_PROCESSING_TOAST =
   'Your PDFs are processing in the background. You can safely navigate away.';
 const PDF_BACKGROUND_PROCESSING_TOAST_AUTO_HIDE_MS = 6000;
+
+const compareTextValues = (left: unknown, right: unknown): number => {
+  const leftValue = left == null ? '' : String(left);
+  const rightValue = right == null ? '' : String(right);
+
+  return leftValue.localeCompare(rightValue, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+};
+
+const ACTIVE_DOCUMENT_STATUSES = new Set([
+  'processing',
+  'parsing',
+  'chunking',
+  'embedding',
+  'storing',
+]);
+
+export const documentDisplayStatus = (document: DocumentSummary): string => {
+  const processingStatus = String(document.processingStatus || '').toLowerCase();
+  const embeddingStatus = String(document.embeddingStatus || '').toLowerCase();
+
+  if (processingStatus === 'failed') {
+    return 'failed';
+  }
+  if (ACTIVE_DOCUMENT_STATUSES.has(processingStatus)) {
+    return processingStatus;
+  }
+  if (embeddingStatus === 'failed' || embeddingStatus === 'partial') {
+    return embeddingStatus;
+  }
+  if (ACTIVE_DOCUMENT_STATUSES.has(embeddingStatus)) {
+    return embeddingStatus;
+  }
+  return processingStatus || embeddingStatus || 'pending';
+};
+
+const compareNumberValues = (left: unknown, right: unknown): number => {
+  const toComparableNumber = (value: unknown): number | null => {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (typeof value === 'string' && value.trim() === '') {
+      return null;
+    }
+
+    const numberValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : null;
+  };
+  const leftComparable = toComparableNumber(left);
+  const rightComparable = toComparableNumber(right);
+
+  if (leftComparable === null && rightComparable === null) return 0;
+  if (leftComparable === null) return 1;
+  if (rightComparable === null) return -1;
+
+  return leftComparable - rightComparable;
+};
+
+const compareDateValues = (left: unknown, right: unknown): number => {
+  const toTimestamp = (value: unknown): number | null => {
+    if (value instanceof Date) {
+      return value.getTime();
+    }
+
+    if (typeof value !== 'string' || value.trim() === '') {
+      return null;
+    }
+
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+
+  return compareNumberValues(toTimestamp(left), toTimestamp(right));
+};
+
+const formatProviderLabel = (provider?: string | null): string => {
+  if (!provider) {
+    return 'Local PDF';
+  }
+  if (provider === 'abc_literature') {
+    return 'ABC Literature';
+  }
+  return provider
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+const firstExternalIdentifier = (
+  externalIds?: Record<string, string | string[]> | null
+): string | null => {
+  if (!externalIds) {
+    return null;
+  }
+
+  const preferredKeys = ['pmid', 'pmcid', 'doi', 'fbrf'];
+  for (const key of preferredKeys) {
+    const match = Object.entries(externalIds).find(
+      ([candidate]) => candidate.toLowerCase() === key
+    );
+    if (!match) {
+      continue;
+    }
+    const [label, rawValue] = match;
+    const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    if (value) {
+      return `${label.toUpperCase()}: ${value}`;
+    }
+  }
+
+  const firstEntry = Object.entries(externalIds)[0];
+  if (!firstEntry) {
+    return null;
+  }
+  const [label, rawValue] = firstEntry;
+  const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+  return value ? `${label.toUpperCase()}: ${value}` : null;
+};
+
+const sourceReferenceLabel = (source?: DocumentSourceProvenance | null): string => {
+  if (!source) {
+    return 'Uploaded PDF';
+  }
+  return (
+    source.referenceCurie ||
+    source.referenceId ||
+    firstExternalIdentifier(source.externalIds) ||
+    source.sourceMd5 ||
+    'Provider import'
+  );
+};
+
 const DocumentList: React.FC<DocumentListProps> = ({
   documents,
   loading,
@@ -93,18 +237,22 @@ const DocumentList: React.FC<DocumentListProps> = ({
   onSelectionChange,
   onTitleUpdate,
   filterBar,
+  showUploadControls = true,
+  paginationModel: controlledPaginationModel,
+  onPaginationModelChange,
+  sortModel: controlledSortModel,
+  onSortModelChange,
 }) => {
-  const extractionHealthQuery = usePdfExtractionHealth();
+  const extractionHealthQuery = usePdfExtractionHealth({ enabled: showUploadControls });
   const extractionHealth = extractionHealthQuery.data;
   const navigate = useNavigate();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [paginationModel, setPaginationModel] = useState<GridPaginationModel>({
+  const [internalPaginationModel, setInternalPaginationModel] = useState<GridPaginationModel>({
     page: 0,
     pageSize: 20,
   });
-  const [sortModel, setSortModel] = useState<GridSortModel>([]);
-  const [filterModel, setFilterModel] = useState<GridFilterModel>({ items: [] });
+  const [internalSortModel, setInternalSortModel] = useState<GridSortModel>([]);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<DocumentSummary | null>(null);
@@ -112,6 +260,12 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const [downloadDocumentId, setDownloadDocumentId] = useState<string | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editDocument, setEditDocument] = useState<DocumentSummary | null>(null);
+
+  const paginationModel = controlledPaginationModel ?? internalPaginationModel;
+  const sortModel = controlledSortModel ?? internalSortModel;
+  const handlePaginationModelChange = onPaginationModelChange ?? setInternalPaginationModel;
+  const handleSortModelChange = onSortModelChange ?? setInternalSortModel;
+  const serverSorting = onSortModelChange !== undefined;
 
   React.useEffect(() => {
     if (!selectedDocumentId) {
@@ -123,8 +277,10 @@ const DocumentList: React.FC<DocumentListProps> = ({
 
   const extractionHealthy = extractionHealth?.status === 'healthy';
   const uploadBlockedByExtraction =
-    extractionHealthQuery.isError ||
-    (extractionHealth != null && !extractionHealthy);
+    showUploadControls && (
+      extractionHealthQuery.isError ||
+      (extractionHealth != null && !extractionHealthy)
+    );
 
   const uploadBlockedReason =
     extractionHealthQuery.isError
@@ -136,8 +292,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const isDocumentBusy = (doc: DocumentSummary): boolean => {
     const processingStatus = String(doc.processingStatus || '').toLowerCase();
     const embeddingStatus = String(doc.embeddingStatus || '').toLowerCase();
-    const activeProcessingStatuses = new Set(['processing', 'parsing', 'chunking', 'embedding', 'storing']);
-    return activeProcessingStatuses.has(processingStatus) || embeddingStatus === 'processing';
+    return ACTIVE_DOCUMENT_STATUSES.has(processingStatus) || embeddingStatus === 'processing';
   };
 
   const formatFileSize = (bytes: number | null | undefined): string => {
@@ -325,21 +480,65 @@ const DocumentList: React.FC<DocumentListProps> = ({
       minWidth: 150,
       sortable: true,
       filterable: true,
+      sortComparator: compareTextValues,
     },
     {
       field: 'title',
       headerName: 'Title',
       flex: 1.5,
       minWidth: 120,
-      sortable: true,
-      filterable: true,
+      sortable: false,
+      filterable: false,
       valueFormatter: (params) => params.value || '—',
+    },
+    {
+      field: 'sourceProvenance',
+      headerName: 'Source',
+      flex: 1.2,
+      minWidth: 280,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams<DocumentSummary, DocumentSourceProvenance | null>) => {
+        const source = params.value ?? params.row.sourceProvenance ?? null;
+        const providerLabel = formatProviderLabel(source?.provider);
+        const referenceLabel = sourceReferenceLabel(source);
+        const statusLabel = source?.importStatus ?? source?.artifactStatus ?? null;
+
+        return (
+          <Stack spacing={0.25} sx={{ minWidth: 0, py: 0.5 }}>
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+              <Chip
+                label={providerLabel}
+                size="small"
+                variant={source ? 'filled' : 'outlined'}
+                color={source ? 'primary' : 'default'}
+                sx={{ flexShrink: 0 }}
+              />
+              {statusLabel && (
+                <Chip label={statusLabel} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
+              )}
+            </Stack>
+            <Tooltip title={referenceLabel}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                sx={{ display: 'block', maxWidth: '100%' }}
+              >
+                {referenceLabel}
+              </Typography>
+            </Tooltip>
+          </Stack>
+        );
+      },
     },
     {
       field: 'fileSize',
       headerName: 'Size',
       width: 90,
       sortable: true,
+      type: 'number',
+      sortComparator: compareNumberValues,
       valueFormatter: (params) => formatFileSize(params.value as number | null),
     },
     {
@@ -348,6 +547,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       flex: 1,
       minWidth: 120,
       sortable: true,
+      sortComparator: compareDateValues,
       valueFormatter: (params) => {
         const value = params.value as string | null;
         return value ? new Date(value).toLocaleDateString() : '—';
@@ -358,26 +558,39 @@ const DocumentList: React.FC<DocumentListProps> = ({
       headerName: 'Accessed',
       flex: 1,
       minWidth: 120,
-      sortable: true,
+      sortable: false,
       valueFormatter: (params) => {
         const value = params.value as string | null;
         return value ? new Date(value).toLocaleDateString() : '—';
       },
     },
     {
-      field: 'embeddingStatus',
+      field: 'processingStatus',
       headerName: 'Status',
-      width: 120,
-      sortable: true,
-      filterable: true,
-      renderCell: (params: GridRenderCellParams) => (
-        <Chip
-          label={params.value}
-          size="small"
-          color={getStatusColor(params.value as string)}
-          variant={params.value === 'processing' ? 'outlined' : 'filled'}
-        />
-      ),
+      width: 220,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams<DocumentSummary>) => {
+        const status = documentDisplayStatus(params.row);
+        return (
+          <Stack spacing={0.25} sx={{ minWidth: 0, py: 0.5 }}>
+            <Chip
+              label={status}
+              size="small"
+              color={getStatusColor(status)}
+              variant={status === 'processing' ? 'outlined' : 'filled'}
+              sx={{ alignSelf: 'flex-start' }}
+            />
+            {params.row.errorMessage && (
+              <Tooltip title={params.row.errorMessage}>
+                <Typography variant="caption" color="error" noWrap>
+                  {params.row.errorMessage}
+                </Typography>
+              </Tooltip>
+            )}
+          </Stack>
+        );
+      },
     },
     {
       field: 'vectorCount',
@@ -385,12 +598,13 @@ const DocumentList: React.FC<DocumentListProps> = ({
       width: 80,
       sortable: true,
       type: 'number',
+      sortComparator: compareNumberValues,
     },
     {
       field: 'chunkCount',
       headerName: 'Chunks',
       width: 80,
-      sortable: true,
+      sortable: false,
       type: 'number',
     },
     {
@@ -454,7 +668,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
               </span>
             </Tooltip>
             {onTitleUpdate && (
-              <Tooltip title="Edit Title">
+              <Tooltip title="Edit display title">
                 <IconButton
                   size="small"
                   onClick={() => {
@@ -487,77 +701,93 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const hasDocuments = documents.length > 0;
 
   return (
-    <Box sx={{ flexGrow: 1, minHeight: 0, width: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        spacing={1}
-        alignItems={{ xs: 'stretch', sm: 'center' }}
-        justifyContent="space-between"
-        sx={{ mb: 2 }}
-      >
-        {extractionHealthQuery.isLoading ? (
-          <Alert severity="info" sx={{ flex: 1 }}>
-            Checking PDF extraction service health…
-          </Alert>
-        ) : extractionHealthQuery.isError ? (
-          <Alert severity="error" sx={{ flex: 1 }}>
-            Unable to reach PDF extraction service: {(extractionHealthQuery.error as Error).message}
-          </Alert>
-        ) : extractionHealth ? (
-          <Alert
-            severity={
-              extractionHealth.status === 'healthy'
-                ? 'success'
-                : extractionHealth.status === 'degraded'
-                  ? 'warning'
-                  : 'error'
-            }
-            sx={{ flex: 1 }}
+    <Box
+      sx={{
+        flex: '1 1 auto',
+        minHeight: 0,
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        position: 'relative',
+      }}
+    >
+      {showUploadControls && (
+        <>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={1}
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            justifyContent="space-between"
+            sx={{ mb: 2 }}
           >
-            PDF extraction service: {extractionHealth.status}
-            {extractionHealth.last_checked && (
-              <Typography component="span" variant="caption" sx={{ ml: 1 }}>
-                · Checked {new Date(extractionHealth.last_checked).toLocaleTimeString()}
-              </Typography>
+            {extractionHealthQuery.isLoading ? (
+              <Alert severity="info" sx={{ flex: 1 }}>
+                Checking PDF extraction service health…
+              </Alert>
+            ) : extractionHealthQuery.isError ? (
+              <Alert severity="error" sx={{ flex: 1 }}>
+                Unable to reach PDF extraction service: {(extractionHealthQuery.error as Error).message}
+              </Alert>
+            ) : extractionHealth ? (
+              <Alert
+                severity={
+                  extractionHealth.status === 'healthy'
+                    ? 'success'
+                    : extractionHealth.status === 'degraded'
+                      ? 'warning'
+                      : 'error'
+                }
+                sx={{ flex: 1 }}
+              >
+                PDF extraction service: {extractionHealth.status}
+                {extractionHealth.last_checked && (
+                  <Typography component="span" variant="caption" sx={{ ml: 1 }}>
+                    · Checked {new Date(extractionHealth.last_checked).toLocaleTimeString()}
+                  </Typography>
+                )}
+                {extractionHealth.error && extractionHealth.status !== 'healthy' && (
+                  <Typography component="span" variant="caption" sx={{ ml: 1 }}>
+                    ({extractionHealth.error})
+                  </Typography>
+                )}
+              </Alert>
+            ) : (
+              <Alert severity="warning" sx={{ flex: 1 }}>
+                PDF extraction service status unavailable.
+              </Alert>
             )}
-            {extractionHealth.error && extractionHealth.status !== 'healthy' && (
-              <Typography component="span" variant="caption" sx={{ ml: 1 }}>
-                ({extractionHealth.error})
-              </Typography>
-            )}
-          </Alert>
-        ) : (
-          <Alert severity="warning" sx={{ flex: 1 }}>
-            PDF extraction service status unavailable.
-          </Alert>
-        )}
 
-        <Button
-          size="small"
-          variant="outlined"
-          onClick={() => extractionHealthQuery.refetch()}
-          disabled={extractionHealthQuery.isFetching}
-          startIcon={extractionHealthQuery.isFetching ? <CircularProgress size={14} /> : undefined}
-        >
-          Refresh Status
-        </Button>
-      </Stack>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => extractionHealthQuery.refetch()}
+              disabled={extractionHealthQuery.isFetching}
+              startIcon={extractionHealthQuery.isFetching ? <CircularProgress size={14} /> : undefined}
+            >
+              Refresh Status
+            </Button>
+          </Stack>
 
-      {uploadBlockedReason && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {uploadBlockedReason}
-        </Alert>
+          {uploadBlockedReason && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {uploadBlockedReason}
+            </Alert>
+          )}
+        </>
       )}
 
       <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-        <Button
-          variant="contained"
-          startIcon={<CloudUpload />}
-          onClick={handleUploadClick}
-          disabled={loading || pipelineBusy || uploadBlockedByExtraction}
-        >
-          UPLOAD DOCUMENT(S)
-        </Button>
+        {showUploadControls && (
+          <Button
+            variant="contained"
+            startIcon={<CloudUpload />}
+            onClick={handleUploadClick}
+            disabled={loading || pipelineBusy || uploadBlockedByExtraction}
+          >
+            UPLOAD DOCUMENT(S)
+          </Button>
+        )}
         <Button
           variant="outlined"
           startIcon={<Refresh />}
@@ -575,14 +805,16 @@ const DocumentList: React.FC<DocumentListProps> = ({
             </Typography>
           </Stack>
         )}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf"
-          multiple
-          style={{ display: 'none' }}
-          onChange={handleFileSelect}
-        />
+        {showUploadControls && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf"
+            multiple
+            style={{ display: 'none' }}
+            onChange={handleFileSelect}
+          />
+        )}
       </Stack>
 
       {/* Optional filter bar */}
@@ -600,7 +832,14 @@ const DocumentList: React.FC<DocumentListProps> = ({
         />
       )}
 
-      <Box sx={{ flexGrow: hasDocuments ? 1 : 0, minHeight: 0, overflowX: 'hidden' }}>
+      <Box
+        data-testid="documents-table-scroll-region"
+        sx={{
+          flex: hasDocuments ? '1 1 0' : '0 0 auto',
+          minHeight: 0,
+          overflow: 'hidden',
+        }}
+      >
         {!hasDocuments ? (
           <TableContainer component={Paper} variant="outlined" sx={{ maxWidth: '100%', overflowX: 'hidden' }}>
             <Table size="small" sx={{ tableLayout: 'fixed' }}>
@@ -620,7 +859,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
                     <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
                       {loading && <CircularProgress size={16} />}
                       <Typography variant="body2" color="text.secondary">
-                        {loading ? 'Loading documents…' : 'No documents yet. Upload a PDF to get started.'}
+                        {loading ? 'Loading documents…' : showUploadControls ? 'No documents yet. Upload a PDF to get started.' : 'No library documents yet.'}
                       </Typography>
                     </Stack>
                   </TableCell>
@@ -636,14 +875,14 @@ const DocumentList: React.FC<DocumentListProps> = ({
             loading={loading}
             pageSizeOptions={[10, 20, 50, 100]}
             paginationModel={paginationModel}
-            onPaginationModelChange={setPaginationModel}
+            onPaginationModelChange={handlePaginationModelChange}
             sortModel={sortModel}
-            onSortModelChange={setSortModel}
-            filterModel={filterModel}
-            onFilterModelChange={setFilterModel}
+            onSortModelChange={handleSortModelChange}
+            sortingOrder={['asc', 'desc']}
             paginationMode="server"
-            sortingMode="server"
+            sortingMode={serverSorting ? 'server' : 'client'}
             filterMode="server"
+            disableColumnFilter
             disableRowSelectionOnClick
             checkboxSelection={checkboxSelection}
             rowSelectionModel={selectedIds}
@@ -653,6 +892,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
             autoHeight={false}
             sx={{
               height: '100%',
+              minHeight: 0,
               '& .MuiDataGrid-cell': {
                 color: 'text.primary',
                 borderBottom: '1px solid',
@@ -705,6 +945,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
           open={editDialogOpen}
           documentId={editDocument?.id ?? ''}
           currentTitle={editDocument?.title ?? null}
+          originalFilename={editDocument?.filename ?? null}
           onClose={() => {
             setEditDialogOpen(false);
             setEditDocument(null);

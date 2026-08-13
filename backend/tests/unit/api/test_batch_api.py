@@ -2,18 +2,25 @@
 
 import asyncio
 from datetime import datetime, timezone
+import io
+import json
 import logging
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
+import zipfile
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from src.api import batch as batch_api
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
 from src.schemas.batch import BatchCreateRequest, BatchResponse, BatchValidationResponse
+
+
+_TEST_REQUEST = cast(Request, object())
 
 
 def _mock_auth(monkeypatch, user_id=11):
@@ -51,10 +58,42 @@ def test_batch_document_status_event_includes_review_session_ids():
         processing_time_ms=1200,
     )
 
-    event = batch_api._batch_document_status_event(batch, doc)
+    event = batch_api._batch_document_status_event(
+        batch,
+        doc,
+        {
+            "adapter_keys": ["gene"],
+            "extraction_result_ids": ["extract-gene"],
+            "extraction_result_refs": [
+                {
+                    "result_ref": "extraction-result:extract-gene",
+                    "extraction_result_id": "extract-gene",
+                }
+            ],
+            "flow_run_id": "flow-run-1",
+            "origin_session_id": "origin-1",
+        },
+    )
 
     assert event["type"] == "DOCUMENT_STATUS"
     assert event["review_session_ids"] == ["session-gene"]
+    assert event["adapter_keys"] == ["gene"]
+    assert event["extraction_result_ids"] == ["extract-gene"]
+    assert event["extraction_result_refs"][0]["result_ref"] == "extraction-result:extract-gene"
+    assert event["flow_run_id"] == "flow-run-1"
+    assert event["origin_session_id"] == "origin-1"
+
+
+def test_batch_partial_document_count_is_subset_of_completed_documents():
+    batch = SimpleNamespace(
+        documents=[
+            SimpleNamespace(output_status="complete"),
+            SimpleNamespace(output_status="partial"),
+            SimpleNamespace(output_status="failed"),
+        ]
+    )
+
+    assert batch_api._batch_partial_document_count(batch) == 1
 
 
 def test_batch_create_request_limits_document_ids_to_ten():
@@ -93,7 +132,8 @@ async def test_create_batch_success(monkeypatch):
 
     assert result.id == batch_id
     assert len(background_tasks.tasks) == 1
-    assert background_tasks.tasks[0].func is batch_api.process_batch_task
+    assert getattr(background_tasks.tasks[0].func, "__observability_original_task__") is batch_api.process_batch_task
+    assert getattr(background_tasks.tasks[0].func, "__observability_task_name__") == "batch.process_batch"
     assert background_tasks.tasks[0].args == (batch_id,)
 
 
@@ -299,7 +339,7 @@ async def test_download_batch_zip_404_when_batch_missing(monkeypatch):
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(uuid4(), request=object(), user={"sub": "u-1"}, db=object())
+        await batch_api.download_batch_zip(uuid4(), request=_TEST_REQUEST, user={"sub": "u-1"}, db=object())
     assert exc.value.status_code == 404
 
 
@@ -311,7 +351,7 @@ async def test_download_batch_zip_400_when_no_completed_docs(monkeypatch):
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(uuid4(), request=object(), user={"sub": "u-1"}, db=object())
+        await batch_api.download_batch_zip(uuid4(), request=_TEST_REQUEST, user={"sub": "u-1"}, db=object())
     assert exc.value.status_code == 400
 
 
@@ -322,10 +362,25 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
     file_id = uuid4()
     file_path = tmp_path / "result.csv"
     file_path.write_text("a,b\n1,2\n")
+    second_file_id = uuid4()
+    second_file_path = tmp_path / "result.json"
+    second_file_path.write_text('{"a": 1}\n')
 
     completed_doc = SimpleNamespace(
         status=BatchDocumentStatus.COMPLETED,
         result_file_path=f"/api/files/{file_id}/download",
+        result_files=[
+            {
+                "file_id": str(file_id),
+                "filename": "result.csv",
+                "download_url": f"/api/files/{file_id}/download",
+            },
+            {
+                "file_id": str(second_file_id),
+                "filename": "result.json",
+                "download_url": f"/api/files/{second_file_id}/download",
+            },
+        ],
         document_id=uuid4(),
         position=0,
     )
@@ -334,21 +389,120 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
     file_output = SimpleNamespace(id=file_id, curator_id="u-1", file_path=str(file_path), filename="result.csv")
+    second_file_output = SimpleNamespace(
+        id=second_file_id,
+        curator_id="u-1",
+        file_path=str(second_file_path),
+        filename="result.json",
+    )
+    file_results = iter((file_output, second_file_output))
     db = SimpleNamespace(
-        query=lambda _model: SimpleNamespace(filter=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: file_output))
+        query=lambda _model: SimpleNamespace(
+            filter=lambda *_args, **_kwargs: SimpleNamespace(
+                first=lambda: next(file_results)
+            )
+        )
     )
     monkeypatch.setattr(
         "src.lib.file_outputs.storage.FileOutputStorageService",
         lambda: SimpleNamespace(base_path=tmp_path),
     )
 
-    response = await batch_api.download_batch_zip(batch_id, request=object(), user={"sub": "u-1"}, db=db)
+    response = await batch_api.download_batch_zip(batch_id, request=_TEST_REQUEST, user={"sub": "u-1"}, db=db)
     assert isinstance(response, StreamingResponse)
     assert response.headers["content-disposition"].endswith(f'batch_{batch_id}_results.zip"')
 
     body = await _read_streaming_response(response)
     assert body.startswith(b"PK")
-    assert b"result.csv" in body
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        assert archive.namelist() == ["result.csv", "result.json"]
+
+
+@pytest.mark.asyncio
+async def test_download_batch_zip_preserves_custom_filenames_for_multiple_documents(monkeypatch, tmp_path):
+    _mock_auth(monkeypatch, user_id=8)
+    batch_id = uuid4()
+    filenames = [
+        "J-101_AI_tool_results.csv",
+        "J-102_AI_tool_results.csv",
+        "J-103_AI_tool_results.csv",
+        "J-101_AI_tool_results.csv",
+    ]
+    expected_zip_names = [
+        "J-101_AI_tool_results.csv",
+        "J-102_AI_tool_results.csv",
+        "J-103_AI_tool_results.csv",
+        "J-101_AI_tool_results_2.csv",
+    ]
+    file_outputs = []
+    documents = []
+
+    for position, filename in enumerate(filenames):
+        file_id = uuid4()
+        file_path = tmp_path / filename
+        file_path.write_text("gene,value\nexample,1\n")
+        file_outputs.append(
+            SimpleNamespace(
+                id=file_id,
+                curator_id="u-1",
+                file_path=str(file_path),
+                filename=filename,
+            )
+        )
+        documents.append(
+            SimpleNamespace(
+                status=BatchDocumentStatus.COMPLETED,
+                result_file_path=f"/api/files/{file_id}/download",
+                result_files=[
+                    {
+                        "file_id": str(file_id),
+                        "filename": filename,
+                        "download_url": f"/api/files/{file_id}/download",
+                    }
+                ],
+                document_id=uuid4(),
+                position=position,
+            )
+        )
+
+    batch = SimpleNamespace(id=batch_id, documents=documents)
+    service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
+    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+
+    file_results = iter(file_outputs)
+    db = SimpleNamespace(
+        query=lambda _model: SimpleNamespace(
+            filter=lambda *_args, **_kwargs: SimpleNamespace(
+                first=lambda: next(file_results)
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "src.lib.file_outputs.storage.FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=tmp_path),
+    )
+
+    response = await batch_api.download_batch_zip(
+        batch_id,
+        request=_TEST_REQUEST,
+        user={"sub": "u-1"},
+        db=db,
+    )
+    body = await _read_streaming_response(response)
+
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        assert archive.namelist() == expected_zip_names
+
+
+def test_unique_zip_member_name_only_suffixes_collisions():
+    used_names: set[str] = set()
+
+    assert batch_api._unique_zip_member_name("results.csv", used_names) == "results.csv"
+    assert batch_api._unique_zip_member_name("results.csv", used_names) == "results_2.csv"
+    assert batch_api._unique_zip_member_name("RESULTS.CSV", used_names) == "RESULTS_3.CSV"
+    assert batch_api._unique_zip_member_name("../folder/safe.csv", used_names) == "safe.csv"
+    assert batch_api._unique_zip_member_name(r"..\folder\safe.csv", used_names) == "safe_2.csv"
+    assert batch_api._unique_zip_member_name("unsafe\x00\n.csv", used_names) == "unsafe.csv"
 
 
 @pytest.mark.asyncio
@@ -380,7 +534,7 @@ async def test_download_batch_zip_400_when_completed_docs_exist_but_none_downloa
     )
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(batch_id, request=object(), user={"sub": "u-1"}, db=db)
+        await batch_api.download_batch_zip(batch_id, request=_TEST_REQUEST, user={"sub": "u-1"}, db=db)
     assert exc.value.status_code == 400
     assert "No downloadable result files" in exc.value.detail
 
@@ -473,6 +627,108 @@ async def test_stream_batch_progress_strips_internal_event_fields(monkeypatch):
 
     assert b'"type": "TOOL_COMPLETE"' in body
     assert b'"internal"' not in body
+
+
+@pytest.mark.asyncio
+async def test_stream_batch_progress_replays_completed_document_snapshot_on_reconnect(
+    monkeypatch,
+):
+    _mock_auth(monkeypatch, user_id=8)
+    batch_id = uuid4()
+    document_id = uuid4()
+    batch_document_id = uuid4()
+    completed_document = SimpleNamespace(
+        id=batch_document_id,
+        document_id=document_id,
+        position=0,
+        status=BatchDocumentStatus.COMPLETED,
+        result_file_path=None,
+        review_session_ids=["review-gene"],
+        error_message=None,
+        processing_time_ms=1200,
+    )
+    batch = SimpleNamespace(
+        id=batch_id,
+        status=BatchStatus.COMPLETED,
+        total_documents=1,
+        completed_documents=1,
+        failed_documents=0,
+        documents=[completed_document],
+        started_at=None,
+        completed_at=None,
+    )
+    handoff_metadata = {
+        "adapter_keys": ["gene"],
+        "extraction_result_ids": ["extract-gene"],
+        "extraction_result_refs": [
+            {
+                "result_ref": "extraction-result:extract-gene",
+                "extraction_result_id": "extract-gene",
+                "adapter_key": "gene",
+            }
+        ],
+        "flow_run_id": "flow-run-1",
+        "origin_session_id": "origin-1",
+    }
+    service = SimpleNamespace(
+        get_batch=lambda *_args, **_kwargs: batch,
+        get_document_handoff_metadata=lambda *_args, **_kwargs: handoff_metadata,
+    )
+    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+
+    class _StreamDB:
+        def expire_all(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(batch_api, "SessionLocal", lambda: _StreamDB())
+
+    class _Broadcaster:
+        async def subscribe(self, _batch_id):
+            return asyncio.Queue()
+
+        async def unsubscribe(self, _batch_id, _queue):
+            return None
+
+    monkeypatch.setattr(batch_api, "get_batch_broadcaster", lambda: _Broadcaster())
+    monkeypatch.setattr(batch_api.asyncio, "sleep", lambda _seconds: _async_noop())
+
+    for _connection in range(2):
+        response = await batch_api.stream_batch_progress(
+            batch_id,
+            {"sub": "u-1"},
+            db=object(),
+        )
+        body = await _read_streaming_response(response)
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in body.decode("utf-8").splitlines()
+            if line.startswith("data: ")
+        ]
+        document_event = next(event for event in events if event["type"] == "DOCUMENT_STATUS")
+
+        assert document_event == {
+            "type": "DOCUMENT_STATUS",
+            "batch_id": str(batch_id),
+            "document_id": str(document_id),
+            "batch_document_id": str(batch_document_id),
+            "position": 0,
+            "status": "completed",
+            "result_file_path": None,
+            "result_files": [],
+            "output_status": None,
+            "output_branches": [],
+            "review_session_ids": ["review-gene"],
+            **handoff_metadata,
+            "error_message": None,
+            "processing_time_ms": 1200,
+        }
+
+
+async def _async_noop():
+    return None
 
 
 async def _read_streaming_response(response):

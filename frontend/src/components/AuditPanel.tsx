@@ -20,6 +20,7 @@ import {
   clearChatRenderCacheForSession,
   getChatRenderCacheKeys,
 } from '../lib/chatCacheKeys'
+import { safeGetJson, safeSetJson } from '../lib/browserStorage'
 import { getStreamEventSessionId } from '../lib/streamEventSession'
 
 /**
@@ -117,16 +118,15 @@ const saveAuditEventsToStorage = (
   sessionId: string,
   events: AuditEvent[],
 ) => {
-  try {
-    if (!userId) {
-      return
-    }
-
-    const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
-    localStorage.setItem(auditEvents, JSON.stringify(events))
-  } catch (e) {
-    console.error('Failed to save audit events to localStorage:', e)
+  if (!userId) {
+    return
   }
+
+  const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
+  safeSetJson(() => window.localStorage, auditEvents, events, {
+    owner: 'audit',
+    workflowCritical: true,
+  })
 }
 
 // Helper to load audit events from localStorage
@@ -134,23 +134,24 @@ const loadAuditEventsFromStorage = (
   userId: string | null | undefined,
   sessionId: string,
 ): AuditEvent[] => {
-  try {
-    if (!userId) {
-      return []
-    }
+  if (!userId) {
+    return []
+  }
 
-    const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
-    const stored = localStorage.getItem(auditEvents)
-    if (stored) {
-      const events = JSON.parse(stored) as Array<Omit<AuditEvent, 'timestamp'> & { timestamp: string }>
-      // Restore Date objects
-      return events.map((event) => ({
-        ...event,
-        timestamp: new Date(event.timestamp),
-      }))
-    }
-  } catch (e) {
-    console.error('Failed to load audit events from localStorage:', e)
+  const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
+  const stored = safeGetJson<Array<Omit<AuditEvent, 'timestamp'> & { timestamp: string }>>(
+    () => window.localStorage,
+    auditEvents,
+    {
+      owner: 'audit',
+      workflowCritical: true,
+    },
+  )
+  if (stored.ok && stored.value) {
+    return stored.value.map((event) => ({
+      ...event,
+      timestamp: new Date(event.timestamp),
+    }))
   }
   return []
 }
@@ -160,15 +161,11 @@ const clearAuditEventsFromStorage = (
   userId: string | null | undefined,
   sessionId: string,
 ) => {
-  try {
-    if (!userId) {
-      return
-    }
-
-    clearChatRenderCacheForSession(userId, sessionId)
-  } catch (e) {
-    console.error('Failed to clear audit events from localStorage:', e)
+  if (!userId) {
+    return
   }
+
+  clearChatRenderCacheForSession(userId, sessionId)
 }
 
 const AuditPanel: React.FC<AuditPanelProps> = ({
@@ -409,6 +406,38 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       color: theme.palette.action.disabled,
     },
   } as const
+  const runIndicatorSx = {
+    minHeight: '30px',
+    px: '10px',
+    py: '4px',
+    display: isStreaming ? 'inline-flex' : 'none',
+    alignItems: 'center',
+    gap: '7px',
+    borderRadius: '4px',
+    border: `1px solid ${alpha(theme.palette.success.main, 0.42)}`,
+    backgroundColor: alpha(theme.palette.success.main, theme.palette.mode === 'dark' ? 0.14 : 0.1),
+    color: theme.palette.success.main,
+    fontSize: '0.75rem',
+    fontWeight: 700,
+    lineHeight: 1.2,
+    whiteSpace: 'nowrap',
+    boxShadow: `0 0 0 1px ${alpha(theme.palette.success.main, 0.04)}, 0 8px 20px ${alpha(theme.palette.success.main, theme.palette.mode === 'dark' ? 0.12 : 0.08)}`,
+    '@keyframes auditRunDotPulse': {
+      '0%, 100%': {
+        transform: 'scale(0.82)',
+        opacity: 0.52,
+      },
+      '50%': {
+        transform: 'scale(1.12)',
+        opacity: 1,
+      },
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      '& .audit-run-indicator-dot': {
+        animation: 'none',
+      },
+    },
+  } as const
   const legendItems = [
     { label: 'In Progress', color: alpha(theme.palette.info.main, 0.58) },
     { label: 'Processing', color: alpha(theme.palette.secondary.main, 0.58) },
@@ -564,6 +593,29 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
         >
           Stop
         </Button>
+
+        <Box
+          data-testid="active-run-indicator"
+          role="status"
+          aria-live="polite"
+          aria-label="Curation run in progress"
+          sx={runIndicatorSx}
+        >
+          <Box
+            className="audit-run-indicator-dot"
+            aria-hidden="true"
+            sx={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              backgroundColor: theme.palette.success.main,
+              boxShadow: `0 0 0 4px ${alpha(theme.palette.success.main, 0.14)}`,
+              animation: 'auditRunDotPulse 1.4s ease-in-out infinite',
+              flexShrink: 0,
+            }}
+          />
+          Running
+        </Box>
 
         {/* Legend (aligned with controls) */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, marginLeft: '8px', flexWrap: 'nowrap' }}>

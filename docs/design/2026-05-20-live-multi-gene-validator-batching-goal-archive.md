@@ -234,47 +234,16 @@ Preferred artifact directories:
 If adding a permanent trial, keep it generic. Do not hardcode expected answers
 or paper-specific regexes.
 
-## Step 4: Deploy The Sandbox Before Live Runs
+## Step 4: Prepare The Development Stack Before Live Runs
 
-Use the Symphony main sandbox. Confirm its commit before each benchmark.
+Use a clean checkout at the exact commit being benchmarked. Start the documented
+local Compose stack, confirm `git status --short --branch` is clean, and record
+`git rev-parse HEAD` with the evidence. Do not hot-patch a running container.
 
-Check sandbox state:
-
-```bash
-export SYMPHONY_INCUS_PROJECT="${SYMPHONY_INCUS_PROJECT:-user-1000}"
-incus --project "${SYMPHONY_INCUS_PROJECT}" exec symphony-main -- \
-  sudo --login --user ctabone bash -lc '
-    cd /home/ctabone/.symphony/sandboxes/agr_ai_curation/main
-    git status --short --branch
-    git rev-parse --short HEAD
-    git log -1 --oneline
-  '
-```
-
-If code or trial changes are committed, push them, then prepare the sandbox from
-Git. Do not hot-patch normal app code into the VM/container.
+Verify the configured backend health endpoint before continuing:
 
 ```bash
-export SYMPHONY_INCUS_PROJECT="${SYMPHONY_INCUS_PROJECT:-user-1000}"
-incus --project "${SYMPHONY_INCUS_PROJECT}" exec symphony-main -- \
-  sudo --login --user ctabone bash -lc '
-    set -euo pipefail
-    cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation
-    git fetch origin main
-    ./scripts/utilities/symphony_main_sandbox.sh prepare --branch main
-  '
-```
-
-Expected backend URL from prior work:
-
-```text
-http://10.79.64.167:8900
-```
-
-Verify health:
-
-```bash
-curl -fsS http://10.79.64.167:8900/health
+curl -fsS "${BACKEND_URL:-http://127.0.0.1:8000}/health"
 ```
 
 ## Step 5: Run The Focused Benchmark
@@ -283,7 +252,7 @@ Use the selected trial. Example command shape:
 
 ```bash
 python3 scripts/testing/domain_envelope_pdf_corpus.py \
-  --base-url http://10.79.64.167:8900 \
+  --base-url http://redacted.invalid:8900 \
   --allow-dev-mode-fallback \
   --allow-duplicate-reuse \
   --trial <trial-id-or-domain> \

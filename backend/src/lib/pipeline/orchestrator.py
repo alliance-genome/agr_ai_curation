@@ -9,8 +9,9 @@ import time
 
 from src.models.pipeline import ProcessingStage
 from .tracker import PipelineTracker
-from src.models.strategy import ChunkingStrategy, StrategyName
+from src.models.strategy import ChunkingStrategy
 from ..exceptions import PDFCancellationError
+from src.lib.observability.runtime import report_runtime_exception
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +261,19 @@ class DocumentPipelineOrchestrator:
             )
 
         except Exception as e:
-            logger.error("Pipeline failed for document %s: %s", document_id, e)
+            report_runtime_exception(
+                e,
+                component="document_pipeline",
+                operation="process_pdf_document_failed",
+                context={
+                    "document_id": document_id,
+                    "stages_completed_count": len(stages_completed),
+                    "stages_completed": [stage.value for stage in stages_completed],
+                    "validate_first": validate_first,
+                    "extraction_strategy": extraction_strategy,
+                },
+            )
+            logger.warning("Pipeline failed for document %s: %s", document_id, e, exc_info=True)
 
             # Mark as failed
             await self._handle_failure(document_id, e)
@@ -438,7 +451,12 @@ class DocumentPipelineOrchestrator:
         finally:
             session.close()
 
-    async def _update_file_paths(self, document_id: str, pdfx_json_path: str, processed_json_path: str):
+    async def _update_file_paths(
+        self,
+        document_id: str,
+        pdfx_json_path: Optional[str],
+        processed_json_path: Optional[str],
+    ):
         """Update file paths in the database."""
         from src.models.sql.database import SessionLocal
         from src.models.sql.pdf_document import PDFDocument

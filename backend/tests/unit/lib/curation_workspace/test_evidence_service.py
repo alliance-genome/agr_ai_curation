@@ -317,7 +317,10 @@ def _add_evidence(
     return evidence
 
 
-def test_create_manual_evidence_persists_record_updates_draft_and_logs_action(db_session):
+def test_create_manual_evidence_flushes_record_updates_draft_and_logs_action(
+    db_session,
+    monkeypatch,
+):
     document = _create_document(db_session)
     extraction_result = _create_extraction_result(db_session, document_id=document.id)
     session = _create_session(db_session, document_id=document.id, total_candidates=1)
@@ -328,6 +331,14 @@ def test_create_manual_evidence_persists_record_updates_draft_and_logs_action(db
         source=CurationCandidateSource.EXTRACTED,
         order=0,
     )
+
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
 
     response = module.create_manual_evidence(
         CurationManualEvidenceCreateRequest(
@@ -356,6 +367,7 @@ def test_create_manual_evidence_persists_record_updates_draft_and_logs_action(db
     assert stored_evidence.source is CurationEvidenceSource.MANUAL
     stored_action = db_session.scalars(select(SessionActionLogModel)).one()
     assert stored_action.action_type is CurationActionType.EVIDENCE_MANUAL_ADDED
+    assert commit_calls == 0
 
 
 def test_resolve_evidence_replaces_matching_record_in_place(db_session, monkeypatch):

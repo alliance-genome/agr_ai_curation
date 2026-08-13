@@ -4,6 +4,7 @@ import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import FlowBuilder, { rebuildValidationGroupsFromEdges } from './FlowBuilder'
+import type { FlowResponse } from './types'
 
 const serviceMocks = vi.hoisted(() => ({
   createFlow: vi.fn(),
@@ -25,6 +26,8 @@ const reactFlowMocks = vi.hoisted(() => ({
   fitView: vi.fn(),
   screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
   onConnect: undefined as undefined | ((connection: { source: string; target: string }) => void),
+  nodes: [] as Array<{ id?: string; type?: string }>,
+  edges: [] as Array<{ source?: string; target?: string; animated?: boolean; data?: { role?: string } }>,
 }))
 
 vi.mock('@/services/agentStudioService', () => ({
@@ -88,6 +91,8 @@ vi.mock('reactflow', async () => {
       onDrop,
       onDragOver,
       onConnect,
+      nodes = [],
+      edges = [],
     }: {
       children?: React.ReactNode
       onInit?: (instance: {
@@ -97,7 +102,11 @@ vi.mock('reactflow', async () => {
       onDrop?: (event: React.DragEvent<HTMLDivElement>) => void
       onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void
       onConnect?: (connection: { source: string; target: string }) => void
+      nodes?: Array<{ id?: string; type?: string }>
+      edges?: Array<{ source?: string; target?: string; animated?: boolean; data?: { role?: string } }>
     }) => {
+      reactFlowMocks.nodes = nodes
+      reactFlowMocks.edges = edges
       react.useEffect(() => {
         onInit?.({
           fitView: reactFlowMocks.fitView,
@@ -113,6 +122,13 @@ vi.mock('reactflow', async () => {
 
       return (
         <div data-testid="react-flow" onDrop={onDrop} onDragOver={onDragOver}>
+          {nodes.filter((node) => node.type === 'output').map((node) => (
+            <div
+              className="react-flow__node-output selectable"
+              data-testid={`react-flow-output-wrapper-${node.id}`}
+              key={node.id}
+            />
+          ))}
           {children}
         </div>
       )
@@ -169,12 +185,7 @@ vi.mock('./PromptViewer', () => ({
   default: () => null,
 }))
 
-function buildFlowResponse(overrides: Partial<Parameters<typeof serviceMocks.createFlow>[0]> & {
-  id?: string
-  name?: string
-  description?: string | null
-  updated_at?: string
-} = {}) {
+function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse {
   return {
     id: overrides.id ?? 'flow-1',
     user_id: 7,
@@ -184,8 +195,10 @@ function buildFlowResponse(overrides: Partial<Parameters<typeof serviceMocks.cre
     last_executed_at: null,
     created_at: '2026-04-03T00:00:00Z',
     updated_at: overrides.updated_at ?? '2026-04-03T00:00:00Z',
-    flow_definition: {
-      version: '1.0' as const,
+    validation_warnings: overrides.validation_warnings ?? [],
+    has_critical_issues: overrides.has_critical_issues ?? false,
+    flow_definition: overrides.flow_definition ?? {
+      version: '1.1' as const,
       entry_node_id: 'node_0',
       nodes: [
         {
@@ -255,6 +268,8 @@ describe('FlowBuilder', () => {
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
     reactFlowMocks.onConnect = undefined
+    reactFlowMocks.nodes = []
+    reactFlowMocks.edges = []
     agentMetadataMocks.agents = {}
   })
 
@@ -324,6 +339,395 @@ describe('FlowBuilder', () => {
 
     await user.click(within(fileActions).getByRole('button', { name: 'Save flow as' }))
     expect(await screen.findByRole('dialog', { name: 'Save Flow As' })).toBeInTheDocument()
+  }, 15000)
+
+  it('loads a flow with stale agent references and surfaces the repair warning', async () => {
+    const user = userEvent.setup()
+    const staleReferenceMessage = (
+      "Flow references unavailable agent(s): node 'agent_1' (Old Agent) "
+      + "references missing agent_id 'old_agent'. Re-select an available agent "
+      + "before saving or running this flow."
+    )
+    const schemaWarningMessage = 'Flow has a validator attachment that needs review.'
+
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Stale Flow'))
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({
+      name: 'Stale Flow',
+      validation_warnings: [
+        {
+          type: 'CRITICAL',
+          message: staleReferenceMessage,
+        },
+        {
+          type: 'WARNING',
+          message: schemaWarningMessage,
+        },
+      ],
+      has_critical_issues: true,
+    }))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    const openDialog = await screen.findByRole('dialog', { name: 'Open Flow' })
+    await user.click(within(openDialog).getByText('Stale Flow'))
+
+    await waitFor(() => {
+      expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1')
+    })
+    expect(
+      await screen.findByText(
+        `Flow loaded with validation issue: ${staleReferenceMessage} ${schemaWarningMessage}`
+      )
+    ).toBeInTheDocument()
+  }, 15000)
+
+  it('surfaces ordinary non-critical validation warnings when loading a current flow', async () => {
+    const user = userEvent.setup()
+    const validationMessage = 'Flow has a validator attachment that needs review.'
+
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Review Flow'))
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({
+      name: 'Review Flow',
+      validation_warnings: [
+        {
+          type: 'WARNING',
+          message: validationMessage,
+        },
+      ],
+      has_critical_issues: false,
+    }))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    const openDialog = await screen.findByRole('dialog', { name: 'Open Flow' })
+    await user.click(within(openDialog).getByText('Review Flow'))
+
+    expect(
+      await screen.findByText(`Flow loaded with validation warning: ${validationMessage}`)
+    ).toBeInTheDocument()
+  }, 15000)
+
+  it('rejects a v1.0 flow before mutating or saving builder state', async () => {
+    const user = userEvent.setup()
+    const onFlowChange = vi.fn()
+    const legacyFlow = buildFlowResponse({
+      name: 'AlleleTest3',
+      flow_definition: {
+        version: '1.0',
+        task_instructions_default_only: true,
+        entry_node_id: 'task',
+        nodes: [
+          {
+            id: 'task',
+            type: 'task_input',
+            position: { x: 0, y: 0 },
+            data: {
+              agent_id: 'task_input',
+              agent_display_name: 'Initial Instructions',
+              task_instructions: "Run flow 'AlleleTest3'",
+              output_key: 'task_input',
+            },
+          },
+          {
+            id: 'node_1',
+            type: 'agent',
+            position: { x: 250, y: 0 },
+            data: {
+              agent_id: 'allele_extractor',
+              agent_display_name: 'Allele Extractor',
+              output_key: 'alleles',
+            },
+          },
+          {
+            id: 'node_2',
+            type: 'agent',
+            position: { x: 500, y: 0 },
+            data: {
+              agent_id: 'chat_output',
+              agent_display_name: 'Chat Output',
+              output_key: 'chat_output',
+            },
+          },
+        ],
+        edges: [
+          { id: 'edge_1', source: 'task', target: 'node_1', role: 'control_flow' },
+          { id: 'edge_2', source: 'node_1', target: 'node_2', role: 'control_flow' },
+        ],
+      },
+    })
+    agentMetadataMocks.agents = {
+      allele_extractor: { category: 'Extraction', subcategory: 'Allele' },
+      chat_output: { category: 'Output', subcategory: 'Formatter' },
+    }
+    serviceMocks.listFlows
+      .mockResolvedValueOnce(buildFlowListResponse('AlleleTest3'))
+    serviceMocks.getFlow.mockResolvedValue(legacyFlow)
+
+    render(<FlowBuilder onFlowChange={onFlowChange} />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    await user.click(
+      within(await screen.findByRole('dialog', { name: 'Open Flow' })).getByText('AlleleTest3')
+    )
+    await waitFor(() => expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1'))
+    expect(await screen.findByText(
+      "Flow 'AlleleTest3' uses unsupported schema version '1.0'. Upgrade or archive it before editing."
+    )).toBeInTheDocument()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    expect(onFlowChange.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      flowName: 'New Flow',
+      version: '1.1',
+    }))
+  }, 15000)
+
+  it('loads and resaves distinct extraction sources attached to one formatter', async () => {
+    const user = userEvent.setup()
+    const multiSourceFlow = buildFlowResponse({
+      name: 'Combined Curation Export',
+      flow_definition: {
+        version: '1.1',
+        entry_node_id: 'task',
+        nodes: [
+          {
+            id: 'task',
+            type: 'task_input',
+            position: { x: 0, y: 0 },
+            data: {
+              agent_id: 'task_input',
+              agent_display_name: 'Initial Instructions',
+              task_instructions: 'Extract genes and alleles',
+              output_key: 'task_input',
+            },
+          },
+          {
+            id: 'genes',
+            type: 'agent',
+            position: { x: 250, y: 0 },
+            data: {
+              agent_id: 'gene_extractor',
+              agent_display_name: 'Gene Extractor',
+              output_key: 'genes',
+            },
+          },
+          {
+            id: 'alleles',
+            type: 'agent',
+            position: { x: 500, y: 0 },
+            data: {
+              agent_id: 'allele_extractor',
+              agent_display_name: 'Allele Extractor',
+              output_key: 'alleles',
+            },
+          },
+          {
+            id: 'combined_csv',
+            type: 'output',
+            position: { x: 500, y: 200 },
+            data: {
+              agent_id: 'csv_formatter',
+              agent_display_name: 'CSV Formatter',
+              output_key: 'combined_csv',
+            },
+          },
+        ],
+        edges: [
+          { id: 'control_1', source: 'task', target: 'genes', role: 'control_flow' },
+          { id: 'control_2', source: 'genes', target: 'alleles', role: 'control_flow' },
+          { id: 'output_1', source: 'genes', target: 'combined_csv', role: 'output_attachment' },
+          { id: 'output_2', source: 'alleles', target: 'combined_csv', role: 'output_attachment' },
+        ],
+      },
+    })
+    agentMetadataMocks.agents = {
+      gene_extractor: { category: 'Extraction', subcategory: 'Gene' },
+      allele_extractor: { category: 'Extraction', subcategory: 'Allele' },
+      csv_formatter: { category: 'Output', subcategory: 'Formatter' },
+    }
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Combined Curation Export'))
+    serviceMocks.getFlow.mockResolvedValue(multiSourceFlow)
+    serviceMocks.updateFlow.mockResolvedValue(multiSourceFlow)
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    await user.click(
+      within(await screen.findByRole('dialog', { name: 'Open Flow' }))
+        .getByText('Combined Curation Export')
+    )
+    await waitFor(() => expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1'))
+
+    await waitFor(() => {
+      // Output attachments carry data just like sequential edges, so they must
+      // retain the same animated affordance after a saved flow is reloaded.
+      const outputEdges = reactFlowMocks.edges.filter(
+        (edge) => edge.data?.role === 'output_attachment'
+      )
+      expect(outputEdges).toHaveLength(2)
+      expect(outputEdges.every((edge) => edge.animated === true)).toBe(true)
+    })
+
+    const outputWrapper = screen.getByTestId('react-flow-output-wrapper-combined_csv')
+    const outputWrapperStyle = getComputedStyle(outputWrapper)
+    // React Flow's default output type adds a white card around our real node;
+    // these assertions protect the scoped reset that keeps all agents aligned.
+    expect(outputWrapperStyle.padding).toBe('0px')
+    expect(outputWrapperStyle.width).toBe('auto')
+    expect(outputWrapperStyle.borderStyle).toBe('none')
+    expect(outputWrapperStyle.backgroundColor).toBe('rgba(0, 0, 0, 0)')
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+
+    await waitFor(() => {
+      const updatePayload = serviceMocks.updateFlow.mock.calls[0]?.[1]
+      expect(updatePayload?.flow_definition).toEqual(expect.objectContaining({
+        version: '1.1',
+        edges: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'output_1',
+            source: 'genes',
+            target: 'combined_csv',
+            role: 'output_attachment',
+          }),
+          expect.objectContaining({
+            id: 'output_2',
+            source: 'alleles',
+            target: 'combined_csv',
+            role: 'output_attachment',
+          }),
+        ]),
+      }))
+    })
+  }, 15000)
+
+  it('groups extraction and typed validation sources without allowing plain custom sources', async () => {
+    const onFlowChange = vi.fn()
+    agentMetadataMocks.agents = {
+      go_extractor: {
+        category: 'Extraction',
+        subcategory: 'Gene Ontology',
+        produces_flow_artifacts: true,
+      },
+      go_validator: {
+        category: 'Validation',
+        subcategory: 'Gene Ontology',
+        output_schema_key: 'go_validation_result',
+        is_active: true,
+        produces_flow_artifacts: true,
+      },
+      csv_formatter: { category: 'Output', subcategory: 'Formatter' },
+      plain_custom: {
+        category: 'Custom',
+        subcategory: 'My Custom Agents',
+        output_schema_key: 'custom_payload',
+        is_active: true,
+        produces_flow_artifacts: false,
+      },
+    }
+
+    render(<FlowBuilder onFlowChange={onFlowChange} />)
+    await screen.findByText('1 step')
+
+    const dropAgent = (agentId: string, agentName: string, y: number) => {
+      fireEvent.drop(screen.getByTestId('react-flow'), {
+        clientX: 320,
+        clientY: y,
+        dataTransfer: {
+          getData: vi.fn((format: string) => (
+            format === 'application/reactflow'
+              ? JSON.stringify({
+                  type: 'agent',
+                  agentId,
+                  agentName,
+                  agentDescription: agentName,
+                })
+              : ''
+          )),
+        },
+      })
+    }
+
+    dropAgent('go_extractor', 'GO Extractor', 220)
+    dropAgent('go_validator', 'GO Validator', 340)
+    dropAgent('csv_formatter', 'CSV Formatter', 460)
+    dropAgent('plain_custom', 'Plain Custom Agent', 580)
+
+    await waitFor(() => {
+      const latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+      const csvNode = latestFlowState?.nodes.find(
+        (node: { agent_id: string }) => node.agent_id === 'csv_formatter'
+      )
+      // New file formatters must start with a deterministic paper-derived name;
+      // otherwise batch exports immediately regress to trace-ID-first sorting.
+      expect(csvNode?.output_filename_template).toBe('{{input_filename_stem}}')
+    })
+
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
+    })
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_2' })
+    })
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_3' })
+    })
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_2', target: 'node_3' })
+    })
+
+    await waitFor(() => {
+      const latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+      expect(latestFlowState?.edges.filter(
+        (edge: { role?: string }) => edge.role === 'output_attachment'
+      )).toEqual([
+        expect.objectContaining({ source: 'node_1', target: 'node_3' }),
+        expect.objectContaining({ source: 'node_2', target: 'node_3' }),
+      ])
+    })
+
+    // Newly connected formatter edges must match the reloaded-flow path above;
+    // this was previously hardcoded to false and regressed independently.
+    expect(reactFlowMocks.edges.filter(
+      (edge) => edge.data?.role === 'output_attachment'
+    )).toEqual([
+      expect.objectContaining({ source: 'node_1', target: 'node_3', animated: true }),
+      expect.objectContaining({ source: 'node_2', target: 'node_3', animated: true }),
+    ])
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_3' })
+    })
+
+    expect(await screen.findByText('This source step is already attached to the formatter.'))
+      .toBeInTheDocument()
+    let latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+    expect(latestFlowState?.edges.filter(
+      (edge: { role?: string }) => edge.role === 'output_attachment'
+    )).toHaveLength(2)
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_4', target: 'node_3' })
+    })
+
+    expect(await screen.findByText(
+      'Attach this formatter to an extraction result or to an active validation result with a declared output schema.'
+    )).toBeInTheDocument()
+    latestFlowState = onFlowChange.mock.calls.at(-1)?.[0]
+    expect(latestFlowState?.edges.filter(
+      (edge: { role?: string }) => edge.role === 'output_attachment'
+    )).toHaveLength(2)
   }, 15000)
 
   it('disables file action save shortcuts when there are no flow nodes', async () => {
@@ -718,6 +1122,11 @@ describe('FlowBuilder', () => {
       dataTransfer,
     })
 
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
+    })
+
     await user.click(screen.getByText('File'))
 
     const fileMenu = await screen.findByRole('menu')
@@ -818,6 +1227,11 @@ describe('FlowBuilder', () => {
       clientX: 320,
       clientY: 220,
       dataTransfer,
+    })
+
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
     })
 
     await user.click(screen.getByText('File'))
@@ -950,6 +1364,10 @@ describe('FlowBuilder', () => {
     })
 
     React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
+    })
+
+    React.act(() => {
       reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_2' })
     })
 
@@ -960,6 +1378,7 @@ describe('FlowBuilder', () => {
     await waitFor(() => {
       const calls = onFlowChange.mock.calls
       const latestFlowState = calls[calls.length - 1]?.[0]
+      expect(latestFlowState?.entry_node_id).toBe('node_0')
       expect(latestFlowState?.edges).toEqual(expect.arrayContaining([
         expect.objectContaining({
           source: 'node_1',
@@ -1134,6 +1553,10 @@ describe('FlowBuilder', () => {
     })
 
     React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
+    })
+
+    React.act(() => {
       reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_2' })
     })
 
@@ -1171,14 +1594,14 @@ describe('FlowBuilder', () => {
       expect(serviceMocks.createFlow).toHaveBeenCalledWith(
         expect.objectContaining({
           flow_definition: expect.objectContaining({
-            edges: [
+            edges: expect.arrayContaining([
               expect.objectContaining({
                 source: 'node_1',
                 target: 'node_2',
                 role: 'validation_attachment',
                 satisfies_binding_id: 'identifier',
               }),
-            ],
+            ]),
             nodes: expect.arrayContaining([
               expect.objectContaining({
                 id: 'node_1',
@@ -1316,12 +1739,16 @@ describe('FlowBuilder', () => {
     })
   }, 15000)
 
-  it('does not handle save shortcuts from editable dialog fields', async () => {
+  it('does not handle builder shortcuts from editable dialog fields', async () => {
     const user = userEvent.setup()
 
     render(<FlowBuilder />)
 
     await screen.findByText('1 step')
+
+    const canvas = screen.getByRole('region', { name: 'Flow canvas' })
+    canvas.focus()
+    await user.keyboard('{Control>}a{/Control}')
 
     await user.click(screen.getByText('File'))
     await user.click(within(await screen.findByRole('menu')).getByText('Save'))
@@ -1338,6 +1765,25 @@ describe('FlowBuilder', () => {
     expect(saveShortcutEvent.defaultPrevented).toBe(false)
     expect(serviceMocks.createFlow).not.toHaveBeenCalled()
     expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+
+    const selectAllShortcutEvent = dispatchKeyboardShortcut(flowNameInput, {
+      key: 'a',
+      ctrlKey: true,
+    })
+    const deleteShortcutEvent = dispatchKeyboardShortcut(flowNameInput, {
+      key: 'Delete',
+    })
+
+    expect(selectAllShortcutEvent.defaultPrevented).toBe(false)
+    expect(deleteShortcutEvent.defaultPrevented).toBe(false)
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+
+    await user.click(within(saveDialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Save Flow' })).not.toBeInTheDocument()
+    })
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(within(await screen.findByRole('menu')).getByText('Delete Selected (1)')).toBeInTheDocument()
   }, 15000)
 
   it('selects all and deletes selected flow elements only from the canvas shortcut context', async () => {
@@ -1364,6 +1810,50 @@ describe('FlowBuilder', () => {
     })
 
     expect(deleteEvent.defaultPrevented).toBe(true)
+    await waitFor(() => {
+      expect(screen.queryByText('1 step')).not.toBeInTheDocument()
+    })
+  }, 15000)
+
+  it('reaches the menus and canvas shortcuts using only the keyboard', async () => {
+    const user = userEvent.setup()
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    const fileMenuTrigger = screen.getByRole('button', { name: 'File' })
+    const editMenuTrigger = screen.getByRole('button', { name: 'Edit' })
+    const canvas = screen.getByRole('region', { name: 'Flow canvas' })
+
+    await user.tab()
+    expect(fileMenuTrigger).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('menu')).toBeInTheDocument()
+    expect(fileMenuTrigger).toHaveAttribute('aria-expanded', 'true')
+    await user.keyboard('{Escape}')
+    expect(fileMenuTrigger).toHaveFocus()
+
+    await user.tab()
+    expect(editMenuTrigger).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('menu')).toBeInTheDocument()
+    expect(editMenuTrigger).toHaveAttribute('aria-expanded', 'true')
+    await user.keyboard('{Escape}')
+    expect(editMenuTrigger).toHaveFocus()
+
+    await user.tab()
+    await user.tab()
+    await user.tab()
+    await user.tab()
+    await user.tab()
+    await user.tab()
+    expect(canvas).toHaveFocus()
+
+    await user.keyboard('{Control>}a{/Control}')
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+
+    await user.keyboard('{Delete}')
     await waitFor(() => {
       expect(screen.queryByText('1 step')).not.toBeInTheDocument()
     })

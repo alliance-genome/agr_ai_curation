@@ -6,19 +6,26 @@ from collections import defaultdict
 from datetime import datetime
 import json
 import math
+import re
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field
 
+from src.lib.curation_workspace.domain_envelope_normalization import (
+    domain_envelope_from_extraction_result,
+    is_canonical_domain_envelope_payload,
+)
 from src.lib.openai_agents.config import (
     get_flow_chat_max_rows,
-    get_flow_planner_max_field_examples,
-    get_flow_planner_max_list_items,
-    get_flow_planner_max_object_items,
-    get_flow_planner_max_row_chars,
-    get_flow_planner_max_text_chars,
+    get_flow_output_projection_preview_max_depth,
+    get_flow_projection_max_field_examples,
+    get_flow_projection_max_list_items,
+    get_flow_projection_max_object_items,
+    get_flow_projection_max_row_chars,
+    get_flow_projection_max_text_chars,
     get_flow_projection_max_rows,
 )
+from src.schemas.curation_workspace import CurationExtractionResultRecord
 
 
 FlowOutputFormat = Literal["csv", "tsv", "json", "chat"]
@@ -50,14 +57,14 @@ FlowOutputFilterOperator = Literal[
 FlowOutputSortDirection = Literal["asc", "desc"]
 
 # Env-configurable (defaults unchanged); see config.py getters and .env.example
-# (flow projection planner group).
+# (flow projection tooling group).
 MAX_PROJECTION_ROWS = get_flow_projection_max_rows()
 MAX_CHAT_ROWS = get_flow_chat_max_rows()
-MAX_FIELD_EXAMPLES = get_flow_planner_max_field_examples()
-MAX_PLANNER_TEXT_CHARS = get_flow_planner_max_text_chars()
-MAX_PLANNER_LIST_ITEMS = get_flow_planner_max_list_items()
-MAX_PLANNER_OBJECT_ITEMS = get_flow_planner_max_object_items()
-MAX_PLANNER_ROW_CHARS = get_flow_planner_max_row_chars()
+MAX_FIELD_EXAMPLES = get_flow_projection_max_field_examples()
+MAX_PROJECTION_TEXT_CHARS = get_flow_projection_max_text_chars()
+MAX_PROJECTION_LIST_ITEMS = get_flow_projection_max_list_items()
+MAX_PROJECTION_OBJECT_ITEMS = get_flow_projection_max_object_items()
+MAX_PROJECTION_ROW_CHARS = get_flow_projection_max_row_chars()
 
 ARTIFACT_DEFAULT_FIELD_REFS = [
     "artifact.step",
@@ -195,6 +202,36 @@ _VALIDATION_RECORD_KEYS = {
 }
 
 _ORDERED_FILTER_OPS = {"gt", "gte", "lt", "lte"}
+_NO_CANONICAL_OBJECT_LIST_WARNING = (
+    "No canonical curation object list was found for this artifact."
+)
+_STRUCTURED_VALIDATOR_RESULT_LIST_FIELDS = (
+    "allele_candidates",
+    "gene_candidates",
+    "results",
+    "annotations",
+    "candidates",
+)
+_STRUCTURED_VALIDATOR_REQUIRED_FIELDS = frozenset(
+    {
+        "status",
+        "request_id",
+        "validator_binding_id",
+        "validator_agent",
+        "target",
+        "resolved_values",
+        "resolved_objects",
+        "missing_expected_fields",
+        "candidates",
+        "lookup_attempts",
+        "explanation",
+    }
+)
+_REJECTED_LEGACY_RESULT_LIST_FIELDS = frozenset(
+    {"items", "objects", "curatable_objects"}
+)
+_OBJECT_ATTRIBUTE_FIELD_PREFIX = "object.attribute."
+_ATTRIBUTE_KEY_PATTERN = re.compile(r"[^0-9a-zA-Z]+")
 
 
 class FlowOutputTransformSpec(BaseModel):
@@ -271,7 +308,8 @@ class FlowOutputArtifact(BaseModel):
     artifact_preview: str = ""
     artifact_shape: Literal[
         "domain_envelope",
-        "domain_extraction_result",
+        "domain_envelope_extraction",
+        "structured_result",
         "non_structured",
     ] = "non_structured"
     warnings: list[str] = Field(default_factory=list)
@@ -285,6 +323,7 @@ class FlowOutputArtifactBundle(BaseModel):
     artifacts: list[FlowOutputArtifact] = Field(default_factory=list)
     field_catalog: list[FlowOutputField] = Field(default_factory=list)
     default_row_source: FlowOutputRowSource = "artifact"
+    default_source_extraction_result_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
     def rows_for_source(self, row_source: FlowOutputRowSource) -> list[dict[str, Any]]:
@@ -336,7 +375,7 @@ def _compact_text(value: Any, *, max_chars: int = 800) -> str:
     return text[: max(0, max_chars - 1)].rstrip() + "..."
 
 
-def _bounded_planner_text(value: Any, *, max_chars: int = MAX_PLANNER_TEXT_CHARS) -> str:
+def _bounded_projection_text(value: Any, *, max_chars: int = MAX_PROJECTION_TEXT_CHARS) -> str:
     text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
     if len(text) <= max_chars:
         return text
@@ -344,52 +383,68 @@ def _bounded_planner_text(value: Any, *, max_chars: int = MAX_PLANNER_TEXT_CHARS
     return f"{text[:max_chars].rstrip()}... [truncated {overflow} chars]"
 
 
-def _bounded_planner_value(value: Any, *, depth: int = 0) -> Any:
+def _bounded_projection_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    max_depth: int | None = None,
+) -> Any:
+    if max_depth is None:
+        max_depth = get_flow_output_projection_preview_max_depth()
     if isinstance(value, str):
-        return _bounded_planner_text(value)
+        return _bounded_projection_text(value)
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
-    if depth >= 4:
+    if depth >= max_depth:
         return "[truncated:depth]"
     if isinstance(value, Mapping):
         items = list(value.items())
         bounded = {
-            str(key): _bounded_planner_value(item, depth=depth + 1)
-            for key, item in items[:MAX_PLANNER_OBJECT_ITEMS]
+            str(key): _bounded_projection_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+            for key, item in items[:MAX_PROJECTION_OBJECT_ITEMS]
         }
-        if len(items) > MAX_PLANNER_OBJECT_ITEMS:
-            bounded["_truncated_keys"] = len(items) - MAX_PLANNER_OBJECT_ITEMS
+        if len(items) > MAX_PROJECTION_OBJECT_ITEMS:
+            bounded["_truncated_keys"] = len(items) - MAX_PROJECTION_OBJECT_ITEMS
         return bounded
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         items = list(value)
         bounded_items = [
-            _bounded_planner_value(item, depth=depth + 1)
-            for item in items[:MAX_PLANNER_LIST_ITEMS]
+            _bounded_projection_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+            for item in items[:MAX_PROJECTION_LIST_ITEMS]
         ]
-        if len(items) > MAX_PLANNER_LIST_ITEMS:
-            bounded_items.append({"_truncated_items": len(items) - MAX_PLANNER_LIST_ITEMS})
+        if len(items) > MAX_PROJECTION_LIST_ITEMS:
+            bounded_items.append({"_truncated_items": len(items) - MAX_PROJECTION_LIST_ITEMS})
         return bounded_items
-    return _bounded_planner_text(value)
+    return _bounded_projection_text(value)
 
 
-def _bounded_planner_row(row: Mapping[str, Any]) -> dict[str, Any]:
+def _bounded_projection_row(row: Mapping[str, Any]) -> dict[str, Any]:
     bounded: dict[str, Any] = {}
+    max_depth = get_flow_output_projection_preview_max_depth()
     for key, value in row.items():
-        bounded[str(key)] = _bounded_planner_value(value)
+        bounded[str(key)] = _bounded_projection_value(value, max_depth=max_depth)
         encoded = json.dumps(bounded, ensure_ascii=False, default=str)
-        if len(encoded) > MAX_PLANNER_ROW_CHARS:
+        if len(encoded) > MAX_PROJECTION_ROW_CHARS:
             bounded["_truncated_preview"] = True
             bounded["_truncated_after_field"] = str(key)
             break
     return bounded
 
 
-def _bounded_planner_warnings(warnings: Sequence[str], *, limit: int = 20) -> list[str]:
-    bounded = [_bounded_planner_text(warning) for warning in warnings[:limit]]
+def _bounded_projection_warnings(warnings: Sequence[str], *, limit: int = 20) -> list[str]:
+    bounded = [_bounded_projection_text(warning) for warning in warnings[:limit]]
     if len(warnings) > limit:
         bounded.append(f"... [truncated {len(warnings) - limit} warnings]")
     return bounded
@@ -441,7 +496,34 @@ def _scalar_payload_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_attribute_key(key: Any) -> str:
+    normalized = _ATTRIBUTE_KEY_PATTERN.sub("_", str(key or "").strip().lower())
+    return re.sub(r"_+", "_", normalized).strip("_")
+
+
+def _is_scalar_attribute_value(value: Any) -> bool:
+    return isinstance(value, (str, int, float, bool)) or value is None
+
+
+def _scalar_attribute_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    attributes = payload.get("attributes")
+    if not isinstance(attributes, Mapping):
+        return {}
+    fields: dict[str, Any] = {}
+    for key, value in attributes.items():
+        normalized_key = _normalize_attribute_key(key)
+        if not normalized_key:
+            continue
+        if _is_scalar_attribute_value(value) or (
+            isinstance(value, list) and all(_is_scalar_attribute_value(item) for item in value)
+        ):
+            fields.setdefault(normalized_key, value)
+    return fields
+
+
 def _field_label(field_ref: str) -> str:
+    if field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX):
+        return field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX).replace("_", " ").title()
     if field_ref in _FIELD_LABEL_OVERRIDES:
         return _FIELD_LABEL_OVERRIDES[field_ref]
     suffix = field_ref.split(".")[-1]
@@ -449,6 +531,8 @@ def _field_label(field_ref: str) -> str:
 
 
 def _column_key_from_ref(field_ref: str) -> str:
+    if field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX):
+        return field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
     if field_ref in _ARTIFACT_KEY_BY_REF:
         return _ARTIFACT_KEY_BY_REF[field_ref]
     return field_ref.replace(".", "_").replace("[", "_").replace("]", "")
@@ -517,7 +601,17 @@ def _coerce_non_negative_int(value: Any) -> int | None:
 
 
 def _object_id_from_item(item: Mapping[str, Any], index: int) -> str:
-    for key in ("object_id", "id", "curie", "primary_external_id", "external_id", "pending_ref_id"):
+    for key in (
+        "object_id",
+        "id",
+        "curie",
+        "primary_external_id",
+        "external_id",
+        "allele_id",
+        "go_id",
+        "gene_id",
+        "pending_ref_id",
+    ):
         value = _string_value(item.get(key))
         if value:
             return value
@@ -647,6 +741,8 @@ def _object_rows_from_items(
         )
         for key, value in _scalar_payload_fields(payload).items():
             row[f"object.payload.{key}"] = value
+        for key, value in _scalar_attribute_fields(payload).items():
+            row[f"{_OBJECT_ATTRIBUTE_FIELD_PREFIX}{key}"] = value
         rows.append(row)
     return rows
 
@@ -941,16 +1037,51 @@ def _validation_records_from_step_metadata(step: Mapping[str, Any]) -> list[Mapp
     return records
 
 
+def _has_mixed_canonical_and_extractor_objects(payload: Mapping[str, Any]) -> bool:
+    return isinstance(payload.get("extracted_objects"), list) and isinstance(
+        payload.get("curatable_objects"), list
+    )
+
+
+def _structured_validator_result_list_field(
+    payload: Mapping[str, Any],
+) -> str | None:
+    """Return the one trusted row-list field declared by a validator result."""
+
+    if not _STRUCTURED_VALIDATOR_REQUIRED_FIELDS.issubset(payload):
+        return None
+    if any(field in payload for field in _REJECTED_LEGACY_RESULT_LIST_FIELDS):
+        return None
+    if payload.get("status") not in {"resolved", "unresolved"}:
+        return None
+    if not isinstance(payload.get("validator_agent"), Mapping) or not isinstance(
+        payload.get("target"), Mapping
+    ):
+        return None
+    for field in _STRUCTURED_VALIDATOR_RESULT_LIST_FIELDS:
+        if field not in payload:
+            continue
+        value = payload.get(field)
+        if not isinstance(value, list) or not all(
+            isinstance(item, Mapping) for item in value
+        ):
+            return None
+        return field
+    return None
+
+
 def _payload_shape(payload: Any) -> Literal[
     "domain_envelope",
-    "domain_extraction_result",
+    "structured_result",
     "non_structured",
 ]:
     if isinstance(payload, Mapping):
-        if payload.get("envelope_id") and payload.get("domain_pack_id") and isinstance(payload.get("objects"), list):
+        if _has_mixed_canonical_and_extractor_objects(payload):
+            return "non_structured"
+        if is_canonical_domain_envelope_payload(payload):
             return "domain_envelope"
-        if isinstance(payload.get("curatable_objects"), list):
-            return "domain_extraction_result"
+        if _structured_validator_result_list_field(payload) is not None:
+            return "structured_result"
     return "non_structured"
 
 
@@ -961,15 +1092,66 @@ def _payload_object_items(
 ) -> tuple[list[Mapping[str, Any]], list[str]]:
     warnings: list[str] = []
     if shape == "domain_envelope":
-        value = payload.get("objects")
-    elif shape == "domain_extraction_result":
-        value = payload.get("curatable_objects")
+        value = payload.get("extracted_objects")
+    elif shape == "structured_result":
+        list_field = _structured_validator_result_list_field(payload)
+        value = payload.get(list_field) if list_field else None
+        if isinstance(value, list):
+            target = payload.get("target")
+            target_object_type = (
+                str(target.get("object_type") or "")
+                if isinstance(target, Mapping)
+                else ""
+            )
+            inherited_annotation_fields = {
+                key: payload.get(key)
+                for key in ("gene_id", "gene_symbol")
+                if payload.get(key) is not None
+            }
+            items: list[Mapping[str, Any]] = []
+            for item in value:
+                if not isinstance(item, Mapping):
+                    continue
+                normalized = dict(item)
+                normalized.setdefault(
+                    "object_type",
+                    target_object_type or str(list_field or "structured_result"),
+                )
+                if list_field == "annotations":
+                    for key, inherited_value in inherited_annotation_fields.items():
+                        normalized.setdefault(key, inherited_value)
+                items.append(normalized)
+            return items, warnings
     else:
         value = None
     if isinstance(value, list):
         return [item for item in value if isinstance(item, Mapping)], warnings
-    warnings.append("No canonical curation object list was found for this artifact.")
+    warnings.append(_NO_CANONICAL_OBJECT_LIST_WARNING)
     return [], warnings
+
+
+def _candidate_payload_object_items(
+    payload: Mapping[str, Any],
+) -> tuple[
+    list[Mapping[str, Any]],
+    list[str],
+    Literal["domain_envelope_extraction"] | None,
+]:
+    """Return trusted candidate object rows for extractor-shaped payloads."""
+    if isinstance(payload.get("objects"), list) or isinstance(
+        payload.get("extracted_objects"), list
+    ):
+        return [], [], None
+
+    value = payload.get("curatable_objects")
+    if not isinstance(value, list):
+        return [], [], None
+
+    return (
+        [item for item in value if isinstance(item, Mapping)],
+        [],
+        "domain_envelope_extraction",
+    )
 
 
 def _payload_from_step_output(step: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -1071,7 +1253,12 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     )
     preview = _compact_text(_step_attr(step, "output_preview") or _step_attr(step, "output"))
 
-    shape = _payload_shape(payload)
+    shape: Literal[
+        "domain_envelope",
+        "domain_envelope_extraction",
+        "structured_result",
+        "non_structured",
+    ] = _payload_shape(payload)
     domain_pack_id = ""
     envelope_id = ""
     object_items: list[Mapping[str, Any]] = []
@@ -1079,9 +1266,18 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     if isinstance(payload, Mapping):
         domain_pack_id = _string_value(payload.get("domain_pack_id") or payload.get("adapter_key"))
         envelope_id = _string_value(payload.get("envelope_id"))
-        object_items, object_warnings = _payload_object_items(payload, shape=shape)
+        if shape == "non_structured" and payload_from_candidate:
+            object_items, object_warnings, trusted_candidate_shape = (
+                _candidate_payload_object_items(payload)
+            )
+            if trusted_candidate_shape is not None:
+                shape = trusted_candidate_shape
+        else:
+            object_items, object_warnings = _payload_object_items(payload, shape=shape)
         if shape == "non_structured":
             object_items = []
+            if not object_warnings:
+                object_warnings = [_NO_CANONICAL_OBJECT_LIST_WARNING]
         warnings.extend(object_warnings)
     elif shape == "non_structured":
         warnings.append("Artifact payload is not a supported structured mapping.")
@@ -1246,7 +1442,7 @@ def _catalog_for_rows(
         non_empty_values = [value for value in values if not _is_empty(value)]
         examples: list[Any] = []
         for value in non_empty_values:
-            json_value = _bounded_planner_value(value)
+            json_value = _bounded_projection_value(value)
             if json_value in examples:
                 continue
             examples.append(json_value)
@@ -1282,21 +1478,14 @@ def _default_row_source_for_bundle(
     return "artifact"
 
 
-def build_flow_output_artifact_bundle(
+def _build_artifact_bundle(
     *,
-    completed_steps: Sequence[Mapping[str, Any]],
+    artifacts: Sequence[FlowOutputArtifact],
     flow_name: str,
     flow_run_id: str | None = None,
     document_id: str | None = None,
     output_format: FlowOutputFormat | None = None,
 ) -> FlowOutputArtifactBundle:
-    """Build the canonical projection bundle from completed flow steps."""
-
-    artifacts = [
-        artifact
-        for step in completed_steps
-        if (artifact := _build_artifact_from_step(step)) is not None
-    ]
     rows_by_source = {
         row_source: [
             row
@@ -1319,7 +1508,7 @@ def build_flow_output_artifact_bundle(
         flow_name=flow_name,
         flow_run_id=flow_run_id,
         document_id=document_id,
-        artifacts=artifacts,
+        artifacts=list(artifacts),
         field_catalog=field_catalog,
         default_row_source=_default_row_source_for_bundle(
             artifacts=artifacts,
@@ -1327,6 +1516,100 @@ def build_flow_output_artifact_bundle(
             output_format=output_format,
         ),
         warnings=warnings,
+    )
+
+
+def build_flow_output_artifact_bundle(
+    *,
+    completed_steps: Sequence[Mapping[str, Any]],
+    flow_name: str,
+    flow_run_id: str | None = None,
+    document_id: str | None = None,
+    output_format: FlowOutputFormat | None = None,
+) -> FlowOutputArtifactBundle:
+    """Build the canonical projection bundle from completed flow steps."""
+
+    artifacts = [
+        artifact
+        for step in completed_steps
+        if (artifact := _build_artifact_from_step(step)) is not None
+    ]
+    return _build_artifact_bundle(
+        flow_name=flow_name,
+        flow_run_id=flow_run_id,
+        document_id=document_id,
+        artifacts=artifacts,
+        output_format=output_format,
+    )
+
+
+def _common_string_value(values: Sequence[str | None]) -> str | None:
+    normalized_values = {
+        value.strip()
+        for value in values
+        if isinstance(value, str) and value.strip()
+    }
+    if len(normalized_values) == 1:
+        return next(iter(normalized_values))
+    return None
+
+
+def _step_from_extraction_result(
+    extraction_result: CurationExtractionResultRecord,
+    *,
+    step_number: int,
+) -> dict[str, Any]:
+    envelope = domain_envelope_from_extraction_result(extraction_result)
+    metadata = dict(extraction_result.metadata or {})
+    metadata.setdefault(
+        "source_key",
+        f"extraction_result:{extraction_result.extraction_result_id}",
+    )
+    return {
+        "step": step_number,
+        "extraction_result_id": extraction_result.extraction_result_id,
+        "agent_id": extraction_result.agent_key,
+        "agent_name": extraction_result.agent_key.replace("_", " ").title(),
+        "output_preview": extraction_result.conversation_summary or "",
+        "candidate": {
+            "agent_key": extraction_result.agent_key,
+            "adapter_key": extraction_result.adapter_key,
+            "candidate_count": extraction_result.candidate_count,
+            "metadata": metadata,
+            "payload_json": envelope.model_dump(mode="json"),
+        },
+    }
+
+
+def build_extraction_result_artifact_bundle(
+    *,
+    extraction_results: Sequence[CurationExtractionResultRecord],
+    bundle_name: str = "Extraction Results",
+    flow_run_id: str | None = None,
+    document_id: str | None = None,
+    output_format: FlowOutputFormat | None = None,
+) -> FlowOutputArtifactBundle:
+    """Build a projection bundle directly from persisted extraction results."""
+
+    completed_steps = [
+        _step_from_extraction_result(extraction_result, step_number=index)
+        for index, extraction_result in enumerate(extraction_results, start=1)
+    ]
+    artifacts = [
+        artifact
+        for step in completed_steps
+        if (artifact := _build_artifact_from_step(step)) is not None
+    ]
+    return _build_artifact_bundle(
+        artifacts=artifacts,
+        flow_name=bundle_name,
+        flow_run_id=flow_run_id or _common_string_value(
+            [record.flow_run_id for record in extraction_results]
+        ),
+        document_id=document_id or _common_string_value(
+            [record.document_id for record in extraction_results]
+        ),
+        output_format=output_format,
     )
 
 
@@ -1338,9 +1621,18 @@ def default_projection_plan(
 ) -> FlowOutputProjectionPlan:
     selected_row_source = row_source or bundle.default_row_source
     row_strategy: FlowOutputRowStrategy = "object"
-    if output_format == "tsv" and selected_row_source == "object":
-        source_identities = _source_identities_for_rows(bundle.rows_for_source("object"))
-        if len(source_identities) == 1:
+    if selected_row_source == "object":
+        object_rows = bundle.rows_for_source("object")
+        source_identities = _source_identities_for_rows(object_rows)
+        has_attribute_fields = any(
+            field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+            for row in object_rows
+            for field_ref in row
+        )
+        if len(source_identities) == 1 and (
+            output_format == "tsv"
+            or (output_format == "csv" and has_attribute_fields)
+        ):
             row_strategy = "wide_union"
     columns = default_columns_for_row_source(
         bundle,
@@ -1361,8 +1653,55 @@ def default_columns_for_row_source(
     *,
     row_strategy: FlowOutputRowStrategy = "object",
     available_refs: set[str] | None = None,
+    rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[FlowOutputColumnSpec]:
     available = available_refs if available_refs is not None else bundle.field_refs_for_source(row_source)
+    selected_rows = rows if rows is not None else bundle.rows_for_source(row_source)
+    attribute_field_refs: list[str] = []
+    if row_source == "object" and row_strategy == "wide_union":
+        all_attribute_refs = _first_seen_refs(selected_rows, prefix=_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+        shared_attribute_refs = _shared_refs(selected_rows, refs=all_attribute_refs)
+        attribute_field_refs = [
+            *shared_attribute_refs,
+            *[
+                field_ref
+                for field_ref in all_attribute_refs
+                if field_ref not in shared_attribute_refs
+            ],
+        ]
+        attribute_field_refs = [
+            field_ref
+            for field_ref in attribute_field_refs
+            if field_ref in available
+        ]
+
+    if row_source == "object" and row_strategy == "wide_union" and attribute_field_refs:
+        selected_identity_refs = [
+            field_ref
+            for field_ref in (
+                "object.label",
+                "object.payload.semantic_class",
+                "object.object_id",
+                "object.evidence_record_ids",
+            )
+            if field_ref in available
+        ]
+        return [
+            FlowOutputColumnSpec(
+                key=_column_key_from_ref(field_ref),
+                header=_field_label(field_ref),
+                field_ref=field_ref,
+            )
+            for field_ref in [
+                *attribute_field_refs,
+                *[
+                    field_ref
+                    for field_ref in selected_identity_refs
+                    if field_ref not in attribute_field_refs
+                ],
+            ]
+        ]
+
     if row_source == "artifact":
         priority = ARTIFACT_DEFAULT_FIELD_REFS
     elif row_source == "object":
@@ -1384,7 +1723,10 @@ def default_columns_for_row_source(
                 field.ref
                 for field in bundle.field_catalog
                 if field.row_source == row_source
-                and field.ref.startswith("object.payload.")
+                and (
+                    field.ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+                    or field.ref.startswith("object.payload.")
+                )
                 and field.ref not in selected
             ],
         ]
@@ -1496,6 +1838,36 @@ def _field_refs_for_rows(rows: Sequence[Mapping[str, Any]]) -> set[str]:
         for row in rows
         for key in row
     }
+
+
+def _first_seen_refs(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    prefix: str,
+) -> list[str]:
+    refs: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for field_ref in row:
+            field_ref = str(field_ref)
+            if field_ref.startswith(prefix) and field_ref not in seen:
+                seen.add(field_ref)
+                refs.append(field_ref)
+    return refs
+
+
+def _shared_refs(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    refs: Sequence[str],
+) -> list[str]:
+    if not rows:
+        return []
+    return [
+        field_ref
+        for field_ref in refs
+        if all(not _is_empty(row.get(field_ref)) for row in rows)
+    ]
 
 
 def _canonical_object_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1941,12 +2313,12 @@ def inspect_output_artifacts(
     *,
     example_limit: int = 3,
 ) -> dict[str, Any]:
-    """Return a bounded planner inventory of artifacts, row sources, and fields."""
+    """Return a bounded projection inventory of artifacts, row sources, and fields."""
 
     row_sources: dict[str, Any] = {}
     for row_source in ("artifact", "object", "evidence", "validation_finding"):
         rows = bundle.rows_for_source(row_source)  # type: ignore[arg-type]
-        bounded_example_limit = max(0, min(example_limit, MAX_PLANNER_LIST_ITEMS))
+        bounded_example_limit = max(0, min(example_limit, MAX_PROJECTION_LIST_ITEMS))
         row_sources[row_source] = {
             "row_count": len(rows),
             "default_columns": [
@@ -1954,7 +2326,7 @@ def inspect_output_artifacts(
                 for column in default_columns_for_row_source(bundle, row_source)  # type: ignore[arg-type]
             ],
             "examples": [
-                _bounded_planner_row(row)
+                _bounded_projection_row(row)
                 for row in rows[:bounded_example_limit]
             ],
             "examples_truncated": len(rows) > bounded_example_limit,
@@ -1970,7 +2342,7 @@ def inspect_output_artifacts(
             field.model_dump(mode="json")
             for field in bundle.field_catalog
         ],
-        "warnings": _bounded_planner_warnings(bundle.warnings),
+        "warnings": _bounded_projection_warnings(bundle.warnings),
     }
 
 
@@ -1991,8 +2363,8 @@ def preview_output_projection(
     result = apply_projection_plan(bundle, preview_plan)
     return FlowOutputProjectionPreview(
         status="ok",
-        warnings=_bounded_planner_warnings(result.warnings),
-        preview_rows=[_bounded_planner_row(row) for row in result.rows[:limit]],
+        warnings=_bounded_projection_warnings(result.warnings),
+        preview_rows=[_bounded_projection_row(row) for row in result.rows[:limit]],
         total_count=result.total_count,
         truncated=result.truncated,
     )
@@ -2107,6 +2479,7 @@ __all__ = [
     "FlowOutputSortSpec",
     "FlowOutputTransformSpec",
     "apply_projection_plan",
+    "build_extraction_result_artifact_bundle",
     "build_flow_output_artifact_bundle",
     "default_columns_for_row_source",
     "default_projection_plan",

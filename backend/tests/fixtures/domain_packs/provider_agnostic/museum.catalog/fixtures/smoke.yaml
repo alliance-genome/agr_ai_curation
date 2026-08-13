@@ -18,7 +18,7 @@ fixtures:
         name: Museum catalog envelope
         version: draft-2020-12
         uri: https://schemas.example.test/museum/envelope.schema.json
-      objects:
+      extracted_objects:
         - object_type: MuseumArtifact
           pending_ref_id: artifact-1
           schema_ref:

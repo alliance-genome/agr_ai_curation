@@ -3,37 +3,85 @@
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import logging
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 from unittest.mock import Mock
 
 import pytest
 
 from src.lib.batch import processor
+from src.lib.batch.service import BatchService
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
 
+_maintain_batch_lease = processor._maintain_batch_lease
 
-def _build_batch_context():
+
+def _build_batch_context() -> tuple[Any, Any, Any]:
     batch = SimpleNamespace(
         id=uuid4(),
         user_id=7,
+        status=BatchStatus.RUNNING,
         total_documents=1,
         completed_documents=0,
         failed_documents=0,
+        lease_owner=None,
+        lease_expires_at=None,
     )
     batch_doc = SimpleNamespace(
         id=uuid4(),
         document_id=uuid4(),
         position=0,
-        status=None,
+        status=BatchDocumentStatus.PENDING,
         result_file_path=None,
+        result_files=None,
+        output_status=None,
         review_session_ids=None,
         processing_time_ms=None,
         processed_at=None,
         error_message=None,
     )
     flow = SimpleNamespace(name="Gene Expression Batch Flow")
+    batch.documents = [batch_doc]
     return batch, batch_doc, flow
+
+
+@pytest.fixture(autouse=True)
+def mocked_batch_persistence(monkeypatch):
+    """Keep processor unit doubles focused on orchestration, not SQL shapes."""
+    def recompute(_service, batch):
+        batch.completed_documents = sum(
+            document.status == BatchDocumentStatus.COMPLETED for document in batch.documents
+        )
+        batch.failed_documents = sum(
+            document.status == BatchDocumentStatus.FAILED for document in batch.documents
+        )
+
+    def claim(service, _batch_id, owner, _seconds):
+        batch = service.db.batch
+        if batch.status != BatchStatus.PENDING:
+            return None
+        batch.status = BatchStatus.RUNNING
+        batch.lease_owner = owner
+        batch.lease_expires_at = datetime.max.replace(tzinfo=timezone.utc)
+        return batch
+
+    def complete(service, _batch_id, owner):
+        batch = service.db.batch
+        if batch.status != BatchStatus.RUNNING or batch.lease_owner != owner:
+            return False
+        batch.status = BatchStatus.COMPLETED
+        return True
+
+    @contextmanager
+    def no_heartbeat(*_args, **_kwargs):
+        yield
+
+    monkeypatch.setattr(BatchService, "recompute_batch_counters", recompute)
+    monkeypatch.setattr(BatchService, "claim_recoverable_batch", claim)
+    monkeypatch.setattr(BatchService, "complete_running_batch", complete)
+    monkeypatch.setattr(processor, "_maintain_batch_lease", no_heartbeat)
 
 
 def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
@@ -42,7 +90,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     published_events = []
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return (None, [])
+        return ([], [], "none", [])
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
     monkeypatch.setattr(
@@ -66,6 +114,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     assert batch.failed_documents == 1
     assert batch.completed_documents == 0
     assert batch_doc.result_file_path is None
+    assert batch_doc.output_status == "failed"
     assert batch_doc.review_session_ids is None
     assert published_events == [
         {
@@ -76,6 +125,9 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
             "position": batch_doc.position,
             "status": BatchDocumentStatus.FAILED.value,
             "result_file_path": None,
+            "result_files": [],
+            "output_status": "failed",
+            "output_branches": [],
             "review_session_ids": None,
             "error_message": "Flow completed without FILE_READY or curation handoff output",
             "processing_time_ms": batch_doc.processing_time_ms,
@@ -84,12 +136,68 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     ]
 
 
+def test_batch_lease_heartbeat_retries_after_session_error(monkeypatch, caplog):
+    batch_id = uuid4()
+    lease_owner = uuid4()
+    heartbeat_calls = 0
+
+    class FakeEvent:
+        def __init__(self):
+            self.wait_calls = 0
+
+        def wait(self, _seconds):
+            self.wait_calls += 1
+            return self.wait_calls > 2
+
+        def set(self):
+            pass
+
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+        def join(self):
+            pass
+
+    @contextmanager
+    def heartbeat_session():
+        nonlocal heartbeat_calls
+        heartbeat_calls += 1
+        if heartbeat_calls == 1:
+            raise RuntimeError("temporary database outage")
+        yield object()
+
+    monkeypatch.setattr(processor.threading, "Event", FakeEvent)
+    monkeypatch.setattr(processor.threading, "Thread", InlineThread)
+    monkeypatch.setattr(processor, "get_db_session", heartbeat_session)
+    monkeypatch.setattr(
+        BatchService,
+        "heartbeat_batch_lease",
+        lambda *_args, **_kwargs: True,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with _maintain_batch_lease(batch_id, lease_owner):
+            pass
+
+    assert heartbeat_calls == 2
+    assert "renewal will retry on the next interval" in caplog.text
+
+
 def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     db = Mock()
     batch, batch_doc, flow = _build_batch_context()
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return ("/api/weaviate/documents/download/abc123", [])
+        return (
+            [{"download_url": "/api/weaviate/documents/download/abc123"}],
+            [],
+            "partial",
+            [],
+        )
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
 
@@ -105,6 +213,10 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     assert batch.completed_documents == 1
     assert batch.failed_documents == 0
     assert batch_doc.result_file_path == "/api/weaviate/documents/download/abc123"
+    assert batch_doc.result_files == [
+        {"download_url": "/api/weaviate/documents/download/abc123"}
+    ]
+    assert batch_doc.output_status == "partial"
     assert batch_doc.review_session_ids is None
 
 
@@ -113,7 +225,7 @@ def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):
     batch, batch_doc, flow = _build_batch_context()
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return (None, ["session-gene", "session-gene_expression"])
+        return ([], ["session-gene", "session-gene_expression"], "complete", [])
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
 
@@ -130,6 +242,33 @@ def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):
     assert batch.failed_documents == 0
     assert batch_doc.result_file_path is None
     assert batch_doc.review_session_ids == ["session-gene", "session-gene_expression"]
+
+
+def test_batch_processor_does_not_persist_success_when_cancelled_during_flow(monkeypatch):
+    db = Mock()
+    batch, batch_doc, flow = _build_batch_context()
+
+    async def _cancel_during_flow(**_kwargs):
+        batch.status = BatchStatus.CANCELLED
+        return ("/api/weaviate/documents/download/cancelled", ["cancelled-session"])
+
+    monkeypatch.setattr(processor, "_execute_flow_for_document", _cancel_during_flow)
+
+    with pytest.raises(processor.BatchCancelled):
+        processor._process_single_document(
+            db=db,
+            batch=batch,
+            batch_doc=batch_doc,
+            flow=flow,
+            cognito_sub="auth-sub",
+        )
+
+    assert batch.status == BatchStatus.CANCELLED
+    assert batch.completed_documents == 0
+    assert batch.failed_documents == 0
+    assert batch_doc.status == BatchDocumentStatus.PROCESSING
+    assert batch_doc.result_file_path is None
+    assert batch_doc.review_session_ids is None
 
 
 class _DummyScalarResult:
@@ -168,6 +307,20 @@ class _DummyDB:
         self.user = user
         self.commit_calls = 0
         self.rollback_calls = 0
+        self.execute_calls = 0
+
+    def execute(self, _stmt):
+        self.execute_calls += 1
+        claimed_id = None
+        if self.batch.status == BatchStatus.PENDING:
+            self.batch.status = BatchStatus.RUNNING
+            self.batch.started_at = datetime.now(timezone.utc)
+            claimed_id = self.batch.id
+        elif self.batch.status == BatchStatus.RUNNING:
+            self.batch.status = BatchStatus.COMPLETED
+            self.batch.completed_at = datetime.now(timezone.utc)
+            claimed_id = self.batch.id
+        return SimpleNamespace(scalar_one_or_none=lambda: claimed_id)
 
     def scalars(self, _stmt):
         return _DummyScalarResult(self.batch)
@@ -175,7 +328,14 @@ class _DummyDB:
     def query(self, model):
         return _DummyQuery(self, model)
 
-    def refresh(self, _obj):
+    def get(self, model, _identifier):
+        if model is processor.Batch:
+            return self.batch
+        if model is processor.BatchDocument:
+            return self.batch_doc
+        return None
+
+    def refresh(self, _obj, **_kwargs):
         return None
 
     def commit(self):
@@ -201,7 +361,7 @@ def test_process_batch_task_does_not_double_count_failed_documents(monkeypatch):
     def _fake_get_db_session():
         yield db
 
-    def _fake_process_single_document(db, batch, batch_doc, flow, cognito_sub):
+    def _fake_process_single_document(db, batch, batch_doc, flow, cognito_sub, **_kwargs):
         batch_doc.status = BatchDocumentStatus.FAILED
         batch_doc.error_message = "Flow completed without FILE_READY output"
         batch_doc.processed_at = datetime.now(timezone.utc)
@@ -215,6 +375,273 @@ def test_process_batch_task_does_not_double_count_failed_documents(monkeypatch):
 
     assert batch.failed_documents == 1
     assert batch_doc.status == BatchDocumentStatus.FAILED
+
+
+def test_process_batch_task_skips_all_processing_when_claim_fails(monkeypatch):
+    batch, batch_doc, flow = _build_batch_context()
+    batch.status = BatchStatus.CANCELLED
+    batch.documents = [batch_doc]
+    db = _DummyDB(
+        batch=batch,
+        batch_doc=batch_doc,
+        flow=flow,
+        user=SimpleNamespace(id=batch.user_id, auth_sub="auth-sub"),
+    )
+
+    @contextmanager
+    def _fake_get_db_session():
+        yield db
+
+    process_document = Mock()
+    execute_flow = Mock()
+    validate_file = Mock()
+    broadcaster = Mock()
+    monkeypatch.setattr(processor, "get_db_session", _fake_get_db_session)
+    monkeypatch.setattr(processor, "_process_single_document", process_document)
+    monkeypatch.setattr(processor, "_execute_flow_for_document", execute_flow)
+    monkeypatch.setattr(processor, "_validate_file_ownership", validate_file)
+    monkeypatch.setattr(processor, "get_batch_broadcaster", broadcaster)
+
+    processor.process_batch_task(batch.id)
+
+    assert batch.status == BatchStatus.CANCELLED
+    assert batch.completed_documents == 0
+    assert batch.failed_documents == 0
+    assert batch_doc.status == BatchDocumentStatus.PENDING
+    process_document.assert_not_called()
+    execute_flow.assert_not_called()
+    validate_file.assert_not_called()
+    broadcaster.assert_not_called()
+
+
+def test_recovered_batch_processes_only_pending_document(monkeypatch):
+    batch, pending_document, flow = _build_batch_context()
+    completed_document = SimpleNamespace(
+        id=uuid4(),
+        document_id=uuid4(),
+        position=0,
+        status=BatchDocumentStatus.COMPLETED,
+        result_file_path="/files/completed",
+        review_session_ids=["existing-review"],
+        processing_time_ms=10,
+        processed_at=datetime.now(timezone.utc),
+        error_message=None,
+    )
+    pending_document.position = 1
+    batch.documents = [completed_document, pending_document]
+    batch.flow_id = uuid4()
+    batch.total_documents = 2
+    batch.completed_documents = 1
+    batch.status = BatchStatus.RUNNING
+    lease_owner = uuid4()
+    batch.lease_owner = lease_owner
+    batch.lease_expires_at = datetime.max.replace(tzinfo=timezone.utc)
+    db = _DummyDB(
+        batch=batch,
+        batch_doc=pending_document,
+        flow=flow,
+        user=SimpleNamespace(id=batch.user_id, auth_sub="auth-sub"),
+    )
+    processed: list[Any] = []
+
+    def process_pending(_db, _batch, document, _flow, _sub, **_kwargs):
+        processed.append(document)
+        document.status = BatchDocumentStatus.COMPLETED
+
+    monkeypatch.setattr(processor, "_process_single_document", process_pending)
+
+    processor._process_claimed_batch(
+        db,
+        BatchService(db),
+        batch,
+        lease_owner,
+    )
+
+    assert processed == [pending_document]
+    assert completed_document.result_file_path == "/files/completed"
+    assert completed_document.review_session_ids == ["existing-review"]
+
+
+def test_process_batch_task_does_not_report_already_reported_flow_failure(monkeypatch, caplog):
+    batch, batch_doc, _flow = _build_batch_context()
+    batch.flow_id = uuid4()
+    batch.documents = [batch_doc]
+    batch.status = BatchStatus.PENDING
+    batch.started_at = None
+    batch.completed_at = None
+
+    flow = SimpleNamespace(id=batch.flow_id, name="Batch Flow")
+    user = SimpleNamespace(id=batch.user_id, auth_sub="auth-sub")
+    db = _DummyDB(batch=batch, batch_doc=batch_doc, flow=flow, user=user)
+    report_calls = []
+
+    @contextmanager
+    def _fake_get_db_session():
+        yield db
+
+    def _fake_process_single_document(db, batch, batch_doc, flow, cognito_sub, **_kwargs):
+        batch_doc.status = BatchDocumentStatus.FAILED
+        batch_doc.error_message = "Flow extraction persistence failed"
+        batch_doc.processed_at = datetime.now(timezone.utc)
+        batch.failed_documents += 1
+        raise processor.BatchFlowExecutionError(
+            "Flow extraction persistence failed",
+            sentry_already_reported=True,
+        )
+
+    monkeypatch.setattr(processor, "get_db_session", _fake_get_db_session)
+    monkeypatch.setattr(processor, "_process_single_document", _fake_process_single_document)
+    monkeypatch.setattr(
+        processor,
+        "report_background_task_exception",
+        lambda *args, **kwargs: report_calls.append((args, kwargs)),
+    )
+    caplog.set_level(logging.WARNING, logger=processor.logger.name)
+
+    processor.process_batch_task(batch.id)
+
+    assert batch.failed_documents == 1
+    assert batch_doc.status == BatchDocumentStatus.FAILED
+    assert report_calls == []
+    matching_records = [
+        record
+        for record in caplog.records
+        if "upstream Sentry reporting" in record.getMessage()
+    ]
+    assert len(matching_records) == 1
+    assert matching_records[0].exc_info is None
+
+
+def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
+    batch, batch_doc, _flow = _build_batch_context()
+    batch.flow_id = uuid4()
+    batch.documents = [batch_doc]
+    batch.status = BatchStatus.PENDING
+    batch.started_at = None
+    batch.completed_at = None
+
+    flow = SimpleNamespace(id=batch.flow_id, name="Batch Flow")
+    user = SimpleNamespace(id=batch.user_id, auth_sub="auth-sub")
+    db = _DummyDB(batch=batch, batch_doc=batch_doc, flow=flow, user=user)
+    report_calls = []
+
+    @contextmanager
+    def _fake_get_db_session():
+        yield db
+
+    def _raise_process_single_document(db, batch, batch_doc, flow, cognito_sub, **_kwargs):
+        raise RuntimeError("batch document failed")
+
+    monkeypatch.setattr(processor, "get_db_session", _fake_get_db_session)
+    monkeypatch.setattr(processor, "_process_single_document", _raise_process_single_document)
+    monkeypatch.setattr(
+        processor,
+        "report_background_task_exception",
+        lambda exc, *, task_name, tags=None, context=None: report_calls.append(
+            {
+                "exc_type": type(exc).__name__,
+                "task_name": task_name,
+                "tags": dict(tags or {}),
+                "context": dict(context or {}),
+            }
+        ),
+    )
+
+    processor.process_batch_task(batch.id)
+
+    assert batch_doc.status == BatchDocumentStatus.FAILED
+    assert report_calls == [
+        {
+            "exc_type": "RuntimeError",
+            "task_name": "batch.process_document",
+            "tags": {
+                "component": "batch",
+                "batch_id": batch.id,
+                "document_id": batch_doc.document_id,
+                "batch_document_id": batch_doc.id,
+            },
+            "context": {},
+        }
+    ]
+
+
+def test_execute_flow_for_document_marks_reported_persistence_flow_error(monkeypatch):
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_failed",
+                "message": "Failed to persist extraction results",
+            },
+        }
+
+    published_events = []
+    monkeypatch.setattr(
+        "src.lib.flows.executor.execute_flow",
+        _fake_execute_flow,
+    )
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(
+            publish_sync=lambda _batch_uuid, event: published_events.append(event)
+        ),
+    )
+
+    flow = SimpleNamespace(name="Batch Flow")
+    batch_id = str(uuid4())
+
+    with pytest.raises(processor.BatchFlowExecutionError) as exc_info:
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=flow,
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=batch_id,
+            )
+        )
+
+    assert exc_info.value.sentry_already_reported is True
+    assert published_events
+    assert published_events[0]["type"] == "FLOW_ERROR"
+
+
+def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatch):
+    formatter_reason = (
+        "Formatter could not create an output: the bound extraction result does "
+        "not contain the requested source fields."
+    )
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "failed",
+                "output_status": "none",
+                "failure_reason": formatter_reason,
+            },
+        }
+
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(publish_sync=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+
+    with pytest.raises(processor.BatchFlowExecutionError) as exc_info:
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=SimpleNamespace(name="Batch Flow"),
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=str(uuid4()),
+            )
+        )
+
+    assert str(exc_info.value) == formatter_reason
 
 
 def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatch):
@@ -246,7 +673,7 @@ def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatc
         )
     )
 
-    assert result == (None, [])
+    assert result == ([], [], "none", [])
     assert published_events == []
 
 
@@ -261,6 +688,21 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
                 "download_url": "/api/weaviate/documents/download/file-1",
                 "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
             },
+        }
+        yield {
+            "type": "FILE_READY",
+            "details": {
+                "download_url": "/api/weaviate/documents/download/file-2",
+                "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0fff2",
+                "filename": "genes.json",
+                "format": "json",
+                "formatter_node_id": "json-output",
+                "source_node_id": "gene-extraction",
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "output_status": "partial"},
         }
 
     monkeypatch.setattr(
@@ -281,11 +723,31 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
             cognito_sub="auth-sub",
             batch_id=batch_id,
             db_user_id=7,
+            document_name="paper.pdf",
         )
     )
 
-    assert result == ("/api/weaviate/documents/download/file-1", [])
+    assert result == (
+        [
+            {
+                "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
+                "download_url": "/api/weaviate/documents/download/file-1",
+            },
+            {
+                "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0fff2",
+                "filename": "genes.json",
+                "download_url": "/api/weaviate/documents/download/file-2",
+                "format": "json",
+                "formatter_node_id": "json-output",
+                "source_node_id": "gene-extraction",
+            },
+        ],
+        [],
+        "partial",
+        [],
+    )
     assert captured["flow_run_id"] == batch_id
+    assert captured["document_name"] == "paper.pdf"
 
 
 def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
@@ -323,7 +785,7 @@ def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
         )
     )
 
-    assert result == (None, ["session-gene", "session-gene_expression"])
+    assert result == ([], ["session-gene", "session-gene_expression"], "complete", [])
     assert len(published_events) == 1
     assert published_events[0]["type"] == "CURATION_HANDOFF_READY"
     assert published_events[0]["batch_id"] == batch_id
@@ -340,6 +802,22 @@ def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypat
             "type": "FLOW_ERROR",
             "details": {"message": "terminal step failed"},
         }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "failed",
+                "output_status": "none",
+                "failure_reason": "terminal step failed",
+                "output_branches": [
+                    {
+                        "source_node_id": "extract",
+                        "output_node_id": "csv",
+                        "status": "missing",
+                        "failure_reason": "source rows cannot be joined",
+                    }
+                ],
+            },
+        }
 
     published_events = []
     monkeypatch.setattr(
@@ -353,7 +831,10 @@ def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypat
     monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
 
-    with pytest.raises(RuntimeError, match="terminal step failed"):
+    with pytest.raises(
+        processor.BatchFlowExecutionError,
+        match="terminal step failed",
+    ) as exc_info:
         asyncio.run(
             processor._execute_flow_for_document(
                 flow=SimpleNamespace(name="Batch Flow"),
@@ -364,9 +845,19 @@ def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypat
             )
         )
 
+    assert exc_info.value.output_branches == [
+        {
+            "source_node_id": "extract",
+            "output_node_id": "csv",
+            "status": "missing",
+            "failure_reason": "source rows cannot be joined",
+        }
+    ]
+
     assert [event["type"] for event in published_events] == [
         "CURATION_HANDOFF_READY",
         "FLOW_ERROR",
+        "FLOW_FINISHED",
     ]
 
 
@@ -403,7 +894,7 @@ def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypat
         )
     )
 
-    assert result == (None, [])
+    assert result == ([], [], "none", [])
     assert published_events == []
 
 
@@ -434,7 +925,7 @@ def test_execute_flow_for_document_ignores_malformed_file_ready_details(monkeypa
         )
     )
 
-    assert result == (None, [])
+    assert result == ([], [], "none", [])
     assert len(published_events) == 1
     assert published_events[0]["type"] == "SUPERVISOR_COMPLETE"
 
@@ -473,7 +964,7 @@ def test_execute_flow_for_document_strips_internal_payload_before_publish(monkey
         )
     )
 
-    assert result == (None, [])
+    assert result == ([], [], "none", [])
     assert len(published_events) == 1
     assert published_events[0]["type"] == "TOOL_COMPLETE"
     assert published_events[0]["batch_id"] == batch_id

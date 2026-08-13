@@ -50,6 +50,7 @@ describe('ConversationTranscriptView', () => {
             content: '',
             payload_json: {
               flow_id: 'flow-1',
+              flow_name: 'Evidence flow',
               flow_run_id: 'run-1',
               step: 2,
               agent_name: 'Gene Agent',

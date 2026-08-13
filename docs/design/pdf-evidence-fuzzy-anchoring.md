@@ -4,7 +4,7 @@
 
 Empirical benchmark and matcher bakeoff results from April 1, 2026 are recorded in:
 
-- `[2026-04-01-pdf-evidence-fuzzy-search-experiments.md](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/docs/design/2026-04-01-pdf-evidence-fuzzy-search-experiments.md)`
+- Historical local record: `2026-04-01-pdf-evidence-fuzzy-search-experiments.md`
 
 ## Goal
 

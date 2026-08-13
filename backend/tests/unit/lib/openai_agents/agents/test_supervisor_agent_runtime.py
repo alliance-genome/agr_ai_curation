@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -161,7 +162,12 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
     normalized_prompt = " ".join(prompt_text.split())
 
     assert "inspect_results(action=\"help\")" in prompt_text
+    assert "inspect_results(action=\"search\"" in prompt_text
     assert "extraction-result:<uuid>" in prompt_text
+    assert (
+        "Do not silently export a different result than the curator requested."
+        in normalized_prompt
+    )
     assert "do not call another extractor just to summarize" in normalized_prompt
     assert "Export and curation prep are separate explicit actions" in prompt_text
     assert "trace inspection only to debug behavior" in prompt_text
@@ -520,7 +526,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
 
     def _metadata(agent_key):
         if agent_key == "gene-extractor":
-            return {"requires_document": True}
+            return {"requires_document": True, "category": "Extraction"}
         raise RuntimeError("metadata failure")
 
     monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_agent_metadata", _metadata)
@@ -539,6 +545,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
     assert specs[0]["group_rules_enabled"] is True
     assert specs[0]["batchable"] is True
     assert specs[0]["batching_entity"] == "gene"
+    assert specs[0]["category"] == "Extraction"
 
 
 def test_create_dynamic_specialist_tools_skips_document_required_tools_without_document(monkeypatch):
@@ -616,6 +623,55 @@ def test_create_dynamic_specialist_tools_passes_document_and_group_context(monke
     assert captured["kwargs"]["abstract"] == "abstract text"
     assert captured["kwargs"]["active_groups"] == ["WB"]
     assert tools == ["wrapped::ask_gene_expression_specialist::Gene Expression"]
+
+
+def test_dynamic_tools_limit_current_request_to_extraction_specialists(monkeypatch):
+    wrapped = {}
+
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key, **_kwargs: SimpleNamespace(name=agent_key),
+    )
+
+    def _capture_streaming_tool(**kwargs):
+        wrapped[kwargs["tool_name"]] = kwargs["authoritative_user_request"]
+        return kwargs["tool_name"]
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_streaming_tool",
+        _capture_streaming_tool,
+    )
+
+    request = "Use only curator-supplied tumor terms."
+    tools = supervisor_agent._create_dynamic_specialist_tools(
+        tool_specs=[
+            {
+                "tool_name": "ask_pdf_extraction_specialist",
+                "agent_key": "pdf_extraction",
+                "description": "Extract from the PDF",
+                "requires_document": False,
+                "category": "Extraction",
+            },
+            {
+                "tool_name": "ask_gene_validation_specialist",
+                "agent_key": "gene_validation",
+                "description": "Validate a gene",
+                "requires_document": False,
+                "category": "Validation",
+            },
+        ],
+        authoritative_user_request=request,
+    )
+
+    # Regression guard: forwarding every long chat prompt to unrelated lookup or
+    # validation agents would broaden scope and waste their isolated context window.
+    assert tools == [
+        "ask_pdf_extraction_specialist",
+        "ask_gene_validation_specialist",
+    ]
+    assert wrapped["ask_pdf_extraction_specialist"] == request
+    assert wrapped["ask_gene_validation_specialist"] is None
 
 
 def test_create_dynamic_specialist_tools_continues_after_agent_construction_failure(monkeypatch):
@@ -821,14 +877,160 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     assert "ask_pdf_extraction_specialist" in created.instructions
     assert supervisor_agent.CURATION_PREP_CONFIRMATION_QUESTION in created.instructions
     assert any(getattr(tool, "name", "") == "prepare_for_curation" for tool in created.tools)
-    assert any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
+    assert not any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
     assert captured_pending["name"] == "Query Supervisor"
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
 
 
 @pytest.mark.asyncio
-async def test_ordinary_non_flow_export_to_file_uses_standard_csv_save_tool(monkeypatch):
-    captured_save = {}
+async def test_dynamic_formatter_specialist_binds_bundle_at_call_time(monkeypatch):
+    captured_agent = {}
+    captured_run = {}
+    fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
+    fake_agent = SimpleNamespace(name="CSV File Formatter")
+
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key, **kwargs: captured_agent.update(
+            {"agent_key": agent_key, "kwargs": kwargs}
+        )
+        or fake_agent,
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_build_chat_formatter_bundle",
+        lambda **_kwargs: (
+            fake_bundle,
+            "FORMATTER SOURCE BUNDLE:\nlatest",
+            "",
+        ),
+    )
+
+    async def _fake_run_streaming_specialist_tool(**kwargs):
+        captured_run.update(kwargs)
+        return "formatter finished"
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_run_streaming_specialist_tool",
+        _fake_run_streaming_specialist_tool,
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                setattr(fn, "description", decorator_kwargs.get("description_override", "")),
+                fn,
+            )[2]
+        ),
+    )
+
+    tools = supervisor_agent._create_dynamic_specialist_tools(
+        tool_specs=[
+            {
+                "agent_key": "csv_formatter",
+                "name": "CSV File Formatter",
+                "description": "Create a CSV file",
+                "tool_name": "ask_csv_formatter_specialist",
+                "requires_document": False,
+                "group_rules_enabled": False,
+            }
+        ],
+        formatter_bundle=None,
+        authoritative_user_request="Use only the supplied tumor vocabulary.",
+    )
+
+    assert [getattr(tool, "name", "") for tool in tools] == [
+        "ask_csv_formatter_specialist"
+    ]
+    assert captured_agent == {}
+
+    result = await tools[0](SimpleNamespace(run_config="run-config"), "Create a CSV")
+
+    assert result == "formatter finished"
+    assert captured_agent["agent_key"] == "csv_formatter"
+    assert captured_agent["kwargs"]["formatter_bundle"] is fake_bundle
+    assert captured_agent["kwargs"]["formatter_output_format"] == "csv"
+    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_formatter"
+    assert captured_agent["kwargs"]["additional_runtime_context"] == [
+        "FORMATTER SOURCE BUNDLE:\nlatest"
+    ]
+    assert captured_run["agent"] is fake_agent
+    assert captured_run["tool_name"] == "ask_csv_formatter_specialist"
+    assert captured_run["specialist_name"] == "CSV File Formatter"
+    assert captured_run["query"] == "Create a CSV"
+    # The formatter needs the same exact vocabulary as the extractor; otherwise it
+    # can reject or remap source objects using only a supervisor-authored summary.
+    assert captured_run["authoritative_user_request"] == (
+        "Use only the supplied tumor vocabulary."
+    )
+    assert captured_run["ctx"].run_config == "run-config"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_formatter_specialist_reports_unavailable_without_bundle(monkeypatch):
+    def _unexpected_get_agent(*_args, **_kwargs):
+        raise AssertionError("formatter agent must not be constructed before a bundle exists")
+
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        _unexpected_get_agent,
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_build_chat_formatter_bundle",
+        lambda **_kwargs: (None, "", "No saved extraction results are available yet."),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                setattr(fn, "description", decorator_kwargs.get("description_override", "")),
+                fn,
+            )[2]
+        ),
+    )
+
+    tools = supervisor_agent._create_dynamic_specialist_tools(
+        tool_specs=[
+            {
+                "agent_key": "csv_formatter",
+                "name": "CSV File Formatter",
+                "description": "Create a CSV file",
+                "tool_name": "ask_csv_formatter_specialist",
+                "requires_document": False,
+                "group_rules_enabled": False,
+            }
+        ],
+        formatter_bundle=None,
+    )
+
+    assert [getattr(tool, "name", "") for tool in tools] == [
+        "ask_csv_formatter_specialist"
+    ]
+    response = json.loads(await tools[0](SimpleNamespace(run_config=None), "Create a CSV"))
+    assert response["status"] == "unavailable"
+    assert response["message"] == "No saved extraction results are available yet."
+
+
+def test_create_supervisor_agent_exposes_formatter_with_saved_chat_bundle(monkeypatch):
+    captured_bundle: dict[str, Any] = {}
+    captured_langfuse: dict[str, Any] = {}
+    fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
+    fake_record = SimpleNamespace(
+        extraction_result_id="00000000-0000-4000-8000-000000000123",
+        created_at=datetime(2026, 6, 17, tzinfo=timezone.utc),
+        agent_key="generic_extractor",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=9,
+        document_id="doc-1",
+        flow_run_id=None,
+    )
 
     monkeypatch.setattr(
         "src.lib.openai_agents.config.get_agent_config",
@@ -841,12 +1043,52 @@ async def test_ordinary_non_flow_export_to_file_uses_standard_csv_save_tool(monk
         lambda model, provider_override=None: model,
     )
     monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
-    monkeypatch.setattr(supervisor_agent, "_get_supervisor_specialist_specs", lambda: [])
-    _patch_supervisor_prompt_bundle(monkeypatch, version=17)
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_get_supervisor_specialist_specs",
+        lambda: [
+            {
+                "agent_key": "csv_formatter",
+                "name": "CSV File Formatter",
+                "description": "Create a CSV file",
+                "tool_name": "ask_csv_formatter_specialist",
+                "requires_document": False,
+                "group_rules_enabled": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        lambda **kwargs: [fake_record]
+        if str(kwargs.get("source_kind")) == "CurationExtractionSourceKind.CHAT"
+        or getattr(kwargs.get("source_kind"), "value", None) == "chat"
+        else [],
+    )
+
+    def _fake_build_bundle(**kwargs):
+        captured_bundle.update(kwargs)
+        return fake_bundle
+
+    monkeypatch.setattr(
+        "src.lib.flows.output_projection.build_extraction_result_artifact_bundle",
+        _fake_build_bundle,
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda *_args, **_kwargs: SimpleNamespace(name="CSV File Formatter"),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_streaming_tool",
+        lambda **kwargs: SimpleNamespace(name=kwargs["tool_name"]),
+    )
+    _patch_supervisor_prompt_bundle(monkeypatch, version=18)
     monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
     monkeypatch.setattr(
         "src.lib.openai_agents.langfuse_client.log_agent_config",
-        lambda **_kwargs: None,
+        lambda **kwargs: captured_langfuse.update(kwargs),
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -861,47 +1103,234 @@ async def test_ordinary_non_flow_export_to_file_uses_standard_csv_save_tool(monk
     )
     monkeypatch.setattr(supervisor_agent, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
-    async def _fake_save_csv_impl(data_json, filename, columns=None):
-        captured_save.update(
-            {
-                "data_json": data_json,
-                "filename": filename,
-                "columns": columns,
-            }
-        )
-        return {
-            "file_id": "file-chat-csv",
-            "filename": "chat_export.csv",
-            "format": "csv",
-            "download_url": "/api/files/file-chat-csv/download",
-        }
+    created = supervisor_agent.create_supervisor_agent(user_id="user-1", document_id="doc-1")
+
+    tool_names = [getattr(tool, "name", "") for tool in created.tools]
+    assert "ask_csv_formatter_specialist" in tool_names
+    assert "export_to_file" not in tool_names
+    assert "EXPORT/DOWNLOAD ROUTING" in created.instructions
+    assert "including results saved earlier in this same supervisor turn" in created.instructions
+    assert "select only a result_ref listed in the runtime formatter bundle" in created.instructions
+    assert "pass that exact source_ref into projection planning" in created.instructions
+    assert "Formatter specialists are the only supported export path" in created.instructions
+    assert captured_bundle["extraction_results"] == [fake_record]
+    assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
+
+
+def test_build_formatter_bundle_uses_only_active_session_document_results(monkeypatch):
+    captured_bundle: dict[str, Any] = {}
+    list_calls: list[dict[str, Any]] = []
+    fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
+    chat_record = SimpleNamespace(
+        extraction_result_id="00000000-0000-4000-8000-000000000123",
+        created_at=datetime(2026, 6, 17, tzinfo=timezone.utc),
+        agent_key="generic_extractor",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=9,
+        document_id="doc-1",
+        flow_run_id=None,
+    )
+    document_record = SimpleNamespace(
+        extraction_result_id="00000000-0000-4000-8000-000000000456",
+        created_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+        agent_key="generic_extractor",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=3,
+        document_id="doc-1",
+        flow_run_id=None,
+    )
+    flow_record = SimpleNamespace(
+        extraction_result_id="00000000-0000-4000-8000-000000000789",
+        created_at=datetime(2026, 6, 16, tzinfo=timezone.utc),
+        agent_key="flow_extractor",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="flow"),
+        candidate_count=2,
+        document_id="doc-1",
+        flow_run_id="flow-run-1",
+    )
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+
+    def _fake_list_extraction_results(**kwargs):
+        list_calls.append(kwargs)
+        source_kind = kwargs.get("source_kind")
+        if getattr(source_kind, "value", None) == "chat":
+            return [chat_record]
+        if getattr(source_kind, "value", None) == "flow":
+            return [flow_record]
+        if source_kind is not None:
+            return []
+        if kwargs.get("document_id") == "doc-1":
+            return [document_record, chat_record]
+        return []
 
     monkeypatch.setattr(
-        "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
-        _fake_save_csv_impl,
+        supervisor_agent,
+        "list_extraction_results",
+        _fake_list_extraction_results,
     )
 
-    created = supervisor_agent.create_supervisor_agent(document_id=None, user_id=None)
-    export_tool = next(
-        tool
-        for tool in created.tools
-        if getattr(tool, "name", "") == "export_to_file"
+    def _fake_build_bundle(**kwargs):
+        captured_bundle.update(kwargs)
+        return fake_bundle
+
+    monkeypatch.setattr(
+        "src.lib.flows.output_projection.build_extraction_result_artifact_bundle",
+        _fake_build_bundle,
+    )
+    bundle, runtime_context, unavailable_note = supervisor_agent._build_chat_formatter_bundle(
+        user_id="user-1",
+        document_id="doc-1",
     )
 
-    response = await export_tool(
-        format_type="csv",
-        data='[{"gene":"BRCA1","status":"validated"}]',
-        filename_hint="chat_export",
+    assert bundle is fake_bundle
+    assert bundle is not None
+    assert unavailable_note == ""
+    assert captured_bundle["extraction_results"] == [chat_record, flow_record]
+    assert captured_bundle["document_id"] == "doc-1"
+    assert bundle.default_source_extraction_result_id == chat_record.extraction_result_id
+    assert len(list_calls) == 2
+    assert all(call["origin_session_id"] == "session-1" for call in list_calls)
+    assert all(call["document_id"] == "doc-1" for call in list_calls)
+    assert all(call["user_id"] == "user-1" for call in list_calls)
+    assert all(
+        call["exclude_agent_keys"] == (supervisor_agent.CURATION_PREP_AGENT_ID,)
+        for call in list_calls
+    )
+    assert (
+        'source_ref="extraction-result:00000000-0000-4000-8000-000000000123"'
+        in runtime_context
+    )
+    assert "extraction-result:00000000-0000-4000-8000-000000000456" not in runtime_context
+    assert flow_record.extraction_result_id in runtime_context
+    assert "active session and loaded document" in runtime_context
+
+
+def test_build_formatter_bundle_fails_closed_without_loaded_document(monkeypatch):
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+
+    def _unexpected_list_extraction_results(**_kwargs):
+        raise AssertionError("missing document scope must not issue an extraction query")
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        _unexpected_list_extraction_results,
     )
 
-    payload = json.loads(response)
-    assert captured_save == {
-        "data_json": '[{"gene":"BRCA1","status":"validated"}]',
-        "filename": "chat_export",
-        "columns": None,
-    }
-    assert payload["file_id"] == "file-chat-csv"
-    assert payload["download_url"].endswith("/download")
+    bundle, runtime_context, unavailable_note = supervisor_agent._build_chat_formatter_bundle(
+        user_id="user-1",
+        document_id=None,
+    )
+
+    assert bundle is None
+    assert runtime_context == ""
+    assert "no document is loaded in this active session" in unavailable_note
+
+
+def test_build_formatter_bundle_ignores_legacy_results_from_prior_sessions(monkeypatch):
+    current_record = SimpleNamespace(
+        extraction_result_id="e00f32a1-4f9a-409b-abd9-a2b72e6c9f92",
+        created_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        agent_key="pdf_extraction",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=1,
+        document_id="doc-1",
+        flow_run_id=None,
+        conversation_summary="Extracted one fly strain.",
+        metadata={},
+        payload_json={
+            "envelope_id": "generic-envelope-current",
+            "domain_pack_id": "generic",
+            "domain_pack_version": "0.1.0",
+            "status": "extracted",
+            "extracted_objects": [
+                {
+                    "object_type": "generic_object",
+                    "pending_ref_id": "generic-object-1",
+                    "payload": {
+                        "class_key": "generic:generic_object",
+                        "label": "Oregon R",
+                        "attributes": {"strain_name": "Oregon R"},
+                    },
+                }
+            ],
+            "history": [],
+            "validation_findings": [],
+            "metadata": {},
+        },
+    )
+    legacy_record = SimpleNamespace(
+        extraction_result_id="209ab952-e02a-4b66-9197-b9441047cbed",
+        created_at=datetime(2026, 5, 20, tzinfo=timezone.utc),
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=1,
+        document_id="doc-1",
+        flow_run_id=None,
+        conversation_summary="Legacy gene extraction.",
+        metadata={},
+        payload_json={
+            "summary": "Legacy gene extraction",
+            "genes": [{"mention": "crb"}],
+            "items": [{"mention": "crb"}],
+            "raw_mentions": [],
+            "exclusions": [],
+            "ambiguities": [],
+            "normalization_notes": [],
+            "run_summary": {},
+        },
+    )
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+
+    list_calls: list[dict[str, Any]] = []
+
+    def _fake_list_extraction_results(**kwargs):
+        list_calls.append(kwargs)
+        source_kind = kwargs.get("source_kind")
+        if (
+            kwargs.get("origin_session_id") == "session-1"
+            and kwargs.get("document_id") == "doc-1"
+            and getattr(source_kind, "value", None) == "chat"
+        ):
+            return [current_record]
+        if source_kind is not None:
+            return []
+        if kwargs.get("document_id") == "doc-1":
+            return [current_record, legacy_record]
+        return []
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        _fake_list_extraction_results,
+    )
+
+    bundle, runtime_context, unavailable_note = supervisor_agent._build_chat_formatter_bundle(
+        user_id="user-1",
+        document_id="doc-1",
+    )
+
+    assert bundle is not None
+    assert unavailable_note == ""
+    assert [artifact.extraction_result_id for artifact in bundle.artifacts] == [
+        current_record.extraction_result_id
+    ]
+    assert bundle.rows_for_source("object")[0]["object.attribute.strain_name"] == "Oregon R"
+    assert bundle.warnings == []
+    assert len(list_calls) == 2
+    assert all(call.get("origin_session_id") == "session-1" for call in list_calls)
+    assert current_record.extraction_result_id in runtime_context
+    assert legacy_record.extraction_result_id not in runtime_context
 
 
 def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(monkeypatch):
@@ -950,7 +1379,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "prepare_for_curation",
         "inspect_results",
         "inspect_chat_traces",
-        "export_to_file",
+        "recall_chat_history",
     ]
     inspect_tool = next(
         tool
@@ -959,6 +1388,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     )
     inspect_params = inspect.signature(inspect_tool).parameters
     assert "action" in inspect_params
+    assert "query" in inspect_params
     assert "result_ref" in inspect_params
     assert "object_ref" in inspect_params
     assert "review_session_id" not in inspect_params
@@ -972,10 +1402,8 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "use inspect_results for persisted extraction objects"
         in tools_by_name["inspect_chat_traces"].description
     )
-    assert (
-        "Use only when the user explicitly asks"
-        in tools_by_name["export_to_file"].description
-    )
+    assert "action=\"search\"" in tools_by_name["inspect_results"].description
+    assert "export_to_file" not in tools_by_name
     assert captured_langfuse["metadata"]["specialist_count"] == 4
 
 
@@ -1029,12 +1457,16 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
         user_id="user-2",
         hierarchy={"sections": [{"name": "Introduction"}, {"name": "Methods"}]},
         enable_guardrails=True,
+        current_user_request="Use this exact controlled vocabulary.",
     )
 
     assert "DOCUMENT CONTEXT: A PDF document is loaded." in created.instructions
     assert "RUNTIME TOOL DESCRIPTIONS ARE AUTHORITATIVE" in created.instructions
     assert created.input_guardrails == ["safety"]
     assert captured_dynamic["sections"] == ["Introduction", "Methods"]
+    assert captured_dynamic["authoritative_user_request"] == (
+        "Use this exact controlled vocabulary."
+    )
 
 
 def test_create_supervisor_agent_applies_model_overrides(monkeypatch):
