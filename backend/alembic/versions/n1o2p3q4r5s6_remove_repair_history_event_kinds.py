@@ -55,6 +55,44 @@ def _check_sql(values: Sequence[str]) -> str:
 
 
 def upgrade() -> None:
+    # ALL-430/ALL-476 superseded repair history with curator field patch events;
+    # normalize existing indexed rows before tightening the event_type constraint.
+    op.execute(
+        """
+        UPDATE domain_envelope_history
+        SET
+            event_type = CASE event_type
+                WHEN 'repair_patch_accepted' THEN 'curator_field_patch_accepted'
+                WHEN 'repair_patch_rejected' THEN 'curator_field_patch_rejected'
+            END,
+            event_json = jsonb_set(
+                jsonb_set(
+                    event_json,
+                    '{event_type}',
+                    to_jsonb((
+                        CASE event_type
+                            WHEN 'repair_patch_accepted'
+                                THEN 'curator_field_patch_accepted'
+                            WHEN 'repair_patch_rejected'
+                                THEN 'curator_field_patch_rejected'
+                        END
+                    )::text),
+                    true
+                ),
+                '{details}',
+                COALESCE(event_json->'details', '{}'::jsonb)
+                    || jsonb_build_object('legacy_repair_event_type', event_type),
+                true
+            )
+        WHERE event_type IN ('repair_patch_accepted', 'repair_patch_rejected')
+        """
+    )
+    op.execute(
+        """
+        DELETE FROM domain_envelope_history
+        WHERE event_type IN ('repair_requested', 'repair_final_classified')
+        """
+    )
     op.drop_constraint(
         "ck_domain_envelope_history_event_type",
         "domain_envelope_history",

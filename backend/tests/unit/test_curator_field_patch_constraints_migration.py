@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
 import sys
 import types
-
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = (
@@ -27,12 +26,20 @@ class RecordingOp:
     def __init__(self) -> None:
         self.created_constraints: list[tuple[str, str, str]] = []
         self.dropped_constraints: list[tuple[str, str, str | None]] = []
+        self.executed_sql: list[str] = []
+        self.operations: list[tuple[str, str]] = []
 
     def create_check_constraint(self, name, table_name, condition):
         self.created_constraints.append((name, table_name, condition))
+        self.operations.append(("create_check_constraint", name))
 
     def drop_constraint(self, name, table_name, type_=None):
         self.dropped_constraints.append((name, table_name, type_))
+        self.operations.append(("drop_constraint", name))
+
+    def execute(self, sql):
+        self.executed_sql.append(str(sql))
+        self.operations.append(("execute", str(sql)))
 
 
 def _load_migration_module(monkeypatch, *, module_name: str, path: Path):
@@ -137,6 +144,12 @@ def test_repair_event_removal_upgrade_refreshes_history_constraint(monkeypatch):
     module.upgrade()
 
     assert module.down_revision == "m1n2o3p4q5r6"
+    assert [operation[0] for operation in op_recorder.operations[:2]] == [
+        "execute",
+        "execute",
+    ]
+    assert "UPDATE domain_envelope_history" in op_recorder.executed_sql[0]
+    assert "DELETE FROM domain_envelope_history" in op_recorder.executed_sql[1]
     assert op_recorder.dropped_constraints == [
         (
             "ck_domain_envelope_history_event_type",
