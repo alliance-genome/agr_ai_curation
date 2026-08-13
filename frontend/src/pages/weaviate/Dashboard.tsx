@@ -15,6 +15,7 @@ import {
   CloudSync,
   Check,
 } from '@mui/icons-material';
+import type { DocumentListResponse } from '../../services/weaviate';
 
 interface HealthData {
   status: string;
@@ -31,15 +32,9 @@ interface HealthData {
   };
 }
 
-interface DocumentStats {
-  pagination?: {
-    total_items: number;
-  };
-}
-
 const Dashboard: React.FC = () => {
   const [healthData, setHealthData] = useState<HealthData | null>(null);
-  const [documentStats, setDocumentStats] = useState<DocumentStats | null>(null);
+  const [documentStats, setDocumentStats] = useState<DocumentListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,7 +51,10 @@ const Dashboard: React.FC = () => {
 
         // Fetch document stats
         const docsResponse = await fetch('/api/weaviate/documents?page=1&page_size=1');
-        const docs = await docsResponse.json();
+        if (!docsResponse.ok) {
+          throw new Error(`Failed to load document stats (${docsResponse.status})`);
+        }
+        const docs = (await docsResponse.json()) as DocumentListResponse;
         setDocumentStats(docs);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
@@ -73,7 +71,7 @@ const Dashboard: React.FC = () => {
   }, []);
 
   const stats = {
-    totalDocuments: documentStats?.pagination?.total_items || 0,
+    totalDocuments: documentStats ? documentStats.total : 0,
     totalVectors: healthData?.details?.weaviate?.collections || 0,
     totalChunks: 0, // This would need a specific endpoint
     processingDocuments: 0,

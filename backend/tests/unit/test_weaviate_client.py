@@ -121,6 +121,7 @@ async def test_async_list_documents_normalises_results():
     assert result["offset"] == 0
     assert result["documents"][0]["document_id"] == str(mock_uuid)
     assert result["documents"][0]["user_id"] == "test_user_user_id"  # user_id is the auth_sub string, not db id
+    assert result["documents"][0]["vector_count"] == 10
     assert result["documents"][0]["weaviate_tenant"] == "test_tenant"
     assert result["documents"][0]["source_provenance"] == {
         "provider": "abc_literature",
@@ -344,6 +345,7 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     assert owned["weaviate_tenant"] == "tenant-owned"
     assert owned["status"] == "PENDING"
     assert owned["embedding_status"] == "pending"
+    assert owned["vector_count"] is None
     assert owned["upload_timestamp"] == "2026-02-10T00:00:00"
     assert owned["source_provenance"] is None
 
