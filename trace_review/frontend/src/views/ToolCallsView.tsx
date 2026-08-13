@@ -288,6 +288,7 @@ function FormattedToolResult({ result, resultLength }: { result: ToolResultParse
   const hasData = parsed?.data && parsed.data.length > 0;
   const hasSection = parsed?.section && parsed.section.section_title;
   const hasJsonData = parsed?.json_data;
+  const hasWarnings = Boolean(parsed?.warnings?.length);
   const hasParsedContent = hasHits || hasData || hasSection || hasJsonData;
 
   // Check if parsing needs attention
@@ -342,6 +343,32 @@ function FormattedToolResult({ result, resultLength }: { result: ToolResultParse
           {resultLength.toLocaleString()} chars total
         </Typography>
       </Box>
+
+      {hasWarnings && (
+        <Box
+          sx={(theme) => ({
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 1,
+            p: 1.5,
+            mb: 1,
+            borderRadius: 1,
+            color: 'warning.main',
+            backgroundColor: alpha(theme.palette.warning.main, 0.1),
+            border: '1px solid',
+            borderColor: 'warning.main'
+          })}
+        >
+          <WarningAmberIcon fontSize="small" />
+          <Box>
+            {parsed!.warnings!.map((warning, index) => (
+              <Typography key={`${index}:${warning}`} variant="body2" sx={{ fontFamily: 'monospace' }}>
+                {warning}
+              </Typography>
+            ))}
+          </Box>
+        </Box>
+      )}
 
       {/* Action buttons */}
       <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
