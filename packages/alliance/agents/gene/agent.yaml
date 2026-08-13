@@ -46,6 +46,10 @@ tools:
 # -----------------------------------------------------------------------------
 output_schema: GeneResultEnvelope
 
+output_projection:
+  row_list_field: gene_candidates
+  identity_fields: [gene_id]
+
 structured_finalization:
   enabled: true
   tool_name: finalize_gene_lookup

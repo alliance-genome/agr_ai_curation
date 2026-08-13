@@ -28,6 +28,8 @@ from typing import Callable, Dict, List, Optional, Any
 
 import yaml
 
+from src.schemas.domain_validator import ValidatorOutputProjection
+
 from .agent_sources import resolve_agent_config_sources
 
 logger = logging.getLogger(__name__)
@@ -162,6 +164,7 @@ class AgentDefinition:
     curation: CurationConfig = field(default_factory=CurationConfig)
     documentation: Optional[Dict[str, Any]] = None
     structured_finalization: Optional[Dict[str, Any]] = None
+    output_projection: ValidatorOutputProjection | None = None
     # model_config is required for agents that are actually executed; that is
     # enforced at the real use-point (from_yaml requires a model; building the
     # agent registry / config raises on a missing model_config). It stays optional
@@ -281,6 +284,11 @@ class AgentDefinition:
             curation=curation,
             documentation=data.get("documentation"),
             structured_finalization=structured_finalization,
+            output_projection=(
+                ValidatorOutputProjection.model_validate(data["output_projection"])
+                if data.get("output_projection") is not None
+                else None
+            ),
         )
 
 

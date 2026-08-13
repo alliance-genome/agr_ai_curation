@@ -11,6 +11,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field
 
+from src.lib.config.agent_loader import get_agent_definition_for_package
 from src.lib.curation_workspace.domain_envelope_normalization import (
     domain_envelope_from_extraction_result,
     is_canonical_domain_envelope_payload,
@@ -26,6 +27,7 @@ from src.lib.openai_agents.config import (
     get_flow_projection_max_rows,
 )
 from src.schemas.curation_workspace import CurationExtractionResultRecord
+from src.schemas.domain_validator import ValidatorOutputProjection
 
 
 FlowOutputFormat = Literal["csv", "tsv", "json", "chat"]
@@ -205,13 +207,6 @@ _ORDERED_FILTER_OPS = {"gt", "gte", "lt", "lte"}
 _NO_CANONICAL_OBJECT_LIST_WARNING = (
     "No canonical curation object list was found for this artifact."
 )
-_STRUCTURED_VALIDATOR_RESULT_LIST_FIELDS = (
-    "allele_candidates",
-    "gene_candidates",
-    "results",
-    "annotations",
-    "candidates",
-)
 _STRUCTURED_VALIDATOR_REQUIRED_FIELDS = frozenset(
     {
         "status",
@@ -229,6 +224,10 @@ _STRUCTURED_VALIDATOR_REQUIRED_FIELDS = frozenset(
 )
 _REJECTED_LEGACY_RESULT_LIST_FIELDS = frozenset(
     {"items", "objects", "curatable_objects"}
+)
+_DEFAULT_VALIDATOR_OUTPUT_PROJECTION = ValidatorOutputProjection(
+    row_list_field="candidates",
+    identity_fields=("value",),
 )
 _OBJECT_ATTRIBUTE_FIELD_PREFIX = "object.attribute."
 _ATTRIBUTE_KEY_PATTERN = re.compile(r"[^0-9a-zA-Z]+")
@@ -600,17 +599,22 @@ def _coerce_non_negative_int(value: Any) -> int | None:
     return None
 
 
-def _object_id_from_item(item: Mapping[str, Any], index: int) -> str:
-    for key in (
-        "object_id",
-        "id",
-        "curie",
-        "primary_external_id",
-        "external_id",
-        "allele_id",
-        "go_id",
-        "gene_id",
-        "pending_ref_id",
+def _object_id_from_item(
+    item: Mapping[str, Any],
+    index: int,
+    *,
+    identity_fields: Sequence[str] = (),
+) -> str:
+    for key in dict.fromkeys(
+        (
+            *identity_fields,
+            "object_id",
+            "id",
+            "curie",
+            "primary_external_id",
+            "external_id",
+            "pending_ref_id",
+        )
     ):
         value = _string_value(item.get(key))
         if value:
@@ -666,7 +670,7 @@ def _object_validation_status(item: Mapping[str, Any]) -> str:
 
 
 def _object_label(item: Mapping[str, Any], payload: Mapping[str, Any], object_id: str) -> str:
-    for key in ("label", "symbol", "name", "gene_symbol", "normalized_symbol", "mention", "entity"):
+    for key in ("label", "symbol", "name", "normalized_symbol", "mention", "entity"):
         value = _string_value(payload.get(key))
         if value:
             return value
@@ -721,11 +725,16 @@ def _object_rows_from_items(
     *,
     artifact_context: Mapping[str, Any],
     items: Sequence[Mapping[str, Any]],
+    identity_fields: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(items, start=1):
         payload = _object_payload(item)
-        object_id = _object_id_from_item(item, index)
+        object_id = _object_id_from_item(
+            item,
+            index,
+            identity_fields=identity_fields,
+        )
         row: dict[str, Any] = dict(artifact_context)
         row.update(
             {
@@ -1043,10 +1052,10 @@ def _has_mixed_canonical_and_extractor_objects(payload: Mapping[str, Any]) -> bo
     )
 
 
-def _structured_validator_result_list_field(
+def _structured_validator_projection(
     payload: Mapping[str, Any],
-) -> str | None:
-    """Return the one trusted row-list field declared by a validator result."""
+) -> ValidatorOutputProjection | None:
+    """Return package-owned row projection metadata for a typed validator result."""
 
     if not _STRUCTURED_VALIDATOR_REQUIRED_FIELDS.issubset(payload):
         return None
@@ -1058,16 +1067,21 @@ def _structured_validator_result_list_field(
         payload.get("target"), Mapping
     ):
         return None
-    for field in _STRUCTURED_VALIDATOR_RESULT_LIST_FIELDS:
-        if field not in payload:
-            continue
-        value = payload.get(field)
-        if not isinstance(value, list) or not all(
-            isinstance(item, Mapping) for item in value
-        ):
-            return None
-        return field
-    return None
+    validator_agent = payload["validator_agent"]
+    package_id = str(validator_agent.get("package_id") or "").strip()
+    agent_id = str(validator_agent.get("agent_id") or "").strip()
+    if not package_id or not agent_id:
+        return None
+    agent = get_agent_definition_for_package(package_id, agent_id)
+    if agent is None:
+        return None
+    projection = agent.output_projection or _DEFAULT_VALIDATOR_OUTPUT_PROJECTION
+    value = payload.get(projection.row_list_field)
+    if not isinstance(value, list) or not all(
+        isinstance(item, Mapping) for item in value
+    ):
+        return None
+    return projection
 
 
 def _payload_shape(payload: Any) -> Literal[
@@ -1080,7 +1094,7 @@ def _payload_shape(payload: Any) -> Literal[
             return "non_structured"
         if is_canonical_domain_envelope_payload(payload):
             return "domain_envelope"
-        if _structured_validator_result_list_field(payload) is not None:
+        if _structured_validator_projection(payload) is not None:
             return "structured_result"
     return "non_structured"
 
@@ -1094,7 +1108,8 @@ def _payload_object_items(
     if shape == "domain_envelope":
         value = payload.get("extracted_objects")
     elif shape == "structured_result":
-        list_field = _structured_validator_result_list_field(payload)
+        projection = _structured_validator_projection(payload)
+        list_field = projection.row_list_field if projection else None
         value = payload.get(list_field) if list_field else None
         if isinstance(value, list):
             target = payload.get("target")
@@ -1103,9 +1118,11 @@ def _payload_object_items(
                 if isinstance(target, Mapping)
                 else ""
             )
-            inherited_annotation_fields = {
+            inherited_parent_fields = {
                 key: payload.get(key)
-                for key in ("gene_id", "gene_symbol")
+                for key in (
+                    projection.inherited_parent_fields if projection else ()
+                )
                 if payload.get(key) is not None
             }
             items: list[Mapping[str, Any]] = []
@@ -1117,9 +1134,8 @@ def _payload_object_items(
                     "object_type",
                     target_object_type or str(list_field or "structured_result"),
                 )
-                if list_field == "annotations":
-                    for key, inherited_value in inherited_annotation_fields.items():
-                        normalized.setdefault(key, inherited_value)
+                for key, inherited_value in inherited_parent_fields.items():
+                    normalized.setdefault(key, inherited_value)
                 items.append(normalized)
             return items, warnings
     else:
@@ -1263,6 +1279,11 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     envelope_id = ""
     object_items: list[Mapping[str, Any]] = []
     warnings: list[str] = []
+    validator_projection = (
+        _structured_validator_projection(payload)
+        if shape == "structured_result" and isinstance(payload, Mapping)
+        else None
+    )
     if isinstance(payload, Mapping):
         domain_pack_id = _string_value(payload.get("domain_pack_id") or payload.get("adapter_key"))
         envelope_id = _string_value(payload.get("envelope_id"))
@@ -1309,6 +1330,9 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     object_rows = _object_rows_from_items(
         artifact_context=artifact_context,
         items=object_items,
+        identity_fields=(
+            validator_projection.identity_fields if validator_projection else ()
+        ),
     )
     rows_by_source["object"] = object_rows
     for object_item, object_row in zip(object_items, object_rows):

@@ -81,14 +81,19 @@ def _completed_domain_step():
     }
 
 
-def _typed_validator_result_payload(**schema_fields):
+def _typed_validator_result_payload(
+    *,
+    package_id="agr.alliance",
+    agent_id="typed_validator",
+    **schema_fields,
+):
     return {
         "status": "resolved",
         "request_id": "request-output-1",
         "validator_binding_id": "binding-output-1",
         "validator_agent": {
-            "package_id": "agr.alliance",
-            "agent_id": "typed_validator",
+            "package_id": package_id,
+            "agent_id": agent_id,
         },
         "target": {
             "domain_pack_id": "agr.alliance",
@@ -1938,10 +1943,17 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
 
 
 @pytest.mark.parametrize(
-    ("schema_name", "schema_fields", "output_format", "expected_id"),
+    (
+        "schema_name",
+        "validator_agent_id",
+        "schema_fields",
+        "output_format",
+        "expected_id",
+    ),
     [
         (
             "AlleleResultEnvelope",
+            "allele_validation",
             {
                 "allele_candidates": [
                     {
@@ -1955,7 +1967,36 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
             "MGI:3689906",
         ),
         (
+            "GeneResultEnvelope",
+            "gene_validation",
+            {
+                "gene_candidates": [
+                    {
+                        "gene_id": "HGNC:11998",
+                        "symbol": "TP53",
+                    }
+                ]
+            },
+            "csv",
+            "HGNC:11998",
+        ),
+        (
+            "ChemicalValidationResult",
+            "chemical_validation",
+            {
+                "candidates": [
+                    {
+                        "value": "CHEM:0001",
+                        "label": "candidate chemical",
+                    }
+                ]
+            },
+            "csv",
+            "CHEM:0001",
+        ),
+        (
             "GOTermResultEnvelope",
+            "gene_ontology_lookup",
             {
                 "results": [
                     {
@@ -1972,6 +2013,7 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
         ),
         (
             "GOAnnotationsResult",
+            "go_annotations_lookup",
             {
                 "gene_id": "WB:WBGene00000898",
                 "gene_symbol": "daf-16",
@@ -1989,17 +2031,49 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
             "csv",
             "GO:0008286",
         ),
+        (
+            "AgmValidationResult",
+            "agm_validation",
+            {
+                "agm_candidates": [
+                    {
+                        "agm_id": "AGM:0001",
+                        "label": "model one",
+                    }
+                ]
+            },
+            "csv",
+            "AGM:0001",
+        ),
+        (
+            "OntologyTermValidationResult",
+            "ontology_term_validation",
+            {
+                "ontology_term_candidates": [
+                    {
+                        "curie": "TERM:0001",
+                        "label": "neutral term",
+                    }
+                ]
+            },
+            "chat",
+            "TERM:0001",
+        ),
     ],
 )
 def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
     schema_name,
+    validator_agent_id,
     schema_fields,
     output_format,
     expected_id,
 ):
     schema = schema_discovery.discover_agent_schemas(force_reload=True)[schema_name]
     payload = schema.model_validate(
-        _typed_validator_result_payload(**schema_fields)
+        _typed_validator_result_payload(
+            agent_id=validator_agent_id,
+            **schema_fields,
+        )
     ).model_dump(mode="json")
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[
@@ -2030,6 +2104,7 @@ def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
 
 def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
     payload = _typed_validator_result_payload(
+        agent_id="go_annotations_lookup",
         gene_id="WB:WBGene00000898",
         gene_symbol="daf-16",
         annotations=[{"go_id": "GO:0008286", "go_name": "signaling"}],

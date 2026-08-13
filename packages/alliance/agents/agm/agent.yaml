@@ -32,6 +32,10 @@ tools:
 
 output_schema: AgmValidationResult
 
+output_projection:
+  row_list_field: agm_candidates
+  identity_fields: [agm_id]
+
 structured_finalization:
   enabled: true
   tool_name: finalize_agm_lookup
