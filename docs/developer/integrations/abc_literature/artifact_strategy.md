@@ -81,9 +81,9 @@ Important constraints:
   text and should be used when available, even when the curator uploaded a PDF.
 - If nXML exists but `_nxml` Markdown does not, ABC may create it without
   overwriting TEI rows.
-- AI Curation should proceed once authorized `converted_merged_main` Markdown
-  exists; supplement conversion may continue or fail without blocking the main
-  chat/document import.
+- AI Curation should proceed once authorized non-TEI
+  `converted_merged_main` Markdown exists; supplement conversion may continue
+  or fail without blocking the main chat/document import.
 - ABC conversion job IDs/progress are not durable enough to be AI Curation's
   source of truth. Persist local import state and recover by re-querying ABC by
   reference.

@@ -156,8 +156,12 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         )
 
     def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
-        file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-        return file_class == "converted_merged_main"
+        file_class = _artifact_file_class(artifact)
+        if file_class != "converted_merged_main":
+            return False
+        # Removed TEI-only main-text fallback — ABC's canonical contract requires
+        # non-TEI converted_merged_main text (ALL-665 follow-up).
+        return not _artifact_is_tei_derived(artifact)
 
     def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:
         """Keep checksum-matched supplements tied to their exact uploaded bytes."""
@@ -165,27 +169,8 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         return _artifact_file_class(source_artifact) == "supplement"
 
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
-        file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
         display_name = str(artifact.display_name or "").strip().lower()
-        combined = f"{file_class} {display_name}"
-        if file_class == "converted_merged_main":
-            class_rank = 0
-        elif file_class.startswith("converted") and "main" in file_class:
-            class_rank = 5
-        else:
-            class_rank = 20
-
-        if "_tei" in combined or "tei" in file_class:
-            source_rank = 100
-        elif "_nxml" in combined or "nxml" in file_class:
-            source_rank = 0
-        elif "_merged" in combined or "merged" in file_class:
-            source_rank = 1
-        else:
-            source_rank = 10
-
-        status_rank = 0 if artifact.status is SourceArtifactStatus.AVAILABLE else 1
-        return (class_rank, source_rank, status_rank)
+        return (0,) if "_nxml" in display_name else (1,)
 
     def reference_source_artifact_sort_key(
         self,
@@ -801,6 +786,12 @@ def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -
 
 def _artifact_file_class(artifact: SourceArtifact) -> str:
     return str(artifact.metadata.get("file_class") or "").strip().lower()
+
+
+def _artifact_is_tei_derived(artifact: SourceArtifact) -> bool:
+    file_class = _artifact_file_class(artifact)
+    display_name = str(artifact.display_name or "").strip().lower()
+    return "tei" in file_class or "_tei" in display_name
 
 
 def _expected_figure_metadata_file_class(
