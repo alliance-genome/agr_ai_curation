@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
+from src.lib.flow_edge_roles import agent_can_source_output_attachment
 from src.lib.openai_agents.bounded_list import (
     normalize_page_limit,
     offset_page,
@@ -177,16 +178,6 @@ _OUTPUT_AGENT_PREFERENCES = (
 )
 
 
-def _agent_category_contains(agent_id: str, token: str) -> bool:
-    entry = AGENT_REGISTRY.get(agent_id, {})
-    category = str(entry.get("category") or "").strip().lower()
-    subcategory = str(entry.get("subcategory") or "").strip().lower()
-    normalized_token = token.strip().lower()
-    return normalized_token in category or normalized_token in subcategory
-
-
-def _is_extraction_agent_id(agent_id: str) -> bool:
-    return _agent_category_contains(agent_id, "extract")
 _DOCUMENT_CONTEXT_AGENT_IDS = (
     "gene",
     "gene_extractor",
@@ -208,7 +199,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             {"agent_id": "pdf_extraction", "step_goal": "Find gene symbols and identifiers"},
             {"agent_id": "gene", "step_goal": "Validate genes in Alliance database"},
-            {"agent_id": "chat_output", "step_goal": "Display validated results", "source_step": 1},
+            {"agent_id": "chat_output", "step_goal": "Display validated results", "source_steps": [2]},
         ],
     },
     {
@@ -217,7 +208,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             {"agent_id": "pdf_extraction", "step_goal": "Find gene mentions and context"},
             {"agent_id": "gene_extractor", "step_goal": "Extract evidence-backed gene assertions"},
-            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_step": 2},
+            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_steps": [2]},
         ],
     },
     {
@@ -226,7 +217,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions"},
             {"agent_id": "disease", "step_goal": "Map to Disease Ontology terms"},
-            {"agent_id": "chat_output", "step_goal": "Display annotation results", "source_step": 1},
+            {"agent_id": "chat_output", "step_goal": "Display annotation results", "source_steps": [2]},
         ],
     },
     {
@@ -235,7 +226,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions and evidence context"},
             {"agent_id": "disease_extractor", "step_goal": "Extract evidence-backed disease assertions"},
-            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_step": 2},
+            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_steps": [2]},
         ],
     },
     {
@@ -253,7 +244,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
             {"agent_id": "pdf_extraction", "step_goal": "Find experimental methods"},
             {"agent_id": "gene_expression", "step_goal": "Extract expression patterns"},
             {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
-            {"agent_id": "chat_output", "step_goal": "Display expression data", "source_step": 2},
+            {"agent_id": "chat_output", "step_goal": "Display expression data", "source_steps": [2]},
         ],
     },
     {
@@ -262,7 +253,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             {"agent_id": "pdf_extraction", "step_goal": "Find phenotype-related result sections"},
             {"agent_id": "phenotype_extractor", "step_goal": "Extract phenotype assertions with evidence"},
-            {"agent_id": "chat_output", "step_goal": "Display phenotype extraction results", "source_step": 2},
+            {"agent_id": "chat_output", "step_goal": "Display phenotype extraction results", "source_steps": [2]},
         ],
     },
     {
@@ -271,7 +262,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions and context"},
             {"agent_id": "allele_extractor", "step_goal": "Extract evidence-backed allele/variant assertions"},
-            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_step": 2},
+            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_steps": [2]},
         ],
     },
     {
@@ -280,7 +271,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions"},
             {"agent_id": "allele", "step_goal": "Validate alleles in Alliance database"},
-            {"agent_id": "chat_output", "step_goal": "Display allele results", "source_step": 1},
+            {"agent_id": "chat_output", "step_goal": "Display allele results", "source_steps": [2]},
         ],
     },
     {
@@ -290,7 +281,7 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
             {"agent_id": "pdf_extraction", "step_goal": "Find GO term mentions and gene functions"},
             {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
             {"agent_id": "gene_ontology", "step_goal": "Validate GO terms"},
-            {"agent_id": "chat_output", "step_goal": "Display GO annotations", "source_step": 1},
+            {"agent_id": "chat_output", "step_goal": "Display GO annotations", "source_steps": [2, 3]},
         ],
     },
 ]
@@ -343,6 +334,52 @@ def _seen_any_equivalent(seen_agents: set[str], preferred_agent_ids: tuple[str, 
 def _is_output_agent_id(agent_id: str) -> bool:
     """Whether an agent ID belongs to the output-agent family."""
     return agent_id in _OUTPUT_AGENT_IDS
+
+
+def _validated_output_source_steps(
+    steps: List[Dict[str, Any]],
+    output_index: int,
+) -> tuple[tuple[int, ...], Optional[str]]:
+    """Validate one formatter's canonical ordered source-step selection."""
+
+    step_num = output_index + 1
+    source_steps = steps[output_index].get("source_steps")
+    # Removed singular source_step fallback — v1.1 output attachments use
+    # canonical ordered sources.
+    if not isinstance(source_steps, list) or not source_steps:
+        return (), (
+            f"Step {step_num}: output formatter requires non-empty source_steps"
+        )
+
+    validated: list[int] = []
+    seen: set[int] = set()
+    for source_step in source_steps:
+        if isinstance(source_step, bool) or not isinstance(source_step, int):
+            return (), (
+                f"Step {step_num}: source_steps must contain only integer step numbers"
+            )
+        if source_step < 1 or source_step >= step_num:
+            return (), (
+                f"Step {step_num}: source_steps must reference earlier steps"
+            )
+        if source_step in seen:
+            return (), (
+                f"Step {step_num}: source_steps must not contain duplicates"
+            )
+
+        source_agent_id = str(steps[source_step - 1].get("agent_id") or "")
+        if not agent_can_source_output_attachment(
+            AGENT_REGISTRY.get(source_agent_id),
+        ):
+            return (), (
+                f"Step {step_num}: source_steps entry {source_step} "
+                f"('{source_agent_id}') is not an extraction agent or a typed "
+                "validation agent"
+            )
+        seen.add(source_step)
+        validated.append(source_step)
+
+    return tuple(validated), None
 
 
 def _build_output_suggestion(
@@ -433,7 +470,7 @@ def _create_flow_handler():
             description: What this flow does (REQUIRED - used as task instructions
                 for the flow's Initial Instructions node)
             steps: List of step configs with agent_id, step_goal, custom_instructions,
-                and source_step for each output formatter
+                and source_steps for each output formatter
 
         Returns:
             Dict with success status, flow_id (if created), and message
@@ -502,28 +539,15 @@ def _create_flow_handler():
             agent_id = str(step["agent_id"])
             if not _is_output_agent_id(agent_id):
                 continue
-            source_step = step.get("source_step")
-            if isinstance(source_step, bool) or not isinstance(source_step, int):
+            _, source_error = _validated_output_source_steps(steps, i)
+            if source_error is not None:
                 return {
                     "success": False,
-                    "error": f"Step {i+1}: output formatter requires integer source_step",
-                    "help": "Set source_step to the earlier extraction step whose result this formatter owns",
-                }
-            if source_step < 1 or source_step > i:
-                return {
-                    "success": False,
-                    "error": f"Step {i+1}: source_step must reference an earlier step",
-                    "help": "Output formatters branch from a prior extraction step; they are not control-flow steps",
-                }
-            source_agent_id = str(steps[source_step - 1].get("agent_id") or "")
-            if not _is_extraction_agent_id(source_agent_id):
-                return {
-                    "success": False,
-                    "error": (
-                        f"Step {i+1}: source_step {source_step} ('{source_agent_id}') "
-                        "is not an extraction agent"
+                    "error": source_error,
+                    "help": (
+                        "Bind each output formatter to one or more earlier extraction "
+                        "or typed validation steps"
                     ),
-                    "help": "Bind each output formatter directly to exactly one extraction step",
                 }
 
         # Convert simplified steps to full FlowDefinition format
@@ -544,7 +568,7 @@ def _create_flow_handler():
         nodes = [task_input_node]
 
         # Add agent nodes for each step. Output formatters are terminal leaves
-        # attached to one extractor; ordinary steps retain the control chain.
+        # attached to ordered sources; ordinary steps retain the control chain.
         edges = []
         last_control_node_id = task_input_node["id"]
         for i, step in enumerate(steps):
@@ -582,12 +606,16 @@ def _create_flow_handler():
             })
 
             if is_output:
-                edges.append({
-                    "id": f"output_edge_{i+1}",
-                    "source": f"step_{step['source_step']}",
-                    "target": node_id,
-                    "role": "output_attachment",
-                })
+                source_steps, _ = _validated_output_source_steps(steps, i)
+                edges.extend(
+                    {
+                        "id": f"output_edge_{i+1}_{source_position}",
+                        "source": f"step_{source_step}",
+                        "target": node_id,
+                        "role": "output_attachment",
+                    }
+                    for source_position, source_step in enumerate(source_steps, 1)
+                )
             else:
                 edges.append({
                     "id": f"edge_{i+1}",
@@ -726,24 +754,9 @@ def _validate_flow_handler():
                 seen_agents.add(agent_id)
 
                 if _is_output_agent_id(agent_id):
-                    source_step = step.get("source_step")
-                    if isinstance(source_step, bool) or not isinstance(source_step, int):
-                        errors.append(
-                            f"Step {step_num}: output formatter requires integer source_step"
-                        )
-                    elif source_step < 1 or source_step >= step_num:
-                        errors.append(
-                            f"Step {step_num}: source_step must reference an earlier step"
-                        )
-                    else:
-                        source_agent_id = str(
-                            steps[source_step - 1].get("agent_id") or ""
-                        )
-                        if not _is_extraction_agent_id(source_agent_id):
-                            errors.append(
-                                f"Step {step_num}: source_step {source_step} "
-                                f"('{source_agent_id}') is not an extraction agent"
-                            )
+                    _, source_error = _validated_output_source_steps(steps, i)
+                    if source_error is not None:
+                        errors.append(source_error)
 
             # Validate custom_instructions length
             custom_instructions = step.get("custom_instructions")
@@ -1154,6 +1167,23 @@ def _get_current_flow_handler():
             )
             return attachment_only_validator_reason(agent_name)
 
+        def _output_source_details(output_attachment) -> list[Dict[str, Any]]:
+            details: list[Dict[str, Any]] = []
+            for source in output_attachment.sources:
+                source_node = node_by_id.get(source.source_node_id, {})
+                source_data = source_node.get("data", source_node)
+                details.append(
+                    {
+                        **source.to_dict(),
+                        "source_agent_id": source_data.get("agent_id"),
+                        "source_agent_display_name": source_data.get(
+                            "agent_display_name",
+                            source.source_node_id,
+                        ),
+                    }
+                )
+            return details
+
         for i, node in enumerate(execution_order, 1):
             node_data = node.get("data", node)  # Handle both nested and flat structures
             node_type = node.get("type", "agent")
@@ -1205,15 +1235,9 @@ def _get_current_flow_handler():
             if validation_attachments:
                 step_info["validation_attachments"] = validation_attachments
             if output_attachment is not None:
-                source_node = node_by_id.get(output_attachment.source_node_id, {})
-                source_data = source_node.get("data", source_node)
                 step_info["output_attachment"] = {
-                    **output_attachment.to_dict(),
-                    "source_agent_id": source_data.get("agent_id"),
-                    "source_agent_display_name": source_data.get(
-                        "agent_display_name",
-                        output_attachment.source_node_id,
-                    ),
+                    "output_node_id": output_attachment.output_node_id,
+                    "sources": _output_source_details(output_attachment),
                 }
             if flow_step_policy_warning:
                 step_info["flow_step_policy_warning"] = flow_step_policy_warning
@@ -1253,12 +1277,14 @@ def _get_current_flow_handler():
                         f"{_truncate_preview(output_filename_template, 100)}"
                     )
                 if output_attachment is not None:
-                    source_node = node_by_id.get(output_attachment.source_node_id, {})
-                    source_data = source_node.get("data", source_node)
+                    source_labels = [
+                        f"{source['source_agent_display_name']} "
+                        f"(`{source['source_node_id']}`)"
+                        for source in _output_source_details(output_attachment)
+                    ]
                     markdown_lines.append(
-                        "- **Formatter Binding:** Only projects the result owned by "
-                        f"{source_data.get('agent_display_name', output_attachment.source_node_id)} "
-                        f"(`{output_attachment.source_node_id}`)"
+                        "- **Formatter Binding:** Projects the ordered results from "
+                        + ", ".join(source_labels)
                     )
                 if validation_attachments:
                     active_enabled = [
@@ -1328,15 +1354,18 @@ def _get_current_flow_handler():
             markdown_lines.append("")
             markdown_lines.append("**Formatter output branches:**")
             for attachment in projection.output_attachments:
-                source_node = node_by_id.get(attachment.source_node_id, {})
-                source_data = source_node.get("data", source_node)
                 output_node = node_by_id.get(attachment.output_node_id, {})
                 output_data = output_node.get("data", output_node)
+                source_names = [
+                    source["source_agent_display_name"]
+                    for source in _output_source_details(attachment)
+                ]
                 markdown_lines.append(
                     "- "
                     f"{output_data.get('agent_display_name', attachment.output_node_id)} "
-                    "creates its own artifact from only "
-                    f"{source_data.get('agent_display_name', attachment.source_node_id)}."
+                    "creates its own artifact from the ordered results of "
+                    + ", ".join(source_names)
+                    + "."
                 )
             markdown_lines.append(
                 "Multiple formatter branches create multiple independent chat/file "
@@ -1440,9 +1469,9 @@ Each step specifies which agent to use and optionally includes a goal
 description and custom instructions to guide that agent's behavior.
 
 Output formatters are branches, not sequential steps. Every Output agent must
-include source_step, the 1-based index of exactly one earlier Extraction agent.
-Multiple formatters may point to the same extractor, and the ordinary extraction
-steps may continue after a formatter branch.
+include source_steps, an ordered list of one or more 1-based indexes of earlier
+Extraction or typed Validation agents. Multiple formatters may point to the same
+sources, and ordinary control-flow steps may continue after a formatter branch.
 
 Returns the created flow's ID for reference.
 
@@ -1484,11 +1513,17 @@ to check for issues without saving.""",
                                 "maxLength": 2000,
                                 "description": "Custom instructions appended to agent prompt (optional)"
                             },
-                            "source_step": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 29,
-                                "description": "Required only for Output agents: 1-based earlier Extraction step whose result this formatter receives"
+                            "source_steps": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 29,
+                                "uniqueItems": True,
+                                "items": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 29
+                                },
+                                "description": "Required only for Output agents: ordered 1-based earlier Extraction or typed Validation steps whose results this formatter receives"
                             },
                             "output_filename_template": {
                                 "type": "string",
@@ -1537,7 +1572,19 @@ ALWAYS use this before create_flow to catch issues early.""",
                         "properties": {
                             "agent_id": {"type": "string"},
                             "step_goal": {"type": "string"},
-                            "custom_instructions": {"type": "string"}
+                            "custom_instructions": {"type": "string"},
+                            "source_steps": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 29,
+                                "uniqueItems": True,
+                                "items": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 29
+                                },
+                                "description": "Required only for Output agents: ordered 1-based earlier Extraction or typed Validation steps whose results this formatter receives"
+                            }
                         },
                         "required": ["agent_id"]
                     },

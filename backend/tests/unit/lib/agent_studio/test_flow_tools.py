@@ -169,6 +169,101 @@ def test_validate_flow_handler_accepts_gene_expression_alias_pair(monkeypatch):
     )
 
 
+def test_validate_flow_handler_accepts_ordered_extraction_and_typed_validator_sources(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "gene_validation", "chat_output"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "gene_validation": {
+                "category": "Validation",
+                "output_schema_key": "GeneResultEnvelope",
+            },
+            "chat_output": {"category": "Output"},
+        },
+    )
+
+    result = flow_tools._validate_flow_handler()(
+        steps=[
+            {"agent_id": "pdf_extraction"},
+            {"agent_id": "gene_validation"},
+            {"agent_id": "chat_output", "source_steps": [1, 2]},
+        ],
+        name="Grouped Output",
+    )
+
+    assert result["valid"] is True
+    assert result["errors"] == []
+
+
+def test_validate_flow_handler_rejects_removed_singular_source_step(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "chat_output"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "chat_output": {"category": "Output"},
+        },
+    )
+
+    result = flow_tools._validate_flow_handler()(
+        steps=[
+            {"agent_id": "pdf_extraction"},
+            {"agent_id": "chat_output", "source_step": 1},
+        ],
+    )
+
+    assert result["valid"] is False
+    assert result["errors"] == [
+        "Step 2: output formatter requires non-empty source_steps"
+    ]
+
+
+def test_validate_flow_handler_checks_every_grouped_source_with_shared_policy(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "untyped_validator", "chat_output"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "untyped_validator": {"category": "Validation"},
+            "chat_output": {"category": "Output"},
+        },
+    )
+
+    result = flow_tools._validate_flow_handler()(
+        steps=[
+            {"agent_id": "pdf_extraction"},
+            {"agent_id": "untyped_validator"},
+            {"agent_id": "chat_output", "source_steps": [1, 2]},
+        ],
+    )
+
+    assert result["valid"] is False
+    assert result["errors"] == [
+        "Step 3: source_steps entry 2 ('untyped_validator') is not an extraction "
+        "agent or a typed validation agent"
+    ]
+
+
 def test_get_flow_templates_handler_uses_registry(monkeypatch):
     monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
     monkeypatch.setattr(
@@ -281,6 +376,62 @@ def test_get_flow_templates_handler_filters_missing_steps_and_resolves_installed
         for step in template["steps"]
     )
     assert "compatible templates" in result["message"]
+
+
+def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch):
+    installed_agent_ids = {
+        "pdf_extraction",
+        "gene_validation",
+        "disease_validation",
+        "allele_validation",
+        "gene_ontology_lookup",
+        "chat_output",
+    }
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", sorted(installed_agent_ids))
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "gene_validation": {
+                "category": "Validation",
+                "output_schema_key": "GeneResultEnvelope",
+            },
+            "disease_validation": {
+                "category": "Validation",
+                "output_schema_key": "DiseaseValidationResult",
+            },
+            "allele_validation": {
+                "category": "Validation",
+                "output_schema_key": "AlleleResultEnvelope",
+            },
+            "gene_ontology_lookup": {
+                "category": "Validation",
+                "output_schema_key": "GOTermResultEnvelope",
+            },
+            "chat_output": {"category": "Output"},
+        },
+    )
+    templates = {
+        template["name"]: template
+        for template in flow_tools._filter_flow_templates(installed_agent_ids)
+    }
+
+    assert templates["Gene Curation"]["steps"][-1]["source_steps"] == [2]
+    assert templates["Disease Annotation"]["steps"][-1]["source_steps"] == [2]
+    assert templates["Allele Annotation"]["steps"][-1]["source_steps"] == [2]
+    assert templates["GO Annotation Pipeline"]["steps"][-1]["source_steps"] == [
+        2,
+        3,
+    ]
+    validate = flow_tools._validate_flow_handler()
+    for name in (
+        "Gene Curation",
+        "Disease Annotation",
+        "Allele Annotation",
+        "GO Annotation Pipeline",
+    ):
+        assert validate(steps=templates[name]["steps"], name=name)["valid"] is True
 
 
 def test_get_flow_templates_handler_reports_core_only_install(monkeypatch):
@@ -573,6 +724,12 @@ def test_get_current_flow_handler_explains_output_attachment_binding():
                     "target": "gene_1",
                     "role": "control_flow",
                 },
+                {
+                    "id": "output_2",
+                    "source": "gene_1",
+                    "target": "allele_csv",
+                    "role": "output_attachment",
+                },
             ],
         }
     )
@@ -586,8 +743,16 @@ def test_get_current_flow_handler_explains_output_attachment_binding():
         "allele_csv",
     ]
     formatter_step = result["steps"][2]
-    assert formatter_step["output_attachment"]["source_node_id"] == "allele_1"
-    assert formatter_step["output_attachment"]["source_agent_id"] == "allele_extractor"
+    assert "source_node_id" not in formatter_step["output_attachment"]
+    assert "edge_id" not in formatter_step["output_attachment"]
+    assert [
+        source["source_node_id"]
+        for source in formatter_step["output_attachment"]["sources"]
+    ] == ["allele_1", "gene_1"]
+    assert [
+        source["source_agent_id"]
+        for source in formatter_step["output_attachment"]["sources"]
+    ] == ["allele_extractor", "gene_extractor"]
     assert result["edges"][1]["role"] == "output_attachment"
     assert result["has_critical_issues"] is False
     assert not any(
@@ -597,7 +762,9 @@ def test_get_current_flow_handler_explains_output_attachment_binding():
     markdown = result["execution_order_markdown"]
     assert "Formatter output branches" in markdown
     assert "Multiple formatter branches create multiple independent" in markdown
-    assert "Only projects the result owned by Allele Extraction" in markdown
+    assert "Projects the ordered results from Allele Extraction" in markdown
+    assert "Gene Extraction (`gene_1`)" in markdown
+    assert "ordered results of Allele Extraction, Gene Extraction" in markdown
 
 
 def test_get_current_flow_handler_flags_attachment_only_validator_step(monkeypatch):
@@ -884,7 +1051,11 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
                 "name": "PDF Specialist",
                 "category": "Extraction",
             },
-            "gene": {"name": "Gene Specialist", "category": "Validation"},
+            "gene": {
+                "name": "Gene Specialist",
+                "category": "Validation",
+                "output_schema_key": "GeneResultEnvelope",
+            },
             "csv_formatter": {
                 "name": "CSV Formatter",
                 "category": "Output",
@@ -909,6 +1080,7 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     assert result["success"] is True
     assert "flow_id" in result
     assert success_db.closed is True
+    assert success_db.added is not None
     assert success_db.added.flow_definition["version"] == "1.1"
 
     branch_db = _FakeDB()
@@ -918,36 +1090,46 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
         description="Extract and export while retaining the control chain",
         steps=[
             {"agent_id": "pdf_extraction", "step_goal": "extract"},
+            {"agent_id": "gene", "step_goal": "validate"},
             {
                 "agent_id": "csv_formatter",
-                "source_step": 1,
+                "source_steps": [1, 2],
                 "output_filename_template": (
                     "{{input_filename_stem}}-{{timestamp}}.csv"
                 ),
             },
-            {"agent_id": "gene", "step_goal": "validate"},
         ],
     )
     assert branch_result["success"] is True, branch_result
+    assert branch_db.added is not None
     assert branch_db.added.flow_definition["version"] == "1.1"
     assert [node["type"] for node in branch_db.added.flow_definition["nodes"]] == [
         "task_input",
         "agent",
-        "output",
         "agent",
+        "output",
     ]
-    assert branch_db.added.flow_definition["edges"][1] == {
-        "id": "output_edge_2",
+    assert branch_db.added.flow_definition["edges"][1]["source"] == "step_1"
+    assert branch_db.added.flow_definition["edges"][1]["target"] == "step_2"
+    assert branch_db.added.flow_definition["edges"][2] == {
+        "id": "output_edge_3_1",
         "source": "step_1",
-        "target": "step_2",
+        "target": "step_3",
         "role": "output_attachment",
         "satisfies_binding_id": None,
         "replaces_attachment_id": None,
         "condition": None,
     }
-    assert branch_db.added.flow_definition["edges"][2]["source"] == "step_1"
-    assert branch_db.added.flow_definition["edges"][2]["target"] == "step_3"
-    assert branch_db.added.flow_definition["nodes"][2]["data"][
+    assert branch_db.added.flow_definition["edges"][3] == {
+        "id": "output_edge_3_2",
+        "source": "step_2",
+        "target": "step_3",
+        "role": "output_attachment",
+        "satisfies_binding_id": None,
+        "replaces_attachment_id": None,
+        "condition": None,
+    }
+    assert branch_db.added.flow_definition["nodes"][3]["data"][
         "output_filename_template"
     ] == "{{input_filename_stem}}-{{timestamp}}.csv"
 
@@ -1126,5 +1308,14 @@ def test_register_flow_tools_registers_five_tools(monkeypatch):
     step_properties = create_flow_schema["properties"]["steps"]["items"][
         "properties"
     ]
-    assert "source_step" in step_properties
+    assert "source_steps" in step_properties
+    assert "source_step" not in step_properties
+    assert step_properties["source_steps"]["minItems"] == 1
+    assert step_properties["source_steps"]["uniqueItems"] is True
     assert "output_filename_template" in step_properties
+    validate_flow_schema = registrations[1]["input_schema"]
+    validate_step_properties = validate_flow_schema["properties"]["steps"][
+        "items"
+    ]["properties"]
+    assert validate_step_properties["source_steps"] == step_properties["source_steps"]
+    assert "source_step" not in validate_step_properties
