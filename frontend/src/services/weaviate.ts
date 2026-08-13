@@ -59,18 +59,55 @@ interface DocumentChunk {
   };
 }
 
+interface RawDocumentSourceProvenance {
+  provider: string;
+  reference_id?: string;
+  reference_curie?: string;
+  source_file_id?: string;
+  pdf_artifact_id?: string;
+  converted_artifact_id?: string;
+  external_ids?: Record<string, string | string[]>;
+  source_md5?: string;
+  file_class?: string;
+  file_extension?: string;
+  artifact_status?: string;
+  import_status?: string;
+  imported_at?: string;
+  access_scope?: string;
+  access_mods?: Record<string, string[]>;
+  viewer_mode?: string;
+}
+
+interface RawDocumentListItem {
+  document_id: string;
+  user_id: string;
+  filename: string;
+  title: string | null;
+  status: string;
+  upload_timestamp: string | null;
+  processing_started_at: string | null;
+  processing_completed_at: string | null;
+  file_size_bytes: number | null;
+  weaviate_tenant: string;
+  chunk_count: number | null;
+  vector_count: number | null;
+  embedding_status: string;
+  error_message: string | null;
+  source_provenance: RawDocumentSourceProvenance | null;
+}
+
 export interface DocumentListResponse {
-  documents: PDFDocument[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  pagination?: {
-    currentPage: number;
-    totalPages: number;
-    totalItems: number;
-    pageSize: number;
-  };
-  filters: DocumentFilter;
+  documents: RawDocumentListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DocumentListData {
+  documents: DocumentSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface RawDocumentDetailResponse {
@@ -339,6 +376,29 @@ export const normalizeDocumentSourceProvenance = (
 
   return normalized.provider ? normalized : null;
 };
+
+export const normalizeDocumentListResponse = (
+  response: DocumentListResponse
+): DocumentListData => ({
+  documents: response.documents.map((document) => ({
+    id: document.document_id,
+    filename: document.filename,
+    title: document.title,
+    fileSize: document.file_size_bytes,
+    creationDate: document.upload_timestamp,
+    lastAccessedDate: null,
+    processingStatus: document.status.toLowerCase(),
+    embeddingStatus: document.embedding_status,
+    errorMessage: document.error_message,
+    chunkCount: document.chunk_count,
+    vectorCount: document.vector_count,
+    metadata: null,
+    sourceProvenance: normalizeDocumentSourceProvenance(document.source_provenance),
+  })),
+  total: response.total,
+  limit: response.limit,
+  offset: response.offset,
+});
 
 const normalizeDocumentSummary = (
   raw: Record<string, unknown> | undefined,
@@ -648,6 +708,17 @@ export const fetchApi = async <T>(
   }
 };
 
+export const fetchDocumentList = async (
+  queryParams: URLSearchParams,
+  options?: RequestInit
+): Promise<DocumentListData> => {
+  const response = await fetchApi<DocumentListResponse>(
+    `/documents?${queryParams.toString()}`,
+    options
+  );
+  return normalizeDocumentListResponse(response);
+};
+
 const fetchPdfExtractionHealth = async (): Promise<PdfExtractionHealthStatus> => {
   const response = await fetch(`${API_BASE_URL}/documents/pdf-extraction-health`, {
     credentials: 'include', // Include httpOnly cookies for authentication
@@ -775,7 +846,7 @@ export const useCancelPdfJob = (
 export const useDocuments = (
   filters: DocumentFilter,
   pagination: PaginationParams,
-  options?: UseQueryOptions<DocumentListResponse>
+  options?: UseQueryOptions<DocumentListData>
 ) => {
   const queryParams = new URLSearchParams({
     page: pagination.page.toString(),
@@ -800,7 +871,7 @@ export const useDocuments = (
 
   return useQuery({
     queryKey: ['documents', filters, pagination],
-    queryFn: () => fetchApi<DocumentListResponse>(`/documents?${queryParams}`),
+    queryFn: () => fetchDocumentList(queryParams),
     ...options,
   });
 };

@@ -263,6 +263,7 @@ async def async_list_documents(
                     "file_size_bytes": pg_doc.file_size,  # Contract field name from PostgreSQL
                     "weaviate_tenant": tenant_name,  # Required by contract
                     "chunk_count": doc_props.get("chunkCount"),
+                    "vector_count": doc_props.get("vectorCount"),
                     "embedding_status": doc_props.get("embeddingStatus", "pending"),  # Frontend expects this field
                     "error_message": pg_doc.error_message,
                     "source_provenance": build_document_source_provenance(pg_doc),

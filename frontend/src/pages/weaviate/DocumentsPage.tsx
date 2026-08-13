@@ -3,7 +3,7 @@ import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
-import { normalizeDocumentSourceProvenance } from '../../services/weaviate';
+import { normalizeDocumentListResponse } from '../../services/weaviate';
 import type {
   DocumentSummary,
   DocumentListResponse,
@@ -12,20 +12,6 @@ import type {
 
 const DocumentList = lazy(() => import('../../components/weaviate/DocumentList'));
 const InlineFilterBar = lazy(() => import('../../components/weaviate/InlineFilterBar'));
-
-const readString = (value: unknown, defaultValue: string): string => (
-  typeof value === 'string' && value.trim() ? value : defaultValue
-);
-
-const readNullableString = (value: unknown): string | null => {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  return null;
-};
 
 const MAX_BATCH_DOCUMENT_SELECTION = 10;
 const DOCUMENTS_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
@@ -178,47 +164,22 @@ const DocumentsPage: React.FC = () => {
         throw new Error(`Failed to load documents (${response.status})`);
       }
 
-      const data = (await response.json()) as DocumentListResponse;
+      const rawData = (await response.json()) as DocumentListResponse;
       if (requestId !== documentRequestIdRef.current) {
         return;
       }
-      const docs = (data.documents || []) as unknown as Array<Record<string, unknown>>;
-      const normalizedDocs: DocumentSummary[] = docs.map((doc) => {
-        const processingStatus = readString(
-          doc.status ?? doc.processing_status ?? doc.processingStatus,
-          'pending',
-        ).toLowerCase() as DocumentSummary['processingStatus'];
-
-        return {
-          id: readString(doc.document_id ?? doc.id, ''),
-          filename: readString(doc.filename, 'Untitled'),
-          title: typeof doc.title === 'string' ? doc.title : null,
-          fileSize: typeof doc.file_size_bytes === 'number' ? doc.file_size_bytes : (typeof doc.file_size === 'number' ? doc.file_size : (typeof doc.fileSize === 'number' ? doc.fileSize : null)),
-          creationDate: readNullableString(doc.upload_timestamp ?? doc.creation_date ?? doc.creationDate),
-          lastAccessedDate: readNullableString(doc.last_accessed_date ?? doc.lastAccessedDate),
-          processingStatus,
-          embeddingStatus: readString(
-            doc.embedding_status ?? doc.embeddingStatus,
-            'pending',
-          ) as DocumentSummary['embeddingStatus'],
-          errorMessage: readNullableString(doc.error_message ?? doc.errorMessage),
-          chunkCount: typeof doc.chunk_count === 'number' ? doc.chunk_count : (typeof doc.chunkCount === 'number' ? doc.chunkCount : 0),
-          vectorCount: typeof doc.vector_count === 'number' ? doc.vector_count : (typeof doc.vectorCount === 'number' ? doc.vectorCount : 0),
-          sourceProvenance: normalizeDocumentSourceProvenance(
-            doc.source_provenance ?? doc.sourceProvenance,
-          ),
-        };
-      });
-      const totalItems =
-        data.total ?? data.pagination?.totalItems ?? (data.pagination as Record<string, unknown> | undefined)?.total_items as number ?? docs.length;
+      const data = normalizeDocumentListResponse(rawData);
+      // The documents API emits one flat snake_case contract; normalization lives
+      // at the service boundary.
+      const totalItems = data.total;
       const lastPage = lastDocumentPage(totalItems, paginationModel.pageSize);
       if (paginationModel.page > lastPage) {
         setPaginationModel((previous) => ({ ...previous, page: lastPage }));
         return;
       }
-      setDocuments(normalizedDocs);
+      setDocuments(data.documents);
       setTotalCount(totalItems);
-      console.log('[DocumentsPage] Refresh success', { count: normalizedDocs.length });
+      console.log('[DocumentsPage] Refresh success', { count: data.documents.length });
     } catch (error) {
       if (requestController.signal.aborted || requestId !== documentRequestIdRef.current) {
         return;

@@ -12,6 +12,7 @@ import {
   useUpdateEmbeddingSettings,
   useUpdateChunkingStrategy,
   useWeaviateHealth,
+  normalizeDocumentListResponse,
   normalizeDocumentDetailResponse,
 } from './weaviate';
 import { createMockDocument, createMockFilter, createMockPaginationParams } from '../test/test-utils';
@@ -41,9 +42,26 @@ describe('weaviate service', () => {
   describe('useDocuments', () => {
     it('fetches documents with filters and pagination', async () => {
       const mockResponse = {
-        documents: [createMockDocument()],
-        pagination: { currentPage: 1, totalPages: 1, totalItems: 1, pageSize: 20 },
-        filters: {},
+        documents: [{
+          document_id: 'doc-1',
+          user_id: 'user-1',
+          filename: 'test-document.pdf',
+          title: 'Test Document',
+          status: 'COMPLETED',
+          upload_timestamp: '2024-01-01T00:00:00Z',
+          processing_started_at: null,
+          processing_completed_at: null,
+          file_size_bytes: 1024000,
+          weaviate_tenant: 'tenant-user-1',
+          chunk_count: 10,
+          vector_count: 100,
+          embedding_status: 'completed',
+          error_message: null,
+          source_provenance: null,
+        }],
+        total: 1,
+        limit: 20,
+        offset: 0,
       };
 
       mockFetch.mockResolvedValueOnce({
@@ -63,7 +81,26 @@ describe('weaviate service', () => {
         expect(result.current.isSuccess).toBe(true);
       });
 
-      expect(result.current.data).toEqual(mockResponse);
+      expect(result.current.data).toEqual({
+        documents: [{
+          id: 'doc-1',
+          filename: 'test-document.pdf',
+          title: 'Test Document',
+          fileSize: 1024000,
+          creationDate: '2024-01-01T00:00:00Z',
+          lastAccessedDate: null,
+          processingStatus: 'completed',
+          embeddingStatus: 'completed',
+          errorMessage: null,
+          chunkCount: 10,
+          vectorCount: 100,
+          metadata: null,
+          sourceProvenance: null,
+        }],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      });
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/weaviate/documents'),
         expect.objectContaining({
@@ -89,6 +126,43 @@ describe('weaviate service', () => {
       });
 
       expect(result.current.error?.message).toContain('Server error');
+    });
+  });
+
+  describe('normalizeDocumentListResponse', () => {
+    it('preserves nullable canonical list fields without display fallbacks', () => {
+      expect(normalizeDocumentListResponse({
+        documents: [{
+          document_id: 'doc-nullable',
+          user_id: 'user-1',
+          filename: 'nullable.pdf',
+          title: null,
+          status: 'PENDING',
+          upload_timestamp: null,
+          processing_started_at: null,
+          processing_completed_at: null,
+          file_size_bytes: null,
+          weaviate_tenant: 'tenant-user-1',
+          chunk_count: null,
+          vector_count: null,
+          embedding_status: 'pending',
+          error_message: null,
+          source_provenance: null,
+        }],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      }).documents[0]).toMatchObject({
+        id: 'doc-nullable',
+        filename: 'nullable.pdf',
+        title: null,
+        fileSize: null,
+        creationDate: null,
+        processingStatus: 'pending',
+        chunkCount: null,
+        vectorCount: null,
+        sourceProvenance: null,
+      });
     });
   });
 
