@@ -504,6 +504,24 @@ class TestBatchToResponseMocked:
         mock_get_flow.assert_called_once_with(mock_batch.flow_id)
         assert result.flow_name == "Looked Up Flow"
 
+    @pytest.mark.parametrize("result_files", [{"file_id": "not-a-list"}, ["not-a-dict"]])
+    def test_batch_to_response_rejects_corrupt_result_manifest(self, result_files):
+        service = BatchService(Mock())
+        batch = Mock()
+        batch.flow_id = uuid4()
+        document = Mock()
+        document.id = uuid4()
+        document.document_id = uuid4()
+        document.result_files = result_files
+        batch.documents = [document]
+
+        with patch.object(service, "get_document_titles", return_value={}), patch.object(
+            service,
+            "get_document_handoff_metadata",
+            return_value={},
+        ), pytest.raises(ValueError, match="invalid canonical result_files manifest"):
+            service.batch_to_response(batch, flow_name="Flow")
+
     def test_batch_to_response_looks_up_document_titles(self):
         """batch_to_response should look up document titles."""
         mock_db = Mock()

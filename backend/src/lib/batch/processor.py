@@ -527,7 +527,6 @@ async def _execute_flow_for_document(
 
                 download_url = file_ready_details.get("download_url")
                 file_id = file_ready_details.get("file_id")
-
                 filename = file_ready_details.get("filename")
 
                 if not (download_url and file_id and filename):
@@ -536,44 +535,43 @@ async def _execute_flow_for_document(
                         "file_id, filename, and download_url"
                     )
 
-                if download_url and file_id and filename:
-                    # GUARDRAIL: Validate file ownership before capturing
-                    # This prevents cross-user file leakage even if event routing has bugs
-                    # (defense-in-depth for KANBAN-935 race condition fix)
-                    if _validate_file_ownership(file_id, cognito_sub):
-                        result_file = {
-                            key: file_ready_details[key]
-                            for key in (
-                                "file_id",
-                                "filename",
-                                "download_url",
-                                "format",
-                                "formatter_node_id",
-                                "source_node_id",
-                                "source_node_ids",
-                                "formatter_label",
-                                "source_label",
-                                "source_labels",
-                                "source_extraction_result_ids",
-                                "source_keys",
-                                "source_envelope_ids",
-                            )
-                            if file_ready_details.get(key) is not None
-                        }
-                        result_files.append(result_file)
-                        enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
-                        broadcaster.publish_sync(batch_uuid, enriched_event)
-                        logger.info(
-                            "Found file output in flow: %s (filename: %s)",
-                            download_url,
-                            file_ready_details.get("filename")
+                # GUARDRAIL: Validate file ownership before capturing
+                # This prevents cross-user file leakage even if event routing has bugs
+                # (defense-in-depth for KANBAN-935 race condition fix)
+                if _validate_file_ownership(file_id, cognito_sub):
+                    result_file = {
+                        key: file_ready_details[key]
+                        for key in (
+                            "file_id",
+                            "filename",
+                            "download_url",
+                            "format",
+                            "formatter_node_id",
+                            "source_node_id",
+                            "source_node_ids",
+                            "formatter_label",
+                            "source_label",
+                            "source_labels",
+                            "source_extraction_result_ids",
+                            "source_keys",
+                            "source_envelope_ids",
                         )
-                    else:
-                        logger.warning(
-                            "FILE_READY event ignored - file %s not owned by user %s "
-                            "(possible race condition or event routing bug)",
-                            file_id, cognito_sub
-                        )
+                        if file_ready_details.get(key) is not None
+                    }
+                    result_files.append(result_file)
+                    enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
+                    broadcaster.publish_sync(batch_uuid, enriched_event)
+                    logger.info(
+                        "Found file output in flow: %s (filename: %s)",
+                        download_url,
+                        file_ready_details.get("filename")
+                    )
+                else:
+                    logger.warning(
+                        "FILE_READY event ignored - file %s not owned by user %s "
+                        "(possible race condition or event routing bug)",
+                        file_id, cognito_sub
+                    )
                 continue
 
             if event_type == "FLOW_FINISHED":

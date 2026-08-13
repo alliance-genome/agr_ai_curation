@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from .auth import get_auth_dependency
 from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.batch.service import BatchService
+from ..lib.batch.result_files import canonical_result_files as _batch_document_result_files
 from ..lib.batch.validation import validate_flow_for_batch
 from ..lib.batch.processor import process_batch_task
 from ..lib.batch.events import get_batch_broadcaster
@@ -62,7 +63,6 @@ def _batch_document_status_event(
     doc: Any,
     handoff_metadata: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    stored_result_files = getattr(doc, "result_files", None)
     stored_output_branches = getattr(doc, "output_branches", None)
     return {
         "type": "DOCUMENT_STATUS",
@@ -71,7 +71,7 @@ def _batch_document_status_event(
         "batch_document_id": str(doc.id),
         "position": doc.position,
         "status": doc.status.value,
-        "result_files": stored_result_files if isinstance(stored_result_files, list) else [],
+        "result_files": _batch_document_result_files(doc),
         "output_status": getattr(doc, "output_status", None),
         "output_branches": (
             stored_output_branches if isinstance(stored_output_branches, list) else []
@@ -91,21 +91,6 @@ def _batch_partial_document_count(batch: Any) -> int:
         for doc in (getattr(batch, "documents", None) or [])
         if getattr(doc, "output_status", None) == "partial"
     )
-
-
-def _batch_document_result_files(doc: Any) -> list[dict[str, str]]:
-    """Return the authoritative canonical result-file manifest."""
-
-    raw_result_files = doc.result_files
-    if raw_result_files is None:
-        return []
-    if not isinstance(raw_result_files, list) or not all(
-        isinstance(item, dict) for item in raw_result_files
-    ):
-        raise ValueError(
-            f"Batch document {doc.id} has an invalid canonical result_files manifest"
-        )
-    return [dict(item) for item in raw_result_files]
 
 
 def _unique_zip_member_name(filename: str, used_names: set[str]) -> str:

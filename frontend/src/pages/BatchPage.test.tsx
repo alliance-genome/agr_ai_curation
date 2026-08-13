@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import BatchPage, { mapBatchDocument } from './BatchPage'
+import BatchPage, { mapBatchDocument, requireBatchResultFiles } from './BatchPage'
 import { DEFAULT_FLOW_LIST_PAGE_SIZE } from '@/services/agentStudioService'
 import { submitFeedback } from '@/services/feedbackService'
 
@@ -129,6 +129,14 @@ describe('BatchPage', () => {
     })
   })
 
+  it('rejects document status events without a canonical result manifest', () => {
+    expect(() => requireBatchResultFiles(undefined, 'doc-1')).toThrow(
+      'DOCUMENT_STATUS event for doc-1 omitted or corrupted the canonical result_files manifest',
+    )
+    expect(() => requireBatchResultFiles([{}], 'doc-1')).toThrow('corrupted')
+    expect(requireBatchResultFiles([], 'doc-1')).toEqual([])
+  })
+
   it('requests flows through the shared page-size contract', async () => {
     renderPage()
 
@@ -237,6 +245,7 @@ describe('BatchPage', () => {
             document_title: 'Alpha paper',
             position: 0,
             status: 'pending',
+            result_files: [],
           }],
         }))
       }
@@ -254,6 +263,7 @@ describe('BatchPage', () => {
       batch_document_id: 'batch-doc-1',
       position: 0,
       status: 'completed',
+      result_files: [],
       review_session_ids: ['review-gene'],
       adapter_keys: ['gene'],
       extraction_result_ids: ['extract-gene'],

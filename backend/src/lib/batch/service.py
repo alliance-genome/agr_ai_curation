@@ -16,6 +16,7 @@ from src.lib.curation_workspace.models import (
     CurationReviewSession,
 )
 from src.schemas.batch import BatchResponse, BatchDocumentResponse
+from .result_files import canonical_result_files
 from .status import (
     require_batch_status_transition,
 )
@@ -460,7 +461,6 @@ class BatchService:
         document_responses = []
         for d in batch.documents:
             handoff_metadata = self.get_document_handoff_metadata(batch, d)
-            stored_result_files = getattr(d, "result_files", None)
             stored_output_status = getattr(d, "output_status", None)
             stored_output_branches = getattr(d, "output_branches", None)
             doc_dict = {
@@ -469,9 +469,7 @@ class BatchService:
                 "document_title": document_titles.get(d.document_id),
                 "position": d.position,
                 "status": d.status,
-                "result_files": (
-                    stored_result_files if isinstance(stored_result_files, list) else []
-                ),
+                "result_files": canonical_result_files(d),
                 "output_status": (
                     stored_output_status
                     if stored_output_status in {"complete", "partial", "none", "failed"}
