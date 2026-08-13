@@ -5,26 +5,30 @@
 # (1) reuses the retention assertion -- every line must appear in the assembled render --
 # and (2) asserts the lines appear in this same order by first occurrence, so the rewrite
 # cannot scramble the
-# enumerate-components -> ground-each-component -> resolve-single-unambiguous ->
-# judge-relation-coherence -> compose-condition-decision sequence.
+# enumerate-components -> group-cross-target-lookups -> residual-lookups ->
+# resolve-single-unambiguous -> judge-relation-coherence ->
+# compose-condition-decision sequence.
 #
 # AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
 # assembled render and be listed in workflow order. These are verbatim from the rewritten
-# <lookup_workflow> "Bounded composite lookup path" numbered block (steps 1-5), where each
-# occurs exactly once and in order. (ECV-11..ECV-15 in
+# <lookup_workflow> "Bounded composite lookup path" numbered block (steps 1-6), where each
+# occurs exactly once and in order. (ECV-11, ECV-12, ECV-12A, and ECV-13..ECV-15 in
 # docs/design/phaseC-checklists/experimental_condition.md.)
 
 # Step 1 -- enumerate every present/required component (relation type as coherence context only).
 Enumerate every present or required component of the condition (relation type as coherence context only).
 
-# Step 2 -- ground each present component via its owning capability method before resolving it.
-For each present grounded component -- condition class/id, condition chemical (ChEBI ontology term), condition taxon, quantity/unit, data provider -- call the owning capability's `agr_curation_query` method before resolving it, and record each call in that component's `lookup_attempts`.
+# Step 2 -- group compatible CURIE lookups across every target before any single-term lookup.
+Group same-family lookup work across every target in the request before calling tools. Collect the unique present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- and make one `agr_curation_query` `get_ontology_terms` call with the combined `terms` list before any single-term ontology lookup. Assign each returned record back to every matching component and record the shared call in that component's `lookup_attempts`.
 
-# Step 3 -- resolve only a single unambiguous match; preserve ambiguous/obsolete/conflicting as candidates.
+# Step 3 -- use only residual owning-capability calls for components not resolved in the group.
+For each present grounded component not resolved by the grouped call -- including quantity/unit, data provider, or an ontology component needing targeted follow-up -- call only the owning capability's residual `agr_curation_query` method before resolving it, and record that call in the component's `lookup_attempts`.
+
+# Step 4 -- resolve only a single unambiguous match; preserve ambiguous/obsolete/conflicting as candidates.
 Resolve a component only when tool evidence returns a single unambiguous match satisfying its expected fields; preserve ambiguous, obsolete, conflicting, or alternate records as that component's candidates and leave it unresolved.
 
-# Step 4 -- judge relation coherence using condition_relation_type as context only.
+# Step 5 -- judge relation coherence using condition_relation_type as context only.
 Judge relation coherence using `condition_relation_type` as context only -- does the resolved condition class fit the stated relation? -- without looking up the relation vocabulary.
 
-# Step 5 -- compose condition-level decision; otherwise unresolved with blocking components listed.
+# Step 6 -- compose condition-level decision; otherwise unresolved with blocking components listed.
 Compose the condition-level decision: resolved only when every required component resolved and the condition-level expected fields can be populated from lookup evidence; otherwise unresolved with the blocking components listed in `unresolved_components`.

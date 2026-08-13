@@ -2425,7 +2425,11 @@ def test_gene_expression_pack_declares_condition_fields_multivalued_and_active()
     )
 
 
-def test_gene_expression_condition_binding_scoped_and_shaped():
+def test_gene_expression_condition_binding_scoped_and_shaped(monkeypatch):
+    monkeypatch.delenv(
+        "EXPERIMENTAL_CONDITION_VALIDATOR_BATCH_MAX_SIZE",
+        raising=False,
+    )
     raw_validator_bindings = _gene_expression_pack().metadata.metadata["validator_bindings"]
     bindings = {
         binding["binding_id"]: binding
@@ -2460,6 +2464,7 @@ def test_gene_expression_condition_binding_scoped_and_shaped():
     assert "condition_id" not in composite["expected_result_fields"]
     assert composite["batch"]["enabled"] is True
     assert composite["batch"]["family"] == "experimental_condition_validation"
+    assert composite["batch"]["max_size"] == 4
 
     relation = bindings["gene_expression_condition_relation_lookup"]
     assert relation["applies_to"]["object_types"] == [GENE_EXPRESSION_OBJECT_TYPE]
