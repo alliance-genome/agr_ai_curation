@@ -6,6 +6,7 @@ specific database clients, such as the AGR curation client, remain separate.
 
 import json
 import logging
+import os
 import threading
 from typing import Dict, Optional
 from urllib.parse import quote
@@ -56,14 +57,27 @@ class PostgresConnectionResolver:
         connection = get_connection(self.service_id)
         if not connection:
             return None
+
+        credentials = connection.credentials
+        url_env_var = getattr(credentials, "url_env_var", "") if credentials else ""
+        if url_env_var:
+            explicit_url = os.getenv(url_env_var)
+            if explicit_url:
+                logger.debug(
+                    "Using %s environment variable for %s",
+                    url_env_var,
+                    self.service_id,
+                )
+                return explicit_url
+
         if connection.url:
             return connection.url
-        if not connection.credentials:
+        if not credentials:
             return None
 
-        source = connection.credentials.source
+        source = credentials.source
         if source == "aws_secrets":
-            return self._fetch_aws_credentials(connection.credentials)
+            return self._fetch_aws_credentials(credentials)
         if source == "env":
             return None
         if source == "url":

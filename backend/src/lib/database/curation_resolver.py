@@ -1,23 +1,14 @@
-"""
-CurationConnectionResolver — sole entry point for curation DB connection config.
+"""Curation database client lifecycle backed by canonical PostgreSQL config."""
 
-All curation DB consumers MUST use this resolver. Do not read CURATION_DB_URL
-directly or call get_aws_credentials() from individual modules.
-
-Credential resolution priority:
-    1. CURATION_DB_URL env var (explicit override)
-    2. credentials.source from connections.yaml
-       - "env": use CURATION_DB_URL (already checked above, so no-op)
-       - "aws_secrets": fetch from AWS Secrets Manager
-       - "url": use url field from connections.yaml directly
-"""
-
-import json
 import logging
 import os
 import threading
 from typing import Optional, Dict, Any
-from urllib.parse import quote
+
+from src.lib.database.postgres_connection_resolver import (
+    PostgresConnectionResolver,
+    get_postgres_connection_resolver,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,151 +35,28 @@ class CurationDbClient:
 
 
 class CurationConnectionResolver:
-    """Resolves curation database connection details from config/connections.yaml.
+    """Manage the curation client while delegating PostgreSQL URL resolution.
 
-    This is the single source of truth for curation DB connectivity. All modules
-    that need curation DB access should use get_curation_resolver() instead of
-    reading environment variables directly.
+    All curation consumers should use ``get_curation_resolver()`` for the domain
+    client. ``PostgresConnectionResolver`` is the canonical URL and credential
+    resolver shared with connection health checks.
     """
 
-    def __init__(self):
-        self._connection_url: Optional[str] = None
-        self._db_client = None
-        self._resolved = False
-        self._lock = threading.Lock()
-        self._db_client_lock = threading.Lock()
-
-    def _resolve(self) -> None:
-        """Resolve the connection URL using the priority chain."""
-        if self._resolved:
-            return
-
-        with self._lock:
-            if self._resolved:
-                return
-
-            url = self._try_resolve()
-            self._connection_url = url
-            self._resolved = True
-
-            if url:
-                # Log with redacted credentials
-                from src.lib.config.connections_loader import redact_url_credentials
-                logger.info(
-                    "Curation DB connection resolved: %s",
-                    redact_url_credentials(url),
-                )
-            else:
-                logger.info("Curation DB not configured — agents will operate without it")
-
-    def _try_resolve(self) -> Optional[str]:
-        """Try each resolution strategy in priority order.
-
-        Returns:
-            PostgreSQL connection URL, or None if not configured.
-        """
-        # Priority 1: CURATION_DB_URL env var (explicit override)
-        url = os.getenv("CURATION_DB_URL")
-        if url:
-            logger.debug("Using CURATION_DB_URL environment variable")
-            return url
-
-        # Priority 2: credentials.source from connections.yaml
-        url = self._try_connections_config()
-        if url:
-            return url
-
-        return None
-
-    def _try_connections_config(self) -> Optional[str]:
-        """Resolve from connections.yaml credentials config."""
-        try:
-            from src.lib.config.connections_loader import get_connection
-        except ImportError:
-            logger.debug("connections_loader not available")
-            return None
-
-        conn = get_connection("curation_db")
-        if not conn:
-            return None
-
-        # If URL is set in the connection config, use it directly
-        if conn.url:
-            return conn.url
-
-        # Check credentials config
-        if not conn.credentials:
-            return None
-
-        source = conn.credentials.source
-
-        if source == "url":
-            raise ValueError(
-                "curation_db credentials.source is 'url' but services.curation_db.url is empty"
-            )
-
-        if source == "aws_secrets":
-            return self._fetch_aws_credentials(conn.credentials)
-
-        if source == "env":
-            # Explicit env mode requires CURATION_DB_URL.
-            return None
-
-        raise ValueError(
-            f"Invalid curation_db credentials.source '{source}'. "
-            "Expected one of: env, aws_secrets, url"
+    def __init__(
+        self,
+        connection_resolver: Optional[PostgresConnectionResolver] = None,
+    ):
+        self._connection_resolver = (
+            connection_resolver
+            if connection_resolver is not None
+            else get_postgres_connection_resolver("curation_db")
         )
-
-    def _fetch_aws_credentials(self, credentials) -> Optional[str]:
-        """Fetch credentials from AWS Secrets Manager and build connection URL."""
-        try:
-            import boto3
-        except ImportError:
-            logger.warning("boto3 not installed — cannot use AWS Secrets Manager")
-            return None
-
-        try:
-            if credentials.aws_profile:
-                session = boto3.Session(profile_name=credentials.aws_profile)
-            else:
-                session = boto3.Session()
-
-            client = session.client(
-                "secretsmanager", region_name=credentials.aws_region
-            )
-            response = client.get_secret_value(SecretId=credentials.aws_secret_id)
-            secret = json.loads(response["SecretString"])
-
-            required_keys = ("username", "password", "host", "port", "dbname")
-            missing = [k for k in required_keys if not secret.get(k)]
-            if missing:
-                raise ValueError(
-                    "AWS Secrets Manager secret is missing required keys: "
-                    + ", ".join(sorted(missing))
-                )
-
-            username = secret["username"]
-            password = quote(secret["password"], safe="")
-            dbname = str(secret["dbname"])
-            host = str(secret["host"])
-            port = str(secret["port"])
-
-            logger.info(
-                "Retrieved curation DB credentials from AWS Secrets Manager: %s",
-                credentials.aws_secret_id,
-            )
-            return f"postgresql://{username}:{password}@{host}:{port}/{dbname}"
-
-        except Exception as e:
-            logger.error("Failed to retrieve AWS Secrets Manager credentials: %s", e)
-            raise ValueError(
-                "Failed to resolve curation DB credentials from AWS Secrets Manager"
-            ) from e
+        self._db_client = None
+        self._db_client_lock = threading.Lock()
 
     def get_connection_url(self) -> Optional[str]:
         """Returns the resolved PostgreSQL connection URL, or None if not configured."""
-        self._resolve()
-        return self._connection_url
+        return self._connection_resolver.get_connection_url()
 
     def get_db_client(self) -> Optional[Any]:
         """Returns a DatabaseMethods instance, or None if curation DB unavailable.
@@ -319,8 +187,7 @@ class CurationConnectionResolver:
     def reset(self) -> None:
         """Reset resolver state (for testing)."""
         self.close()
-        self._connection_url = None
-        self._resolved = False
+        self._connection_resolver.reset()
 
 
 # Module-level singleton

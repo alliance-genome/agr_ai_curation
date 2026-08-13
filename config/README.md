@@ -156,6 +156,11 @@ The overlay is deep-merged over the base file, so it can add services or replace
 only selected nested fields. Secret values should still come from environment
 variables or a secret manager rather than the overlay itself.
 
+PostgreSQL services may declare `credentials.url_env_var` as the name of an
+explicit full-URL environment override. When set, that environment value takes
+priority over the service URL and configured credential source; health checks
+and domain clients resolve it through the same PostgreSQL resolver.
+
 ### providers.yaml
 
 Defines deployment override entries for LLM runtime providers used by agent execution.

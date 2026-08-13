@@ -209,6 +209,7 @@ class CredentialsConfig:
     """
 
     source: str = "env"
+    url_env_var: str = ""
     aws_secret_id: str = ""
     aws_profile: str = ""
     aws_region: str = "us-east-1"
@@ -221,6 +222,7 @@ class CredentialsConfig:
 
         return cls(
             source=_substitute_env_vars(data.get("source", "env")),
+            url_env_var=str(data.get("url_env_var", "")).strip(),
             aws_secret_id=_substitute_env_vars(data.get("aws_secret_id", "")),
             aws_profile=_substitute_env_vars(data.get("aws_profile", "")),
             aws_region=_substitute_env_vars(data.get("aws_region", "us-east-1")),
@@ -741,14 +743,14 @@ async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optiona
 async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[bool], Optional[str]]:
     """Check Postgres health via connection test.
 
-    For services with credentials config but no URL, resolves the effective URL
-    via the service-specific PostgreSQL connection resolver.
+    For services with credentials config, resolves the effective URL via the
+    service-specific PostgreSQL connection resolver.
     """
     url = conn.url
 
-    # If no URL but credentials are configured, resolve it without coupling
-    # generic PostgreSQL services to the AGR curation client.
-    if not url and conn.credentials:
+    # Credential-aware services always use the canonical resolver so health
+    # checks and runtime clients share URL precedence and AWS URL construction.
+    if conn.credentials:
         try:
             from src.lib.database.postgres_connection_resolver import (
                 get_postgres_connection_resolver,

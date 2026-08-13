@@ -160,6 +160,7 @@ services:
     timeout_seconds: 10
     credentials:
       source: "${CURATION_DB_CREDENTIALS_SOURCE:-env}"  # "env", "aws_secrets", or "url"
+      url_env_var: "CURATION_DB_URL"
       aws_secret_id: "${CURATION_DB_AWS_SECRET_ID:-ai-curation/db/curation-readonly}"
       aws_profile: "${AWS_PROFILE:-}"
       aws_region: "${AWS_REGION:-us-east-1}"
