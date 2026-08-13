@@ -9,12 +9,14 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest  # type: ignore[reportMissingImports]
+import yaml
 from src.lib.agent_studio import runtime_validation
 from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
 from src.lib.curation_workspace.adapter_registry import build_curation_adapter_registry
 from src.lib.curation_workspace.export_adapters.registry import ExportAdapterRegistry
 from src.lib.domain_packs.loader import load_domain_fixture_pack
+from src.lib.flows.output_projection import build_flow_output_artifact_bundle
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import load_tool_registry
 from src.schemas.curation_workspace import SubmissionMode
@@ -42,6 +44,7 @@ GENERIC_RUNTIME_GUARD_PATHS = {
 GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/agent_studio/catalog_service.py"),
     Path("backend/src/lib/config/agent_loader.py"),
+    Path("backend/src/lib/flows/output_projection.py"),
     Path("backend/src/lib/openai_agents/runner.py"),
     Path("backend/src/lib/openai_agents/streaming_tools.py"),
 }
@@ -50,6 +53,10 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"agr_curation_query"),
     re.compile(r"alliance_api_call"),
     re.compile(r"alliancegenome"),
+    re.compile(
+        r"\b(?:allele_candidates|gene_candidates|agm_candidates|"
+        r"ontology_term_candidates|gene_id|gene_symbol|go_id)\b"
+    ),
     re.compile(r"\b(?:FB|WB|MGI|RGD|SGD|ZFIN|HGNC)\b"),
 )
 GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
@@ -322,6 +329,11 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     assert agents["demo_agent_validation"].folder_name == "demo_agent"
     assert agents["demo_agent_validation"].tools == ["demo_search_tool"]
     assert agents["demo_agent_validation"].curation.adapter_key == "demo"
+    assert agents["demo_agent_validation"].output_projection is not None
+    assert (
+        agents["demo_agent_validation"].output_projection.row_list_field
+        == "projected_records"
+    )
 
     schemas = schema_discovery.discover_agent_schemas(packages_dir, force_reload=True)
     assert set(schemas) == {
@@ -357,6 +369,138 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
             *registry.keys(),
         ]
     )
+
+
+@pytest.mark.parametrize(
+    ("projection", "message"),
+    [
+        (None, "must declare output_projection"),
+        (
+            {"row_list_field": "missing_rows", "identity_fields": ["record_key"]},
+            "must name a list field",
+        ),
+        (
+            {
+                "row_list_field": "projected_records",
+                "identity_fields": ["missing_key"],
+            },
+            "identity_fields are not declared",
+        ),
+        (
+            {
+                "row_list_field": "projected_records",
+                "identity_fields": ["record_key"],
+                "label_fields": ["missing_label"],
+            },
+            "label_fields are not declared",
+        ),
+        (
+            {
+                "row_list_field": "projected_records",
+                "identity_fields": ["record_key"],
+                "inherited_parent_fields": ["missing_source"],
+            },
+            "inherited_parent_fields are not declared",
+        ),
+    ],
+)
+def test_typed_validator_projection_metadata_is_validated_at_package_load(
+    monkeypatch,
+    tmp_path,
+    projection,
+    message,
+):
+    packages_dir = tmp_path / "runtime-packages"
+    _copy_runtime_package(REPO_ROOT / "packages" / "core", packages_dir, "agr.core")
+    package_dir = _copy_runtime_package(
+        ORG_CUSTOM_FIXTURE,
+        packages_dir,
+        "org.custom",
+    )
+    agent_yaml = package_dir / "agents" / "demo_agent" / "agent.yaml"
+    agent_data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
+    if projection is None:
+        agent_data.pop("output_projection")
+    else:
+        agent_data["output_projection"] = projection
+    agent_yaml.write_text(
+        yaml.safe_dump(agent_data, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
+    monkeypatch.setattr(
+        agent_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "runtime-config",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        agent_loader.load_agent_definitions(packages_dir, force_reload=True)
+
+
+def test_org_custom_validator_projection_uses_package_descriptor(
+    monkeypatch,
+    tmp_path,
+):
+    packages_dir = tmp_path / "runtime-packages"
+    _copy_runtime_package(REPO_ROOT / "packages" / "core", packages_dir, "agr.core")
+    _copy_runtime_package(ORG_CUSTOM_FIXTURE, packages_dir, "org.custom")
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
+    monkeypatch.setattr(
+        agent_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "runtime-config",
+    )
+    agent_loader.load_agent_definitions(packages_dir, force_reload=True)
+
+    schemas = schema_discovery.discover_agent_schemas(
+        packages_dir,
+        force_reload=True,
+    )
+    payload = schemas["DemoValidationEnvelope"].model_validate(
+        {
+            "status": "resolved",
+            "request_id": "request-demo-1",
+            "validator_binding_id": "binding-demo-1",
+            "validator_agent": {
+                "package_id": "org.custom",
+                "agent_id": "demo_agent_validation",
+            },
+            "target": {
+                "domain_pack_id": "org.custom.demo_record",
+                "object_type": "DemoRecord",
+            },
+            "resolved_values": {},
+            "resolved_objects": [],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [],
+            "curator_message": "Fixture projection succeeded.",
+            "explanation": "Fixture projection.",
+            "source_name": "fixture provider",
+            "projected_records": [
+                {"record_key": "DEMO-1", "label": "First record"}
+            ],
+        }
+    ).model_dump(mode="json")
+
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {"step": 1, "agent_id": "demo_agent_validation", "output": payload}
+        ],
+        flow_name="Demo validation",
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "structured_result"
+    rows = bundle.rows_for_source("object")
+    assert len(rows) == 1
+    assert rows[0]["object.object_type"] == "DemoRecord"
+    assert rows[0]["object.object_id"] == "DEMO-1"
+    assert rows[0]["object.label"] == "First record"
+    assert rows[0]["object.payload.source_name"] == "fixture provider"
 
 
 def test_org_custom_domain_pack_walkthrough_registers_runtime_surfaces(monkeypatch, tmp_path):

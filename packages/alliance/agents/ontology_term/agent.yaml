@@ -36,6 +36,10 @@ tools:
 
 output_schema: OntologyTermValidationResult
 
+output_projection:
+  row_list_field: ontology_term_candidates
+  identity_fields: [curie]
+
 structured_finalization:
   enabled: true
   tool_name: finalize_ontology_term_lookup

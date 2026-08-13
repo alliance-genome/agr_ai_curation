@@ -43,6 +43,9 @@ tools:
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
 output_schema: GOTermResultEnvelope
+output_projection:
+  row_list_field: results
+  identity_fields: [go_id]
 structured_finalization:
   enabled: true
   tool_name: finalize_go_term_lookup

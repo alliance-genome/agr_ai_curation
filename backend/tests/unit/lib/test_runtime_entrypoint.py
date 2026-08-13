@@ -607,6 +607,9 @@ agent_bundles:
             "agent_id: runtime_validator\n"
             "name: Runtime Validator\n"
             "output_schema: RuntimeValidatorResult\n"
+            "output_projection:\n"
+            "  row_list_field: records\n"
+            "  identity_fields: [record_id]\n"
         ),
         encoding="utf-8",
     )
@@ -616,9 +619,13 @@ agent_bundles:
     )
     (agent_dir / "schema.py").write_text(
         (
+            "from pydantic import BaseModel\n"
             "from src.schemas.domain_validator import DomainValidatorResultBase\n\n"
+            "class RuntimeValidatorRow(BaseModel):\n"
+            "    record_id: str\n\n"
             "class RuntimeValidatorResult(DomainValidatorResultBase):\n"
             "    __envelope_class__ = True\n"
+            "    records: list[RuntimeValidatorRow]\n"
         ),
         encoding="utf-8",
     )

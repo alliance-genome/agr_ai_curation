@@ -46,6 +46,10 @@ tools:
 # -----------------------------------------------------------------------------
 output_schema: AlleleResultEnvelope
 
+output_projection:
+  row_list_field: allele_candidates
+  identity_fields: [allele_id]
+
 structured_finalization:
   enabled: true
   tool_name: finalize_allele_lookup

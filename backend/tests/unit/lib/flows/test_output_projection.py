@@ -81,14 +81,19 @@ def _completed_domain_step():
     }
 
 
-def _typed_validator_result_payload(**schema_fields):
+def _typed_validator_result_payload(
+    *,
+    package_id="agr.alliance",
+    agent_id="typed_validator",
+    **schema_fields,
+):
     return {
         "status": "resolved",
         "request_id": "request-output-1",
         "validator_binding_id": "binding-output-1",
         "validator_agent": {
-            "package_id": "agr.alliance",
-            "agent_id": "typed_validator",
+            "package_id": package_id,
+            "agent_id": agent_id,
         },
         "target": {
             "domain_pack_id": "agr.alliance",
@@ -1938,10 +1943,17 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
 
 
 @pytest.mark.parametrize(
-    ("schema_name", "schema_fields", "output_format", "expected_id"),
+    (
+        "schema_name",
+        "validator_agent_id",
+        "schema_fields",
+        "output_format",
+        "expected_id",
+    ),
     [
         (
             "AlleleResultEnvelope",
+            "allele_validation",
             {
                 "allele_candidates": [
                     {
@@ -1955,7 +1967,79 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
             "MGI:3689906",
         ),
         (
+            "GeneResultEnvelope",
+            "gene_validation",
+            {
+                "gene_candidates": [
+                    {
+                        "gene_id": "HGNC:11998",
+                        "symbol": "TP53",
+                    }
+                ]
+            },
+            "csv",
+            "HGNC:11998",
+        ),
+        (
+            "ChemicalValidationResult",
+            "chemical_validation",
+            {
+                "candidates": [
+                    {
+                        "value": "CHEM:0001",
+                        "label": "candidate chemical",
+                    }
+                ]
+            },
+            "csv",
+            "CHEM:0001",
+        ),
+        (
+            "ControlledVocabularyValidationResult",
+            "controlled_vocabulary_validation",
+            {
+                "controlled_vocabulary_candidates": [
+                    {
+                        "internal_id": 42,
+                        "vocabulary": "demo vocabulary",
+                        "term_name": "demo term",
+                        "obsolete": False,
+                    }
+                ]
+            },
+            "csv",
+            "42",
+        ),
+        (
+            "DataProviderValidationResult",
+            "data_provider_validation",
+            {
+                "data_provider_candidates": [
+                    {
+                        "abbreviation": "FB",
+                        "taxon_id": "NCBITaxon:7227",
+                    }
+                ]
+            },
+            "csv",
+            "FB",
+        ),
+        (
+            "ExperimentalConditionValidationResult",
+            "experimental_condition_validation",
+            {
+                "normalized_components": [
+                    {
+                        "component_type": "condition_class",
+                    }
+                ]
+            },
+            "csv",
+            "condition_class",
+        ),
+        (
             "GOTermResultEnvelope",
+            "gene_ontology_lookup",
             {
                 "results": [
                     {
@@ -1972,6 +2056,7 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
         ),
         (
             "GOAnnotationsResult",
+            "go_annotations_lookup",
             {
                 "gene_id": "WB:WBGene00000898",
                 "gene_symbol": "daf-16",
@@ -1981,6 +2066,7 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
                         "go_name": "insulin receptor signaling pathway",
                         "aspect": "biological_process",
                         "evidence_code": "IMP",
+                        "qualifier": ["not"],
                     }
                 ],
                 "manual_count": 1,
@@ -1989,17 +2075,63 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
             "csv",
             "GO:0008286",
         ),
+        (
+            "AgmValidationResult",
+            "agm_validation",
+            {
+                "agm_candidates": [
+                    {
+                        "agm_id": "AGM:0001",
+                        "label": "model one",
+                    }
+                ]
+            },
+            "csv",
+            "AGM:0001",
+        ),
+        (
+            "OntologyTermValidationResult",
+            "ontology_term_validation",
+            {
+                "ontology_term_candidates": [
+                    {
+                        "curie": "TERM:0001",
+                        "label": "neutral term",
+                    }
+                ]
+            },
+            "chat",
+            "TERM:0001",
+        ),
+        (
+            "SubjectEntityValidationResult",
+            "subject_entity_validation",
+            {
+                "subject_candidates": [
+                    {
+                        "subject_identifier": "FB:FBgn0000001",
+                        "subject_type": "gene",
+                    }
+                ]
+            },
+            "csv",
+            "FB:FBgn0000001",
+        ),
     ],
 )
 def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
     schema_name,
+    validator_agent_id,
     schema_fields,
     output_format,
     expected_id,
 ):
     schema = schema_discovery.discover_agent_schemas(force_reload=True)[schema_name]
     payload = schema.model_validate(
-        _typed_validator_result_payload(**schema_fields)
+        _typed_validator_result_payload(
+            agent_id=validator_agent_id,
+            **schema_fields,
+        )
     ).model_dump(mode="json")
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[
@@ -2030,6 +2162,7 @@ def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
 
 def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
     payload = _typed_validator_result_payload(
+        agent_id="go_annotations_lookup",
         gene_id="WB:WBGene00000898",
         gene_symbol="daf-16",
         annotations=[{"go_id": "GO:0008286", "go_name": "signaling"}],
@@ -2041,12 +2174,14 @@ def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
     )
 
     row = bundle.rows_for_source("object")[0]
+    assert row["object.label"] == "signaling"
     assert row["object.payload.gene_id"] == "WB:WBGene00000898"
     assert row["object.payload.gene_symbol"] == "daf-16"
 
 
 def test_validator_like_payload_with_legacy_items_remains_non_structured():
     payload = _typed_validator_result_payload(
+        agent_id="allele_validation",
         items=[{"id": "legacy-row"}],
     )
     bundle = build_flow_output_artifact_bundle(
@@ -2057,6 +2192,47 @@ def test_validator_like_payload_with_legacy_items_remains_non_structured():
 
     assert bundle.artifacts == []
     assert bundle.rows_for_source("object") == []
+
+
+def test_typed_validator_row_without_declared_identity_fails_loudly():
+    payload = _typed_validator_result_payload(
+        agent_id="go_annotations_lookup",
+        gene_id="WB:WBGene00000898",
+        gene_symbol="daf-16",
+        annotations=[{"go_id": "", "go_name": "invalid identity"}],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="does not provide any declared identity field: go_id",
+    ):
+        build_flow_output_artifact_bundle(
+            completed_steps=[
+                {"step": 1, "agent_id": "go_annotations", "output": payload}
+            ],
+            flow_name="Missing validator identity",
+            output_format="csv",
+        )
+
+
+def test_typed_validator_result_with_unknown_package_agent_fails_loudly():
+    payload = _typed_validator_result_payload(
+        package_id="org.missing",
+        agent_id="missing_validation",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Unknown package-scoped validator agent "
+        "'org.missing:missing_validation'",
+    ):
+        build_flow_output_artifact_bundle(
+            completed_steps=[
+                {"step": 1, "agent_id": "custom", "output": payload}
+            ],
+            flow_name="Unknown validator",
+            output_format="csv",
+        )
 
 
 def test_raw_result_list_remains_non_structured():

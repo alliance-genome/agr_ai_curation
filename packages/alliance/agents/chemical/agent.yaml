@@ -44,6 +44,9 @@ tools:
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
 output_schema: ChemicalValidationResult
+output_projection:
+  row_list_field: candidates
+  identity_fields: [value]
 structured_finalization:
   enabled: true
   tool_name: finalize_chemical_lookup

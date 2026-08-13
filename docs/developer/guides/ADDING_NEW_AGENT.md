@@ -106,6 +106,15 @@ tools:
 # Output schema class name (from agents/my_agent/schema.py)
 output_schema: MyAgentEnvelope
 
+# Required when output_schema inherits DomainValidatorResultBase. The row list,
+# row identity fields, and inherited top-level fields are validated against the
+# declared schema when agent metadata loads.
+output_projection:
+  row_list_field: candidates
+  identity_fields: [value]
+  label_fields: [label]
+  inherited_parent_fields: []
+
 # LLM settings (supports environment variables)
 model_config:
   model: "${AGENT_MY_AGENT_MODEL:-gpt-5.5}"

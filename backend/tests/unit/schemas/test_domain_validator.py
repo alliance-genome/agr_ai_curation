@@ -7,6 +7,7 @@ from src.schemas.domain_validator import (
     DomainValidatorResultBase,
     ValidationTarget,
     ValidatorAgentRef,
+    ValidatorOutputProjection,
     is_domain_validator_result_schema,
 )
 
@@ -141,3 +142,36 @@ def test_support_models_are_strict():
 
     with pytest.raises(ValidationError):
         ValidationTarget.model_validate({"domain_pack_id": "demo.entity", "extra": True})
+
+
+def test_validator_output_projection_requires_explicit_safe_field_names():
+    projection = ValidatorOutputProjection.model_validate(
+        {
+            "row_list_field": "projected_records",
+            "identity_fields": ["record_key"],
+            "label_fields": ["label"],
+            "inherited_parent_fields": ["source_name"],
+        }
+    )
+
+    assert projection.row_list_field == "projected_records"
+    assert projection.identity_fields == ("record_key",)
+    assert projection.label_fields == ("label",)
+    assert projection.inherited_parent_fields == ("source_name",)
+
+    for invalid in (
+        {"row_list_field": "", "identity_fields": ["record_key"]},
+        {"row_list_field": "records", "identity_fields": []},
+        {"row_list_field": "records", "identity_fields": ["record.key"]},
+        {
+            "row_list_field": "records",
+            "identity_fields": ["record_key", "record_key"],
+        },
+        {
+            "row_list_field": "records",
+            "identity_fields": ["record_key"],
+            "unexpected": True,
+        },
+    ):
+        with pytest.raises(ValidationError):
+            ValidatorOutputProjection.model_validate(invalid)

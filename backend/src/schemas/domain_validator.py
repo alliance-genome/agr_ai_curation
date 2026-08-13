@@ -22,6 +22,45 @@ class DomainValidatorBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ValidatorOutputProjection(DomainValidatorBaseModel):
+    """Package-owned row projection contract for typed validator results."""
+
+    row_list_field: StrictStr = Field(
+        description="Result field containing the canonical projected rows"
+    )
+    identity_fields: tuple[StrictStr, ...] = Field(
+        min_length=1,
+        description="Ordered row fields used to derive stable object identities",
+    )
+    label_fields: tuple[StrictStr, ...] = Field(
+        default=(),
+        description="Ordered row or inherited fields used for display labels",
+    )
+    inherited_parent_fields: tuple[StrictStr, ...] = Field(
+        default=(),
+        description="Top-level result fields copied into each projected row",
+    )
+
+    @field_validator("row_list_field")
+    @classmethod
+    def _validate_row_list_field(cls, value: str) -> str:
+        if not value or value != value.strip() or not value.isidentifier():
+            raise ValueError("row_list_field must be a non-empty field name")
+        return value
+
+    @field_validator("identity_fields", "label_fields", "inherited_parent_fields")
+    @classmethod
+    def _validate_projection_fields(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(
+            not field or field != field.strip() or not field.isidentifier()
+            for field in value
+        ):
+            raise ValueError("projection entries must be non-empty field names")
+        if len(set(value)) != len(value):
+            raise ValueError("projection entries must be unique")
+        return value
+
+
 class ValidatorAgentRef(DomainValidatorBaseModel):
     """Package-scoped validator agent identity."""
 

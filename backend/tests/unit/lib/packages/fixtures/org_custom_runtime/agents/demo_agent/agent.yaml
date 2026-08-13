@@ -14,6 +14,11 @@ supervisor_routing:
 tools:
   - demo_search_tool
 output_schema: DemoValidationEnvelope
+output_projection:
+  row_list_field: projected_records
+  identity_fields: [record_key]
+  label_fields: [label]
+  inherited_parent_fields: [source_name]
 requires_document: false
 required_params: []
 batch_capabilities:
