@@ -27,7 +27,8 @@ jobs:
       - name: Install gate dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ruff pyyaml
+          # Keep the changed-file lint contract stable across Ruff releases.
+          python -m pip install "ruff==0.15.14" pyyaml
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
