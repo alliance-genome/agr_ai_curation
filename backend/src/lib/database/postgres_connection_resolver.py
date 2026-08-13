@@ -6,6 +6,7 @@ specific database clients, such as the AGR curation client, remain separate.
 
 import json
 import logging
+import os
 import threading
 from typing import Dict, Optional
 from urllib.parse import quote
@@ -47,23 +48,31 @@ class PostgresConnectionResolver:
                 logger.info("PostgreSQL service %s is not configured", self.service_id)
 
     def _try_connections_config(self) -> Optional[str]:
-        try:
-            from src.lib.config.connections_loader import get_connection
-        except ImportError:
-            logger.debug("connections_loader not available")
-            return None
+        from src.lib.config.connections_loader import get_connection
 
         connection = get_connection(self.service_id)
         if not connection:
             return None
+
+        credentials = connection.credentials
+        if credentials and credentials.url_env_var:
+            explicit_url = os.getenv(credentials.url_env_var)
+            if explicit_url:
+                logger.debug(
+                    "Using %s environment variable for %s",
+                    credentials.url_env_var,
+                    self.service_id,
+                )
+                return explicit_url
+
         if connection.url:
             return connection.url
-        if not connection.credentials:
+        if not credentials:
             return None
 
-        source = connection.credentials.source
+        source = credentials.source
         if source == "aws_secrets":
-            return self._fetch_aws_credentials(connection.credentials)
+            return self._fetch_aws_credentials(credentials)
         if source == "env":
             return None
         if source == "url":
@@ -76,14 +85,10 @@ class PostgresConnectionResolver:
             "Expected one of: env, aws_secrets, url"
         )
 
-    def _fetch_aws_credentials(self, credentials) -> Optional[str]:
+    def _fetch_aws_credentials(self, credentials) -> str:
         try:
             import boto3
-        except ImportError:
-            logger.warning("boto3 not installed — cannot use AWS Secrets Manager")
-            return None
 
-        try:
             session = (
                 boto3.Session(profile_name=credentials.aws_profile)
                 if credentials.aws_profile
@@ -155,7 +160,5 @@ def get_postgres_connection_resolver(service_id: str) -> PostgresConnectionResol
 
 def reset_postgres_connection_resolvers() -> None:
     """Reset all generic resolver singletons (primarily for tests)."""
-    global _resolvers
     for resolver in _resolvers.values():
         resolver.reset()
-    _resolvers = {}

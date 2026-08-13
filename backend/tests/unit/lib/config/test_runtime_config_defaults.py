@@ -7,12 +7,17 @@ from pathlib import Path
 import pytest
 
 from src.lib.config import connections_loader, groups_loader
+from src.lib.database.postgres_connection_resolver import (
+    PostgresConnectionResolver,
+    reset_postgres_connection_resolvers,
+)
 
 
 @pytest.fixture(autouse=True)
 def _reset_loader_state(monkeypatch):
     groups_loader.reset_cache()
     connections_loader.reset_cache()
+    reset_postgres_connection_resolvers()
     for variable in (
         "AGR_RUNTIME_ROOT",
         "AGR_RUNTIME_CONFIG_DIR",
@@ -24,6 +29,7 @@ def _reset_loader_state(monkeypatch):
     yield
     groups_loader.reset_cache()
     connections_loader.reset_cache()
+    reset_postgres_connection_resolvers()
 
 
 def _write_groups_yaml(path: Path) -> None:
@@ -114,7 +120,7 @@ def test_load_connections_deep_merges_deployment_overlay(monkeypatch, tmp_path: 
         "    url: http://custom-weaviate:9090\n"
         "  external_reporting_db:\n"
         "    description: Deployment-owned reporting database\n"
-        "    url: ${EXTERNAL_REPORTING_DB_URL:-}\n"
+        "    url: postgresql://reporting-db:5432/reporting\n"
         "    required: false\n"
         "    active: false\n",
         encoding="utf-8",
@@ -129,6 +135,10 @@ def test_load_connections_deep_merges_deployment_overlay(monkeypatch, tmp_path: 
     assert connections["weaviate"].description == "Vector database"
     assert connections["weaviate"].required is True
     assert connections["external_reporting_db"].active is False
+    assert (
+        PostgresConnectionResolver("external_reporting_db").get_connection_url()
+        == "postgresql://reporting-db:5432/reporting"
+    )
 
 
 def test_load_connections_rejects_missing_configured_overlay(

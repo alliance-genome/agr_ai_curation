@@ -20,7 +20,6 @@ import importlib
 import inspect
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 from functools import lru_cache
@@ -36,6 +35,7 @@ from src.lib.config.agent_loader import (
     get_agent_by_folder,
 )
 from src.lib.file_outputs import FileValidationError, sanitize_output_descriptor
+from src.lib.database.curation_resolver import get_curation_resolver
 from src.lib.prompts.assembly import (
     PromptLayerBundle,
     build_agent_prompt_layers,
@@ -1520,8 +1520,7 @@ def _build_tool_execution_context(
     if isinstance(raw_database_url, str) and raw_database_url.strip():
         database_url = raw_database_url.strip()
     else:
-        env_database_url = os.getenv("CURATION_DB_URL", "").strip()
-        database_url = env_database_url or None
+        database_url = get_curation_resolver().get_connection_url()
 
     raw_formatter_output_format = kwargs.get("formatter_output_format")
     formatter_output_format = (

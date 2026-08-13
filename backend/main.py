@@ -22,6 +22,9 @@ from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
+from src.lib.database.postgres_connection_resolver import (
+    get_postgres_connection_resolver,
+)
 from src.lib.observability.sentry import initialize_sentry_if_configured
 from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
 from src.lib.storage_permissions import ensure_writable_directory
@@ -561,9 +564,13 @@ def _env_flag_enabled(name: str, default: str = "false") -> bool:
     }
 
 
-def _check_database_url(label: str, env_name: str, *, required: bool) -> dict[str, object]:
+def _check_database_connection(
+    label: str,
+    url: str | None,
+    *,
+    required: bool,
+) -> dict[str, object]:
     """Check a configured SQLAlchemy database URL without exposing the URL."""
-    url = os.getenv(env_name)
     if not url:
         return {
             "status": "missing" if required else "not_configured",
@@ -596,6 +603,39 @@ def _check_database_url(label: str, env_name: str, *, required: bool) -> dict[st
             "required": required,
             "error_type": type(e).__name__,
         }
+
+
+def _check_database_url(label: str, env_name: str, *, required: bool) -> dict[str, object]:
+    """Resolve an environment URL and check its database connection."""
+    return _check_database_connection(
+        label,
+        os.getenv(env_name),
+        required=required,
+    )
+
+
+def _check_curation_database(*, required: bool) -> dict[str, object]:
+    """Check curation readiness through the canonical PostgreSQL resolver."""
+    try:
+        url = get_postgres_connection_resolver(
+            "curation_db"
+        ).get_connection_url()
+    except Exception as exc:
+        logger.warning(
+            "Curation database readiness resolution failed: %s",
+            type(exc).__name__,
+        )
+        return {
+            "status": "invalid_config",
+            "required": required,
+            "error_type": type(exc).__name__,
+        }
+
+    return _check_database_connection(
+        "Curation database",
+        url,
+        required=required,
+    )
 
 
 def _check_elasticsearch(*, required: bool) -> dict[str, object]:
@@ -673,9 +713,7 @@ def readiness_check():
     require_literature_db = _env_flag_enabled("HEALTH_CHECK_REQUIRE_LITERATURE_DB")
     services = {
         "app": {"status": "running", "required": True},
-        "curation_db": _check_database_url(
-            "Curation database",
-            "CURATION_DB_URL",
+        "curation_db": _check_curation_database(
             required=require_external_validation_deps,
         ),
         "literature_db": _check_database_url(

@@ -147,11 +147,12 @@ services:
   # If not configured, agents gracefully degrade (PDF/Weaviate tools still work).
   #
   # Credential resolution priority:
-  #   1. CURATION_DB_URL env var (full connection string)
-  #   2. credentials.source config below (env/aws_secrets/url)
+  #   1. credentials.url_env_var (CURATION_DB_URL full connection string)
+  #   2. url field (typically supplied by a deployment overlay)
+  #   3. credentials.source config below (env/aws_secrets/url)
   curation_db:
     description: "AGR Curation PostgreSQL database (direct connection)"
-    url: "${CURATION_DB_URL:-}"
+    url: ""
     health_check:
       endpoint: null
       method: CONNECT
@@ -160,6 +161,7 @@ services:
     timeout_seconds: 10
     credentials:
       source: "${CURATION_DB_CREDENTIALS_SOURCE:-env}"  # "env", "aws_secrets", or "url"
+      url_env_var: "CURATION_DB_URL"
       aws_secret_id: "${CURATION_DB_AWS_SECRET_ID:-ai-curation/db/curation-readonly}"
       aws_profile: "${AWS_PROFILE:-}"
       aws_region: "${AWS_REGION:-us-east-1}"

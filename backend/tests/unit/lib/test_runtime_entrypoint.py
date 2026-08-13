@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -339,8 +340,13 @@ def test_bootstrap_package_environments_marks_startup_sentinel(monkeypatch, tmp_
 
 def test_refresh_identifier_prefixes_writes_runtime_state_file(monkeypatch, tmp_path: Path):
     runtime_root = tmp_path / "runtime"
+    canonical_url = "postgresql://user:pass@localhost:5432/curation"
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
-    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/curation")
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=lambda: canonical_url),
+    )
 
     class FakeCursor:
         def __init__(self):
@@ -382,6 +388,85 @@ def test_refresh_identifier_prefixes_writes_runtime_state_file(monkeypatch, tmp_
     assert json.loads(prefix_file.read_text(encoding="utf-8")) == {
         "prefixes": ["FB", "GO", "MGI", "WB"]
     }
+
+
+def test_refresh_identifier_prefixes_prefers_canonical_curation_url(
+    monkeypatch, tmp_path: Path
+):
+    runtime_root = tmp_path / "runtime"
+    canonical_url = "postgresql://curation.example/curation"
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://application.example/app")
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=lambda: canonical_url),
+    )
+
+    connected_urls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, _query):
+            return None
+
+        def fetchall(self):
+            return []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    def connect(url):
+        connected_urls.append(url)
+        return FakeConnection()
+
+    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", connect)
+
+    assert runtime_entrypoint.refresh_identifier_prefixes() is True
+    assert connected_urls == [canonical_url]
+
+
+def test_refresh_identifier_prefixes_propagates_curation_resolution_failure(monkeypatch):
+    def fail_resolution():
+        raise ValueError("curation config is invalid")
+
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=fail_resolution),
+    )
+
+    with pytest.raises(ValueError, match="curation config is invalid"):
+        runtime_entrypoint.refresh_identifier_prefixes()
+
+
+def test_refresh_identifier_prefixes_skips_when_curation_is_unconfigured(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=lambda: None),
+    )
+
+    def unexpected_connect(*_args, **_kwargs):
+        raise AssertionError("unconfigured curation must not connect")
+
+    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", unexpected_connect)
+
+    assert runtime_entrypoint.refresh_identifier_prefixes() is False
 
 
 def test_write_json_atomically_uses_replace_in_target_directory(monkeypatch, tmp_path: Path):

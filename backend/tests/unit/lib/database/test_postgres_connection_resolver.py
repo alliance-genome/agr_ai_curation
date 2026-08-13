@@ -6,6 +6,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from src.lib.config.connections_loader import CredentialsConfig
 from src.lib.database.postgres_connection_resolver import (
     PostgresConnectionResolver,
     get_postgres_connection_resolver,
@@ -46,11 +47,59 @@ def test_prefers_direct_config_url(monkeypatch):
     assert resolver.get_connection_url() == connection.url
 
 
+def test_prefers_explicit_url_environment_variable(monkeypatch):
+    resolver = PostgresConnectionResolver("curation_db")
+    environment_url = _db_url("env", "pw", "tunnel", "15432", "curation")
+    connection = SimpleNamespace(
+        url=_db_url("overlay", "pw", "private-db", "5432", "curation"),
+        credentials=CredentialsConfig(
+            source="url",
+            url_env_var="CURATION_DB_URL",
+        ),
+    )
+    monkeypatch.setenv("CURATION_DB_URL", environment_url)
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.get_connection",
+        lambda _service_id: connection,
+    )
+
+    assert resolver.get_connection_url() == environment_url
+
+
+def test_uses_config_url_when_explicit_url_environment_variable_is_empty(monkeypatch):
+    resolver = PostgresConnectionResolver("curation_db")
+    config_url = _db_url("overlay", "pw", "private-db", "5432", "curation")
+    connection = SimpleNamespace(
+        url=config_url,
+        credentials=CredentialsConfig(
+            source="url",
+            url_env_var="CURATION_DB_URL",
+        ),
+    )
+    monkeypatch.delenv("CURATION_DB_URL", raising=False)
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.get_connection",
+        lambda _service_id: connection,
+    )
+
+    assert resolver.get_connection_url() == config_url
+
+
+def test_missing_service_is_unconfigured(monkeypatch):
+    resolver = PostgresConnectionResolver("external_reporting_db")
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.get_connection",
+        lambda _service_id: None,
+    )
+
+    assert resolver.get_connection_url() is None
+
+
 def test_env_source_without_resolved_url_is_unconfigured(monkeypatch):
     resolver = PostgresConnectionResolver("external_reporting_db")
     connection = SimpleNamespace(
         url="",
-        credentials=SimpleNamespace(source="env"),
+        credentials=CredentialsConfig(source="env"),
     )
     monkeypatch.setattr(
         "src.lib.config.connections_loader.get_connection",
@@ -60,9 +109,25 @@ def test_env_source_without_resolved_url_is_unconfigured(monkeypatch):
     assert resolver.get_connection_url() is None
 
 
+@pytest.mark.parametrize("source", ["url", "unsupported"])
+def test_invalid_or_incomplete_credential_source_fails_fast(monkeypatch, source):
+    resolver = PostgresConnectionResolver("external_reporting_db")
+    connection = SimpleNamespace(
+        url="",
+        credentials=CredentialsConfig(source=source),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.get_connection",
+        lambda _service_id: connection,
+    )
+
+    with pytest.raises(ValueError, match="credentials.source"):
+        resolver.get_connection_url()
+
+
 def test_fetches_and_escapes_aws_secret(monkeypatch):
     resolver = PostgresConnectionResolver("external_reporting_db")
-    credentials = SimpleNamespace(
+    credentials = CredentialsConfig(
         source="aws_secrets",
         aws_profile="dev",
         aws_region="us-east-1",
@@ -111,7 +176,7 @@ def test_fetches_and_escapes_aws_secret(monkeypatch):
 
 def test_invalid_aws_secret_raises_service_specific_error(monkeypatch):
     resolver = PostgresConnectionResolver("external_production_db")
-    credentials = SimpleNamespace(
+    credentials = CredentialsConfig(
         source="aws_secrets",
         aws_profile="",
         aws_region="us-east-1",
@@ -142,6 +207,28 @@ def test_invalid_aws_secret_raises_service_specific_error(monkeypatch):
         resolver.get_connection_url()
 
 
+def test_missing_boto3_raises_service_specific_error(monkeypatch):
+    resolver = PostgresConnectionResolver("external_production_db")
+    connection = SimpleNamespace(
+        url="",
+        credentials=CredentialsConfig(
+            source="aws_secrets",
+            aws_secret_id="external-production-secret",
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.get_connection",
+        lambda _service_id: connection,
+    )
+    monkeypatch.setitem(sys.modules, "boto3", None)
+
+    with pytest.raises(
+        ValueError,
+        match="Failed to resolve external_production_db credentials",
+    ):
+        resolver.get_connection_url()
+
+
 def test_singleton_registry_is_per_service():
     production = get_postgres_connection_resolver("external_production_db")
     same_production = get_postgres_connection_resolver("external_production_db")
@@ -149,3 +236,8 @@ def test_singleton_registry_is_per_service():
 
     assert production is same_production
     assert production is not reporting
+
+    reset_postgres_connection_resolvers()
+
+    assert get_postgres_connection_resolver("external_production_db") is production
+    assert get_postgres_connection_resolver("external_reporting_db") is reporting

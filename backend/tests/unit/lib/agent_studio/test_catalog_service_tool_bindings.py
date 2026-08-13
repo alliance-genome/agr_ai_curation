@@ -218,8 +218,11 @@ def test_runtime_formatter_filename_context_names_finalize_tool():
     assert "save_*_file" not in context
 
 
-def test_build_tool_execution_context_uses_env_database_url(monkeypatch):
-    monkeypatch.setenv("CURATION_DB_URL", "postgresql://example/db")
+def test_build_tool_execution_context_uses_canonical_database_url(monkeypatch):
+    resolver = SimpleNamespace(
+        get_connection_url=lambda: "postgresql://example/db"
+    )
+    monkeypatch.setattr(catalog_service, "get_curation_resolver", lambda: resolver)
 
     context = catalog_service._build_tool_execution_context(
         {"document_id": "doc-1", "user_id": "user-1"}

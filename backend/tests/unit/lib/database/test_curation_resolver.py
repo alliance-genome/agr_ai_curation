@@ -3,6 +3,7 @@
 import os
 import sys
 from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,6 +12,10 @@ from src.lib.database.curation_resolver import (
     CurationConnectionResolver,
     get_curation_resolver,
     reset_curation_resolver,
+)
+from src.lib.database.postgres_connection_resolver import (
+    PostgresConnectionResolver,
+    reset_postgres_connection_resolvers,
 )
 
 
@@ -23,131 +28,38 @@ def _db_url(user: str, password: str, host: str, port: str, dbname: str) -> str:
 @pytest.fixture(autouse=True)
 def _reset_singleton_and_env(monkeypatch):
     reset_curation_resolver()
+    reset_postgres_connection_resolvers()
     monkeypatch.delenv("CURATION_DB_URL", raising=False)
     monkeypatch.delenv("TMP_PATH", raising=False)
     yield
     reset_curation_resolver()
+    reset_postgres_connection_resolvers()
 
 
-def test_resolve_noops_when_already_resolved(monkeypatch):
-    resolver = CurationConnectionResolver()
-    resolver._resolved = True
-    resolver._connection_url = _db_url("cached", "pw", "localhost", "5432", "db")
+def test_connection_url_delegates_to_canonical_postgres_resolver():
+    connection_url = _db_url("reader", "pw", "db", "5432", "curation")
+    delegate = MagicMock(spec=PostgresConnectionResolver)
+    delegate.get_connection_url.return_value = connection_url
+    resolver = CurationConnectionResolver(connection_resolver=delegate)
 
-    monkeypatch.setattr(resolver, "_try_resolve", lambda: (_ for _ in ()).throw(AssertionError("should not resolve")))
-    resolver._resolve()
-    assert resolver._connection_url == _db_url("cached", "pw", "localhost", "5432", "db")
-
-
-def test_try_connections_config_handles_import_error(monkeypatch):
-    resolver = CurationConnectionResolver()
-    original_import = __import__
-
-    def _fake_import(name, *args, **kwargs):
-        if name == "src.lib.config.connections_loader":
-            raise ImportError("missing module")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.__import__", _fake_import)
-    assert resolver._try_connections_config() is None
+    assert resolver.get_connection_url() == connection_url
+    assert resolver.is_configured() is True
+    resolver.reset()
+    assert delegate.get_connection_url.call_count == 2
+    delegate.reset.assert_called_once_with()
 
 
-def test_try_connections_config_handles_none_connection(monkeypatch):
-    resolver = CurationConnectionResolver()
-    monkeypatch.setattr("src.lib.config.connections_loader.get_connection", lambda _name: None)
-    assert resolver._try_connections_config() is None
+def test_unconfigured_curation_client_and_health_status():
+    delegate = MagicMock(spec=PostgresConnectionResolver)
+    delegate.get_connection_url.return_value = None
+    resolver = CurationConnectionResolver(connection_resolver=delegate)
 
-
-def test_try_connections_config_prefers_direct_url(monkeypatch):
-    resolver = CurationConnectionResolver()
-    conn = SimpleNamespace(url=_db_url("cfg", "pw", "host", "5432", "from_config"), credentials=None)
-    monkeypatch.setattr("src.lib.config.connections_loader.get_connection", lambda _name: conn)
-    assert resolver._try_connections_config() == _db_url("cfg", "pw", "host", "5432", "from_config")
-
-
-def test_try_connections_config_returns_none_without_credentials(monkeypatch):
-    resolver = CurationConnectionResolver()
-    conn = SimpleNamespace(url="", credentials=None)
-    monkeypatch.setattr("src.lib.config.connections_loader.get_connection", lambda _name: conn)
-    assert resolver._try_connections_config() is None
-
-
-def test_try_connections_config_uses_aws_secrets_source(monkeypatch):
-    resolver = CurationConnectionResolver()
-    creds = SimpleNamespace(source="aws_secrets", aws_profile=None, aws_region="us-east-1", aws_secret_id="secret-id")
-    conn = SimpleNamespace(url="", credentials=creds)
-    monkeypatch.setattr("src.lib.config.connections_loader.get_connection", lambda _name: conn)
-    monkeypatch.setattr(
-        resolver,
-        "_fetch_aws_credentials",
-        lambda _credentials: _db_url("aws", "pw", "host", "5432", "from_aws"),
-    )
-    assert resolver._try_connections_config() == _db_url("aws", "pw", "host", "5432", "from_aws")
-
-
-def test_fetch_aws_credentials_returns_none_when_boto3_missing(monkeypatch):
-    resolver = CurationConnectionResolver()
-    creds = SimpleNamespace(aws_profile=None, aws_region="us-east-1", aws_secret_id="secret-id")
-    original_import = __import__
-
-    def _fake_import(name, *args, **kwargs):
-        if name == "boto3":
-            raise ImportError("missing boto3")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.__import__", _fake_import)
-    assert resolver._fetch_aws_credentials(creds) is None
-
-
-def test_fetch_aws_credentials_success(monkeypatch):
-    resolver = CurationConnectionResolver()
-    creds = SimpleNamespace(aws_profile="dev", aws_region="us-east-1", aws_secret_id="secret-id")
-
-    class _Client:
-        def get_secret_value(self, SecretId):
-            assert SecretId == "secret-id"
-            return {
-                "SecretString": (
-                    '{"username":"user","password":"p@ss word","host":"db.example.org",'
-                    '"port":"5432","dbname":"curation"}'
-                )
-            }
-
-    class _Session:
-        def __init__(self, profile_name=None):
-            assert profile_name == "dev"
-
-        def client(self, service, region_name=None):
-            assert service == "secretsmanager"
-            assert region_name == "us-east-1"
-            return _Client()
-
-    fake_boto3 = ModuleType("boto3")
-    fake_boto3.Session = _Session
-    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
-
-    url = resolver._fetch_aws_credentials(creds)
-    assert url == _db_url("user", "p%40ss%20word", "db.example.org", "5432", "curation")
-
-
-def test_fetch_aws_credentials_raises_when_secret_invalid(monkeypatch):
-    resolver = CurationConnectionResolver()
-    creds = SimpleNamespace(aws_profile=None, aws_region="us-east-1", aws_secret_id="secret-id")
-
-    class _Client:
-        def get_secret_value(self, SecretId):
-            return {"SecretString": '{"username":"user","password":"pw"}'}
-
-    class _Session:
-        def client(self, service, region_name=None):
-            return _Client()
-
-    fake_boto3 = ModuleType("boto3")
-    fake_boto3.Session = _Session
-    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
-
-    with pytest.raises(ValueError, match="Failed to resolve curation DB credentials from AWS Secrets Manager"):
-        resolver._fetch_aws_credentials(creds)
+    assert resolver.is_configured() is False
+    assert resolver.get_db_client() is None
+    assert resolver.get_health_status() == {
+        "status": "not_configured",
+        "message": "Curation database is not configured",
+    }
 
 
 def test_get_db_client_returns_cached_instance():

@@ -284,13 +284,14 @@ def test_singleton_context_and_runtime_helpers(monkeypatch):
     assert catalog_service._coerce_db_user_id(" 42 ") == 42
     assert catalog_service._coerce_db_user_id("abc") is None
 
-    monkeypatch.delenv("CURATION_DB_URL", raising=False)
+    mock_resolver = SimpleNamespace(get_connection_url=lambda: None)
+    monkeypatch.setattr(catalog_service, "get_curation_resolver", lambda: mock_resolver)
     ctx = catalog_service._build_tool_execution_context({"document_id": 10, "user_id": 5})
     assert ctx.document_id == "10"
     assert ctx.user_id == "5"
     assert ctx.database_url is None
 
-    monkeypatch.setenv("CURATION_DB_URL", "postgres://env")
+    mock_resolver.get_connection_url = lambda: "postgres://env"
     ctx_env = catalog_service._build_tool_execution_context({})
     assert ctx_env.database_url == "postgres://env"
     ctx_kw = catalog_service._build_tool_execution_context({"database_url": " postgres://kw "})

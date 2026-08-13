@@ -209,6 +209,7 @@ class CredentialsConfig:
     """
 
     source: str = "env"
+    url_env_var: str = ""
     aws_secret_id: str = ""
     aws_profile: str = ""
     aws_region: str = "us-east-1"
@@ -221,6 +222,8 @@ class CredentialsConfig:
 
         return cls(
             source=_substitute_env_vars(data.get("source", "env")),
+            # This is an environment variable name, not a substitutable value.
+            url_env_var=str(data.get("url_env_var", "")).strip(),
             aws_secret_id=_substitute_env_vars(data.get("aws_secret_id", "")),
             aws_profile=_substitute_env_vars(data.get("aws_profile", "")),
             aws_region=_substitute_env_vars(data.get("aws_region", "us-east-1")),
@@ -357,10 +360,12 @@ class ConnectionDefinition:
         timeout_seconds: Timeout for health check requests
         is_healthy: Current health status (set after health check)
         last_error: Last error message if health check failed
+        effective_display_url: Credential-redacted URL used by the latest
+            PostgreSQL health check
 
     Security Note:
-        Always use display_url for logging and API responses to prevent
-        credential exposure. The url field may contain credentials.
+        Use display_url for config logging and get_connection_display_url for
+        API status responses. The url field may contain credentials.
     """
 
     service_id: str
@@ -375,6 +380,7 @@ class ConnectionDefinition:
     credentials: Optional[CredentialsConfig] = None
     is_healthy: Optional[bool] = None
     last_error: Optional[str] = None
+    effective_display_url: str = field(default="", init=False)
 
     @property
     def display_url(self) -> str:
@@ -546,6 +552,13 @@ def get_optional_connections() -> List[ConnectionDefinition]:
     return [c for c in _connection_registry.values() if not c.required]
 
 
+def get_connection_display_url(conn: ConnectionDefinition) -> str:
+    """Return the effective connection URL with credentials redacted."""
+    if not conn.credentials or conn.health_check.method != "CONNECT":
+        return conn.display_url
+    return conn.effective_display_url
+
+
 def get_connection_status() -> Dict[str, Dict[str, Any]]:
     """
     Get health status of all connections.
@@ -562,7 +575,7 @@ def get_connection_status() -> Dict[str, Dict[str, Any]]:
         status[service_id] = {
             "service_id": service_id,
             "description": conn.description,
-            "url": conn.display_url,  # Use display_url to prevent credential exposure
+            "url": get_connection_display_url(conn),
             "required": conn.required,
             "is_healthy": conn.is_healthy,
             "last_error": sanitize_error_message(conn.last_error),  # Sanitize error messages
@@ -634,6 +647,8 @@ async def check_service_health(service_id: str) -> Optional[bool]:
         return False
 
     if not conn.active:
+        if conn.credentials and conn.health_check.method == "CONNECT":
+            conn.effective_display_url = ""
         update_health_status(service_id, None, None)
         return None
 
@@ -741,23 +756,22 @@ async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optiona
 async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[bool], Optional[str]]:
     """Check Postgres health via connection test.
 
-    For services with credentials config but no URL, resolves the effective URL
-    via the service-specific PostgreSQL connection resolver.
+    For services with credentials config, resolves the effective URL via the
+    service-specific PostgreSQL connection resolver.
     """
     url = conn.url
+    conn.effective_display_url = ""
 
-    # If no URL but credentials are configured, resolve it without coupling
-    # generic PostgreSQL services to the AGR curation client.
-    if not url and conn.credentials:
-        try:
-            from src.lib.database.postgres_connection_resolver import (
-                get_postgres_connection_resolver,
-            )
-            url = get_postgres_connection_resolver(
-                conn.service_id
-            ).get_connection_url()
-        except ImportError:
-            pass
+    # Credential-aware services always use the canonical resolver so health
+    # checks and runtime clients share URL precedence and AWS URL construction.
+    if conn.credentials:
+        from src.lib.database.postgres_connection_resolver import (
+            get_postgres_connection_resolver,
+        )
+
+        url = get_postgres_connection_resolver(conn.service_id).get_connection_url()
+
+    conn.effective_display_url = _redact_url_credentials(url or "")
 
     if not url:
         if conn.required:

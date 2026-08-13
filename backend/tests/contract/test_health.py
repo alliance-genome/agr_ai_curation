@@ -186,6 +186,22 @@ class TestReadinessEndpoint:
 class TestMainHealthEndpoint:
     """Tests for the main app health endpoints."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_database_resolution(self):
+        from src.lib.config.connections_loader import reset_cache
+        from src.lib.database.curation_resolver import reset_curation_resolver
+        from src.lib.database.postgres_connection_resolver import (
+            reset_postgres_connection_resolvers,
+        )
+
+        reset_cache()
+        reset_curation_resolver()
+        reset_postgres_connection_resolvers()
+        yield
+        reset_cache()
+        reset_curation_resolver()
+        reset_postgres_connection_resolvers()
+
     def test_liveness_health_is_lightweight(self, client):
         response = client.get("/health")
         assert response.status_code == 200
@@ -264,6 +280,7 @@ class TestMainHealthEndpoint:
             return {"status": "connected", "required": kwargs["required"]}
 
         monkeypatch.setattr("main._check_database_url", _connected_database)
+        monkeypatch.setattr("main._check_curation_database", _connected_database)
         monkeypatch.setattr("main._check_elasticsearch", _connected_elasticsearch)
 
         response = client.get("/health/ready")
