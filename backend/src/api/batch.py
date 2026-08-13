@@ -96,10 +96,16 @@ def _batch_partial_document_count(batch: Any) -> int:
 def _batch_document_result_files(doc: Any) -> list[dict[str, str]]:
     """Return the authoritative canonical result-file manifest."""
 
-    raw_result_files = getattr(doc, "result_files", None)
-    if not isinstance(raw_result_files, list):
+    raw_result_files = doc.result_files
+    if raw_result_files is None:
         return []
-    return [dict(item) for item in raw_result_files if isinstance(item, dict)]
+    if not isinstance(raw_result_files, list) or not all(
+        isinstance(item, dict) for item in raw_result_files
+    ):
+        raise ValueError(
+            f"Batch document {doc.id} has an invalid canonical result_files manifest"
+        )
+    return [dict(item) for item in raw_result_files]
 
 
 def _unique_zip_member_name(filename: str, used_names: set[str]) -> str:
@@ -442,7 +448,7 @@ async def download_batch_zip(
                         continue
 
                     filename = _unique_zip_member_name(
-                        result_file["filename"],
+                        file_output.filename,
                         used_filenames,
                     )
 

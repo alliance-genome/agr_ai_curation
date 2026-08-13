@@ -21,10 +21,7 @@ down_revision: str | Sequence[str] | None = "d6e7f8a9b0c1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_FILE_DOWNLOAD_PATTERNS = (
-    re.compile(r"^/api/files/([0-9a-fA-F-]+)/download$"),
-    re.compile(r"^/api/weaviate/documents/download/([0-9a-fA-F-]+)$"),
-)
+_FILE_DOWNLOAD_PATTERN = re.compile(r"^/api/files/([0-9a-fA-F-]+)/download$")
 _REQUIRED_RESULT_FIELDS = ("file_id", "filename", "download_url")
 
 
@@ -43,14 +40,13 @@ def _candidate_file_id(entry: Mapping[str, Any]) -> UUID | None:
     download_url = entry.get("download_url")
     if not isinstance(download_url, str) or not download_url.strip():
         return None
-    for pattern in _FILE_DOWNLOAD_PATTERNS:
-        match = pattern.fullmatch(download_url)
-        if match:
-            try:
-                return UUID(match.group(1))
-            except ValueError:
-                return None
-    return None
+    match = _FILE_DOWNLOAD_PATTERN.fullmatch(download_url)
+    if match is None:
+        return None
+    try:
+        return UUID(match.group(1))
+    except ValueError:
+        return None
 
 
 def _reconcile_batch_results(
@@ -172,6 +168,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Restore the alias; multi-file manifests are lossy beyond their first entry."""
+
     columns = {
         column["name"]
         for column in sa.inspect(op.get_bind()).get_columns("batch_documents")

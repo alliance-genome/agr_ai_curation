@@ -521,16 +521,20 @@ async def _execute_flow_for_document(
             if event_type == "FILE_READY":
                 file_ready_details: Any = event.get("details")
                 if not isinstance(file_ready_details, dict):
-                    logger.warning(
-                        "FILE_READY event ignored - malformed details payload: %r",
-                        file_ready_details
+                    raise BatchFlowExecutionError(
+                        "FILE_READY event did not provide a canonical result-file payload"
                     )
-                    continue
 
                 download_url = file_ready_details.get("download_url")
                 file_id = file_ready_details.get("file_id")
 
                 filename = file_ready_details.get("filename")
+
+                if not (download_url and file_id and filename):
+                    raise BatchFlowExecutionError(
+                        "FILE_READY event is missing required canonical fields: "
+                        "file_id, filename, and download_url"
+                    )
 
                 if download_url and file_id and filename:
                     # GUARDRAIL: Validate file ownership before capturing
@@ -570,12 +574,6 @@ async def _execute_flow_for_document(
                             "(possible race condition or event routing bug)",
                             file_id, cognito_sub
                         )
-                elif download_url:
-                    logger.warning(
-                        "FILE_READY event missing canonical file_id or filename, "
-                        "ignoring output: %s",
-                        download_url,
-                    )
                 continue
 
             if event_type == "FLOW_FINISHED":

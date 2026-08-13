@@ -668,7 +668,7 @@ def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatc
         },
     ],
 )
-def test_execute_flow_for_document_ignores_file_ready_without_canonical_identity(
+def test_execute_flow_for_document_fails_file_ready_without_canonical_identity(
     monkeypatch,
     details,
 ):
@@ -690,18 +690,21 @@ def test_execute_flow_for_document_ignores_file_ready_without_canonical_identity
     monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
 
-    result = asyncio.run(
-        processor._execute_flow_for_document(
-            flow=SimpleNamespace(name="Batch Flow"),
-            document_id=str(uuid4()),
-            cognito_sub="auth-sub",
-            batch_id=str(uuid4()),
-            db_user_id=7,
+    with pytest.raises(
+        processor.BatchFlowExecutionError,
+        match="missing required canonical fields",
+    ):
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=SimpleNamespace(name="Batch Flow"),
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=str(uuid4()),
+                db_user_id=7,
+            )
         )
-    )
 
-    assert result == ([], [], "none", [])
-    assert published_events == []
+    assert published_events[-1]["type"] == "BATCH_DOCUMENT_ERROR"
 
 
 def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
@@ -895,8 +898,9 @@ def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypat
         yield {
             "type": "FILE_READY",
             "details": {
-                "download_url": "/api/weaviate/documents/download/unowned",
+                "download_url": "/api/files/c0ffee00-cafe-cafe-cafe-c0ffeec0ffee/download",
                 "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
+                "filename": "unowned.json",
             },
         }
 
@@ -927,7 +931,7 @@ def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypat
     assert published_events == []
 
 
-def test_execute_flow_for_document_ignores_malformed_file_ready_details(monkeypatch):
+def test_execute_flow_for_document_fails_malformed_file_ready_details(monkeypatch):
     async def _fake_execute_flow(**_kwargs):
         yield {"type": "FILE_READY", "details": None}
         yield {"type": "SUPERVISOR_COMPLETE", "details": {"ok": True}}
@@ -944,19 +948,22 @@ def test_execute_flow_for_document_ignores_malformed_file_ready_details(monkeypa
     monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
 
-    result = asyncio.run(
-        processor._execute_flow_for_document(
-            flow=SimpleNamespace(name="Batch Flow"),
-            document_id=str(uuid4()),
-            cognito_sub="auth-sub",
-            batch_id=str(uuid4()),
-            db_user_id=7,
+    with pytest.raises(
+        processor.BatchFlowExecutionError,
+        match="canonical result-file payload",
+    ):
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=SimpleNamespace(name="Batch Flow"),
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=str(uuid4()),
+                db_user_id=7,
+            )
         )
-    )
 
-    assert result == ([], [], "none", [])
     assert len(published_events) == 1
-    assert published_events[0]["type"] == "SUPERVISOR_COMPLETE"
+    assert published_events[0]["type"] == "BATCH_DOCUMENT_ERROR"
 
 
 def test_execute_flow_for_document_strips_internal_payload_before_publish(monkeypatch):

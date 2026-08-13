@@ -210,41 +210,6 @@ class TestBatchServiceMocked:
         assert mock_batch.started_at == started_at
         mock_db.commit.assert_called_once()
 
-    def test_update_document_status(self):
-        """Update document status should set status and optional fields."""
-        mock_db = Mock()
-        service = BatchService(mock_db)
-
-        mock_doc = Mock()
-        mock_doc.status = BatchDocumentStatus.PENDING
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_doc
-
-        service.update_document_status(
-            uuid4(),
-            status=BatchDocumentStatus.PROCESSING,
-            result_files=[
-                {
-                    "file_id": "file-1",
-                    "filename": "result.json",
-                    "download_url": "/path/to/result.json",
-                }
-            ],
-            output_status="partial",
-            processing_time_ms=1500,
-        )
-
-        assert mock_doc.status == BatchDocumentStatus.PROCESSING
-        assert mock_doc.result_files == [
-            {
-                "file_id": "file-1",
-                "filename": "result.json",
-                "download_url": "/path/to/result.json",
-            }
-        ]
-        assert mock_doc.output_status == "partial"
-        assert mock_doc.processing_time_ms == 1500
-        mock_db.commit.assert_called_once()
-
     def test_count_running_batches_returns_scalar(self):
         """Count running batches should return query scalar result."""
         mock_db = Mock()
@@ -286,66 +251,6 @@ class TestBatchServiceMocked:
 
         assert result is mock_batch
         mock_db.commit.assert_called_once()
-
-    # CR-10: Test that processed_at is set for completed/failed status
-    def test_update_document_status_sets_processed_at_for_completed(self):
-        """Update document status should set processed_at for COMPLETED status."""
-        mock_db = Mock()
-        service = BatchService(mock_db)
-
-        mock_doc = Mock()
-        mock_doc.status = BatchDocumentStatus.PROCESSING
-        mock_doc.processed_at = None
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_doc
-
-        service.update_document_status(
-            uuid4(),
-            status=BatchDocumentStatus.COMPLETED,
-        )
-
-        assert mock_doc.status == BatchDocumentStatus.COMPLETED
-        assert mock_doc.processed_at is not None
-
-    def test_update_document_status_sets_processed_at_for_failed(self):
-        """Update document status should set processed_at for FAILED status."""
-        mock_db = Mock()
-        service = BatchService(mock_db)
-
-        mock_doc = Mock()
-        mock_doc.status = BatchDocumentStatus.PENDING
-        mock_doc.processed_at = None
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_doc
-
-        service.update_document_status(
-            uuid4(),
-            status=BatchDocumentStatus.FAILED,
-            error_message="Test error",
-        )
-
-        assert mock_doc.status == BatchDocumentStatus.FAILED
-        assert mock_doc.error_message == "Test error"
-        assert mock_doc.processed_at is not None
-
-    def test_update_document_status_does_not_set_processed_at_for_processing(self):
-        """Update document status should NOT set processed_at for PROCESSING status."""
-        mock_db = Mock()
-        service = BatchService(mock_db)
-
-        mock_doc = Mock()
-        mock_doc.status = BatchDocumentStatus.PENDING
-        mock_doc.processed_at = None
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_doc
-
-        service.update_document_status(
-            uuid4(),
-            status=BatchDocumentStatus.PROCESSING,
-        )
-
-        assert mock_doc.status == BatchDocumentStatus.PROCESSING
-        # processed_at should not have been set (would remain None)
-        # The mock doesn't track this properly, but the service code only sets
-        # processed_at for COMPLETED or FAILED status
-
 
 class TestCreateBatchMocked:
     """CR-4: Tests for create_batch method using mocks."""

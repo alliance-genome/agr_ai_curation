@@ -135,7 +135,7 @@ interface BatchDocumentPayload {
   document_title?: string | null;
   position: number;
   status: DocumentStatus;
-  result_files?: BatchResultFile[];
+  result_files: BatchResultFile[];
   output_status?: 'complete' | 'partial' | 'none' | 'failed';
   output_branches?: BatchOutputBranch[];
   error_message?: string;
@@ -155,7 +155,7 @@ export function mapBatchDocument(doc: BatchDocumentPayload): BatchDocument {
     document_id: doc.document_id,
     title: doc.document_title || `Document ${doc.position + 1}`,
     status: doc.status,
-    result_files: doc.result_files ?? [],
+    result_files: doc.result_files,
     output_status: doc.output_status,
     output_branches: doc.output_branches,
     error_message: doc.error_message,
@@ -478,7 +478,7 @@ const BatchPage: React.FC = () => {
                   return {
                     ...d,
                     status: docStatus,
-                    result_files: data.result_files ?? data.data?.result_files ?? d.result_files,
+                    result_files: eventPayload.result_files as BatchResultFile[],
                     output_status: data.output_status ?? data.data?.output_status ?? d.output_status,
                     output_branches: data.output_branches ?? data.data?.output_branches ?? d.output_branches,
                     error_message: data.error_message ?? data.data?.error_message ?? d.error_message,
@@ -767,10 +767,6 @@ const BatchPage: React.FC = () => {
   // Navigate to documents page to select documents
   const handleChangeDocuments = () => {
     navigate('/weaviate/documents');
-  };
-
-  const getResultFiles = (doc: BatchDocument): BatchResultFile[] => {
-    return doc.result_files;
   };
 
   const getMissingOutputSummary = (doc: BatchDocument): string => {
@@ -1291,7 +1287,7 @@ const BatchPage: React.FC = () => {
                   >
                     <MoreVertIcon fontSize="small" />
                   </IconButton>
-                  {doc.status === 'completed' && getResultFiles(doc).map((resultFile, index) => (
+                  {doc.status === 'completed' && doc.result_files.map((resultFile, index) => (
                     <Tooltip
                       key={resultFile.file_id ?? resultFile.download_url}
                       title={`${resultFile.filename ? `Download ${resultFile.filename}` : `Download result ${index + 1}`}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`}
@@ -1317,8 +1313,8 @@ const BatchPage: React.FC = () => {
                 secondary={
                   doc.status === 'failed'
                     ? doc.error_message
-                    : getResultFiles(doc).length
-                      ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${getResultFiles(doc)
+                    : doc.result_files.length
+                      ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${doc.result_files
                         .map((resultFile, index) => `${resultFile.filename ?? `Result ${index + 1}`}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
                         .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}`
                       : undefined

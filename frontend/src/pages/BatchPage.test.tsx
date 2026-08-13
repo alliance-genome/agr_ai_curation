@@ -154,6 +154,7 @@ describe('BatchPage', () => {
       document_title: 'Alpha paper',
       position: 0,
       status: 'completed',
+      result_files: [],
       review_session_ids: ['review-gene'],
       adapter_keys: ['gene'],
       extraction_result_ids: ['extract-gene'],
@@ -176,6 +177,7 @@ describe('BatchPage', () => {
       document_id: 'doc-zero',
       position: 0,
       status: 'completed',
+      result_files: [],
       review_session_ids: null,
     }).review_session_ids).toEqual([])
 
@@ -184,6 +186,7 @@ describe('BatchPage', () => {
       document_id: 'doc-missing-ids',
       position: 1,
       status: 'completed',
+      result_files: [],
     }).review_session_ids).toEqual([])
   })
 

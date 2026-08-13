@@ -101,6 +101,14 @@ def test_batch_partial_document_count_is_subset_of_completed_documents():
     assert batch_api._batch_partial_document_count(batch) == 1
 
 
+@pytest.mark.parametrize("result_files", [{"file_id": "not-a-list"}, ["not-a-dict"]])
+def test_batch_document_result_files_rejects_corrupt_manifests(result_files):
+    document = SimpleNamespace(id=uuid4(), result_files=result_files)
+
+    with pytest.raises(ValueError, match="invalid canonical result_files manifest"):
+        batch_api._batch_document_result_files(document)
+
+
 def test_batch_create_request_limits_document_ids_to_ten():
     flow_id = uuid4()
     doc_ids = [uuid4() for _ in range(11)]

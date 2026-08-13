@@ -138,7 +138,7 @@ def test_upgrade_reconciles_url_only_rows_preserves_canonical_rows_and_is_idempo
     _insert_batch_document(
         migration_connection,
         row_id=legacy_row_id,
-        result_file_path=f"/api/weaviate/documents/download/{legacy_file_id}",
+        result_file_path=f"/api/files/{legacy_file_id}/download",
         result_files=None,
     )
     canonical_manifest = [
