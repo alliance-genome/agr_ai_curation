@@ -1,6 +1,6 @@
 """GO annotations lookup agent schema."""
 
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import Field, StrictBool, StrictStr
 
@@ -20,7 +20,7 @@ class GOAnnotationResult(DomainValidatorBaseModel):
     evidence_label: Optional[StrictStr] = None
     assigned_by: Optional[StrictStr] = None
     is_manual: Optional[StrictBool] = None
-    qualifier: Any = None
+    qualifier: Optional[list[StrictStr]] = None
 
 
 class GOAnnotationsResult(DomainValidatorResultBase):

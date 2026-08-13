@@ -601,20 +601,23 @@ def _object_id_from_item(
     *,
     identity_fields: Sequence[str] = (),
 ) -> str:
-    for key in dict.fromkeys(
-        (
-            *identity_fields,
-            "object_id",
-            "id",
-            "curie",
-            "primary_external_id",
-            "external_id",
-            "pending_ref_id",
-        )
-    ):
+    keys = identity_fields or (
+        "object_id",
+        "id",
+        "curie",
+        "primary_external_id",
+        "external_id",
+        "pending_ref_id",
+    )
+    for key in dict.fromkeys(keys):
         value = _string_value(item.get(key))
         if value:
             return value
+    if identity_fields:
+        raise ValueError(
+            "Structured result row does not provide any declared identity field: "
+            f"{', '.join(identity_fields)}"
+        )
     return str(index)
 
 
@@ -665,8 +668,16 @@ def _object_validation_status(item: Mapping[str, Any]) -> str:
     return ""
 
 
-def _object_label(item: Mapping[str, Any], payload: Mapping[str, Any], object_id: str) -> str:
-    for key in ("label", "symbol", "name", "normalized_symbol", "mention", "entity"):
+def _object_label(
+    item: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    object_id: str,
+    *,
+    label_fields: Sequence[str] = (),
+) -> str:
+    for key in dict.fromkeys(
+        (*label_fields, "label", "symbol", "name", "normalized_symbol", "mention", "entity")
+    ):
         value = _string_value(payload.get(key))
         if value:
             return value
@@ -722,6 +733,7 @@ def _object_rows_from_items(
     artifact_context: Mapping[str, Any],
     items: Sequence[Mapping[str, Any]],
     identity_fields: Sequence[str] = (),
+    label_fields: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(items, start=1):
@@ -736,7 +748,12 @@ def _object_rows_from_items(
             {
                 "object.object_type": item.get("object_type") or item.get("type") or "",
                 "object.object_id": object_id,
-                "object.label": _object_label(item, payload, object_id),
+                "object.label": _object_label(
+                    item,
+                    payload,
+                    object_id,
+                    label_fields=label_fields,
+                ),
                 "object.pending_ref_id": item.get("pending_ref_id") or "",
                 "object.status": item.get("status") or "",
                 "object.evidence_count": _object_evidence_count(item),
@@ -1350,6 +1367,7 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
         identity_fields=(
             validator_projection.identity_fields if validator_projection else ()
         ),
+        label_fields=(validator_projection.label_fields if validator_projection else ()),
     )
     rows_by_source["object"] = object_rows
     for object_item, object_row in zip(object_items, object_rows):

@@ -149,12 +149,14 @@ def test_validator_output_projection_requires_explicit_safe_field_names():
         {
             "row_list_field": "projected_records",
             "identity_fields": ["record_key"],
+            "label_fields": ["label"],
             "inherited_parent_fields": ["source_name"],
         }
     )
 
     assert projection.row_list_field == "projected_records"
     assert projection.identity_fields == ("record_key",)
+    assert projection.label_fields == ("label",)
     assert projection.inherited_parent_fields == ("source_name",)
 
     for invalid in (

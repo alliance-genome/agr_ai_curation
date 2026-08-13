@@ -2066,6 +2066,7 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
                         "go_name": "insulin receptor signaling pathway",
                         "aspect": "biological_process",
                         "evidence_code": "IMP",
+                        "qualifier": ["not"],
                     }
                 ],
                 "manual_count": 1,
@@ -2173,6 +2174,7 @@ def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():
     )
 
     row = bundle.rows_for_source("object")[0]
+    assert row["object.label"] == "signaling"
     assert row["object.payload.gene_id"] == "WB:WBGene00000898"
     assert row["object.payload.gene_symbol"] == "daf-16"
 
@@ -2190,6 +2192,27 @@ def test_validator_like_payload_with_legacy_items_remains_non_structured():
 
     assert bundle.artifacts == []
     assert bundle.rows_for_source("object") == []
+
+
+def test_typed_validator_row_without_declared_identity_fails_loudly():
+    payload = _typed_validator_result_payload(
+        agent_id="go_annotations_lookup",
+        gene_id="WB:WBGene00000898",
+        gene_symbol="daf-16",
+        annotations=[{"go_id": "", "go_name": "invalid identity"}],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="does not provide any declared identity field: go_id",
+    ):
+        build_flow_output_artifact_bundle(
+            completed_steps=[
+                {"step": 1, "agent_id": "go_annotations", "output": payload}
+            ],
+            flow_name="Missing validator identity",
+            output_format="csv",
+        )
 
 
 def test_typed_validator_result_with_unknown_package_agent_fails_loudly():

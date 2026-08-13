@@ -43,7 +43,7 @@ tools:
 output_schema: ExperimentalConditionValidationResult
 output_projection:
   row_list_field: normalized_components
-  identity_fields: [component_type]
+  identity_fields: [field_path, component_type]
 
 structured_finalization:
   enabled: true

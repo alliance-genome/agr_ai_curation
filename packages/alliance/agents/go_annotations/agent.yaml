@@ -46,6 +46,7 @@ output_schema: GOAnnotationsResult
 output_projection:
   row_list_field: annotations
   identity_fields: [go_id]
+  label_fields: [go_name, gene_symbol]
   inherited_parent_fields: [gene_id, gene_symbol]
 structured_finalization:
   enabled: true

@@ -32,6 +32,10 @@ class ValidatorOutputProjection(DomainValidatorBaseModel):
         min_length=1,
         description="Ordered row fields used to derive stable object identities",
     )
+    label_fields: tuple[StrictStr, ...] = Field(
+        default=(),
+        description="Ordered row or inherited fields used for display labels",
+    )
     inherited_parent_fields: tuple[StrictStr, ...] = Field(
         default=(),
         description="Top-level result fields copied into each projected row",
@@ -44,7 +48,7 @@ class ValidatorOutputProjection(DomainValidatorBaseModel):
             raise ValueError("row_list_field must be a non-empty field name")
         return value
 
-    @field_validator("identity_fields", "inherited_parent_fields")
+    @field_validator("identity_fields", "label_fields", "inherited_parent_fields")
     @classmethod
     def _validate_projection_fields(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if any(

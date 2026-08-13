@@ -390,6 +390,14 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
             {
                 "row_list_field": "projected_records",
                 "identity_fields": ["record_key"],
+                "label_fields": ["missing_label"],
+            },
+            "label_fields are not declared",
+        ),
+        (
+            {
+                "row_list_field": "projected_records",
+                "identity_fields": ["record_key"],
                 "inherited_parent_fields": ["missing_source"],
             },
             "inherited_parent_fields are not declared",
@@ -491,6 +499,7 @@ def test_org_custom_validator_projection_uses_package_descriptor(
     assert len(rows) == 1
     assert rows[0]["object.object_type"] == "DemoRecord"
     assert rows[0]["object.object_id"] == "DEMO-1"
+    assert rows[0]["object.label"] == "First record"
     assert rows[0]["object.payload.source_name"] == "fixture provider"
 
 

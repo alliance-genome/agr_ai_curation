@@ -112,6 +112,7 @@ output_schema: MyAgentEnvelope
 output_projection:
   row_list_field: candidates
   identity_fields: [value]
+  label_fields: [label]
   inherited_parent_fields: []
 
 # LLM settings (supports environment variables)

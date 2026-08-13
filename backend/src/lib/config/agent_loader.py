@@ -32,7 +32,6 @@ from pydantic import BaseModel
 from src.schemas.domain_validator import (
     DomainValidatorResultBase,
     ValidatorOutputProjection,
-    is_domain_validator_result_schema,
 )
 
 from .agent_sources import resolve_agent_config_sources
@@ -307,12 +306,11 @@ def _validate_output_projection_contract(
         return
     output_schema = output_schema_resolver(agent.output_schema)
     if output_schema is None:
-        return
-    is_validator_schema = is_domain_validator_result_schema(output_schema) or any(
-        base.__qualname__ == DomainValidatorResultBase.__qualname__
-        for base in output_schema.mro()
-    )
-    if not is_validator_schema:
+        raise ValueError(
+            f"Agent '{agent.agent_id}' declares unknown output_schema "
+            f"'{agent.output_schema}'"
+        )
+    if not issubclass(output_schema, DomainValidatorResultBase):
         return
 
     projection = agent.output_projection
@@ -346,6 +344,19 @@ def _validate_output_projection_contract(
             f"Validator agent '{agent.agent_id}' output_projection.identity_fields "
             f"are not declared by {row_model.__name__}: "
             f"{', '.join(unknown_identity_fields)}"
+        )
+
+    allowed_label_fields = set(row_model.model_fields) | set(
+        projection.inherited_parent_fields
+    )
+    unknown_label_fields = sorted(
+        set(projection.label_fields) - allowed_label_fields
+    )
+    if unknown_label_fields:
+        raise ValueError(
+            f"Validator agent '{agent.agent_id}' output_projection.label_fields "
+            "are not declared by the row model or inherited from the result: "
+            f"{', '.join(unknown_label_fields)}"
         )
 
     unknown_parent_fields = sorted(
