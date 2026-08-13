@@ -758,7 +758,7 @@ This tool returns:
 1. **Initial Instructions** (REQUIRED FIRST STEP) - Define the curation task
 2. **Extraction/Verification agents** - Process the document
 3. **Automatic validation** - Domain-pack metadata and curator selections schedule active validators through runtime dispatch after extraction
-4. **Output branches** (if exporting data) - Attach each CSV, TSV, JSON, or chat formatter directly to exactly one extraction node
+4. **Output branches** (if exporting data) - Attach each CSV, TSV, JSON, or chat formatter to one or more earlier extraction or typed validation nodes through ordered `source_steps`
 
 Each step receives the flow task, loaded document context, selected agent, and
 that node's custom instructions. Do not recommend custom input templates or
@@ -774,7 +774,7 @@ prompts.
 **When exporting to file (CSV/TSV/JSON):**
 - The Initial Instructions should define WHAT data to collect
 - Domain envelopes define the semantic objects; review rows and files are projections from those objects
-- Every formatter is a terminal output branch bound to one extraction result; it does not merge data from multiple extractors
+- Every formatter is a terminal output branch bound through ordered `source_steps` to one or more earlier extraction or typed validation results; grouped sources are projected together in that declared order
 - Multiple formatters may attach to one extractor, and a flow may attach formatters to different extractors; each branch produces its own independent artifact
 - The ordinary control-flow chain may continue after an output branch. Do not describe an output attachment as passing data into the next extraction step
 - Filename metadata is runtime-owned. Use output_filename_template with built-ins such as {{input_filename_stem}} and {{timestamp}}; do not require document names or timestamps to exist as extraction fields

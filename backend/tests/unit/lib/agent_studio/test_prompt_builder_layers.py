@@ -107,3 +107,20 @@ def test_selected_agent_context_uses_canonical_group_prompt_layers_in_runtime_or
 
     assert "LEGACY BASE ONLY" not in prompt
     assert "LEGACY GROUP ONLY" not in prompt
+
+
+def test_flow_context_describes_grouped_output_sources():
+    prompt = build_opus_system_prompt(
+        ChatContext.model_validate({"active_tab": "flows"}),
+        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        list_model_definitions=lambda: [],
+        get_prompt_catalog=lambda: None,
+        prepare_trace_context=lambda _trace_id: None,
+    )
+
+    assert (
+        "one or more earlier extraction or typed validation nodes through ordered "
+        "`source_steps`"
+    ) in prompt
+    assert "grouped sources are projected together in that declared order" in prompt
+    assert "exactly one extraction node" not in prompt
