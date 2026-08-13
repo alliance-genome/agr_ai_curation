@@ -129,6 +129,13 @@ def test_experimental_condition_prompt_and_tool_grant_name_lower_level_methods()
         "unresolved_components",
     ]:
         assert fragment in content
+    bulk_lookup_instruction = "Group same-family lookup work across every target"
+    residual_lookup_instruction = "not resolved by the grouped call"
+    assert bulk_lookup_instruction in content
+    assert residual_lookup_instruction in content
+    assert content.index(bulk_lookup_instruction) < content.index(
+        residual_lookup_instruction
+    )
     assert "repair_action" not in content
 
 

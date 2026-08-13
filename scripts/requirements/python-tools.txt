@@ -1,2 +1,2 @@
-ruff
+ruff==0.15.14
 pyyaml

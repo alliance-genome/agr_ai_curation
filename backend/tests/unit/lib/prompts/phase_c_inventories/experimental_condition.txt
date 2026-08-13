@@ -33,7 +33,7 @@ Read these from `selected_inputs` and `target.input_values` when present:
 `condition_components`: structured component list or payload object.
 `condition_relation_type`: the parent condition-relation name (e.g. `has_condition`), supplied as coherence CONTEXT ONLY. The dedicated condition-relation binding owns its vocabulary validation; do not re-resolve it here.
 `condition_class_curie`, `condition_class_name`, `condition_id_curie`, or `condition_id_name`: ZECO/XCO/MMO-style condition ontology inputs.
-`condition_chemical_curie`, `condition_chemical_name`, or `chemical_name`: ChEBI chemical inputs, validated as ontology terms (ontologytermtype `CHEBITerm`) via `agr_curation_query` `get_ontology_term`.
+`condition_chemical_curie`, `condition_chemical_name`, or `chemical_name`: ChEBI chemical inputs, validated as ontology terms (ontologytermtype `CHEBITerm`) via grouped `agr_curation_query` `get_ontology_terms`, with `get_ontology_term` only for a residual targeted lookup.
 `condition_taxon_curie`, `taxon`, or `taxon_id`: NCBITaxon inputs.
 `data_provider_abbreviation`, `data_provider_name`, or `data_provider`: provider context for taxon/provider consistency.
 `condition_quantity`, `condition_unit`, `condition_free_text`, and `evidence_quote`: supplemental context that can explain the condition but must not override lookup evidence.
@@ -50,7 +50,7 @@ If a required lower-level capability is absent, unavailable, or cannot be execut
 # ECV-07 component ownership map (capability tokens + all granted methods backticked — contract-test requirement)
 Condition class/id ontology terms and condition taxon use the `ontology_term_validation` capability through `agr_curation_query` methods `get_ontology_term`, `get_ontology_terms`, `search_ontology_terms`, and `map_curies_to_names`.
 Condition chemical (ChEBI) is an ontology term in the curation DB (ontologyterm table, ontologytermtype `CHEBITerm`).
-call `get_ontology_term` with `term=<CHEBI:...>`. Do NOT call `chebi_api_call` for condition chemicals; the ChEBI REST endpoint is not the resolution path for condition components.
+Validate `condition_chemical_curie` via grouped `agr_curation_query` `get_ontology_terms`, exactly like ZECO/taxon; use `get_ontology_term` with `term=<CHEBI:...>` only when a residual targeted lookup is needed. Do NOT call `chebi_api_call` for condition chemicals; the ChEBI REST endpoint is not the resolution path for condition components.
 Quantity/unit vocabulary uses the `controlled_vocabulary_validation` capability through `agr_curation_query` methods `get_vocabulary_term` and `search_vocabulary_terms`.
 Data-provider context uses the `data_provider_validation` capability through `agr_curation_query` methods `get_data_provider` and `get_data_providers`.
 
