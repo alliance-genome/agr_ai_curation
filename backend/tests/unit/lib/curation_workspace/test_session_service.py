@@ -5015,6 +5015,122 @@ def test_submission_intent_fingerprint_uses_authored_content_not_derived_state(
     assert fingerprint() != initial
 
 
+def test_reused_submission_key_replays_unchanged_non_envelope_intent(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+
+    class CountingAdapter:
+        transport_key = "counting"
+
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            return {"status": "accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("A terminal accepted submission is not reconciled")
+
+    adapter = CountingAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=str(uuid4()),
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    first_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+    second_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert second_response.submission.submission_id == first_response.submission.submission_id
+    assert adapter.submit_calls == 1
+
+
+def test_reused_submission_key_replays_unchanged_domain_envelope_intent(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+    )
+
+    class CountingAdapter:
+        transport_key = "counting"
+
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            return {"status": "accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("A terminal accepted submission is not reconciled")
+
+    adapter = CountingAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=str(uuid4()),
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    first_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+    second_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert second_response.submission.submission_id == first_response.submission.submission_id
+    assert adapter.submit_calls == 1
+
+
 def test_reused_submission_key_rejects_changed_domain_envelope_revision(
     db_session,
     tmp_path,

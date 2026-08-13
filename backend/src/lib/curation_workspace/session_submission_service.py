@@ -1295,6 +1295,20 @@ def _domain_envelope_candidate_bundle(
     candidate: CurationCandidate,
     domain_context: _DomainEnvelopeSubmissionContext,
 ) -> dict[str, Any] | None:
+    context = _domain_envelope_object_context_for_submission(
+        candidate,
+        domain_context,
+    )
+    if context is None:
+        return None
+
+    return _domain_envelope_candidate_payload(candidate, context)
+
+
+def _domain_envelope_object_context_for_submission(
+    candidate: CurationCandidate,
+    domain_context: _DomainEnvelopeSubmissionContext,
+) -> _DomainEnvelopeObjectContext | None:
     context = domain_context.object_contexts.get(str(candidate.id))
     if (
         context is None
@@ -1304,8 +1318,7 @@ def _domain_envelope_candidate_bundle(
         or context.blockers
     ):
         return None
-
-    return _domain_envelope_candidate_payload(candidate, context)
+    return context
 
 
 def _domain_envelope_candidate_payload(
@@ -1971,21 +1984,21 @@ def _submission_intent_fingerprint(
     candidates: list[dict[str, Any]] = []
     for candidate in ready_candidates:
         context = (
-            domain_context.object_contexts.get(str(candidate.id))
+            _domain_envelope_object_context_for_submission(candidate, domain_context)
             if domain_context is not None
             else None
         )
-        if (
-            context is not None
-            and context.envelope_row is not None
-            and context.domain_object is not None
-        ):
+        if context is not None:
+            envelope_row = context.envelope_row
+            domain_object = context.domain_object
+            assert envelope_row is not None
+            assert domain_object is not None
             candidates.append(
                 {
                     "candidate_id": str(candidate.id),
-                    "envelope_id": context.envelope_row.envelope_id,
-                    "object_id": _stable_object_id(context.domain_object),
-                    "envelope_revision": context.envelope_row.revision,
+                    "envelope_id": envelope_row.envelope_id,
+                    "object_id": _stable_object_id(domain_object),
+                    "envelope_revision": envelope_row.revision,
                 }
             )
             continue
@@ -2047,9 +2060,8 @@ def _execute_direct_submission_attempt(
     actor_claims: dict[str, Any],
     action_type: CurationActionType,
     idempotency_key: str,
-    intent_fingerprint: str,
+    intent_fingerprint: str | None,
     retry_confirmed_failure: bool = False,
-    reuse_persisted_intent: bool = False,
     action_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[CurationSubmissionRecord, CurationActionLogEntry]:
     """Durably stage, deliver, and reconcile one idempotent submission attempt."""
@@ -2057,7 +2069,8 @@ def _execute_direct_submission_attempt(
     transport_adapter = _resolve_submission_transport_adapter(target_key)
     requested_at = datetime.now(timezone.utc)
     serialized_payload = _serialize_submission_payload_contract(payload)
-    serialized_payload[_SUBMISSION_INTENT_FINGERPRINT_KEY] = intent_fingerprint
+    if intent_fingerprint is not None:
+        serialized_payload[_SUBMISSION_INTENT_FINGERPRINT_KEY] = intent_fingerprint
     submission_row = db.scalar(
         select(SubmissionModel).where(SubmissionModel.idempotency_key == idempotency_key)
     )
@@ -2125,17 +2138,28 @@ def _execute_direct_submission_attempt(
         or submission_row.target_key != target_key
         or persisted_payload is None
         or persisted_payload.candidate_ids != payload.candidate_ids
-        or (
-            not reuse_persisted_intent
-            and not reconcile_only
-            and _stored_submission_intent_fingerprint(submission_row)
-            != intent_fingerprint
-        )
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Idempotency key is already bound to a different submission intent",
         )
+    persisted_intent_fingerprint = _stored_submission_intent_fingerprint(submission_row)
+    if intent_fingerprint is not None and not reconcile_only:
+        if persisted_intent_fingerprint is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Idempotency key predates submission intent fingerprinting; "
+                    "start a new submission"
+                ),
+            )
+        if persisted_intent_fingerprint != intent_fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Idempotency key is already bound to a different submission intent"
+                ),
+            )
     if not created_attempt:
         # Reconciliation and retries must use the exact body durably bound to
         # the key, even if mutable session metadata changed after first send.
@@ -2680,15 +2704,6 @@ def retry_submission(
         domain_context=domain_context,
         readiness=readiness,
     )
-    intent_fingerprint = _submission_intent_fingerprint(
-        db=db,
-        session_row=session_row,
-        adapter_key=original_submission.adapter_key,
-        mode=original_submission.mode,
-        target_key=original_submission.target_key,
-        ready_candidates=ready_candidates,
-        domain_context=domain_context,
-    )
     retry_reason = _normalized_optional_string(request.reason, field_name="reason")
     response_submission, action_log_entry = _execute_direct_submission_attempt(
         db=db,
@@ -2702,11 +2717,10 @@ def retry_submission(
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_RETRIED,
         idempotency_key=original_submission.idempotency_key,
-        intent_fingerprint=intent_fingerprint,
+        intent_fingerprint=None,
         retry_confirmed_failure=(
             original_submission.attempt_state == CurationSubmissionAttemptState.FAILED
         ),
-        reuse_persisted_intent=True,
         action_metadata={
             "original_submission_id": str(original_submission.id),
             "retry_reason": retry_reason,
