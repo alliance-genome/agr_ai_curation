@@ -2,7 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import PromptViewer from './PromptViewer'
-import type { CombinedPromptResponse, PromptInfo, PromptLayerInfo } from '@/types/promptExplorer'
+import type {
+  CombinedPromptResponse,
+  PromptCatalog,
+  PromptInfo,
+  PromptLayerInfo,
+} from '@/types/promptExplorer'
 
 const serviceMocks = vi.hoisted(() => ({
   fetchPromptCatalog: vi.fn(),
@@ -125,6 +130,15 @@ function createDeferred<T>() {
   return { promise, resolve, reject }
 }
 
+function createCatalog(catalogAgent: PromptInfo): PromptCatalog {
+  return {
+    categories: [{ category: 'Validation', agents: [catalogAgent] }],
+    total_agents: 1,
+    available_groups: [],
+    last_updated: '2026-07-13T00:00:00Z',
+  }
+}
+
 describe('PromptViewer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -205,5 +219,94 @@ describe('PromptViewer', () => {
     await act(async () => alphaRequest.resolve(combined))
     expect(screen.getByRole('button', { name: 'Group beta rules' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Group alpha rules' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the latest agent loading state when catalog requests resolve out of order', async () => {
+    const geneRequest = createDeferred<PromptCatalog>()
+    const proteinRequest = createDeferred<PromptCatalog>()
+    const proteinAgent: PromptInfo = {
+      ...agent,
+      agent_id: 'protein',
+      agent_name: 'Protein Agent',
+      description: 'Curates proteins.',
+      has_group_rules: false,
+      group_rules: {},
+    }
+    serviceMocks.fetchPromptCatalog
+      .mockImplementationOnce(() => geneRequest.promise)
+      .mockImplementationOnce(() => proteinRequest.promise)
+
+    const { rerender } = render(
+      <PromptViewer agentId="gene" agentName="Gene Agent" open onClose={vi.fn()} />
+    )
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(1))
+
+    rerender(<PromptViewer agentId="protein" agentName="Protein Agent" open onClose={vi.fn()} />)
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(2))
+
+    await act(async () => geneRequest.resolve(createCatalog(agent)))
+    expect(screen.getByRole('progressbar')).toBeInTheDocument()
+    expect(screen.queryByText('Curates genes.')).not.toBeInTheDocument()
+
+    await act(async () => proteinRequest.resolve(createCatalog(proteinAgent)))
+    expect(await screen.findByText('Curates proteins.')).toBeInTheDocument()
+    expect(screen.queryByText('Curates genes.')).not.toBeInTheDocument()
+  })
+
+  it('does not let a slower catalog response overwrite the latest agent', async () => {
+    const geneRequest = createDeferred<PromptCatalog>()
+    const proteinRequest = createDeferred<PromptCatalog>()
+    const proteinAgent: PromptInfo = {
+      ...agent,
+      agent_id: 'protein',
+      agent_name: 'Protein Agent',
+      description: 'Curates proteins.',
+      has_group_rules: false,
+      group_rules: {},
+    }
+    serviceMocks.fetchPromptCatalog
+      .mockImplementationOnce(() => geneRequest.promise)
+      .mockImplementationOnce(() => proteinRequest.promise)
+
+    const { rerender } = render(
+      <PromptViewer agentId="gene" agentName="Gene Agent" open onClose={vi.fn()} />
+    )
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(1))
+
+    rerender(<PromptViewer agentId="protein" agentName="Protein Agent" open onClose={vi.fn()} />)
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(2))
+
+    await act(async () => proteinRequest.resolve(createCatalog(proteinAgent)))
+    expect(await screen.findByText('Curates proteins.')).toBeInTheDocument()
+
+    await act(async () => geneRequest.resolve(createCatalog(agent)))
+    expect(screen.getByText('Curates proteins.')).toBeInTheDocument()
+    expect(screen.queryByText('Curates genes.')).not.toBeInTheDocument()
+  })
+
+  it('ignores a stale catalog failure after the viewer closes and reopens', async () => {
+    const closedRequest = createDeferred<PromptCatalog>()
+    const reopenedRequest = createDeferred<PromptCatalog>()
+    serviceMocks.fetchPromptCatalog
+      .mockImplementationOnce(() => closedRequest.promise)
+      .mockImplementationOnce(() => reopenedRequest.promise)
+
+    const onClose = vi.fn()
+    const { rerender } = render(
+      <PromptViewer agentId="gene" agentName="Gene Agent" open onClose={onClose} />
+    )
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(1))
+
+    rerender(<PromptViewer agentId="gene" agentName="Gene Agent" open={false} onClose={onClose} />)
+    rerender(<PromptViewer agentId="gene" agentName="Gene Agent" open onClose={onClose} />)
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(2))
+
+    await act(async () => closedRequest.reject(new Error('stale request failed')))
+    expect(screen.getByRole('progressbar')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to load agent data')).not.toBeInTheDocument()
+
+    await act(async () => reopenedRequest.resolve(createCatalog(agent)))
+    expect(await screen.findByText('Curates genes.')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to load agent data')).not.toBeInTheDocument()
   })
 })
