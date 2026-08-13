@@ -116,9 +116,7 @@ class _Provider:
         file_class = str(artifact.metadata.get("file_class") or "").lower()
         display_name = str(artifact.display_name or "").lower()
         if self.provider_id == "abc_literature":
-            return file_class == self.main_file_class and not (
-                "tei" in file_class or "_tei" in display_name
-            )
+            return file_class == self.main_file_class and "_tei" not in display_name
         return file_class == self.main_file_class
 
     def main_text_artifact_sort_key(self, artifact):

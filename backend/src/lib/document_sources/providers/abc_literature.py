@@ -789,9 +789,8 @@ def _artifact_file_class(artifact: SourceArtifact) -> str:
 
 
 def _artifact_is_tei_derived(artifact: SourceArtifact) -> bool:
-    file_class = _artifact_file_class(artifact)
     display_name = str(artifact.display_name or "").strip().lower()
-    return "tei" in file_class or "_tei" in display_name
+    return "_tei" in display_name
 
 
 def _expected_figure_metadata_file_class(

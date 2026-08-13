@@ -176,9 +176,7 @@ def _fake_is_main_text_artifact(
     display_name = str(artifact.display_name or "").strip().lower()
     combined = f"{file_class} {display_name}"
     if provider_id == "abc_literature":
-        return file_class == "converted_merged_main" and not (
-            "tei" in file_class or "_tei" in display_name
-        )
+        return file_class == "converted_merged_main" and "_tei" not in display_name
     return "supplement" not in combined
 
 
