@@ -32,7 +32,7 @@ assert_not_contains() {
   fi
 }
 
-mkdir -p "${TMP_DIR}/bin" "${TMP_DIR}/empty-aws" "${TMP_DIR}/file_outputs"
+mkdir -p "${TMP_DIR}/bin" "${TMP_DIR}/empty-aws"
 cat > "${TMP_DIR}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
