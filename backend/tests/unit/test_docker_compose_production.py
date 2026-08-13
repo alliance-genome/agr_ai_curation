@@ -168,7 +168,6 @@ def _safe_rendered_config() -> dict:
         {
             "frontend": {
                 "image": "example.invalid/frontend:v0.9.0",
-                "environment": {"VITE_DEV_MODE": "false"},
             },
             "backend": {
                 "image": "example.invalid/backend:v0.9.0",
@@ -206,6 +205,60 @@ def test_effective_production_contract_accepts_secure_rendered_config():
     assert production_preflight.validate_config(_safe_rendered_config()) == []
 
 
+def test_production_frontend_has_no_ineffective_runtime_vite_mode():
+    frontend = _load_compose()["services"]["frontend"]
+
+    assert "VITE_DEV_MODE" not in frontend.get("environment", {})
+
+
+def test_frontend_build_metadata_requires_production_mode_and_source_revision():
+    assert production_preflight.validate_frontend_build_metadata(
+        {"schema_version": 1, "vite_dev_mode": False, "git_sha": "abcdef1"}
+    ) == []
+
+    assert production_preflight.validate_frontend_build_metadata(
+        {"schema_version": 1, "vite_dev_mode": True, "git_sha": "unknown"}
+    ) == [
+        "frontend image must be compiled with vite_dev_mode=false",
+        "frontend build metadata git_sha must identify the compiled source",
+    ]
+
+
+def test_preflight_reads_build_metadata_from_selected_frontend_image():
+    pull = Mock(returncode=0, stdout="", stderr="")
+    inspect = Mock(
+        returncode=0,
+        stdout='{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}',
+        stderr="",
+    )
+
+    with patch.object(
+        production_preflight.subprocess,
+        "run",
+        side_effect=[pull, inspect],
+    ) as run:
+        metadata = production_preflight.inspect_frontend_build_metadata(
+            "example.invalid/frontend:v0.9.0"
+        )
+
+    assert metadata["vite_dev_mode"] is False
+    assert run.call_args_list[0].args[0] == [
+        "docker",
+        "pull",
+        "example.invalid/frontend:v0.9.0",
+    ]
+    assert run.call_args_list[1].args[0] == [
+        "docker",
+        "run",
+        "--rm",
+        "--network=none",
+        "--entrypoint",
+        "cat",
+        "example.invalid/frontend:v0.9.0",
+        "/usr/share/nginx/html/build-metadata.json",
+    ]
+
+
 def test_effective_production_contract_defaults_match_sentry_runtime_configuration():
     compose = _load_compose()
     backend_env = compose["services"]["backend"]["environment"]
@@ -239,7 +292,6 @@ def test_runtime_preflight_allows_explicit_sentry_operational_overrides():
 @pytest.mark.parametrize(
     ("service", "key", "unsafe_value", "expected_error"),
     [
-        ("frontend", "VITE_DEV_MODE", "true", "frontend.VITE_DEV_MODE"),
         ("backend", "DEV_MODE", "true", "backend.DEV_MODE"),
         ("backend", "DEBUG", "true", "backend.DEBUG"),
         ("backend", "AUTH_PROVIDER", "dev", "backend.AUTH_PROVIDER"),

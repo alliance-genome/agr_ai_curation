@@ -195,6 +195,21 @@ jobs:
           sbom: false
           tags: ${{ steps.tags.outputs.tags }}
 
+      - name: Verify frontend compiled mode artifact
+        if: matrix.artifact_id == 'frontend'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REPOSITORY: ${{ matrix.repository }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+        run: |
+          image_ref="${REPOSITORY}@${DIGEST}"
+          docker pull "${image_ref}"
+          docker run --rm --network=none --entrypoint cat "${image_ref}" \
+            /usr/share/nginx/html/build-metadata.json \
+            | jq -e --arg sha "${SHORT_SHA}" \
+              '.schema_version == 1 and .vite_dev_mode == false and .git_sha == $sha'
+
       - name: Write image metadata
         shell: bash
         env:

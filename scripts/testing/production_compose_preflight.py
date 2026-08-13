@@ -37,6 +37,7 @@ APP_SERVICES = {"backend", "frontend", "trace_review_backend"}
 PINNED_APP_IMAGE_PATTERN = re.compile(
     r".+:(?:v\d+\.\d+\.\d+|sha-[0-9a-fA-F]{7,40})$"
 )
+FRONTEND_BUILD_METADATA_PATH = "/usr/share/nginx/html/build-metadata.json"
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -84,11 +85,9 @@ def validate_config(
         return errors
 
     backend_env = _environment(services["backend"])
-    frontend_env = _environment(services["frontend"])
     trace_env = _environment(services["trace_review_backend"])
     weaviate_env = _environment(services["weaviate"])
 
-    _require_bool(errors, frontend_env, "frontend", "VITE_DEV_MODE", False)
     _require_bool(errors, backend_env, "backend", "DEV_MODE", False)
     _require_bool(errors, backend_env, "backend", "DEBUG", False)
     _require_bool(errors, backend_env, "backend", "SECURE_COOKIES", True)
@@ -169,6 +168,61 @@ def validate_config(
     return errors
 
 
+def validate_frontend_build_metadata(metadata: Any) -> list[str]:
+    """Validate immutable metadata emitted alongside the compiled frontend."""
+    if not isinstance(metadata, dict):
+        return ["frontend build metadata must be a JSON object"]
+    errors: list[str] = []
+    if metadata.get("schema_version") != 1:
+        errors.append("frontend build metadata schema_version must be 1")
+    if metadata.get("vite_dev_mode") is not False:
+        errors.append("frontend image must be compiled with vite_dev_mode=false")
+    git_sha = metadata.get("git_sha")
+    if not isinstance(git_sha, str) or not git_sha.strip() or git_sha == "unknown":
+        errors.append("frontend build metadata git_sha must identify the compiled source")
+    return errors
+
+
+def inspect_frontend_build_metadata(image: str) -> dict[str, Any]:
+    """Pull the selected image and read its immutable served build metadata."""
+    pull = subprocess.run(
+        ["docker", "pull", image],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if pull.returncode:
+        detail = pull.stderr.strip() or pull.stdout.strip()
+        raise RuntimeError(f"could not pull frontend image {image}: {detail}")
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network=none",
+            "--entrypoint",
+            "cat",
+            image,
+            FRONTEND_BUILD_METADATA_PATH,
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"could not read frontend build metadata from {image}: {detail}")
+    try:
+        metadata = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"frontend build metadata is not valid JSON: {exc}") from exc
+    if not isinstance(metadata, dict):
+        raise RuntimeError("frontend build metadata must be a JSON object")
+    return metadata
+
+
 def render_config(env_file: Path, compose_file: Path = PRODUCTION_COMPOSE) -> dict[str, Any]:
     command = [
         "docker",
@@ -203,7 +257,14 @@ def main() -> int:
         type=Path,
         help="Validate already-rendered JSON (test/diagnostic use only).",
     )
+    parser.add_argument(
+        "--frontend-build-metadata-json",
+        type=Path,
+        help="Read frontend build metadata from a file instead of the selected image (tests only).",
+    )
     args = parser.parse_args()
+    if args.frontend_build_metadata_json and not args.config_json:
+        parser.error("--frontend-build-metadata-json requires --config-json")
 
     try:
         config = (
@@ -228,7 +289,27 @@ def main() -> int:
             print(f"- {error}", file=sys.stderr)
         return 1
 
-    print("PRODUCTION PREFLIGHT PASSED: rendered Compose contract is fail-closed")
+    try:
+        frontend_image = str(config["services"]["frontend"]["image"])
+        frontend_metadata = (
+            json.loads(args.frontend_build_metadata_json.read_text(encoding="utf-8"))
+            if args.frontend_build_metadata_json
+            else inspect_frontend_build_metadata(frontend_image)
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"PRODUCTION PREFLIGHT FAILED: {exc}", file=sys.stderr)
+        return 1
+
+    errors = validate_frontend_build_metadata(frontend_metadata)
+    if errors:
+        print("PRODUCTION PREFLIGHT FAILED:", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
+
+    print(
+        "PRODUCTION PREFLIGHT PASSED: rendered Compose and frontend build metadata are fail-closed"
+    )
     return 0
 
 
