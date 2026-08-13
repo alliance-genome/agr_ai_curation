@@ -360,10 +360,12 @@ class ConnectionDefinition:
         timeout_seconds: Timeout for health check requests
         is_healthy: Current health status (set after health check)
         last_error: Last error message if health check failed
+        effective_display_url: Credential-redacted URL used by the latest
+            PostgreSQL health check
 
     Security Note:
-        Always use display_url for logging and API responses to prevent
-        credential exposure. The url field may contain credentials.
+        Use display_url for config logging and get_connection_display_url for
+        API status responses. The url field may contain credentials.
     """
 
     service_id: str
@@ -378,6 +380,7 @@ class ConnectionDefinition:
     credentials: Optional[CredentialsConfig] = None
     is_healthy: Optional[bool] = None
     last_error: Optional[str] = None
+    effective_display_url: str = field(default="", init=False)
 
     @property
     def display_url(self) -> str:
@@ -551,23 +554,9 @@ def get_optional_connections() -> List[ConnectionDefinition]:
 
 def get_connection_display_url(conn: ConnectionDefinition) -> str:
     """Return the effective connection URL with credentials redacted."""
-    if not conn.credentials:
+    if not conn.credentials or conn.health_check.method != "CONNECT":
         return conn.display_url
-
-    try:
-        from src.lib.database.postgres_connection_resolver import (
-            get_postgres_connection_resolver,
-        )
-
-        resolved_url = get_postgres_connection_resolver(
-            conn.service_id
-        ).get_connection_url()
-    except Exception:
-        # Health checks record resolver failures separately. Status rendering
-        # must preserve that diagnostic response without retrying it into a 500.
-        return conn.display_url
-
-    return _redact_url_credentials(resolved_url or "")
+    return conn.effective_display_url
 
 
 def get_connection_status() -> Dict[str, Dict[str, Any]]:
@@ -658,6 +647,8 @@ async def check_service_health(service_id: str) -> Optional[bool]:
         return False
 
     if not conn.active:
+        if conn.credentials and conn.health_check.method == "CONNECT":
+            conn.effective_display_url = ""
         update_health_status(service_id, None, None)
         return None
 
@@ -769,6 +760,7 @@ async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[b
     service-specific PostgreSQL connection resolver.
     """
     url = conn.url
+    conn.effective_display_url = ""
 
     # Credential-aware services always use the canonical resolver so health
     # checks and runtime clients share URL precedence and AWS URL construction.
@@ -778,6 +770,8 @@ async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[b
         )
 
         url = get_postgres_connection_resolver(conn.service_id).get_connection_url()
+
+    conn.effective_display_url = _redact_url_credentials(url or "")
 
     if not url:
         if conn.required:

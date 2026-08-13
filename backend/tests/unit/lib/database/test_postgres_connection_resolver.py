@@ -207,6 +207,28 @@ def test_invalid_aws_secret_raises_service_specific_error(monkeypatch):
         resolver.get_connection_url()
 
 
+def test_missing_boto3_raises_service_specific_error(monkeypatch):
+    resolver = PostgresConnectionResolver("external_production_db")
+    connection = SimpleNamespace(
+        url="",
+        credentials=CredentialsConfig(
+            source="aws_secrets",
+            aws_secret_id="external-production-secret",
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.connections_loader.get_connection",
+        lambda _service_id: connection,
+    )
+    monkeypatch.setitem(sys.modules, "boto3", None)
+
+    with pytest.raises(
+        ValueError,
+        match="Failed to resolve external_production_db credentials",
+    ):
+        resolver.get_connection_url()
+
+
 def test_singleton_registry_is_per_service():
     production = get_postgres_connection_resolver("external_production_db")
     same_production = get_postgres_connection_resolver("external_production_db")

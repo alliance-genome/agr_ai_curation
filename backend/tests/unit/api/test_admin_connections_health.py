@@ -7,6 +7,11 @@ import pytest
 from fastapi import HTTPException
 
 import src.api.admin.connections as admin_connections
+from src.lib.config.connections_loader import (
+    ConnectionDefinition,
+    CredentialsConfig,
+    HealthCheck,
+)
 
 
 def test_check_all_connections_requires_initialized(monkeypatch):
@@ -168,11 +173,11 @@ def test_check_single_connection_returns_sanitized_response(monkeypatch):
 def test_check_single_connection_uses_effective_redacted_url(monkeypatch):
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
 
-    conn = SimpleNamespace(
+    conn = ConnectionDefinition(
         service_id="curation_db",
         description="Curation DB",
-        display_url="",
-        credentials=SimpleNamespace(source="env"),
+        health_check=HealthCheck(method="CONNECT"),
+        credentials=CredentialsConfig(source="env"),
         required=False,
         is_healthy=True,
         last_error=None,
@@ -183,17 +188,15 @@ def test_check_single_connection_uses_effective_redacted_url(monkeypatch):
     )
 
     async def _check_service_health(_service_id: str):
+        conn.effective_display_url = (
+            "testdb://***:***@db.example:5432/curation"
+        )
         return True
 
     monkeypatch.setattr(
         "src.lib.config.connections_loader.check_service_health",
         _check_service_health,
     )
-    monkeypatch.setattr(
-        "src.lib.config.connections_loader.get_connection_display_url",
-        lambda _conn: "testdb://***:***@db.example:5432/curation",
-    )
-
     result = asyncio.run(admin_connections.check_single_connection("curation_db"))
 
     assert result.url == "testdb://***:***@db.example:5432/curation"

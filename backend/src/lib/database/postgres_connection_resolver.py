@@ -48,11 +48,7 @@ class PostgresConnectionResolver:
                 logger.info("PostgreSQL service %s is not configured", self.service_id)
 
     def _try_connections_config(self) -> Optional[str]:
-        try:
-            from src.lib.config.connections_loader import get_connection
-        except ImportError:
-            logger.debug("connections_loader not available")
-            return None
+        from src.lib.config.connections_loader import get_connection
 
         connection = get_connection(self.service_id)
         if not connection:
@@ -89,14 +85,10 @@ class PostgresConnectionResolver:
             "Expected one of: env, aws_secrets, url"
         )
 
-    def _fetch_aws_credentials(self, credentials) -> Optional[str]:
+    def _fetch_aws_credentials(self, credentials) -> str:
         try:
             import boto3
-        except ImportError:
-            logger.warning("boto3 not installed — cannot use AWS Secrets Manager")
-            return None
 
-        try:
             session = (
                 boto3.Session(profile_name=credentials.aws_profile)
                 if credentials.aws_profile

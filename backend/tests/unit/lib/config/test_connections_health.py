@@ -17,6 +17,9 @@ from src.lib.config.connections_loader import (
     _check_postgres_health,
     _redact_url_credentials,
     sanitize_error_message,
+    check_service_health,
+    get_connection,
+    get_connection_display_url,
     get_connection_status,
     load_connections,
     reset_cache,
@@ -286,6 +289,7 @@ class TestCheckPostgresHealth:
         resolver_factory.assert_called_once_with("curation_db")
         assert is_healthy is None
         assert error is None
+        assert conn.effective_display_url == ""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("service_id", ["curation_db", "external_production_db"])
@@ -330,6 +334,7 @@ class TestCheckPostgresHealth:
         )
         assert is_healthy is True
         assert error is None
+        assert conn.effective_display_url == resolved_url
 
     @pytest.mark.asyncio
     async def test_optional_configured_broken_service_returns_false(self):
@@ -743,27 +748,21 @@ class TestGetConnectionStatusRedaction:
             # but we can verify the URL field exists and is a string
             assert isinstance(url, str)
 
-    def test_get_connection_status_uses_resolved_credential_url(self):
-        """Credential-aware status reports the canonical URL without secrets."""
-        resolved_url = "testdb://reader:sensitive-value@db.example:5432/curation"
-        resolver = MagicMock()
-        resolver.get_connection_url.return_value = resolved_url
+    def test_get_connection_status_uses_recorded_credential_url(self):
+        """Credential-aware status reports the URL recorded by its health check."""
+        load_connections()
+        conn = get_connection("curation_db")
+        assert conn is not None
+        conn.effective_display_url = "testdb://***:***@db.example:5432/curation"
 
-        with patch(
-            "src.lib.database.postgres_connection_resolver."
-            "get_postgres_connection_resolver",
-            return_value=resolver,
-        ) as resolver_factory:
-            load_connections()
-            status = get_connection_status()
+        status = get_connection_status()
 
-        resolver_factory.assert_called_once_with("curation_db")
         assert status["curation_db"]["url"] == (
             "testdb://***:***@db.example:5432/curation"
         )
-        assert "sensitive-value" not in str(status["curation_db"])
 
-    def test_get_connection_status_survives_credential_resolution_failure(self):
+    @pytest.mark.asyncio
+    async def test_get_connection_status_preserves_credential_resolution_failure(self):
         resolver = MagicMock()
         resolver.get_connection_url.side_effect = ValueError("invalid secret")
 
@@ -773,9 +772,24 @@ class TestGetConnectionStatusRedaction:
             return_value=resolver,
         ):
             load_connections()
+            await check_service_health("curation_db")
             status = get_connection_status()
 
         assert status["curation_db"]["url"] == ""
+        assert status["curation_db"]["is_healthy"] is False
+        assert "invalid secret" in status["curation_db"]["last_error"]
+
+    def test_non_postgres_credentials_keep_configured_display_url(self):
+        conn = ConnectionDefinition(
+            service_id="credentialed_cache",
+            url="testdb://cache-user:cache-value@cache.example:6379",
+            health_check=HealthCheck(method="PING"),
+            credentials=CredentialsConfig(source="env"),
+        )
+
+        assert get_connection_display_url(conn) == (
+            "testdb://***:***@cache.example:6379"
+        )
 
     def test_credentials_never_leak_in_status(self):
         """Verify no credentials leak through get_connection_status."""
