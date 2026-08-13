@@ -33,6 +33,14 @@ export interface ExecuteFlowOptions {
 export type ChatRunTerminalStatus = 'completed' | 'error'
 export type ChatRunKind = 'chat' | 'flow'
 
+const CHAT_TERMINAL_EVENT_TYPES = new Set([
+  'turn_completed',
+  'turn_interrupted',
+  'turn_failed',
+  'turn_save_failed',
+  'session_gone',
+])
+
 export interface ChatRunTerminalEventDetail {
   sessionId: string
   runKind: ChatRunKind
@@ -160,10 +168,23 @@ function buildClientTurnId(): string {
   return globalThis.crypto.randomUUID()
 }
 
-function getRunTerminalStatus(events: SSEEvent[]): ChatRunTerminalStatus {
-  return events.some((event) => event.type.toUpperCase().includes('ERROR'))
-    ? 'error'
-    : 'completed'
+function getRunTerminalStatus(
+  events: SSEEvent[],
+  runKind: ChatRunKind,
+): ChatRunTerminalStatus {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+
+    if (runKind === 'flow' && event.type === 'FLOW_FINISHED') {
+      return event.status === 'completed' ? 'completed' : 'error'
+    }
+
+    if (runKind === 'chat' && CHAT_TERMINAL_EVENT_TYPES.has(event.type)) {
+      return event.type === 'turn_completed' ? 'completed' : 'error'
+    }
+  }
+
+  return 'error'
 }
 
 function emitChatRunTerminal(detail: ChatRunTerminalEventDetail) {
@@ -420,7 +441,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
 
       if (!ownsActiveRun(run)) return
 
-      const terminalStatus = getRunTerminalStatus(sharedState.events)
+      const terminalStatus = getRunTerminalStatus(sharedState.events, 'chat')
       const eventStreamVersion = sharedState.eventStreamVersion
       releaseStreamRun(run)
       emitChatRunTerminal({
@@ -547,7 +568,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
 
       if (!ownsActiveRun(run)) return
 
-      const terminalStatus = getRunTerminalStatus(sharedState.events)
+      const terminalStatus = getRunTerminalStatus(sharedState.events, 'flow')
       const eventStreamVersion = sharedState.eventStreamVersion
       releaseStreamRun(run)
       emitChatRunTerminal({
