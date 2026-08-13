@@ -234,19 +234,23 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
 
     def test_tool_result_parser_surfaces_bulk_symbol_truncation_warning(self):
         result = ToolResultParser.parse(
-            "status='ok' data=[{'symbol': 'wg'}] count=1 "
-            "warnings=['bulk_symbol_cap_applied:2:3'] message=None"
+            "status='ok' data={'requested_count': 2, 'items': [{'symbol': 'wg'}]} "
+            "count=1 warnings=['anatomy_lookup:no match for [x]', "
+            "'bulk_symbol_cap_applied:2:3'] message=None"
         )
 
         self.assertEqual(
             result["parsed"]["warnings"],
-            ["bulk_symbol_cap_applied:2:3"],
+            [
+                "anatomy_lookup:no match for [x]",
+                "bulk_symbol_cap_applied:2:3",
+            ],
         )
         self.assertIn(
             "Bulk symbols truncated: processed first 2 of 3",
             result["summary"],
         )
-        self.assertEqual(result["parse_status"], "full")
+        self.assertEqual(result["parse_status"], "partial")
 
     def test_tool_calls_keep_repeated_no_id_calls_from_separate_generations(self):
         observations = [

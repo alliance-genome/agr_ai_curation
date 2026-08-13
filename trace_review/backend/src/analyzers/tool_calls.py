@@ -181,16 +181,15 @@ class ToolResultParser:
             result["count"] = int(count_match.group(1))
 
         # Extract warnings from agr_curation_query results.
-        warnings_match = re.search(r"warnings=(None|\[[^\]]*\])", text)
+        warnings_match = re.search(
+            r"warnings=(None|\[.*?\])(?=\s+message=)", text, re.DOTALL
+        )
         if warnings_match:
             warnings_text = warnings_match.group(1)
             if warnings_text == "None":
                 result["warnings"] = None
             else:
-                try:
-                    warnings = ast.literal_eval(warnings_text)
-                except (SyntaxError, ValueError):
-                    warnings = None
+                warnings = ast.literal_eval(warnings_text)
                 if isinstance(warnings, list) and all(
                     isinstance(warning, str) for warning in warnings
                 ):
@@ -687,8 +686,11 @@ class ToolCallAnalyzer:
 
                     # Parse arguments JSON string
                     try:
-                        import json
-                        arguments = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                        arguments = (
+                            json.loads(arguments_str)
+                            if isinstance(arguments_str, str)
+                            else arguments_str
+                        )
                     except Exception:
                         arguments = {"raw": arguments_str}
 

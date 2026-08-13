@@ -361,8 +361,8 @@ function FormattedToolResult({ result, resultLength }: { result: ToolResultParse
         >
           <WarningAmberIcon fontSize="small" />
           <Box>
-            {parsed!.warnings!.map((warning) => (
-              <Typography key={warning} variant="body2" sx={{ fontFamily: 'monospace' }}>
+            {parsed!.warnings!.map((warning, index) => (
+              <Typography key={`${index}:${warning}`} variant="body2" sx={{ fontFamily: 'monospace' }}>
                 {warning}
               </Typography>
             ))}

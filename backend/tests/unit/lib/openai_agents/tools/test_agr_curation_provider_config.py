@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from agr_ai_curation_alliance.tools import agr_curation
 from src.lib import identifier_validation
 
