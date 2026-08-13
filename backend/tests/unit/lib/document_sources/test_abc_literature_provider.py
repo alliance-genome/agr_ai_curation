@@ -9,6 +9,7 @@ from src.lib.document_sources.identifier_import import (
     ReferenceImportDecisionStatus,
     select_reference_import_candidate,
 )
+from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceConfigError,
@@ -188,6 +189,33 @@ def provider_from_fake(
     fake_client: FakeABCLiteratureClient,
 ) -> ABCLiteratureDocumentSourceProvider:
     return ABCLiteratureDocumentSourceProvider(fake_client)  # type: ignore[arg-type]
+
+
+def _main_markdown(*, artifact_id: str, display_name: str) -> SourceArtifact:
+    return SourceArtifact(
+        provider="abc_literature",
+        artifact_id=artifact_id,
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        display_name=display_name,
+        metadata={"file_class": "converted_merged_main", "file_extension": "md"},
+    )
+
+
+def test_main_text_contract_excludes_tei_before_ranking() -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+    tei = _main_markdown(artifact_id="tei-1", display_name="paper_tei.md")
+    nxml = _main_markdown(artifact_id="nxml-1", display_name="paper_nxml.md")
+    merged = _main_markdown(artifact_id="merged-1", display_name="paper_merged.md")
+
+    assert select_preferred_main_text_artifact(provider, [tei]) == (None, 0)
+    assert select_preferred_main_text_artifact(provider, [tei, merged, nxml]) == (
+        nxml,
+        1,
+    )
+    assert provider.main_text_artifact_sort_key(nxml) == (0,)
+    assert provider.main_text_artifact_sort_key(merged) == (1,)
 
 
 def test_checksum_match_uses_local_pdf_only_for_supplements() -> None:

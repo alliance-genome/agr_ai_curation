@@ -220,7 +220,7 @@ def _fake_is_main_text_artifact(
     display_name = str(artifact.display_name or "").strip().lower()
     combined = f"{file_class} {display_name}"
     if provider_id == "abc_literature":
-        return file_class == "converted_merged_main"
+        return file_class == "converted_merged_main" and "_tei" not in display_name
     return "supplement" not in combined
 
 
@@ -232,8 +232,8 @@ def _fake_main_text_artifact_sort_key(
     file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
     display_name = str(artifact.display_name or "").strip().lower()
     combined = f"{file_class} {display_name}"
-    if provider_id == "abc_literature" and "tei" in combined:
-        return (100,)
+    if provider_id == "abc_literature":
+        return (0,) if "_nxml" in display_name else (1,)
     if "_nxml" in combined or "nxml" in file_class:
         return (0,)
     if "_merged" in combined or "merged" in file_class:
@@ -778,7 +778,7 @@ async def test_select_reference_import_candidate_prefers_canonical_nxml_markdown
 
 
 @pytest.mark.asyncio
-async def test_select_reference_import_candidate_accepts_abc_tei_only_main_markdown():
+async def test_select_reference_import_candidate_routes_abc_tei_only_main_to_conversion():
     source = _source_artifact(artifact_id="pdf-1", provider="abc_literature")
     provider = _FakeConversionProvider(
         artifacts=(
@@ -805,11 +805,16 @@ async def test_select_reference_import_candidate_accepts_abc_tei_only_main_markd
         authorized_group_ids=("FB",),
     )
 
-    assert decision.status == ReferenceImportDecisionStatus.READY
+    assert decision.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING
     assert decision.selected is not None
-    assert decision.selected.converted_artifact is not None
-    assert decision.selected.converted_artifact.artifact_id == "md-tei"
-    assert provider.request_conversion_calls == []
+    assert decision.selected.converted_artifact is None
+    assert provider.request_conversion_calls == [
+        {
+            "reference": decision.reference,
+            "wait": False,
+            "request_bearer_token": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio

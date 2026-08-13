@@ -100,6 +100,10 @@ execution share this rule and the provider's canonical-main selection hooks;
 none of those consumers treats `UNKNOWN` as a ready fallback or embeds
 `converted_merged_main` selection logic.
 
+ABC's canonical-main hook also excludes TEI-signaled artifacts before shared
+selection. A TEI-only artifact list therefore continues conversion or reports
+missing canonical text instead of producing a ready import.
+
 ABC `conversion_job_id` is not durable enough to drive AI Curation recovery.
 On restart or replay, AI Curation should re-query by reference and local source
 provenance, not by assuming an ABC job ID can be resumed.

@@ -100,6 +100,9 @@ exists and no non-TEI main Markdown can be obtained without overwrite, surface a
 legacy-TEI-only/missing-canonical-text state for product and Blue Team follow-up
 rather than overwriting ABC rows.
 
+The ABC adapter rejects TEI-signaled rows from its canonical-main predicate, so
+shared upload and import selection cannot revive them as a unique fallback.
+
 ## Provider-Neutral Shape
 
 Core AI Curation code should depend on document-source concepts, not ABC

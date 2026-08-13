@@ -61,6 +61,10 @@ authorized ABC reference, AI Curation should continue the provider-conversion
 path or report that canonical converted text is not ready; it should not ingest
 the TEI row as the main paper text.
 
+The ABC provider adapter enforces the non-TEI requirement before artifacts
+reach the shared main-text selector. TEI-signaled rows are not lower-ranked
+fallbacks; they are outside the canonical candidate set.
+
 For non-ABC document-source providers, the core selector accepts provider
 normalized ready Markdown artifacts without requiring ABC's
 `converted_merged_main` class name.

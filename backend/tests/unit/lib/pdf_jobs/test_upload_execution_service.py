@@ -113,17 +113,17 @@ class _Provider:
         }
 
     def is_main_text_artifact(self, artifact):
-        return artifact.metadata.get("file_class") == self.main_file_class
+        file_class = str(artifact.metadata.get("file_class") or "").lower()
+        display_name = str(artifact.display_name or "").lower()
+        if self.provider_id == "abc_literature":
+            return file_class == self.main_file_class and "_tei" not in display_name
+        return file_class == self.main_file_class
 
     def main_text_artifact_sort_key(self, artifact):
         display_name = str(artifact.display_name or "").lower()
         if self.provider_id != "abc_literature":
             return (int(artifact.metadata.get("provider_rank", 0)),)
-        if "_nxml" in display_name:
-            return (0,)
-        if "_tei" in display_name:
-            return (100,)
-        return (1,)
+        return (0,) if "_nxml" in display_name else (1,)
 
     def conversion_progress_percentage(self, result):
         if result.status in {
@@ -1070,7 +1070,7 @@ async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_met
     ]
 
 
-def test_select_preferred_main_text_accepts_abc_tei_only_artifact():
+def test_select_preferred_main_text_rejects_abc_tei_only_artifact():
     artifact = SourceArtifact(
         provider="abc_literature",
         artifact_id="tei-markdown-1",
@@ -1088,8 +1088,8 @@ def test_select_preferred_main_text_accepts_abc_tei_only_artifact():
         [artifact],
     )
 
-    assert selected is artifact
-    assert ambiguous_count == 1
+    assert selected is None
+    assert ambiguous_count == 0
 
 
 def test_select_preferred_main_text_reports_ambiguous_equal_candidates():
@@ -1247,7 +1247,7 @@ async def test_execute_provider_conversion_fails_when_completed_without_canonica
             reference_curie="AGRKB:101",
             display_name="paper_tei.md",
             access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
-            metadata={"file_class": "converted_tei_main", "file_extension": "md"},
+            metadata={"file_class": "converted_merged_main", "file_extension": "md"},
         )
     ]
     progress_updates = []
