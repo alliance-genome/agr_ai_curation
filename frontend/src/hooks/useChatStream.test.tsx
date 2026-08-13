@@ -15,6 +15,21 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+function sseResponse(events: readonly object[]): Response {
+  const encoder = new TextEncoder()
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        events.forEach((event) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+        })
+        controller.close()
+      },
+    }),
+    { status: 200 },
+  )
+}
+
 describe('useChatStream shared lifecycle', () => {
   beforeEach(() => {
     vi.mocked(global.fetch).mockReset()
@@ -262,14 +277,14 @@ describe('useChatStream shared lifecycle', () => {
     const listener = (event: Event) => terminalEvents.push(event as CustomEvent)
     window.addEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
 
-    vi.mocked(global.fetch).mockResolvedValue(new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.close()
-        },
-      }),
-      { status: 200 },
-    ))
+    vi.mocked(global.fetch).mockResolvedValue(sseResponse([
+      {
+        type: 'turn_completed',
+        session_id: 'session-terminal',
+        turn_id: 'turn-terminal',
+        message: 'Chat turn completed.',
+      },
+    ]))
 
     const { result, unmount } = renderHook(() => useChatStream())
 
@@ -291,23 +306,24 @@ describe('useChatStream shared lifecycle', () => {
     window.removeEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
   })
 
-  it('marks streamed error events as terminal errors', async () => {
+  it('uses the durable chat failure event as the terminal status', async () => {
     const terminalEvents: CustomEvent[] = []
     const listener = (event: Event) => terminalEvents.push(event as CustomEvent)
     window.addEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
-    const encoder = new TextEncoder()
-
-    vi.mocked(global.fetch).mockResolvedValue(new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(encoder.encode(
-            'data: {"type":"SUPERVISOR_ERROR","session_id":"session-error","timestamp":"2026-06-30T00:00:00.000Z","details":{"message":"failed"}}\n\n',
-          ))
-          controller.close()
-        },
-      }),
-      { status: 200 },
-    ))
+    vi.mocked(global.fetch).mockResolvedValue(sseResponse([
+      {
+        type: 'SUPERVISOR_ERROR',
+        session_id: 'session-error',
+        timestamp: '2026-06-30T00:00:00.000Z',
+        details: { message: 'failed' },
+      },
+      {
+        type: 'turn_failed',
+        session_id: 'session-error',
+        turn_id: 'turn-error',
+        message: 'Chat turn failed.',
+      },
+    ]))
 
     const { result, unmount } = renderHook(() => useChatStream())
 
@@ -321,6 +337,70 @@ describe('useChatStream shared lifecycle', () => {
         sessionId: 'session-error',
         runKind: 'chat',
         status: 'error',
+      }),
+    )
+
+    result.current.clearEvents()
+    unmount()
+    window.removeEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
+  })
+
+  it.each([
+    {
+      name: 'keeps a chat completion successful after a non-fatal specialist warning',
+      runKind: 'chat',
+      sessionId: 'session-warning',
+      expectedStatus: 'completed',
+      events: [
+        {
+          type: 'SPECIALIST_ERROR',
+          details: { fatal: false, severity: 'warning' },
+        },
+        { type: 'turn_completed' },
+      ],
+    },
+    {
+      name: 'uses FLOW_FINISHED completion after a non-fatal specialist warning',
+      runKind: 'flow',
+      sessionId: 'flow-warning',
+      expectedStatus: 'completed',
+      events: [
+        {
+          type: 'SPECIALIST_ERROR',
+          details: { fatal: false, severity: 'warning' },
+        },
+        { type: 'FLOW_FINISHED', status: 'completed' },
+      ],
+    },
+    {
+      name: 'uses a failed FLOW_FINISHED status without an earlier error event',
+      runKind: 'flow',
+      sessionId: 'flow-failed',
+      expectedStatus: 'error',
+      events: [{ type: 'FLOW_FINISHED', status: 'failed' }],
+    },
+  ] as const)('$name', async ({ events, expectedStatus, runKind, sessionId }) => {
+    const terminalEvents: CustomEvent[] = []
+    const listener = (event: Event) => terminalEvents.push(event as CustomEvent)
+    window.addEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
+    vi.mocked(global.fetch).mockResolvedValue(sseResponse(events))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      if (runKind === 'chat') {
+        await result.current.sendMessage('hello', sessionId)
+      } else {
+        await result.current.executeFlow('flow-1', sessionId)
+      }
+    })
+
+    expect(terminalEvents).toHaveLength(1)
+    expect(terminalEvents[0].detail).toEqual(
+      expect.objectContaining({
+        sessionId,
+        runKind,
+        status: expectedStatus,
       }),
     )
 
