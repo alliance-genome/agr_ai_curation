@@ -11,6 +11,23 @@ if [[ "${SMOKE_SCRIPT_PATH}" == *"/add_literature_upload_smoke.py" ]]; then
 fi
 
 if [[ "${IS_ADD_LITERATURE_UPLOAD_SMOKE}" == "1" ]]; then
+  TOKEN_ENV_NAME="ADD_LITERATURE_UPLOAD_SMOKE_CURATOR_ID_TOKEN"
+  TOKEN_ENV_FILE_NAME="ADD_LITERATURE_UPLOAD_SMOKE_ENV_FILE"
+else
+  TOKEN_ENV_NAME="ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_ID_TOKEN"
+  TOKEN_ENV_FILE_NAME="ABC_LITERATURE_READY_UPLOAD_SMOKE_ENV_FILE"
+fi
+for argument in "$@"; do
+  case "${argument}" in
+    --curator-id-token|--curator-id-token=*)
+      echo "The Docker smoke wrapper does not accept --curator-id-token." >&2
+      echo "Set ${TOKEN_ENV_NAME} in the uncommitted smoke env file selected by ${TOKEN_ENV_FILE_NAME}, then rerun the wrapper." >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "${IS_ADD_LITERATURE_UPLOAD_SMOKE}" == "1" ]]; then
   SMOKE_ENV_FILE="${ADD_LITERATURE_UPLOAD_SMOKE_ENV_FILE:-${ABC_LITERATURE_READY_UPLOAD_SMOKE_ENV_FILE:-${HOME}/.agr_ai_curation/.env}}"
 else
   SMOKE_ENV_FILE="${ABC_LITERATURE_READY_UPLOAD_SMOKE_ENV_FILE:-${HOME}/.agr_ai_curation/.env}"
