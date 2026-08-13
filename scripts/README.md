@@ -668,6 +668,8 @@ Evidence output:
 
 - `file_outputs/temp/abc_literature_identifier_import_smoke_<timestamp>.json`
 
+## Utilities
+
 ### utilities/check_services.sh
 
 Health check script that verifies all Docker services are running and responding.
