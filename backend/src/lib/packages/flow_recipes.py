@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 import re
 from string import Formatter
@@ -326,9 +327,16 @@ def build_flow_recipe_catalog(registry: PackageRegistry) -> FlowRecipeCatalog:
     return FlowRecipeCatalog(contributions=contributions)
 
 
+@lru_cache(maxsize=8)
+def _load_flow_recipe_catalog_for_path(packages_dir: Path) -> FlowRecipeCatalog:
+    """Cache immutable package metadata for one runtime package root."""
+
+    registry = load_package_registry(packages_dir, fail_on_validation_error=True)
+    return build_flow_recipe_catalog(registry)
+
+
 def load_flow_recipe_catalog() -> FlowRecipeCatalog:
     """Load recipe contributions from the active package directory."""
 
-    packages_dir = resolve_default_packages_dir()
-    registry = load_package_registry(packages_dir, fail_on_validation_error=True)
-    return build_flow_recipe_catalog(registry)
+    packages_dir = resolve_default_packages_dir().resolve(strict=False)
+    return _load_flow_recipe_catalog_for_path(packages_dir)

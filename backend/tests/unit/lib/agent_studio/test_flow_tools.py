@@ -807,6 +807,71 @@ def test_flow_templates_do_not_advertise_rejected_output_bindings(monkeypatch):
     assert templates == []
 
 
+def test_flow_templates_renumber_sources_after_optional_formatter_is_removed(
+    monkeypatch,
+    tmp_path,
+):
+    available_agent_ids = {
+        "pdf_extraction",
+        "record_extractor",
+        "secondary_extractor",
+        "chat_output",
+    }
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", sorted(available_agent_ids))
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "record_extractor": {"category": "Extraction"},
+            "secondary_extractor": {"category": "Extraction"},
+            "chat_output": {"category": "Output"},
+        },
+    )
+    catalog = FlowRecipeCatalog(
+        contributions=(
+            LoadedFlowRecipeManifest(
+                package_id="org.custom",
+                export_name="default",
+                source_path=tmp_path / "flow_recipes.yaml",
+                manifest=FlowRecipeManifest.model_validate(
+                    {
+                        "flow_recipes_api_version": "1.0.0",
+                        "recipes": [
+                            {
+                                "name": "Optional Mid-flow Output",
+                                "description": "Exercise canonical source remapping",
+                                "steps": [
+                                    {"agent_id": "pdf_extraction"},
+                                    {"agent_id": "record_extractor"},
+                                    {
+                                        "agent_id": "csv_formatter",
+                                        "source_steps": [2],
+                                    },
+                                    {"agent_id": "secondary_extractor"},
+                                    {
+                                        "agent_id": "chat_output",
+                                        "source_steps": [4],
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+    )
+
+    templates = flow_tools._filter_flow_templates(available_agent_ids, catalog)
+
+    assert templates[0]["steps"] == [
+        {"agent_id": "pdf_extraction"},
+        {"agent_id": "record_extractor"},
+        {"agent_id": "secondary_extractor"},
+        {"agent_id": "chat_output", "source_steps": [3]},
+    ]
+
+
 def test_flow_template_shared_validation_failure_reports_package_recipe_context(
     monkeypatch,
     tmp_path,

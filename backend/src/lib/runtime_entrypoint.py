@@ -129,6 +129,8 @@ def validate_runtime_packages() -> PackageRegistry:
         fail_on_validation_error=True,
     )
     flow_recipe_catalog = build_flow_recipe_catalog(registry)
+    # Agent eligibility is package-configured and must be resolved only after
+    # the package registry has passed structural validation.
     from src.lib.agent_studio.flow_tools import validate_installed_flow_recipe_catalog
 
     compatible_flow_recipe_count = validate_installed_flow_recipe_catalog(
@@ -154,12 +156,13 @@ def validate_runtime_packages() -> PackageRegistry:
         output_schema_resolver=build_package_scoped_output_schema_resolver(packages_dir),
     )
     logger.info(
-        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s domain_packs=%s flow_recipes=%s",
+        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s domain_packs=%s flow_recipes=%s/%s-compatible",
         len(registry.loaded_packages),
         len(registry.failed_packages),
         report["status"],
         len(tool_registry.bindings),
         len(domain_pack_registry.loaded_packs),
+        len(flow_recipe_catalog.recipes),
         compatible_flow_recipe_count,
     )
     if registry.failed_packages:

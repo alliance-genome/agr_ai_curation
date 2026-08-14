@@ -694,6 +694,9 @@ def _filter_flow_templates(
             contract_agent_ids = sorted(
                 {str(step["agent_id"]) for step in template["steps"]}
             )
+            # This install-independent pass checks recipe structure and limits.
+            # The resolved pass below enforces real extraction/typed-validator
+            # source eligibility against the installed agent registry.
             contract_agent_registry = {
                 agent_id: {
                     "category": (
@@ -723,10 +726,10 @@ def _filter_flow_templates(
                     f"{'; '.join(exc.errors)}"
                 ) from exc
 
-            filtered_steps: List[Dict[str, Any]] = []
+            resolved_steps: list[tuple[int, Dict[str, Any]]] = []
             missing_required_step = False
 
-            for step in template["steps"]:
+            for original_step_number, step in enumerate(template["steps"], 1):
                 resolved_agent_id = _resolve_available_agent_id(
                     step["agent_id"],
                     available_agent_ids,
@@ -738,9 +741,45 @@ def _filter_flow_templates(
                     missing_required_step = True
                     break
 
-                filtered_steps.append({**step, "agent_id": resolved_agent_id})
+                resolved_steps.append(
+                    (
+                        original_step_number,
+                        {**step, "agent_id": resolved_agent_id},
+                    )
+                )
 
-            if missing_required_step or not filtered_steps:
+            if missing_required_step or not resolved_steps:
+                continue
+
+            step_number_map = {
+                original_step_number: filtered_step_number
+                for filtered_step_number, (original_step_number, _) in enumerate(
+                    resolved_steps,
+                    1,
+                )
+            }
+            filtered_steps: List[Dict[str, Any]] = []
+            for _, step in resolved_steps:
+                remapped_step = dict(step)
+                if "source_steps" in remapped_step:
+                    remapped_step["source_steps"] = [
+                        step_number_map[source_step]
+                        for source_step in remapped_step["source_steps"]
+                    ]
+                filtered_steps.append(remapped_step)
+
+            incompatible_output_binding = False
+            for output_index, step in enumerate(filtered_steps):
+                if not _is_output_agent_id(str(step["agent_id"])):
+                    continue
+                _, source_error = _validated_output_source_steps(
+                    filtered_steps,
+                    output_index,
+                )
+                if source_error is not None:
+                    incompatible_output_binding = True
+                    break
+            if incompatible_output_binding:
                 continue
 
             try:
@@ -749,12 +788,6 @@ def _filter_flow_templates(
                     task_instructions=template["description"],
                 )
             except _SimplifiedFlowValidationError as exc:
-                if any(
-                    "is not an extraction agent or a typed validation agent"
-                    in error
-                    for error in exc.errors
-                ):
-                    continue
                 raise FlowRecipeLoadError(
                     f"Invalid flow recipe '{template['name']}' from package "
                     f"'{contribution.package_id}' at {contribution.source_path}: "
