@@ -558,6 +558,7 @@ def test_workspace_response_includes_domain_envelope_projections():
         now = _now()
         document = PDFDocument(
             id=uuid4(),
+            user_id=1,
             filename="paper.pdf",
             title="Projection Paper",
             file_path="/tmp/paper.pdf",

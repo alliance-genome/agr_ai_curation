@@ -130,17 +130,18 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
     file_hash = _hash(document_id)
     paper = evidence_fixture["paper"]
 
-    test_db.add(
-        User(
-            auth_sub=current_user_auth_sub,
-            email="curator1@alliancegenome.org",
-            display_name="Curator One",
-            is_active=True,
-        )
+    owner = User(
+        auth_sub=current_user_auth_sub,
+        email="curator1@alliancegenome.org",
+        display_name="Curator One",
+        is_active=True,
     )
+    test_db.add(owner)
+    test_db.flush()
     test_db.add(
         PDFDocument(
             id=document_id,
+            user_id=owner.id,
             filename=str(paper["filename"]),
             title=str(paper["title"]),
             file_path=f"{document_id}/{paper['filename']}",

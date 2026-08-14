@@ -166,7 +166,7 @@ def _create_user(db_session, *, auth_sub: str) -> User:
     return user
 
 
-def _create_document(db_session, *, document_id, suffix: str, user_id: int | None = None) -> None:
+def _create_document(db_session, *, document_id, suffix: str, user_id: int) -> None:
     db_session.add(
         PDFDocument(
             id=document_id,
@@ -314,10 +314,21 @@ def test_list_sessions_uses_recent_activity_keyset_pagination(db_session):
 
 def test_count_and_document_filters_respect_user_scope(db_session):
     repository = ChatHistoryRepository(db_session)
+    user_a = _create_user(db_session, auth_sub=USER_A)
     document_a = uuid4()
     document_b = uuid4()
-    _create_document(db_session, document_id=document_a, suffix="doc-a")
-    _create_document(db_session, document_id=document_b, suffix="doc-b")
+    _create_document(
+        db_session,
+        document_id=document_a,
+        suffix="doc-a",
+        user_id=user_a.id,
+    )
+    _create_document(
+        db_session,
+        document_id=document_b,
+        suffix="doc-b",
+        user_id=user_a.id,
+    )
 
     _create_session(
         repository,
@@ -388,7 +399,6 @@ def test_get_visible_document_id_is_scoped_to_the_authenticated_user(db_session)
     user_b = _create_user(db_session, auth_sub=USER_B)
     visible_document_id = uuid4()
     hidden_document_id = uuid4()
-    orphan_document_id = uuid4()
 
     _create_document(
         db_session,
@@ -402,11 +412,6 @@ def test_get_visible_document_id_is_scoped_to_the_authenticated_user(db_session)
         suffix="hidden",
         user_id=user_b.id,
     )
-    _create_document(
-        db_session,
-        document_id=orphan_document_id,
-        suffix="orphan",
-    )
     db_session.commit()
 
     assert (
@@ -419,13 +424,6 @@ def test_get_visible_document_id_is_scoped_to_the_authenticated_user(db_session)
     assert (
         repository.get_visible_document_id(
             document_id=hidden_document_id,
-            user_auth_sub=USER_A,
-        )
-        is None
-    )
-    assert (
-        repository.get_visible_document_id(
-            document_id=orphan_document_id,
             user_auth_sub=USER_A,
         )
         is None

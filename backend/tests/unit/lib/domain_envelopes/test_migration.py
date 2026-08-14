@@ -135,6 +135,7 @@ def _create_document(db_session: Session) -> PDFDocument:
     now = _now()
     document = PDFDocument(
         id=uuid4(),
+        user_id=1,
         filename=f"paper-{uuid4()}.pdf",
         title="Legacy paper",
         file_path=f"/tmp/{uuid4()}.pdf",

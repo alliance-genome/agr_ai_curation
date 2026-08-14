@@ -93,13 +93,13 @@ class PDFDocument(Base):
     source_access_mods: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     viewer_mode: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # User ownership (T007: Alembic migration a7f8b9c0d1e2)
-    # Foreign key to users table for multi-tenant data isolation (FR-012, FR-016)
-    user_id: Mapped[int | None] = mapped_column(
+    # Every supported PDF document has an authenticated owner. The database
+    # foreign key and ON DELETE CASCADE were introduced by migration a7f8b9c0d1e2.
+    user_id: Mapped[int] = mapped_column(
         Integer,
-        nullable=True,  # Nullable for backwards compatibility (set during upload)
+        nullable=False,
         index=True,
-        comment="Owner user ID - references users(user_id)"
+        comment="Owner user ID - references users(user_id)",
     )
 
     __table_args__ = (

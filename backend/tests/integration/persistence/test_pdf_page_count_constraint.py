@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
+from tests.pdf_document_test_support import ensure_test_pdf_owner
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -41,10 +42,11 @@ def db_session():
         session.close()
 
 
-def _document(page_count: int) -> PDFDocument:
+def _document(page_count: int, *, user_id: int) -> PDFDocument:
     document_id = uuid4()
     return PDFDocument(
         id=document_id,
+        user_id=user_id,
         filename=f"page_count_constraint_{document_id}.pdf",
         file_path=f"test/{document_id}.pdf",
         file_hash=document_id.hex * 2,
@@ -59,7 +61,11 @@ def test_database_accepts_positive_page_counts_above_legacy_ceiling(
     db_session,
     page_count,
 ):
-    document = _document(page_count)
+    owner_id = ensure_test_pdf_owner(
+        db_session,
+        auth_sub="test_pdf_owner_page_count_constraint",
+    )
+    document = _document(page_count, user_id=owner_id)
     db_session.add(document)
     db_session.commit()
 
@@ -67,7 +73,11 @@ def test_database_accepts_positive_page_counts_above_legacy_ceiling(
 
 
 def test_database_rejects_non_positive_page_count(db_session):
-    db_session.add(_document(0))
+    owner_id = ensure_test_pdf_owner(
+        db_session,
+        auth_sub="test_pdf_owner_page_count_constraint",
+    )
+    db_session.add(_document(0, user_id=owner_id))
 
     with pytest.raises(IntegrityError):
         db_session.commit()

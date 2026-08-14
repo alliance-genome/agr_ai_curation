@@ -239,6 +239,7 @@ def _persist_document(db, *, suffix: str = "1"):
     now = _now()
     document = PDFDocument(
         id=uuid4(),
+        user_id=1,
         filename=f"paper-{suffix}.pdf",
         title=f"Paper {suffix}",
         file_path=f"/tmp/paper-{suffix}.pdf",

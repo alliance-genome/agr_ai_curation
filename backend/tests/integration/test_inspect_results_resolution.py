@@ -47,6 +47,7 @@ from src.lib.openai_agents.inspect_results import inspect_results
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import CurationExtractionSourceKind
+from tests.pdf_document_test_support import ensure_test_pdf_owner
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -76,9 +77,14 @@ def persistence_db():
 def document_id(persistence_db):
     doc_id = uuid4()
     hex_value = doc_id.hex
+    owner_id = ensure_test_pdf_owner(
+        persistence_db,
+        auth_sub="test_pdf_owner_inspect_results",
+    )
     persistence_db.add(
         PDFDocument(
             id=doc_id,
+            user_id=owner_id,
             filename=f"test_inspect_results_{hex_value}.pdf",
             title="inspect_results fixture",
             file_path=f"{doc_id}/inspect.pdf",

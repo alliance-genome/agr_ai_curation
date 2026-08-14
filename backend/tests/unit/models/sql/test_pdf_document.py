@@ -1,5 +1,6 @@
 """Tests for PDFDocument SQLAlchemy model."""
 from sqlalchemy import CheckConstraint
+from sqlalchemy.orm import Mapped
 
 from src.models.sql.pdf_document import PDFDocument
 
@@ -11,6 +12,7 @@ class TestPDFDocumentModel:
         """PDFDocument should have a title attribute for batch processing."""
         # The title field allows users to rename documents for batch clarity
         doc = PDFDocument(
+            user_id=1,
             filename="test.pdf",
             file_path="/path/to/test.pdf",
             file_hash="abc123def456",
@@ -28,6 +30,7 @@ class TestPDFDocumentModel:
     def test_title_defaults_to_none(self):
         """Title should default to None (optional field)."""
         doc = PDFDocument(
+            user_id=1,
             filename="test.pdf",
             file_path="/path/to/test.pdf",
             file_hash="abc123def456",
@@ -37,6 +40,13 @@ class TestPDFDocumentModel:
 
         # Title should be None by default (not set by user yet)
         assert doc.title is None
+
+    def test_owner_is_required_in_the_orm_contract(self):
+        column = PDFDocument.__table__.c.user_id
+
+        assert PDFDocument.__annotations__["user_id"] == Mapped[int]
+        assert column.nullable is False
+        assert column.index is True
 
     def test_model_file_size_constraint_only_requires_positive_size(self):
         constraint = next(
@@ -61,6 +71,7 @@ class TestPDFDocumentModel:
     def test_literature_provenance_defaults_to_none(self):
         """Local PDF uploads should not require upstream source provenance."""
         doc = PDFDocument(
+            user_id=1,
             filename="test.pdf",
             file_path="/path/to/test.pdf",
             file_hash="abc123def456",
@@ -78,6 +89,7 @@ class TestPDFDocumentModel:
     def test_literature_provenance_is_settable(self):
         """ABC imports can persist artifact/source identifiers and viewer mode."""
         doc = PDFDocument(
+            user_id=1,
             filename="AGRKB-101.md",
             file_path="/path/to/AGRKB-101.md",
             file_hash="md5abc123",

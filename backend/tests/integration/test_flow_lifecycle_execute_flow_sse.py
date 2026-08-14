@@ -464,6 +464,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     from src.models.sql.database import Base
     from src.models.sql.file_output import FileOutput
     from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.user import User
 
     sample_pdf_path = (
         Path(__file__).resolve().parents[1]
@@ -500,9 +501,16 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     )
 
     document_id = uuid4()
+    owner = User(
+        auth_sub="test_valid_user_00u1abc2def4",
+        is_active=True,
+    )
+    test_db.add(owner)
+    test_db.flush()
     test_db.add(
         PDFDocument(
             id=document_id,
+            user_id=owner.id,
             filename="test_sample_fly_publication.pdf",
             file_path=str(sample_pdf_path),
             file_hash="f" * 64,

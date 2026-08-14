@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
+from tests.pdf_document_test_support import ensure_test_pdf_owner
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -41,10 +42,11 @@ def db_session():
         session.close()
 
 
-def _document(file_size: int) -> PDFDocument:
+def _document(file_size: int, *, user_id: int) -> PDFDocument:
     document_id = uuid4()
     return PDFDocument(
         id=document_id,
+        user_id=user_id,
         filename=f"file_size_constraint_{document_id}.pdf",
         file_path=f"test/{document_id}.pdf",
         file_hash=document_id.hex * 2,
@@ -56,7 +58,13 @@ def _document(file_size: int) -> PDFDocument:
 
 def test_upgrade_from_prior_head_relaxes_former_ceiling():
     alembic_config = Config(str(BACKEND_ROOT / "alembic.ini"))
-    document = _document(550 * 1024 * 1024)
+    with SessionLocal() as owner_session:
+        owner_id = ensure_test_pdf_owner(
+            owner_session,
+            auth_sub="test_pdf_owner_file_size_constraint",
+        )
+        owner_session.commit()
+    document = _document(550 * 1024 * 1024, user_id=owner_id)
 
     command.downgrade(alembic_config, "0f1e2d3c4b5a")
     try:
@@ -88,7 +96,11 @@ def test_upgrade_from_prior_head_relaxes_former_ceiling():
 
 
 def test_database_accepts_positive_size_above_former_ceiling(db_session):
-    document = _document(550 * 1024 * 1024)
+    owner_id = ensure_test_pdf_owner(
+        db_session,
+        auth_sub="test_pdf_owner_file_size_constraint",
+    )
+    document = _document(550 * 1024 * 1024, user_id=owner_id)
     db_session.add(document)
     db_session.commit()
 
@@ -97,7 +109,11 @@ def test_database_accepts_positive_size_above_former_ceiling(db_session):
 
 @pytest.mark.parametrize("file_size", [0, -1])
 def test_database_rejects_non_positive_file_size(db_session, file_size):
-    db_session.add(_document(file_size))
+    owner_id = ensure_test_pdf_owner(
+        db_session,
+        auth_sub="test_pdf_owner_file_size_constraint",
+    )
+    db_session.add(_document(file_size, user_id=owner_id))
 
     with pytest.raises(IntegrityError):
         db_session.commit()
