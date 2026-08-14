@@ -173,6 +173,28 @@ def test_agent_studio_compose_and_env_example_default_to_opus_5():
     assert f"{retired_env_var}=" not in env_example
 
 
+def test_pdf_size_limit_is_shared_by_backend_and_frontend_compose_services():
+    dev_services = _load_dev_compose()["services"]
+    production_services = _load_compose()["services"]
+    expected = "${PDF_MAX_FILE_SIZE_BYTES:-524288000}"
+
+    assert _list_environment(dev_services["frontend"]["environment"])[
+        "PDF_MAX_FILE_SIZE_BYTES"
+    ] == expected
+    assert _list_environment(dev_services["backend"]["environment"])[
+        "PDF_MAX_FILE_SIZE_BYTES"
+    ] == expected
+    assert production_services["frontend"]["environment"][
+        "PDF_MAX_FILE_SIZE_BYTES"
+    ] == expected
+    assert production_services["backend"]["environment"][
+        "PDF_MAX_FILE_SIZE_BYTES"
+    ] == expected
+    assert "PDF_MAX_FILE_SIZE_BYTES=524288000" in ENV_TEMPLATE_PATH.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_dev_compose_mounts_canonical_agent_studio_prompt_source():
     compose = _load_dev_compose()
     backend_volumes = compose["services"]["backend"]["volumes"]

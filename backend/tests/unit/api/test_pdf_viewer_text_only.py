@@ -131,3 +131,21 @@ def test_viewer_response_schema_serializes_stored_page_counts_above_legacy_limit
     )
 
     assert response.page_count == page_count
+
+
+def test_viewer_response_schema_serializes_size_above_current_admission_limit():
+    stored_size = 550 * 1024 * 1024
+
+    response = pdf_viewer.PDFDocumentSummary.model_validate(
+        {
+            "id": _DOC_ID,
+            "filename": "paper.pdf",
+            "page_count": 1,
+            "file_size": stored_size,
+            "upload_timestamp": datetime(2026, 6, 25, tzinfo=timezone.utc),
+            "viewer_url": f"/api/pdf-viewer/documents/{_DOC_ID}/content",
+            "viewer_mode": "local_pdf",
+        }
+    )
+
+    assert response.file_size == stored_size

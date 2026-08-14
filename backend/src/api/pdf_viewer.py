@@ -15,7 +15,6 @@ from src.lib.pdf_viewer.rapidfuzz_matcher import (
     PdfPageText,
     match_quote_to_pdf_pages,
 )
-from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
 from src.config import get_pdf_storage_path
 from src.api.auth import get_auth_dependency
 from src.api.documents import validate_user_file_path
@@ -38,7 +37,6 @@ class PDFDocumentSummary(BaseModel):
     file_size: int = Field(
         ...,
         gt=0,
-        le=MAX_PDF_FILE_SIZE_BYTES,
         description="File size in bytes",
     )
     upload_timestamp: datetime

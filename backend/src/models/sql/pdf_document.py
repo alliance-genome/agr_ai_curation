@@ -7,7 +7,6 @@ from sqlalchemy import CheckConstraint, DateTime, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
 from src.models.sql.database import Base
 
 
@@ -105,7 +104,7 @@ class PDFDocument(Base):
 
     __table_args__ = (
         CheckConstraint(
-            f"file_size > 0 AND file_size <= {MAX_PDF_FILE_SIZE_BYTES}",
+            "file_size > 0",
             name="ck_pdf_documents_file_size",
         ),
         CheckConstraint(

@@ -1312,7 +1312,9 @@ async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_e
 
 
 @pytest.mark.asyncio
-async def test_intake_upload_file_size_constraint_error_maps_to_validation_error(tmp_path):
+async def test_intake_upload_file_size_constraint_error_is_not_misreported_as_limit_error(
+    tmp_path,
+):
     session = _FakeSession(
         fail_commit_on_call=1,
         commit_error=IntegrityError(
@@ -1345,7 +1347,7 @@ async def test_intake_upload_file_size_constraint_error_maps_to_validation_error
         tenant_name_resolver=lambda _sub: "tenant-user-1",
     )
 
-    with pytest.raises(UploadIntakeValidationError, match=f"{MAX_PDF_FILE_SIZE_MB} MB"):
+    with pytest.raises(IntegrityError):
         await service.intake_upload(
             background_tasks=BackgroundTasks(),
             file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
