@@ -208,6 +208,7 @@ def seeded_review_sessions(client: TestClient, test_db):
         ),
     ]
     test_db.add_all(users)
+    test_db.flush()
 
     document_alpha_id = uuid4()
     document_beta_id = uuid4()
@@ -216,6 +217,7 @@ def seeded_review_sessions(client: TestClient, test_db):
     documents = [
         PDFDocument(
             id=document_alpha_id,
+            user_id=users[0].id,
             filename="test_cw_alpha.pdf",
             title="Alpha 100% curation paper",
             file_path=f"{document_alpha_id}/alpha.pdf",
@@ -225,6 +227,7 @@ def seeded_review_sessions(client: TestClient, test_db):
         ),
         PDFDocument(
             id=document_beta_id,
+            user_id=users[1].id,
             filename="test_cw_beta.pdf",
             title="Beta_gene paper",
             file_path=f"{document_beta_id}/beta.pdf",
@@ -234,6 +237,7 @@ def seeded_review_sessions(client: TestClient, test_db):
         ),
         PDFDocument(
             id=document_gamma_id,
+            user_id=users[2].id,
             filename="test_cw_gamma.pdf",
             title="BetaXgene submission paper",
             file_path=f"{document_gamma_id}/gamma.pdf",

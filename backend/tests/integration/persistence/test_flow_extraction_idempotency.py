@@ -29,6 +29,7 @@ from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
     CurationExtractionSourceKind,
 )
+from tests.pdf_document_test_support import ensure_test_pdf_owner
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -40,11 +41,12 @@ def migrated_database():
     command.upgrade(alembic_config, "head")
 
 
-def _document(*, title: str) -> PDFDocument:
+def _document(*, title: str, user_id: int) -> PDFDocument:
     document_id = uuid4()
     hex_value = document_id.hex
     return PDFDocument(
         id=document_id,
+        user_id=user_id,
         filename=f"flow_idempotency_{hex_value}.pdf",
         title=title,
         file_path=f"{document_id}/flow.pdf",
@@ -90,8 +92,12 @@ def _request(*, document_id: str, payload: dict) -> CurationExtractionPersistenc
 def test_flow_persistence_concurrent_writers_converge_without_losing_outer_work(
     monkeypatch,
 ):
-    source_document = _document(title="FLOW source")
     with SessionLocal() as setup_session:
+        owner_id = ensure_test_pdf_owner(
+            setup_session,
+            auth_sub="test_pdf_owner_flow_idempotency",
+        )
+        source_document = _document(title="FLOW source", user_id=owner_id)
         setup_session.add(source_document)
         setup_session.commit()
 
@@ -141,7 +147,10 @@ def test_flow_persistence_concurrent_writers_converge_without_losing_outer_work(
 
     def _write(writer_index: int) -> str:
         with SessionLocal() as session:
-            outer_document = _document(title=f"Unrelated writer {writer_index}")
+            outer_document = _document(
+                title=f"Unrelated writer {writer_index}",
+                user_id=owner_id,
+            )
             outer_document.id = outer_document_ids[writer_index]
             session.add(outer_document)
             response = persist_idempotent_extraction_results([request], db=session)[0]

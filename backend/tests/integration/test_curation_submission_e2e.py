@@ -475,19 +475,20 @@ def submission_e2e_context(client: TestClient, test_db):
     )
 
     current_user_auth_sub = client.current_user_auth_sub
-    test_db.add(
-        User(
-            auth_sub=current_user_auth_sub,
-            email="curator1@alliancegenome.org",
-            display_name="Curator One",
-            is_active=True,
-        )
+    owner = User(
+        auth_sub=current_user_auth_sub,
+        email="curator1@alliancegenome.org",
+        display_name="Curator One",
+        is_active=True,
     )
+    test_db.add(owner)
+    test_db.flush()
 
     document_id = uuid4()
     test_db.add(
         PDFDocument(
             id=document_id,
+            user_id=owner.id,
             filename="test_submission_e2e.pdf",
             title="Submission E2E Paper",
             file_path=f"{document_id}/submission-e2e.pdf",
