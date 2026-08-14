@@ -18,6 +18,7 @@ COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.production.yml"
 DEV_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.yml"
 TEST_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.test.yml"
 ENV_TEMPLATE_PATH = WORKSPACE_ROOT / "scripts/install/lib/templates/env.standalone"
+ENV_EXAMPLE_PATH = WORKSPACE_ROOT / ".env.example"
 START_VERIFY_PATH = WORKSPACE_ROOT / "scripts/install/06_start_verify.sh"
 MAKEFILE_PATH = WORKSPACE_ROOT / "Makefile"
 PREFLIGHT_PATH = WORKSPACE_ROOT / "scripts/testing/production_compose_preflight.py"
@@ -150,6 +151,26 @@ def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
     assert live_test_env["LIVE_LLM_OPENAI_MODEL"] == (
         "${LIVE_LLM_OPENAI_MODEL:-gpt-5.6-terra}"
     )
+
+
+def test_agent_studio_compose_and_env_example_default_to_opus_5():
+    dev_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    env_example = ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
+
+    assert dev_env["PROMPT_EXPLORER_MODEL_ID"] == (
+        "${PROMPT_EXPLORER_MODEL_ID:-claude-opus-5}"
+    )
+    assert production_env["PROMPT_EXPLORER_MODEL_ID"] == (
+        "${PROMPT_EXPLORER_MODEL_ID:-claude-opus-5}"
+    )
+    assert "PROMPT_EXPLORER_MODEL_ID=claude-opus-5" in env_example
+    retired_env_var = "ANTHROPIC_" + "OPUS_MODEL"
+    assert retired_env_var not in dev_env
+    assert retired_env_var not in production_env
+    assert f"{retired_env_var}=" not in env_example
 
 
 def test_dev_compose_mounts_canonical_agent_studio_prompt_source():

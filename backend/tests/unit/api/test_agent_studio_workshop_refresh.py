@@ -303,7 +303,7 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     monkeypatch.setattr(
         api_module,
         "_resolve_prompt_explorer_model",
-        lambda: ("claude-sonnet-test", "Claude Sonnet Test"),
+        lambda: ("claude-opus-5", "Claude Opus 5"),
     )
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
@@ -403,6 +403,14 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     ]
     first_call = captured["api_calls"][0]
     second_call = captured["api_calls"][1]
+    for api_call in (first_call, second_call):
+        assert api_call["model"] == "claude-opus-5"
+        assert api_call["max_tokens"] == 16384
+        assert api_call["output_config"] == {"effort": "medium"}
+        assert "thinking" not in api_call
+        assert "temperature" not in api_call
+        assert "top_k" not in api_call
+        assert "top_p" not in api_call
     assert first_call["betas"] == ["effort-2025-11-24", "context-management-2025-06-27"]
     assert first_call["context_management"] == {
         "edits": [

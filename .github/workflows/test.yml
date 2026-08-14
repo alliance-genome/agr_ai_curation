@@ -84,6 +84,7 @@ jobs:
             -v "${{ github.workspace }}/docs:/app/docs:ro" \
             -v "${{ github.workspace }}/frontend:/app/frontend:ro" \
             -v "${{ github.workspace }}/scripts/testing:/app/scripts/testing:ro" \
+            -v "${{ github.workspace }}/.env.example:/workspace/.env.example:ro" \
             -v "${{ github.workspace }}/docker-compose.yml:/workspace/docker-compose.yml:ro" \
             -v "${{ github.workspace }}/docker-compose.production.yml:/workspace/docker-compose.production.yml:ro" \
             -v "${{ github.workspace }}/docker-compose.test.yml:/workspace/docker-compose.test.yml:ro" \

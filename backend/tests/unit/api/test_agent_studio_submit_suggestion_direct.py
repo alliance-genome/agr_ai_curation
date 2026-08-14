@@ -119,7 +119,7 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
 
     notified = {}
     reported = []
-    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-opus-test")
+    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-opus-5")
 
     class _FakeMessagesClient:
         @staticmethod
@@ -177,6 +177,68 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
             "context": {},
         }
     ]
+
+
+def test_process_suggestion_background_uses_opus_5_request_contract(monkeypatch):
+    import src.api.agent_studio as api_module
+
+    captured = {}
+    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-opus-5")
+
+    class _FakeMessagesClient:
+        @staticmethod
+        def create(**kwargs):
+            captured["request"] = kwargs
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="tool_use",
+                        name="submit_prompt_suggestion",
+                        input={"summary": "Focused request contract"},
+                    )
+                ],
+            )
+
+    class _FakeAnthropicClient:
+        def __init__(self, **_kwargs):
+            self.messages = _FakeMessagesClient()
+
+    async def _fake_handle_tool_call(**kwargs):
+        captured["tool_call"] = kwargs
+        return {"success": True, "suggestion_id": "suggestion-1"}
+
+    monkeypatch.setattr(api_module.anthropic, "Anthropic", _FakeAnthropicClient)
+    monkeypatch.setattr(api_module, "_handle_tool_call", _fake_handle_tool_call)
+
+    asyncio.run(
+        api_module._process_suggestion_background(
+            messages=[{"role": "user", "content": "hello"}],
+            system_prompt="system",
+            context=None,
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
+            api_key="test-key",
+        )
+    )
+
+    request = captured["request"]
+    assert request["model"] == "claude-opus-5"
+    assert request["max_tokens"] == 4096
+    assert request["system"] == "system"
+    assert request["messages"] == [{"role": "user", "content": "hello"}]
+    assert request["tools"] == [api_module.ANTHROPIC_SUGGESTION_TOOL]
+    assert request["tool_choice"] == {
+        "type": "tool",
+        "name": "submit_prompt_suggestion",
+    }
+    assert "thinking" not in request
+    assert "output_config" not in request
+    assert "temperature" not in request
+    assert "top_k" not in request
+    assert "top_p" not in request
+    assert captured["tool_call"]["tool_input"] == {
+        "summary": "Focused request contract"
+    }
 
 
 def test_submit_suggestion_direct_sanitizes_unexpected_errors(monkeypatch, caplog):

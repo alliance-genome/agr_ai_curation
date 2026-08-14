@@ -144,7 +144,6 @@ from src.services.user_service import set_global_user_from_cognito
 logger = logging.getLogger(__name__)
 
 PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
-LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR = "ANTHROPIC_OPUS_MODEL"
 AGENT_STUDIO_SEEDED_SESSION_PREFIX = agent_studio_chat_session.AGENT_STUDIO_SEEDED_SESSION_PREFIX
 AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
     # Project prompts must be supplied by config/package sources; backend-core
@@ -209,14 +208,11 @@ def _resolve_prompt_explorer_model() -> tuple[str, str]:
 
     Resolution order:
     1. PROMPT_EXPLORER_MODEL_ID env override
-    2. Legacy ANTHROPIC_OPUS_MODEL env override
-    3. Anthropic model from config/models.yaml (default first)
+    2. Anthropic model from config/models.yaml (default first)
     """
-    configured_model_id = (
-        os.getenv(PROMPT_EXPLORER_MODEL_ENV_VAR)
-        or os.getenv(LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR)
-        or ""
-    ).strip()
+    # Removed ANTHROPIC_OPUS_MODEL fallback — PROMPT_EXPLORER_MODEL_ID is the
+    # sole Agent Studio environment override.
+    configured_model_id = (os.getenv(PROMPT_EXPLORER_MODEL_ENV_VAR) or "").strip()
     return prompt_builder.resolve_prompt_explorer_model(
         configured_model_id=configured_model_id,
         catalog_models=_list_anthropic_catalog_models(),
