@@ -143,11 +143,12 @@ Packages can contribute:
 - provider defaults
 - model defaults
 - tool policy defaults
+- Agent Studio flow recipes, agent equivalences, and composition suggestions
 
 `agr.core` ships the default provider/model/tool policy files plus the
 supervisor bundle. `agr.alliance` ships the default specialist agent catalog
-and shipped tool bindings. Keep custom behavior in a separate package so
-upgrades can replace the shipped packages safely.
+along with shipped tool bindings and flow recipes. Keep custom behavior in a
+separate package so upgrades can replace the shipped packages safely.
 
 ### Minimal custom package layout
 
@@ -189,6 +190,16 @@ agent_bundles:
 
 The `agent_bundles` shorthand expands into the required agent, prompt, schema,
 and group-rule exports automatically.
+
+### Agent Studio flow recipes
+
+A package can export `config/flow_recipes.yaml` with `kind: flow_recipes`.
+The strict versioned contract contributes starter recipes plus optional agent
+equivalence and suggestion metadata. Recipe steps are checked by the same
+validation path as `validate_flow` and `create_flow`; malformed exports fail
+startup with package and source-file context. Core-only installs expose no
+domain recipes. See the developer configuration guide for the complete YAML
+shape.
 
 ## Merge and override behavior
 

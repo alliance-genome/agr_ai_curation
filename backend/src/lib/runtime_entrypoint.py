@@ -21,6 +21,7 @@ from src.lib.packages import (
     ExportKind,
     PackageEnvironmentManager,
     PackageRegistry,
+    build_flow_recipe_catalog,
     build_package_health_report,
     get_file_output_dir,
     get_identifier_prefix_file_path,
@@ -127,6 +128,14 @@ def validate_runtime_packages() -> PackageRegistry:
         packages_dir,
         fail_on_validation_error=True,
     )
+    flow_recipe_catalog = build_flow_recipe_catalog(registry)
+    # Agent eligibility is package-configured and must be resolved only after
+    # the package registry has passed structural validation.
+    from src.lib.agent_studio.flow_tools import validate_installed_flow_recipe_catalog
+
+    compatible_flow_recipe_count = validate_installed_flow_recipe_catalog(
+        flow_recipe_catalog
+    )
     from src.lib.config.agent_loader import build_package_scoped_agent_resolver
     from src.lib.config.schema_discovery import build_package_scoped_output_schema_resolver
     from src.lib.domain_packs.registry import load_package_domain_pack_registry
@@ -147,12 +156,14 @@ def validate_runtime_packages() -> PackageRegistry:
         output_schema_resolver=build_package_scoped_output_schema_resolver(packages_dir),
     )
     logger.info(
-        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s domain_packs=%s",
+        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s domain_packs=%s flow_recipes=%s/%s-compatible",
         len(registry.loaded_packages),
         len(registry.failed_packages),
         report["status"],
         len(tool_registry.bindings),
         len(domain_pack_registry.loaded_packs),
+        len(flow_recipe_catalog.recipes),
+        compatible_flow_recipe_count,
     )
     if registry.failed_packages:
         for failure in registry.failed_packages:

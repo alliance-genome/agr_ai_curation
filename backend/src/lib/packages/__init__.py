@@ -17,6 +17,13 @@ from .env_manager import (
     PackageEnvironmentManager,
 )
 from .health import build_package_health_report
+from .flow_recipes import (
+    FlowRecipeCatalog,
+    FlowRecipeLoadError,
+    FlowRecipeManifest,
+    build_flow_recipe_catalog,
+    load_flow_recipe_catalog,
+)
 from .import_paths import extend_sys_path_for_package
 from .manifest_loader import (
     AgentBundleRegistrationError,
@@ -106,6 +113,9 @@ __all__ = [
     "DiscoveredPackage",
     "CurationAdapterLoadError",
     "ExportKind",
+    "FlowRecipeCatalog",
+    "FlowRecipeLoadError",
+    "FlowRecipeManifest",
     "LoadedPackage",
     "LoadedCurationAdapterExport",
     "LoadedToolBindingExport",
@@ -145,6 +155,7 @@ __all__ = [
     "ToolRegistry",
     "ToolRegistryValidationError",
     "build_package_health_report",
+    "build_flow_recipe_catalog",
     "build_tool_registry",
     "decode_request",
     "decode_response",
@@ -177,6 +188,7 @@ __all__ = [
     "load_package_tool_binding_exports",
     "load_package_manifest",
     "load_package_registry",
+    "load_flow_recipe_catalog",
     "load_runtime_overrides",
     "load_tool_bindings",
     "load_tool_registry",

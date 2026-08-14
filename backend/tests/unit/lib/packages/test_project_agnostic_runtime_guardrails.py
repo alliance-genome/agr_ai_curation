@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest  # type: ignore[reportMissingImports]
 import yaml
 from src.lib.agent_studio import runtime_validation
+from src.lib.agent_studio import flow_tools
 from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
 from src.lib.curation_workspace.adapter_registry import build_curation_adapter_registry
@@ -18,6 +19,7 @@ from src.lib.curation_workspace.export_adapters.registry import ExportAdapterReg
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.flows.output_projection import build_flow_output_artifact_bundle
 from src.lib.packages.registry import load_package_registry
+from src.lib.packages.flow_recipes import load_flow_recipe_catalog
 from src.lib.packages.tool_registry import load_tool_registry
 from src.schemas.curation_workspace import SubmissionMode
 
@@ -43,10 +45,12 @@ GENERIC_RUNTIME_GUARD_PATHS = {
 }
 GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/agent_studio/catalog_service.py"),
+    Path("backend/src/lib/agent_studio/flow_tools.py"),
     Path("backend/src/lib/config/agent_loader.py"),
     Path("backend/src/lib/flows/output_projection.py"),
     Path("backend/src/lib/openai_agents/runner.py"),
     Path("backend/src/lib/openai_agents/streaming_tools.py"),
+    Path("backend/src/lib/packages/flow_recipes.py"),
 }
 GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"agr\.alliance"),
@@ -58,6 +62,19 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
         r"ontology_term_candidates|gene_id|gene_symbol|go_id)\b"
     ),
     re.compile(r"\b(?:FB|WB|MGI|RGD|SGD|ZFIN|HGNC)\b"),
+)
+GENERIC_FLOW_RECIPE_SOURCE_GUARD_PATHS = {
+    Path("backend/src/lib/agent_studio/flow_tools.py"),
+    Path("backend/src/lib/packages/flow_recipes.py"),
+}
+GENERIC_FLOW_RECIPE_SOURCE_PATTERNS = (
+    re.compile(r"\balliance\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:gene|gene_validation|gene_expression|gene_ontology|allele|"
+        r"allele_validation|disease|disease_validation|chemical|"
+        r"chemical_validation|phenotype_extractor)\b",
+        re.IGNORECASE,
+    ),
 )
 GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
     re.compile(r"agr\.alliance"),
@@ -361,6 +378,41 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     assert "demo_agent" in registry
     assert "gene_validation" not in registry
     assert "gene_extractor" not in registry
+    flow_recipe_catalog = load_flow_recipe_catalog()
+    assert [recipe.name for recipe in flow_recipe_catalog.recipes] == [
+        "Demo Record Review"
+    ]
+    assert [
+        group.agent_ids for group in flow_recipe_catalog.equivalence_groups
+    ] == [["demo_agent", "demo_agent_validation"]]
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["demo_agent", "demo_agent_validation"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "demo_agent": {"category": "Demo"},
+            "demo_agent_validation": {"category": "Demo"},
+        },
+    )
+    assert flow_tools._filter_flow_templates(
+        {"demo_agent", "demo_agent_validation"},
+        flow_recipe_catalog,
+    ) == [
+        {
+            "name": "Demo Record Review",
+            "description": "Review a demo record with the installed custom specialist",
+            "steps": [
+                {
+                    "agent_id": "demo_agent",
+                    "step_goal": "Validate the demo record",
+                }
+            ],
+        }
+    ]
     _assert_no_alliance_runtime_values(
         [
             *agents.keys(),
@@ -729,6 +781,17 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
     for relative_path in sorted(GENERIC_RUNTIME_SOURCE_GUARD_PATHS):
         text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         for pattern in GENERIC_RUNTIME_SOURCE_PATTERNS:
+            if pattern.search(text):
+                violations.append(f"{relative_path}: {pattern.pattern}")
+
+    assert violations == []
+
+
+def test_generic_flow_recipe_sources_do_not_hardcode_domain_metadata():
+    violations = []
+    for relative_path in sorted(GENERIC_FLOW_RECIPE_SOURCE_GUARD_PATHS):
+        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        for pattern in GENERIC_FLOW_RECIPE_SOURCE_PATTERNS:
             if pattern.search(text):
                 violations.append(f"{relative_path}: {pattern.pattern}")
 

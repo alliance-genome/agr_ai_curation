@@ -157,6 +157,70 @@ For standalone installs, that folder lives under
 `agr.core` supervisor bundle plus the shipped `agr.alliance` specialist
 bundles.
 
+### Agent Studio Flow Recipes
+
+Organization-specific starter flows and composition guidance belong to the
+runtime package that owns the participating specialists. Declare a strict
+`flow_recipes` export in `package.yaml`:
+
+```yaml
+exports:
+  - kind: flow_recipes
+    name: organization_flows
+    path: config/flow_recipes.yaml
+```
+
+The exported YAML uses `flow_recipes_api_version: 1.0.0` and may declare
+`recipes`, `equivalence_groups`, and `suggestions`. Recipes use the same
+simplified `steps` contract accepted by Agent Studio's `validate_flow` and
+`create_flow` tools. At runtime, a recipe is advertised only when all required
+specialists are installed; an unavailable formatter is omitted only when the
+remaining recipe still passes the shared validator. Invalid metadata and
+cross-package name or equivalence collisions fail with package, file, and
+recipe provenance.
+
+```yaml
+flow_recipes_api_version: 1.0.0
+
+equivalence_groups:
+  - agent_ids: [record_checker, record_validation]
+
+suggestions:
+  - name: validate_extracted_records
+    when_present: [record_extractor]
+    when_absent: [record_checker]
+    suggested_agent_id: record_checker
+    placement: after
+    message: >-
+      Consider adding '{suggested_agent_id}' after '{trigger_agent_id}'
+
+recipes:
+  - name: Record Review
+    description: Extract and validate structured records
+    steps:
+      - agent_id: record_extractor
+        step_goal: Extract supported records
+        custom_instructions: Retain source evidence
+      - agent_id: record_checker
+        step_goal: Validate extracted identifiers
+      - agent_id: csv_formatter
+        step_goal: Save validated records
+        source_steps: [1, 2]
+        output_filename_template: "{{input_filename_stem}}-records.csv"
+```
+
+Equivalence order is preference order when more than one installed ID matches.
+Suggestion `placement` is `first` or `after` and preserves its position around
+core-owned output guidance. Messages may use only `{suggested_agent_id}` and
+`{trigger_agent_id}` without conversions or format specifications. Recipe step
+fields are `agent_id` plus optional `step_goal`, `custom_instructions`, ordered
+`source_steps`, and `output_filename_template`.
+
+Keep generic formatter classification and attachment mechanics in core. Put
+domain agent IDs, aliases, recipe wording, and domain composition suggestions
+in the owning package contract. A core-only installation therefore exposes no
+domain recipes.
+
 ### Loading Order
 
 At system startup:

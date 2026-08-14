@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.lib.packages.models import ExportKind, PackageExport, PackageManifest
+from src.lib.packages.flow_recipes import FlowRecipeLoadError
 from src.lib.packages.registry import LoadedPackage, PackageRegistry
 from src.lib import runtime_entrypoint
 from .packages import find_repo_root
@@ -82,6 +83,55 @@ def test_validate_runtime_packages_accepts_core_only_runtime(monkeypatch, tmp_pa
 
     assert [package.package_id for package in registry.loaded_packages] == ["agr.core"]
     assert registry.failed_packages == ()
+
+
+def test_validate_runtime_packages_rejects_recipe_that_fails_shared_flow_contract(
+    monkeypatch,
+    tmp_path: Path,
+):
+    runtime_root = tmp_path / "runtime"
+    package_dir = runtime_root / "packages" / "org.invalid"
+    (package_dir / "config").mkdir(parents=True)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    (package_dir / "package.yaml").write_text(
+        """\
+package_id: org.invalid
+display_name: Invalid Recipe Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/org_invalid
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: flow_recipes
+    name: invalid_recipe
+    path: config/flow_recipes.yaml
+""",
+        encoding="utf-8",
+    )
+    (package_dir / "config" / "flow_recipes.yaml").write_text(
+        """\
+flow_recipes_api_version: 1.0.0
+recipes:
+  - name: Invalid Source Ordering
+    description: Proves startup uses the shared flow contract
+    steps:
+      - agent_id: pdf_extraction
+      - agent_id: chat_output
+        source_steps: [2]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FlowRecipeLoadError) as exc_info:
+        runtime_entrypoint.validate_runtime_packages()
+
+    message = str(exc_info.value)
+    assert "org.invalid" in message
+    assert "flow_recipes.yaml" in message
+    assert "Invalid Source Ordering" in message
+    assert "source_steps must reference earlier steps" in message
 
 
 def test_validate_runtime_packages_warns_for_undeclared_agent_bundle_but_keeps_package_loaded(
