@@ -415,10 +415,6 @@ class UploadIntakeService:
                 weaviate_document_created=weaviate_document_created,
             )
             constraint_name = self._extract_integrity_constraint_name(integrity_error)
-            if constraint_name == "ck_pdf_documents_file_size":
-                raise UploadIntakeValidationError(
-                    pdf_file_size_limit_message(file_size_bytes)
-                ) from integrity_error
             if self._is_duplicate_integrity_error(integrity_error, constraint_name):
                 existing_after_conflict = (
                     session.execute(
@@ -954,7 +950,7 @@ class UploadIntakeService:
             for part in (error, getattr(error, "orig", None))
             if part is not None
         )
-        for known_name in ("ck_pdf_documents_file_size", *_PDF_DOCUMENT_DUPLICATE_CONSTRAINTS):
+        for known_name in _PDF_DOCUMENT_DUPLICATE_CONSTRAINTS:
             if known_name in error_text:
                 return known_name
         return None

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 from unittest.mock import Mock, patch
 
 import pytest
 import yaml
+
+from src.lib.openai_agents.config import get_pdf_max_file_size_bytes
 
 
 WORKSPACE_ROOT = Path("/workspace")
@@ -19,6 +22,9 @@ DEV_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.yml"
 TEST_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.test.yml"
 ENV_TEMPLATE_PATH = WORKSPACE_ROOT / "scripts/install/lib/templates/env.standalone"
 ENV_EXAMPLE_PATH = WORKSPACE_ROOT / ".env.example"
+FRONTEND_DOCKERFILE_PATH = WORKSPACE_ROOT / "frontend" / "Dockerfile"
+if not FRONTEND_DOCKERFILE_PATH.exists():
+    FRONTEND_DOCKERFILE_PATH = Path("/app/frontend/Dockerfile")
 START_VERIFY_PATH = WORKSPACE_ROOT / "scripts/install/06_start_verify.sh"
 MAKEFILE_PATH = WORKSPACE_ROOT / "Makefile"
 PREFLIGHT_PATH = WORKSPACE_ROOT / "scripts/testing/production_compose_preflight.py"
@@ -171,6 +177,39 @@ def test_agent_studio_compose_and_env_example_default_to_opus_5():
     assert retired_env_var not in dev_env
     assert retired_env_var not in production_env
     assert f"{retired_env_var}=" not in env_example
+
+
+def test_pdf_size_limit_is_shared_by_backend_and_frontend_compose_services(
+    monkeypatch,
+):
+    dev_services = _load_dev_compose()["services"]
+    production_services = _load_compose()["services"]
+    expected = "${PDF_MAX_FILE_SIZE_BYTES:-524288000}"
+
+    assert _list_environment(dev_services["frontend"]["environment"])[
+        "PDF_MAX_FILE_SIZE_BYTES"
+    ] == expected
+    assert _list_environment(dev_services["backend"]["environment"])[
+        "PDF_MAX_FILE_SIZE_BYTES"
+    ] == expected
+    assert production_services["frontend"]["environment"][
+        "PDF_MAX_FILE_SIZE_BYTES"
+    ] == expected
+    assert production_services["backend"]["environment"][
+        "PDF_MAX_FILE_SIZE_BYTES"
+    ] == expected
+    assert "PDF_MAX_FILE_SIZE_BYTES=524288000" in ENV_TEMPLATE_PATH.read_text(
+        encoding="utf-8"
+    )
+    dockerfile = FRONTEND_DOCKERFILE_PATH.read_text(encoding="utf-8")
+    image_default = re.search(
+        r"^ENV PDF_MAX_FILE_SIZE_BYTES=(\d+)$",
+        dockerfile,
+        re.MULTILINE,
+    )
+    assert image_default is not None
+    monkeypatch.delenv("PDF_MAX_FILE_SIZE_BYTES", raising=False)
+    assert int(image_default.group(1)) == get_pdf_max_file_size_bytes()
 
 
 def test_dev_compose_mounts_canonical_agent_studio_prompt_source():

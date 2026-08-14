@@ -93,6 +93,7 @@ import sys
 config = json.load(open(sys.argv[1], encoding="utf-8"))
 services = config["services"]
 backend_env = services["backend"]["environment"]
+frontend_env = services["frontend"]["environment"]
 trace_review = services["trace_review_backend"]
 trace_review_env = trace_review["environment"]
 
@@ -103,6 +104,8 @@ assert str(backend_env["HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS"]).lower()
 assert str(backend_env["HEALTH_CHECK_REQUIRE_LITERATURE_DB"]).lower() == "false"
 assert backend_env["ELASTICSEARCH_HOST"] == ""
 assert backend_env["ELASTICSEARCH_SCHEME"] == "https"
+assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
+assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 PY
 
 docker compose --env-file "${env_file}" -f "${compose_file}" config --format json >"${rendered_file}"
@@ -116,9 +119,12 @@ import sys
 
 config = json.load(open(sys.argv[1], encoding="utf-8"))
 backend_env = config["services"]["backend"]["environment"]
+frontend_env = config["services"]["frontend"]["environment"]
 weaviate_env = config["services"]["weaviate"]["environment"]
 assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
 assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
+assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
+assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert weaviate_env["AUTHORIZATION_ADMINLIST_USERS"] == "curation-backend"
 PY
 

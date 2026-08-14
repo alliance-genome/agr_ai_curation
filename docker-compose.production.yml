@@ -107,6 +107,8 @@ services:
   frontend:
     image: "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:?set a release or sha tag in the production env}"
     restart: unless-stopped
+    environment:
+      PDF_MAX_FILE_SIZE_BYTES: "${PDF_MAX_FILE_SIZE_BYTES:-524288000}"
     depends_on:
       backend:
         condition: service_healthy
@@ -169,6 +171,7 @@ services:
       RUN_DB_BOOTSTRAP_ON_START: "${RUN_DB_BOOTSTRAP_ON_START:-true}"
       RUN_DB_MIGRATIONS_ON_START: "${RUN_DB_MIGRATIONS_ON_START:-true}"
       PDF_EXTRACTION_SERVICE_URL: "${PDF_EXTRACTION_SERVICE_URL:-}"
+      PDF_MAX_FILE_SIZE_BYTES: "${PDF_MAX_FILE_SIZE_BYTES:-524288000}"
       PDF_EXTRACTION_TIMEOUT: "${PDF_EXTRACTION_TIMEOUT:-300}"
       PDF_EXTRACTION_POLL_INTERVAL_SECONDS: "${PDF_EXTRACTION_POLL_INTERVAL_SECONDS:-2}"
       PDF_EXTRACTION_METHODS: "${PDF_EXTRACTION_METHODS:-grobid,marker}"

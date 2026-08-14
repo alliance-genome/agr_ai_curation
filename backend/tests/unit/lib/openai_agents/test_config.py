@@ -533,10 +533,10 @@ def test_pdf_max_file_size_default_is_500mb(monkeypatch):
     assert get_pdf_max_file_size_bytes() == 500 * 1024 * 1024
 
 
-def test_pdf_max_file_size_env_override(monkeypatch):
-    monkeypatch.setenv("PDF_MAX_FILE_SIZE_BYTES", str(125 * 1024 * 1024))
+def test_pdf_max_file_size_env_override_can_raise_former_ceiling(monkeypatch):
+    monkeypatch.setenv("PDF_MAX_FILE_SIZE_BYTES", str(600 * 1024 * 1024))
 
-    assert get_pdf_max_file_size_bytes() == 125 * 1024 * 1024
+    assert get_pdf_max_file_size_bytes() == 600 * 1024 * 1024
 
 
 def test_pdf_upload_max_page_count_defaults_to_100(monkeypatch):
