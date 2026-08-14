@@ -109,3 +109,26 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
     }
 
     assert actual_exports == expected_exports
+
+
+def test_alliance_specialist_models_follow_gpt56_role_mapping():
+    expected_model_by_category = {
+        "Extraction": "gpt-5.6-sol",
+        "Validation": "gpt-5.6-terra",
+    }
+    seen_categories: set[str] = set()
+
+    for agent_dir in _iter_shipped_agent_dirs(ALLIANCE_AGENTS_DIR):
+        agent_data = yaml.safe_load(
+            (agent_dir / "agent.yaml").read_text(encoding="utf-8")
+        )
+        category = agent_data.get("category")
+        if category not in expected_model_by_category:
+            continue
+
+        seen_categories.add(category)
+        configured_model = agent_data["model_config"]["model"]
+        expected_model = expected_model_by_category[category]
+        assert configured_model.endswith(f":-{expected_model}}}"), agent_dir.name
+
+    assert seen_categories == set(expected_model_by_category)

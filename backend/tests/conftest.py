@@ -77,12 +77,12 @@ os.environ.setdefault("WEAVIATE_SCHEME", "http")
 # Model / LLM config is now sourced from .env with fail-fast (no code fallback).
 # Seed test defaults so suites that hit a default-model/reasoning code path have
 # values; tests that exercise the missing-var fail-fast monkeypatch.delenv these.
-os.environ.setdefault("DEFAULT_AGENT_MODEL", "gpt-5.5")
-os.environ.setdefault("DEFAULT_AGENT_REASONING", "low")
+os.environ.setdefault("DEFAULT_AGENT_MODEL", "gpt-5.6-terra")
+os.environ.setdefault("DEFAULT_AGENT_REASONING", "medium")
 os.environ.setdefault("EMBEDDING_MODEL", "text-embedding-3-small")
-os.environ.setdefault("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+os.environ.setdefault("HIERARCHY_LLM_MODEL", "gpt-5.6-terra")
 os.environ.setdefault("HIERARCHY_LLM_REASONING", "low")
-os.environ.setdefault("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
+os.environ.setdefault("ABSTRACT_EXTRACTION_MODEL", "gpt-5.6-sol")
 
 
 @pytest.fixture(autouse=True)
@@ -96,12 +96,12 @@ def _ensure_required_model_env(monkeypatch):
     their own body, which still takes effect during the test.
     """
     for key, value in (
-        ("DEFAULT_AGENT_MODEL", "gpt-5.5"),
-        ("DEFAULT_AGENT_REASONING", "low"),
+        ("DEFAULT_AGENT_MODEL", "gpt-5.6-terra"),
+        ("DEFAULT_AGENT_REASONING", "medium"),
         ("EMBEDDING_MODEL", "text-embedding-3-small"),
-        ("HIERARCHY_LLM_MODEL", "gpt-5.4-mini"),
+        ("HIERARCHY_LLM_MODEL", "gpt-5.6-terra"),
         ("HIERARCHY_LLM_REASONING", "low"),
-        ("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini"),
+        ("ABSTRACT_EXTRACTION_MODEL", "gpt-5.6-sol"),
     ):
         if key not in os.environ:
             monkeypatch.setenv(key, value)

@@ -199,10 +199,10 @@ Defines deployment override entries for the model catalog and maps each model to
 
 ```yaml
 models:
-  - model_id: gpt-5.5
-    name: GPT-5.5
+  - model_id: gpt-5.6-sol
+    name: GPT-5.6 Sol
     provider: openai
-    default: false
+    default: true
     curator_visible: true
 
   - model_id: acme/model-x

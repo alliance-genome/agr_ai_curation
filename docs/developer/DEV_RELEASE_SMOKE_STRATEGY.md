@@ -4,7 +4,7 @@ Date: 2026-04-13
 Status: Implemented on dev, still pending manual/browser sign-off and release-tag work  
 Audience: release owners, backend/frontend maintainers, future handoff sessions  
 Primary script target: `scripts/testing/dev_release_smoke.py`
-Execution cadence: implement one slice at a time, validate it, run a GPT-5.5
+Execution cadence: implement one slice at a time, validate it, run a GPT-5.6 Sol
 xhigh code-review pass, then move to the next slice
 
 SDK upgrade gate: `openai-agents` is intentionally pinned exactly in
@@ -941,7 +941,7 @@ After each implementation slice:
 
 1. Run targeted validation for that slice locally and, when appropriate, on the
    deployed dev stack.
-2. Run a GPT-5.5 xhigh code-review subagent pass focused on the slice's changed
+2. Run a GPT-5.6 Sol xhigh code-review subagent pass focused on the slice's changed
    files and behaviors.
 3. Address any review findings before starting the next slice.
 
@@ -1003,7 +1003,7 @@ If you are picking this work up in a fresh session, do this next:
    - finalize changelog/version/tag for the next patch release
 5. If more smoke work is still needed later, continue using the same cadence:
    - targeted validation
-   - GPT-5.5 xhigh review pass
+   - GPT-5.6 Sol xhigh review pass
    - then only move forward after findings are addressed
 
 That should be enough to resume the work without needing the earlier context.

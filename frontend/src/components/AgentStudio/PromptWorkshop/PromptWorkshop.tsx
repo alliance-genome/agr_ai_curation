@@ -287,11 +287,19 @@ function resolveReasoningSelection(
   return model.reasoning_options[0] || ''
 }
 
-const MODEL_HELP_TEXT = [
-  'Quick guide:',
-  '• gpt-5.5 (medium reasoning): default for complex PDF extraction and hard reasoning.',
-  '• gpt-5.4-mini: balanced speed and quality for iterative drafting.',
-].join('\n')
+function buildModelHelpText(models: ModelOption[]): string {
+  if (models.length === 0) return 'No curator-visible models are currently configured.'
+
+  return [
+    'Configured model guidance:',
+    ...models.map((model) => {
+      const defaultReasoning = model.default_reasoning
+        ? ` (default reasoning: ${model.default_reasoning})`
+        : ''
+      return `• ${model.model_id}${defaultReasoning}: ${model.guidance || model.description || 'No guidance configured.'}`
+    }),
+  ].join('\n')
+}
 
 const REASONING_HELP_TEXT = [
   'Reasoning levels trade off speed and depth:',
@@ -1403,7 +1411,7 @@ function PromptWorkshop({
         return `- ${model.name} [${model.model_id}] via ${model.provider}\n  Guidance: ${model.guidance || model.description || 'n/a'}\n  ${reasoning}`
       }).join('\n')
 
-    const message = `Help me choose the best model settings for my Agent Workshop draft.\n\nAgent draft: ${targetName}\nCurrent model: ${selectedModelId || 'none'}\nCurrent reasoning: ${selectedModelReasoning || 'none'}\nAttached tools: ${selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'}\n\nAvailable models:\n${modelLines}\n\nRecommendation policy to follow unless my use case says otherwise:\n- Prefer gpt-5.5 with medium reasoning for complex PDF extraction and deep thinking.\n- Use gpt-5.4-mini as a faster middle-ground for iterative drafting.\n\nPlease:\n1. Ask 1-3 focused questions to understand my use case\n2. Recommend a model and (if applicable) reasoning level\n3. Explain tradeoffs in plain curator-friendly language\n4. Give one backup model choice\n\n[Request ID: ${Date.now()}]`
+    const message = `Help me choose the best model settings for my Agent Workshop draft.\n\nAgent draft: ${targetName}\nCurrent model: ${selectedModelId || 'none'}\nCurrent reasoning: ${selectedModelReasoning || 'none'}\nAttached tools: ${selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'}\n\nAvailable models (authoritative configured choices):\n${modelLines}\n\nUse only the available models and their configured guidance above. Do not rely on historical model names or unlisted variants.\n\nPlease:\n1. Ask 1-3 focused questions to understand my use case\n2. Recommend a model and (if applicable) reasoning level\n3. Explain tradeoffs in plain curator-friendly language\n4. Give one backup model choice\n\n[Request ID: ${Date.now()}]`
     onVerifyRequest?.(message)
     setStatus('Opened model-selection discussion with Claude')
   }
@@ -1692,8 +1700,8 @@ function PromptWorkshop({
                 <Typography variant="caption" color="text.secondary">
                   Model guidance
                 </Typography>
-                <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{MODEL_HELP_TEXT}</span>} placement="top">
-                  <IconButton size="small" sx={{ p: 0.25 }}>
+                <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{buildModelHelpText(modelOptions)}</span>} placement="top">
+                  <IconButton aria-label="Show configured model guidance" size="small" sx={{ p: 0.25 }}>
                     <HelpOutlineIcon sx={{ fontSize: 15 }} />
                   </IconButton>
                 </Tooltip>

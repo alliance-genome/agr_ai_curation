@@ -224,7 +224,7 @@ output_schema: GeneValidationEnvelope
 
 # Model configuration
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-5.5}"
+  model: "${AGENT_GENE_MODEL:-gpt-5.6-terra}"
   temperature: 0.1
   reasoning: "medium"
 
@@ -347,24 +347,26 @@ Located at: `config/models.yaml`
 
 ```yaml
 models:
-  - model_id: gpt-5.4-mini
-    name: GPT-5.4 Mini
+  - model_id: gpt-5.6-terra
+    name: GPT-5.6 Terra
     provider: openai                    # Must match a key in providers.yaml
-    description: Faster, lower-cost model for quick drafting and lightweight extraction.
-    guidance: Use when speed matters more than peak accuracy.
+    description: Faster, lower-cost reasoning model for validation and lightweight tasks.
+    guidance: Use for validation and utility agents where speed matters but reasoning still helps.
     default: false                      # Exactly one model should be default
-    supports_reasoning: false
+    supports_reasoning: true
     supports_temperature: false
+    reasoning_options: [low, medium, high, xhigh]
+    default_reasoning: medium
     recommended_for:
-      - Interactive drafting and quick iterations
-      - Routine extraction and formatting
+      - Validation and lightweight extraction
+      - Follow-up checks after using search/read tools
     avoid_for:
       - Deep multi-step adjudication with conflicting evidence
 
-  - model_id: gpt-5.5
-    name: GPT-5.5
+  - model_id: gpt-5.6-sol
+    name: GPT-5.6 Sol
     provider: openai
-    description: Highest-quality model for complex reasoning.
+    description: Highest-quality model for complex curation reasoning and extraction.
     default: true
     supports_reasoning: true
     reasoning_options: [low, medium, high, xhigh]
@@ -632,7 +634,7 @@ output_projection:
   inherited_parent_fields: []
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.5}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.6-terra}"
   temperature: 0.2
   reasoning: "low"
 
@@ -1027,8 +1029,8 @@ GROQ_BASE_URL=https://api.groq.com/openai/v1
 LLM_PROVIDER_STRICT_MODE=true      # Fail startup if required keys missing (default: true)
 
 # Per-agent model overrides (in agent.yaml via ${VAR:-default})
-AGENT_GENE_MODEL=gpt-4o
-AGENT_SUPERVISOR_MODEL=gpt-4o
+AGENT_GENE_MODEL=gpt-5.6-terra
+AGENT_SUPERVISOR_MODEL=gpt-5.6-sol
 
 # Config paths (optional, defaults to config/)
 CONFIG_PATH=/app/config

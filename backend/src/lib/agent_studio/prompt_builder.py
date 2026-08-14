@@ -603,12 +603,11 @@ The curator is actively iterating an agent draft in Agent Workshop.
 - Draft model: {workshop.draft_model_id or "Not set"}
 - Draft reasoning: {workshop.draft_model_reasoning or "Not set"}
 
-Agent Workshop model recommendation defaults:
-- Use `gpt-5.5` with `medium` reasoning for difficult PDF extraction and deep reasoning.
-- Use `gpt-5.4-mini` for fast iterative drafting, database lookup, and balanced quality/speed.
-
-Configured model options:
+Configured model options (authoritative recommendation source):
 {model_catalog_text}
+
+Recommend only from the configured options above. Use each entry's configured guidance,
+recommended uses, and default reasoning rather than relying on historical model names.
 
 Use this workshop context to give concrete prompt-engineering feedback, especially:
 1. how to improve the editable main/base prompt structure and specificity,

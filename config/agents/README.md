@@ -170,7 +170,7 @@ installs.
 | `supervisor_routing.description` | Yes | Tells the supervisor when to route to this agent |
 | `tools` | Yes | Tool IDs from the merged runtime tool registry |
 | `output_schema` | Yes | Pydantic class name from `schema.py` |
-| `model_config.model` | No | LLM model (default: `gpt-4o`) |
+| `model_config.model` | No | Registered LLM model (current default: `gpt-5.6-terra`) |
 | `model_config.temperature` | No | Response randomness 0.0-1.0 (default: `0.1`) |
 | `model_config.reasoning` | No | Thinking effort: `disabled` / `low` / `medium` / `high` / `xhigh` |
 | `group_rules_enabled` | No | Load `group_rules/*.yaml` (default: `false`) |
@@ -219,10 +219,14 @@ file when that field is missing.
 Model configuration supports environment variable substitution:
 
 ```yaml
+# Database validation/lookup agent
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-5.6-sol}"
+  model: "${AGENT_GENE_MODEL:-gpt-5.6-terra}"
   temperature: ${AGENT_GENE_TEMP:-0.1}
 ```
+
+Document extractors use Sol instead, for example
+`AGENT_GENE_EXTRACTOR_MODEL` defaults to `gpt-5.6-sol`.
 
 Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 

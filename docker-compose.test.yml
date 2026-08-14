@@ -108,6 +108,7 @@ services:
       - ./packages:/workspace/packages:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
+      - ./docker-compose.test.yml:/workspace/docker-compose.test.yml:ro
       - ./Makefile:/workspace/Makefile:ro
       - ./promtail-config.yml:/workspace/promtail-config.yml:ro
       - ./scripts/install:/workspace/scripts/install:ro
@@ -168,6 +169,7 @@ services:
       - ./packages:/workspace/packages:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
+      - ./docker-compose.test.yml:/workspace/docker-compose.test.yml:ro
       - ./Makefile:/workspace/Makefile:ro
       - ./promtail-config.yml:/workspace/promtail-config.yml:ro
       - ./scripts/install:/workspace/scripts/install:ro
@@ -260,7 +262,7 @@ services:
       - LIVE_BACKEND_PDFX_TIMEOUT_SECONDS=${LIVE_BACKEND_PDFX_TIMEOUT_SECONDS:-900}
       - LIVE_BACKEND_PDFX_POLL_INTERVAL_SECONDS=${LIVE_BACKEND_PDFX_POLL_INTERVAL_SECONDS:-2}
       - LIVE_LLM_ENABLE=${LIVE_LLM_ENABLE:-0}
-      - LIVE_LLM_OPENAI_MODEL=${LIVE_LLM_OPENAI_MODEL:-gpt-5.4-mini}
+      - LIVE_LLM_OPENAI_MODEL=${LIVE_LLM_OPENAI_MODEL:-gpt-5.6-terra}
       - LIVE_LLM_GROQ_MODEL=${LIVE_LLM_GROQ_MODEL:-}
       - PDFX_LIVE_SAMPLE_PDF=${PDFX_LIVE_SAMPLE_PDF:-}
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-}
