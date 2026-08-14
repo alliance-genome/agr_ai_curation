@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-import pytest
+import yaml
 
 from . import find_repo_root
 from src.lib.packages.manifest_loader import load_package_manifest
@@ -93,3 +93,22 @@ def test_core_package_mirrors_shipped_runtime_config_files():
         assert core_path.read_text(encoding="utf-8") == config_path.read_text(
             encoding="utf-8"
         )
+
+
+def test_shipped_openai_catalog_exposes_only_supported_gpt56_models():
+    runtime_catalog = yaml.safe_load(
+        (REPO_ROOT / "config" / "models.yaml").read_text(encoding="utf-8")
+    )["models"]
+    package_catalog = yaml.safe_load(
+        (CORE_CONFIG_DIR / "models.yaml").read_text(encoding="utf-8")
+    )["models"]
+
+    assert runtime_catalog == package_catalog
+    assert [model["model_id"] for model in runtime_catalog] == [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+    ]
+    assert [model["default"] for model in runtime_catalog] == [True, False]
+    for model in runtime_catalog:
+        assert model["reasoning_options"] == ["low", "medium", "high", "xhigh"]
+        assert model["default_reasoning"] == "medium"

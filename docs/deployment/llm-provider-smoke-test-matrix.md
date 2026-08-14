@@ -78,8 +78,8 @@ Run each scenario for every curator-visible model defined in `models.yaml`.
 
 | ID | Test | Steps | Pass Criteria |
 |---|---|---|---|
-| `C1` | Reasoning-capable model | Run a reasoning model (e.g., `gpt-5.5`) with low, medium, and high reasoning levels. | Accepted levels work. Unsupported values are rejected or normalized. |
-| `C2` | Non-reasoning model | Attempt to set reasoning on a non-reasoning model (e.g., `gpt-5.4-mini`). | Runtime does not crash. The setting is ignored or blocked. |
+| `C1` | Reasoning-capable model | Run a configured reasoning model (for example, `gpt-5.6-sol` or `gpt-5.6-terra`) with supported catalog reasoning levels. | Accepted levels work. Unsupported values are rejected or normalized. |
+| `C2` | Non-reasoning model | When the deployment catalog includes a model with `supports_reasoning: false`, attempt to set reasoning on it. | Runtime does not crash. The setting is ignored or blocked. Skip this case when no such model is configured. |
 
 ### D. Failure Path -- No Fallback (Manual)
 

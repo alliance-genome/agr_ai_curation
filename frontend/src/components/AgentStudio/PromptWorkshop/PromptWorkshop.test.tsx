@@ -210,7 +210,7 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     group_prompt_overrides: {},
     icon: '🔧',
     include_group_rules: true,
-    model_id: 'gpt-4o',
+    model_id: 'gpt-5.6-terra',
     model_temperature: 0.1,
     model_reasoning: undefined,
     tool_ids: [],
@@ -309,35 +309,41 @@ async function assertGroupOptions(expected: string[], absent: string[] = []): Pr
 describe('PromptWorkshop', () => {
   const modelOptions: ModelOption[] = [
     {
-      model_id: 'gpt-4o',
-      name: 'GPT-4o',
+      model_id: 'gpt-5.6-terra',
+      name: 'GPT-5.6 Terra',
       provider: 'openai',
-      description: 'default',
-      guidance: 'General model',
+      description: 'fast reasoning model',
+      guidance: 'Use for validation, lookups, utilities, and iterative drafting.',
       default: true,
-      supports_reasoning: false,
-      supports_temperature: true,
-      reasoning_options: [],
-      default_reasoning: undefined,
-      reasoning_descriptions: {},
-      recommended_for: [],
-      avoid_for: [],
+      supports_reasoning: true,
+      supports_temperature: false,
+      reasoning_options: ['low', 'medium', 'high', 'xhigh'],
+      default_reasoning: 'medium',
+      reasoning_descriptions: {
+        low: 'Fastest',
+        medium: 'Balanced',
+        high: 'Deep',
+        xhigh: 'Deepest',
+      },
+      recommended_for: ['Validation and lightweight work'],
+      avoid_for: ['Deep multi-step adjudication'],
     },
     {
-      model_id: 'gpt-5.5',
-      name: 'GPT-5.5',
+      model_id: 'gpt-5.6-sol',
+      name: 'GPT-5.6 Sol',
       provider: 'openai',
-      description: 'reasoning model',
-      guidance: 'Use medium by default',
+      description: 'deep reasoning model',
+      guidance: 'Use for complex PDF extraction and difficult reasoning.',
       default: false,
       supports_reasoning: true,
       supports_temperature: false,
-      reasoning_options: ['low', 'medium', 'high'],
+      reasoning_options: ['low', 'medium', 'high', 'xhigh'],
       default_reasoning: 'medium',
       reasoning_descriptions: {
         low: 'Fast',
         medium: 'Balanced',
         high: 'Slow',
+        xhigh: 'Slowest',
       },
       recommended_for: ['Complex work'],
       avoid_for: ['Simple lookups'],
@@ -384,7 +390,7 @@ describe('PromptWorkshop', () => {
       description: 'Gene validation',
       icon: '🧬',
       category: 'Validation',
-      model_id: 'gpt-4o',
+      model_id: 'gpt-5.6-terra',
       tool_ids: ['search_document'],
       output_schema_key: undefined,
     },
@@ -397,7 +403,7 @@ describe('PromptWorkshop', () => {
       description: 'Gene validation',
       icon: '🧬',
       category: 'Validation',
-      model_id: 'gpt-4o',
+      model_id: 'gpt-5.6-terra',
       tool_ids: ['search_document'],
       output_schema_key: undefined,
     },
@@ -407,7 +413,7 @@ describe('PromptWorkshop', () => {
       description: 'Disease validation',
       icon: '🦠',
       category: 'Validation',
-      model_id: 'gpt-4o',
+      model_id: 'gpt-5.6-terra',
       tool_ids: ['search_document'],
       output_schema_key: undefined,
     },
@@ -480,7 +486,7 @@ describe('PromptWorkshop', () => {
 
     const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
     expect(payload.template_source).toBe('gene')
-    expect(payload.model_id).toBe('gpt-4o')
+    expect(payload.model_id).toBe('gpt-5.6-terra')
     expect(payload).not.toHaveProperty('parent_agent_id')
   }, 15000) // Increased because full workshop bootstrap can exceed the default timeout under CI load.
 
@@ -890,7 +896,7 @@ describe('PromptWorkshop', () => {
   it('saves selected reasoning for reasoning-capable models', async () => {
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [], total: 0 })
-      .mockResolvedValueOnce({ custom_agents: [buildCustomAgent({ model_id: 'gpt-5.5', model_reasoning: 'high' })], total: 1 })
+      .mockResolvedValueOnce({ custom_agents: [buildCustomAgent({ model_id: 'gpt-5.6-sol', model_reasoning: 'high' })], total: 1 })
 
     render(<PromptWorkshop catalog={buildCatalog()} />)
 
@@ -905,7 +911,7 @@ describe('PromptWorkshop', () => {
     const modelControl = modelLabel!.closest('.MuiFormControl-root') as HTMLElement | null
     expect(modelControl).toBeTruthy()
     fireEvent.mouseDown(within(modelControl!).getByRole('combobox'))
-    fireEvent.click(await screen.findByRole('option', { name: 'GPT-5.5' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'GPT-5.6 Sol' }))
 
     const [reasoningLabel] = await screen.findAllByText('Reasoning', { selector: 'label' })
     const reasoningControl = reasoningLabel.closest('.MuiFormControl-root') as HTMLElement | null
@@ -931,6 +937,13 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchModelOptions).toHaveBeenCalled()
     })
 
+    fireEvent.mouseOver(screen.getByRole('button', { name: 'Show configured model guidance' }))
+    const guidance = await screen.findByText(/Configured model guidance:/)
+    expect(guidance).toHaveTextContent('gpt-5.6-sol')
+    expect(guidance).toHaveTextContent('gpt-5.6-terra')
+    expect(guidance).not.toHaveTextContent('gpt-5.5')
+    expect(guidance).not.toHaveTextContent('gpt-5.4-mini')
+
     fireEvent.click(
       await screen.findByRole(
         'button',
@@ -940,7 +953,13 @@ describe('PromptWorkshop', () => {
     )
 
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
-    expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me choose the best model settings')
+    const request = onVerifyRequest.mock.calls[0][0]
+    expect(request).toContain('Help me choose the best model settings')
+    expect(request).toContain('gpt-5.6-sol')
+    expect(request).toContain('gpt-5.6-terra')
+    expect(request).not.toContain('gpt-5.5')
+    expect(request).not.toContain('gpt-5.4-mini')
+    expect(request).not.toContain('gpt-5.6-luna')
   }, 15000)
 
   it('opens a draft discussion request with live prompt and tool inspection guidance', async () => {

@@ -16,6 +16,7 @@ if not (WORKSPACE_ROOT / "docker-compose.production.yml").exists():
 
 COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.production.yml"
 DEV_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.yml"
+TEST_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.test.yml"
 ENV_TEMPLATE_PATH = WORKSPACE_ROOT / "scripts/install/lib/templates/env.standalone"
 START_VERIFY_PATH = WORKSPACE_ROOT / "scripts/install/06_start_verify.sh"
 MAKEFILE_PATH = WORKSPACE_ROOT / "Makefile"
@@ -43,6 +44,14 @@ def _load_compose() -> dict:
 
 def _load_dev_compose() -> dict:
     return yaml.safe_load(DEV_COMPOSE_PATH.read_text(encoding="utf-8"))
+
+
+def _load_test_compose() -> dict:
+    return yaml.safe_load(TEST_COMPOSE_PATH.read_text(encoding="utf-8"))
+
+
+def _list_environment(entries: list[str]) -> dict[str, str]:
+    return dict(entry.split("=", 1) for entry in entries)
 
 
 def _bind_targets(service: dict) -> dict[str, str]:
@@ -111,6 +120,35 @@ def test_dev_compose_trace_review_defaults_to_local_langfuse_bootstrap_keys():
         "${TRACE_REVIEW_LANGFUSE_LOCAL_SECRET_KEY:-"
         "${LANGFUSE_LOCAL_SECRET_KEY:-"
         "${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-local-secret-key-default}}}"
+    )
+
+
+def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
+    dev_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    live_test_env = _list_environment(
+        _load_test_compose()["services"]["backend-integration-tests"][
+            "environment"
+        ]
+    )
+
+    expected_backend_defaults = {
+        "DEFAULT_AGENT_MODEL": "${DEFAULT_AGENT_MODEL:-gpt-5.6-terra}",
+        "DEFAULT_AGENT_REASONING": "${DEFAULT_AGENT_REASONING:-medium}",
+        "HIERARCHY_LLM_MODEL": "${HIERARCHY_LLM_MODEL:-gpt-5.6-terra}",
+        "HIERARCHY_LLM_REASONING": "${HIERARCHY_LLM_REASONING:-low}",
+        "ABSTRACT_EXTRACTION_MODEL": "${ABSTRACT_EXTRACTION_MODEL:-gpt-5.6-sol}",
+    }
+    assert {key: dev_env[key] for key in expected_backend_defaults} == (
+        expected_backend_defaults
+    )
+    assert {key: production_env[key] for key in expected_backend_defaults} == (
+        expected_backend_defaults
+    )
+    assert live_test_env["LIVE_LLM_OPENAI_MODEL"] == (
+        "${LIVE_LLM_OPENAI_MODEL:-gpt-5.6-terra}"
     )
 
 

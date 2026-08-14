@@ -512,6 +512,12 @@ class TestAgentWorkshopSystemPrompt:
         assert "ask for permission in plain language" in system_prompt
         assert "distilled OpenAI-style prompt playbook" in system_prompt
         assert "put core instructions first, then separate context/examples with clear delimiters" in system_prompt
+        assert "gpt-5.6-sol" in system_prompt
+        assert "gpt-5.6-terra" in system_prompt
+        assert "authoritative recommendation source" in system_prompt
+        assert "gpt-5.5" not in system_prompt
+        assert "gpt-5.4-mini" not in system_prompt
+        assert "gpt-5.6-luna" not in system_prompt
         assert "<workshop_prompt_draft>" in system_prompt
         assert "<workshop_selected_group_prompt group=\"WB\">" in system_prompt
         assert "WB GROUP DRAFT CONTENT" in system_prompt
