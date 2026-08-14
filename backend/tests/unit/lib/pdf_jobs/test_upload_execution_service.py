@@ -5,12 +5,14 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast, get_type_hints
+from uuid import UUID
 
 import pytest
 from fastapi import BackgroundTasks
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
+    DocumentSourceProvider,
     SourceAccessPolicy,
     SourceAccessScope,
     SourceArtifact,
@@ -33,6 +35,7 @@ from src.lib.pipeline.orchestrator import ProcessingResult
 from src.lib.pipeline.tracker import PipelineTracker
 from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
+from src.models.sql import database as database_module
 from src.models.sql.pdf_processing_job import PdfJobStatus
 
 
@@ -974,6 +977,150 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
 
 
 @pytest.mark.asyncio
+async def test_execute_provider_conversion_falls_back_to_local_pdf_when_main_markdown_is_denied(
+    monkeypatch,
+    tmp_path,
+):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.conversion_results = [
+        SourceConversionResult(
+            provider="fake_provider",
+            status=SourceConversionStatus.RUNNING,
+            reference_curie="AGRKB:101",
+            converted_classes=("converted_merged_main",),
+        )
+    ]
+    provider.artifacts = [
+        SourceArtifact(
+            provider="fake_provider",
+            artifact_id="markdown-88",
+            role=SourceArtifactRole.CONVERTED_TEXT,
+            artifact_format=SourceArtifactFormat.MARKDOWN,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper_nxml.md",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": "converted_merged_main", "file_extension": "md"},
+        )
+    ]
+    provider.download_errors["markdown-88"] = DocumentSourceAccessDenied(
+        "Document-source artifact access was denied"
+    )
+    progress_updates = []
+    sql_selections = []
+    source_import_failures = []
+    orchestrator_calls = []
+    completed_events = []
+    failed_events = []
+
+    class _RecordingOrchestrator:
+        async def process_pdf_document(self, **kwargs) -> ProcessingResult:
+            orchestrator_calls.append(kwargs)
+            return _pipeline_result(success=True, document_id=kwargs["document_id"])
+
+    async def _sync_selection(self, request, converted_artifact):
+        sql_selections.append((request.document_id, converted_artifact.artifact_id))
+
+    async def _sync_source_import_failure(self, request):
+        source_import_failures.append((request.document_id, request.owner_user_id))
+
+    service = UploadExecutionService(
+        pipeline_tracker=cast(PipelineTracker, tracker),
+        orchestrator_factory=lambda _connection, _tracker: _RecordingOrchestrator(),
+        document_source_provider_factory=lambda: cast(DocumentSourceProvider, provider),
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 5)
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "update_progress",
+        lambda **kwargs: progress_updates.append(kwargs),
+    )
+    monkeypatch.setattr(service_module.pdf_job_service, "set_process_id", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: completed_events.append(kwargs)
+        or SimpleNamespace(
+            status=PdfJobStatus.COMPLETED.value,
+            message=kwargs["message"],
+        ),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_conversion_sql_selection",
+        _sync_selection,
+    )
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_source_import_failure",
+        _sync_source_import_failure,
+    )
+
+    file_path = tmp_path / "paper.pdf"
+    file_path.write_bytes(b"%PDF-1.7 local upload")
+    await service.execute_provider_conversion(
+        ProviderConversionExecutionRequest(
+            document_id="doc-conversion",
+            job_id="job-conversion",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            file_path=file_path,
+            reference="AGRKB:101",
+            source_artifact_id="source-pdf-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "abc_literature",
+                "reference_curie": "AGRKB:101",
+                "pdf_artifact_id": "source-pdf-1",
+            },
+        )
+    )
+
+    assert provider.conversion_requests == [
+        {
+            "reference": "AGRKB:101",
+            "wait": False,
+            "request_bearer_token": "curator-token",
+        }
+    ]
+    assert provider.list_artifact_calls == [
+        {"reference": "AGRKB:101", "request_bearer_token": "curator-token"}
+    ]
+    assert provider.downloads == [
+        {"artifact_id": "markdown-88", "request_bearer_token": "curator-token"}
+    ]
+    assert sql_selections == [("doc-conversion", "markdown-88")]
+    assert source_import_failures == [("doc-conversion", 42)]
+    assert len(orchestrator_calls) == 1
+    assert orchestrator_calls[0]["file_path"] == file_path
+    assert orchestrator_calls[0]["document_id"] == "doc-conversion"
+    assert completed_events == [
+        {"job_id": "job-conversion", "message": "Processing completed"}
+    ]
+    assert failed_events == []
+    assert progress_updates[-2]["metadata"] == {
+        "document_source": {
+            "converted_markdown_status": "access_denied",
+            "text_source": "local_pdf",
+        }
+    }
+    assert tracker.calls[-1]["stage"] is ProcessingStage.COMPLETED
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
 async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_metadata(
     monkeypatch,
     tmp_path,
@@ -1800,6 +1947,90 @@ async def test_provider_access_denial_marks_failed_when_saved_pdf_is_missing(
     assert terminal_failures == [
         ("doc-provider", "provider access denied", ProcessingStage.FAILED.value)
     ]
+
+
+@pytest.mark.asyncio
+async def test_sync_provider_source_import_failure_updates_owned_document(monkeypatch):
+    document = SimpleNamespace(source_import_status="pending")
+    session = SimpleNamespace(
+        statement=None,
+        commit_calls=0,
+        rollback_calls=0,
+        close_calls=0,
+    )
+
+    def _execute(statement):
+        session.statement = statement
+        return SimpleNamespace(scalar_one_or_none=lambda: document)
+
+    session.execute = _execute
+    session.commit = lambda: setattr(session, "commit_calls", session.commit_calls + 1)
+    session.rollback = lambda: setattr(session, "rollback_calls", session.rollback_calls + 1)
+    session.close = lambda: setattr(session, "close_calls", session.close_calls + 1)
+    monkeypatch.setattr(database_module, "SessionLocal", lambda: session)
+
+    service = UploadExecutionService(pipeline_tracker=cast(PipelineTracker, _Tracker()))
+    request = ProviderMarkdownExecutionRequest(
+        document_id="11111111-1111-1111-1111-111111111111",
+        job_id="job-provider",
+        user_id="user-provider",
+        owner_user_id=42,
+        filename="paper.pdf",
+        converted_artifact_id="markdown-1",
+        curator_token="curator-token",
+        source_provenance={"provider": "fake_provider"},
+        file_path=Path("/tmp/paper.pdf"),
+    )
+
+    await service._sync_provider_source_import_failure(request)
+
+    compiled = session.statement.compile()
+    assert "pdf_documents.id" in str(session.statement.whereclause)
+    assert "pdf_documents.user_id" in str(session.statement.whereclause)
+    assert set(compiled.params.values()) == {
+        request.owner_user_id,
+        UUID(request.document_id),
+    }
+    assert document.source_import_status == "failed"
+    assert session.commit_calls == 1
+    assert session.rollback_calls == 0
+    assert session.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_provider_source_import_failure_rejects_missing_or_other_owner_document(
+    monkeypatch,
+):
+    session = SimpleNamespace(commit_calls=0, rollback_calls=0, close_calls=0)
+    session.execute = lambda _statement: SimpleNamespace(scalar_one_or_none=lambda: None)
+    session.commit = lambda: setattr(session, "commit_calls", session.commit_calls + 1)
+    session.rollback = lambda: setattr(session, "rollback_calls", session.rollback_calls + 1)
+    session.close = lambda: setattr(session, "close_calls", session.close_calls + 1)
+    monkeypatch.setattr(database_module, "SessionLocal", lambda: session)
+
+    service = UploadExecutionService(pipeline_tracker=cast(PipelineTracker, _Tracker()))
+    request = ProviderConversionExecutionRequest(
+        document_id="11111111-1111-1111-1111-111111111111",
+        job_id="job-provider",
+        user_id="user-provider",
+        owner_user_id=42,
+        filename="paper.pdf",
+        reference="AGRKB:101",
+        source_artifact_id="source-pdf-1",
+        curator_token="curator-token",
+        source_provenance={"provider": "fake_provider"},
+        file_path=Path("/tmp/paper.pdf"),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot persist provider source-import failure for missing document",
+    ):
+        await service._sync_provider_source_import_failure(request)
+
+    assert session.commit_calls == 0
+    assert session.rollback_calls == 1
+    assert session.close_calls == 1
 
 
 @pytest.mark.asyncio
