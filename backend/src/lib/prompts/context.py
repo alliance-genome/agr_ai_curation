@@ -73,7 +73,7 @@ _used_prompt_runs: ContextVar[Optional[List[PromptRun]]] = ContextVar(
 )
 
 
-@dataclass(init=False)
+@dataclass
 class PromptOverride:
     """Full system-prompt replacement for a specific agent in this request context."""
 
@@ -81,20 +81,6 @@ class PromptOverride:
     agent_name: str
     custom_agent_id: str
     group_overrides: Optional[Dict[str, str]] = None
-
-    def __init__(
-        self,
-        content: str,
-        agent_name: str,
-        custom_agent_id: str,
-        group_overrides: Optional[Dict[str, str]] = None,
-        mod_overrides: Optional[Dict[str, str]] = None,
-    ) -> None:
-        self.content = content
-        self.agent_name = agent_name
-        self.custom_agent_id = custom_agent_id
-        self.group_overrides = group_overrides if group_overrides is not None else mod_overrides
-        self.mod_overrides = self.group_overrides
 
 
 prompt_override_var: ContextVar[Optional[PromptOverride]] = ContextVar(
