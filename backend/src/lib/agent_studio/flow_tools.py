@@ -167,6 +167,30 @@ class _SimplifiedFlowValidationError(ValueError):
         self.errors = errors
 
 
+def _simplified_flow_recovery_help(errors: List[str]) -> str:
+    """Return recovery guidance aligned with the first validation failure."""
+
+    first_error = errors[0] if errors else ""
+    if "output_filename_template" in first_error:
+        return (
+            "Use only the supported filename variables: "
+            "{{input_filename}}, {{input_filename_stem}}, {{trace_id}}, "
+            "and {{timestamp}}"
+        )
+    if "agent_id" in first_error:
+        return f"Valid agent IDs: {', '.join(FLOW_AGENT_IDS)}"
+    if "source_steps" in first_error:
+        return (
+            "Bind formatter source_steps to one or more earlier Extraction or "
+            "typed Validation steps, in the desired output order"
+        )
+    if "exceeds" in first_error:
+        return "Shorten the named field to the configured maximum"
+    if "steps" in first_error.lower() or "step" in first_error.lower():
+        return "Provide a non-empty steps array within the configured step limit"
+    return "Correct the reported flow validation error and try again"
+
+
 def _simplified_flow_steps_schema() -> Dict[str, Any]:
     """Build the complete shared provider schema for simplified flow steps."""
 
@@ -543,13 +567,6 @@ def _build_simplified_flow_definition(
             continue
 
         agent_id = step.get("agent_id")
-        if not agent_id:
-            errors.append(f"Step {step_num}: missing agent_id")
-            continue
-        if not isinstance(agent_id, str) or agent_id not in FLOW_AGENT_IDS:
-            errors.append(f"Step {step_num}: unknown agent_id '{agent_id}'")
-            continue
-
         custom_instructions = step.get("custom_instructions")
         custom_limit = get_agent_studio_flow_custom_instructions_max_chars()
         if (
@@ -581,6 +598,13 @@ def _build_simplified_flow_definition(
                 f"Step {step_num}: output_filename_template exceeds "
                 f"{template_limit} characters"
             )
+
+        if not agent_id:
+            errors.append(f"Step {step_num}: missing agent_id")
+            continue
+        if not isinstance(agent_id, str) or agent_id not in FLOW_AGENT_IDS:
+            errors.append(f"Step {step_num}: unknown agent_id '{agent_id}'")
+            continue
 
         if _is_output_agent_id(agent_id):
             source_steps, source_error = _validated_output_source_steps(steps, i)
@@ -846,7 +870,7 @@ def _create_flow_handler():
             return {
                 "success": False,
                 "error": exc.errors[0],
-                "help": f"Valid agent IDs: {', '.join(FLOW_AGENT_IDS)}",
+                "help": _simplified_flow_recovery_help(exc.errors),
             }
 
         flow_definition = validated_flow_def.model_dump()

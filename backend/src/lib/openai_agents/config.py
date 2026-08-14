@@ -24,6 +24,15 @@ import logging
 from typing import Optional, Literal, TYPE_CHECKING, Union
 from dataclasses import dataclass
 
+from src.lib.flow_contract_limits import (
+    FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS,
+    FLOW_DEFINITION_MAX_NODES_DEFAULT,
+    FLOW_DESCRIPTION_MAX_CHARS,
+    FLOW_NAME_MAX_CHARS,
+    FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS,
+    FLOW_STEP_GOAL_MAX_CHARS,
+)
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -85,6 +94,28 @@ def _get_env_int_with_fallback(key: str, default: int) -> int:
     except ValueError:
         logger.warning("Invalid int value for %s: %s, using default %s", key, raw, default)
         return default
+
+
+def _get_bounded_positive_env_int(
+    key: str,
+    default: int,
+    maximum: int,
+) -> int:
+    """Read a positive integer and report when canonical capacity clamps it."""
+
+    configured = _get_env_int_with_fallback(key, default)
+    if configured < 1:
+        logger.warning("%s=%s is below minimum 1; using 1", key, configured)
+        configured = 1
+    if configured > maximum:
+        logger.warning(
+            "%s=%s exceeds canonical maximum %s; using %s",
+            key,
+            configured,
+            maximum,
+            maximum,
+        )
+    return min(configured, maximum)
 
 
 def get_batch_worker_lease_seconds() -> int:
@@ -1378,85 +1409,84 @@ def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
 
 def get_flow_definition_max_nodes() -> int:
     """Max canonical flow nodes, including the required task-input node."""
-    return max(2, _get_env_int_with_fallback("FLOW_DEFINITION_MAX_NODES", 31))
+    configured = _get_env_int_with_fallback(
+        "FLOW_DEFINITION_MAX_NODES",
+        FLOW_DEFINITION_MAX_NODES_DEFAULT,
+    )
+    if configured < 2:
+        logger.warning(
+            "FLOW_DEFINITION_MAX_NODES=%s is below minimum 2; using 2",
+            configured,
+        )
+    return max(2, configured)
 
 
 def get_agent_studio_flow_max_steps() -> int:
     """Max authored steps admitted by Agent Studio within canonical capacity."""
-    configured_max = max(
-        1,
-        _get_env_int_with_fallback("AGENT_STUDIO_FLOW_MAX_STEPS", 30),
+    configured_max = _get_env_int_with_fallback(
+        "AGENT_STUDIO_FLOW_MAX_STEPS",
+        FLOW_DEFINITION_MAX_NODES_DEFAULT - 1,
     )
-    return min(configured_max, get_flow_definition_max_nodes() - 1)
+    if configured_max < 1:
+        logger.warning(
+            "AGENT_STUDIO_FLOW_MAX_STEPS=%s is below minimum 1; using 1",
+            configured_max,
+        )
+        configured_max = 1
+    canonical_capacity = get_flow_definition_max_nodes() - 1
+    if configured_max > canonical_capacity:
+        logger.warning(
+            "AGENT_STUDIO_FLOW_MAX_STEPS=%s exceeds the canonical authored-step "
+            "capacity %s; using %s",
+            configured_max,
+            canonical_capacity,
+            canonical_capacity,
+        )
+    return min(configured_max, canonical_capacity)
 
 
 def get_agent_studio_flow_name_max_chars() -> int:
     """Max Agent Studio flow-name length, bounded by persistence."""
-    return min(
-        255,
-        max(
-            1,
-            _get_env_int_with_fallback(
-                "AGENT_STUDIO_FLOW_NAME_MAX_CHARS",
-                255,
-            ),
-        ),
+    return _get_bounded_positive_env_int(
+        "AGENT_STUDIO_FLOW_NAME_MAX_CHARS",
+        FLOW_NAME_MAX_CHARS,
+        FLOW_NAME_MAX_CHARS,
     )
 
 
 def get_agent_studio_flow_description_max_chars() -> int:
     """Max Agent Studio flow-description length, bounded by the API model."""
-    return min(
-        2_000,
-        max(
-            1,
-            _get_env_int_with_fallback(
-                "AGENT_STUDIO_FLOW_DESCRIPTION_MAX_CHARS",
-                2_000,
-            ),
-        ),
+    return _get_bounded_positive_env_int(
+        "AGENT_STUDIO_FLOW_DESCRIPTION_MAX_CHARS",
+        FLOW_DESCRIPTION_MAX_CHARS,
+        FLOW_DESCRIPTION_MAX_CHARS,
     )
 
 
 def get_agent_studio_flow_step_goal_max_chars() -> int:
     """Max simplified step-goal length, bounded by ``FlowNodeData``."""
-    return min(
-        500,
-        max(
-            1,
-            _get_env_int_with_fallback(
-                "AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS",
-                500,
-            ),
-        ),
+    return _get_bounded_positive_env_int(
+        "AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS",
+        FLOW_STEP_GOAL_MAX_CHARS,
+        FLOW_STEP_GOAL_MAX_CHARS,
     )
 
 
 def get_agent_studio_flow_custom_instructions_max_chars() -> int:
     """Max simplified custom-instruction length, bounded by ``FlowNodeData``."""
-    return min(
-        2_000,
-        max(
-            1,
-            _get_env_int_with_fallback(
-                "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
-                2_000,
-            ),
-        ),
+    return _get_bounded_positive_env_int(
+        "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
+        FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS,
+        FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS,
     )
 
 
 def get_agent_studio_flow_output_filename_template_max_chars() -> int:
     """Max formatter filename-template length, bounded by ``FlowNodeData``."""
-    return min(
-        255,
-        max(
-            1,
-            _get_env_int_with_fallback(
-                "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
-                255,
-            ),
-        ),
+    return _get_bounded_positive_env_int(
+        "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
+        FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS,
+        FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS,
     )
 
 

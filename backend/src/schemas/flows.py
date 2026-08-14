@@ -3,6 +3,7 @@
 Defines request/response schemas for Flow CRUD operations
 and validation for FlowDefinition JSONB structure.
 """
+from collections.abc import Sized
 from datetime import datetime
 import re
 from typing import Any, List, Literal, Optional
@@ -11,12 +12,18 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
+from src.lib.flow_contract_limits import (
+    FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS,
+    FLOW_DESCRIPTION_MAX_CHARS,
+    FLOW_NAME_MAX_CHARS,
+    FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS,
+    FLOW_STEP_GOAL_MAX_CHARS,
+)
 from src.lib.flow_edge_roles import (
     CONTROL_FLOW_EDGE_ROLE,
     FlowEdgeRole,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
 )
-from src.lib.openai_agents.config import get_flow_definition_max_nodes
 
 
 # =============================================================================
@@ -138,12 +145,12 @@ class FlowNodeData(BaseModel):
     # Step configuration (for agent nodes)
     step_goal: Optional[str] = Field(
         None,
-        max_length=500,
+        max_length=FLOW_STEP_GOAL_MAX_CHARS,
         description="Goal description for this step"
     )
     custom_instructions: Optional[str] = Field(
         None,
-        max_length=2000,
+        max_length=FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS,
         description="Custom instructions prepended to agent prompt with highest priority"
     )
     prompt_version: Optional[int] = Field(
@@ -163,7 +170,7 @@ class FlowNodeData(BaseModel):
     )
     output_filename_template: Optional[str] = Field(
         None,
-        max_length=255,
+        max_length=FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS,
         description=(
             "For output/formatter nodes only. Template for the human-readable filename "
             "descriptor. Supported placeholders are {{input_filename}}, "
@@ -324,10 +331,44 @@ class FlowDefinition(BaseModel):
     nodes: List[FlowNode] = Field(
         ...,
         min_length=1,
-        max_length=get_flow_definition_max_nodes(),
     )
     edges: List[FlowEdge] = Field(default_factory=list)
     entry_node_id: str = Field(..., description="Starting node ID")
+
+    @staticmethod
+    def _enforce_node_count(nodes: Any) -> Any:
+        """Enforce the current canonical node capacity."""
+
+        from src.lib.openai_agents.config import get_flow_definition_max_nodes
+
+        max_nodes = get_flow_definition_max_nodes()
+        if len(nodes) > max_nodes:
+            raise ValueError(
+                f"Flow has {len(nodes)} nodes; maximum is {max_nodes}"
+            )
+        return nodes
+
+    @field_validator("nodes", mode="before")
+    @classmethod
+    def validate_raw_node_count(cls, nodes: Any) -> Any:
+        """Reject oversized raw node lists before parsing their children."""
+
+        if isinstance(nodes, Sized) and not isinstance(
+            nodes,
+            (str, bytes, dict),
+        ):
+            cls._enforce_node_count(nodes)
+        return nodes
+
+    @field_validator("nodes")
+    @classmethod
+    def validate_parsed_node_count(
+        cls,
+        nodes: List[FlowNode],
+    ) -> List[FlowNode]:
+        """Enforce capacity after parsing non-sized input iterables."""
+
+        return cls._enforce_node_count(nodes)
 
     # VALIDATOR 1: Unique node IDs
     @field_validator("nodes")
@@ -452,12 +493,12 @@ class CreateFlowRequest(BaseModel):
     name: str = Field(
         ...,
         min_length=1,
-        max_length=255,
+        max_length=FLOW_NAME_MAX_CHARS,
         description="Flow name (must be unique per user)"
     )
     description: Optional[str] = Field(
         None,
-        max_length=2000,
+        max_length=FLOW_DESCRIPTION_MAX_CHARS,
         description="Optional flow description"
     )
     flow_definition: FlowDefinition
@@ -476,12 +517,12 @@ class UpdateFlowRequest(BaseModel):
     name: Optional[str] = Field(
         None,
         min_length=1,
-        max_length=255,
+        max_length=FLOW_NAME_MAX_CHARS,
         description="New flow name"
     )
     description: Optional[str] = Field(
         None,
-        max_length=2000,
+        max_length=FLOW_DESCRIPTION_MAX_CHARS,
         description="New description (use empty string to clear)"
     )
     flow_definition: Optional[FlowDefinition] = None

@@ -345,7 +345,7 @@ def test_validate_and_create_share_pre_persistence_rejection(monkeypatch):
         {
             "agent_id": "csv_formatter",
             "source_steps": [1],
-            "output_filename_template": "{{not_builtin}}.csv",
+            "output_filename_template": "{{agent_id}}.csv",
         },
     ]
 
@@ -359,6 +359,8 @@ def test_validate_and_create_share_pre_persistence_rejection(monkeypatch):
     assert validation["valid"] is False
     assert creation["success"] is False
     assert creation["error"] == validation["errors"][0]
+    assert "supported filename variables" in creation["help"]
+    assert "Valid agent IDs" not in creation["help"]
 
 
 def test_validate_and_create_share_configured_step_goal_limit(monkeypatch):
@@ -383,6 +385,23 @@ def test_validate_and_create_share_configured_step_goal_limit(monkeypatch):
         "Step 1: step_goal exceeds 4 characters"
     ]
     assert creation["error"] == validation["errors"][0]
+    assert creation["help"] == (
+        "Shorten the named field to the configured maximum"
+    )
+
+
+def test_validate_collects_field_limits_before_unknown_agent_id(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS", "4")
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction"])
+
+    result = flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": "not_available", "step_goal": "12345"}]
+    )
+
+    assert result["errors"] == [
+        "Step 1: step_goal exceeds 4 characters",
+        "Step 1: unknown agent_id 'not_available'",
+    ]
 
 
 @pytest.mark.parametrize("malformed_steps", [None, {"agent_id": "pdf_extraction"}])

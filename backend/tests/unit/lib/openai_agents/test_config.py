@@ -124,6 +124,16 @@ def test_agent_studio_flow_step_limit_respects_canonical_node_capacity(monkeypat
     assert get_agent_studio_flow_max_steps() == 1
 
 
+def test_agent_studio_flow_limit_clamps_are_reported(monkeypatch, caplog):
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "256")
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_MAX_STEPS", "31")
+
+    assert get_agent_studio_flow_name_max_chars() == 255
+    assert get_agent_studio_flow_max_steps() == 30
+    assert "exceeds canonical maximum 255" in caplog.text
+    assert "exceeds the canonical authored-step capacity 30" in caplog.text
+
+
 def test_flow_supervisor_parallel_tool_calls_default_disabled(monkeypatch):
     monkeypatch.delenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
 
