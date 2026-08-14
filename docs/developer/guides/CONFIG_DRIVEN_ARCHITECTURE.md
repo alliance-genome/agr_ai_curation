@@ -179,6 +179,11 @@ remaining recipe still passes the shared validator. Invalid metadata and
 cross-package name or equivalence collisions fail with package, file, and
 recipe provenance.
 
+Recipe dependency discovery is intentionally broader than ordinary flow-step
+eligibility: an installed typed validator can satisfy a recipe dependency while
+remaining attachment-only and absent from `FLOW_AGENT_IDS` and the Flow Builder
+palette. This distinction preserves the shared validator execution policy.
+
 ```yaml
 flow_recipes_api_version: 1.0.0
 

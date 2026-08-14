@@ -197,8 +197,10 @@ A package can export `config/flow_recipes.yaml` with `kind: flow_recipes`.
 The strict versioned contract contributes starter recipes plus optional agent
 equivalence and suggestion metadata. Recipe steps are checked by the same
 validation path as `validate_flow` and `create_flow`; malformed exports fail
-startup with package and source-file context. Core-only installs expose no
-domain recipes. See the developer configuration guide for the complete YAML
+startup with package and source-file context. Installed typed validators count
+as recipe dependencies even when they remain attachment-only; recipe discovery
+does not add them to the ordinary flow-step palette. Core-only installs expose
+no domain recipes. See the developer configuration guide for the complete YAML
 shape.
 
 ## Merge and override behavior

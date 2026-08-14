@@ -70,6 +70,10 @@ GENERIC_FLOW_RECIPE_SOURCE_GUARD_PATHS = {
 GENERIC_FLOW_RECIPE_SOURCE_PATTERNS = (
     re.compile(r"\balliance\b", re.IGNORECASE),
     re.compile(
+        r"\b(?:link|validate|validated|validates|validating)\b.{0,40}\bdatabase\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\b(?:gene|gene_validation|gene_expression|gene_ontology|allele|"
         r"allele_validation|disease|disease_validation|chemical|"
         r"chemical_validation|phenotype_extractor)\b",
