@@ -125,6 +125,7 @@ def test_agent_studio_flow_step_limit_respects_canonical_node_capacity(monkeypat
 
 
 def test_agent_studio_flow_limit_clamps_are_reported(monkeypatch, caplog):
+    monkeypatch.delenv("FLOW_DEFINITION_MAX_NODES", raising=False)
     monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "256")
     monkeypatch.setenv("AGENT_STUDIO_FLOW_MAX_STEPS", "31")
 

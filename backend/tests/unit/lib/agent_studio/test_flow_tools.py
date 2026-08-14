@@ -239,6 +239,7 @@ def test_validate_flow_handler_rejects_removed_singular_source_step(monkeypatch)
     assert result["errors"] == [
         "Step 2: output formatter requires non-empty source_steps"
     ]
+    assert result["help"].startswith("Bind formatter source_steps")
 
 
 def test_validate_flow_handler_checks_every_grouped_source_with_shared_policy(
@@ -318,7 +319,14 @@ def test_validate_flow_uses_canonical_output_filename_template_validation(
     assert any("unsupported_variable" in error for error in invalid["errors"])
 
 
-def test_validate_and_create_share_pre_persistence_rejection(monkeypatch):
+@pytest.mark.parametrize(
+    "unsupported_variable",
+    ["agent_id", "source_steps", "exceeds"],
+)
+def test_validate_and_create_share_pre_persistence_rejection(
+    monkeypatch,
+    unsupported_variable,
+):
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
     monkeypatch.setattr(
         flow_tools,
@@ -345,7 +353,9 @@ def test_validate_and_create_share_pre_persistence_rejection(monkeypatch):
         {
             "agent_id": "csv_formatter",
             "source_steps": [1],
-            "output_filename_template": "{{agent_id}}.csv",
+            "output_filename_template": (
+                "{{" + unsupported_variable + "}}.csv"
+            ),
         },
     ]
 
@@ -357,6 +367,7 @@ def test_validate_and_create_share_pre_persistence_rejection(monkeypatch):
     )
 
     assert validation["valid"] is False
+    assert "supported filename variables" in validation["help"]
     assert creation["success"] is False
     assert creation["error"] == validation["errors"][0]
     assert "supported filename variables" in creation["help"]
@@ -388,6 +399,77 @@ def test_validate_and_create_share_configured_step_goal_limit(monkeypatch):
     assert creation["help"] == (
         "Shorten the named field to the configured maximum"
     )
+
+
+def test_overlong_filename_template_returns_length_help(monkeypatch):
+    monkeypatch.setenv(
+        "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
+        "4",
+    )
+    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "csv_formatter"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "csv_formatter": {"category": "Output"},
+        },
+    )
+    steps = [
+        {"agent_id": "pdf_extraction"},
+        {
+            "agent_id": "csv_formatter",
+            "source_steps": [1],
+            "output_filename_template": "a.csv",
+        },
+    ]
+
+    validation = flow_tools._validate_flow_handler()(steps=steps)
+    creation = flow_tools._create_flow_handler()(
+        name="Filename length",
+        description="Exercise filename length recovery",
+        steps=steps,
+    )
+
+    assert validation["help"] == (
+        "Shorten the named field to the configured maximum"
+    )
+    assert creation["help"] == validation["help"]
+
+
+def test_limit_clamp_warnings_are_not_repeated_per_step(monkeypatch, caplog):
+    monkeypatch.setenv(
+        "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
+        "2001",
+    )
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS", "501")
+    monkeypatch.setenv(
+        "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
+        "256",
+    )
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction"])
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {"pdf_extraction": {"category": "Extraction"}},
+    )
+
+    result = flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": "pdf_extraction"}] * 3
+    )
+
+    assert result["valid"] is True
+    for environment_name in (
+        "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
+        "AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS",
+        "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
+    ):
+        assert sum(environment_name in message for message in caplog.messages) == 1
 
 
 def test_validate_collects_field_limits_before_unknown_agent_id(monkeypatch):
@@ -426,6 +508,7 @@ def test_validate_and_create_structurally_reject_non_array_steps(
         "suggestions": [],
         "step_count": 0,
         "unique_agents": [],
+        "help": "Provide a non-empty steps array within the configured step limit",
     }
     assert creation["success"] is False
     assert creation["error"] == validation["errors"][0]
@@ -1221,6 +1304,7 @@ def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
     unknown_agent = create("Flow A", "desc", [{"agent_id": "nope"}])
     assert unknown_agent["success"] is False
     assert "unknown agent_id" in unknown_agent["error"]
+    assert unknown_agent["help"].startswith("Valid agent IDs:")
 
 
 def test_create_flow_handler_success_and_db_errors(monkeypatch):
@@ -1509,6 +1593,7 @@ def test_register_flow_tools_registers_five_tools(monkeypatch):
 
     monkeypatch.setattr(flow_tools, "get_diagnostic_tools_registry", lambda: _Registry())
     monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene", "chat_output"])
+    monkeypatch.delenv("AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS", raising=False)
 
     flow_tools.register_flow_tools()
 

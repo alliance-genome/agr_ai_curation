@@ -171,6 +171,8 @@ def _simplified_flow_recovery_help(errors: List[str]) -> str:
     """Return recovery guidance aligned with the first validation failure."""
 
     first_error = errors[0] if errors else ""
+    if " exceeds " in first_error and first_error.endswith(" characters"):
+        return "Shorten the named field to the configured maximum"
     if "output_filename_template" in first_error:
         return (
             "Use only the supported filename variables: "
@@ -184,8 +186,8 @@ def _simplified_flow_recovery_help(errors: List[str]) -> str:
             "Bind formatter source_steps to one or more earlier Extraction or "
             "typed Validation steps, in the desired output order"
         )
-    if "exceeds" in first_error:
-        return "Shorten the named field to the configured maximum"
+    if "must be an object" in first_error:
+        return "Provide each flow step as an object with an agent_id"
     if "steps" in first_error.lower() or "step" in first_error.lower():
         return "Provide a non-empty steps array within the configured step limit"
     return "Correct the reported flow validation error and try again"
@@ -560,6 +562,9 @@ def _build_simplified_flow_definition(
         )
 
     output_source_steps: dict[int, tuple[int, ...]] = {}
+    custom_limit = get_agent_studio_flow_custom_instructions_max_chars()
+    step_goal_limit = get_agent_studio_flow_step_goal_max_chars()
+    template_limit = get_agent_studio_flow_output_filename_template_max_chars()
     for i, step in enumerate(steps):
         step_num = i + 1
         if not isinstance(step, dict):
@@ -568,7 +573,6 @@ def _build_simplified_flow_definition(
 
         agent_id = step.get("agent_id")
         custom_instructions = step.get("custom_instructions")
-        custom_limit = get_agent_studio_flow_custom_instructions_max_chars()
         if (
             isinstance(custom_instructions, str)
             and len(custom_instructions) > custom_limit
@@ -579,7 +583,6 @@ def _build_simplified_flow_definition(
             )
 
         step_goal = step.get("step_goal")
-        step_goal_limit = get_agent_studio_flow_step_goal_max_chars()
         if isinstance(step_goal, str) and len(step_goal) > step_goal_limit:
             errors.append(
                 f"Step {step_num}: step_goal exceeds "
@@ -587,9 +590,6 @@ def _build_simplified_flow_definition(
             )
 
         output_filename_template = step.get("output_filename_template")
-        template_limit = (
-            get_agent_studio_flow_output_filename_template_max_chars()
-        )
         if (
             isinstance(output_filename_template, str)
             and len(output_filename_template) > template_limit
@@ -998,14 +998,17 @@ def _validate_flow_handler():
                 f"'{gene_expression_agent_id}' to validate gene identifiers"
             )
 
-        return {
+        result = {
             "valid": len(errors) == 0,
             "errors": errors,
             "warnings": warnings,
             "suggestions": suggestions,
             "step_count": len(validated_steps),
-            "unique_agents": list(seen_agents)
+            "unique_agents": list(seen_agents),
         }
+        if errors:
+            result["help"] = _simplified_flow_recovery_help(errors)
+        return result
 
     return handler
 

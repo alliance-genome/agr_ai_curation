@@ -3,8 +3,9 @@
 Defines request/response schemas for Flow CRUD operations
 and validation for FlowDefinition JSONB structure.
 """
-from collections.abc import Sized
+from collections.abc import Iterable, Mapping, Sized
 from datetime import datetime
+from itertools import islice
 import re
 from typing import Any, List, Literal, Optional
 from uuid import UUID
@@ -335,40 +336,34 @@ class FlowDefinition(BaseModel):
     edges: List[FlowEdge] = Field(default_factory=list)
     entry_node_id: str = Field(..., description="Starting node ID")
 
-    @staticmethod
-    def _enforce_node_count(nodes: Any) -> Any:
-        """Enforce the current canonical node capacity."""
+    @field_validator("nodes", mode="before")
+    @classmethod
+    def validate_raw_node_count(cls, nodes: Any) -> Any:
+        """Reject oversized node iterables before parsing their children."""
 
         from src.lib.openai_agents.config import get_flow_definition_max_nodes
 
         max_nodes = get_flow_definition_max_nodes()
-        if len(nodes) > max_nodes:
-            raise ValueError(
-                f"Flow has {len(nodes)} nodes; maximum is {max_nodes}"
-            )
-        return nodes
-
-    @field_validator("nodes", mode="before")
-    @classmethod
-    def validate_raw_node_count(cls, nodes: Any) -> Any:
-        """Reject oversized raw node lists before parsing their children."""
-
         if isinstance(nodes, Sized) and not isinstance(
             nodes,
-            (str, bytes, dict),
+            (str, bytes, Mapping),
         ):
-            cls._enforce_node_count(nodes)
+            if len(nodes) > max_nodes:
+                raise ValueError(
+                    f"Flow has {len(nodes)} nodes; maximum is {max_nodes}"
+                )
+            return nodes
+        if isinstance(nodes, Iterable) and not isinstance(
+            nodes,
+            (str, bytes, Mapping),
+        ):
+            materialized_nodes = list(islice(nodes, max_nodes + 1))
+            if len(materialized_nodes) > max_nodes:
+                raise ValueError(
+                    f"Flow has more than {max_nodes} nodes; maximum is {max_nodes}"
+                )
+            return materialized_nodes
         return nodes
-
-    @field_validator("nodes")
-    @classmethod
-    def validate_parsed_node_count(
-        cls,
-        nodes: List[FlowNode],
-    ) -> List[FlowNode]:
-        """Enforce capacity after parsing non-sized input iterables."""
-
-        return cls._enforce_node_count(nodes)
 
     # VALIDATOR 1: Unique node IDs
     @field_validator("nodes")
