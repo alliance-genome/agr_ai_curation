@@ -185,8 +185,7 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For Agent Studio Claude chat
-      - PROMPT_EXPLORER_MODEL_ID=${PROMPT_EXPLORER_MODEL_ID:-claude-opus-4-8}
-      - ANTHROPIC_OPUS_MODEL=${ANTHROPIC_OPUS_MODEL:-claude-opus-4-8}
+      - PROMPT_EXPLORER_MODEL_ID=${PROMPT_EXPLORER_MODEL_ID:-claude-opus-5}
       # Langfuse Observability Configuration
       - LANGFUSE_HOST=http://langfuse:3000
       - LANGFUSE_PUBLIC_URL=${LANGFUSE_PUBLIC_URL:-}

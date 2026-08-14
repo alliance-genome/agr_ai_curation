@@ -152,6 +152,20 @@ def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
     )
 
 
+def test_agent_studio_model_defaults_are_claude_opus_5():
+    dev_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_env = _load_compose()["services"]["backend"]["environment"]
+
+    assert dev_env["PROMPT_EXPLORER_MODEL_ID"] == (
+        "${PROMPT_EXPLORER_MODEL_ID:-claude-opus-5}"
+    )
+    assert production_env["PROMPT_EXPLORER_MODEL_ID"] == (
+        "${PROMPT_EXPLORER_MODEL_ID:-claude-opus-5}"
+    )
+
+
 def test_dev_compose_mounts_canonical_agent_studio_prompt_source():
     compose = _load_dev_compose()
     backend_volumes = compose["services"]["backend"]["volumes"]

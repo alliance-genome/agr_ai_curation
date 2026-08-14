@@ -144,7 +144,6 @@ from src.services.user_service import set_global_user_from_cognito
 logger = logging.getLogger(__name__)
 
 PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
-LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR = "ANTHROPIC_OPUS_MODEL"
 AGENT_STUDIO_SEEDED_SESSION_PREFIX = agent_studio_chat_session.AGENT_STUDIO_SEEDED_SESSION_PREFIX
 AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
     # Project prompts must be supplied by config/package sources; backend-core
@@ -209,14 +208,10 @@ def _resolve_prompt_explorer_model() -> tuple[str, str]:
 
     Resolution order:
     1. PROMPT_EXPLORER_MODEL_ID env override
-    2. Legacy ANTHROPIC_OPUS_MODEL env override
-    3. Anthropic model from config/models.yaml (default first)
+    2. Anthropic model from config/models.yaml (default first)
     """
-    configured_model_id = (
-        os.getenv(PROMPT_EXPLORER_MODEL_ENV_VAR)
-        or os.getenv(LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR)
-        or ""
-    ).strip()
+    # Removed ANTHROPIC_OPUS_MODEL fallback — PROMPT_EXPLORER_MODEL_ID is the sole Agent Studio environment override.
+    configured_model_id = (os.getenv(PROMPT_EXPLORER_MODEL_ENV_VAR) or "").strip()
     return prompt_builder.resolve_prompt_explorer_model(
         configured_model_id=configured_model_id,
         catalog_models=_list_anthropic_catalog_models(),
@@ -3156,7 +3151,7 @@ def _build_agent_studio_replay_events(
     The assistant can discuss prompts, suggest improvements, and submit suggestions
     to the development team using the submit_prompt_suggestion tool.
 
-    Uses the effort parameter (beta) set to "medium" for optimal quality/cost balance.
+    Uses the effort parameter set to "medium" for optimal quality/cost balance.
 
     The response is a Server-Sent Events stream with the following event types:
     - TEXT_DELTA: Text content from Opus
@@ -3337,11 +3332,11 @@ async def chat_with_opus(
             # Note: User context was set before entering generate_stream().
             # We'll clean it up in the finally block at the end of this generator.
 
-            # Build API call parameters for beta API with effort parameter
+            # Build API call parameters for context-management beta and effort
             # Using effort="medium" for optimal quality/cost balance (76% fewer tokens)
             api_params = {
                 "model": anthropic_model_id,
-                "betas": ["effort-2025-11-24", "context-management-2025-06-27"],
+                "betas": ["context-management-2025-06-27"],
                 "max_tokens": 16384,
                 "system": system_prompt,
                 "messages": current_messages,
@@ -3414,7 +3409,7 @@ async def chat_with_opus(
                     payload_summary=preflight_event["payload_summary"],
                 )
 
-                # Stream the response using beta API for effort parameter support
+                # Stream through the beta API for context-management support
                 async with client.beta.messages.stream(**api_params) as stream:
                     async for event in stream:
                         if event.type == "content_block_delta":

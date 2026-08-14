@@ -303,7 +303,7 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     monkeypatch.setattr(
         api_module,
         "_resolve_prompt_explorer_model",
-        lambda: ("claude-sonnet-test", "Claude Sonnet Test"),
+        lambda: ("claude-opus-5", "Claude Opus 5"),
     )
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
@@ -403,17 +403,29 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     ]
     first_call = captured["api_calls"][0]
     second_call = captured["api_calls"][1]
-    assert first_call["betas"] == ["effort-2025-11-24", "context-management-2025-06-27"]
-    assert first_call["context_management"] == {
-        "edits": [
-            {
-                "type": "clear_tool_uses_20250919",
-                "trigger": {"type": "input_tokens", "value": 140000},
-                "keep": {"type": "tool_uses", "value": 3},
-                "clear_tool_inputs": False,
-            }
+    assert first_call["model"] == "claude-opus-5"
+    assert second_call["model"] == "claude-opus-5"
+    assert first_call["max_tokens"] == 16384
+    assert second_call["max_tokens"] == 16384
+    assert first_call["output_config"] == {"effort": "medium"}
+    assert second_call["output_config"] == {"effort": "medium"}
+    for call in (first_call, second_call):
+        assert call["betas"] == [
+            "context-management-2025-06-27",
         ]
-    }
+        assert call["context_management"] == {
+            "edits": [
+                {
+                    "type": "clear_tool_uses_20250919",
+                    "trigger": {"type": "input_tokens", "value": 140000},
+                    "keep": {"type": "tool_uses", "value": 3},
+                    "clear_tool_inputs": False,
+                }
+            ]
+        }
+        assert "thinking" not in call
+        assert "temperature" not in call
+        assert "top_p" not in call
     assert first_call["tool_choice"] == {
         "type": "tool",
         "name": "refresh_workshop_prompt",

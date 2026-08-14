@@ -179,6 +179,64 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
     ]
 
 
+def test_process_suggestion_background_uses_opus_5_compatible_forced_tool_request(monkeypatch):
+    import src.api.agent_studio as api_module
+
+    captured = {}
+    handled = {}
+    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-opus-5")
+
+    class _FakeMessagesClient:
+        @staticmethod
+        def create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="tool_use",
+                        name="submit_prompt_suggestion",
+                        input={"suggestion": "Use a clearer instruction."},
+                    )
+                ],
+            )
+
+    class _FakeAnthropicClient:
+        def __init__(self, **_kwargs):
+            self.messages = _FakeMessagesClient()
+
+    async def _fake_handle_tool_call(**kwargs):
+        handled.update(kwargs)
+        return {"success": True, "suggestion_id": "suggestion-1"}
+
+    monkeypatch.setattr(api_module.anthropic, "Anthropic", _FakeAnthropicClient)
+    monkeypatch.setattr(api_module, "_handle_tool_call", _fake_handle_tool_call)
+
+    asyncio.run(
+        api_module._process_suggestion_background(
+            messages=[{"role": "user", "content": "hello"}],
+            system_prompt="system",
+            context=None,
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
+            api_key="test-key",
+        )
+    )
+
+    assert captured["model"] == "claude-opus-5"
+    assert captured["max_tokens"] == 4096
+    assert captured["tool_choice"] == {
+        "type": "tool",
+        "name": "submit_prompt_suggestion",
+    }
+    assert captured["tools"] == [api_module.ANTHROPIC_SUGGESTION_TOOL]
+    assert "thinking" not in captured
+    assert "output_config" not in captured
+    assert "temperature" not in captured
+    assert "top_p" not in captured
+    assert handled["tool_name"] == "submit_prompt_suggestion"
+    assert handled["tool_input"] == {"suggestion": "Use a clearer instruction."}
+
+
 def test_submit_suggestion_direct_sanitizes_unexpected_errors(monkeypatch, caplog):
     import src.api.agent_studio as api_module
 
