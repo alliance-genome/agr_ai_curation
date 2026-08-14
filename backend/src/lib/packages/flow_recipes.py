@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 import re
 from string import Formatter
@@ -327,7 +327,7 @@ def build_flow_recipe_catalog(registry: PackageRegistry) -> FlowRecipeCatalog:
     return FlowRecipeCatalog(contributions=contributions)
 
 
-@lru_cache(maxsize=8)
+@cache
 def _load_flow_recipe_catalog_for_path(packages_dir: Path) -> FlowRecipeCatalog:
     """Cache immutable package metadata for one runtime package root."""
 
