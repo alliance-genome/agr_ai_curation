@@ -92,6 +92,65 @@ class TestFlowDefinitionTaskInputRequirement:
 
         assert flow.version == "1.1"
 
+    def test_node_limit_is_read_at_validation_time(self, monkeypatch):
+        two_node_flow = {
+            "nodes": [
+                make_task_input_node("task_1", "Extract genes"),
+                make_agent_node("agent_1", output_key="agent_1_output"),
+            ],
+            "edges": [
+                {
+                    "id": "edge_1",
+                    "source": "task_1",
+                    "target": "agent_1",
+                }
+            ],
+            "entry_node_id": "task_1",
+        }
+
+        monkeypatch.setenv("FLOW_DEFINITION_MAX_NODES", "2")
+        assert len(FlowDefinition.model_validate(two_node_flow).nodes) == 2
+
+        three_node_flow = {
+            **two_node_flow,
+            "nodes": [
+                *two_node_flow["nodes"],
+                make_agent_node(
+                    "agent_2",
+                    output_key="agent_2_output",
+                ),
+            ],
+        }
+        with pytest.raises(ValidationError, match="maximum is 2"):
+            FlowDefinition.model_validate(three_node_flow)
+
+        iterator_flow = FlowDefinition.model_validate(
+            {
+                **two_node_flow,
+                "nodes": iter(two_node_flow["nodes"]),
+            }
+        )
+        assert len(iterator_flow.nodes) == 2
+
+        with pytest.raises(ValidationError, match="maximum is 2"):
+            FlowDefinition.model_validate(
+                {
+                    **three_node_flow,
+                    "nodes": iter(three_node_flow["nodes"]),
+                }
+            )
+
+        with pytest.raises(ValidationError) as exc_info:
+            FlowDefinition.model_validate(
+                {
+                    "nodes": [{}] * 100,
+                    "edges": [],
+                    "entry_node_id": "missing",
+                }
+            )
+        assert len(exc_info.value.errors()) == 1
+        assert "maximum is 2" in str(exc_info.value)
+
     def test_flow_definition_rejects_v1_0(self):
         with pytest.raises(ValidationError, match="1.1"):
             FlowDefinition.model_validate(

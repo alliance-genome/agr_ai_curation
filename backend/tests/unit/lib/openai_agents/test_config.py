@@ -10,9 +10,16 @@ from src.lib.openai_agents.config import (
     AgentConfig,
     build_model_settings,
     get_agent_config,
+    get_agent_studio_flow_custom_instructions_max_chars,
+    get_agent_studio_flow_description_max_chars,
+    get_agent_studio_flow_max_steps,
+    get_agent_studio_flow_name_max_chars,
+    get_agent_studio_flow_output_filename_template_max_chars,
+    get_agent_studio_flow_step_goal_max_chars,
     get_api_key,
     get_base_url,
     get_flow_supervisor_parallel_tool_calls_enabled,
+    get_flow_definition_max_nodes,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
     get_inspect_results_json_depth_limit,
@@ -29,6 +36,103 @@ from src.lib.openai_agents.config import (
     supports_reasoning,
     supports_temperature,
 )
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "getter", "default", "override", "maximum"),
+    [
+        (
+            "AGENT_STUDIO_FLOW_MAX_STEPS",
+            get_agent_studio_flow_max_steps,
+            30,
+            4,
+            30,
+        ),
+        (
+            "AGENT_STUDIO_FLOW_NAME_MAX_CHARS",
+            get_agent_studio_flow_name_max_chars,
+            255,
+            80,
+            255,
+        ),
+        (
+            "AGENT_STUDIO_FLOW_DESCRIPTION_MAX_CHARS",
+            get_agent_studio_flow_description_max_chars,
+            2_000,
+            900,
+            2_000,
+        ),
+        (
+            "AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS",
+            get_agent_studio_flow_step_goal_max_chars,
+            500,
+            120,
+            500,
+        ),
+        (
+            "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
+            get_agent_studio_flow_custom_instructions_max_chars,
+            2_000,
+            700,
+            2_000,
+        ),
+        (
+            "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
+            get_agent_studio_flow_output_filename_template_max_chars,
+            255,
+            90,
+            255,
+        ),
+    ],
+)
+def test_agent_studio_flow_admission_limits(
+    monkeypatch,
+    environment_name,
+    getter,
+    default,
+    override,
+    maximum,
+):
+    monkeypatch.delenv(environment_name, raising=False)
+    assert getter() == default
+
+    monkeypatch.setenv(environment_name, str(override))
+    assert getter() == override
+
+    monkeypatch.setenv(environment_name, "0")
+    assert getter() == 1
+
+    if maximum is not None:
+        monkeypatch.setenv(environment_name, str(maximum + 1))
+        assert getter() == maximum
+
+
+def test_agent_studio_flow_step_limit_respects_canonical_node_capacity(monkeypatch):
+    monkeypatch.delenv("FLOW_DEFINITION_MAX_NODES", raising=False)
+    monkeypatch.delenv("AGENT_STUDIO_FLOW_MAX_STEPS", raising=False)
+    assert get_flow_definition_max_nodes() == 31
+    assert get_agent_studio_flow_max_steps() == 30
+
+    monkeypatch.setenv("FLOW_DEFINITION_MAX_NODES", "10")
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_MAX_STEPS", "30")
+
+    assert get_flow_definition_max_nodes() == 10
+    assert get_agent_studio_flow_max_steps() == 9
+
+    monkeypatch.setenv("FLOW_DEFINITION_MAX_NODES", "1")
+    assert get_flow_definition_max_nodes() == 2
+    assert get_agent_studio_flow_max_steps() == 1
+
+
+def test_agent_studio_flow_limit_clamps_are_reported(monkeypatch, caplog):
+    monkeypatch.delenv("FLOW_DEFINITION_MAX_NODES", raising=False)
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "256")
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_MAX_STEPS", "31")
+
+    assert get_agent_studio_flow_name_max_chars() == 255
+    assert get_agent_studio_flow_max_steps() == 30
+    assert "exceeds canonical maximum 255" in caplog.text
+    assert "exceeds the canonical authored-step capacity 30" in caplog.text
 
 
 def test_flow_supervisor_parallel_tool_calls_default_disabled(monkeypatch):
