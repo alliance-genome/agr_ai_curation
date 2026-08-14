@@ -125,7 +125,7 @@ def get_prompt(
         )
     if (
         override
-        and prompt_type in {"group_rules", "mod_rules"}
+        and prompt_type == "group_rules"
         and override.agent_name == agent_name
         and group_id
     ):
@@ -229,7 +229,7 @@ def get_prompt_optional(
         )
     if (
         override
-        and prompt_type in {"group_rules", "mod_rules"}
+        and prompt_type == "group_rules"
         and override.agent_name == agent_name
         and group_id
     ):

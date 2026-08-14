@@ -1264,8 +1264,7 @@ def _build_catalog() -> PromptCatalog:
 
         if prompt_type == "system" and mod_key == "base":
             prompts_by_agent[agent_name]["system"] = prompt
-        elif prompt_type in {"group_rules", "mod_rules"} and mod_key != "base":
-            # Support legacy mod_rules keys during migration.
+        elif prompt_type == "group_rules" and mod_key != "base":
             prompts_by_agent[agent_name]["group_rules"][mod_key] = prompt
 
     # Build catalog by combining AGENT_REGISTRY metadata with database prompts
