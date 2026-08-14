@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceProvider,
@@ -12,6 +14,23 @@ from src.lib.openai_agents.config import get_document_source_provider
 
 LOCAL_PDF_PROVIDER_ID = "local_pdf"
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
+
+
+def get_document_source_provider_metadata(provider_id: str) -> dict[str, Any] | None:
+    """Return non-secret presentation metadata owned by a registered provider."""
+
+    if provider_id.strip().lower() == ABC_LITERATURE_PROVIDER_ID:
+        from src.lib.document_sources.providers.abc_literature import (
+            ABC_LITERATURE_PROVIDER_METADATA,
+        )
+
+        return {
+            "display_label": ABC_LITERATURE_PROVIDER_METADATA["display_label"],
+            "reference_label_priority": list(
+                ABC_LITERATURE_PROVIDER_METADATA["reference_label_priority"]
+            ),
+        }
+    return None
 
 
 def _resolve_provider_id(provider_id: str | None) -> str:

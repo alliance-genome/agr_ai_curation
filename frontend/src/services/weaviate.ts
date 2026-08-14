@@ -61,6 +61,7 @@ interface DocumentChunk {
 
 interface RawDocumentSourceProvenance {
   provider: string;
+  provider_metadata?: RawDocumentSourceProviderMetadata;
   reference_id?: string;
   reference_curie?: string;
   source_file_id?: string;
@@ -76,6 +77,11 @@ interface RawDocumentSourceProvenance {
   access_scope?: string;
   access_mods?: Record<string, string[]>;
   viewer_mode?: string;
+}
+
+interface RawDocumentSourceProviderMetadata {
+  display_label?: string;
+  reference_label_priority?: string[];
 }
 
 interface RawDocumentListItem {
@@ -125,6 +131,7 @@ export interface RawDocumentDetailResponse {
 
 export interface DocumentSourceProvenance {
   provider?: string | null;
+  providerMetadata?: DocumentSourceProviderMetadata | null;
   referenceId?: string | null;
   referenceCurie?: string | null;
   sourceFileId?: string | null;
@@ -140,6 +147,11 @@ export interface DocumentSourceProvenance {
   accessScope?: string | null;
   accessMods?: Record<string, string[]> | null;
   viewerMode?: string | null;
+}
+
+export interface DocumentSourceProviderMetadata {
+  displayLabel?: string | null;
+  referenceLabelPriority?: string[] | null;
 }
 
 export interface DocumentSummary {
@@ -336,6 +348,31 @@ const toExternalIdsOrNull = (value: unknown): Record<string, string | string[]> 
   return Object.keys(normalized).length > 0 ? normalized : null;
 };
 
+const normalizeDocumentSourceProviderMetadata = (
+  value: unknown
+): DocumentSourceProviderMetadata | null => {
+  const record = toRecordOrNull(value);
+  if (!record) {
+    return null;
+  }
+
+  const rawReferenceLabelPriority = record.reference_label_priority;
+  const referenceLabelPriority = Array.isArray(rawReferenceLabelPriority)
+    ? rawReferenceLabelPriority.filter(
+        (entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())
+      )
+    : null;
+  const metadata: DocumentSourceProviderMetadata = {
+    displayLabel: toStringOrNull(record.display_label),
+    referenceLabelPriority:
+      referenceLabelPriority && referenceLabelPriority.length > 0
+        ? referenceLabelPriority
+        : null,
+  };
+
+  return metadata.displayLabel || metadata.referenceLabelPriority ? metadata : null;
+};
+
 export const normalizeDocumentSourceProvenance = (
   raw: unknown,
   fallback?: DocumentSourceProvenance | null
@@ -354,6 +391,10 @@ export const normalizeDocumentSourceProvenance = (
 
   const normalized: DocumentSourceProvenance = {
     provider: toStringOrNull(source.provider) ?? fallback?.provider ?? null,
+    providerMetadata:
+      normalizeDocumentSourceProviderMetadata(source.provider_metadata) ??
+      fallback?.providerMetadata ??
+      null,
     referenceId: toStringOrNull(source.reference_id ?? source.referenceId) ?? fallback?.referenceId ?? null,
     referenceCurie: toStringOrNull(source.reference_curie ?? source.referenceCurie) ?? fallback?.referenceCurie ?? null,
     sourceFileId: toStringOrNull(source.source_file_id ?? source.sourceFileId) ?? fallback?.sourceFileId ?? null,

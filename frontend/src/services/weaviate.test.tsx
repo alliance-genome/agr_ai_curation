@@ -185,6 +185,10 @@ describe('weaviate service', () => {
           },
           source_provenance: {
             provider: 'abc_literature',
+            provider_metadata: {
+              display_label: 'ABC Literature',
+              reference_label_priority: ['external_ids.fbrf', 'reference_curie'],
+            },
             reference_curie: 'AGRKB:101',
             external_ids: { pmid: '12345' },
             converted_artifact_id: 'converted-md-1',
@@ -262,6 +266,10 @@ describe('weaviate service', () => {
           },
           sourceProvenance: {
             provider: 'abc_literature',
+            providerMetadata: {
+              displayLabel: 'ABC Literature',
+              referenceLabelPriority: ['external_ids.fbrf', 'reference_curie'],
+            },
             referenceId: null,
             referenceCurie: 'AGRKB:101',
             sourceFileId: null,

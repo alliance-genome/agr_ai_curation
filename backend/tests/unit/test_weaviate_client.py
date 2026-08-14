@@ -125,6 +125,18 @@ async def test_async_list_documents_normalises_results():
     assert result["documents"][0]["weaviate_tenant"] == "test_tenant"
     assert result["documents"][0]["source_provenance"] == {
         "provider": "abc_literature",
+        "provider_metadata": {
+            "display_label": "ABC Literature",
+            "reference_label_priority": [
+                "external_ids.fbrf",
+                "reference_curie",
+                "reference_id",
+                "external_ids.pmid",
+                "external_ids.pmcid",
+                "external_ids.doi",
+                "source_md5",
+            ],
+        },
         "reference_id": "101",
         "reference_curie": "AGRKB:101",
         "source_file_id": "source-file-1",

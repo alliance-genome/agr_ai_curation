@@ -509,6 +509,18 @@ async def test_get_download_info_reports_pdf_backed_provider_markdown(monkeypatc
     assert payload["source_markdown_size"] > 0
     assert payload["source_provenance"] == {
         "provider": "abc_literature",
+        "provider_metadata": {
+            "display_label": "ABC Literature",
+            "reference_label_priority": [
+                "external_ids.fbrf",
+                "reference_curie",
+                "reference_id",
+                "external_ids.pmid",
+                "external_ids.pmcid",
+                "external_ids.doi",
+                "source_md5",
+            ],
+        },
         "reference_id": "ref-123",
         "reference_curie": "AGRKB:101",
         "source_file_id": "source-pdf-1",

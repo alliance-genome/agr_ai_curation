@@ -291,19 +291,23 @@ describe('DocumentList', () => {
     expect(screen.queryByText('completed')).not.toBeInTheDocument();
   });
 
-  it('displays provider provenance in the source column', () => {
+  it('renders generic provider provenance from presentation metadata', () => {
     const docs = [
       createTestDocument({
         id: 'provider-doc',
         filename: 'provider.pdf',
         sourceProvenance: {
-          provider: 'abc_literature',
-          referenceCurie: 'AGRKB:101',
+          provider: 'archive_gateway',
+          providerMetadata: {
+            displayLabel: 'Genome Archive',
+            referenceLabelPriority: ['external_ids.catalog', 'reference_curie'],
+          },
+          referenceCurie: 'ARCHIVE:101',
           referenceId: null,
           sourceFileId: 'source-pdf-1',
           pdfArtifactId: 'source-pdf-1',
           convertedArtifactId: 'converted-md-1',
-          externalIds: { pmid: '12345' },
+          externalIds: { catalog: 'CAT-123', index: 'secondary' },
           sourceMd5: 'abc123',
           fileClass: 'converted_merged_nxml',
           fileExtension: 'md',
@@ -311,7 +315,7 @@ describe('DocumentList', () => {
           importStatus: 'imported',
           importedAt: null,
           accessScope: 'restricted',
-          accessMods: { mods: ['FB'] },
+          accessMods: { mods: ['GROUP'] },
           viewerMode: 'local_pdf',
         },
       }),
@@ -322,11 +326,12 @@ describe('DocumentList', () => {
 
     expect(screen.getByText('Source')).toBeInTheDocument();
     expect(screen.getByText('Source').closest('th')).toHaveStyle({ minWidth: '280px' });
-    expect(screen.getByText('ABC Literature')).toBeInTheDocument();
-    expect(screen.getByText('AGRKB:101')).toBeInTheDocument();
+    expect(screen.getByText('Genome Archive')).toBeInTheDocument();
+    expect(screen.getByText('CATALOG: CAT-123')).toBeInTheDocument();
+    expect(screen.queryByText('ARCHIVE:101')).not.toBeInTheDocument();
     expect(screen.getByText('Local PDF')).toBeInTheDocument();
     expect(screen.getByText('Uploaded PDF')).toBeInTheDocument();
-    expect(screen.getByText('ABC Literature').closest('.MuiChip-root')).toHaveStyle({
+    expect(screen.getByText('Genome Archive').closest('.MuiChip-root')).toHaveStyle({
       flexShrink: '0',
     });
     expect(screen.getByText('imported').closest('.MuiChip-root')).toHaveStyle({ flexShrink: '0' });
