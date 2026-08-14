@@ -1376,6 +1376,90 @@ def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
     )
 
 
+def get_flow_definition_max_nodes() -> int:
+    """Max canonical flow nodes, including the required task-input node."""
+    return max(2, _get_env_int_with_fallback("FLOW_DEFINITION_MAX_NODES", 31))
+
+
+def get_agent_studio_flow_max_steps() -> int:
+    """Max authored steps admitted by Agent Studio within canonical capacity."""
+    configured_max = max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_FLOW_MAX_STEPS", 30),
+    )
+    return min(configured_max, get_flow_definition_max_nodes() - 1)
+
+
+def get_agent_studio_flow_name_max_chars() -> int:
+    """Max Agent Studio flow-name length, bounded by persistence."""
+    return min(
+        255,
+        max(
+            1,
+            _get_env_int_with_fallback(
+                "AGENT_STUDIO_FLOW_NAME_MAX_CHARS",
+                255,
+            ),
+        ),
+    )
+
+
+def get_agent_studio_flow_description_max_chars() -> int:
+    """Max Agent Studio flow-description length, bounded by the API model."""
+    return min(
+        2_000,
+        max(
+            1,
+            _get_env_int_with_fallback(
+                "AGENT_STUDIO_FLOW_DESCRIPTION_MAX_CHARS",
+                2_000,
+            ),
+        ),
+    )
+
+
+def get_agent_studio_flow_step_goal_max_chars() -> int:
+    """Max simplified step-goal length, bounded by ``FlowNodeData``."""
+    return min(
+        500,
+        max(
+            1,
+            _get_env_int_with_fallback(
+                "AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS",
+                500,
+            ),
+        ),
+    )
+
+
+def get_agent_studio_flow_custom_instructions_max_chars() -> int:
+    """Max simplified custom-instruction length, bounded by ``FlowNodeData``."""
+    return min(
+        2_000,
+        max(
+            1,
+            _get_env_int_with_fallback(
+                "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
+                2_000,
+            ),
+        ),
+    )
+
+
+def get_agent_studio_flow_output_filename_template_max_chars() -> int:
+    """Max formatter filename-template length, bounded by ``FlowNodeData``."""
+    return min(
+        255,
+        max(
+            1,
+            _get_env_int_with_fallback(
+                "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
+                255,
+            ),
+        ),
+    )
+
+
 def get_trace_review_export_timeout_seconds() -> float:
     """HTTP timeout for the TraceReview export call (TRACE_REVIEW_EXPORT_TIMEOUT_SECONDS).
 

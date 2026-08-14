@@ -16,6 +16,7 @@ from src.lib.flow_edge_roles import (
     FlowEdgeRole,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
 )
+from src.lib.openai_agents.config import get_flow_definition_max_nodes
 
 
 # =============================================================================
@@ -320,7 +321,11 @@ class FlowDefinition(BaseModel):
             "only when the run does not supply a user query."
         ),
     )
-    nodes: List[FlowNode] = Field(..., min_length=1, max_length=30)
+    nodes: List[FlowNode] = Field(
+        ...,
+        min_length=1,
+        max_length=get_flow_definition_max_nodes(),
+    )
     edges: List[FlowEdge] = Field(default_factory=list)
     entry_node_id: str = Field(..., description="Starting node ID")
 

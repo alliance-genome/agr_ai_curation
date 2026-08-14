@@ -19,7 +19,7 @@ User Context:
 
 import logging
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
@@ -29,6 +29,14 @@ from src.lib.openai_agents.bounded_list import (
     offset_page,
     parse_offset_cursor,
     substring_match,
+)
+from src.lib.openai_agents.config import (
+    get_agent_studio_flow_custom_instructions_max_chars,
+    get_agent_studio_flow_description_max_chars,
+    get_agent_studio_flow_max_steps,
+    get_agent_studio_flow_name_max_chars,
+    get_agent_studio_flow_output_filename_template_max_chars,
+    get_agent_studio_flow_step_goal_max_chars,
 )
 
 from .catalog_service import AGENT_REGISTRY
@@ -40,6 +48,9 @@ from .flow_agent_policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from src.schemas.flows import FlowDefinition
 
 
 # =============================================================================
@@ -146,6 +157,79 @@ def _get_flow_agent_ids() -> List[str]:
 
 # Cached list for schema validation
 FLOW_AGENT_IDS = _get_flow_agent_ids()
+
+
+class _SimplifiedFlowValidationError(ValueError):
+    """Aggregate validation failures from the shared simplified-flow path."""
+
+    def __init__(self, errors: List[str]) -> None:
+        super().__init__(errors[0] if errors else "Flow validation failed")
+        self.errors = errors
+
+
+def _simplified_flow_steps_schema() -> Dict[str, Any]:
+    """Build the complete shared provider schema for simplified flow steps."""
+
+    max_steps = get_agent_studio_flow_max_steps()
+    max_source_step = max(1, max_steps - 1)
+    return {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": max_steps,
+        "items": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "enum": FLOW_AGENT_IDS,
+                    "description": "Agent to use for this step",
+                },
+                "step_goal": {
+                    "type": "string",
+                    "maxLength": get_agent_studio_flow_step_goal_max_chars(),
+                    "description": "Goal description for this step (optional)",
+                },
+                "custom_instructions": {
+                    "type": "string",
+                    "maxLength": (
+                        get_agent_studio_flow_custom_instructions_max_chars()
+                    ),
+                    "description": (
+                        "Custom instructions appended to agent prompt (optional)"
+                    ),
+                },
+                "source_steps": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": max_source_step,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": max_source_step,
+                    },
+                    "description": (
+                        "Required only for Output agents: ordered 1-based earlier "
+                        "Extraction or typed Validation steps whose results this "
+                        "formatter receives"
+                    ),
+                },
+                "output_filename_template": {
+                    "type": "string",
+                    "maxLength": (
+                        get_agent_studio_flow_output_filename_template_max_chars()
+                    ),
+                    "description": (
+                        "Optional for file Output agents: runtime-resolved filename "
+                        "template using built-ins such as {{input_filename_stem}} "
+                        "and {{timestamp}}"
+                    ),
+                },
+            },
+            "required": ["agent_id"],
+        },
+        "description": "Ordered list of flow steps",
+    }
 
 
 # Keep this map aligned with flow-facing agent aliases/canonical IDs exported
@@ -367,7 +451,13 @@ def _validated_output_source_steps(
                 f"Step {step_num}: source_steps must not contain duplicates"
             )
 
-        source_agent_id = str(steps[source_step - 1].get("agent_id") or "")
+        source_step_config = steps[source_step - 1]
+        if not isinstance(source_step_config, dict):
+            return (), (
+                f"Step {step_num}: source_steps entry {source_step} must "
+                "reference a step object"
+            )
+        source_agent_id = str(source_step_config.get("agent_id") or "")
         if not agent_can_source_output_attachment(
             AGENT_REGISTRY.get(source_agent_id),
         ):
@@ -380,6 +470,224 @@ def _validated_output_source_steps(
         validated.append(source_step)
 
     return tuple(validated), None
+
+
+def _simplified_flow_metadata_errors(
+    *,
+    name: Optional[str],
+    description: Optional[str] = None,
+    require_description: bool = False,
+) -> List[str]:
+    """Validate tool-level metadata against the configured admission limits."""
+
+    errors: List[str] = []
+    if name is not None:
+        if not isinstance(name, str) or not name.strip():
+            errors.append("Flow name cannot be empty")
+        elif len(name) > get_agent_studio_flow_name_max_chars():
+            errors.append(
+                "Flow name exceeds "
+                f"{get_agent_studio_flow_name_max_chars()} characters"
+            )
+
+    if require_description:
+        if not isinstance(description, str) or not description.strip():
+            errors.append(
+                "Flow description is required (used as task instructions)"
+            )
+        elif len(description) > get_agent_studio_flow_description_max_chars():
+            errors.append(
+                "Flow description exceeds "
+                f"{get_agent_studio_flow_description_max_chars()} characters"
+            )
+    return errors
+
+
+def _build_simplified_flow_definition(
+    *,
+    steps: Any,
+    task_instructions: str,
+) -> "FlowDefinition":
+    """Build and canonically validate a simplified Agent Studio flow.
+
+    This function is deliberately side-effect free so validation and creation
+    use the same pre-persistence contract.
+    """
+
+    from pydantic import ValidationError
+
+    from src.lib.flows.validation_attachments import (
+        apply_flow_validation_attachment_defaults,
+    )
+    from src.schemas.flows import FlowDefinition
+
+    errors: List[str] = []
+    if not isinstance(steps, list):
+        raise _SimplifiedFlowValidationError(["Flow steps must be an array"])
+    if not steps:
+        raise _SimplifiedFlowValidationError(
+            ["Flow must have at least one step"]
+        )
+
+    max_steps = get_agent_studio_flow_max_steps()
+    if len(steps) > max_steps:
+        raise _SimplifiedFlowValidationError(
+            [f"Flow has {len(steps)} steps; maximum is {max_steps}"]
+        )
+
+    output_source_steps: dict[int, tuple[int, ...]] = {}
+    for i, step in enumerate(steps):
+        step_num = i + 1
+        if not isinstance(step, dict):
+            errors.append(f"Step {step_num}: must be an object")
+            continue
+
+        agent_id = step.get("agent_id")
+        if not agent_id:
+            errors.append(f"Step {step_num}: missing agent_id")
+            continue
+        if not isinstance(agent_id, str) or agent_id not in FLOW_AGENT_IDS:
+            errors.append(f"Step {step_num}: unknown agent_id '{agent_id}'")
+            continue
+
+        custom_instructions = step.get("custom_instructions")
+        custom_limit = get_agent_studio_flow_custom_instructions_max_chars()
+        if (
+            isinstance(custom_instructions, str)
+            and len(custom_instructions) > custom_limit
+        ):
+            errors.append(
+                f"Step {step_num}: custom_instructions exceeds "
+                f"{custom_limit} characters"
+            )
+
+        step_goal = step.get("step_goal")
+        step_goal_limit = get_agent_studio_flow_step_goal_max_chars()
+        if isinstance(step_goal, str) and len(step_goal) > step_goal_limit:
+            errors.append(
+                f"Step {step_num}: step_goal exceeds "
+                f"{step_goal_limit} characters"
+            )
+
+        output_filename_template = step.get("output_filename_template")
+        template_limit = (
+            get_agent_studio_flow_output_filename_template_max_chars()
+        )
+        if (
+            isinstance(output_filename_template, str)
+            and len(output_filename_template) > template_limit
+        ):
+            errors.append(
+                f"Step {step_num}: output_filename_template exceeds "
+                f"{template_limit} characters"
+            )
+
+        if _is_output_agent_id(agent_id):
+            source_steps, source_error = _validated_output_source_steps(steps, i)
+            if source_error is not None:
+                errors.append(source_error)
+            else:
+                output_source_steps[i] = source_steps
+
+    if errors:
+        raise _SimplifiedFlowValidationError(errors)
+
+    task_input_node = {
+        "id": "task_input_0",
+        "type": "task_input",
+        "position": {"x": 100, "y": 50},
+        "data": {
+            "agent_id": "task_input",
+            "agent_display_name": "Initial Instructions",
+            "agent_description": "Define the task for this flow",
+            "task_instructions": task_instructions,
+            "custom_instructions": "",
+            "output_key": "task_input",
+        },
+    }
+    nodes = [task_input_node]
+    edges = []
+    last_control_node_id = task_input_node["id"]
+
+    for i, step in enumerate(steps):
+        node_id = f"step_{i + 1}"
+        agent_id = step["agent_id"]
+        agent_info = AGENT_REGISTRY.get(agent_id, {})
+        display_name = agent_info.get(
+            "name",
+            agent_id.replace("_", " ").title(),
+        )
+        is_output = _is_output_agent_id(agent_id)
+        nodes.append(
+            {
+                "id": node_id,
+                "type": "output" if is_output else "agent",
+                "position": {
+                    "x": 420 if is_output else 100,
+                    "y": 200 + (i * 150),
+                },
+                "data": {
+                    "agent_id": agent_id,
+                    "agent_display_name": display_name,
+                    "step_goal": step.get("step_goal"),
+                    "custom_instructions": step.get("custom_instructions"),
+                    "output_key": f"step_{i + 1}_output",
+                    **(
+                        {
+                            "output_filename_template": step.get(
+                                "output_filename_template"
+                            )
+                        }
+                        if is_output and step.get("output_filename_template")
+                        else {}
+                    ),
+                },
+            }
+        )
+
+        if is_output:
+            edges.extend(
+                {
+                    "id": f"output_edge_{i + 1}_{source_position}",
+                    "source": f"step_{source_step}",
+                    "target": node_id,
+                    "role": "output_attachment",
+                }
+                for source_position, source_step in enumerate(
+                    output_source_steps[i],
+                    1,
+                )
+            )
+        else:
+            edges.append(
+                {
+                    "id": f"edge_{i + 1}",
+                    "source": last_control_node_id,
+                    "target": node_id,
+                    "role": "control_flow",
+                }
+            )
+            last_control_node_id = node_id
+
+    try:
+        flow_definition = FlowDefinition.model_validate(
+            {
+                "version": "1.1",
+                "task_instructions_default_only": False,
+                "nodes": nodes,
+                "edges": edges,
+                "entry_node_id": "task_input_0",
+            }
+        )
+        return apply_flow_validation_attachment_defaults(flow_definition)
+    except ValidationError as exc:
+        validation_errors = [
+            str(error.get("msg") or "Flow validation failed")
+            for error in exc.errors()
+        ]
+        raise _SimplifiedFlowValidationError(validation_errors) from exc
+    except ValueError as exc:
+        raise _SimplifiedFlowValidationError([str(exc)]) from exc
 
 
 def _build_output_suggestion(
@@ -517,170 +825,31 @@ def _create_flow_handler():
                 "help": "This tool requires authentication. Ensure you're logged in."
             }
 
-        # Validate description (required for task_input instructions)
-        if not description or not description.strip():
-            return {
-                "success": False,
-                "error": "Flow description is required (used as task instructions)",
-                "help": "Provide a description of what this flow should accomplish"
-            }
-
-        # Validate steps
-        if not steps:
-            return {
-                "success": False,
-                "error": "Flow must have at least one step",
-                "help": "Provide at least one step with an agent_id"
-            }
-
-        if len(steps) > 30:
-            return {
-                "success": False,
-                "error": f"Flow has {len(steps)} steps; maximum is 30",
-                "help": "Reduce the number of steps"
-            }
-
-        # Validate agent IDs in steps
-        invalid_agents = []
-        for i, step in enumerate(steps):
-            agent_id = step.get("agent_id")
-            if not agent_id:
-                return {
-                    "success": False,
-                    "error": f"Step {i+1}: missing agent_id",
-                    "help": f"Available agents: {', '.join(FLOW_AGENT_IDS)}"
-                }
-            if agent_id not in FLOW_AGENT_IDS:
-                invalid_agents.append(f"Step {i+1}: '{agent_id}'")
-
-        if invalid_agents:
-            return {
-                "success": False,
-                "error": f"Unknown agent_id(s): {', '.join(invalid_agents)}",
-                "help": f"Valid agent IDs: {', '.join(FLOW_AGENT_IDS)}"
-            }
-
-        output_source_steps: dict[int, tuple[int, ...]] = {}
-        for i, step in enumerate(steps):
-            agent_id = str(step["agent_id"])
-            if not _is_output_agent_id(agent_id):
-                continue
-            source_steps, source_error = _validated_output_source_steps(steps, i)
-            if source_error is not None:
-                return {
-                    "success": False,
-                    "error": source_error,
-                    "help": (
-                        "Bind each output formatter to one or more earlier extraction "
-                        "or typed validation steps"
-                    ),
-                }
-            output_source_steps[i] = source_steps
-
-        # Convert simplified steps to full FlowDefinition format
-        # Start with a task_input node (required by schema validation)
-        task_input_node = {
-            "id": "task_input_0",
-            "type": "task_input",
-            "position": {"x": 100, "y": 50},
-            "data": {
-                "agent_id": "task_input",
-                "agent_display_name": "Initial Instructions",
-                "agent_description": "Define the task for this flow",
-                "task_instructions": description,  # Use flow description as instructions
-                "custom_instructions": "",
-                "output_key": "task_input"
-            }
-        }
-        nodes = [task_input_node]
-
-        # Add agent nodes for each step. Output formatters are terminal leaves
-        # attached to ordered sources; ordinary steps retain the control chain.
-        edges = []
-        last_control_node_id = task_input_node["id"]
-        for i, step in enumerate(steps):
-            node_id = f"step_{i+1}"
-            agent_id = step["agent_id"]
-
-            # Get display name from registry
-            agent_info = AGENT_REGISTRY.get(agent_id, {})
-            display_name = agent_info.get("name", agent_id.replace("_", " ").title())
-
-            is_output = _is_output_agent_id(agent_id)
-            nodes.append({
-                "id": node_id,
-                "type": "output" if is_output else "agent",
-                "position": {
-                    "x": 420 if is_output else 100,
-                    "y": 200 + (i * 150),
-                },
-                "data": {
-                    "agent_id": agent_id,
-                    "agent_display_name": display_name,
-                    "step_goal": step.get("step_goal"),
-                    "custom_instructions": step.get("custom_instructions"),
-                    "output_key": f"step_{i+1}_output",
-                    **(
-                        {
-                            "output_filename_template": step.get(
-                                "output_filename_template"
-                            )
-                        }
-                        if is_output and step.get("output_filename_template")
-                        else {}
-                    ),
-                }
-            })
-
-            if is_output:
-                source_steps = output_source_steps[i]
-                edges.extend(
-                    {
-                        "id": f"output_edge_{i+1}_{source_position}",
-                        "source": f"step_{source_step}",
-                        "target": node_id,
-                        "role": "output_attachment",
-                    }
-                    for source_position, source_step in enumerate(source_steps, 1)
-                )
-            else:
-                edges.append({
-                    "id": f"edge_{i+1}",
-                    "source": last_control_node_id,
-                    "target": node_id,
-                    "role": "control_flow",
-                })
-                last_control_node_id = node_id
-
-        flow_definition = {
-            "version": "1.1",
-            "nodes": nodes,
-            "edges": edges,
-            "entry_node_id": "task_input_0"  # task_input must be entry node
-        }
-
-        # Validate via Pydantic schema (same validation as API endpoint)
-        from src.lib.flows.validation_attachments import (
-            apply_flow_validation_attachment_defaults,
+        metadata_errors = _simplified_flow_metadata_errors(
+            name=name,
+            description=description,
+            require_description=True,
         )
-        from src.schemas.flows import FlowDefinition
-        from pydantic import ValidationError
+        if metadata_errors:
+            return {
+                "success": False,
+                "error": metadata_errors[0],
+                "help": "Provide a valid flow name and description",
+            }
 
         try:
-            validated_flow_def = FlowDefinition(**flow_definition)
-            flow_definition = apply_flow_validation_attachment_defaults(
-                validated_flow_def,
-            ).model_dump()
-        except ValidationError as e:
-            # Extract user-friendly error message
-            errors = e.errors()
-            if errors:
-                error_msg = errors[0].get("msg", "Flow validation failed")
-            else:
-                error_msg = "Flow validation failed"
-            return {"success": False, "error": error_msg}
-        except ValueError as e:
-            return {"success": False, "error": str(e)}
+            validated_flow_def = _build_simplified_flow_definition(
+                steps=steps,
+                task_instructions=description,
+            )
+        except _SimplifiedFlowValidationError as exc:
+            return {
+                "success": False,
+                "error": exc.errors[0],
+                "help": f"Valid agent IDs: {', '.join(FLOW_AGENT_IDS)}",
+            }
+
+        flow_definition = validated_flow_def.model_dump()
 
         # Save to database
         try:
@@ -749,62 +918,33 @@ def _validate_flow_handler():
         Returns:
             Dict with valid (bool), errors, warnings, and suggestions
         """
-        errors = []
-        warnings = []
-        suggestions = []
+        errors = _simplified_flow_metadata_errors(name=name)
+        warnings: List[str] = []
+        suggestions: List[str] = []
         available_agent_ids = set(FLOW_AGENT_IDS)
 
-        # Validate step count
-        if not steps:
-            errors.append("Flow must have at least one step")
-        elif len(steps) > 30:
-            errors.append(f"Flow has {len(steps)} steps; maximum is 30")
+        try:
+            _build_simplified_flow_definition(
+                steps=steps,
+                task_instructions="Agent Studio validation preflight",
+            )
+        except _SimplifiedFlowValidationError as exc:
+            errors.extend(exc.errors)
 
-        # Validate each step
-        seen_agents = set()
-        for i, step in enumerate(steps):
+        validated_steps = steps if isinstance(steps, list) else []
+        seen_agents: set[str] = set()
+        for i, step in enumerate(validated_steps):
+            if not isinstance(step, dict):
+                continue
             agent_id = step.get("agent_id")
-            step_num = i + 1
-
-            # Validate agent_id exists
-            if not agent_id:
-                errors.append(f"Step {step_num}: missing agent_id")
-            elif agent_id not in FLOW_AGENT_IDS:
-                errors.append(f"Step {step_num}: unknown agent_id '{agent_id}'")
-            else:
-                # Track for duplicate detection
-                if agent_id in seen_agents:
-                    warnings.append(
-                        f"Step {step_num}: agent '{agent_id}' used multiple times "
-                        "(allowed but unusual)"
-                    )
-                seen_agents.add(agent_id)
-
-                if _is_output_agent_id(agent_id):
-                    _, source_error = _validated_output_source_steps(steps, i)
-                    if source_error is not None:
-                        errors.append(source_error)
-
-            # Validate custom_instructions length
-            custom_instructions = step.get("custom_instructions")
-            if custom_instructions and len(custom_instructions) > 2000:
-                errors.append(
-                    f"Step {step_num}: custom_instructions exceeds 2000 characters"
+            if not isinstance(agent_id, str) or agent_id not in FLOW_AGENT_IDS:
+                continue
+            if agent_id in seen_agents:
+                warnings.append(
+                    f"Step {i + 1}: agent '{agent_id}' used multiple times "
+                    "(allowed but unusual)"
                 )
-
-            # Validate step_goal length
-            step_goal = step.get("step_goal")
-            if step_goal and len(step_goal) > 500:
-                errors.append(
-                    f"Step {step_num}: step_goal exceeds 500 characters"
-                )
-
-        # Validate name if provided
-        if name is not None:
-            if not name.strip():
-                errors.append("Flow name cannot be empty")
-            elif len(name) > 255:
-                errors.append("Flow name exceeds 255 characters")
+            seen_agents.add(agent_id)
 
         # Generate suggestions based on agent patterns
         pdf_agent_id = _resolve_available_agent_id("pdf_extraction", available_agent_ids)
@@ -839,7 +979,7 @@ def _validate_flow_handler():
             "errors": errors,
             "warnings": warnings,
             "suggestions": suggestions,
-            "step_count": len(steps),
+            "step_count": len(validated_steps),
             "unique_agents": list(seen_agents)
         }
 
@@ -1480,6 +1620,7 @@ def register_flow_tools() -> None:
     Called on module import to make flow tools available to Opus.
     """
     registry = get_diagnostic_tools_registry()
+    simplified_steps_schema = _simplified_flow_steps_schema()
 
     logger.info("Registering flow tools...")
 
@@ -1511,58 +1652,16 @@ to check for issues without saving.""",
                 "name": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 255,
+                    "maxLength": get_agent_studio_flow_name_max_chars(),
                     "description": "Flow name (must be unique per user)"
                 },
                 "description": {
                     "type": "string",
-                    "maxLength": 2000,
+                    "minLength": 1,
+                    "maxLength": get_agent_studio_flow_description_max_chars(),
                     "description": "What this flow does - describe the overall goal"
                 },
-                "steps": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 30,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "agent_id": {
-                                "type": "string",
-                                "enum": FLOW_AGENT_IDS,
-                                "description": "Agent to use for this step"
-                            },
-                            "step_goal": {
-                                "type": "string",
-                                "maxLength": 255,
-                                "description": "Goal description for this step (optional)"
-                            },
-                            "custom_instructions": {
-                                "type": "string",
-                                "maxLength": 2000,
-                                "description": "Custom instructions appended to agent prompt (optional)"
-                            },
-                            "source_steps": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": 29,
-                                "uniqueItems": True,
-                                "items": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 29
-                                },
-                                "description": "Required only for Output agents: ordered 1-based earlier Extraction or typed Validation steps whose results this formatter receives"
-                            },
-                            "output_filename_template": {
-                                "type": "string",
-                                "maxLength": 255,
-                                "description": "Optional for file Output agents: runtime-resolved filename template using built-ins such as {{input_filename_stem}} and {{timestamp}}"
-                            }
-                        },
-                        "required": ["agent_id"]
-                    },
-                    "description": "Ordered list of flow steps"
-                }
+                "steps": simplified_steps_schema,
             },
             "required": ["name", "description", "steps"]
         },
@@ -1591,33 +1690,11 @@ ALWAYS use this before create_flow to catch issues early.""",
             "properties": {
                 "name": {
                     "type": "string",
+                    "minLength": 1,
+                    "maxLength": get_agent_studio_flow_name_max_chars(),
                     "description": "Flow name to validate (optional)"
                 },
-                "steps": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "agent_id": {"type": "string"},
-                            "step_goal": {"type": "string"},
-                            "custom_instructions": {"type": "string"},
-                            "source_steps": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": 29,
-                                "uniqueItems": True,
-                                "items": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 29
-                                },
-                                "description": "Required only for Output agents: ordered 1-based earlier Extraction or typed Validation steps whose results this formatter receives"
-                            }
-                        },
-                        "required": ["agent_id"]
-                    },
-                    "description": "Steps to validate"
-                }
+                "steps": simplified_steps_schema,
             },
             "required": ["steps"]
         },
