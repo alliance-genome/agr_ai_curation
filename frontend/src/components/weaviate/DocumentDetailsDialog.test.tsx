@@ -157,8 +157,8 @@ describe('DocumentDetailsDialog', () => {
       />,
     );
 
-    expect(screen.getByText('Mock Literature')).toBeInTheDocument();
-    expect(screen.getByText('Provider import')).toBeInTheDocument();
+    expect(screen.getByText('mock_literature')).toBeInTheDocument();
+    expect(screen.getByText('Provider presentation metadata missing')).toBeInTheDocument();
   });
 
   it('does not show stale summary provenance after loaded detail returns null provenance', () => {

@@ -356,15 +356,14 @@ const normalizeDocumentSourceProviderMetadata = (
     return null;
   }
 
-  const rawReferenceLabelPriority =
-    record.reference_label_priority ?? record.referenceLabelPriority;
+  const rawReferenceLabelPriority = record.reference_label_priority;
   const referenceLabelPriority = Array.isArray(rawReferenceLabelPriority)
     ? rawReferenceLabelPriority.filter(
         (entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())
       )
     : null;
   const metadata: DocumentSourceProviderMetadata = {
-    displayLabel: toStringOrNull(record.display_label ?? record.displayLabel),
+    displayLabel: toStringOrNull(record.display_label),
     referenceLabelPriority:
       referenceLabelPriority && referenceLabelPriority.length > 0
         ? referenceLabelPriority
@@ -393,9 +392,9 @@ export const normalizeDocumentSourceProvenance = (
   const normalized: DocumentSourceProvenance = {
     provider: toStringOrNull(source.provider) ?? fallback?.provider ?? null,
     providerMetadata:
-      normalizeDocumentSourceProviderMetadata(
-        source.provider_metadata ?? source.providerMetadata
-      ) ?? fallback?.providerMetadata ?? null,
+      normalizeDocumentSourceProviderMetadata(source.provider_metadata) ??
+      fallback?.providerMetadata ??
+      null,
     referenceId: toStringOrNull(source.reference_id ?? source.referenceId) ?? fallback?.referenceId ?? null,
     referenceCurie: toStringOrNull(source.reference_curie ?? source.referenceCurie) ?? fallback?.referenceCurie ?? null,
     sourceFileId: toStringOrNull(source.source_file_id ?? source.sourceFileId) ?? fallback?.sourceFileId ?? null,

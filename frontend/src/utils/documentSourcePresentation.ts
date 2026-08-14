@@ -1,17 +1,12 @@
 import type { DocumentSourceProvenance } from '../services/weaviate';
 
-const titleCaseProviderId = (provider: string): string =>
-  provider
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-
 export const documentSourceProviderLabel = (
   source?: DocumentSourceProvenance | null
 ): string => {
   if (!source?.provider) {
     return 'Local PDF';
   }
-  return source.providerMetadata?.displayLabel || titleCaseProviderId(source.provider);
+  return source.providerMetadata?.displayLabel || source.provider;
 };
 
 const externalIdentifierLabel = (
@@ -59,18 +54,17 @@ export const documentSourceReferenceLabel = (
     return 'Uploaded PDF';
   }
 
-  for (const selector of source.providerMetadata?.referenceLabelPriority ?? []) {
+  const priority = source.providerMetadata?.referenceLabelPriority;
+  if (!priority?.length) {
+    return 'Provider presentation metadata missing';
+  }
+
+  for (const selector of priority) {
     const label = configuredReferenceLabel(source, selector);
     if (label) {
       return label;
     }
   }
 
-  return (
-    source.referenceCurie ||
-    source.referenceId ||
-    externalIdentifierLabel(source.externalIds) ||
-    source.sourceMd5 ||
-    'Provider import'
-  );
+  return 'Provider reference unavailable';
 };
