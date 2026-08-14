@@ -79,6 +79,7 @@ vi.mock('@mui/x-data-grid', async () => {
     sortingMode = 'client',
     paginationMode = 'client',
     filterMode = 'client',
+    rowCount,
     sortingOrder = ['asc', 'desc', null],
     sx,
   }: {
@@ -92,6 +93,7 @@ vi.mock('@mui/x-data-grid', async () => {
     sortingMode?: 'client' | 'server';
     paginationMode?: 'client' | 'server';
     filterMode?: 'client' | 'server';
+    rowCount?: number;
     sortingOrder?: Array<'asc' | 'desc' | null>;
     sx?: Record<string, unknown>;
   }) => {
@@ -144,6 +146,7 @@ vi.mock('@mui/x-data-grid', async () => {
         data-sorting-mode={sortingMode}
         data-pagination-mode={paginationMode}
         data-filter-mode={filterMode}
+        data-row-count={String(rowCount ?? rows.length)}
         style={{
           height: typeof sx?.height === 'string' ? sx.height : undefined,
           minHeight: typeof sx?.minHeight === 'number' ? `${sx.minHeight}px` : undefined,
@@ -479,6 +482,7 @@ describe('DocumentList', () => {
     expect(grid).toHaveAttribute('data-pagination-mode', 'server');
     expect(grid).toHaveAttribute('data-filter-mode', 'server');
     expect(grid).toHaveAttribute('data-sorting-mode', 'client');
+    expect(grid).toHaveAttribute('data-row-count', '100');
   });
 
   it('sorts rows by text, number, and date columns and toggles direction', () => {
