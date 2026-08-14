@@ -142,12 +142,11 @@ class TestCustomAgentTestEndpoint:
         assert run_kwargs["active_groups"] == ["WB"]
         assert run_kwargs["context_messages"] == [{"role": "user", "content": "test query"}]
 
-    def test_test_request_accepts_legacy_mod_id_alias(self):
+    def test_test_request_rejects_legacy_mod_id_alias(self):
         import src.api.agent_studio_custom as api_module
 
-        request = api_module.TestCustomAgentRequest(input="test query", mod_id="WB")
-
-        assert request.group_id == "WB"
+        with pytest.raises(ValidationError):
+            api_module.TestCustomAgentRequest(input="test query", mod_id="WB")
 
 
 def _custom_agent_payload(template_source: str = "gene") -> dict:
@@ -234,29 +233,25 @@ class TestCustomAgentCrudContract:
                 parent_agent_id="gene",  # legacy field should be rejected
             )
 
-    def test_create_request_accepts_legacy_mod_alias_fields(self):
+    def test_create_request_rejects_legacy_mod_alias_fields(self):
         import src.api.agent_studio_custom as api_module
 
-        request = api_module.CreateCustomAgentRequest(
-            template_source="gene",
-            name="My Agent",
-            mod_prompt_overrides={"WB": "Rules"},
-            include_mod_rules=False,
-        )
+        with pytest.raises(ValidationError):
+            api_module.CreateCustomAgentRequest(
+                template_source="gene",
+                name="My Agent",
+                mod_prompt_overrides={"WB": "Rules"},
+                include_mod_rules=False,
+            )
 
-        assert request.group_prompt_overrides == {"WB": "Rules"}
-        assert request.include_group_rules is False
-
-    def test_update_request_accepts_legacy_mod_alias_fields(self):
+    def test_update_request_rejects_legacy_mod_alias_fields(self):
         import src.api.agent_studio_custom as api_module
 
-        request = api_module.UpdateCustomAgentRequest(
-            mod_prompt_overrides={"WB": "Rules"},
-            include_mod_rules=True,
-        )
-
-        assert request.group_prompt_overrides == {"WB": "Rules"}
-        assert request.include_group_rules is True
+        with pytest.raises(ValidationError):
+            api_module.UpdateCustomAgentRequest(
+                mod_prompt_overrides={"WB": "Rules"},
+                include_mod_rules=True,
+            )
 
     def test_create_endpoint_returns_400_for_unknown_model(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module

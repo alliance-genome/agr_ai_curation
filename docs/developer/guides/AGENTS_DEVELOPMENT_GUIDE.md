@@ -158,7 +158,7 @@ The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
 | `output_schema_key` | String(100) | Pydantic class name resolved from the agent bundle schema module |
 | `group_rules_enabled` | Boolean | Whether to inject group-specific rules |
 | `group_rules_component` | String(100) | Prompt cache key for group rule lookup |
-| `mod_prompt_overrides` | JSONB | Per-group prompt overrides (custom agents) |
+| `group_prompt_overrides` | JSONB | Per-group prompt overrides (custom agents) |
 | `visibility` | String(20) | `system`, `private`, or `project` |
 | `user_id` | Integer | Owner (NULL for system agents) |
 | `project_id` | UUID | Project scope (for `project` visibility) |

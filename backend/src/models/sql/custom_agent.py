@@ -17,7 +17,6 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import synonym
 
 from .agent import Agent
 from .database import Base
@@ -47,7 +46,6 @@ class CustomAgentVersion(Base):
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
-    mod_prompt_overrides = synonym("group_prompt_overrides")
     notes = Column(Text, nullable=True)
     created_at = Column(
         DateTime(timezone=True),

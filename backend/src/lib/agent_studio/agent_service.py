@@ -120,13 +120,7 @@ def agent_to_execution_spec(agent: Agent) -> AgentExecutionSpec:
         output_schema_key=agent.output_schema_key,
         group_rules_enabled=bool(agent.group_rules_enabled),
         group_rules_component=agent.group_rules_component,
-        group_prompt_overrides=dict(agent.mod_prompt_overrides or {}),
+        group_prompt_overrides=dict(agent.group_prompt_overrides or {}),
         supervisor_enabled=bool(agent.supervisor_enabled),
         show_in_palette=bool(agent.show_in_palette),
     )
-
-
-AgentExecutionSpec.mod_prompt_overrides = property(
-    lambda self: self.group_prompt_overrides,
-    lambda self, value: setattr(self, "group_prompt_overrides", value),
-)

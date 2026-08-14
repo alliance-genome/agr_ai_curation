@@ -238,16 +238,13 @@ class FlowContextDefinition(BaseModel):
 class AgentWorkshopContext(BaseModel):
     """Agent Workshop context passed to Opus chat."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     template_source: Optional[str] = None
     template_name: Optional[str] = None
     custom_agent_id: Optional[str] = None
     custom_agent_name: Optional[str] = None
-    include_group_rules: Optional[bool] = Field(
-        None,
-        validation_alias=AliasChoices("include_group_rules", "include_mod_rules"),
-    )
+    include_group_rules: Optional[bool] = None
     selected_group_id: Optional[str] = Field(
         None,
         validation_alias=AliasChoices("selected_group_id", "selected_mod_id"),
@@ -259,14 +256,8 @@ class AgentWorkshopContext(BaseModel):
     )
     draft_is_dirty: Optional[bool] = None
     custom_agent_updated_at: Optional[str] = None
-    group_prompt_override_count: Optional[int] = Field(
-        None,
-        validation_alias=AliasChoices("group_prompt_override_count", "mod_prompt_override_count"),
-    )
-    has_group_prompt_overrides: Optional[bool] = Field(
-        None,
-        validation_alias=AliasChoices("has_group_prompt_overrides", "has_mod_prompt_overrides"),
-    )
+    group_prompt_override_count: Optional[int] = None
+    has_group_prompt_overrides: Optional[bool] = None
     template_prompt_stale: Optional[bool] = None
     template_exists: Optional[bool] = None
     draft_tool_ids: Optional[List[str]] = None
@@ -457,14 +448,6 @@ def _group_rule_info_set_mod_id(self, value: str) -> None:
     self.group_id = value
 
 
-def _agent_workshop_get_include_mod_rules(self) -> Optional[bool]:
-    return self.include_group_rules
-
-
-def _agent_workshop_set_include_mod_rules(self, value: Optional[bool]) -> None:
-    self.include_group_rules = value
-
-
 def _agent_workshop_get_selected_mod_id(self) -> Optional[str]:
     return self.selected_group_id
 
@@ -479,22 +462,6 @@ def _agent_workshop_get_selected_mod_prompt_draft(self) -> Optional[str]:
 
 def _agent_workshop_set_selected_mod_prompt_draft(self, value: Optional[str]) -> None:
     self.selected_group_prompt_draft = value
-
-
-def _agent_workshop_get_mod_prompt_override_count(self) -> Optional[int]:
-    return self.group_prompt_override_count
-
-
-def _agent_workshop_set_mod_prompt_override_count(self, value: Optional[int]) -> None:
-    self.group_prompt_override_count = value
-
-
-def _agent_workshop_get_has_mod_prompt_overrides(self) -> Optional[bool]:
-    return self.has_group_prompt_overrides
-
-
-def _agent_workshop_set_has_mod_prompt_overrides(self, value: Optional[bool]) -> None:
-    self.has_group_prompt_overrides = value
 
 
 def _chat_context_get_selected_mod_id(self) -> Optional[str]:
@@ -517,11 +484,8 @@ GroupRuleInfo.mod_id = property(_group_rule_info_get_mod_id, _group_rule_info_se
 PromptInfo.has_mod_rules = property(_prompt_info_has_mod_rules, _prompt_info_set_mod_rules)
 PromptInfo.mod_rules = property(_prompt_info_get_mod_rules, _prompt_info_set_mod_rule_map)
 PromptCatalog.available_mods = property(lambda self: self.available_groups, lambda self, value: setattr(self, "available_groups", value))
-AgentWorkshopContext.include_mod_rules = property(_agent_workshop_get_include_mod_rules, _agent_workshop_set_include_mod_rules)
 AgentWorkshopContext.selected_mod_id = property(_agent_workshop_get_selected_mod_id, _agent_workshop_set_selected_mod_id)
 AgentWorkshopContext.selected_mod_prompt_draft = property(_agent_workshop_get_selected_mod_prompt_draft, _agent_workshop_set_selected_mod_prompt_draft)
-AgentWorkshopContext.mod_prompt_override_count = property(_agent_workshop_get_mod_prompt_override_count, _agent_workshop_set_mod_prompt_override_count)
-AgentWorkshopContext.has_mod_prompt_overrides = property(_agent_workshop_get_has_mod_prompt_overrides, _agent_workshop_set_has_mod_prompt_overrides)
 ChatContext.selected_mod_id = property(_chat_context_get_selected_mod_id, _chat_context_set_selected_mod_id)
 PromptExecution.mod_applied = property(_prompt_execution_get_mod_applied, _prompt_execution_set_mod_applied)
 MODRuleInfo = GroupRuleInfo

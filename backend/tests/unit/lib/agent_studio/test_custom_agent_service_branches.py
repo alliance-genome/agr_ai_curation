@@ -317,7 +317,7 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
     snapshot = db.added[0]
     assert snapshot.version == 10
     assert snapshot.custom_prompt == "current prompt"
-    assert snapshot.mod_prompt_overrides == {"WB": "keep"}
+    assert snapshot.group_prompt_overrides == {"WB": "keep"}
     assert snapshot.notes == "Snapshot before revert to v3"
 
 
@@ -355,7 +355,7 @@ def test_revert_custom_agent_to_version_strips_exact_locked_parent_layers(monkey
     assert updated.custom_prompt == "Keep historical curator guidance."
     assert updated.group_prompt_overrides == {"MGI": "historical rules"}
     assert db.added[0].custom_prompt == "current prompt"
-    assert db.added[0].mod_prompt_overrides == {"WB": "current rules"}
+    assert db.added[0].group_prompt_overrides == {"WB": "current rules"}
 
 
 def test_revert_custom_agent_to_version_rejects_ambiguous_locked_prompt(monkeypatch):
@@ -400,7 +400,7 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
         name="Runtime Agent",
         custom_prompt="prompt",
         group_prompt_overrides={" wb ": "rules"},
-        include_group_rules=True,
+        group_rules_enabled=True,
         tool_ids=["search_document"],
         template_source="gene",
         user_id=7,
@@ -436,22 +436,13 @@ def test_get_custom_agent_group_prompt_additional_paths(monkeypatch):
     assert service.get_custom_agent_group_prompt("gene", "", {"WB": "rules"}) is None
 
     def _get_prompt_optional(_agent_name, prompt_type, group_id=None, **_kwargs):
-        _ = group_id
-        if prompt_type == "group_rules":
-            return None
-        return SimpleNamespace(content="fallback mod rules")
+        _ = (prompt_type, group_id)
+        return SimpleNamespace(content="group rules")
 
     fake_cache_module = SimpleNamespace(get_prompt_optional=_get_prompt_optional)
     monkeypatch.setitem(__import__("sys").modules, "src.lib.prompts.cache", fake_cache_module)
 
-    assert (
-        service.get_custom_agent_mod_prompt(
-            parent_agent_key="gene",
-            mod_id="WB",
-            mod_prompt_overrides=None,
-        )
-        == "fallback mod rules"
-    )
+    assert service.get_custom_agent_group_prompt("gene", "WB", None) == "group rules"
 
     fake_cache_none = SimpleNamespace(get_prompt_optional=lambda *_args, **_kwargs: None)
     monkeypatch.setitem(__import__("sys").modules, "src.lib.prompts.cache", fake_cache_none)

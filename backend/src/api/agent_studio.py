@@ -280,11 +280,7 @@ def _merge_custom_agents_into_catalog(
         }
         tools = list(getattr(custom, "tool_ids", None) or [])
         template_group_rules = template_prompt_info.group_rules if template_prompt_info else {}
-        raw_overrides = (
-            getattr(custom, "group_prompt_overrides", None)
-            or getattr(custom, "mod_prompt_overrides", None)
-            or {}
-        )
+        raw_overrides = getattr(custom, "group_prompt_overrides", None) or {}
         normalized_overrides = {
             str(group_id).strip().upper(): content
             for group_id, content in raw_overrides.items()
@@ -809,18 +805,10 @@ def _build_custom_agent_effective_prompt_bundle(
             not_found_error_types=(CustomAgentNotFoundError,),
         )
 
-    custom_group_rules_enabled = bool(
-        getattr(
-            custom_agent,
-            "group_rules_enabled",
-            getattr(custom_agent, "include_mod_rules", False),
-        )
-    )
+    custom_group_rules_enabled = bool(custom_agent.group_rules_enabled)
     try:
         custom_group_overrides = normalize_editable_group_prompt_overrides(
-            getattr(custom_agent, "group_prompt_overrides", None)
-            or getattr(custom_agent, "mod_prompt_overrides", None)
-            or {}
+            custom_agent.group_prompt_overrides or {}
         )
     except ValueError as exc:
         logger.warning(
