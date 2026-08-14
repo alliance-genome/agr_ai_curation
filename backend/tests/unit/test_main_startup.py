@@ -525,7 +525,12 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
                      user_id=None,
                      project_id=None,
                      template_source=agent_key,
-                     model_id="gpt-5.4-mini",
+                     model_id={
+                         "chat_output": "gpt-5.6-sol",
+                         "curation_handoff": "gpt-5.6-terra",
+                         "curation_prep": "gpt-5.6-terra",
+                         "supervisor": "gpt-5.6-sol",
+                     }[agent_key],
                      model_reasoning=None,
                      tool_ids=[],
                      output_schema_key=None,

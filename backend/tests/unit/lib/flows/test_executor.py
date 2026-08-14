@@ -5082,7 +5082,7 @@ class TestCreateFlowSupervisorNoTools:
                 },
             ),
         )
-        mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
+        mock_config.return_value = MagicMock(model="gpt-5.6-sol", temperature=0.0, reasoning=None)
 
         flow = _make_flow([
             _task_input_node(),
@@ -5094,7 +5094,7 @@ class TestCreateFlowSupervisorNoTools:
             create_flow_supervisor(flow, document_id=None)  # No doc — both steps skipped
 
     @patch("src.lib.flows.executor.build_model_settings")
-    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.5")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.6-sol")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -5109,7 +5109,7 @@ class TestCreateFlowSupervisorNoTools:
     ):
         """Should NOT raise when at least one tool is created."""
         monkeypatch.delenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
-        mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
+        mock_config.return_value = MagicMock(model="gpt-5.6-sol", temperature=0.0, reasoning=None)
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
         mock_settings.return_value = ModelSettings()
@@ -5125,7 +5125,7 @@ class TestCreateFlowSupervisorNoTools:
         assert mock_settings.call_args.kwargs["parallel_tool_calls"] is False
 
     @patch("src.lib.flows.executor.build_model_settings")
-    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.5")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.6-sol")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -5140,7 +5140,7 @@ class TestCreateFlowSupervisorNoTools:
     ):
         """Flow-specific override should be forwarded without affecting chat supervisors."""
         monkeypatch.setenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", "true")
-        mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
+        mock_config.return_value = MagicMock(model="gpt-5.6-sol", temperature=0.0, reasoning=None)
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
         mock_settings.return_value = ModelSettings()
