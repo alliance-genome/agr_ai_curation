@@ -90,8 +90,7 @@ def resolve_prompt_explorer_model(
 
     Resolution order is controlled by the caller:
     1. PROMPT_EXPLORER_MODEL_ID env override
-    2. Legacy ANTHROPIC_OPUS_MODEL env override
-    3. Anthropic model from config/models.yaml (default first)
+    2. Anthropic model from config/models.yaml (default first)
     """
 
     catalog_name_by_id = {
@@ -113,7 +112,7 @@ def resolve_prompt_explorer_model(
 
     raise ValueError(
         "No Agent Studio Anthropic model configured. Set PROMPT_EXPLORER_MODEL_ID "
-        "(or legacy ANTHROPIC_OPUS_MODEL), or add an anthropic model to config/models.yaml."
+        "or add an anthropic model to config/models.yaml."
     )
 
 

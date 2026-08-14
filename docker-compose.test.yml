@@ -106,6 +106,7 @@ services:
       - ./frontend:/app/frontend:ro
       - ./config:/workspace/config:ro
       - ./packages:/workspace/packages:ro
+      - ./.env.example:/workspace/.env.example:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
       - ./docker-compose.test.yml:/workspace/docker-compose.test.yml:ro
@@ -167,6 +168,7 @@ services:
       - ./frontend:/app/frontend:ro
       - ./config:/workspace/config:ro
       - ./packages:/workspace/packages:ro
+      - ./.env.example:/workspace/.env.example:ro
       - ./docker-compose.yml:/workspace/docker-compose.yml:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
       - ./docker-compose.test.yml:/workspace/docker-compose.test.yml:ro
