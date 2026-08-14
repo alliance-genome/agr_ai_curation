@@ -785,6 +785,19 @@ def test_all_ten_alliance_recipes_appear_when_required_agents_are_flow_eligible(
     ]
 
 
+def test_advertised_alliance_recipes_pass_the_public_validation_contract():
+    templates = flow_tools._get_flow_templates_handler()()["templates"]
+    validate = flow_tools._validate_flow_handler()
+
+    assert templates
+    for template in templates:
+        result = validate(steps=template["steps"], name=template["name"])
+        assert result["valid"] is True, {
+            "recipe": template["name"],
+            "errors": result["errors"],
+        }
+
+
 def test_flow_templates_do_not_advertise_rejected_output_bindings(monkeypatch):
     installed_agent_ids = {
         "pdf_extraction",
