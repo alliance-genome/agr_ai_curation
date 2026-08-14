@@ -103,23 +103,14 @@ def test_get_prompt_optional_returns_group_override_for_group_rules(_mock_cache_
     assert result.source_file == f"custom_agent:{custom_agent_id}"
 
 
-def test_get_prompt_optional_uses_legacy_mod_override_alias_for_group_rules(_mock_cache_ready):
-    custom_agent_id = str(uuid.uuid4())
-    set_prompt_override(
+def test_prompt_override_rejects_legacy_mod_overrides_alias():
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
         PromptOverride(
             content="custom base prompt",
             agent_name="gene",
-            custom_agent_id=custom_agent_id,
+            custom_agent_id=str(uuid.uuid4()),
             mod_overrides={"WB": "legacy wb group prompt"},
         )
-    )
-
-    result = prompt_cache.get_prompt_optional("gene", prompt_type="group_rules", group_id="WB")
-    assert result is not None
-    assert result.content == "legacy wb group prompt"
-    assert result.group_id == "WB"
-    assert result.prompt_type == "group_rules"
-    assert result.source_file == f"custom_agent:{custom_agent_id}"
 
 
 def test_get_prompt_optional_accepts_group_id_alias(_mock_cache_ready, monkeypatch):
@@ -139,22 +130,20 @@ def test_get_prompt_optional_accepts_group_id_alias(_mock_cache_ready, monkeypat
     assert result.content == "cached wb group prompt"
 
 
-def test_get_prompt_optional_supports_legacy_mod_rules_prompt_type(_mock_cache_ready, monkeypatch):
-    prompt = PromptTemplate(
-        id=uuid.uuid4(),
-        agent_name="gene",
-        prompt_type="mod_rules",
-        group_id="WB",
-        content="legacy wb mod rules",
-        version=2,
-        is_active=True,
+def test_get_prompt_optional_does_not_apply_override_to_legacy_mod_rules_prompt_type(
+    _mock_cache_ready,
+):
+    set_prompt_override(
+        PromptOverride(
+            content="custom base prompt",
+            agent_name="gene",
+            custom_agent_id=str(uuid.uuid4()),
+            group_overrides={"WB": "custom wb group prompt"},
+        )
     )
-    monkeypatch.setattr(prompt_cache, "_active_cache", {"gene:mod_rules:WB": prompt})
 
     result = prompt_cache.get_prompt_optional("gene", prompt_type="mod_rules", group_id="WB")
-    assert result is not None
-    assert result.content == "legacy wb mod rules"
-    assert result.group_id == "WB"
+    assert result is None
 
 
 def test_clear_prompt_context_clears_override():

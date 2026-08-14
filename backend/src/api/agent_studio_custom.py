@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -123,16 +123,12 @@ class CreateCustomAgentRequest(BaseModel):
     template_source: Optional[str] = Field(None, min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=100)
     custom_prompt: Optional[str] = None
-    group_prompt_overrides: Dict[str, str] = Field(
-        default_factory=dict,
-        validation_alias=AliasChoices("group_prompt_overrides", "mod_prompt_overrides"),
-    )
+    # Removed legacy MOD aliases — group-based prompt override fields are now
+    # the sole Agent Studio contract after ALL-714.
+    group_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     description: Optional[str] = None
     icon: Optional[str] = Field(None, max_length=10)
-    include_group_rules: bool = Field(
-        True,
-        validation_alias=AliasChoices("include_group_rules", "include_mod_rules"),
-    )
+    include_group_rules: bool = True
     model_id: Optional[str] = Field(None, min_length=1, max_length=100)
     model_temperature: Optional[float] = None
     model_reasoning: Optional[str] = Field(None, max_length=20)
@@ -148,16 +144,10 @@ class UpdateCustomAgentRequest(BaseModel):
 
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     custom_prompt: Optional[str] = None
-    group_prompt_overrides: Optional[Dict[str, str]] = Field(
-        None,
-        validation_alias=AliasChoices("group_prompt_overrides", "mod_prompt_overrides"),
-    )
+    group_prompt_overrides: Optional[Dict[str, str]] = None
     description: Optional[str] = None
     icon: Optional[str] = Field(None, max_length=10)
-    include_group_rules: Optional[bool] = Field(
-        None,
-        validation_alias=AliasChoices("include_group_rules", "include_mod_rules"),
-    )
+    include_group_rules: Optional[bool] = None
     model_id: Optional[str] = Field(None, min_length=1, max_length=100)
     model_temperature: Optional[float] = None
     model_reasoning: Optional[str] = Field(None, max_length=20)
@@ -170,12 +160,10 @@ class UpdateCustomAgentRequest(BaseModel):
 class TestCustomAgentRequest(BaseModel):
     """Request for running a quick custom-agent test."""
 
+    model_config = ConfigDict(extra="forbid")
+
     input: str = Field(..., min_length=1)
-    group_id: Optional[str] = Field(
-        None,
-        max_length=20,
-        validation_alias=AliasChoices("group_id", "mod_id"),
-    )
+    group_id: Optional[str] = Field(None, max_length=20)
     document_id: Optional[str] = None
     session_id: Optional[str] = None
 
@@ -193,15 +181,9 @@ class CustomAgentResponse(BaseModel):
     custom_prompt_overlay_status: Literal["clean", "deduplicated", "needs_review"] = "clean"
     custom_prompt_removed_layer_kinds: List[str] = Field(default_factory=list)
     custom_prompt_warning: Optional[str] = None
-    group_prompt_overrides: Dict[str, str] = Field(
-        default_factory=dict,
-        validation_alias=AliasChoices("group_prompt_overrides", "mod_prompt_overrides"),
-    )
+    group_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     icon: str
-    include_group_rules: bool = Field(
-        ...,
-        validation_alias=AliasChoices("include_group_rules", "include_mod_rules"),
-    )
+    include_group_rules: bool
     model_id: str
     model_temperature: float
     model_reasoning: Optional[str] = None
@@ -228,16 +210,11 @@ class ListCustomAgentsResponse(BaseModel):
 class CustomAgentVersionResponse(BaseModel):
     """Version entry response."""
 
-    model_config = ConfigDict(populate_by_name=True)
-
     id: str
     custom_agent_id: str
     version: int
     custom_prompt: str
-    group_prompt_overrides: Dict[str, str] = Field(
-        default_factory=dict,
-        validation_alias=AliasChoices("group_prompt_overrides", "mod_prompt_overrides"),
-    )
+    group_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     notes: Optional[str] = None
     created_at: datetime
 

@@ -69,8 +69,8 @@ def test_get_prompt_key_for_agent_rejects_unknown_key():
         catalog_service.get_prompt_key_for_agent("unknown_agent_key")
 
 
-def test_build_catalog_accepts_group_rules_and_legacy_mod_rules(monkeypatch):
-    """Catalog build should read both group_rules and legacy mod_rules prompt types."""
+def test_build_catalog_uses_only_group_rules_prompt_type(monkeypatch):
+    """Catalog build ignores retired mod_rules prompt keys."""
     base_prompt = PromptTemplate(
         id=uuid.uuid4(),
         agent_name="gene",
@@ -121,15 +121,14 @@ def test_build_catalog_accepts_group_rules_and_legacy_mod_rules(monkeypatch):
 
     catalog = catalog_service._build_catalog()
     assert catalog.total_agents == 1
-    assert sorted(catalog.available_groups) == ["FB", "WB"]
+    assert catalog.available_groups == ["WB"]
     assert len(catalog.categories) == 1
     assert len(catalog.categories[0].agents) == 1
 
     agent = catalog.categories[0].agents[0]
     assert agent.has_group_rules is True
-    assert sorted(agent.group_rules.keys()) == ["FB", "WB"]
+    assert list(agent.group_rules) == ["WB"]
     assert agent.group_rules["WB"].content == "wb rules"
-    assert agent.group_rules["FB"].content == "fb rules"
 
 
 def test_build_catalog_hides_attachment_only_validators_from_flow_palette(monkeypatch):

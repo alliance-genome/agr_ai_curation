@@ -3,6 +3,7 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 
 class TestGetRegistryMetadata:
@@ -1023,19 +1024,18 @@ class TestGetRegistryMetadata:
         assert "has_mod_rules" not in dumped
         assert "mod_rules" not in dumped
 
-    def test_agent_workshop_legacy_aliases_dump_canonical_fields(self):
+    def test_agent_workshop_group_fields_dump_canonical_fields(self):
         from src.lib.agent_studio.models import AgentWorkshopContext
 
         workshop = AgentWorkshopContext(
-            include_mod_rules=True,
+            include_group_rules=True,
             selected_mod_id="WB",
             selected_mod_prompt_draft="WB group draft",
-            mod_prompt_override_count=2,
-            has_mod_prompt_overrides=True,
+            group_prompt_override_count=2,
+            has_group_prompt_overrides=True,
         )
 
         assert workshop.include_group_rules is True
-        assert workshop.include_mod_rules is True
         assert workshop.selected_group_id == "WB"
         assert workshop.selected_mod_id == "WB"
 
@@ -1050,3 +1050,13 @@ class TestGetRegistryMetadata:
         assert "selected_mod_prompt_draft" not in dumped
         assert "mod_prompt_override_count" not in dumped
         assert "has_mod_prompt_overrides" not in dumped
+
+    def test_agent_workshop_rejects_removed_prompt_override_aliases(self):
+        from src.lib.agent_studio.models import AgentWorkshopContext
+
+        with pytest.raises(ValidationError):
+            AgentWorkshopContext(
+                include_mod_rules=True,
+                mod_prompt_override_count=2,
+                has_mod_prompt_overrides=True,
+            )

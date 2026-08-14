@@ -279,22 +279,15 @@ def _normalize_editable_custom_prompt(
 
 
 def _read_group_prompt_overrides(agent_obj: Any) -> Dict[str, str]:
-    """Read group overrides from either the new or legacy attribute name."""
-    raw_overrides = getattr(agent_obj, "group_prompt_overrides", None)
-    if raw_overrides is None:
-        raw_overrides = getattr(agent_obj, "mod_prompt_overrides", None)
-    return normalize_group_prompt_overrides(raw_overrides)
+    """Read canonical group overrides from an agent-like object."""
+    return normalize_group_prompt_overrides(
+        getattr(agent_obj, "group_prompt_overrides", None)
+    )
 
 
 def _write_group_prompt_overrides(agent_obj: Any, overrides: Dict[str, str]) -> None:
-    """Write group overrides back to SQL models and simple test doubles."""
-    if hasattr(type(agent_obj), "group_prompt_overrides"):
-        agent_obj.group_prompt_overrides = dict(overrides)
-        return
-    if hasattr(agent_obj, "group_prompt_overrides"):
-        agent_obj.group_prompt_overrides = dict(overrides)
-    if hasattr(agent_obj, "mod_prompt_overrides"):
-        agent_obj.mod_prompt_overrides = dict(overrides)
+    """Write canonical group overrides back to an agent-like object."""
+    agent_obj.group_prompt_overrides = dict(overrides)
 
 
 def make_custom_agent_id(custom_agent_uuid: uuid.UUID | str) -> str:
@@ -554,15 +547,8 @@ def create_custom_agent(
     category: Optional[str] = None,
     model_temperature: Optional[float] = None,
     model_reasoning: Optional[str] = None,
-    mod_prompt_overrides: Optional[Dict[str, str]] = None,
-    include_mod_rules: Optional[bool] = None,
 ) -> CustomAgent:
     """Create a new custom agent and seed version snapshot."""
-    if group_prompt_overrides is None and mod_prompt_overrides is not None:
-        group_prompt_overrides = mod_prompt_overrides
-    if include_mod_rules is not None:
-        include_group_rules = include_mod_rules
-
     selected_template_key = str(template_source or "").strip()
     parent_defaults: Dict[str, Any] = {}
     parent_agent_key: Optional[str] = None
@@ -647,7 +633,7 @@ def create_custom_agent(
         output_schema_key=effective_output_schema_key,
         group_rules_enabled=include_group_rules,
         group_rules_component=parent_agent_key,
-        mod_prompt_overrides=normalized_group_overrides,
+        group_prompt_overrides=normalized_group_overrides,
         icon=(icon or "\U0001F527"),
         category=category if category is not None else parent_defaults["category"],
         template_source=parent_agent_key,
@@ -675,7 +661,7 @@ def create_custom_agent(
         custom_agent_id=custom_agent.id,
         version=1,
         custom_prompt=agent_prompt,
-        mod_prompt_overrides=normalized_group_overrides,
+        group_prompt_overrides=normalized_group_overrides,
         notes="Initial version",
     ))
 
@@ -885,15 +871,8 @@ def update_custom_agent(
     tool_ids: Optional[List[str]] = None,
     output_schema_key: Optional[str] = None,
     allow_empty_tool_ids: bool = False,
-    mod_prompt_overrides: Optional[Dict[str, str]] = None,
-    include_mod_rules: Optional[bool] = None,
 ) -> CustomAgent:
     """Update custom-agent config and snapshot previous prompt when prompt changes."""
-    if group_prompt_overrides is None and mod_prompt_overrides is not None:
-        group_prompt_overrides = mod_prompt_overrides
-    if include_mod_rules is not None:
-        include_group_rules = include_mod_rules
-
     if name is not None:
         existing_name = db.query(CustomAgent).filter(
             CustomAgent.user_id == custom_agent.user_id,
@@ -974,7 +953,7 @@ def update_custom_agent(
                 custom_agent_id=custom_agent.id,
                 version=next_version,
                 custom_prompt=custom_agent.custom_prompt,
-                mod_prompt_overrides=current_group_overrides,
+                group_prompt_overrides=current_group_overrides,
                 notes=notes or "Auto-snapshot before prompt update",
             )
         )
@@ -1057,7 +1036,7 @@ def revert_custom_agent_to_version(
             custom_agent_id=custom_agent.id,
             version=snapshot_version,
             custom_prompt=custom_agent.custom_prompt,
-            mod_prompt_overrides=_read_group_prompt_overrides(custom_agent),
+            group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
             notes=notes or f"Snapshot before revert to v{version}",
         )
     )
@@ -1125,9 +1104,7 @@ def get_custom_agent_runtime_info(
             display_name=custom_agent.name,
             custom_prompt=main_prompt,
             group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
-            include_group_rules=bool(
-                getattr(custom_agent, "group_rules_enabled", getattr(custom_agent, "include_mod_rules", False))
-            ),
+            include_group_rules=bool(custom_agent.group_rules_enabled),
             requires_document=requires_document,
             parent_exists=parent_exists,
         )
@@ -1143,9 +1120,7 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
     parent_exists = True
 
     group_prompt_overrides = _read_group_prompt_overrides(custom_agent)
-    include_group_rules = bool(
-        getattr(custom_agent, "group_rules_enabled", getattr(custom_agent, "include_mod_rules", False))
-    )
+    include_group_rules = bool(custom_agent.group_rules_enabled)
 
     overlay_normalization = normalize_custom_overlay_for_parent(
         custom_agent.template_source,
@@ -1171,10 +1146,8 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "custom_prompt_removed_layer_kinds": overlay_normalization.removed_layer_kinds,
         "custom_prompt_warning": overlay_normalization.warning,
         "group_prompt_overrides": group_prompt_overrides,
-        "mod_prompt_overrides": group_prompt_overrides,
         "icon": custom_agent.icon,
         "include_group_rules": include_group_rules,
-        "include_mod_rules": include_group_rules,
         "model_id": custom_agent.model_id,
         "model_temperature": float(custom_agent.model_temperature or 0.1),
         "model_reasoning": custom_agent.model_reasoning,
@@ -1210,27 +1183,7 @@ def get_custom_agent_group_prompt(
         parent_agent_key,
         prompt_type="group_rules",
         group_id=normalized_group_id,
-    ) or get_prompt_optional(
-        parent_agent_key,
-        prompt_type="mod_rules",
-        group_id=normalized_group_id,
     )
     if not rule_prompt:
         return None
     return rule_prompt.content
-
-
-normalize_mod_prompt_overrides = normalize_group_prompt_overrides
-
-
-def get_custom_agent_mod_prompt(
-    parent_agent_key: str,
-    mod_id: str,
-    mod_prompt_overrides: Optional[Dict[str, str]] = None,
-) -> Optional[str]:
-    """Legacy wrapper retained for one release cycle."""
-    return get_custom_agent_group_prompt(
-        parent_agent_key=parent_agent_key,
-        group_id=mod_id,
-        group_prompt_overrides=mod_prompt_overrides,
-    )
