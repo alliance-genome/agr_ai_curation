@@ -38,9 +38,20 @@ assert_rejected_value() {
   grep -Fq "${expected_message}" <<<"${output}"
 }
 
+assert_nginx_variables_survive_rendering() {
+  local rendered
+  rendered="$(docker run --rm --env host=must-not-render "${image_tag}" nginx -T 2>&1)"
+  # These assertions intentionally match literal Nginx variables after envsubst.
+  # shellcheck disable=SC2016
+  grep -Fq 'proxy_set_header Host $host;' <<<"${rendered}"
+  # shellcheck disable=SC2016
+  grep -Fq 'try_files $uri $uri/ /index.html;' <<<"${rendered}"
+}
+
 assert_rendered_limit 524288000
 assert_rendered_limit 629145600 --env PDF_MAX_FILE_SIZE_BYTES=629145600
 assert_rejected_value malformed "must be a positive integer byte count"
 assert_rejected_value 0 "must be greater than zero"
+assert_nginx_variables_survive_rendering
 
 echo "Frontend Nginx PDF limit contract tests passed"

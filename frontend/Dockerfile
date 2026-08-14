@@ -39,6 +39,7 @@ RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") && \
 FROM public.ecr.aws/nginx/nginx:alpine AS nginx-runtime-base
 
 ENV PDF_MAX_FILE_SIZE_BYTES=524288000
+ENV NGINX_ENVSUBST_FILTER="^PDF_MAX_FILE_SIZE_BYTES$"
 
 # Render the runtime limit through the official Nginx entrypoint after first
 # validating that the value is a positive byte count.

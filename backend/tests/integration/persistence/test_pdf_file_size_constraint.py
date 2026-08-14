@@ -59,16 +59,18 @@ def test_upgrade_from_prior_head_relaxes_former_ceiling():
     document = _document(550 * 1024 * 1024)
 
     command.downgrade(alembic_config, "0f1e2d3c4b5a")
-    legacy_session = SessionLocal()
     try:
-        legacy_session.add(document)
-        with pytest.raises(IntegrityError):
-            legacy_session.commit()
-        legacy_session.rollback()
+        legacy_session = SessionLocal()
+        try:
+            legacy_session.add(document)
+            with pytest.raises(IntegrityError):
+                legacy_session.commit()
+            legacy_session.rollback()
+        finally:
+            legacy_session.close()
     finally:
-        legacy_session.close()
+        command.upgrade(alembic_config, "head")
 
-    command.upgrade(alembic_config, "head")
     upgraded_session = SessionLocal()
     try:
         upgraded_session.add(document)
