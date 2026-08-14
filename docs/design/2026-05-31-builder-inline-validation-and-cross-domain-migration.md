@@ -360,9 +360,8 @@ where the DB session and document identity already live.
 - `get_agent_metadata` curation-inheritance also serves user custom agents via `template_source`
   (a permanent product feature). Keep the custom-agent path; at most narrow the builder-routing
   part later.
-- The `equivalence_groups` pairs in `packages/alliance/config/flow_recipes.yaml`
-  for live validator/lookup agents (`gene<->gene_validation`, etc.) are NOT
-  removed by this migration. Only the
+- The `_AGENT_ID_EQUIVALENTS` pairs in `flow_tools.py` for live validator/lookup agents
+  (`gene<->gene_validation`, etc.) are NOT removed by this migration. Only the
   `gene_expression<->gene_expression_extraction` folder-vs-agent_id split is migration-related,
   and only removable via a folder rename / canonical-id migration.
 
@@ -568,5 +567,4 @@ curl -s "${TRACE_REVIEW_URL:-http://127.0.0.1:8001}/api/claude/traces/$TID/diagn
 - `api/chat_common.py`: `_build_extraction_candidate_from_tool_event` 144; `_persist_extraction_candidates` 327 (+ dedupe band-aid ~350).
 - `agent_studio/catalog_service.py`: `get_agent_metadata` curation inheritance 2236-2265 (the (A) fix).
 - `curation_workspace/extraction_results.py`: `build_extraction_envelope_candidate` 84; `_is_extraction_envelope_payload` 704; `get_agent_curation_metadata` 734; sanitizers 157-336.
-- `packages/alliance/config/flow_recipes.yaml`: `equivalence_groups` and the
-  `validate_expression_gene_identifiers` suggestion rule.
+- `agent_studio/flow_tools.py`: `_AGENT_ID_EQUIVALENTS` 143; `_GENE_EXPRESSION_AGENT_IDS` 185.

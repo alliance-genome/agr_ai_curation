@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 import src.lib.agent_studio.flow_tools as flow_tools
 from src.lib.agent_studio.models import FlowContextDefinition
+from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 from src.lib.packages.flow_recipes import (
     FlowRecipeCatalog,
     FlowRecipeLoadError,
@@ -52,9 +53,7 @@ def test_workflow_user_context_set_get_clear():
 def test_flow_context_set_get_clear():
     assert flow_tools.get_current_flow_context() is None
     flow_tools.set_current_flow_context({"flow_name": "My Flow", "nodes": []})
-    flow_context = flow_tools.get_current_flow_context()
-    assert flow_context is not None
-    assert flow_context["flow_name"] == "My Flow"
+    assert flow_tools.get_current_flow_context()["flow_name"] == "My Flow"
 
 
 def test_flow_context_definition_is_v1_1_only():
@@ -577,7 +576,6 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
                 "name": "Gene Specialist",
                 "description": "Validate genes",
                 "category": "Validation",
-                "output_schema_key": "GeneResultEnvelope",
                 "requires_document": False,
             },
         },
@@ -649,14 +647,12 @@ def test_get_flow_templates_handler_filters_missing_steps_and_resolves_installed
                 "name": "Gene Specialist",
                 "description": "Validate genes",
                 "category": "Validation",
-                "output_schema_key": "GeneResultEnvelope",
                 "requires_document": False,
             },
             "gene_ontology_lookup": {
                 "name": "GO Specialist",
                 "description": "Validate GO terms",
                 "category": "Validation",
-                "output_schema_key": "GOTermResultEnvelope",
                 "requires_document": False,
             },
         },
@@ -734,27 +730,48 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
         assert validate(steps=templates[name]["steps"], name=name)["valid"] is True
 
 
-def test_all_ten_alliance_recipes_appear_with_actual_runtime_eligibility():
-    attachment_only_agent_ids = {
+def test_all_ten_alliance_recipes_appear_when_required_agents_are_flow_eligible(
+    monkeypatch,
+):
+    catalog = flow_tools.load_flow_recipe_catalog()
+    available_agent_ids = {
+        step.agent_id
+        for recipe in catalog.recipes
+        for step in recipe.steps
+    }
+    validation_agent_ids = {
         "gene",
-        "gene_validation",
-        "disease",
-        "disease_validation",
         "allele",
-        "allele_validation",
+        "disease",
+        "chemical",
+        "gene_ontology",
     }
-    flow_agent_ids = set(flow_tools._get_flow_agent_ids())
-    recipe_agent_ids = flow_tools._get_recipe_dependency_agent_ids()
-    result = flow_tools._get_flow_templates_handler()()
-    advertised_agent_ids = {
-        agent["agent_id"] for agent in result["available_agents"]
-    }
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", sorted(available_agent_ids))
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            agent_id: (
+                {
+                    "category": "Validation",
+                    "output_schema_key": f"{agent_id.title()}Result",
+                }
+                if agent_id in validation_agent_ids
+                else {
+                    "category": (
+                        "Output"
+                        if agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+                        else "Extraction"
+                    )
+                }
+            )
+            for agent_id in available_agent_ids
+        },
+    )
 
-    assert attachment_only_agent_ids.isdisjoint(flow_agent_ids)
-    assert attachment_only_agent_ids.isdisjoint(advertised_agent_ids)
-    assert attachment_only_agent_ids <= recipe_agent_ids
+    templates = flow_tools._filter_flow_templates(available_agent_ids, catalog)
 
-    assert [template["name"] for template in result["templates"]] == [
+    assert [template["name"] for template in templates] == [
         "Gene Curation",
         "Gene Extraction",
         "Disease Annotation",

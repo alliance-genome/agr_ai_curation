@@ -167,22 +167,6 @@ def _get_flow_agent_ids() -> List[str]:
 FLOW_AGENT_IDS = _get_flow_agent_ids()
 
 
-def _get_recipe_dependency_agent_ids() -> set[str]:
-    """Return installed agents that package recipes may require.
-
-    Recipe discovery has to distinguish installation from ordinary flow-step
-    eligibility. Typed validators may be package recipe dependencies even when
-    they remain attachment-only and therefore absent from ``FLOW_AGENT_IDS``.
-    """
-
-    return {
-        agent_id
-        for agent_id, entry in AGENT_REGISTRY.items()
-        if agent_allows_ordinary_flow_step(agent_id, entry)
-        or agent_can_source_output_attachment(entry)
-    }
-
-
 class _SimplifiedFlowValidationError(ValueError):
     """Aggregate validation failures from the shared simplified-flow path."""
 
@@ -802,10 +786,6 @@ def _filter_flow_templates(
                 _build_simplified_flow_definition(
                     steps=filtered_steps,
                     task_instructions=template["description"],
-                    flow_agent_ids=sorted(
-                        {str(step["agent_id"]) for step in filtered_steps}
-                    ),
-                    agent_registry=AGENT_REGISTRY,
                 )
             except _SimplifiedFlowValidationError as exc:
                 raise FlowRecipeLoadError(
@@ -828,7 +808,7 @@ def _filter_flow_templates(
 def validate_installed_flow_recipe_catalog(catalog: FlowRecipeCatalog) -> int:
     """Validate package recipes at startup and return the compatible count."""
 
-    return len(_filter_flow_templates(_get_recipe_dependency_agent_ids(), catalog))
+    return len(_filter_flow_templates(set(FLOW_AGENT_IDS), catalog))
 
 
 def _build_package_suggestions(
@@ -1153,22 +1133,8 @@ def _get_flow_templates_handler():
             )
         ]
 
-        recipe_agent_ids = {
-            agent_id
-            for agent_id in _get_recipe_dependency_agent_ids()
-            if (
-                not normalized_category
-                or AGENT_REGISTRY.get(agent_id, {}).get("category")
-                == normalized_category
-            )
-            and substring_match(
-                query,
-                agent_id,
-                AGENT_REGISTRY.get(agent_id, {}).get("name", agent_id),
-                AGENT_REGISTRY.get(agent_id, {}).get("description", ""),
-            )
-        }
-        templates = _filter_flow_templates(recipe_agent_ids)
+        available_agent_ids = {agent["agent_id"] for agent in matched_agents}
+        templates = _filter_flow_templates(available_agent_ids)
 
         total_count = len(matched_agents)
         bounded_limit = normalize_page_limit(limit)
