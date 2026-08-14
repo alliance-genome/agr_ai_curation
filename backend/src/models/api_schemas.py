@@ -90,6 +90,7 @@ class DocumentSourceProvenance(BaseModel):
     """Compact non-secret provenance for provider-backed documents."""
 
     provider: Optional[str] = None
+    provider_metadata: Optional[Dict[str, str | List[str]]] = None
     reference_id: Optional[str] = None
     reference_curie: Optional[str] = None
     source_file_id: Optional[str] = None

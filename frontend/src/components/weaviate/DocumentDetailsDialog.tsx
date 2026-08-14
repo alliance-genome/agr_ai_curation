@@ -32,6 +32,10 @@ import {
   ChunkPreviewSummary,
   useDocument,
 } from '../../services/weaviate';
+import {
+  documentSourceProviderLabel,
+  documentSourceReferenceLabel,
+} from '../../utils/documentSourcePresentation';
 
 interface DocumentDetailsDialogProps {
   open: boolean;
@@ -237,18 +241,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
   const metadataTitle = getMetadataValue('title');
   const metadataLastProcessedStage = getMetadataValue('last_processed_stage');
 
-  const formatProviderLabel = (provider?: string | null): string => {
-    if (!provider) {
-      return 'Local PDF';
-    }
-    if (provider === 'abc_literature') {
-      return 'ABC Literature';
-    }
-    return provider
-      .replace(/[_-]+/g, ' ')
-      .replace(/\b\w/g, (letter) => letter.toUpperCase());
-  };
-
   const externalIdsText = React.useMemo(() => {
     const externalIds = sourceProvenance?.externalIds;
     if (!externalIds) {
@@ -269,12 +261,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
       .join(' · ');
   }, [sourceProvenance]);
 
-  const sourceReferenceText =
-    sourceProvenance?.referenceCurie ||
-    sourceProvenance?.referenceId ||
-    externalIdsText ||
-    sourceProvenance?.sourceMd5 ||
-    (sourceProvenance ? 'Provider import' : 'Uploaded PDF');
+  const sourceReferenceText = documentSourceReferenceLabel(sourceProvenance);
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
@@ -438,7 +425,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                   <Divider sx={{ mb: 2 }} />
                   <Grid container spacing={2}>
                     <Grid item xs={12} md={6}>
-                      {renderInfoItem('Provider', formatProviderLabel(sourceProvenance?.provider))}
+                      {renderInfoItem('Provider', documentSourceProviderLabel(sourceProvenance))}
                       {renderInfoItem(
                         'Reference',
                         sourceReferenceText

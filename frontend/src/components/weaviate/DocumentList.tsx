@@ -46,6 +46,10 @@ import {
 } from '../../services/weaviate';
 import { emitGlobalToast } from '../../lib/globalNotifications';
 import {
+  documentSourceProviderLabel,
+  documentSourceReferenceLabel,
+} from '../../utils/documentSourcePresentation';
+import {
   MAX_UPLOAD_FILES_PER_SELECTION,
   uploadPdfDocument,
   validatePdfSelection,
@@ -164,62 +168,6 @@ const compareDateValues = (left: unknown, right: unknown): number => {
   };
 
   return compareNumberValues(toTimestamp(left), toTimestamp(right));
-};
-
-const formatProviderLabel = (provider?: string | null): string => {
-  if (!provider) {
-    return 'Local PDF';
-  }
-  if (provider === 'abc_literature') {
-    return 'ABC Literature';
-  }
-  return provider
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-};
-
-const firstExternalIdentifier = (
-  externalIds?: Record<string, string | string[]> | null
-): string | null => {
-  if (!externalIds) {
-    return null;
-  }
-
-  const preferredKeys = ['pmid', 'pmcid', 'doi', 'fbrf'];
-  for (const key of preferredKeys) {
-    const match = Object.entries(externalIds).find(
-      ([candidate]) => candidate.toLowerCase() === key
-    );
-    if (!match) {
-      continue;
-    }
-    const [label, rawValue] = match;
-    const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
-    if (value) {
-      return `${label.toUpperCase()}: ${value}`;
-    }
-  }
-
-  const firstEntry = Object.entries(externalIds)[0];
-  if (!firstEntry) {
-    return null;
-  }
-  const [label, rawValue] = firstEntry;
-  const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
-  return value ? `${label.toUpperCase()}: ${value}` : null;
-};
-
-const sourceReferenceLabel = (source?: DocumentSourceProvenance | null): string => {
-  if (!source) {
-    return 'Uploaded PDF';
-  }
-  return (
-    source.referenceCurie ||
-    source.referenceId ||
-    firstExternalIdentifier(source.externalIds) ||
-    source.sourceMd5 ||
-    'Provider import'
-  );
 };
 
 const DocumentList: React.FC<DocumentListProps> = ({
@@ -500,8 +448,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
       filterable: false,
       renderCell: (params: GridRenderCellParams<DocumentSummary, DocumentSourceProvenance | null>) => {
         const source = params.value ?? params.row.sourceProvenance ?? null;
-        const providerLabel = formatProviderLabel(source?.provider);
-        const referenceLabel = sourceReferenceLabel(source);
+        const providerLabel = documentSourceProviderLabel(source);
+        const referenceLabel = documentSourceReferenceLabel(source);
         const statusLabel = source?.importStatus ?? source?.artifactStatus ?? null;
 
         return (

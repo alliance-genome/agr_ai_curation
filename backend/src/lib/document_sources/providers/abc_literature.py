@@ -33,6 +33,18 @@ from src.lib.openai_agents.config import (
 )
 
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
+ABC_LITERATURE_PROVIDER_METADATA = {
+    "display_label": "ABC Literature",
+    "reference_label_priority": [
+        "external_ids.fbrf",
+        "reference_curie",
+        "reference_id",
+        "external_ids.pmid",
+        "external_ids.pmcid",
+        "external_ids.doi",
+        "source_md5",
+    ],
+}
 
 _FIGURE_METADATA_FILE_CLASSES = {
     "converted_main_figure_metadata",

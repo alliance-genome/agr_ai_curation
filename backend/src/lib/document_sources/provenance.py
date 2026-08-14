@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from src.models.sql.pdf_document import PDFDocument
 
+from .registry import get_document_source_provider_metadata
+
 
 _SCALAR_PROVENANCE_FIELDS = (
     "provider",
@@ -64,7 +66,14 @@ _SENSITIVE_KEY_PARTS = (
 def build_document_source_provenance(document: Any) -> dict[str, Any] | None:
     """Return compact, non-secret source provenance for API/Weaviate metadata."""
 
-    return sanitize_document_source_provenance(_raw_provenance_from_document(document))
+    provenance = sanitize_document_source_provenance(_raw_provenance_from_document(document))
+    if provenance is None:
+        return None
+
+    provider_metadata = get_document_source_provider_metadata(provenance["provider"])
+    if provider_metadata is not None:
+        provenance["provider_metadata"] = provider_metadata
+    return provenance
 
 
 def sanitize_document_source_provenance(raw: Any) -> dict[str, Any] | None:

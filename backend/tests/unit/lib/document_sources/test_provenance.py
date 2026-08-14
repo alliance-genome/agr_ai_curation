@@ -72,6 +72,18 @@ def test_build_document_source_provenance_uses_neutral_non_secret_fields() -> No
     assert provenance is not None
     assert provenance == {
         "provider": "abc_literature",
+        "provider_metadata": {
+            "display_label": "ABC Literature",
+            "reference_label_priority": [
+                "external_ids.fbrf",
+                "reference_curie",
+                "reference_id",
+                "external_ids.pmid",
+                "external_ids.pmcid",
+                "external_ids.doi",
+                "source_md5",
+            ],
+        },
         "reference_id": "101",
         "reference_curie": "AGRKB:101",
         "source_file_id": "source-file-1",

@@ -27,13 +27,17 @@ const providerDocument: DocumentDetailData = {
     vectorCount: 12,
     metadata: null,
     sourceProvenance: {
-      provider: 'abc_literature',
+      provider: 'archive_gateway',
+      providerMetadata: {
+        displayLabel: 'Genome Archive',
+        referenceLabelPriority: ['external_ids.catalog', 'reference_curie'],
+      },
       referenceId: 'ref-123',
-      referenceCurie: 'AGRKB:101',
+      referenceCurie: 'ARCHIVE:101',
       sourceFileId: 'source-pdf-1',
       pdfArtifactId: 'source-pdf-1',
       convertedArtifactId: 'converted-md-1',
-      externalIds: { pmid: '12345', doi: '10.5555/example' },
+      externalIds: { catalog: 'CAT-123', accession: 'ACC-456' },
       sourceMd5: 'abc123',
       fileClass: 'converted_merged_nxml',
       fileExtension: 'md',
@@ -41,7 +45,7 @@ const providerDocument: DocumentDetailData = {
       importStatus: 'imported',
       importedAt: null,
       accessScope: 'restricted',
-      accessMods: { mods: ['FB'] },
+      accessMods: { mods: ['GROUP'] },
       viewerMode: 'local_pdf',
     },
   },
@@ -72,12 +76,13 @@ describe('DocumentDetailsDialog', () => {
     );
 
     expect(screen.getByText('Source')).toBeInTheDocument();
-    expect(screen.getByText('ABC Literature')).toBeInTheDocument();
-    expect(screen.getByText('AGRKB:101')).toBeInTheDocument();
-    expect(screen.getByText('PMID: 12345 · DOI: 10.5555/example')).toBeInTheDocument();
+    expect(screen.getByText('Genome Archive')).toBeInTheDocument();
+    expect(screen.getAllByText('CATALOG: CAT-123')).toHaveLength(1);
+    expect(screen.queryByText('ARCHIVE:101')).not.toBeInTheDocument();
+    expect(screen.getByText('CATALOG: CAT-123 · ACCESSION: ACC-456')).toBeInTheDocument();
     expect(screen.getByText('converted-md-1')).toBeInTheDocument();
     expect(screen.getByText('restricted')).toBeInTheDocument();
-    expect(screen.getByText('mods: FB')).toBeInTheDocument();
+    expect(screen.getByText('mods: GROUP')).toBeInTheDocument();
     expect(screen.queryByText('conversion_request')).not.toBeInTheDocument();
   });
 
@@ -184,6 +189,6 @@ describe('DocumentDetailsDialog', () => {
 
     expect(screen.getByText('Local PDF')).toBeInTheDocument();
     expect(screen.getByText('Uploaded PDF')).toBeInTheDocument();
-    expect(screen.queryByText('ABC Literature')).not.toBeInTheDocument();
+    expect(screen.queryByText('Genome Archive')).not.toBeInTheDocument();
   });
 });
