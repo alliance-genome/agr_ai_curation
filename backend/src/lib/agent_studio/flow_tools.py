@@ -855,10 +855,16 @@ def _create_flow_handler():
             require_description=True,
         )
         if metadata_errors:
+            recovery_help = "Provide a valid flow name and description"
+            if (
+                " exceeds " in metadata_errors[0]
+                and metadata_errors[0].endswith(" characters")
+            ):
+                recovery_help = _simplified_flow_recovery_help(metadata_errors)
             return {
                 "success": False,
                 "error": metadata_errors[0],
-                "help": "Provide a valid flow name and description",
+                "help": recovery_help,
             }
 
         try:

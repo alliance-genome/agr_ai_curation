@@ -124,6 +124,22 @@ class TestFlowDefinitionTaskInputRequirement:
         with pytest.raises(ValidationError, match="maximum is 2"):
             FlowDefinition.model_validate(three_node_flow)
 
+        iterator_flow = FlowDefinition.model_validate(
+            {
+                **two_node_flow,
+                "nodes": iter(two_node_flow["nodes"]),
+            }
+        )
+        assert len(iterator_flow.nodes) == 2
+
+        with pytest.raises(ValidationError, match="maximum is 2"):
+            FlowDefinition.model_validate(
+                {
+                    **three_node_flow,
+                    "nodes": iter(three_node_flow["nodes"]),
+                }
+            )
+
         with pytest.raises(ValidationError) as exc_info:
             FlowDefinition.model_validate(
                 {

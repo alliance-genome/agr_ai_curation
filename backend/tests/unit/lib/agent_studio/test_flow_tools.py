@@ -12,7 +12,17 @@ from src.lib.agent_studio.models import FlowContextDefinition
 
 
 @pytest.fixture(autouse=True)
-def _clear_contextvars():
+def _isolate_flow_tool_state(monkeypatch):
+    for environment_name in (
+        "FLOW_DEFINITION_MAX_NODES",
+        "AGENT_STUDIO_FLOW_MAX_STEPS",
+        "AGENT_STUDIO_FLOW_NAME_MAX_CHARS",
+        "AGENT_STUDIO_FLOW_DESCRIPTION_MAX_CHARS",
+        "AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS",
+        "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
+        "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
+    ):
+        monkeypatch.delenv(environment_name, raising=False)
     flow_tools.clear_workflow_user_context()
     flow_tools.clear_current_flow_context()
     yield
@@ -1305,6 +1315,17 @@ def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
     assert unknown_agent["success"] is False
     assert "unknown agent_id" in unknown_agent["error"]
     assert unknown_agent["help"].startswith("Valid agent IDs:")
+
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "4")
+    long_name = create(
+        "Flow A",
+        "desc",
+        [{"agent_id": "pdf_extraction"}],
+    )
+    assert "Flow name exceeds 4 characters" in long_name["error"]
+    assert long_name["help"] == (
+        "Shorten the named field to the configured maximum"
+    )
 
 
 def test_create_flow_handler_success_and_db_errors(monkeypatch):
