@@ -503,7 +503,6 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     document_id = uuid4()
     owner = User(
         auth_sub="test_valid_user_00u1abc2def4",
-        email="valid_curator@alliancegenome.org",
         is_active=True,
     )
     test_db.add(owner)
