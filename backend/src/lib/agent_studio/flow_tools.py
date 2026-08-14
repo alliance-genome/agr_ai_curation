@@ -19,11 +19,19 @@ User Context:
 
 import logging
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
-from src.lib.flow_edge_roles import agent_can_source_output_attachment
+from src.lib.flow_edge_roles import (
+    SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
+    agent_can_source_output_attachment,
+)
+from src.lib.packages.flow_recipes import (
+    FlowRecipeCatalog,
+    FlowRecipeLoadError,
+    load_flow_recipe_catalog,
+)
 from src.lib.openai_agents.bounded_list import (
     normalize_page_limit,
     offset_page,
@@ -258,21 +266,8 @@ def _simplified_flow_steps_schema() -> Dict[str, Any]:
     }
 
 
-# Keep this map aligned with flow-facing agent aliases/canonical IDs exported
-# by the runtime packages so suggestions do not advertise missing agents.
-_AGENT_ID_EQUIVALENTS: Dict[str, tuple[str, ...]] = {
-    "gene": ("gene", "gene_validation"),
-    "gene_validation": ("gene", "gene_validation"),
-    "allele": ("allele", "allele_validation"),
-    "allele_validation": ("allele", "allele_validation"),
-    "disease": ("disease", "disease_validation"),
-    "disease_validation": ("disease", "disease_validation"),
-    "chemical": ("chemical", "chemical_validation"),
-    "chemical_validation": ("chemical", "chemical_validation"),
-    "gene_expression": ("gene_expression", "gene_expression_extraction"),
-    "gene_expression_extraction": ("gene_expression", "gene_expression_extraction"),
-    "gene_ontology": ("gene_ontology", "gene_ontology_lookup"),
-    "gene_ontology_lookup": ("gene_ontology", "gene_ontology_lookup"),
+# Formatter classification and display preference are generic runtime mechanics.
+_CORE_AGENT_ID_EQUIVALENTS: Dict[str, tuple[str, ...]] = {
     "chat_output": ("chat_output", "chat_output_formatter"),
     "chat_output_formatter": ("chat_output", "chat_output_formatter"),
     "csv_formatter": ("csv_formatter",),
@@ -288,133 +283,31 @@ _OUTPUT_AGENT_PREFERENCES = (
 )
 
 
-_DOCUMENT_CONTEXT_AGENT_IDS = (
-    "gene",
-    "gene_extractor",
-    "allele",
-    "allele_extractor",
-    "disease",
-    "disease_extractor",
-    "chemical",
-    "gene_expression",
-    "phenotype_extractor",
-)
-_GENE_VALIDATION_AGENT_IDS = ("gene", "gene_validation")
-_GENE_EXPRESSION_AGENT_IDS = ("gene_expression", "gene_expression_extraction")
-
-_RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
-    {
-        "name": "Gene Curation",
-        "description": "Extract gene mentions from PDF and validate against database",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find gene symbols and identifiers"},
-            {"agent_id": "gene", "step_goal": "Validate genes in Alliance database"},
-            {"agent_id": "chat_output", "step_goal": "Display validated results", "source_steps": [2]},
-        ],
-    },
-    {
-        "name": "Gene Extraction",
-        "description": "Extract experimentally supported gene assertions from papers",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find gene mentions and context"},
-            {"agent_id": "gene_extractor", "step_goal": "Extract evidence-backed gene assertions"},
-            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_steps": [2]},
-        ],
-    },
-    {
-        "name": "Disease Annotation",
-        "description": "Extract disease mentions and map to ontology terms",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions"},
-            {"agent_id": "disease", "step_goal": "Map to Disease Ontology terms"},
-            {"agent_id": "chat_output", "step_goal": "Display annotation results", "source_steps": [2]},
-        ],
-    },
-    {
-        "name": "Disease Extraction",
-        "description": "Extract experimentally supported disease assertions from papers",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions and evidence context"},
-            {"agent_id": "disease_extractor", "step_goal": "Extract evidence-backed disease assertions"},
-            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_steps": [2]},
-        ],
-    },
-    {
-        "name": "Chemical Entity Extraction",
-        "description": "Extract chemical compounds and link to ChEBI",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Extract chemical names"},
-            {"agent_id": "chemical", "step_goal": "Map to ChEBI identifiers"},
-        ],
-    },
-    {
-        "name": "Gene Expression Analysis",
-        "description": "Extract gene expression data from methods sections",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find experimental methods"},
-            {"agent_id": "gene_expression", "step_goal": "Extract expression patterns"},
-            {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
-            {"agent_id": "chat_output", "step_goal": "Display expression data", "source_steps": [2]},
-        ],
-    },
-    {
-        "name": "Phenotype Extraction",
-        "description": "Extract experimentally supported phenotype assertions from papers",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find phenotype-related result sections"},
-            {"agent_id": "phenotype_extractor", "step_goal": "Extract phenotype assertions with evidence"},
-            {"agent_id": "chat_output", "step_goal": "Display phenotype extraction results", "source_steps": [2]},
-        ],
-    },
-    {
-        "name": "Allele/Variant Extraction",
-        "description": "Extract experimentally supported allele and variant assertions from papers",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions and context"},
-            {"agent_id": "allele_extractor", "step_goal": "Extract evidence-backed allele/variant assertions"},
-            {"agent_id": "chat_output", "step_goal": "Display extraction results", "source_steps": [2]},
-        ],
-    },
-    {
-        "name": "Allele Annotation",
-        "description": "Extract allele/variant mentions and link to database",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions"},
-            {"agent_id": "allele", "step_goal": "Validate alleles in Alliance database"},
-            {"agent_id": "chat_output", "step_goal": "Display allele results", "source_steps": [2]},
-        ],
-    },
-    {
-        "name": "GO Annotation Pipeline",
-        "description": "Extract and validate Gene Ontology annotations",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find GO term mentions and gene functions"},
-            {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
-            {"agent_id": "gene_ontology", "step_goal": "Validate GO terms"},
-            {"agent_id": "chat_output", "step_goal": "Display GO annotations", "source_steps": [2, 3]},
-        ],
-    },
-]
+def _agent_id_equivalences(catalog: FlowRecipeCatalog) -> Dict[str, tuple[str, ...]]:
+    equivalents = dict(_CORE_AGENT_ID_EQUIVALENTS)
+    for contribution in catalog.contributions:
+        for group in contribution.manifest.equivalence_groups:
+            group_ids = tuple(group.agent_ids)
+            for agent_id in group_ids:
+                equivalents[agent_id] = group_ids
+    return equivalents
 
 
-def _equivalent_agent_ids(agent_id: str) -> tuple[str, ...]:
+def _equivalent_agent_ids(
+    agent_id: str,
+    equivalences: Dict[str, tuple[str, ...]],
+) -> tuple[str, ...]:
     """Return equivalent aliases/canonical IDs for a flow-facing agent ID."""
-    return _AGENT_ID_EQUIVALENTS.get(agent_id, (agent_id,))
-
-
-_OUTPUT_AGENT_IDS = {
-    agent_id
-    for preferred_agent_id in _OUTPUT_AGENT_PREFERENCES
-    for agent_id in _equivalent_agent_ids(preferred_agent_id)
-}
+    return equivalences.get(agent_id, (agent_id,))
 
 
 def _resolve_available_agent_id(
     agent_id: str,
     available_agent_ids: set[str],
+    equivalences: Dict[str, tuple[str, ...]],
 ) -> Optional[str]:
     """Resolve a preferred flow agent ID to an installed equivalent."""
-    for candidate in _equivalent_agent_ids(agent_id):
+    for candidate in _equivalent_agent_ids(agent_id, equivalences):
         if candidate in available_agent_ids:
             return candidate
     return None
@@ -423,35 +316,50 @@ def _resolve_available_agent_id(
 def _installed_agent_choices(
     preferred_agent_ids: tuple[str, ...],
     available_agent_ids: set[str],
+    equivalences: Dict[str, tuple[str, ...]],
 ) -> List[str]:
     """Return installed agent IDs in preferred display order."""
     installed: List[str] = []
     for agent_id in preferred_agent_ids:
-        resolved = _resolve_available_agent_id(agent_id, available_agent_ids)
+        resolved = _resolve_available_agent_id(
+            agent_id,
+            available_agent_ids,
+            equivalences,
+        )
         if resolved and resolved not in installed:
             installed.append(resolved)
     return installed
 
 
-def _seen_any_equivalent(seen_agents: set[str], preferred_agent_ids: tuple[str, ...]) -> bool:
+def _seen_any_equivalent(
+    seen_agents: set[str],
+    preferred_agent_ids: tuple[str, ...] | list[str],
+    equivalences: Dict[str, tuple[str, ...]],
+) -> bool:
     """Whether any seen agent matches one of the preferred IDs or its aliases."""
     for agent_id in preferred_agent_ids:
-        if any(candidate in seen_agents for candidate in _equivalent_agent_ids(agent_id)):
+        if any(
+            candidate in seen_agents
+            for candidate in _equivalent_agent_ids(agent_id, equivalences)
+        ):
             return True
     return False
 
 
 def _is_output_agent_id(agent_id: str) -> bool:
     """Whether an agent ID belongs to the output-agent family."""
-    return agent_id in _OUTPUT_AGENT_IDS
+    return agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 
 
 def _validated_output_source_steps(
     steps: List[Dict[str, Any]],
     output_index: int,
+    agent_registry: Dict[str, Dict[str, Any]] | None = None,
 ) -> tuple[tuple[int, ...], Optional[str]]:
     """Validate one formatter's canonical ordered source-step selection."""
 
+    if agent_registry is None:
+        agent_registry = AGENT_REGISTRY
     step_num = output_index + 1
     source_steps = steps[output_index].get("source_steps")
     # Removed singular source_step fallback — v1.1 output attachments use
@@ -485,7 +393,7 @@ def _validated_output_source_steps(
             )
         source_agent_id = str(source_step_config.get("agent_id") or "")
         if not agent_can_source_output_attachment(
-            AGENT_REGISTRY.get(source_agent_id),
+            agent_registry.get(source_agent_id),
         ):
             return (), (
                 f"Step {step_num}: source_steps entry {source_step} "
@@ -533,6 +441,8 @@ def _build_simplified_flow_definition(
     *,
     steps: Any,
     task_instructions: str,
+    flow_agent_ids: List[str] | None = None,
+    agent_registry: Dict[str, Dict[str, Any]] | None = None,
 ) -> "FlowDefinition":
     """Build and canonically validate a simplified Agent Studio flow.
 
@@ -547,6 +457,10 @@ def _build_simplified_flow_definition(
     )
     from src.schemas.flows import FlowDefinition
 
+    if flow_agent_ids is None:
+        flow_agent_ids = FLOW_AGENT_IDS
+    if agent_registry is None:
+        agent_registry = AGENT_REGISTRY
     errors: List[str] = []
     if not isinstance(steps, list):
         raise _SimplifiedFlowValidationError(["Flow steps must be an array"])
@@ -602,12 +516,16 @@ def _build_simplified_flow_definition(
         if not agent_id:
             errors.append(f"Step {step_num}: missing agent_id")
             continue
-        if not isinstance(agent_id, str) or agent_id not in FLOW_AGENT_IDS:
+        if not isinstance(agent_id, str) or agent_id not in flow_agent_ids:
             errors.append(f"Step {step_num}: unknown agent_id '{agent_id}'")
             continue
 
         if _is_output_agent_id(agent_id):
-            source_steps, source_error = _validated_output_source_steps(steps, i)
+            source_steps, source_error = _validated_output_source_steps(
+                steps,
+                i,
+                agent_registry,
+            )
             if source_error is not None:
                 errors.append(source_error)
             else:
@@ -636,7 +554,7 @@ def _build_simplified_flow_definition(
     for i, step in enumerate(steps):
         node_id = f"step_{i + 1}"
         agent_id = step["agent_id"]
-        agent_info = AGENT_REGISTRY.get(agent_id, {})
+        agent_info = agent_registry.get(agent_id, {})
         display_name = agent_info.get(
             "name",
             agent_id.replace("_", " ").title(),
@@ -717,13 +635,19 @@ def _build_simplified_flow_definition(
 def _build_output_suggestion(
     seen_agents: set[str],
     available_agent_ids: set[str],
+    equivalences: Dict[str, tuple[str, ...]],
 ) -> Optional[str]:
     """Build a final-step suggestion that only mentions installed agents."""
     installed_output_agents = _installed_agent_choices(
         _OUTPUT_AGENT_PREFERENCES,
         available_agent_ids,
+        equivalences,
     )
-    if not installed_output_agents or _seen_any_equivalent(seen_agents, _OUTPUT_AGENT_PREFERENCES):
+    if not installed_output_agents or _seen_any_equivalent(
+        seen_agents,
+        _OUTPUT_AGENT_PREFERENCES,
+        equivalences,
+    ):
         return None
 
     primary_output = installed_output_agents[0]
@@ -733,7 +657,7 @@ def _build_output_suggestion(
         "Validation steps"
     )
 
-    if primary_output in _equivalent_agent_ids("chat_output"):
+    if primary_output in _equivalent_agent_ids("chat_output", equivalences):
         if additional_outputs:
             formatted_outputs = ", ".join(additional_outputs)
             return (
@@ -755,54 +679,160 @@ def _build_output_suggestion(
     )
 
 
-def _filter_flow_templates(available_agent_ids: set[str]) -> List[Dict[str, Any]]:
+def _filter_flow_templates(
+    available_agent_ids: set[str],
+    catalog: FlowRecipeCatalog | None = None,
+) -> List[Dict[str, Any]]:
     """Filter template steps to installed agents without advertising missing specialists."""
+    catalog = catalog or load_flow_recipe_catalog()
+    equivalences = _agent_id_equivalences(catalog)
     templates: List[Dict[str, Any]] = []
 
-    for template in _RAW_FLOW_TEMPLATES:
-        filtered_steps: List[Dict[str, Any]] = []
-        missing_required_step = False
-
-        for step in template["steps"]:
-            resolved_agent_id = _resolve_available_agent_id(
-                step["agent_id"],
-                available_agent_ids,
+    for contribution in catalog.contributions:
+        for recipe in contribution.manifest.recipes:
+            template = recipe.model_dump(exclude_none=True)
+            contract_agent_ids = sorted(
+                {str(step["agent_id"]) for step in template["steps"]}
             )
-            if resolved_agent_id is None:
-                if _is_output_agent_id(step["agent_id"]):
-                    continue
-                missing_required_step = True
-                break
-
-            filtered_steps.append({**step, "agent_id": resolved_agent_id})
-
-        if missing_required_step or not filtered_steps:
-            continue
-
-        invalid_output_binding = False
-        for output_index, step in enumerate(filtered_steps):
-            if not _is_output_agent_id(str(step["agent_id"])):
-                continue
-            _, source_error = _validated_output_source_steps(
-                filtered_steps,
-                output_index,
-            )
-            if source_error is not None:
-                invalid_output_binding = True
-                break
-
-        if invalid_output_binding:
-            continue
-
-        templates.append(
-            {
-                "name": template["name"],
-                "description": template["description"],
-                "steps": filtered_steps,
+            contract_agent_registry = {
+                agent_id: {
+                    "category": (
+                        "Output" if _is_output_agent_id(agent_id) else "Extraction"
+                    )
+                }
+                for agent_id in contract_agent_ids
             }
-        )
+            metadata_errors = _simplified_flow_metadata_errors(
+                name=template["name"],
+                description=template["description"],
+                require_description=True,
+            )
+            try:
+                if metadata_errors:
+                    raise _SimplifiedFlowValidationError(metadata_errors)
+                _build_simplified_flow_definition(
+                    steps=template["steps"],
+                    task_instructions=template["description"],
+                    flow_agent_ids=contract_agent_ids,
+                    agent_registry=contract_agent_registry,
+                )
+            except _SimplifiedFlowValidationError as exc:
+                raise FlowRecipeLoadError(
+                    f"Invalid flow recipe '{template['name']}' from package "
+                    f"'{contribution.package_id}' at {contribution.source_path}: "
+                    f"{'; '.join(exc.errors)}"
+                ) from exc
+
+            filtered_steps: List[Dict[str, Any]] = []
+            missing_required_step = False
+
+            for step in template["steps"]:
+                resolved_agent_id = _resolve_available_agent_id(
+                    step["agent_id"],
+                    available_agent_ids,
+                    equivalences,
+                )
+                if resolved_agent_id is None:
+                    if _is_output_agent_id(step["agent_id"]):
+                        continue
+                    missing_required_step = True
+                    break
+
+                filtered_steps.append({**step, "agent_id": resolved_agent_id})
+
+            if missing_required_step or not filtered_steps:
+                continue
+
+            try:
+                _build_simplified_flow_definition(
+                    steps=filtered_steps,
+                    task_instructions=template["description"],
+                )
+            except _SimplifiedFlowValidationError as exc:
+                if any(
+                    "is not an extraction agent or a typed validation agent"
+                    in error
+                    for error in exc.errors
+                ):
+                    continue
+                raise FlowRecipeLoadError(
+                    f"Invalid flow recipe '{template['name']}' from package "
+                    f"'{contribution.package_id}' at {contribution.source_path}: "
+                    f"{'; '.join(exc.errors)}"
+                ) from exc
+
+            templates.append(
+                {
+                    "name": template["name"],
+                    "description": template["description"],
+                    "steps": filtered_steps,
+                }
+            )
 
     return templates
+
+
+def validate_installed_flow_recipe_catalog(catalog: FlowRecipeCatalog) -> int:
+    """Validate package recipes at startup and return the compatible count."""
+
+    return len(_filter_flow_templates(set(FLOW_AGENT_IDS), catalog))
+
+
+def _build_package_suggestions(
+    seen_agents: set[str],
+    available_agent_ids: set[str],
+    catalog: FlowRecipeCatalog,
+    equivalences: Dict[str, tuple[str, ...]],
+    placement: Literal["first", "after"],
+) -> List[str]:
+    """Evaluate declarative package suggestion rules against installed agents."""
+
+    suggestions: List[str] = []
+    for rule in catalog.suggestions:
+        if rule.placement != placement:
+            continue
+        trigger_preference = next(
+            (
+                preferred
+                for preferred in rule.when_present
+                if _seen_any_equivalent(
+                    seen_agents,
+                    (preferred,),
+                    equivalences,
+                )
+            ),
+            None,
+        )
+        if trigger_preference is None or _seen_any_equivalent(
+            seen_agents,
+            rule.when_absent,
+            equivalences,
+        ):
+            continue
+
+        trigger_agent_id = _resolve_available_agent_id(
+            trigger_preference,
+            available_agent_ids,
+            equivalences,
+        )
+        if trigger_agent_id is None:
+            continue
+
+        suggested_agent_id = _resolve_available_agent_id(
+            rule.suggested_agent_id,
+            available_agent_ids,
+            equivalences,
+        )
+        if suggested_agent_id is None:
+            continue
+
+        suggestions.append(
+            rule.message.format(
+                suggested_agent_id=suggested_agent_id,
+                trigger_agent_id=trigger_agent_id,
+            )
+        )
+    return suggestions
 
 
 # =============================================================================
@@ -952,6 +982,8 @@ def _validate_flow_handler():
         warnings: List[str] = []
         suggestions: List[str] = []
         available_agent_ids = set(FLOW_AGENT_IDS)
+        recipe_catalog = load_flow_recipe_catalog()
+        equivalences = _agent_id_equivalences(recipe_catalog)
 
         try:
             _build_simplified_flow_definition(
@@ -976,33 +1008,32 @@ def _validate_flow_handler():
                 )
             seen_agents.add(agent_id)
 
-        # Generate suggestions based on agent patterns
-        pdf_agent_id = _resolve_available_agent_id("pdf_extraction", available_agent_ids)
-        if (
-            pdf_agent_id
-            and not _seen_any_equivalent(seen_agents, ("pdf_extraction",))
-            and _seen_any_equivalent(seen_agents, _DOCUMENT_CONTEXT_AGENT_IDS)
-        ):
-            suggestions.append(
-                f"Consider adding '{pdf_agent_id}' step first to extract entities from documents"
+        suggestions.extend(
+            _build_package_suggestions(
+                seen_agents,
+                available_agent_ids,
+                recipe_catalog,
+                equivalences,
+                "first",
             )
+        )
 
-        output_suggestion = _build_output_suggestion(seen_agents, available_agent_ids)
+        output_suggestion = _build_output_suggestion(
+            seen_agents,
+            available_agent_ids,
+            equivalences,
+        )
         if output_suggestion and len(seen_agents) >= 2:
             suggestions.append(output_suggestion)
-
-        gene_expression_agent_id = _resolve_available_agent_id("gene_expression", available_agent_ids)
-        gene_validation_agent_id = _resolve_available_agent_id("gene", available_agent_ids)
-        if (
-            gene_expression_agent_id
-            and gene_validation_agent_id
-            and _seen_any_equivalent(seen_agents, _GENE_EXPRESSION_AGENT_IDS)
-            and not _seen_any_equivalent(seen_agents, _GENE_VALIDATION_AGENT_IDS)
-        ):
-            suggestions.append(
-                f"Consider adding '{gene_validation_agent_id}' step after "
-                f"'{gene_expression_agent_id}' to validate gene identifiers"
+        suggestions.extend(
+            _build_package_suggestions(
+                seen_agents,
+                available_agent_ids,
+                recipe_catalog,
+                equivalences,
+                "after",
             )
+        )
 
         result = {
             "valid": len(errors) == 0,

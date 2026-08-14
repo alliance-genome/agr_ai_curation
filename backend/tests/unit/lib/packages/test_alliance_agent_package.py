@@ -81,6 +81,11 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
             "default",
             "python/src/agr_ai_curation_alliance/curation_adapters.py",
         ),
+        (
+            ExportKind.FLOW_RECIPES,
+            "alliance_flow_recipes",
+            "config/flow_recipes.yaml",
+        ),
     }
     for bundle in _raw_manifest_agent_bundles():
         agent_name = str(bundle["name"])

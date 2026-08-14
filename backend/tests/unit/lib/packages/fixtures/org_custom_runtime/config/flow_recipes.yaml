@@ -1,0 +1,10 @@
+flow_recipes_api_version: 1.0.0
+equivalence_groups:
+  - agent_ids: [demo_agent, demo_agent_validation]
+suggestions: []
+recipes:
+  - name: Demo Record Review
+    description: Review a demo record with the installed custom specialist
+    steps:
+      - agent_id: demo_agent
+        step_goal: Validate the demo record

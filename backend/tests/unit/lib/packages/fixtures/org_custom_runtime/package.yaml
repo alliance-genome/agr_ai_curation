@@ -15,6 +15,10 @@ exports:
     name: default
     path: python/src/org_custom/curation_adapters.py
     description: Neutral custom organization curation adapter registrations
+  - kind: flow_recipes
+    name: demo_flows
+    path: config/flow_recipes.yaml
+    description: Neutral custom organization flow recipe metadata
 agent_bundles:
   - name: demo_agent
     has_schema: true

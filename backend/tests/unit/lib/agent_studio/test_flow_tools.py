@@ -9,6 +9,13 @@ from pydantic import ValidationError
 
 import src.lib.agent_studio.flow_tools as flow_tools
 from src.lib.agent_studio.models import FlowContextDefinition
+from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+from src.lib.packages.flow_recipes import (
+    FlowRecipeCatalog,
+    FlowRecipeLoadError,
+    FlowRecipeManifest,
+    LoadedFlowRecipeManifest,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -723,6 +730,61 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
         assert validate(steps=templates[name]["steps"], name=name)["valid"] is True
 
 
+def test_all_ten_alliance_recipes_appear_when_required_agents_are_flow_eligible(
+    monkeypatch,
+):
+    catalog = flow_tools.load_flow_recipe_catalog()
+    available_agent_ids = {
+        step.agent_id
+        for recipe in catalog.recipes
+        for step in recipe.steps
+    }
+    validation_agent_ids = {
+        "gene",
+        "allele",
+        "disease",
+        "chemical",
+        "gene_ontology",
+    }
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", sorted(available_agent_ids))
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            agent_id: (
+                {
+                    "category": "Validation",
+                    "output_schema_key": f"{agent_id.title()}Result",
+                }
+                if agent_id in validation_agent_ids
+                else {
+                    "category": (
+                        "Output"
+                        if agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+                        else "Extraction"
+                    )
+                }
+            )
+            for agent_id in available_agent_ids
+        },
+    )
+
+    templates = flow_tools._filter_flow_templates(available_agent_ids, catalog)
+
+    assert [template["name"] for template in templates] == [
+        "Gene Curation",
+        "Gene Extraction",
+        "Disease Annotation",
+        "Disease Extraction",
+        "Chemical Entity Extraction",
+        "Gene Expression Analysis",
+        "Phenotype Extraction",
+        "Allele/Variant Extraction",
+        "Allele Annotation",
+        "GO Annotation Pipeline",
+    ]
+
+
 def test_flow_templates_do_not_advertise_rejected_output_bindings(monkeypatch):
     installed_agent_ids = {
         "pdf_extraction",
@@ -743,6 +805,67 @@ def test_flow_templates_do_not_advertise_rejected_output_bindings(monkeypatch):
     templates = flow_tools._filter_flow_templates(installed_agent_ids)
 
     assert templates == []
+
+
+def test_flow_template_shared_validation_failure_reports_package_recipe_context(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "chat_output"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "chat_output": {"category": "Output"},
+        },
+    )
+    source_path = tmp_path / "flow_recipes.yaml"
+    catalog = FlowRecipeCatalog(
+        contributions=(
+            LoadedFlowRecipeManifest(
+                package_id="org.invalid",
+                export_name="default",
+                source_path=source_path,
+                manifest=FlowRecipeManifest.model_validate(
+                    {
+                        "flow_recipes_api_version": "1.0.0",
+                        "recipes": [
+                            {
+                                "name": "Broken Output",
+                                "description": "Invalid ordered source binding",
+                                "steps": [
+                                    {"agent_id": "pdf_extraction"},
+                                    {
+                                        "agent_id": "chat_output",
+                                        "source_steps": [2],
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises(FlowRecipeLoadError) as exc_info:
+        flow_tools._filter_flow_templates(
+            {"pdf_extraction", "chat_output"},
+            catalog,
+        )
+
+    message = str(exc_info.value)
+    assert "Broken Output" in message
+    assert "org.invalid" in message
+    assert str(source_path) in message
+    assert "source_steps must reference earlier steps" in message
+
+
 
 
 def test_get_flow_templates_handler_reports_core_only_install(monkeypatch):

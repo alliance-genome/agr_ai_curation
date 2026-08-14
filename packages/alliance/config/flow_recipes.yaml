@@ -1,0 +1,135 @@
+flow_recipes_api_version: 1.0.0
+
+equivalence_groups:
+  - agent_ids: [gene, gene_validation]
+  - agent_ids: [allele, allele_validation]
+  - agent_ids: [disease, disease_validation]
+  - agent_ids: [chemical, chemical_validation]
+  - agent_ids: [gene_expression, gene_expression_extraction]
+  - agent_ids: [gene_ontology, gene_ontology_lookup]
+
+suggestions:
+  - name: document_extraction_first
+    when_present:
+      - gene
+      - gene_extractor
+      - allele
+      - allele_extractor
+      - disease
+      - disease_extractor
+      - chemical
+      - gene_expression
+      - phenotype_extractor
+    when_absent: [pdf_extraction]
+    suggested_agent_id: pdf_extraction
+    placement: first
+    message: "Consider adding '{suggested_agent_id}' step first to extract entities from documents"
+  - name: validate_expression_gene_identifiers
+    when_present: [gene_expression]
+    when_absent: [gene]
+    suggested_agent_id: gene
+    placement: after
+    message: "Consider adding '{suggested_agent_id}' step after '{trigger_agent_id}' to validate gene identifiers"
+
+recipes:
+  - name: Gene Curation
+    description: Extract gene mentions from PDF and validate against database
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find gene symbols and identifiers
+      - agent_id: gene
+        step_goal: Validate genes in Alliance database
+      - agent_id: chat_output
+        step_goal: Display validated results
+        source_steps: [2]
+  - name: Gene Extraction
+    description: Extract experimentally supported gene assertions from papers
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find gene mentions and context
+      - agent_id: gene_extractor
+        step_goal: Extract evidence-backed gene assertions
+      - agent_id: chat_output
+        step_goal: Display extraction results
+        source_steps: [2]
+  - name: Disease Annotation
+    description: Extract disease mentions and map to ontology terms
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find disease mentions
+      - agent_id: disease
+        step_goal: Map to Disease Ontology terms
+      - agent_id: chat_output
+        step_goal: Display annotation results
+        source_steps: [2]
+  - name: Disease Extraction
+    description: Extract experimentally supported disease assertions from papers
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find disease mentions and evidence context
+      - agent_id: disease_extractor
+        step_goal: Extract evidence-backed disease assertions
+      - agent_id: chat_output
+        step_goal: Display extraction results
+        source_steps: [2]
+  - name: Chemical Entity Extraction
+    description: Extract chemical compounds and link to ChEBI
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Extract chemical names
+      - agent_id: chemical
+        step_goal: Map to ChEBI identifiers
+  - name: Gene Expression Analysis
+    description: Extract gene expression data from methods sections
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find experimental methods
+      - agent_id: gene_expression
+        step_goal: Extract expression patterns
+      - agent_id: gene
+        step_goal: Validate gene identifiers
+      - agent_id: chat_output
+        step_goal: Display expression data
+        source_steps: [2]
+  - name: Phenotype Extraction
+    description: Extract experimentally supported phenotype assertions from papers
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find phenotype-related result sections
+      - agent_id: phenotype_extractor
+        step_goal: Extract phenotype assertions with evidence
+      - agent_id: chat_output
+        step_goal: Display phenotype extraction results
+        source_steps: [2]
+  - name: Allele/Variant Extraction
+    description: Extract experimentally supported allele and variant assertions from papers
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find allele/variant mentions and context
+      - agent_id: allele_extractor
+        step_goal: Extract evidence-backed allele/variant assertions
+      - agent_id: chat_output
+        step_goal: Display extraction results
+        source_steps: [2]
+  - name: Allele Annotation
+    description: Extract allele/variant mentions and link to database
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find allele/variant mentions
+      - agent_id: allele
+        step_goal: Validate alleles in Alliance database
+      - agent_id: chat_output
+        step_goal: Display allele results
+        source_steps: [2]
+  - name: GO Annotation Pipeline
+    description: Extract and validate Gene Ontology annotations
+    steps:
+      - agent_id: pdf_extraction
+        step_goal: Find GO term mentions and gene functions
+      - agent_id: gene
+        step_goal: Validate gene identifiers
+      - agent_id: gene_ontology
+        step_goal: Validate GO terms
+      - agent_id: chat_output
+        step_goal: Display GO annotations
+        source_steps: [2, 3]
