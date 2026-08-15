@@ -81,14 +81,18 @@ def get_configured_document_source_dev_mode_static_curator_token(
     resolver = registered.registration.development_token_resolver
     if resolver is None:
         return None
+    token: str | None = None
     try:
         token = resolver()
-    except Exception as exc:
+    except Exception:
+        resolver_failed = True
+    else:
+        resolver_failed = False
+    if resolver_failed:
         raise DocumentSourceConfigError(
             "Document-source development-token resolver failed for "
-            f"{registered.source.describe(selected_provider_id)} "
-            f"({type(exc).__name__})"
-        ) from exc
+            f"{registered.source.describe(selected_provider_id)}"
+        )
     if token is not None and not isinstance(token, str):
         raise DocumentSourceConfigError(
             "Document-source development-token resolver returned an invalid value for "
@@ -110,19 +114,21 @@ def get_configured_document_source_provider(
         )
 
     registered = _resolve_external_provider(selected_provider_id)
+    provider: DocumentSourceProvider | None = None
     try:
         provider = registered.registration.factory()
-    except DocumentSourceConfigError:
-        raise
-    except Exception as exc:
+    except Exception:
+        factory_failed = True
+    else:
+        factory_failed = False
+    if factory_failed:
         raise DocumentSourceConfigError(
             "Document-source provider factory failed for "
-            f"{registered.source.describe(selected_provider_id)} "
-            f"({type(exc).__name__})"
-        ) from exc
+            f"{registered.source.describe(selected_provider_id)}"
+        )
 
     actual_provider_id = getattr(provider, "provider_id", None)
-    if actual_provider_id != selected_provider_id:
+    if provider is None or actual_provider_id != selected_provider_id:
         raise DocumentSourceConfigError(
             "Document-source provider factory returned a mismatched provider_id; "
             f"expected '{selected_provider_id}' for "

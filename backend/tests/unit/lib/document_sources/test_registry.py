@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 import pytest
@@ -249,6 +250,109 @@ def test_provider_import_error_is_sanitized_and_has_provenance(tmp_path):
     assert "broken_provider" in message
     assert "RuntimeError" in message
     assert "do-not-leak" not in message
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+    assert "do-not-leak" not in "".join(
+        traceback.format_exception(exc_info.value)
+    )
+
+
+def test_provider_factory_error_is_sanitized_without_chained_secrets(
+    tmp_path,
+    monkeypatch,
+):
+    packages_dir = tmp_path / "packages"
+    _write_provider_package(
+        packages_dir,
+        package_id="org.factory_failure",
+        provider_id="factory_failure",
+        module_text='''\
+from src.lib.document_sources.models import DocumentSourceConfigError
+from src.lib.document_sources.registration import DocumentSourceProviderRegistration
+
+def create_provider():
+    secret = "factory-do-not-leak"
+    raise DocumentSourceConfigError(secret)
+
+DOCUMENT_SOURCE_PROVIDER_REGISTRATION = DocumentSourceProviderRegistration(
+    provider_id="factory_failure",
+    factory=create_provider,
+)
+''',
+    )
+    registry = load_document_source_provider_registry(packages_dir)
+    monkeypatch.setattr(
+        document_source_registry,
+        "get_document_source_provider_registry",
+        lambda: registry,
+    )
+
+    with pytest.raises(DocumentSourceConfigError) as exc_info:
+        document_source_registry.get_configured_document_source_provider(
+            "factory_failure"
+        )
+
+    message = str(exc_info.value)
+    assert "org.factory_failure" in message
+    assert "factory_failure" in message
+    assert "factory-do-not-leak" not in message
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+    assert "factory-do-not-leak" not in "".join(
+        traceback.format_exception(exc_info.value)
+    )
+
+
+def test_development_token_resolver_error_is_sanitized_without_chained_secrets(
+    tmp_path,
+    monkeypatch,
+):
+    packages_dir = tmp_path / "packages"
+    _write_provider_package(
+        packages_dir,
+        package_id="org.resolver_failure",
+        provider_id="resolver_failure",
+        module_text='''\
+from src.lib.document_sources.registration import DocumentSourceProviderRegistration
+
+class SyntheticProvider:
+    provider_id = "resolver_failure"
+
+def create_provider():
+    return SyntheticProvider()
+
+def resolve_development_token():
+    secret = "resolver-do-not-leak"
+    raise RuntimeError(secret)
+
+DOCUMENT_SOURCE_PROVIDER_REGISTRATION = DocumentSourceProviderRegistration(
+    provider_id="resolver_failure",
+    factory=create_provider,
+    development_token_resolver=resolve_development_token,
+)
+''',
+    )
+    registry = load_document_source_provider_registry(packages_dir)
+    monkeypatch.setattr(
+        document_source_registry,
+        "get_document_source_provider_registry",
+        lambda: registry,
+    )
+
+    with pytest.raises(DocumentSourceConfigError) as exc_info:
+        document_source_registry.get_configured_document_source_dev_mode_static_curator_token(
+            "resolver_failure"
+        )
+
+    message = str(exc_info.value)
+    assert "org.resolver_failure" in message
+    assert "resolver_failure" in message
+    assert "resolver-do-not-leak" not in message
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+    assert "resolver-do-not-leak" not in "".join(
+        traceback.format_exception(exc_info.value)
+    )
 
 
 def test_registration_provider_id_must_match_manifest_export_name(tmp_path):

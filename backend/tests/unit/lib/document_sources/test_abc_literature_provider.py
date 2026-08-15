@@ -859,11 +859,19 @@ def test_registry_rejects_unknown_provider(lookup) -> None:
         lookup("unsupported_provider")
 
 
-def test_registry_normalizes_abc_config_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_registry_sanitizes_abc_config_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ABC_LITERATURE_API_BASE_URL", raising=False)
 
-    with pytest.raises(DocumentSourceConfigError, match="ABC_LITERATURE_API_BASE_URL"):
+    with pytest.raises(DocumentSourceConfigError) as exc_info:
         get_configured_document_source_provider("abc_literature")
+
+    message = str(exc_info.value)
+    assert "Document-source provider factory failed" in message
+    assert "abc_literature" in message
+    assert "agr.alliance" in message
+    assert "ABC_LITERATURE_API_BASE_URL" not in message
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
 
 
 @pytest.mark.asyncio

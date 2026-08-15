@@ -66,10 +66,11 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
     ),
     re.compile(r"\b(?:FB|WB|MGI|RGD|SGD|ZFIN|HGNC)\b"),
 )
+GENERIC_DOCUMENT_SOURCE_CORE_ROOT = Path("backend/src/lib/document_sources")
 GENERIC_DOCUMENT_SOURCE_CORE_PATHS = {
-    Path("backend/src/lib/document_sources/providers/__init__.py"),
-    Path("backend/src/lib/document_sources/registration.py"),
-    Path("backend/src/lib/document_sources/registry.py"),
+    path.relative_to(REPO_ROOT)
+    for path in (REPO_ROOT / GENERIC_DOCUMENT_SOURCE_CORE_ROOT).rglob("*.py")
+} | {
     Path("backend/src/lib/openai_agents/config.py"),
     Path("backend/src/lib/packages/document_source_provider_registry.py"),
 }
@@ -822,6 +823,16 @@ def test_document_source_core_has_no_project_provider_imports_or_ids():
                 violations.append(f"{relative_path}: {pattern.pattern}")
 
     assert violations == []
+
+
+def test_document_source_core_guardrail_covers_every_core_module():
+    document_source_root = REPO_ROOT / GENERIC_DOCUMENT_SOURCE_CORE_ROOT
+    expected_paths = {
+        path.relative_to(REPO_ROOT)
+        for path in document_source_root.rglob("*.py")
+    }
+
+    assert expected_paths <= GENERIC_DOCUMENT_SOURCE_CORE_PATHS
 
 
 def test_generic_flow_recipe_sources_do_not_hardcode_domain_metadata():
