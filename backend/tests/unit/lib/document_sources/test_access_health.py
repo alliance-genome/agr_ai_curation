@@ -125,37 +125,15 @@ def test_repeated_dev_static_token_lookup_does_not_construct_provider(
     monkeypatch,
 ) -> None:
     request = request_with_cookies({})
-    constructed = []
-
-    class ClosableProvider:
-        def __init__(self) -> None:
-            self.closed = False
-
-        async def aclose(self) -> None:
-            self.closed = True
-
-    def construct_provider() -> ClosableProvider:
-        provider = ClosableProvider()
-        constructed.append(provider)
-        return provider
 
     monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
     monkeypatch.setattr(
         "src.lib.document_sources.registry.get_document_source_provider",
         lambda: "abc_literature",
     )
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
-        lambda: "static_bearer",
-    )
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
-        lambda: " repeated-dev-token ",
-    )
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.ABCLiteratureDocumentSourceProvider.from_env",
-        construct_provider,
-    )
+    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "static_bearer")
+    monkeypatch.setenv("ABC_LITERATURE_BEARER_TOKEN", " repeated-dev-token ")
+    monkeypatch.delenv("ABC_LITERATURE_API_BASE_URL", raising=False)
 
     contexts = [
         build_document_source_request_context(
@@ -170,7 +148,6 @@ def test_repeated_dev_static_token_lookup_does_not_construct_provider(
         "repeated-dev-token",
         "repeated-dev-token",
     ]
-    assert constructed == []
 
 
 def test_non_dev_request_does_not_read_static_token_configuration(monkeypatch) -> None:

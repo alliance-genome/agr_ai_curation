@@ -24,7 +24,7 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
     SourceReference,
 )
-from src.lib.document_sources.providers.abc_literature import (
+from agr_ai_curation_alliance.document_sources.abc_literature import (
     ABCLiteratureDocumentSourceProvider,
 )
 

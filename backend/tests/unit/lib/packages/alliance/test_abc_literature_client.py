@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from src.lib.literature.client import (
+from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureAuthMode,
     ABCLiteratureClient,
     ABCLiteratureClientConfig,

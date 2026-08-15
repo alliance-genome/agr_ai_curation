@@ -15,6 +15,10 @@ exports:
     name: default
     path: python/src/org_custom/curation_adapters.py
     description: Neutral custom organization curation adapter registrations
+  - kind: document_source_provider
+    name: example_literature
+    path: python/src/org_custom/document_sources.py
+    description: Neutral example external document-source provider registration
   - kind: flow_recipes
     name: demo_flows
     path: config/flow_recipes.yaml

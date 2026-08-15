@@ -140,6 +140,7 @@ Packages can contribute:
 
 - agent bundles
 - tool bindings
+- external document-source provider registrations
 - provider defaults
 - model defaults
 - tool policy defaults
@@ -190,6 +191,38 @@ agent_bundles:
 
 The `agent_bundles` shorthand expands into the required agent, prompt, schema,
 and group-rule exports automatically.
+
+### External document-source providers
+
+A package can register an external document source with a Python module export:
+
+```yaml
+exports:
+  - kind: document_source_provider
+    name: example_literature
+    path: python/src/org_custom/document_sources.py
+    description: Example literature service integration
+```
+
+The module must define `get_document_source_provider_registrations()` and
+return a list or tuple of `DocumentSourceProviderRegistration` values. Each
+registration supplies a unique lowercase provider ID, a lazy provider factory,
+optional lazy development-token resolver, non-secret presentation metadata,
+and boolean capability metadata. Factories and token resolvers are not called
+while packages are enumerated. A configured provider is selected with
+`DOCUMENT_SOURCE_PROVIDER=<provider_id>`.
+
+Import `DocumentSourceProviderRegistration` and
+`DocumentSourceProviderPresentation` from `src.lib.packages`; the synthetic
+package under `backend/tests/unit/lib/packages/fixtures/org_custom_runtime/`
+shows a minimal third-provider implementation.
+
+Provider IDs are unique across all loaded packages. Missing modules, malformed
+registrations, and collisions fail startup with the package ID, manifest/module
+path, export name, and provider ID where available. `local_pdf` is reserved for
+the built-in local upload flow and is not an external provider registration.
+The shipped `agr.alliance` package owns the `abc_literature` registration; a
+core-only install starts without it and continues to use `local_pdf`.
 
 ### Agent Studio flow recipes
 

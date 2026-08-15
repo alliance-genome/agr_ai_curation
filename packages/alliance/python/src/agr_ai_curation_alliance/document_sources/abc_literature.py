@@ -21,30 +21,13 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
     SourceReference,
 )
-from src.lib.literature.client import (
+from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureClient,
-    ABCLiteratureClientConfig,
     ABCLiteratureClientError,
     ABCLiteratureHTTPError,
 )
-from src.lib.openai_agents.config import (
-    get_abc_literature_auth_mode,
-    get_abc_literature_bearer_token,
-)
 
-ABC_LITERATURE_PROVIDER_ID = "abc_literature"
-ABC_LITERATURE_PROVIDER_METADATA = {
-    "display_label": "ABC Literature",
-    "reference_label_priority": [
-        "external_ids.fbrf",
-        "reference_curie",
-        "reference_id",
-        "external_ids.pmid",
-        "external_ids.pmcid",
-        "external_ids.doi",
-        "source_md5",
-    ],
-}
+from agr_ai_curation_alliance.document_sources import ABC_LITERATURE_PROVIDER_ID
 
 _FIGURE_METADATA_FILE_CLASSES = {
     "converted_main_figure_metadata",
@@ -58,15 +41,6 @@ _ARTIFACT_STATUS_KEYS = (
 )
 
 
-def get_dev_mode_static_curator_token() -> str | None:
-    """Return the configured static bearer only for the explicit ABC dev mode."""
-
-    if get_abc_literature_auth_mode().strip().lower() != "static_bearer":
-        return None
-    token = (get_abc_literature_bearer_token() or "").strip()
-    return token or None
-
-
 class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
     """Map ABC Literature REST payloads into provider-neutral source objects."""
 
@@ -74,10 +48,6 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
 
     def __init__(self, client: ABCLiteratureClient):
         self._client = client
-
-    @classmethod
-    def from_env(cls) -> ABCLiteratureDocumentSourceProvider:
-        return cls(ABCLiteratureClient(ABCLiteratureClientConfig.from_env()))
 
     async def __aenter__(self) -> Self:
         return self
