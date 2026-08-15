@@ -23,7 +23,7 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
     SourceReference,
 )
-from src.lib.literature.client import (
+from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureAuthMode,
     ABCLiteratureClient,
     ABCLiteratureClientConfig,

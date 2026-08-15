@@ -1,4 +1,4 @@
-"""ABC Literature read-only client support."""
+"""Alliance-owned ABC Literature read-only client support."""
 
 from .client import (
     ABCLiteratureAuthMode,

@@ -1,4 +1,4 @@
-"""ABC Literature REST client for allowed AI Curation import operations.
+"""Alliance-owned ABC Literature REST client for allowed import operations.
 
 The client intentionally exposes only lookup/list/download/search operations
 plus the constrained existing-reference conversion request used by ABC-backed

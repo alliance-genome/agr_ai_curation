@@ -6,12 +6,11 @@ from src.lib.document_sources.registration import (
     DocumentSourceProviderPresentation,
     DocumentSourceProviderRegistration,
 )
-from src.lib.literature.client import ABCLiteratureConfigError
-
 from agr_ai_curation_alliance.document_sources.abc_literature import (
     ABCLiteratureDocumentSourceProvider,
     get_dev_mode_static_curator_token,
 )
+from agr_ai_curation_alliance.literature.client import ABCLiteratureConfigError
 
 
 def _create_abc_literature_provider() -> ABCLiteratureDocumentSourceProvider:

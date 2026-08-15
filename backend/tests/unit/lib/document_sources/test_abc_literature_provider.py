@@ -28,11 +28,11 @@ from agr_ai_curation_alliance.document_sources.abc_literature import (
     ABCLiteratureDocumentSourceProvider,
     get_dev_mode_static_curator_token,
 )
+from agr_ai_curation_alliance.literature.client import ABCLiteratureHTTPError
 from src.lib.document_sources.registry import (
     get_configured_document_source_dev_mode_static_curator_token,
     get_configured_document_source_provider,
 )
-from src.lib.literature.client import ABCLiteratureHTTPError
 
 
 class FakeABCLiteratureClient:

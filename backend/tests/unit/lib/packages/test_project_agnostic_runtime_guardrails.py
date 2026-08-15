@@ -205,7 +205,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/feedback/test_service.py"),
     Path("backend/tests/unit/lib/flows/test_executor.py"),
     Path("backend/tests/unit/lib/flows/test_output_projection.py"),
-    Path("backend/tests/unit/lib/literature/test_client.py"),
+    Path("backend/tests/unit/lib/packages/alliance/test_abc_literature_client.py"),
     Path("backend/tests/unit/lib/openai_agents/test_streaming_tools_retry_paths.py"),
     Path("backend/tests/unit/lib/pdf_jobs/test_upload_intake_service.py"),
     Path("backend/tests/unit/models/sql/test_pdf_document.py"),
@@ -833,6 +833,11 @@ def test_document_source_core_guardrail_covers_every_core_module():
     }
 
     assert expected_paths <= GENERIC_DOCUMENT_SOURCE_CORE_PATHS
+
+
+def test_document_source_core_does_not_ship_alliance_literature_client():
+    assert not (REPO_ROOT / "backend/src/lib/literature/client.py").exists()
+    assert not (REPO_ROOT / "backend/src/lib/literature/__init__.py").exists()
 
 
 def test_generic_flow_recipe_sources_do_not_hardcode_domain_metadata():
