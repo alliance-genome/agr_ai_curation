@@ -16,10 +16,18 @@ from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
 from src.lib.curation_workspace.adapter_registry import build_curation_adapter_registry
 from src.lib.curation_workspace.export_adapters.registry import ExportAdapterRegistry
+from src.lib.document_sources.registry import (
+    get_configured_document_source_dev_mode_static_curator_token,
+    get_configured_document_source_provider,
+    get_document_source_provider_metadata,
+)
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.flows.output_projection import build_flow_output_artifact_bundle
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.flow_recipes import load_flow_recipe_catalog
+from src.lib.packages.document_source_provider_loader import (
+    load_document_source_provider_catalog,
+)
 from src.lib.packages.tool_registry import load_tool_registry
 from src.schemas.curation_workspace import SubmissionMode
 
@@ -47,16 +55,22 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/agent_studio/catalog_service.py"),
     Path("backend/src/lib/agent_studio/flow_tools.py"),
     Path("backend/src/lib/config/agent_loader.py"),
+    Path("backend/src/lib/openai_agents/config.py"),
+    Path("backend/src/lib/document_sources/registry.py"),
     Path("backend/src/lib/flows/output_projection.py"),
     Path("backend/src/lib/openai_agents/runner.py"),
     Path("backend/src/lib/openai_agents/streaming_tools.py"),
     Path("backend/src/lib/packages/flow_recipes.py"),
+    Path("backend/src/lib/packages/document_source_provider_loader.py"),
 }
 GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"agr\.alliance"),
     re.compile(r"agr_curation_query"),
     re.compile(r"alliance_api_call"),
     re.compile(r"alliancegenome"),
+    re.compile(r"abc_literature"),
+    re.compile(r"ABC Literature"),
+    re.compile(r"agr_ai_curation_alliance\.document_sources"),
     re.compile(
         r"\b(?:allele_candidates|gene_candidates|agm_candidates|"
         r"ontology_term_candidates|gene_id|gene_symbol|go_id)\b"
@@ -372,6 +386,41 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     demo_tool_binding = tool_registry.get("demo_search_tool")
     assert demo_tool_binding is not None
     assert demo_tool_binding.source.package_id == "org.custom"
+
+    document_source_catalog = load_document_source_provider_catalog(packages_dir)
+    assert set(document_source_catalog.registrations_by_provider_id) == {
+        "example_literature"
+    }
+    loaded_document_source = document_source_catalog.get("example_literature")
+    assert loaded_document_source is not None
+    assert dict(loaded_document_source.registration.capabilities) == {
+        "identifier_import": True,
+        "checksum_lookup": False,
+        "conversion_requests": False,
+    }
+    callback_calls = getattr(
+        loaded_document_source.registration.factory,
+        "__globals__",
+    )["CALLBACK_CALLS"]
+    assert callback_calls == {"factory": 0, "development_token_resolver": 0}
+    assert loaded_document_source.source.package_id == "org.custom"
+    assert get_document_source_provider_metadata("example_literature") == {
+        "display_label": "Example Literature",
+        "reference_label_priority": ["reference_curie", "reference_id"],
+    }
+    assert callback_calls == {"factory": 0, "development_token_resolver": 0}
+    assert (
+        get_configured_document_source_dev_mode_static_curator_token(
+            "example_literature"
+        )
+        == "fixture-development-token"
+    )
+    assert callback_calls == {"factory": 0, "development_token_resolver": 1}
+    assert (
+        get_configured_document_source_provider("example_literature").provider_id
+        == "example_literature"
+    )
+    assert callback_calls == {"factory": 1, "development_token_resolver": 1}
 
     registry = build_agent_registry()
     assert "demo_agent_validation" in registry

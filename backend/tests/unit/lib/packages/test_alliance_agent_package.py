@@ -82,6 +82,11 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
             "python/src/agr_ai_curation_alliance/curation_adapters.py",
         ),
         (
+            ExportKind.DOCUMENT_SOURCE_PROVIDER,
+            "abc_literature",
+            "python/src/agr_ai_curation_alliance/document_sources/registration.py",
+        ),
+        (
             ExportKind.FLOW_RECIPES,
             "alliance_flow_recipes",
             "config/flow_recipes.yaml",

@@ -11,6 +11,19 @@ from .curation_adapter_loader import (
     LoadedCurationAdapterExport,
     load_package_curation_adapter_exports,
 )
+from .document_source_provider_loader import (
+    DocumentSourceProviderCatalog,
+    DocumentSourceProviderLoadError,
+    DocumentSourceProviderSource,
+    LoadedDocumentSourceProviderRegistration,
+    build_document_source_provider_catalog,
+    load_document_source_provider_catalog,
+    load_package_document_source_provider_exports,
+)
+from .document_source_provider_models import (
+    DocumentSourceProviderPresentation,
+    DocumentSourceProviderRegistration,
+)
 from .env_manager import (
     PackageEnvironment,
     PackageEnvironmentBootstrapError,
@@ -112,12 +125,18 @@ from .tool_registry import (
 __all__ = [
     "DiscoveredPackage",
     "CurationAdapterLoadError",
+    "DocumentSourceProviderCatalog",
+    "DocumentSourceProviderLoadError",
+    "DocumentSourceProviderPresentation",
+    "DocumentSourceProviderRegistration",
+    "DocumentSourceProviderSource",
     "ExportKind",
     "FlowRecipeCatalog",
     "FlowRecipeLoadError",
     "FlowRecipeManifest",
     "LoadedPackage",
     "LoadedCurationAdapterExport",
+    "LoadedDocumentSourceProviderRegistration",
     "LoadedToolBindingExport",
     "PROTOCOL_VERSION",
     "AgentBundleRegistrationError",
@@ -155,6 +174,7 @@ __all__ = [
     "ToolRegistry",
     "ToolRegistryValidationError",
     "build_package_health_report",
+    "build_document_source_provider_catalog",
     "build_flow_recipe_catalog",
     "build_tool_registry",
     "decode_request",
@@ -185,6 +205,8 @@ __all__ = [
     "get_tool_bindings_path",
     "iter_runtime_package_dirs",
     "load_package_curation_adapter_exports",
+    "load_document_source_provider_catalog",
+    "load_package_document_source_provider_exports",
     "load_package_tool_binding_exports",
     "load_package_manifest",
     "load_package_registry",

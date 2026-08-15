@@ -14,6 +14,10 @@ from .models import (
     SourceReference,
     ViewerMode,
 )
+from src.lib.packages.document_source_provider_models import (
+    DocumentSourceProviderPresentation,
+    DocumentSourceProviderRegistration,
+)
 from .access import (
     DocumentSourceRequestContext,
     build_document_source_request_context,
@@ -32,6 +36,8 @@ __all__ = [
     "DocumentSourceError",
     "DocumentSourceHealth",
     "DocumentSourceProvider",
+    "DocumentSourceProviderPresentation",
+    "DocumentSourceProviderRegistration",
     "SourceAccessPolicy",
     "SourceAccessScope",
     "SourceArtifact",

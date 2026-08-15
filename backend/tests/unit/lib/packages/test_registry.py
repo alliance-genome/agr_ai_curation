@@ -370,6 +370,7 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
     assert alliance_export_kinds == {
         ExportKind.AGENT,
         ExportKind.CURATION_ADAPTER,
+        ExportKind.DOCUMENT_SOURCE_PROVIDER,
         ExportKind.PROMPT,
         ExportKind.GROUP_RULE,
         ExportKind.SCHEMA,

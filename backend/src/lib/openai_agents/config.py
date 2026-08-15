@@ -779,7 +779,7 @@ def get_flow_supervisor_parallel_tool_calls_enabled() -> bool:
 # for the documented rationale and consequences of each.
 # =============================================================================
 
-# --- Document source / ABC Literature ---
+# --- Document sources ---
 
 
 def get_document_source_import_enabled() -> bool:
@@ -790,41 +790,6 @@ def get_document_source_import_enabled() -> bool:
 def get_document_source_provider() -> str:
     """Primary document-source provider identifier (DOCUMENT_SOURCE_PROVIDER)."""
     return os.getenv("DOCUMENT_SOURCE_PROVIDER", "local_pdf").strip() or "local_pdf"
-
-
-def get_abc_literature_api_base_url() -> str:
-    """ABC Literature REST API base URL (ABC_LITERATURE_API_BASE_URL)."""
-    return os.getenv("ABC_LITERATURE_API_BASE_URL", "")
-
-
-def get_abc_literature_auth_mode() -> str:
-    """ABC Literature auth mode (ABC_LITERATURE_AUTH_MODE)."""
-    return os.getenv("ABC_LITERATURE_AUTH_MODE", "none")
-
-
-def get_abc_literature_bearer_token() -> str | None:
-    """Static bearer token for ABC Literature auth (ABC_LITERATURE_BEARER_TOKEN)."""
-    return os.getenv("ABC_LITERATURE_BEARER_TOKEN")
-
-
-def get_abc_literature_cognito_token_url() -> str | None:
-    """Cognito token endpoint for ABC Literature auth."""
-    return os.getenv("ABC_LITERATURE_COGNITO_TOKEN_URL")
-
-
-def get_abc_literature_cognito_client_id() -> str | None:
-    """Cognito client id for ABC Literature auth (ABC_LITERATURE_COGNITO_CLIENT_ID)."""
-    return os.getenv("ABC_LITERATURE_COGNITO_CLIENT_ID")
-
-
-def get_abc_literature_cognito_client_secret() -> str | None:
-    """Cognito client secret for ABC Literature auth."""
-    return os.getenv("ABC_LITERATURE_COGNITO_CLIENT_SECRET")
-
-
-def get_abc_literature_cognito_scope() -> str | None:
-    """Cognito client-credentials scope for ABC Literature auth."""
-    return os.getenv("ABC_LITERATURE_COGNITO_SCOPE")
 
 
 def get_document_source_request_timeout_seconds() -> float:

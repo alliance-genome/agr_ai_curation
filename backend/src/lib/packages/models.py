@@ -122,6 +122,7 @@ class ExportKind(str, Enum):
     CONNECTION = "connection"
     IDENTIFIER_PREFIXES = "identifier_prefixes"
     CURATION_ADAPTER = "curation_adapter"
+    DOCUMENT_SOURCE_PROVIDER = "document_source_provider"
     FLOW_RECIPES = "flow_recipes"
 
 

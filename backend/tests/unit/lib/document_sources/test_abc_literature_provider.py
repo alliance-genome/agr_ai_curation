@@ -24,15 +24,22 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
     SourceReference,
 )
-from src.lib.document_sources.providers.abc_literature import (
+from agr_ai_curation_alliance.document_sources.abc_literature import (
     ABCLiteratureDocumentSourceProvider,
-    get_dev_mode_static_curator_token,
+)
+from agr_ai_curation_alliance.document_sources.registration import (
+    _build_abc_literature_client_config,
+    _resolve_abc_literature_development_token,
 )
 from src.lib.document_sources.registry import (
     get_configured_document_source_dev_mode_static_curator_token,
     get_configured_document_source_provider,
 )
-from src.lib.literature.client import ABCLiteratureHTTPError
+from src.lib.literature.client import (
+    ABCLiteratureAuthMode,
+    ABCLiteratureConfigError,
+    ABCLiteratureHTTPError,
+)
 
 
 class FakeABCLiteratureClient:
@@ -351,29 +358,47 @@ async def test_reference_import_uses_actual_abc_main_pdf_precedence() -> None:
     assert decision.selected.converted_artifact.artifact_id == "5020781"
 
 def test_dev_mode_static_curator_token_uses_static_bearer_config(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
-        lambda: "static_bearer",
-    )
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
-        lambda: " abc-dev-token ",
-    )
+    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "static_bearer")
+    monkeypatch.setenv("ABC_LITERATURE_BEARER_TOKEN", " abc-dev-token ")
 
-    assert get_dev_mode_static_curator_token() == "abc-dev-token"
+    assert _resolve_abc_literature_development_token() == "abc-dev-token"
 
 
 def test_dev_mode_static_curator_token_ignores_non_static_auth_mode(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
-        lambda: "passthrough",
-    )
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
-        lambda: "abc-dev-token",
-    )
+    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "passthrough")
+    monkeypatch.setenv("ABC_LITERATURE_BEARER_TOKEN", "abc-dev-token")
 
-    assert get_dev_mode_static_curator_token() is None
+    assert _resolve_abc_literature_development_token() is None
+
+
+def test_package_builds_complete_abc_client_config_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("ABC_LITERATURE_API_BASE_URL", " https://literature.example/api ")
+    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "cognito_client_credentials")
+    monkeypatch.setenv("ABC_LITERATURE_BEARER_TOKEN", "static-token")
+    monkeypatch.setenv("ABC_LITERATURE_COGNITO_TOKEN_URL", "https://auth.example/token")
+    monkeypatch.setenv("ABC_LITERATURE_COGNITO_CLIENT_ID", "client-id")
+    monkeypatch.setenv("ABC_LITERATURE_COGNITO_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("ABC_LITERATURE_COGNITO_SCOPE", "scope/read")
+    monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", "12.5")
+
+    config = _build_abc_literature_client_config()
+
+    assert config.base_url == "https://literature.example/api"
+    assert config.auth_mode is ABCLiteratureAuthMode.COGNITO_CLIENT_CREDENTIALS
+    assert config.bearer_token == "static-token"
+    assert config.cognito_token_url == "https://auth.example/token"
+    assert config.cognito_client_id == "client-id"
+    assert config.cognito_client_secret == "client-secret"
+    assert config.cognito_scope == "scope/read"
+    assert config.timeout_seconds == 12.5
+
+
+def test_package_rejects_unknown_abc_auth_mode(monkeypatch) -> None:
+    monkeypatch.setenv("ABC_LITERATURE_API_BASE_URL", "https://literature.example/api")
+    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "unknown")
+
+    with pytest.raises(ABCLiteratureConfigError, match="ABC_LITERATURE_AUTH_MODE"):
+        _build_abc_literature_client_config()
 
 
 @pytest.mark.asyncio

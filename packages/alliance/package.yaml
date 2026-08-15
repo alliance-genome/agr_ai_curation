@@ -19,6 +19,10 @@ exports:
     name: default
     path: python/src/agr_ai_curation_alliance/curation_adapters.py
     description: Package-owned curation adapter registrations
+  - kind: document_source_provider
+    name: abc_literature
+    path: python/src/agr_ai_curation_alliance/document_sources/registration.py
+    description: Alliance ABC Literature document-source provider registration
   - kind: flow_recipes
     name: alliance_flow_recipes
     path: config/flow_recipes.yaml
