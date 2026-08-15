@@ -21,7 +21,7 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
     SourceReference,
 )
-from src.lib.literature.client import (
+from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureClient,
     ABCLiteratureClientError,
     ABCLiteratureHTTPError,
@@ -48,14 +48,6 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
 
     def __init__(self, client: ABCLiteratureClient):
         self._client = client
-
-    @classmethod
-    def from_env(cls) -> ABCLiteratureDocumentSourceProvider:
-        from agr_ai_curation_alliance.document_sources.registration import (
-            _build_abc_literature_client_config,
-        )
-
-        return cls(ABCLiteratureClient(_build_abc_literature_client_config()))
 
     async def __aenter__(self) -> Self:
         return self

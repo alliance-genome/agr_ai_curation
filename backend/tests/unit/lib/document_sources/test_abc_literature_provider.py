@@ -35,7 +35,7 @@ from src.lib.document_sources.registry import (
     get_configured_document_source_dev_mode_static_curator_token,
     get_configured_document_source_provider,
 )
-from src.lib.literature.client import (
+from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureAuthMode,
     ABCLiteratureConfigError,
     ABCLiteratureHTTPError,
@@ -399,6 +399,28 @@ def test_package_rejects_unknown_abc_auth_mode(monkeypatch) -> None:
 
     with pytest.raises(ABCLiteratureConfigError, match="ABC_LITERATURE_AUTH_MODE"):
         _build_abc_literature_client_config()
+
+
+@pytest.mark.parametrize(
+    ("raw_timeout", "expected_timeout"),
+    [
+        (None, 10.0),
+        ("not-a-number", 10.0),
+        ("0", 0.1),
+    ],
+)
+def test_package_preserves_document_source_timeout_defaults_and_minimum(
+    monkeypatch,
+    raw_timeout: str | None,
+    expected_timeout: float,
+) -> None:
+    monkeypatch.setenv("ABC_LITERATURE_API_BASE_URL", "https://literature.example/api")
+    if raw_timeout is None:
+        monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raw_timeout)
+
+    assert _build_abc_literature_client_config().timeout_seconds == expected_timeout
 
 
 @pytest.mark.asyncio

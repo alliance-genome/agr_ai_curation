@@ -37,7 +37,7 @@ def _document_source_request_timeout_seconds() -> float:
 def _build_abc_literature_client_config():
     """Build ABC client configuration entirely from Alliance package settings."""
 
-    from src.lib.literature.client import (
+    from agr_ai_curation_alliance.literature.client import (
         ABCLiteratureAuthMode,
         ABCLiteratureClientConfig,
         ABCLiteratureConfigError,
@@ -71,14 +71,18 @@ def _build_abc_literature_client_config():
 
 def _create_abc_literature_provider():
     from src.lib.document_sources.models import DocumentSourceConfigError
-    from src.lib.literature.client import ABCLiteratureConfigError
+    from agr_ai_curation_alliance.literature.client import (
+        ABCLiteratureClient,
+        ABCLiteratureConfigError,
+    )
 
     from agr_ai_curation_alliance.document_sources.abc_literature import (
         ABCLiteratureDocumentSourceProvider,
     )
 
     try:
-        return ABCLiteratureDocumentSourceProvider.from_env()
+        client = ABCLiteratureClient(_build_abc_literature_client_config())
+        return ABCLiteratureDocumentSourceProvider(client)
     except ABCLiteratureConfigError as exc:
         raise DocumentSourceConfigError(str(exc)) from exc
 
