@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.lib.document_sources.registration import (
     DocumentSourceProviderRegistration,
+    LOCAL_PDF_PROVIDER_ID,
 )
 
 from .import_paths import extend_sys_path_for_package
@@ -230,6 +231,12 @@ def _load_provider_export(
         raise DocumentSourceProviderExportLoadError(
             f"Document-source {source.describe(registration.provider_id)} must use "
             f"the provider ID as its export name; got '{export.name}'"
+        )
+    if registration.provider_id == LOCAL_PDF_PROVIDER_ID:
+        raise DocumentSourceProviderExportLoadError(
+            f"Document-source provider ID '{LOCAL_PDF_PROVIDER_ID}' is reserved for "
+            "the built-in local upload flow and cannot be registered by "
+            f"{source.describe(registration.provider_id)}"
         )
 
     return RegisteredDocumentSourceProvider(

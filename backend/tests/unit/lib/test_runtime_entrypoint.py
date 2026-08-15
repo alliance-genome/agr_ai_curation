@@ -12,6 +12,9 @@ from types import SimpleNamespace
 import pytest
 
 from src.lib.document_sources.models import DocumentSourceConfigError
+from src.lib.packages.document_source_provider_registry import (
+    DocumentSourceProviderRegistryValidationError,
+)
 from src.lib.packages.models import ExportKind, PackageExport, PackageManifest
 from src.lib.packages.flow_recipes import FlowRecipeLoadError
 from src.lib.packages.registry import LoadedPackage, PackageRegistry
@@ -106,6 +109,56 @@ def test_validate_runtime_packages_rejects_unregistered_document_source_provider
     assert "missing_provider" in message
     assert "Registered external providers: none" in message
     assert "local_pdf" in message
+
+
+def test_validate_runtime_packages_rejects_package_owned_local_pdf(
+    monkeypatch,
+    tmp_path: Path,
+):
+    runtime_root = tmp_path / "runtime"
+    package_dir = runtime_root / "packages" / "agr.core"
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    runtime_entrypoint.ensure_runtime_layout()
+    shutil.copytree(REPO_ROOT / "packages" / "core", package_dir)
+
+    manifest_path = package_dir / "package.yaml"
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    manifest_path.write_text(
+        manifest_text.replace(
+            "agent_bundles:\n",
+            "  - kind: document_source_provider\n"
+            "    name: local_pdf\n"
+            "    path: python/src/provider_export.py\n"
+            "    description: Invalid built-in shadow\n"
+            "agent_bundles:\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    module_path = package_dir / "python" / "src" / "provider_export.py"
+    module_path.write_text(
+        '''\
+from src.lib.document_sources.registration import DocumentSourceProviderRegistration
+
+DOCUMENT_SOURCE_PROVIDER_REGISTRATION = DocumentSourceProviderRegistration(
+    provider_id="local_pdf",
+    factory=lambda: object(),
+)
+''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DocumentSourceProviderRegistryValidationError) as exc_info:
+        runtime_entrypoint.validate_runtime_packages()
+
+    message = str(exc_info.value)
+    assert "local_pdf" in message
+    assert "reserved for the built-in local upload flow" in message
+    assert "agr.core" in message
+    assert str(manifest_path) in message
+    assert "export 'local_pdf'" in message
+    assert str(module_path) in message
 
 
 def test_validate_runtime_packages_rejects_recipe_that_fails_shared_flow_contract(

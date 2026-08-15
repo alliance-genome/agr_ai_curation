@@ -11,6 +11,7 @@ from .models import DocumentSourceProvider
 
 
 _PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+LOCAL_PDF_PROVIDER_ID = "local_pdf"
 
 DocumentSourceProviderFactory = Callable[[], DocumentSourceProvider]
 DevelopmentTokenResolver = Callable[[], str | None]

@@ -9,6 +9,7 @@ from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceProvider,
 )
+from src.lib.document_sources.registration import LOCAL_PDF_PROVIDER_ID
 from src.lib.openai_agents.config import get_document_source_provider
 
 if TYPE_CHECKING:
@@ -16,9 +17,6 @@ if TYPE_CHECKING:
         DocumentSourceProviderRegistry,
         RegisteredDocumentSourceProvider,
     )
-
-
-LOCAL_PDF_PROVIDER_ID = "local_pdf"
 
 
 @lru_cache(maxsize=1)

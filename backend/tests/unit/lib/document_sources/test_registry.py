@@ -375,6 +375,33 @@ def test_registration_provider_id_must_match_manifest_export_name(tmp_path):
     assert "provider ID as its export name" in message
 
 
+def test_registry_rejects_reserved_local_pdf_registration_with_provenance(tmp_path):
+    packages_dir = tmp_path / "packages"
+    package_dir = _write_provider_package(
+        packages_dir,
+        package_id="org.reserved",
+        provider_id="local_pdf",
+        module_text=_valid_registration_module("local_pdf"),
+    )
+
+    with pytest.raises(DocumentSourceProviderRegistryValidationError) as exc_info:
+        load_document_source_provider_registry(packages_dir)
+
+    message = str(exc_info.value)
+    assert "local_pdf" in message
+    assert "reserved for the built-in local upload flow" in message
+    assert "org.reserved" in message
+    assert str(package_dir / "package.yaml") in message
+    assert "export 'local_pdf'" in message
+    assert str(package_dir / "python" / "src" / "provider_export.py") in message
+
+    registry = load_document_source_provider_registry(
+        packages_dir,
+        fail_on_validation_error=False,
+    )
+    assert registry.get("local_pdf") is None
+
+
 def test_duplicate_provider_ids_report_both_package_provenances(tmp_path):
     packages_dir = tmp_path / "packages"
     for package_id in ("org.first", "org.second"):
