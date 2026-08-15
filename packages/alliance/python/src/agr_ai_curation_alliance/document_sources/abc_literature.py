@@ -1,7 +1,9 @@
+# pyright: reportAttributeAccessIssue=false, reportMissingImports=false, reportOptionalMemberAccess=false
 """ABC Literature document-source provider adapter."""
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Self, TypeGuard
 
@@ -22,29 +24,15 @@ from src.lib.document_sources.models import (
     SourceReference,
 )
 from src.lib.literature.client import (
+    ABCLiteratureAuthMode,
     ABCLiteratureClient,
     ABCLiteratureClientConfig,
     ABCLiteratureClientError,
+    ABCLiteratureConfigError,
     ABCLiteratureHTTPError,
-)
-from src.lib.openai_agents.config import (
-    get_abc_literature_auth_mode,
-    get_abc_literature_bearer_token,
 )
 
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
-ABC_LITERATURE_PROVIDER_METADATA = {
-    "display_label": "ABC Literature",
-    "reference_label_priority": [
-        "external_ids.fbrf",
-        "reference_curie",
-        "reference_id",
-        "external_ids.pmid",
-        "external_ids.pmcid",
-        "external_ids.doi",
-        "source_md5",
-    ],
-}
 
 _FIGURE_METADATA_FILE_CLASSES = {
     "converted_main_figure_metadata",
@@ -61,10 +49,45 @@ _ARTIFACT_STATUS_KEYS = (
 def get_dev_mode_static_curator_token() -> str | None:
     """Return the configured static bearer only for the explicit ABC dev mode."""
 
-    if get_abc_literature_auth_mode().strip().lower() != "static_bearer":
+    if os.getenv("ABC_LITERATURE_AUTH_MODE", "none").strip().lower() != "static_bearer":
         return None
-    token = (get_abc_literature_bearer_token() or "").strip()
+    token = (os.getenv("ABC_LITERATURE_BEARER_TOKEN") or "").strip()
     return token or None
+
+
+def _client_config_from_env() -> ABCLiteratureClientConfig:
+    """Build package-owned ABC configuration from documented environment inputs."""
+
+    raw_base_url = os.getenv("ABC_LITERATURE_API_BASE_URL", "").strip()
+    if not raw_base_url:
+        raise ABCLiteratureConfigError("ABC_LITERATURE_API_BASE_URL is required")
+
+    raw_auth_mode = os.getenv("ABC_LITERATURE_AUTH_MODE", "none").strip().lower()
+    try:
+        auth_mode = ABCLiteratureAuthMode(raw_auth_mode)
+    except ValueError as exc:
+        allowed = ", ".join(mode.value for mode in ABCLiteratureAuthMode)
+        raise ABCLiteratureConfigError(
+            "Unsupported ABC_LITERATURE_AUTH_MODE; "
+            f"expected one of {allowed}"
+        ) from exc
+
+    raw_timeout = os.getenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", "10.0")
+    try:
+        timeout_seconds = float(raw_timeout)
+    except (TypeError, ValueError):
+        timeout_seconds = 10.0
+
+    return ABCLiteratureClientConfig(
+        base_url=raw_base_url,
+        auth_mode=auth_mode,
+        timeout_seconds=max(0.1, timeout_seconds),
+        bearer_token=os.getenv("ABC_LITERATURE_BEARER_TOKEN"),
+        cognito_token_url=os.getenv("ABC_LITERATURE_COGNITO_TOKEN_URL"),
+        cognito_client_id=os.getenv("ABC_LITERATURE_COGNITO_CLIENT_ID"),
+        cognito_client_secret=os.getenv("ABC_LITERATURE_COGNITO_CLIENT_SECRET"),
+        cognito_scope=os.getenv("ABC_LITERATURE_COGNITO_SCOPE"),
+    )
 
 
 class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
@@ -77,7 +100,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
 
     @classmethod
     def from_env(cls) -> ABCLiteratureDocumentSourceProvider:
-        return cls(ABCLiteratureClient(ABCLiteratureClientConfig.from_env()))
+        return cls(ABCLiteratureClient(_client_config_from_env()))
 
     async def __aenter__(self) -> Self:
         return self

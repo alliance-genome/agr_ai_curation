@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.lib.document_sources.models import DocumentSourceConfigError
 from src.lib.packages.models import ExportKind, PackageExport, PackageManifest
 from src.lib.packages.flow_recipes import FlowRecipeLoadError
 from src.lib.packages.registry import LoadedPackage, PackageRegistry
@@ -43,6 +44,7 @@ def _clear_runtime_env(monkeypatch):
         "BACKEND_HOST",
         "BACKEND_PORT",
         "BACKEND_WORKERS",
+        "DOCUMENT_SOURCE_PROVIDER",
     ):
         monkeypatch.delenv(variable, raising=False)
 
@@ -83,6 +85,27 @@ def test_validate_runtime_packages_accepts_core_only_runtime(monkeypatch, tmp_pa
 
     assert [package.package_id for package in registry.loaded_packages] == ["agr.core"]
     assert registry.failed_packages == ()
+
+
+def test_validate_runtime_packages_rejects_unregistered_document_source_provider(
+    monkeypatch,
+    tmp_path: Path,
+):
+    runtime_root = tmp_path / "runtime"
+    packages_dir = runtime_root / "packages"
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("DOCUMENT_SOURCE_PROVIDER", "missing_provider")
+    runtime_entrypoint.ensure_runtime_layout()
+    shutil.copytree(REPO_ROOT / "packages" / "core", packages_dir / "agr.core")
+
+    with pytest.raises(DocumentSourceConfigError) as exc_info:
+        runtime_entrypoint.validate_runtime_packages()
+
+    message = str(exc_info.value)
+    assert "missing_provider" in message
+    assert "Registered external providers: none" in message
+    assert "local_pdf" in message
 
 
 def test_validate_runtime_packages_rejects_recipe_that_fails_shared_flow_contract(

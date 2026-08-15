@@ -123,6 +123,7 @@ class ExportKind(str, Enum):
     IDENTIFIER_PREFIXES = "identifier_prefixes"
     CURATION_ADAPTER = "curation_adapter"
     FLOW_RECIPES = "flow_recipes"
+    DOCUMENT_SOURCE_PROVIDER = "document_source_provider"
 
 
 class ToolBindingType(str, Enum):

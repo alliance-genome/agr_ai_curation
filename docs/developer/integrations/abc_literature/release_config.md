@@ -16,7 +16,9 @@ DOCUMENT_SOURCE_IMPORT_ENABLED=false
 
 Enable the ABC Literature import path only on stacks that have the Add
 Literature UI/API, request-local curator-token forwarding, group mapping, and
-ABC Literature REST config in place:
+ABC Literature REST config in place. The `agr.alliance` runtime package must be
+installed because it owns the `abc_literature` registration, construction, and
+non-secret presentation/capability metadata:
 
 ```bash
 DOCUMENT_SOURCE_PROVIDER=abc_literature

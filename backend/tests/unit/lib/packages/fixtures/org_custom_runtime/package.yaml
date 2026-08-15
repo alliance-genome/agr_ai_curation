@@ -19,6 +19,10 @@ exports:
     name: demo_flows
     path: config/flow_recipes.yaml
     description: Neutral custom organization flow recipe metadata
+  - kind: document_source_provider
+    name: example_literature
+    path: python/src/org_custom/document_source_provider.py
+    description: Synthetic non-project document-source provider
 agent_bundles:
   - name: demo_agent
     has_schema: true

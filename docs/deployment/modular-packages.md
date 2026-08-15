@@ -140,6 +140,7 @@ Packages can contribute:
 
 - agent bundles
 - tool bindings
+- document-source providers
 - provider defaults
 - model defaults
 - tool policy defaults
@@ -191,6 +192,34 @@ agent_bundles:
 The `agent_bundles` shorthand expands into the required agent, prompt, schema,
 and group-rule exports automatically.
 
+### Document-source providers
+
+External document-source providers are explicit package exports. The export
+points to a Python module that defines
+`DOCUMENT_SOURCE_PROVIDER_REGISTRATION` using the shared
+`DocumentSourceProviderRegistration` contract:
+
+```yaml
+exports:
+  - kind: document_source_provider
+    name: example_literature
+    path: python/src/org_custom/document_source_provider.py
+    description: Example literature provider registration
+```
+
+The record owns the provider ID and factory, an optional development-token
+resolver, non-secret presentation labels, and boolean capability metadata.
+Factories and token resolvers remain lazy; startup validates and enumerates
+registration records without invoking either callable. Provider IDs must be
+unique across installed packages. Missing or malformed records and collisions
+fail startup with package ID, manifest, export name, path, and provider-ID
+provenance. Credentials must remain runtime environment or secret-store inputs,
+not registration metadata.
+
+`local_pdf` is a built-in upload mode rather than an external provider
+registration. The shipped `agr.alliance` package owns the `abc_literature`
+registration selected by Alliance deployments.
+
 ### Agent Studio flow recipes
 
 A package can export `config/flow_recipes.yaml` with `kind: flow_recipes`.
@@ -217,6 +246,10 @@ the same way.
 Use `runtime/config/providers.yaml`, `runtime/config/models.yaml`, and
 `runtime/config/tool_policy_defaults.yaml` for deployment-local overrides. Use a
 custom package when you want a reusable bundle that can move across installs.
+
+Document-source provider exports use stricter collision behavior: duplicate
+provider IDs are startup errors and cannot be resolved through runtime override
+files.
 
 ### Agents
 

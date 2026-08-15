@@ -16,18 +16,6 @@ from urllib.parse import quote
 
 import httpx
 
-from src.lib.openai_agents.config import (
-    get_abc_literature_api_base_url,
-    get_abc_literature_auth_mode,
-    get_abc_literature_bearer_token,
-    get_abc_literature_cognito_client_id,
-    get_abc_literature_cognito_client_secret,
-    get_abc_literature_cognito_scope,
-    get_abc_literature_cognito_token_url,
-    get_document_source_request_timeout_seconds,
-)
-
-
 class ABCLiteratureAuthMode(str, Enum):
     NONE = "none"
     STATIC_BEARER = "static_bearer"
@@ -65,35 +53,6 @@ class ABCLiteratureClientConfig:
     cognito_client_id: str | None = None
     cognito_client_secret: str | None = None
     cognito_scope: str | None = None
-
-    @classmethod
-    def from_env(cls) -> "ABCLiteratureClientConfig":
-        """Build configuration from documented environment variables."""
-        raw_base_url = get_abc_literature_api_base_url().strip()
-        if not raw_base_url:
-            raise ABCLiteratureConfigError("ABC_LITERATURE_API_BASE_URL is required")
-
-        raw_auth_mode = get_abc_literature_auth_mode().strip().lower()
-        try:
-            auth_mode = ABCLiteratureAuthMode(raw_auth_mode)
-        except ValueError as exc:
-            allowed = ", ".join(mode.value for mode in ABCLiteratureAuthMode)
-            raise ABCLiteratureConfigError(
-                f"Unsupported ABC_LITERATURE_AUTH_MODE {raw_auth_mode!r}; "
-                f"expected one of {allowed}"
-            ) from exc
-
-        return cls(
-            base_url=raw_base_url,
-            auth_mode=auth_mode,
-            timeout_seconds=get_document_source_request_timeout_seconds(),
-            bearer_token=get_abc_literature_bearer_token(),
-            cognito_token_url=get_abc_literature_cognito_token_url(),
-            cognito_client_id=get_abc_literature_cognito_client_id(),
-            cognito_client_secret=get_abc_literature_cognito_client_secret(),
-            cognito_scope=get_abc_literature_cognito_scope(),
-        )
-
 
 class ABCLiteratureClient:
     """Small async client for allowed ABC Literature import operations."""

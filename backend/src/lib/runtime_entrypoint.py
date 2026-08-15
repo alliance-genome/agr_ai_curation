@@ -16,12 +16,16 @@ import psycopg2
 from psycopg2 import sql
 
 from src.lib.database.curation_resolver import get_curation_resolver
+from src.lib.document_sources.registry import (
+    validate_configured_document_source_provider,
+)
 from src.lib.packages import (
     AgentBundleRegistrationError,
     ExportKind,
     PackageEnvironmentManager,
     PackageRegistry,
     build_flow_recipe_catalog,
+    build_document_source_provider_registry,
     build_package_health_report,
     get_file_output_dir,
     get_identifier_prefix_file_path,
@@ -124,6 +128,12 @@ def validate_runtime_packages() -> PackageRegistry:
 
     _warn_undeclared_agent_bundle_directories(registry)
 
+    document_source_provider_registry = build_document_source_provider_registry(
+        registry,
+        fail_on_validation_error=True,
+    )
+    validate_configured_document_source_provider(document_source_provider_registry)
+
     tool_registry = load_tool_registry(
         packages_dir,
         fail_on_validation_error=True,
@@ -156,11 +166,12 @@ def validate_runtime_packages() -> PackageRegistry:
         output_schema_resolver=build_package_scoped_output_schema_resolver(packages_dir),
     )
     logger.info(
-        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s domain_packs=%s flow_recipes=%s/%s-compatible",
+        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s document_source_providers=%s domain_packs=%s flow_recipes=%s/%s-compatible",
         len(registry.loaded_packages),
         len(registry.failed_packages),
         report["status"],
         len(tool_registry.bindings),
+        len(document_source_provider_registry.providers),
         len(domain_pack_registry.loaded_packs),
         len(flow_recipe_catalog.recipes),
         compatible_flow_recipe_count,

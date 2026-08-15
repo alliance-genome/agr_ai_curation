@@ -23,6 +23,19 @@ scripts_path = Path("/app/scripts")
 if scripts_path.exists() and str(scripts_path) not in sys.path:
     sys.path.insert(0, str(scripts_path.parent))  # Add /app to path
 
+# Alliance-specific contract tests import implementations from the shipped
+# package boundary. Runtime package loading adds this path dynamically in the
+# application; collection-time imports need the same package root explicitly.
+alliance_package_path = (
+    Path(__file__).resolve().parents[2]
+    / "packages"
+    / "alliance"
+    / "python"
+    / "src"
+)
+if alliance_package_path.exists() and str(alliance_package_path) not in sys.path:
+    sys.path.insert(0, str(alliance_package_path))
+
 
 def _ensure_rapidfuzz_test_stub() -> None:
     """Provide a minimal rapidfuzz stub when the dependency is unavailable."""

@@ -23,6 +23,10 @@ exports:
     name: alliance_flow_recipes
     path: config/flow_recipes.yaml
     description: Alliance Agent Studio recipes, aliases, and composition guidance
+  - kind: document_source_provider
+    name: abc_literature
+    path: python/src/agr_ai_curation_alliance/document_source_provider.py
+    description: Alliance ABC Literature document-source provider registration
 # MAINTAINER NOTE: Adding a directory under packages/alliance/agents/ is not enough
 # to activate a specialist. Every bundle with agents/<name>/agent.yaml must also be
 # listed in agent_bundles below or startup will warn and skip that on-disk bundle.

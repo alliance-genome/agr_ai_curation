@@ -19,6 +19,9 @@ from src.lib.curation_workspace.export_adapters.registry import ExportAdapterReg
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.flows.output_projection import build_flow_output_artifact_bundle
 from src.lib.packages.registry import load_package_registry
+from src.lib.packages.document_source_provider_registry import (
+    load_document_source_provider_registry,
+)
 from src.lib.packages.flow_recipes import load_flow_recipe_catalog
 from src.lib.packages.tool_registry import load_tool_registry
 from src.schemas.curation_workspace import SubmissionMode
@@ -62,6 +65,18 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
         r"ontology_term_candidates|gene_id|gene_symbol|go_id)\b"
     ),
     re.compile(r"\b(?:FB|WB|MGI|RGD|SGD|ZFIN|HGNC)\b"),
+)
+GENERIC_DOCUMENT_SOURCE_CORE_PATHS = {
+    Path("backend/src/lib/document_sources/providers/__init__.py"),
+    Path("backend/src/lib/document_sources/registration.py"),
+    Path("backend/src/lib/document_sources/registry.py"),
+    Path("backend/src/lib/openai_agents/config.py"),
+    Path("backend/src/lib/packages/document_source_provider_registry.py"),
+}
+GENERIC_DOCUMENT_SOURCE_CORE_PATTERNS = (
+    re.compile(r"abc_literature", re.IGNORECASE),
+    re.compile(r"agr_ai_curation_alliance"),
+    re.compile(r"document_sources\.providers\."),
 )
 GENERIC_FLOW_RECIPE_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/agent_studio/flow_tools.py"),
@@ -180,6 +195,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/document_sources/test_import_selection.py"),
     Path("backend/tests/unit/lib/document_sources/test_ingestion.py"),
     Path("backend/tests/unit/lib/document_sources/test_provenance.py"),
+    Path("backend/tests/unit/lib/document_sources/test_registry.py"),
     Path("backend/tests/unit/lib/domain_packs/test_allele_domain_pack_fixtures.py"),
     Path("backend/tests/unit/lib/domain_packs/test_materialization.py"),
     Path("backend/tests/unit/lib/domain_packs/test_pack_workspace_display.py"),
@@ -372,6 +388,16 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     demo_tool_binding = tool_registry.get("demo_search_tool")
     assert demo_tool_binding is not None
     assert demo_tool_binding.source.package_id == "org.custom"
+
+    document_source_registry = load_document_source_provider_registry(
+        packages_dir,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    example_provider = document_source_registry.get("example_literature")
+    assert example_provider is not None
+    assert example_provider.source.package_id == "org.custom"
+    assert example_provider.registration.factory().provider_id == "example_literature"
 
     registry = build_agent_registry()
     assert "demo_agent_validation" in registry
@@ -781,6 +807,17 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
     for relative_path in sorted(GENERIC_RUNTIME_SOURCE_GUARD_PATHS):
         text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         for pattern in GENERIC_RUNTIME_SOURCE_PATTERNS:
+            if pattern.search(text):
+                violations.append(f"{relative_path}: {pattern.pattern}")
+
+    assert violations == []
+
+
+def test_document_source_core_has_no_project_provider_imports_or_ids():
+    violations = []
+    for relative_path in sorted(GENERIC_DOCUMENT_SOURCE_CORE_PATHS):
+        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        for pattern in GENERIC_DOCUMENT_SOURCE_CORE_PATTERNS:
             if pattern.search(text):
                 violations.append(f"{relative_path}: {pattern.pattern}")
 

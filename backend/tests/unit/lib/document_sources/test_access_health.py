@@ -144,16 +144,10 @@ def test_repeated_dev_static_token_lookup_does_not_construct_provider(
         "src.lib.document_sources.registry.get_document_source_provider",
         lambda: "abc_literature",
     )
+    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "static_bearer")
+    monkeypatch.setenv("ABC_LITERATURE_BEARER_TOKEN", " repeated-dev-token ")
     monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
-        lambda: "static_bearer",
-    )
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
-        lambda: " repeated-dev-token ",
-    )
-    monkeypatch.setattr(
-        "src.lib.document_sources.providers.abc_literature.ABCLiteratureDocumentSourceProvider.from_env",
+        "agr_ai_curation_alliance.document_sources.abc_literature.ABCLiteratureDocumentSourceProvider.from_env",
         construct_provider,
     )
 
