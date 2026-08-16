@@ -41,6 +41,12 @@ class SummaryOnlyValidatorResult(BaseModel):
     summary: str
 
 
+class EmbeddedValidatorResult(BaseModel):
+    """Fixture wrapper that does not satisfy the producer contract."""
+
+    result: DomainValidatorResultBase
+
+
 def _validator_agent(
     *,
     package_id: str = "org.validators",
@@ -59,6 +65,8 @@ def _validator_schema_resolver(schema_key: str):
         return BindingReadyValidatorResult
     if schema_key == "SummaryOnlyValidatorResult":
         return SummaryOnlyValidatorResult
+    if schema_key == "EmbeddedValidatorResult":
+        return EmbeddedValidatorResult
     return None
 
 
@@ -344,7 +352,14 @@ def test_active_validator_agent_reference_validates_package_agent_and_dependency
     assert option["validator_agent_id"] == "shared_validator"
 
 
-def test_active_validator_agent_reference_requires_binding_ready_schema(tmp_path: Path):
+@pytest.mark.parametrize(
+    "output_schema",
+    ["SummaryOnlyValidatorResult", "EmbeddedValidatorResult"],
+)
+def test_active_validator_agent_reference_requires_binding_ready_schema(
+    tmp_path: Path,
+    output_schema: str,
+):
     pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
 
@@ -357,12 +372,12 @@ def test_active_validator_agent_reference_requires_binding_ready_schema(tmp_path
                 dependencies={("org.owner", "org.validators")},
             ),
             agent_resolver=lambda _package_id, _agent_id: _validator_agent(
-                output_schema="SummaryOnlyValidatorResult"
+                output_schema=output_schema
             ),
             output_schema_resolver=_validator_schema_resolver,
         )
 
-    assert "must inherit from or embed DomainValidatorResultBase" in str(exc_info.value)
+    assert "must inherit from DomainValidatorResultBase" in str(exc_info.value)
 
 
 def test_active_validator_agent_reference_requires_output_schema(tmp_path: Path):
