@@ -19,14 +19,16 @@ Public customization path:
 
 Repository-development note:
 
-- The repo-local `config/` tree still carries installer-seeded defaults plus
-  source mirrors used when maintaining shipped packages from this checkout.
-- `packages/core/agents/supervisor/` is the generic shipped `agr.core`
-  supervisor baseline, while `config/agents/supervisor/` is the repo-local or
-  deployment-specific supervisor override layer.
-- `config/agents/` is now the repo-local core/override layer; Alliance
-  specialist bundles live under `packages/alliance/agents/` and are discovered
-  from runtime packages first.
+- The repo-local `config/` tree carries installer-seeded defaults. Source
+  Compose explicitly mounts it at `/runtime/config`, so `config/agents/` is an
+  intentional development override rather than an implicitly discovered
+  source mirror.
+- Generic shipped agents live under `packages/core/agents/`; Alliance
+  specialists live under `packages/alliance/agents/`. Package manifests are
+  authoritative for both profiles.
+- `config/agents/supervisor/` is the source checkout's intentional supervisor
+  override. Standalone deployments can create the same override under
+  `~/.agr_ai_curation/runtime/config/agents/`.
 - Domain-pack metadata lives with packages. In this source checkout, Alliance
   packs live under `packages/alliance/domain_packs/`; core provider-neutral
   tests also use fixtures under `backend/tests/fixtures/domain_packs/`.
@@ -52,7 +54,7 @@ config/
 ├── maintenance_message.txt      # Optional maintenance banner content
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
-└── agents/                      # Repo-local core/override agent bundles
+└── agents/                      # Explicit source-development overrides
     ├── README.md               # Agent configuration guide
     ├── _examples/              # Template agents (not loaded)
     │   └── basic_agent/        # Example agent structure
@@ -106,8 +108,9 @@ For repo-local development of the shipped defaults:
    - Configure external API endpoints
    - Define health check parameters
 
-4. **Edit repo-local agent bundles** in `config/agents/` only when you are
-   developing the shipped supervisor or specialist packages from source.
+4. **Edit package-owned bundles** under `packages/core/agents/` or
+   `packages/alliance/agents/`. Use `config/agents/` only for an intentional
+   source-development override.
 
 ## Configuration Files
 
@@ -143,8 +146,8 @@ Note:
 
 The internal group ID key (for example, `FB`) is used to match group-specific
 rules in agent bundles, whether they live in a runtime package
-(`runtime/packages/<package>/agents/<agent>/group_rules/[group_id].yaml`) or in
-the repo-local `config/agents/` source tree.
+(`runtime/packages/<package>/agents/<agent>/group_rules/[group_id].yaml`) or an
+explicit runtime override (`runtime/config/agents/<agent>/group_rules/`).
 
 ### connections.yaml
 
@@ -261,10 +264,11 @@ Notes:
 
 ### agents/
 
-This repo-local directory carries the shipped core bundles plus any local
-override copies that should win over package defaults. Public standalone
-installs load agents from `runtime/packages/*/agents` first, then layer
-`config/agents/` overrides on top when present.
+This repo-local directory contains explicit source-development overrides. The
+source Compose file mounts it at `/runtime/config/agents`, so its bundles win
+over package defaults by intent. Public standalone installs load shipped agents
+only from `runtime/packages/*/agents`; an operator may add overrides under
+`runtime/config/agents/`.
 
 Each agent bundle is a self-contained folder with:
 

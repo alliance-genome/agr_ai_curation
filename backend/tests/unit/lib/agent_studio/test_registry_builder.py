@@ -221,12 +221,9 @@ class TestAgentDocumentationCoverage:
         assert set(registry.keys()) == {
             "task_input",
             "supervisor",
-            "chat_output",
-            "chat_output_formatter",
             "curation_handoff",
             "curation_prep",
         }
-        assert registry["chat_output"] == registry["chat_output_formatter"]
         assert "pdf_extraction" not in registry
         assert "gene" not in registry
 

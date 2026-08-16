@@ -2238,8 +2238,8 @@ content: Test ontology term prompt.
             assert call_kwargs["agent_name"] == "ontology_term_validation"
 
     def test_real_agent_folder_names(self):
-        """Verify the repo override layer only keeps core/override bundles."""
-        expected_agents = {"chat_output", "supervisor"}
+        """Verify the repo tree contains only intentional source overrides."""
+        expected_agents = {"supervisor"}
 
         actual_folders = set()
         for folder in CONFIG_AGENTS_PATH.iterdir():

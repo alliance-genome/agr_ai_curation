@@ -97,13 +97,13 @@ packages.
 
 ```text
 agr_ai_curation/
-├── config/                              # Repo mirrors of shipped defaults
+├── config/                              # Installer defaults and explicit source overrides
 │   ├── models.yaml
 │   ├── providers.yaml
 │   ├── tool_policy_defaults.yaml
 │   ├── groups.yaml.example
 │   ├── connections.yaml.example
-│   └── agents/                          # Source-development mirror of agr.core supervisor + agr.alliance specialists
+│   └── agents/                          # Explicit source-development agent overrides
 │       ├── README.md
 │       ├── _examples/
 │       └── ...
@@ -153,9 +153,9 @@ agents/my_agent/
 
 For standalone installs, that folder lives under
 `~/.agr_ai_curation/runtime/packages/<package>/agents/`. In this repository,
-`config/agents/` is the source-development mirror for the shipped
-`agr.core` supervisor bundle plus the shipped `agr.alliance` specialist
-bundles.
+canonical bundles live under `packages/core/agents/` and
+`packages/alliance/agents/`; `config/agents/` is an explicit
+source-development runtime override.
 
 ### Agent Studio Flow Recipes
 
@@ -660,8 +660,8 @@ Choose the path that matches your goal:
 
 - **Standalone install or org customization** -- Create the bundle inside a
   package under `~/.agr_ai_curation/runtime/packages/<package>/agents/`.
-- **Shipped `agr.alliance` package maintenance** -- Update the repo mirror under
-  `config/agents/` and keep `packages/alliance/agents/` aligned before shipping.
+- **Shipped `agr.alliance` package maintenance** -- Update the canonical bundle
+  under `packages/alliance/agents/` and declare it in `packages/alliance/package.yaml`.
 
 ### Step 1: Create or choose a package
 
@@ -774,9 +774,9 @@ agent_bundles:
     group_rules: [fb]
 ```
 
-If you are maintaining the shipped `agr.alliance` package from this repository, keep the
-same bundle aligned in `packages/alliance/agents/my_agent/` and the repo mirror
-under `config/agents/my_agent/`.
+If you are maintaining the shipped `agr.alliance` package from this repository,
+put the canonical bundle in `packages/alliance/agents/my_agent/` and declare it
+in `packages/alliance/package.yaml`.
 
 ### Step 6: Restart and test
 
@@ -1039,10 +1039,9 @@ into `~/.agr_ai_curation/runtime/packages/` and restarting the stack.
 
 Alliance agents are edited directly in the package-owned source tree at
 `packages/alliance/agents/`. The runtime loads these via the package-manifest
-loader; repo-local overrides live in `config/agents/` and are layered on top at
-load time. There is no separate `alliance_agents/` mirror or sync step — edit
-`packages/alliance/agents/` (and `config/agents/` for overrides) and restart the
-stack.
+loader. An operator may explicitly provide overrides under
+`/runtime/config/agents`; a repository checkout is never scanned implicitly.
+There is no separate `alliance_agents/` mirror or sync step.
 
 ### Docker Deployment
 
@@ -1096,10 +1095,9 @@ LLM_PROVIDER_STRICT_MODE=true      # Fail startup if required keys missing (defa
 AGENT_GENE_MODEL=gpt-5.6-terra
 AGENT_SUPERVISOR_MODEL=gpt-5.6-sol
 
-# Config paths (optional, defaults to config/)
-CONFIG_PATH=/app/config
-MODELS_CONFIG_PATH=/app/config/models.yaml
-PROVIDERS_CONFIG_PATH=/app/config/providers.yaml
+# Runtime paths (optional; these are the container defaults)
+AGR_RUNTIME_CONFIG_DIR=/runtime/config
+AGR_RUNTIME_PACKAGES_DIR=/runtime/packages
 
 # Tool policy cache
 TOOL_POLICY_CACHE_TTL_SECONDS=30   # How long to cache tool policies (default: 30)

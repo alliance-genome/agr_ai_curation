@@ -1,10 +1,10 @@
 # Agents Directory
 
-This repo directory is the source-development override layer for the shipped
-core/runtime bundles. The canonical shipped specialist catalog lives under
-`packages/alliance/agents/`; `config/agents/` is reserved for core-owned bundles
-such as `supervisor` and `chat_output`, plus deployment-specific overrides that
-should win over package defaults.
+This repo directory contains explicit source-development overrides. The source
+Compose file mounts it at `/runtime/config/agents`; merely having a repository
+checkout no longer makes these bundles discoverable. Canonical shipped generic
+agents live under `packages/core/agents/`, and Alliance specialists live under
+`packages/alliance/agents/`.
 
 Public or organization-specific customization for a standard install should
 happen through runtime packages under `~/.agr_ai_curation/runtime/packages/`
@@ -12,12 +12,10 @@ plus deployment overrides under `~/.agr_ai_curation/runtime/config/`, not by
 editing this checkout in place.
 
 See [Modular Packages and Upgrades](../../docs/deployment/modular-packages.md)
-for the installed runtime layout. If you are maintaining the shipped packages
-in this repository, treat `packages/core/agents/supervisor/` as the generic
-shipped baseline, use `config/agents/supervisor/` for repo-local or
-deployment-specific supervisor overrides, keep `config/agents/chat_output/`
-aligned with its canonical shipped source, and keep Alliance specialist bundles
-under `packages/alliance/agents/`.
+for the installed runtime layout. If you are maintaining shipped packages in
+this repository, edit the canonical bundle under its owning package and declare
+it in that package's `agent_bundles`. Use `config/agents/supervisor/` only for
+the source checkout's intentional supervisor override.
 
 When you add or materially change supervisor-routable specialists, review
 `config/agents/supervisor/prompt.yaml` so the org-level handoff examples and
@@ -151,7 +149,7 @@ scripts/install/install.sh --from-stage 6
 
 Use the repo paths in this directory only when you are:
 
-- maintaining the shipped supervisor or specialist packages from source,
+- maintaining an intentional source-development runtime override,
 - updating templates under `_examples/`, or
 - testing loader/runtime changes from a repository checkout.
 
@@ -204,10 +202,10 @@ file when that field is missing.
 ## Loading and override behavior
 
 - Agent bundles are discovered from loaded runtime packages first, then from
-  `config/agents/` as an override layer.
-- Bundle names must be unique across packages. When a bundle exists in both a
-  package and `config/agents/`, the `config/agents/` copy overrides the package
-  copy by folder name.
+  `/runtime/config/agents` when that explicit override directory exists.
+- Bundle names must be unique across packages. When an explicit runtime-config
+  bundle has the same folder name as a package bundle, the runtime-config copy
+  overrides it deterministically.
 - Tools referenced by `agent.yaml` must exist in the merged runtime tool
   registry, usually via package `tools/bindings.yaml` exports.
 - Provider, model, and tool-policy defaults can be overridden by runtime config

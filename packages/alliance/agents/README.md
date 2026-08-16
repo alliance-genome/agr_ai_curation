@@ -9,8 +9,8 @@ editing this checkout in place.
 
 See [Modular Packages and Upgrades](../../../docs/deployment/modular-packages.md)
 for the installed runtime layout. If you are maintaining the shipped
-specialist catalog in this repository, keep these agent bundles aligned with
-their repo mirror under [config/agents/README.md](../../../config/agents/README.md).
+specialist catalog in this repository, these package-owned bundles and the
+`agr.alliance` manifest are the canonical sources.
 The core supervisor bundle is owned separately by
 `packages/core/agents/supervisor/`.
 
@@ -235,7 +235,7 @@ Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 
 ## See also
 
-- [config/agents/README.md](../../../config/agents/README.md) - Repo source mirror guidance
+- [config/agents/README.md](../../../config/agents/README.md) - Explicit runtime override guidance
 - [backend/tools/README.md](../../../backend/tools/README.md) - Package-first tool authoring
 - [CONFIG_DRIVEN_ARCHITECTURE.md](../../../docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md) - Repository architecture reference
 - [groups.yaml.example](../../../config/groups.yaml.example) - Group configuration template

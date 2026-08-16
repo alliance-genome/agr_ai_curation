@@ -4,8 +4,8 @@ Registry Builder - Builds AGENT_REGISTRY from resolved YAML configurations.
 This module provides the bridge between layered agent definitions
 and AGENT_REGISTRY metadata used by catalog_service.py.
 
-Runtime packages are the primary source of truth, with `config/agents/`
-acting as the override layer.
+Runtime packages are the primary source of truth. Deployments may layer an
+explicit `/runtime/config/agents` override directory on top.
 This module builds the registry dynamically at startup.
 """
 
@@ -78,9 +78,8 @@ def _agent_definition_to_registry_entry(
     """
     # Package-owned documentation keeps domain-specific UI copy with the
     # agent bundle (loaded from each agent's docs.yaml into
-    # agent_def.documentation). Configured synthetic flow nodes that ship no
-    # docs.yaml (e.g. curation_prep) keep their curator-facing prose in
-    # system_agent_docs.yaml.
+    # agent_def.documentation). Synthetic flow nodes without docs.yaml keep
+    # their curator-facing prose in system_agent_docs.yaml.
     doc = agent_def.documentation or get_system_agent_documentation(
         agent_def.agent_id
     )
@@ -136,9 +135,9 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
     """
     Build AGENT_REGISTRY from YAML configurations.
 
-    Loads all resolved agent definitions from runtime packages plus
-    `config/agents/` overrides and converts them to AGENT_REGISTRY metadata
-    entries.
+    Loads all resolved agent definitions from runtime packages plus an optional
+    explicit `/runtime/config/agents` override and converts them to
+    AGENT_REGISTRY metadata entries.
 
     Returns:
         Dictionary mapping agent_id to registry entry

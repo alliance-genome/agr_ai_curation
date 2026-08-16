@@ -305,7 +305,6 @@ services:
       - ./file_outputs:/app/file_outputs
       - ./extraction_trace_events:/app/extraction_trace_events
       - ./backend/config:/app/backend/config
-      - ./config:/app/config:ro  # Config files including maintenance_message.txt
       # REMOVED: docker.sock and docker-compose.yml mounts (security hardening 2026-03-24)
       # These enabled the /api/logs endpoint but also gave container-escape capability.
       # The logs feature now requires 'docker compose logs' from the host.

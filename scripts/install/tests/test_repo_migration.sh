@@ -53,7 +53,15 @@ assert_dir_not_exists() {
 run_helper() {
   local output_path="$1"
   shift
-  local script_path="${MIGRATION_HELPER_SCRIPT:-$helper_script}"
+  local script_path="${MIGRATION_HELPER_SCRIPT:-}"
+
+  if [[ -z "$script_path" ]]; then
+    local fixture_helper_repo="${output_path%/*}/helper-repo"
+    if [[ ! -d "${fixture_helper_repo}/.git" ]]; then
+      prepare_helper_repo "$fixture_helper_repo"
+    fi
+    script_path="${fixture_helper_repo}/scripts/install/migrate_repo_install.sh"
+  fi
 
   set +e
   bash "$script_path" "$@" >"$output_path" 2>&1
@@ -135,6 +143,7 @@ write_source_env() {
   cat >"${source_repo}/.env" <<'EOF'
 OPENAI_API_KEY=test-openai-key
 AGENTS_CONFIG_PATH=config/agents
+AGR_REPO_CONFIG_HOST_DIR=config
 GROUPS_CONFIG_PATH=config/groups.yaml
 EOF
 }
@@ -201,7 +210,7 @@ test_standard_repo_install_apply() {
   assert_file_exists "${install_home}/data/weaviate/segments.db"
   assert_file_exists "${install_home}/.env"
   assert_contains "AGR_RUNTIME_CONFIG_HOST_DIR=${install_home}/runtime/config" "${install_home}/.env"
-  assert_contains "AGR_REPO_CONFIG_HOST_DIR=${source_repo}/config" "${install_home}/.env"
+  assert_not_contains 'AGR_REPO_CONFIG_HOST_DIR=' "${install_home}/.env"
   assert_contains "AGR_RUNTIME_PACKAGES_HOST_DIR=${install_home}/runtime/packages" "${install_home}/.env"
   assert_contains "WEAVIATE_DATA_HOST_DIR=${install_home}/data/weaviate" "${install_home}/.env"
   assert_not_contains 'AGENTS_CONFIG_PATH=' "${install_home}/.env"

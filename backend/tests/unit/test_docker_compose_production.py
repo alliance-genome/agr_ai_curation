@@ -69,6 +69,19 @@ def _bind_targets(service: dict) -> dict[str, str]:
     return bindings
 
 
+def test_backend_test_services_mount_repo_config_as_explicit_runtime_override():
+    services = _load_test_compose()["services"]
+
+    for service_name in (
+        "backend-tests",
+        "backend-unit-tests",
+        "backend-integration-tests",
+        "backend-persistence-tests",
+        "backend-contract-tests",
+    ):
+        assert "./config:/runtime/config:ro" in services[service_name]["volumes"]
+
+
 def test_production_compose_uses_published_app_images_without_local_builds():
     compose = _load_compose()
     services = compose["services"]
@@ -508,7 +521,6 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
 
     assert backend_bindings == {
         "/runtime/config": "${AGR_RUNTIME_CONFIG_HOST_DIR:-./config}",
-        "/app/config": "${AGR_REPO_CONFIG_HOST_DIR:-./config}",
         "/runtime/packages": "${AGR_RUNTIME_PACKAGES_HOST_DIR:-./packages}",
         "/runtime/state": "${AGR_RUNTIME_STATE_HOST_DIR:-./runtime_state}",
         "/runtime/state/pdf_storage": "${PDF_STORAGE_HOST_DIR:-./pdf_storage}",
@@ -582,7 +594,6 @@ def test_standalone_template_and_installer_reference_the_production_compose_path
 
     for key in (
         "AGR_RUNTIME_CONFIG_HOST_DIR=",
-        "AGR_REPO_CONFIG_HOST_DIR=",
         "AGR_RUNTIME_PACKAGES_HOST_DIR=",
         "AGR_RUNTIME_STATE_HOST_DIR=",
         "PDF_STORAGE_HOST_DIR=",
@@ -597,6 +608,7 @@ def test_standalone_template_and_installer_reference_the_production_compose_path
         "TRACE_REVIEW_INTERNAL_API_TOKEN=",
     ):
         assert key in env_template
+    assert "AGR_REPO_CONFIG_HOST_DIR=" not in env_template
 
     assert "main_compose_file" in start_verify_script
     assert "docker-compose.production.yml" in start_verify_script

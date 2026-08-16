@@ -416,7 +416,7 @@ def _convert_documentation(doc_dict: Optional[Dict[str, Any]]) -> Optional[Agent
 
 
 # Agent metadata registry - built dynamically from layered YAML configurations.
-# Source of truth: runtime packages plus config/agents overrides
+# Source of truth: runtime packages plus explicit /runtime/config/agents overrides
 # Factory functions: discovered via convention (create_{folder}_agent)
 AGENT_REGISTRY = build_agent_registry()
 

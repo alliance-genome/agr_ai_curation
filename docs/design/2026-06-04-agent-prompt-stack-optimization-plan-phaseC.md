@@ -6,14 +6,17 @@
 
 ## Prompt trees & scope (verified)
 
-- **`packages/alliance/agents/` is the live committed source** (resolver path; production mounts it). Edit it for the 24 packaged agents.
-- **`config/agents/` is an override layer that wins by folder name** and is on the production path. Three agents have a **prompt** override there and MUST be edited in `config/agents/`: **`supervisor`** (config-only, ~17.5K), **`curation_prep`** (config-only, ~3.5K), **`chat_output`** (in BOTH trees, currently byte-identical — edit the config copy AND keep the packages copy in sync). A harness guard asserts no agent's `config/agents` prompt diverges unexpectedly from packages.
+- **Package manifests own the shipped agents.** The canonical sources live under `packages/core/agents/` and `packages/alliance/agents/`.
+- **`config/agents/` contains explicit source-development overrides only.** It is loaded only when mounted at `/runtime/config/agents`; a repository checkout is not scanned implicitly. The supervisor override remains intentional, while `curation_prep` is owned by `agr.core` and `chat_output` by `agr.alliance`.
 - **`alliance_agents/` is a STALE legacy mirror — do NOT edit.** No `docs.yaml`, last commit 2026-05-30, already diverged from packages; `scripts/deploy_alliance.sh` (which would copy it into packages) is "Alliance-internal only" (`06_start_verify.sh:311`), not in the deploy path. **Flag:** do not run `deploy_alliance.sh` against this branch — it would revert this work from the stale mirror.
-- **Total scope: 26 prompts** = 24 packaged + supervisor + curation_prep (chat_output counts once but is edited in two trees).
+- **Historical rewrite scope: 26 prompt identities.** `chat_output` counts once;
+  current ownership is defined by the package manifests and the explicit
+  supervisor source-development override described above.
 
 **Tech Stack:** Python 3.11, YAML, pytest. Run (no DB):
 ```bash
-docker run --rm -v "$(pwd)/backend:/app/backend" -v "$(pwd)/packages:/app/packages:ro" -v "$(pwd)/config:/app/config:ro" -v "$(pwd)/alliance_agents:/app/alliance_agents" -v "$(pwd)/docs:/app/docs:ro" -v "$(pwd)/frontend:/app/frontend:ro" -w /app/backend -e OPENAI_API_KEY=test -e PYTHONUNBUFFERED=1 -e EMBEDDING_MODEL=text-embedding-3-small -e EMBEDDING_MODEL_TOKEN_LIMIT=8191 -e EMBEDDING_TOKEN_SAFETY_MARGIN=500 ai-curation-unit-tests:latest python -m pytest <paths> -q
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
+  bash -lc "python -m pytest <paths> -q"
 ```
 (`test_pdf_corpus_trial_examples_do_not_teach_quote_submission` fails environmentally here — ignore.)
 
@@ -24,7 +27,7 @@ Execute in waves; gate (Opus 4.8 + Codex gpt-5.5/high) after each wave before th
 - **Wave 1 — Pilot extractor: gene_extractor** (largest). Validate the full per-agent procedure end-to-end.
 - **Wave 2 — Remaining extractors:** gene_expression, disease_extractor, allele_extractor, phenotype_extractor, pdf.
 - **Wave 3 — Validators/lookups:** gene, allele, ontology_term, chemical, go_annotations, experimental_condition, disease, orthologs, reference, controlled_vocabulary, gene_ontology, data_provider, subject_entity, agm, supervisor.
-- **Wave 4 — Output/formatters:** chat_output (dual-tree), tsv_formatter, json_formatter, csv_formatter, curation_prep.
+- **Wave 4 — Output/formatters:** chat_output, tsv_formatter, json_formatter, csv_formatter, curation_prep.
 
 ## The outcome-first skeleton (every agent)
 
@@ -48,7 +51,7 @@ Restructure to: **Role → Goal → Success criteria → Constraints (invariants
 
 - [ ] **Step 5: Reason-code survival.** For agents with canonical `reason_code` enums, assert the full set (sourced from the **domain pack** — e.g. `packages/alliance/python/.../domain_packs/gene_expression/{export,conversion}.py`, NOT by grepping the prompt) appears in the assembled render.
 
-- [ ] **Step 6: Report-only contradiction dump + config-divergence + render/custom-agent smoke.** (a) Dump every MUST/NEVER/ALWAYS line per agent for the human reviewer (no automated semantic detection — current prompts have zero such tokens; Phase C introduces them). (b) Assert no agent's `config/agents/<a>/prompt.yaml` diverges from its `packages` copy except the intended config-only agents. (c) Render smoke: each agent's assembled bundle renders; a custom (curator-cloned) agent's render works (reuse the catalog/`_build_runtime_instructions` path).
+- [ ] **Step 6: Report-only contradiction dump + config-divergence + render/custom-agent smoke.** (a) Dump every MUST/NEVER/ALWAYS line per agent for the human reviewer (no automated semantic detection — current prompts have zero such tokens; Phase C introduces them). (b) Assert that any committed `config/agents/<a>/prompt.yaml` source-development override stays identical to its package source unless the divergence is explicitly allowlisted. (c) Render smoke: each agent's assembled bundle renders; a custom (curator-cloned) agent's render works (reuse the catalog/`_build_runtime_instructions` path).
 
 - [ ] **Step 7:** Harness green on seeds. Commit `test(prompts): Phase C no-DB rewrite-guard harness (retention w/ groups, machine-checked dropped-list, workflow invariants, reason-code survival, contradiction dump, config-divergence + render smoke)`.
 
@@ -61,7 +64,7 @@ Restructure to: **Role → Goal → Success criteria → Constraints (invariants
 For agent `<A>` (tree per the scope section):
 - [ ] **1. Semantic-coverage checklist** → `docs/design/phaseC-checklists/<A>.md`: read the current prompt + its seed contract test; list EVERY load-bearing rule (curation rules, no-invention, resolver discipline, reason_codes, evidence rules, output/handoff contract, group-rule hooks, field-path/count/ordering contracts) → its new home, or an explicit justified drop. **Each checklist line gets a stable ID.**
 - [ ] **2. Inventory + dropped-list** for the harness (`phase_c_inventories/<A>...`), derived from the checklist (authoritative) + the contract-test phrases (secondary).
-- [ ] **3. Rewrite** `prompt.yaml` `content` to the skeleton, preserving every checklist item, in curator voice. Extractors: `<search_context>` drop + evidence de-dup. For config-tree agents edit `config/agents/<A>/prompt.yaml` (and sync packages for chat_output).
+- [ ] **3. Rewrite** the package-owned `prompt.yaml` content to the skeleton, preserving every checklist item, in curator voice. Extractors: `<search_context>` drop + evidence de-dup. Edit `config/agents/<A>/prompt.yaml` only for an intentional source-development override.
 - [ ] **4. Re-baseline rules (tight):** any edited/removed assertion in the seed contract test MUST be cross-referenced to a checklist ID and have a **replacement assertion in the SAME commit** (ideally targeting the new layer via the assembled render), OR a reviewed `deleted` dropped-entry. **Never** delete an assertion with no replacement; **never** weaken a count/ordering assertion (`==3`→`>=1` is forbidden — counts/ordering may move with their example but not loosen).
 - [ ] **5. Run** the harness for `<A>` + the agent's contract/policy test + `tests/unit/lib/prompts/` + (after each extractor) the cross-cutting guards (`test_record_evidence_prompt_contract.py`, `test_domain_envelope_repair_prompt_contract.py`, `test_non_gene_evidence_prompt_policy.py`, `test_agent_studio_domain_envelope_prompt_policy.py`, `test_assembly.py`). Green. Capture before/after `wc -c`.
 - [ ] **6. Commit** (explicit paths): prompt.yaml(s) + checklist + inventory + dropped-list + any re-baselined test.
@@ -76,7 +79,7 @@ For agent `<A>` (tree per the scope section):
 
 ## Self-Review
 
-**Spec coverage:** outcome-first rewrite of all agents (incl. the config-tree supervisor/curation_prep/chat_output) — per-agent tasks across waves; harness with real no-DB render + group dimension + machine-checked dropped-list + workflow invariants + reason-code survival + contradiction dump + render/custom-agent/config-divergence smoke — Task 1; per-agent semantic-coverage checklist with IDs + tight re-baselining + scenario cards — procedure; `<search_context>` drop + evidence de-dup for extractors — skeleton; structural + two reviews per wave, no live A/B, loss-full accepted — gate. Covered. `alliance_agents` explicitly out (stale); deploy_alliance.sh landmine flagged.
+**Spec coverage:** outcome-first rewrite of all agents (package-owned agents plus the explicit supervisor source-development override) — per-agent tasks across waves; harness with real no-DB render + group dimension + machine-checked dropped-list + workflow invariants + reason-code survival + contradiction dump + render/custom-agent/config-divergence smoke — Task 1; per-agent semantic-coverage checklist with IDs + tight re-baselining + scenario cards — procedure; `<search_context>` drop + evidence de-dup for extractors — skeleton; structural + two reviews per wave, no live A/B, loss-full accepted — gate. Covered. `alliance_agents` explicitly out (stale); deploy_alliance.sh landmine flagged.
 
 **Placeholder scan:** the harness foundation is now concretely specified (no-DB render via `build_agent_core_prompt` + file-read base/group concat — corrects the prior false "reads files" claim); per-agent tasks share one fully-specified procedure with per-agent inputs in the wave lists. No TBDs.
 

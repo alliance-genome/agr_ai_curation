@@ -38,16 +38,8 @@ def _find_project_root() -> Path | None:
     return None
 
 
-def _get_env_agent_search_path() -> Path | None:
-    """Return the explicit legacy override path when configured."""
-    env_path = os.environ.get("AGENTS_CONFIG_PATH")
-    if env_path:
-        return Path(env_path)
-    return None
-
-
 def _get_fallback_packages_dir() -> Path:
-    """Return the package-search fallback when no explicit override is set."""
+    """Return the installed or source-checkout package root."""
     runtime_packages_dir = get_runtime_packages_dir()
     if runtime_packages_dir.exists():
         return runtime_packages_dir
@@ -60,20 +52,12 @@ def _get_fallback_packages_dir() -> Path:
 
 
 def get_default_agent_search_path() -> Path:
-    """Return the effective default search path, honoring AGENTS_CONFIG_PATH."""
-    env_path = _get_env_agent_search_path()
-    if env_path is not None:
-        return env_path
-
+    """Return the authoritative package root for shipped agents."""
     return _get_fallback_packages_dir()
 
 
 def get_default_agent_search_paths() -> tuple[Path, ...]:
-    """Return the default layered agent search paths."""
-    env_path = _get_env_agent_search_path()
-    if env_path is not None:
-        return (env_path.expanduser().resolve(strict=False),)
-
+    """Return packages plus the optional explicit runtime-config override."""
     search_paths = [
         _get_fallback_packages_dir().expanduser().resolve(strict=False),
     ]
@@ -82,12 +66,6 @@ def get_default_agent_search_paths() -> tuple[Path, ...]:
     ).expanduser().resolve(strict=False)
     if runtime_config_agents_dir.exists() and runtime_config_agents_dir not in search_paths:
         search_paths.append(runtime_config_agents_dir)
-
-    project_root = _find_project_root()
-    if project_root is not None:
-        repo_agents_dir = (project_root / "config" / "agents").expanduser().resolve(strict=False)
-        if repo_agents_dir.exists() and repo_agents_dir not in search_paths:
-            search_paths.append(repo_agents_dir)
 
     return tuple(search_paths)
 
@@ -107,10 +85,6 @@ def _resolve_search_paths(
         if not resolved:
             raise ValueError("search_path sequence must not be empty")
         return resolved, False
-
-    env_path = _get_env_agent_search_path()
-    if env_path is not None:
-        return (env_path.expanduser().resolve(strict=False),), False
 
     return get_default_agent_search_paths(), True
 

@@ -21,9 +21,9 @@ What each guard does:
   declared ``new_home`` (the render, a bindings.yaml tool description, or
   get_agent_contract output); ``deleted`` entries are not asserted but are
   printed so silent deletions can't hide in the diff.
-* **Config-divergence** — any agent with a ``prompt.yaml`` in BOTH
-  ``config/agents`` and ``packages`` must keep them byte-identical (chat_output),
-  unless explicitly allowlisted (initially: none).
+* **Config-divergence** — any source-development override committed under
+  ``config/agents`` alongside a package prompt must stay byte-identical unless
+  explicitly allowlisted (initially: none).
 * **Render smoke** — every agent's locked core prompt renders without error, and
   the full assembled text builds.
 * **Contradiction dump** — every MUST/NEVER/ALWAYS line per agent is printed for
@@ -234,18 +234,24 @@ def test_deleted_dropped_entries_are_reported_for_review(capsys):
 # Config-divergence guard
 # ---------------------------------------------------------------------------
 
-# Agents whose config/agents prompt.yaml is intentionally allowed to differ from
-# its packages copy. Initially empty: chat_output (the only dual-tree agent) must
-# stay byte-identical. supervisor/curation_prep are config-only and not pairs.
-_CONFIG_DIVERGENCE_ALLOWLIST: frozenset[str] = frozenset()
+# Agents whose explicit source-development override prompt intentionally differs
+# from its package default. The Alliance-tuned supervisor exercises this boundary.
+_CONFIG_DIVERGENCE_ALLOWLIST: frozenset[str] = frozenset({"supervisor"})
 
-_DUAL_TREE_PAIRS = harness.config_packages_prompt_pairs()
+_OVERRIDE_PACKAGE_PAIRS = harness.config_packages_prompt_pairs()
 
 
-@pytest.mark.skipif(not _DUAL_TREE_PAIRS, reason="no dual-tree (config+packages) agents found")
-@pytest.mark.parametrize("pair", _DUAL_TREE_PAIRS, ids=[pair[0] for pair in _DUAL_TREE_PAIRS])
+@pytest.mark.skipif(
+    not _OVERRIDE_PACKAGE_PAIRS,
+    reason="no source-override/package agent pairs found",
+)
+@pytest.mark.parametrize(
+    "pair",
+    _OVERRIDE_PACKAGE_PAIRS,
+    ids=[pair[0] for pair in _OVERRIDE_PACKAGE_PAIRS],
+)
 def test_config_and_packages_prompts_are_identical(pair):
-    """A dual-tree agent's config + packages prompt.yaml must be byte-identical."""
+    """Unallowlisted source overrides must match their package prompt."""
     agent_key, config_prompt, packages_prompt = pair
     if agent_key in _CONFIG_DIVERGENCE_ALLOWLIST:
         pytest.skip(f"{agent_key} is allowlisted to diverge")
@@ -253,10 +259,10 @@ def test_config_and_packages_prompts_are_identical(pair):
     config_bytes = config_prompt.read_bytes()
     packages_bytes = packages_prompt.read_bytes()
     assert config_bytes == packages_bytes, (
-        f"Phase C config-divergence guard: '{agent_key}' prompt.yaml differs "
-        f"between config/agents and packages. A dual-tree agent must be edited in "
-        f"BOTH trees in lockstep (an accidental single-tree edit is the bug this "
-        f"guard catches). Sizes: config={len(config_bytes)}B "
+        f"Phase C config-divergence guard: the unallowlisted source override "
+        f"for '{agent_key}' differs from its package prompt. Keep the override "
+        f"identical or explicitly allowlist the intended divergence. "
+        f"Sizes: config={len(config_bytes)}B "
         f"packages={len(packages_bytes)}B."
     )
 

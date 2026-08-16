@@ -58,7 +58,7 @@ The system uses a **config-driven, database-backed** architecture where YAML fil
 
 ### Key Components
 
-1. **Package-backed YAML layer** (`runtime/packages/*/agents/<agent>/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions in standalone installs. In this repository, `packages/core/agents/supervisor/` is the generic shipped supervisor baseline, `config/agents/supervisor/` is the repo-local or deployment-specific supervisor override layer, and the shipped `agr.alliance` specialists are maintained under `packages/alliance/agents/`. `registry_builder.py` reads these bundles for UI metadata and Alembic migrations seed them into the database.
+1. **Package-backed YAML layer** (`runtime/packages/*/agents/<agent>/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions. Canonical repository sources live under `packages/core/agents/` and `packages/alliance/agents/`; `/runtime/config/agents` is the optional explicit override layer. `registry_builder.py` reads these bundles for UI metadata and Alembic migrations seed them into the database.
 
 2. **Unified Agents Table** (`agents` in Postgres) -- Single table for both system agents (seeded from YAML) and custom agents (created via UI). Contains all runtime fields: instructions, model settings, tool IDs, output schema key, group rules config, supervisor routing, and visibility.
 
@@ -79,7 +79,7 @@ The system uses a **config-driven, database-backed** architecture where YAML fil
 ```text
 runtime/packages/*/agents/*.yaml ──→ registry_builder.py ──→ AGENT_REGISTRY (UI metadata)
                                  └──→ Alembic migration ──→ agents table (runtime authority)
-config/agents/*.yaml (repo mirror for agr.core supervisor + agr.alliance specialists) ──────┘
+/runtime/config/agents/*.yaml (optional explicit override) ────────────────────────────────┘
                                                                   │
                                                                   ▼
                                                           get_agent_by_id()
@@ -123,7 +123,7 @@ config/agents/*.yaml (repo mirror for agr.core supervisor + agr.alliance special
 ### System Agents (package-defined)
 
 1. A package author creates `agents/my_agent/agent.yaml`, `prompt.yaml`, and optional `group_rules/` inside a runtime package.
-2. If shipped packages are being maintained from this repository, use `packages/core/agents/supervisor/` for the generic shipped supervisor baseline, `config/agents/supervisor/` for repo-local or deployment-specific supervisor overrides, and `packages/alliance/agents/my_agent/` for shipped `agr.alliance` specialist bundles.
+2. If shipped packages are being maintained from this repository, use `packages/core/agents/<agent>/` for generic shipped agents, `packages/alliance/agents/my_agent/` for shipped Alliance specialists, and `config/agents/` only for explicit source-development overrides.
 3. An Alembic migration reads the package-backed YAML and inserts a row into `agents` with `visibility='system'`.
 4. At backend startup, `registry_builder.py` reads the bundle to build `AGENT_REGISTRY` for UI metadata.
 5. The prompt cache loads active prompts from `prompt_templates` for group rule injection.
@@ -183,9 +183,9 @@ The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
 Use `<agent_root>` below to mean either:
 
 - `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/` for a standalone install, or
-- `packages/core/agents/supervisor/` when maintaining the generic shipped `agr.core` supervisor from this repository, `config/agents/supervisor/` when maintaining a repo-local or deployment-specific supervisor override, or `packages/alliance/agents/<agent>/` when maintaining shipped `agr.alliance` specialist bundles.
+- `packages/core/agents/<agent>/` when maintaining a generic shipped `agr.core` agent, `packages/alliance/agents/<agent>/` for shipped `agr.alliance` specialists, or `/runtime/config/agents/<agent>/` for an explicit deployment override.
 
-See the runtime bundle contract in `config/agents/README.md` or the repo mirror
+See the runtime bundle contract in `config/agents/README.md` or the repository
 template at `config/agents/_examples/basic_agent/agent.yaml` for all fields. Key sections:
 
 - **Basic info**: `agent_id`, `name`, `description`, `category`, `subcategory`
@@ -230,7 +230,7 @@ backend merges those exports into the runtime tool registry exposed through
 `TOOL_BINDINGS` in `catalog_service.py`. In this repository, the shipped
 Alliance tool catalog lives under
 `packages/alliance/python/src/agr_ai_curation_alliance/tools/`, while `agr.core`
-is the minimal supervisor/startup package.
+is the minimal generic-agent/startup package.
 
 | Tool ID | Category | Description |
 |---------|----------|-------------|
@@ -578,7 +578,7 @@ See `packages/alliance/tools/bindings.yaml` and the normalized `TOOL_REGISTRY` /
 | Agent not in Flow Builder palette | `show_in_palette=true` in DB? Agent in `AGENT_REGISTRY`? |
 | "Unknown agent_id" error | Agent row missing from `agents` table. Run migration or insert manually. |
 | "Unknown tool binding" error | Tool not exported correctly from a package `tools/bindings.yaml`, or the merged runtime registry rejected the binding. |
-| Schema not found | `output_schema_key` doesn't match a class in the agent bundle `schema.py` (or the matching `config/agents/.../schema.py` repo mirror when maintaining shipped packages from source). Check exact spelling. |
+| Schema not found | `output_schema_key` doesn't match a class in the installed or package-owned agent bundle `schema.py`. Check exact spelling. |
 | Prompt changes not reflected | Refresh cache: `curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh`. For `agents.instructions`, restart backend. |
 | Group rules not injected | `group_rules_enabled=true`? `group_rules_component` set? Active group rule prompt in `prompt_templates`? |
 | Tool errors at runtime | Check `TOOL_BINDINGS.required_context` -- missing `document_id` or `database_url`? |
@@ -599,9 +599,9 @@ See `packages/alliance/tools/bindings.yaml` and the normalized `TOOL_REGISTRY` /
 - `backend/src/models/sql/agent.py` -- Unified agent SQL model
 - `backend/src/lib/openai_agents/agents/supervisor_agent.py` -- Dynamic supervisor with tool discovery
 - `backend/src/lib/config/` -- All configuration loaders
-- `packages/core/` -- Shipped `agr.core` (Alliance Core) package source, manifests, defaults, and supervisor bundle
+- `packages/core/` -- Shipped `agr.core` (Alliance Core) package source, manifests, defaults, and generic runtime-agent bundles
 - `packages/alliance/` -- Shipped `agr.alliance` (Alliance Defaults) specialist/tool package source
 - `config/models.yaml` -- Model catalog
-- `config/agents/` -- Repo mirror of the shipped agr.core supervisor plus agr.alliance specialist bundles
+- `config/agents/` -- Explicit source-development runtime overrides and authoring examples
 - Langfuse docs: https://langfuse.com/docs
 - OpenAI Agents SDK: https://github.com/openai/openai-agents-python

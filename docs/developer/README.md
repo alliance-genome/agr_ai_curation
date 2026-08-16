@@ -89,7 +89,7 @@ For configuration files, see:
 Choose the path that matches your goal:
 
 - Standard install or org customization: create a runtime package under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/` and install that package.
-- Repository package maintenance: use the repo template under `config/agents/_examples/basic_agent`, then keep the shipped supervisor copy in `packages/core/agents/` or the shipped specialist copy in `packages/alliance/agents/` aligned before shipping.
+- Repository package maintenance: use the template under `config/agents/_examples/basic_agent`, then add the canonical bundle directly to `packages/core/agents/` or `packages/alliance/agents/` and declare it in that package manifest.
 - UI-only customization: create custom agents in Agent Studio with no file changes.
 
 See [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) and
@@ -209,7 +209,7 @@ cp config/connections.yaml.example config/connections.yaml
 
 The system uses a **config-driven, database-backed architecture** where:
 
-1. **Package-backed YAML defines initial state** -- Agent metadata, prompts, and group rules come from bundles under `~/.agr_ai_curation/runtime/packages/*/agents/` in standalone installs. In a source checkout, `config/agents/` is the repo mirror for the shipped `agr.core` supervisor plus the shipped `agr.alliance` specialist bundles.
+1. **Package-backed YAML defines initial state** -- Agent metadata, prompts, and group rules come from bundles under `~/.agr_ai_curation/runtime/packages/*/agents/`. The source checkout uses the same package-owned trees; `config/agents/` is loaded only because source Compose explicitly mounts it as `/runtime/config/agents`.
 2. **Database is runtime authority** -- The unified `agents` table stores all agent records (system + custom)
 3. **Dynamic discovery** -- The supervisor queries the database for enabled agents and builds streaming tools at runtime
 4. **Declarative tool bindings** -- Package `tools/bindings.yaml` exports are normalized into `TOOL_BINDINGS` with explicit context requirements
@@ -245,11 +245,10 @@ Runtime Agent           # OpenAI Agents SDK Agent instance
   (output schema resolved from schema discovery)
 ```
 
-For shipped-package maintenance in this repository, keep
-`packages/core/agents/supervisor/` generic as the shipped baseline, use
-`config/agents/supervisor/` as the repo-local or deployment-specific override,
-and keep the remaining repo mirror bundles aligned with
-`packages/alliance/agents/`. When the specialist catalog changes in a way that
-affects routing or handoff style, review the config supervisor override too.
+For shipped-package maintenance in this repository, edit canonical bundles
+directly under `packages/core/agents/` or `packages/alliance/agents/` and update
+the owning manifest. `config/agents/supervisor/` is an intentional
+source-development override, not a shipped mirror. When the specialist catalog
+changes in a way that affects routing or handoff style, review that override too.
 
 See [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) and [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) for the complete reference.

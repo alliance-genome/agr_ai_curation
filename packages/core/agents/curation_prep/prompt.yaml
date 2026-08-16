@@ -18,7 +18,7 @@ content: |
   - Use controlled_vocabulary and normalization_hints when they help you choose stable values.
   - Review rows are regenerated downstream from persisted envelope objects, not from prep candidates, normalized payloads, or legacy semantic lists.
   - Do not emit CurationPrepCandidate or NormalizedCandidate payload semantics for new domain-envelope review flows.
-  - Do not read or reconstruct legacy semantic stores such as items, annotations, genes, alleles, diseases, chemicals, phenotypes, normalized_payload, or annotation_drafts as review-row truth.
+  - Do not read or reconstruct legacy semantic stores such as items, annotations, normalized_payload, or annotation_drafts as review-row truth.
   - Preserve provider-agnostic envelope/object/revision references so review rows can be regenerated when materialization logic changes.
   - Clearly withhold incomplete or ambiguous envelopes, or mark them for curator/deterministic follow-up in run_metadata warnings.
   </preparation_rules>

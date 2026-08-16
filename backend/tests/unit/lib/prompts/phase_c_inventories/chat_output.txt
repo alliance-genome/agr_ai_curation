@@ -6,9 +6,8 @@
 # rewritten base prompt). LEAN CHAT-RESPONSE skeleton: each rule stated ONCE. The dropped
 # worked example is tracked in chat_output.dropped.json.
 #
-# DUAL-TREE: chat_output's base prompt lives in BOTH config/agents and packages, byte-
-# identical (config-divergence guard). assembled_prompt_text('chat_output_formatter')
-# resolves the config copy; the inventory is valid for both because they are identical.
+# chat_output's base prompt is owned by its package. This inventory checks the
+# package-resolved prompt used by assembled_prompt_text('chat_output_formatter').
 #
 # chat_output has output_schema: null (NO output-mandate injection), tools: [] (NO tool-call
 # or tool-summary injection), and group_rules_enabled: false (NO group inventory, NO reason

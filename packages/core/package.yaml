@@ -7,7 +7,7 @@ max_runtime_version: 2.0.0
 python_package_root: python/src/agr_ai_curation_core
 requirements_file: requirements/runtime.txt
 # Alliance Core is intentionally the smallest healthy standalone package.
-# It owns startup config and the supervisor bundle, but no package-owned tools.
+# It owns startup config and generic runtime agent bundles, but no package-owned tools.
 exports:
   - kind: model
     name: default_models
@@ -26,5 +26,7 @@ exports:
     path: config/agent_studio_system_prompt.md
     description: Neutral Agent Studio system prompt for core-only deployments
 agent_bundles:
+  - name: curation_handoff
+  - name: curation_prep
   - name: supervisor
     group_rules: [mgi, rgd]

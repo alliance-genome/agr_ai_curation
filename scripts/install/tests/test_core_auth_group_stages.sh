@@ -257,7 +257,7 @@ test_core_config_generates_env_and_backups() {
   assert_contains "^FRONTEND_IMAGE_TAG=${expected_image_tag}$" "$env_file"
   assert_contains "^TRACE_REVIEW_BACKEND_IMAGE_TAG=${expected_image_tag}$" "$env_file"
   assert_contains "^AGR_RUNTIME_CONFIG_HOST_DIR=${runtime_config_dir}$" "$env_file"
-  assert_contains "^AGR_REPO_CONFIG_HOST_DIR=${repo_root}/config$" "$env_file"
+  assert_not_contains '^AGR_REPO_CONFIG_HOST_DIR=' "$env_file"
   assert_contains "^AGR_RUNTIME_PACKAGES_HOST_DIR=${runtime_packages_dir}$" "$env_file"
   assert_contains "^AGR_RUNTIME_STATE_HOST_DIR=${runtime_state_dir}$" "$env_file"
   assert_contains "^PDF_STORAGE_HOST_DIR=${pdf_storage_dir}$" "$env_file"

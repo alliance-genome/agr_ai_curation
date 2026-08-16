@@ -7,8 +7,9 @@
 # Relocations/deletions tracked in supervisor.dropped.json; the ordered routing/handoff
 # workflow in supervisor.invariants.txt; MGI/RGD group hooks in supervisor.{mgi,rgd}.txt.
 #
-# SPECIAL: supervisor is config-only (config/agents/supervisor/prompt.yaml; NO
-# packages/alliance/agents/supervisor) and is a ROUTER, not a validator/lookup. Its
+# SPECIAL: this inventory exercises the explicit source-development supervisor
+# override at config/agents/supervisor/prompt.yaml. The shipped generic baseline
+# lives under packages/core/agents/supervisor. The supervisor is a ROUTER, not a validator/lookup. Its
 # agent.yaml declares NO tools and NO output_schema, so the locked core injects NEITHER a
 # required-tool-call policy NOR an output mandate -> NO relocated-to-render de-dup; the base
 # owns its tool-call guidance and prompt-only output contract in full.

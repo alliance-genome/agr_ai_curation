@@ -1,4 +1,4 @@
-# Phase C semantic-coverage checklist: `chat_output` (Wave 4 — DUAL-TREE; CHAT-RESPONSE skeleton)
+# Phase C semantic-coverage checklist: `chat_output` (Wave 4 — CHAT-RESPONSE skeleton)
 
 This is the **authoritative inventory source** for the outcome-first rewrite of the
 `chat_output` base prompt (canonical agent id `chat_output_formatter`). Every load-bearing
@@ -7,19 +7,13 @@ OR an explicit, justified relocation/deletion. The harness inventories
 (`phase_c_inventories/chat_output.txt`, `.invariants.txt`, `.dropped.json`) are derived
 from this checklist.
 
-## DUAL-TREE — critical
+## Package-owned source
 
-`chat_output` is the **only dual-tree agent**: its base prompt exists at BOTH
-`packages/alliance/agents/chat_output/prompt.yaml` AND
-`config/agents/chat_output/prompt.yaml`, and the pre-rewrite copies are **byte-identical**
-(5052 bytes each). The Phase C config-divergence guard
-(`test_config_and_packages_prompts_are_identical`) requires the two copies to stay
-byte-identical, and `chat_output` is NOT on the divergence allowlist. So the rewrite writes
-the SAME new content to BOTH paths.
-
-`assembled_prompt_text('chat_output_formatter')` resolves to the **config** copy (the
-override layer wins); since both copies are identical the inventory built from the assembled
-render is valid for both trees.
+`chat_output` is owned by the `agr.alliance` package at
+`packages/alliance/agents/chat_output/prompt.yaml`. The retired repo shadow under
+`config/agents/chat_output/` no longer exists. The Phase C inventory therefore
+checks the package-resolved prompt used by
+`assembled_prompt_text('chat_output_formatter')`.
 
 ## What `chat_output` actually IS (role + output contract + skeleton choice)
 
@@ -27,8 +21,7 @@ render is valid for both trees.
 formatter**: it turns the curation results an upstream agent hands it into the curator-facing
 plain-text/markdown reply shown in the chat window. Verified against the code:
 
-- Both `config/agents/chat_output/agent.yaml` and
-  `packages/alliance/agents/chat_output/agent.yaml` set `output_schema: null`, `tools: []`,
+- `packages/alliance/agents/chat_output/agent.yaml` sets `output_schema: null`, `tools: []`,
   `supervisor_routing.enabled: false` (flow terminal), and `group_rules_enabled: false`.
 - `output_schema: null` -> the locked core injects **NO** Generated Runtime Contract /
   output-schema mandate (the core render is just the `## Platform Runtime Contract` header).
@@ -132,8 +125,8 @@ inventory** and no `.reason_codes.txt`.
    of CHAT-23/CHAT-24 and is deleted (no home).
 4. **NO group rules, NO reason codes:** the prompt never carried those; `bindings.yaml` and
    the tool-catalog baseline are untouched.
-5. **DUAL-TREE:** the SAME new content is written to BOTH `config/agents/chat_output/` and
-   `packages/alliance/agents/chat_output/`; the config-divergence guard stays green.
+5. **Package ownership:** the rewritten content lives only in
+   `packages/alliance/agents/chat_output/`; there is no repo shadow to synchronize.
 
 ## NO workflow invariants (no ordered tool/file path)
 

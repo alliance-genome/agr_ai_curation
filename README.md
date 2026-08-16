@@ -234,10 +234,9 @@ editing the repo-local `config/agents/` directory directly. See
 [Modular Packages and Upgrades](docs/deployment/modular-packages.md) for the
 package contract.
 
-If you are developing the built-in catalog from a repository checkout,
-`config/agents/supervisor/` mirrors the shipped `agr.core` supervisor bundle and
-the remaining `config/agents/<name>/` folders mirror the shipped
-`agr.alliance` specialist bundles.
+Built-in agents are owned by their package under `packages/<package>/agents/`.
+The repo-local `config/agents/` tree is not scanned implicitly; it is reserved
+for explicit source-development overrides mounted at `/runtime/config/agents`.
 
 ## Configuration
 

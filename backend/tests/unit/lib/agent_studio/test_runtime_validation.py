@@ -151,7 +151,7 @@ def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(
     assert any("Failed to load expected system agents from layered sources: boom" in msg for msg in report["warnings"])
 
 
-def test_build_agent_runtime_report_allows_unseeded_core_only_runtime(monkeypatch):
+def test_build_agent_runtime_report_allows_unseeded_package_runtime(monkeypatch):
     import src.lib.agent_studio.runtime_validation as module
 
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [])
@@ -175,19 +175,26 @@ def test_build_agent_runtime_report_allows_unseeded_core_only_runtime(monkeypatc
     assert report["errors"] == []
     assert report["summary"]["missing_system_agent_count"] == 1
     assert any(
-        "allowing core-only runtime bootstrap" in msg
+        "allowing package runtime bootstrap" in msg
         for msg in report["warnings"]
     )
 
 
-def test_allow_unseeded_core_only_runtime_accepts_chat_output_core_bundle():
+def test_allow_unseeded_package_runtime_requires_empty_database():
     import src.lib.agent_studio.runtime_validation as module
 
-    assert module._allow_unseeded_core_only_runtime(
-        expected_system_agent_keys={"supervisor", "chat_output"},
+    assert module._allow_unseeded_package_runtime(
         actual_system_agent_keys=set(),
         agent_count=0,
     ) is True
+    assert module._allow_unseeded_package_runtime(
+        actual_system_agent_keys={"supervisor"},
+        agent_count=1,
+    ) is False
+    assert module._allow_unseeded_package_runtime(
+        actual_system_agent_keys=set(),
+        agent_count=1,
+    ) is False
 
 
 def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monkeypatch):

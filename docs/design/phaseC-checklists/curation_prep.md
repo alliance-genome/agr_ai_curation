@@ -1,17 +1,18 @@
-# Phase C semantic-coverage checklist: `curation_prep` (Wave 4 — config-only; PREP skeleton)
+# Phase C semantic-coverage checklist: `curation_prep` (Wave 4 — PREP skeleton)
 
 This is the **authoritative inventory source** for the outcome-first rewrite of the
-config-only `curation_prep` base prompt (canonical agent id `curation_prep`). Every
+`curation_prep` base prompt (canonical agent id `curation_prep`). Every
 load-bearing rule in the pre-rewrite prompt is listed here with a stable ID (PREP-NN) and
 its new home, OR an explicit, justified relocation/deletion. The harness inventories
 (`phase_c_inventories/curation_prep.txt`, `.invariants.txt`, `.dropped.json`) are derived
 from this checklist.
 
-## Config-only (NOT dual-tree)
+## Package-owned source
 
-`curation_prep` lives **ONLY** at `config/agents/curation_prep/prompt.yaml`; there is no
-`packages/alliance/agents/curation_prep` twin. The config-divergence guard does not apply
-(no pair). `assembled_prompt_text('curation_prep')` resolves the config copy directly.
+`curation_prep` is generic runtime infrastructure owned by `agr.core` at
+`packages/core/agents/curation_prep/prompt.yaml`.
+`assembled_prompt_text('curation_prep')` resolves that package source unless an
+operator explicitly supplies a runtime override.
 
 ## What `curation_prep` actually IS (role + output contract + skeleton choice)
 
@@ -20,7 +21,7 @@ upstream extraction/flow context and authors a `CurationPrepAgentOutput` that se
 persisted domain-envelope revisions for downstream review-row projection. It is the bridge
 from extraction into a structured curator-review workspace. Verified against the code:
 
-- `config/agents/curation_prep/agent.yaml` sets `output_schema: CurationPrepAgentOutput`,
+- `packages/core/agents/curation_prep/agent.yaml` sets `output_schema: CurationPrepAgentOutput`,
   `tools: []`, `supervisor_routing.enabled: false` (flow terminal), and
   `group_rules_enabled: false`.
 - `output_schema: CurationPrepAgentOutput` -> the locked core injects the **output mandate**
@@ -98,7 +99,7 @@ VERIFIED: `tools: []`, so the core injects no tool-policy lines. Nothing relocat
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
 | PREP-16 | Do not emit CurationPrepCandidate or NormalizedCandidate payload semantics for new domain-envelope review flows. | `<preparation_rules>` (no-legacy-candidate-payloads) |
-| PREP-17 | Do not read or reconstruct legacy semantic stores such as items, annotations, genes, alleles, diseases, chemicals, phenotypes, normalized_payload, or annotation_drafts as review-row truth. | `<preparation_rules>` (no-legacy-stores-as-truth) |
+| PREP-17 | Do not read or reconstruct legacy semantic stores such as items, annotations, normalized_payload, or annotation_drafts as review-row truth. | `<preparation_rules>` (no-legacy-stores-as-truth) |
 | PREP-18 | Preserve provider-agnostic envelope/object/revision references so review rows can be regenerated when materialization logic changes. | `<preparation_rules>` (provider-agnostic refs) |
 
 ## Output contract (CurationPrepAgentOutput fields, terse)
@@ -156,7 +157,9 @@ fixtures, curation-workspace service/invocation tests, and the agent-documentati
 (whose capabilities/summary/limitations come from `docs.yaml`, NOT `prompt.yaml`). The
 domain-envelope prompt-policy guard
 (`test_validator_dispatch_cleanup_guardrail_rejects_stale_active_surface_terms`) scans
-`config/agents/curation_prep/prompt.yaml` for FORBIDDEN legacy validator-dispatch terms; the
-lean rewrite introduces none of those. No prompt-text assertion is edited, deleted, or
-weakened by this rewrite. The only content guards over this base prompt are the Phase C
+package-owned agent prompts, including
+`packages/core/agents/curation_prep/prompt.yaml`, for FORBIDDEN legacy
+validator-dispatch terms; the lean rewrite introduces none of those. No
+prompt-text assertion is edited, deleted, or weakened by this rewrite. The only
+content guards over this base prompt are the Phase C
 retention/invariant/dropped-list harness seeded by this checklist.

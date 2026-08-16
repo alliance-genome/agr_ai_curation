@@ -109,23 +109,13 @@ def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
         return set(), f"Failed to load expected system agents from layered sources: {exc}"
 
 
-def _allow_unseeded_core_only_runtime(
+def _allow_unseeded_package_runtime(
     *,
-    expected_system_agent_keys: set[str],
     actual_system_agent_keys: set[str],
     agent_count: int,
 ) -> bool:
-    """Whether a fresh `agr.core`-only runtime should skip missing-system hard failure."""
-    return (
-        agent_count == 0
-        and not actual_system_agent_keys
-        and expected_system_agent_keys in (
-            {"supervisor"},
-            {"supervisor", "chat_output"},
-            {"supervisor", "chat_output", "curation_prep"},
-            {"supervisor", "chat_output", "curation_handoff", "curation_prep"},
-        )
-    )
+    """Whether an empty database may bootstrap the active package profile."""
+    return agent_count == 0 and not actual_system_agent_keys
 
 
 def _disable_agents_with_missing_tools(report: Dict[str, Any]) -> None:
@@ -261,13 +251,12 @@ def build_agent_runtime_report(
         missing_system_agents = sorted(expected_system_agent_keys - actual_system_agent_keys)
         if missing_system_agents:
             missing_system_agent_count = len(missing_system_agents)
-            if _allow_unseeded_core_only_runtime(
-                expected_system_agent_keys=expected_system_agent_keys,
+            if _allow_unseeded_package_runtime(
                 actual_system_agent_keys=actual_system_agent_keys,
                 agent_count=len(agents),
             ):
                 warnings.append(
-                    "No active system agents are seeded yet; allowing core-only runtime "
+                    "No active system agents are seeded yet; allowing package runtime "
                     "bootstrap with expected agent(s): "
                     + ", ".join(missing_system_agents)
                 )

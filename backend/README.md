@@ -322,10 +322,10 @@ The backend runs on port 8000 inside the container. The Dockerfile includes:
 - PDF processing tools (Poppler)
 - Health check endpoint
 
-The `config/` directory from the project root is mounted read-only into the container at
-`/app/config`, providing access to `models.yaml`, `providers.yaml`, agent definitions, and
-other runtime configuration. Alembic migrations run automatically on container startup
-(`alembic upgrade head`) before the application starts.
+Runtime overrides are mounted read-only at `/runtime/config`, while package-owned
+defaults and agent definitions are mounted read-only at `/runtime/packages`.
+Alembic migrations run automatically on container startup (`alembic upgrade head`)
+before the application starts.
 
 ## Troubleshooting
 
