@@ -44,14 +44,27 @@ def test_domain_validator_result_accepts_resolved_and_unresolved_only():
         DomainValidatorResultBase.model_validate(_base_payload("under_development"))
 
 
-def test_domain_validator_normalizes_lookup_query_strings_and_raw_scores():
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("lookup_query", "https://www.ebi.ac.uk/chebi/backend/api/public/compound/17160/"),
+        ("lookup_query", "64153"),
+        ("lookup_query", None),
+        ("candidate_score", 48.159214),
+        ("candidate_score", -0.01),
+    ],
+)
+def test_domain_validator_rejects_legacy_lookup_queries_and_scores(
+    field: str,
+    invalid_value: object,
+):
     payload = _base_payload()
     payload["candidates"] = [
         {
             "value": "CHEBI:17160",
             "label": "17alpha-estradiol",
             "object_type": "ChemicalTerm",
-            "score": 48.159214,
+            "score": invalid_value if field == "candidate_score" else 0.8,
             "matched_fields": {"name": "estradiol"},
             "details": {"source": "ebi_chebi"},
         }
@@ -60,27 +73,42 @@ def test_domain_validator_normalizes_lookup_query_strings_and_raw_scores():
         {
             "provider": "ebi_chebi",
             "method": "compound",
-            "query": "https://www.ebi.ac.uk/chebi/backend/api/public/compound/17160/",
-            "result_count": 1,
-            "outcome": "success",
-        },
-        {
-            "provider": "ebi_chebi",
-            "method": "compound",
-            "query": "64153",
+            "query": invalid_value if field == "lookup_query" else {"value": "64153"},
             "result_count": 1,
             "outcome": "success",
         },
     ]
 
-    result = DomainValidatorResultBase.model_validate(payload)
+    with pytest.raises(ValidationError):
+        DomainValidatorResultBase.model_validate(payload)
 
-    assert result.candidates[0].score is None
-    assert result.candidates[0].details["raw_score"] == 48.159214
-    assert result.lookup_attempts[0].query == {
-        "url": "https://www.ebi.ac.uk/chebi/backend/api/public/compound/17160/"
-    }
-    assert result.lookup_attempts[1].query == {"value": "64153"}
+
+def test_domain_validator_requires_lookup_query_metadata():
+    payload = _base_payload()
+    payload["lookup_attempts"] = [
+        {
+            "provider": "ebi_chebi",
+            "method": "compound",
+            "result_count": 1,
+            "outcome": "success",
+        }
+    ]
+
+    with pytest.raises(ValidationError):
+        DomainValidatorResultBase.model_validate(payload)
+
+
+@pytest.mark.parametrize("score", [None, 0.0, 0.75, 1.0])
+def test_domain_validator_accepts_null_or_confidence_range_scores(score: float | None):
+    payload = _base_payload()
+    payload["candidates"] = [
+        {
+            "value": "CHEBI:17160",
+            "score": score,
+        }
+    ]
+
+    assert DomainValidatorResultBase.model_validate(payload).candidates[0].score == score
 
 
 def test_domain_validator_accepts_blocked_lookup_attempt_outcome():
@@ -102,7 +130,7 @@ def test_domain_validator_accepts_blocked_lookup_attempt_outcome():
     assert result.lookup_attempts[0].outcome == "blocked"
 
 
-def test_domain_validator_infers_missing_status_from_resolved_lookup_output():
+def test_domain_validator_rejects_missing_status():
     payload = _base_payload()
     del payload["status"]
     payload["resolved_objects"] = [{"curie": "DOID:898", "name": "ADPKD"}]
@@ -116,10 +144,11 @@ def test_domain_validator_infers_missing_status_from_resolved_lookup_output():
         }
     ]
 
-    assert DomainValidatorResultBase.model_validate(payload).status == "resolved"
+    with pytest.raises(ValidationError):
+        DomainValidatorResultBase.model_validate(payload)
 
 
-def test_domain_validator_schema_detection_allows_inheritance_and_embedding():
+def test_domain_validator_schema_detection_requires_inheritance():
     class InheritedResult(DomainValidatorResultBase):
         pass
 
@@ -130,7 +159,7 @@ def test_domain_validator_schema_detection_allows_inheritance_and_embedding():
         summary: str
 
     assert is_domain_validator_result_schema(InheritedResult)
-    assert is_domain_validator_result_schema(EmbeddedResult)
+    assert not is_domain_validator_result_schema(EmbeddedResult)
     assert not is_domain_validator_result_schema(SummaryOnly)
 
 

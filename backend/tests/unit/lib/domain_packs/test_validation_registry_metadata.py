@@ -9,6 +9,9 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
+from packages.alliance.agents.gene.schema import GeneResultEnvelope
+from packages.alliance.agents.reference.schema import ReferenceValidationResult
+
 from src.agr_ai_curation_runtime import agr_lookup
 from src.lib import lookup_status
 from src.lib.domain_packs.loader import (
@@ -41,6 +44,12 @@ class SummaryOnlyValidatorResult(BaseModel):
     summary: str
 
 
+class EmbeddedValidatorResult(BaseModel):
+    """Unsupported wrapper around the dispatcher result contract."""
+
+    result: DomainValidatorResultBase
+
+
 def _validator_agent(
     *,
     package_id: str = "org.validators",
@@ -59,6 +68,12 @@ def _validator_schema_resolver(schema_key: str):
         return BindingReadyValidatorResult
     if schema_key == "SummaryOnlyValidatorResult":
         return SummaryOnlyValidatorResult
+    if schema_key == "EmbeddedValidatorResult":
+        return EmbeddedValidatorResult
+    if schema_key == "GeneResultEnvelope":
+        return GeneResultEnvelope
+    if schema_key == "ReferenceValidationResult":
+        return ReferenceValidationResult
     return None
 
 
@@ -344,7 +359,39 @@ def test_active_validator_agent_reference_validates_package_agent_and_dependency
     assert option["validator_agent_id"] == "shared_validator"
 
 
-def test_active_validator_agent_reference_requires_binding_ready_schema(tmp_path: Path):
+@pytest.mark.parametrize(
+    "output_schema",
+    ["GeneResultEnvelope", "ReferenceValidationResult"],
+)
+def test_active_validator_agent_reference_accepts_active_package_subclasses(
+    tmp_path: Path,
+    output_schema: str,
+):
+    pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    validate_active_validator_agent_references(
+        [registry],
+        _package_registry(
+            "org.owner",
+            "org.validators",
+            dependencies={("org.owner", "org.validators")},
+        ),
+        agent_resolver=lambda _package_id, _agent_id: _validator_agent(
+            output_schema=output_schema
+        ),
+        output_schema_resolver=_validator_schema_resolver,
+    )
+
+
+@pytest.mark.parametrize(
+    "output_schema",
+    ["SummaryOnlyValidatorResult", "EmbeddedValidatorResult"],
+)
+def test_active_validator_agent_reference_requires_binding_ready_schema(
+    tmp_path: Path,
+    output_schema: str,
+):
     pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
 
@@ -357,12 +404,12 @@ def test_active_validator_agent_reference_requires_binding_ready_schema(tmp_path
                 dependencies={("org.owner", "org.validators")},
             ),
             agent_resolver=lambda _package_id, _agent_id: _validator_agent(
-                output_schema="SummaryOnlyValidatorResult"
+                output_schema=output_schema
             ),
             output_schema_resolver=_validator_schema_resolver,
         )
 
-    assert "must inherit from or embed DomainValidatorResultBase" in str(exc_info.value)
+    assert "must inherit from DomainValidatorResultBase" in str(exc_info.value)
 
 
 def test_active_validator_agent_reference_requires_output_schema(tmp_path: Path):

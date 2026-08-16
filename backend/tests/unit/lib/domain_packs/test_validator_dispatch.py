@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
@@ -34,6 +35,7 @@ from src.lib.domain_packs.validator_dispatch import (
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from src.schemas.domain_validator import (
     DomainValidationRequest,
+    DomainValidatorResultBase,
     ValidationTarget,
     ValidatorAgentRef,
 )
@@ -1742,6 +1744,82 @@ def test_concrete_validator_envelope_projects_to_shared_result_contract():
         "symbol": "ABC-1",
     }
     assert not hasattr(result, "gene_candidates")
+
+
+def test_reference_validator_envelope_projects_to_shared_result_contract():
+    from packages.alliance.agents.reference.schema import ReferenceValidationResult
+
+    request = _verbose_validation_request()
+    payload = _result_payload(request)
+    payload.update(
+        {
+            "reference_id": 101000000924191,
+            "curie": "AGRKB:101000000924191",
+            "title": "A reference title",
+            "candidate_references": [{"curie": "AGRKB:101000000924191"}],
+        }
+    )
+    concrete_result = ReferenceValidationResult.model_validate(payload)
+
+    result = validator_result_from_agent_output(
+        SimpleNamespace(final_output=concrete_result),
+        request=request,
+    )
+
+    assert result.status == "resolved"
+    assert result.resolved_values == {
+        "identifier": "AGR:0001",
+        "symbol": "ABC-1",
+    }
+    assert not hasattr(result, "candidate_references")
+
+
+def test_embedded_validator_result_becomes_invalid_schema_result():
+    request = _verbose_validation_request()
+
+    class EmbeddedValidatorResult(BaseModel):
+        result: DomainValidatorResultBase
+
+    embedded_result = EmbeddedValidatorResult(
+        result=DomainValidatorResultBase.model_validate(_result_payload(request))
+    )
+
+    result = validator_result_from_agent_output(
+        SimpleNamespace(final_output=embedded_result),
+        request=request,
+    )
+
+    assert result.status == "unresolved"
+    assert result.lookup_attempts[0].method == "invalid_schema"
+    assert "incompatible output" in result.explanation
+
+
+@pytest.mark.parametrize(
+    "legacy_shape",
+    ["omitted_status", "bare_query", "out_of_range_score"],
+)
+def test_legacy_validator_result_payload_becomes_invalid_schema_result(
+    legacy_shape: str,
+):
+    request = _verbose_validation_request()
+    payload = _result_payload(request)
+    if legacy_shape == "omitted_status":
+        payload.pop("status")
+    elif legacy_shape == "bare_query":
+        payload["lookup_attempts"][0]["query"] = "AGR:0001"
+    else:
+        payload["candidates"] = [
+            {
+                "value": "AGR:0001",
+                "score": 48.159214,
+            }
+        ]
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "unresolved"
+    assert result.lookup_attempts[0].method == "invalid_schema"
+    assert "incompatible output" in result.explanation
 
 
 def test_validator_result_identity_mismatch_becomes_invalid_schema_result():

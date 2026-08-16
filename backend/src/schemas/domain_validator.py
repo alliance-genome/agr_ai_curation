@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, get_args, get_origin
+from typing import Any, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -10,7 +10,6 @@ from pydantic import (
     Field,
     StrictStr,
     field_validator,
-    model_validator,
 )
 
 DomainValidatorStatus = Literal["resolved", "unresolved"]
@@ -143,43 +142,13 @@ class ValidatorCandidate(DomainValidatorBaseModel):
         description="Provider-owned candidate diagnostics",
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _preserve_non_confidence_scores(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-
-        score = value.get("score")
-        if score is None or isinstance(score, bool):
-            return value
-
-        try:
-            numeric_score = float(score)
-        except (TypeError, ValueError):
-            return value
-
-        if 0.0 <= numeric_score <= 1.0:
-            return value
-
-        normalized = dict(value)
-        details = normalized.get("details")
-        if not isinstance(details, dict):
-            details = {}
-        details = dict(details)
-        details.setdefault("raw_score", score)
-        normalized["details"] = details
-        normalized["score"] = None
-        return normalized
-
 
 class ValidatorLookupAttempt(DomainValidatorBaseModel):
     """One lookup attempted while resolving a validator target."""
 
     provider: StrictStr = Field(description="Lookup provider or data source")
     method: StrictStr = Field(description="Lookup method or endpoint")
-    query: dict[str, Any] = Field(
-        default_factory=dict, description="Lookup query payload"
-    )
+    query: dict[str, Any] = Field(description="Lookup query payload")
     result_count: int = Field(
         default=0, ge=0, description="Number of returned candidates"
     )
@@ -195,20 +164,6 @@ class ValidatorLookupAttempt(DomainValidatorBaseModel):
         default=None,
         description="Short curator- or developer-facing lookup note",
     )
-
-    @field_validator("query", mode="before")
-    @classmethod
-    def _normalize_query_payload(cls, value: object) -> object:
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return value
-        if isinstance(value, str):
-            text = value.strip()
-            if text.startswith(("http://", "https://")):
-                return {"url": text}
-            return {"value": text}
-        return {"value": value}
 
 
 class DomainValidatorResultBase(DomainValidatorBaseModel):
@@ -249,34 +204,6 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
         description="Validator reasoning and decision explanation"
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _infer_omitted_status(cls, value: object) -> object:
-        if not isinstance(value, dict) or "status" in value:
-            return value
-
-        normalized = dict(value)
-        lookup_attempts = normalized.get("lookup_attempts")
-        missing_fields = normalized.get("missing_expected_fields")
-        resolved_values = normalized.get("resolved_values")
-        resolved_objects = normalized.get("resolved_objects")
-        has_successful_lookup = False
-        if isinstance(lookup_attempts, list):
-            has_successful_lookup = any(
-                isinstance(attempt, dict) and attempt.get("outcome") == "success"
-                for attempt in lookup_attempts
-            )
-        has_resolution = bool(resolved_values) or bool(resolved_objects)
-        normalized["status"] = (
-            "resolved"
-            if has_successful_lookup
-            and has_resolution
-            and isinstance(missing_fields, list)
-            and not missing_fields
-            else "unresolved"
-        )
-        return normalized
-
     @field_validator("status", mode="before")
     @classmethod
     def _reject_metadata_only_statuses(cls, value: object) -> object:
@@ -288,29 +215,9 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
 
 
 def is_domain_validator_result_schema(schema: object) -> bool:
-    """Return whether ``schema`` inherits from or embeds ``DomainValidatorResultBase``."""
+    """Return whether ``schema`` inherits from ``DomainValidatorResultBase``."""
 
-    if not isinstance(schema, type) or not issubclass(schema, BaseModel):
-        return False
-    if issubclass(schema, DomainValidatorResultBase):
-        return True
-    return any(
-        _annotation_contains_domain_validator_base(field.annotation)
-        for field in schema.model_fields.values()
-    )
-
-
-def _annotation_contains_domain_validator_base(annotation: object) -> bool:
-    if isinstance(annotation, type):
-        try:
-            return issubclass(annotation, DomainValidatorResultBase)
-        except TypeError:
-            return False
-
-    origin = get_origin(annotation)
-    if origin is not None and _annotation_contains_domain_validator_base(origin):
-        return True
-
-    return any(
-        _annotation_contains_domain_validator_base(arg) for arg in get_args(annotation)
+    return isinstance(schema, type) and issubclass(
+        schema,
+        DomainValidatorResultBase,
     )
