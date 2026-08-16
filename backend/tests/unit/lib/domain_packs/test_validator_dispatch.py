@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
@@ -34,6 +35,7 @@ from src.lib.domain_packs.validator_dispatch import (
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from src.schemas.domain_validator import (
     DomainValidationRequest,
+    DomainValidatorResultBase,
     ValidationTarget,
     ValidatorAgentRef,
 )
@@ -1717,31 +1719,70 @@ def test_invalid_validator_schema_becomes_controlled_unresolved_result(
     assert "incompatible output" in result.validator_results[0].explanation
 
 
-def test_concrete_validator_envelope_projects_to_shared_result_contract():
+def test_active_package_validator_envelopes_project_across_dispatch_and_finalization():
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from packages.alliance.agents.reference.schema import ReferenceValidationResult
 
     request = _verbose_validation_request()
     payload = _result_payload(request)
-    payload["gene_candidates"] = [
-        {
-            "gene_id": "AGR:0001",
-            "symbol": "ABC-1",
-            "data_provider": "FIXTURE",
-        }
+    package_results = [
+        (
+            GeneResultEnvelope.model_validate(
+                {
+                    **payload,
+                    "gene_candidates": [
+                        {
+                            "gene_id": "AGR:0001",
+                            "symbol": "ABC-1",
+                            "data_provider": "FIXTURE",
+                        }
+                    ],
+                }
+            ),
+            "gene_candidates",
+        ),
+        (
+            ReferenceValidationResult.model_validate(
+                {**payload, "reference_id": "AGRKB:101000000924191"}
+            ),
+            "reference_id",
+        ),
     ]
-    concrete_result = GeneResultEnvelope.model_validate(payload)
 
-    result = validator_result_from_agent_output(
-        SimpleNamespace(final_output=concrete_result),
-        request=request,
+    for concrete_result, package_field in package_results:
+        result = validator_result_from_agent_output(
+            SimpleNamespace(final_output=concrete_result),
+            request=request,
+        )
+        feedback = _validator_result_finalization_feedback(
+            concrete_result,
+            request=request,
+        )
+
+        assert result.status == "resolved"
+        assert result.resolved_values == {
+            "identifier": "AGR:0001",
+            "symbol": "ABC-1",
+        }
+        assert not hasattr(result, package_field)
+        assert feedback.accepted_result is not None
+        assert not hasattr(feedback.accepted_result, package_field)
+
+
+def test_embedded_validator_result_is_rejected_by_dispatch():
+    class EmbeddedValidatorResult(BaseModel):
+        result: DomainValidatorResultBase
+
+    request = _verbose_validation_request()
+    wrapped_result = EmbeddedValidatorResult(
+        result=DomainValidatorResultBase.model_validate(_result_payload(request))
     )
 
-    assert result.status == "resolved"
-    assert result.resolved_values == {
-        "identifier": "AGR:0001",
-        "symbol": "ABC-1",
-    }
-    assert not hasattr(result, "gene_candidates")
+    result = validator_result_from_agent_output(wrapped_result, request=request)
+
+    assert result.status == "unresolved"
+    assert result.lookup_attempts[0].method == "invalid_schema"
+    assert "incompatible output" in result.explanation
 
 
 def test_validator_result_identity_mismatch_becomes_invalid_schema_result():
