@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, create_model, model_validator
 
 from packages.alliance.agents.gene.schema import GeneResultEnvelope
 from packages.alliance.agents.reference.schema import ReferenceValidationResult
@@ -57,6 +57,15 @@ IncompatibleInheritedValidatorResult = create_model(
 )
 
 
+class BehaviorWeakeningValidatorResult(DomainValidatorResultBase):
+    """Nominally compatible schema that invalidates a canonical field."""
+
+    @model_validator(mode="after")
+    def _clear_status(self):
+        object.__setattr__(self, "status", None)
+        return self
+
+
 def _validator_agent(
     *,
     package_id: str = "org.validators",
@@ -79,6 +88,8 @@ def _validator_schema_resolver(schema_key: str):
         return EmbeddedValidatorResult
     if schema_key == "IncompatibleInheritedValidatorResult":
         return IncompatibleInheritedValidatorResult
+    if schema_key == "BehaviorWeakeningValidatorResult":
+        return BehaviorWeakeningValidatorResult
     if schema_key == "GeneResultEnvelope":
         return GeneResultEnvelope
     if schema_key == "ReferenceValidationResult":
@@ -399,6 +410,7 @@ def test_active_validator_agent_reference_accepts_active_package_subclasses(
         "SummaryOnlyValidatorResult",
         "EmbeddedValidatorResult",
         "IncompatibleInheritedValidatorResult",
+        "BehaviorWeakeningValidatorResult",
     ],
 )
 def test_active_validator_agent_reference_requires_binding_ready_schema(
@@ -425,6 +437,7 @@ def test_active_validator_agent_reference_requires_binding_ready_schema(
     assert "must preserve the canonical DomainValidatorResultBase fields" in str(
         exc_info.value
     )
+    assert "and validation behavior" in str(exc_info.value)
 
 
 def test_active_validator_agent_reference_requires_output_schema(tmp_path: Path):

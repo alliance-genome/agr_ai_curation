@@ -14,6 +14,25 @@ from pydantic import (
 
 DomainValidatorStatus = Literal["resolved", "unresolved"]
 
+_PYDANTIC_DECORATOR_GROUPS = (
+    "validators",
+    "field_validators",
+    "root_validators",
+    "field_serializers",
+    "model_serializers",
+    "model_validators",
+    "computed_fields",
+)
+
+_PYDANTIC_MODEL_BEHAVIOR_METHODS = (
+    "__get_pydantic_core_schema__",
+    "model_dump",
+    "model_dump_json",
+    "model_validate",
+    "model_validate_json",
+    "model_validate_strings",
+)
+
 
 class DomainValidatorBaseModel(BaseModel):
     """Strict base model for validator result contracts."""
@@ -215,14 +234,61 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
 
 
 def is_domain_validator_result_schema(schema: object) -> bool:
-    """Return whether ``schema`` preserves the shared validator result contract."""
+    """Return whether ``schema`` only adds fields to the shared result contract."""
 
     if not isinstance(schema, type) or not issubclass(
         schema, DomainValidatorResultBase
     ):
         return False
 
-    return all(
+    preserves_fields = all(
         schema.model_fields[field_name].asdict() == base_field.asdict()
         for field_name, base_field in DomainValidatorResultBase.model_fields.items()
     )
+    return preserves_fields and _preserves_domain_validator_model_behavior(schema)
+
+
+def _preserves_domain_validator_model_behavior(
+    schema: type[DomainValidatorResultBase],
+) -> bool:
+    """Reject subclass hooks that can rewrite canonical values or serialization."""
+
+    if schema.model_config != DomainValidatorResultBase.model_config:
+        return False
+    if schema.__pydantic_custom_init__:
+        return False
+    if (
+        schema.__pydantic_post_init__
+        != DomainValidatorResultBase.__pydantic_post_init__
+    ):
+        return False
+
+    for method_name in _PYDANTIC_MODEL_BEHAVIOR_METHODS:
+        if _callable_identity(getattr(schema, method_name)) is not _callable_identity(
+            getattr(DomainValidatorResultBase, method_name)
+        ):
+            return False
+
+    schema_decorators = schema.__pydantic_decorators__
+    base_decorators = DomainValidatorResultBase.__pydantic_decorators__
+    for group_name in _PYDANTIC_DECORATOR_GROUPS:
+        schema_group = getattr(schema_decorators, group_name)
+        base_group = getattr(base_decorators, group_name)
+        if schema_group.keys() != base_group.keys():
+            return False
+        for decorator_name, base_decorator in base_group.items():
+            schema_decorator = schema_group[decorator_name]
+            if schema_decorator.info != base_decorator.info:
+                return False
+            if _callable_identity(schema_decorator.func) is not _callable_identity(
+                base_decorator.func
+            ):
+                return False
+
+    return True
+
+
+def _callable_identity(value: object) -> object:
+    """Return the underlying function for a possibly bound method."""
+
+    return getattr(value, "__func__", value)
