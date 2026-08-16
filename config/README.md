@@ -32,6 +32,9 @@ Repository-development note:
   tests also use fixtures under `backend/tests/fixtures/domain_packs/`.
 - `config/models.yaml`, `config/providers.yaml`, and
   `config/tool_policy_defaults.yaml` remain aligned with `packages/core/config/`.
+- `config/overrides.yaml` selects the shipped Alliance Agent Studio prompt when
+  both shipped packages are installed; core-only profiles still use the sole
+  neutral prompt exported by `agr.core`.
 
 ## Directory Structure
 
@@ -43,6 +46,7 @@ config/
 ├── providers.yaml               # LLM runtime provider definitions
 ├── models.yaml                  # LLM model catalog overrides
 ├── tool_policy_defaults.yaml    # Tool policy default overrides
+├── overrides.yaml               # Explicit package export selections
 ├── maintenance_message.txt      # Optional maintenance banner content
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
@@ -71,8 +75,8 @@ The installer seeds the runtime config for you. After
    - `~/.agr_ai_curation/runtime/config/providers.yaml`
    - `~/.agr_ai_curation/runtime/config/models.yaml`
    - `~/.agr_ai_curation/runtime/config/tool_policy_defaults.yaml`
-4. If you add custom packages with conflicting tool bindings, create
-   `~/.agr_ai_curation/runtime/config/overrides.yaml`.
+4. Review `~/.agr_ai_curation/runtime/config/overrides.yaml` when changing the
+   installed package profile or adding conflicting tool/prompt exports.
 
 ### Source development
 
@@ -285,9 +289,11 @@ At system startup:
 3. Package-backed provider/model/tool policy defaults load from
    `runtime/packages/*`.
 4. The runtime override files in `runtime/config/` are merged on top.
-5. Agent bundles are discovered from `runtime/packages/*/agents`.
-6. Group rules are associated with agents based on `group_id` matching.
-7. Domain packs are discovered from `runtime/packages/*/domain_packs` and used
+5. The Agent Studio prompt is resolved from package exports and explicit
+   `overrides.yaml` selection when more than one candidate is active.
+6. Agent bundles are discovered from `runtime/packages/*/agents`.
+7. Group rules are associated with agents based on `group_id` matching.
+8. Domain packs are discovered from `runtime/packages/*/domain_packs` and used
    to interpret domain envelopes, automatic validation, review-row projections,
    and export/submission readiness.
 
@@ -299,6 +305,9 @@ At system startup:
   startup errors.
 - Tool binding collisions require an explicit selection in
   `runtime/config/overrides.yaml`.
+- Multiple Agent Studio prompt exports require one explicit
+  `agent_studio_prompt` selection in `runtime/config/overrides.yaml`; there is
+  no implicit filesystem or package-order fallback.
 - Domain-pack IDs must be unique and validated. Domain-pack metadata is the
   canonical home for object definitions, field paths, validator bindings, and
   required/export-blocking policy.

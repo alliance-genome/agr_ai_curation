@@ -27,6 +27,10 @@ exports:
     name: alliance_flow_recipes
     path: config/flow_recipes.yaml
     description: Alliance Agent Studio recipes, aliases, and composition guidance
+  - kind: agent_studio_prompt
+    name: system
+    path: config/agent_studio_system_prompt.md
+    description: Alliance curator Agent Studio system prompt
 # MAINTAINER NOTE: Adding a directory under packages/alliance/agents/ is not enough
 # to activate a specialist. Every bundle with agents/<name>/agent.yaml must also be
 # listed in agent_bundles below or startup will warn and skip that on-disk bundle.

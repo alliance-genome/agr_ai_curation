@@ -212,26 +212,22 @@ def test_pdf_size_limit_is_shared_by_backend_and_frontend_compose_services(
     assert int(image_default.group(1)) == get_pdf_max_file_size_bytes()
 
 
-def test_dev_compose_mounts_canonical_agent_studio_prompt_source():
+def test_dev_compose_uses_package_mount_for_agent_studio_prompt_source():
     compose = _load_dev_compose()
     backend_volumes = compose["services"]["backend"]["volumes"]
 
-    assert "./alliance_config:/app/alliance_config:ro" in backend_volumes
+    assert "./packages:/runtime/packages:ro" in backend_volumes
+    assert not any("alliance_config" in volume for volume in backend_volumes)
 
 
-def test_production_compose_mounts_canonical_agent_studio_prompt_source():
+def test_production_compose_uses_runtime_packages_for_agent_studio_prompt_source():
     compose = _load_compose()
     backend_bindings = _bind_targets(compose["services"]["backend"])
-    canonical_prompt = (
-        WORKSPACE_ROOT / "alliance_config" / "agent_studio_system_prompt.md"
-    )
-    if not canonical_prompt.is_file():
-        canonical_prompt = Path("/app/alliance_config/agent_studio_system_prompt.md")
 
-    assert backend_bindings["/app/alliance_config"] == (
-        "${AGR_REPO_CONFIG_HOST_DIR:-./config}/../alliance_config"
+    assert backend_bindings["/runtime/packages"] == (
+        "${AGR_RUNTIME_PACKAGES_HOST_DIR:-./packages}"
     )
-    assert canonical_prompt.is_file()
+    assert "/app/alliance_config" not in backend_bindings
 
 
 def test_production_compose_requires_pinned_app_image_tags():
@@ -513,7 +509,6 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
     assert backend_bindings == {
         "/runtime/config": "${AGR_RUNTIME_CONFIG_HOST_DIR:-./config}",
         "/app/config": "${AGR_REPO_CONFIG_HOST_DIR:-./config}",
-        "/app/alliance_config": "${AGR_REPO_CONFIG_HOST_DIR:-./config}/../alliance_config",
         "/runtime/packages": "${AGR_RUNTIME_PACKAGES_HOST_DIR:-./packages}",
         "/runtime/state": "${AGR_RUNTIME_STATE_HOST_DIR:-./runtime_state}",
         "/runtime/state/pdf_storage": "${PDF_STORAGE_HOST_DIR:-./pdf_storage}",

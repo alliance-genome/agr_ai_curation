@@ -85,6 +85,29 @@ def test_validate_runtime_packages_accepts_core_only_runtime(monkeypatch, tmp_pa
     assert registry.failed_packages == ()
 
 
+def test_validate_runtime_packages_accepts_alliance_prompt_selection(
+    monkeypatch,
+    tmp_path: Path,
+):
+    runtime_root = tmp_path / "runtime"
+    packages_dir = runtime_root / "packages"
+    config_dir = runtime_root / "config"
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    runtime_entrypoint.ensure_runtime_layout()
+    shutil.copytree(REPO_ROOT / "packages" / "core", packages_dir / "core")
+    shutil.copytree(REPO_ROOT / "packages" / "alliance", packages_dir / "alliance")
+    shutil.copy2(REPO_ROOT / "config" / "overrides.yaml", config_dir / "overrides.yaml")
+
+    registry = runtime_entrypoint.validate_runtime_packages()
+
+    assert [package.package_id for package in registry.loaded_packages] == [
+        "agr.alliance",
+        "agr.core",
+    ]
+    assert registry.failed_packages == ()
+
+
 def test_validate_runtime_packages_rejects_recipe_that_fails_shared_flow_contract(
     monkeypatch,
     tmp_path: Path,
@@ -107,6 +130,9 @@ exports:
   - kind: flow_recipes
     name: invalid_recipe
     path: config/flow_recipes.yaml
+  - kind: agent_studio_prompt
+    name: system
+    path: config/agent_studio_system_prompt.md
 """,
         encoding="utf-8",
     )
@@ -121,6 +147,10 @@ recipes:
       - agent_id: chat_output
         source_steps: [2]
 """,
+        encoding="utf-8",
+    )
+    (package_dir / "config" / "agent_studio_system_prompt.md").write_text(
+        "Neutral prompt\n",
         encoding="utf-8",
     )
 
@@ -161,6 +191,9 @@ exports:
     name: default
     path: tools/bindings.yaml
     description: Default bindings
+  - kind: agent_studio_prompt
+    name: system
+    path: config/agent_studio_system_prompt.md
 agent_bundles:
   - name: gene
 """,
@@ -175,6 +208,11 @@ tools:
     callable: demo_core.tools.agr:agr_curation_query
     required_context: []
 """,
+        encoding="utf-8",
+    )
+    (package_dir / "config").mkdir()
+    (package_dir / "config" / "agent_studio_system_prompt.md").write_text(
+        "Neutral prompt\n",
         encoding="utf-8",
     )
     for agent_name in ("gene", "missing_manifest"):
@@ -644,10 +682,20 @@ min_runtime_version: 1.0.0
 max_runtime_version: 2.0.0
 python_package_root: python/src/demo_validators
 requirements_file: requirements/runtime.txt
+exports:
+  - kind: agent_studio_prompt
+    name: system
+    path: config/agent_studio_system_prompt.md
 agent_bundles:
   - name: runtime_validator
     has_schema: true
 """,
+        encoding="utf-8",
+    )
+    config_dir = package_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "agent_studio_system_prompt.md").write_text(
+        "Neutral prompt\n",
         encoding="utf-8",
     )
     agent_dir = package_dir / "agents" / "runtime_validator"

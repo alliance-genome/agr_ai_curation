@@ -1,6 +1,6 @@
 # Independent Deployment
 
-Last updated: 2026-03-18
+Last updated: 2026-08-15
 
 ## Scope
 
@@ -52,9 +52,7 @@ The standalone installer seeds the modular runtime under
 - Selected package profile state: `~/.agr_ai_curation/.install_package_profile.env`
 - Runtime config: `~/.agr_ai_curation/runtime/config`
 - Repo config mirror for legacy compatibility: `AGR_REPO_CONFIG_HOST_DIR=/path/to/your/repo/config`.
-  The standalone backend also mounts the sibling `alliance_config/` directory
-  from this repo path as the canonical Agent Studio prompt source.
-- Optional package/tool collision selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
+- Package/tool/Agent Studio prompt selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
 - Runtime packages: `~/.agr_ai_curation/runtime/packages`
 - Default shipped package directory: `~/.agr_ai_curation/runtime/packages/core`
 - Optional shipped Alliance defaults directory: `~/.agr_ai_curation/runtime/packages/alliance`
@@ -83,9 +81,12 @@ Package profile [1=core only, 2=core + alliance]
   records `INSTALL_PACKAGE_IDS=agr.core` in
   `~/.agr_ai_curation/.install_package_profile.env`, and is expected to start
   healthy.
+  Agent Studio uses the neutral prompt exported by `agr.core`.
 - `core + alliance` seeds both `agr.core` (Alliance Core) and `agr.alliance`
   (Alliance Defaults), restoring the richer shipped AGR/Alliance specialist and
   tool catalog.
+  The shipped runtime selection activates the richer Agent Studio prompt
+  exported by `agr.alliance`.
 - You can add `agr.alliance` later by re-running Stage 2:
 
   ```bash

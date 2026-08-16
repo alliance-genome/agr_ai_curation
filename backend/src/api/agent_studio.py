@@ -15,7 +15,6 @@ import asyncio
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone  # noqa: F401 - Agent Studio module API surface.
-from pathlib import Path as FilePath
 from typing import Any, Callable, Dict, List, NoReturn, Optional, cast
 
 import anthropic
@@ -131,6 +130,7 @@ from src.lib.chat_history_repository import (
     ChatSessionRecord,
 )
 from src.lib.config import list_model_definitions
+from src.lib.packages import load_installed_agent_studio_prompt
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.runtime_payload_budget import provider_context_preflight
@@ -145,14 +145,6 @@ logger = logging.getLogger(__name__)
 
 PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
 AGENT_STUDIO_SEEDED_SESSION_PREFIX = agent_studio_chat_session.AGENT_STUDIO_SEEDED_SESSION_PREFIX
-AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
-    # Project prompts must be supplied by config/package sources; backend-core
-    # prompt files are intentionally not runtime fallback candidates.
-    FilePath(__file__).resolve().parents[3] / "alliance_config" / "agent_studio_system_prompt.md",
-    FilePath(__file__).resolve().parents[2] / "alliance_config" / "agent_studio_system_prompt.md",
-]
-
-
 def _raise_agent_studio_lookup_http_exception(
     *,
     exc: CustomAgentNotFoundError | CustomAgentAccessError,
@@ -220,11 +212,8 @@ def _resolve_prompt_explorer_model() -> tuple[str, str]:
 
 
 def _load_agent_studio_system_prompt_template() -> str:
-    """Load the shared Agent Studio system prompt template from alliance_config."""
-    return prompt_builder.load_agent_studio_system_prompt_template(
-        candidates=AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES,
-        logger=logger,
-    )
+    """Load the system prompt selected by the active runtime package profile."""
+    return load_installed_agent_studio_prompt().content
 
 
 def _normalize_suggestion_type(value: Any) -> Any:

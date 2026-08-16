@@ -474,9 +474,15 @@ class TestAgentWorkshopSystemPrompt:
 
         assert context.view_mode == "group"
 
-    def test_build_opus_system_prompt_includes_workshop_context_and_truncates_draft(self):
+    def test_build_opus_system_prompt_includes_workshop_context_and_truncates_draft(
+        self,
+        monkeypatch,
+    ):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
+
+        monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", "/app/packages")
+        monkeypatch.setenv("AGR_RUNTIME_CONFIG_DIR", "/app/config")
 
         draft = "A" * 12050
         context = ChatContext(
@@ -524,37 +530,16 @@ class TestAgentWorkshopSystemPrompt:
         assert "Truncated to first 12000 chars for context." in system_prompt
         assert "Prompt injection note:" in system_prompt
 
-    def test_load_system_prompt_template_prefers_canonical_alliance_config(self, monkeypatch, tmp_path):
+    def test_load_system_prompt_template_uses_package_selection(self, monkeypatch):
         from src.api import agent_studio as api_module
-
-        canonical = tmp_path / "canonical_prompt.md"
-        fallback = tmp_path / "packaged_prompt.md"
-        canonical.write_text("canonical prompt", encoding="utf-8")
-        fallback.write_text("fallback prompt", encoding="utf-8")
 
         monkeypatch.setattr(
             api_module,
-            "AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES",
-            [canonical, fallback],
+            "load_installed_agent_studio_prompt",
+            lambda: SimpleNamespace(content="selected package prompt"),
         )
 
-        assert api_module._load_agent_studio_system_prompt_template() == "canonical prompt"
-
-    def test_load_system_prompt_template_loads_explicit_package_candidate_when_config_missing(self, monkeypatch, tmp_path):
-        from src.api import agent_studio as api_module
-
-        missing = tmp_path / "missing_prompt.md"
-        package_prompt = tmp_path / "package_config" / "agent_studio_system_prompt.md"
-        package_prompt.parent.mkdir()
-        package_prompt.write_text("package prompt", encoding="utf-8")
-
-        monkeypatch.setattr(
-            api_module,
-            "AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES",
-            [missing, package_prompt],
-        )
-
-        assert api_module._load_agent_studio_system_prompt_template() == "package prompt"
+        assert api_module._load_agent_studio_system_prompt_template() == "selected package prompt"
 
     def test_build_opus_system_prompt_injects_package_diagnostic_tool_metadata(self, monkeypatch):
         from src.lib.agent_studio import prompt_builder

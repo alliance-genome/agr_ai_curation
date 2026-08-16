@@ -296,6 +296,12 @@ test_core_config_generates_env_and_backups() {
     echo "Expected seeded runtime config file at ${runtime_config_dir}/providers.yaml" >&2
     exit 1
   }
+  [[ -f "${runtime_config_dir}/overrides.yaml" ]] || {
+    echo "Expected seeded package selection file at ${runtime_config_dir}/overrides.yaml" >&2
+    exit 1
+  }
+  assert_contains 'export_kind: agent_studio_prompt' "${runtime_config_dir}/overrides.yaml"
+  assert_contains 'package_id: agr.alliance' "${runtime_config_dir}/overrides.yaml"
   [[ "$(stat -c '%a' "${runtime_config_dir}/providers.yaml")" == "644" ]] || {
     echo "Expected seeded runtime config file to be readable by published containers" >&2
     exit 1

@@ -108,6 +108,15 @@ tool_policies:
     allow_execute: true
 EOF
 
+  cat >"${source_repo}/config/overrides.yaml" <<'EOF'
+overrides_api_version: 1.0.0
+selections:
+  - export_kind: agent_studio_prompt
+    name: system
+    package_id: agr.alliance
+    reason: Use the Alliance curator prompt when installed.
+EOF
+
   cat >"${source_repo}/config/maintenance_message.txt" <<'EOF'
 All systems normal.
 EOF

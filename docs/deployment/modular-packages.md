@@ -1,6 +1,6 @@
 # Modular Packages and Upgrades
 
-Last updated: 2026-03-18
+Last updated: 2026-08-15
 
 ## Scope
 
@@ -30,7 +30,7 @@ The standalone installer seeds an installed runtime under
 │   │   ├── models.yaml
 │   │   ├── providers.yaml
 │   │   ├── tool_policy_defaults.yaml
-│   │   └── overrides.yaml            # optional
+│   │   └── overrides.yaml            # package export selections
 │   ├── packages/
 │   │   ├── core/
 │   │   │   ├── package.yaml
@@ -41,6 +41,7 @@ The standalone installer seeds an installed runtime under
 │   │   ├── alliance/                   # optional unless profile includes agr.alliance
 │   │   │   ├── package.yaml
 │   │   │   ├── agents/
+│   │   │   ├── config/
 │   │   │   ├── python/
 │   │   │   ├── requirements/
 │   │   │   └── tools/bindings.yaml
@@ -145,11 +146,13 @@ Packages can contribute:
 - model defaults
 - tool policy defaults
 - Agent Studio flow recipes, agent equivalences, and composition suggestions
+- one Agent Studio system prompt per package profile
 
 `agr.core` ships the default provider/model/tool policy files plus the
-supervisor bundle. `agr.alliance` ships the default specialist agent catalog
-along with shipped tool bindings and flow recipes. Keep custom behavior in a
-separate package so upgrades can replace the shipped packages safely.
+supervisor bundle plus a neutral Agent Studio prompt. `agr.alliance` ships the
+default specialist agent catalog along with shipped tool bindings, flow recipes,
+and the Alliance curator Agent Studio prompt. Keep custom behavior in a separate
+package so upgrades can replace the shipped packages safely.
 
 ### Minimal custom package layout
 
@@ -234,6 +237,27 @@ startup with package and source-file context. Core-only installs expose no
 domain recipes. See the developer configuration guide for the complete YAML
 shape.
 
+### Agent Studio system prompt
+
+Each healthy package profile must resolve exactly one `agent_studio_prompt`
+export. The export is a UTF-8 Markdown template and must retain the
+`{{USER_GREETING}}` and `{{PACKAGE_DIAGNOSTIC_TOOLS}}` placeholders when that
+dynamic context is desired:
+
+```yaml
+exports:
+  - kind: agent_studio_prompt
+    name: system
+    path: config/agent_studio_system_prompt.md
+    description: Organization-specific Agent Studio guidance
+```
+
+With one active prompt export, that prompt is selected automatically. With
+multiple active exports, startup fails unless `runtime/config/overrides.yaml`
+selects exactly one package/export. The error includes the package ID, manifest,
+export name, and resolved file path for each candidate. There is no filesystem
+fallback or package-order winner.
+
 ## Merge and override behavior
 
 Runtime loading is deterministic, but not every content type resolves conflicts
@@ -288,6 +312,24 @@ their `tools/bindings.yaml` export.
 If you need only some conflicting tools from a package to win, split them into
 separate tool-binding exports instead of keeping every tool in one `default`
 export.
+
+### Agent Studio prompt
+
+- A profile with one `agent_studio_prompt` export uses it directly.
+- A profile with multiple prompt exports requires an explicit selection.
+- The shipped `config/overrides.yaml` selects `agr.alliance:system` when both
+  shipped packages are installed. In a core-only profile, the sole
+  `agr.core:system` export remains active even though the Alliance selection has
+  no installed candidate.
+
+```yaml
+overrides_api_version: 1.0.0
+selections:
+  - export_kind: agent_studio_prompt
+    name: system
+    package_id: agr.alliance
+    reason: Use the Alliance curator prompt for this package profile.
+```
 
 ## Install a custom tool package
 
