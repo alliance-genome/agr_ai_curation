@@ -842,6 +842,40 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
     assert violations == []
 
 
+def test_active_agent_docs_keep_package_and_explicit_override_contract():
+    backend_readme = (REPO_ROOT / "backend/README.md").read_text(encoding="utf-8")
+    group_config = (
+        REPO_ROOT / "backend/config/group_rules/group_config.py"
+    ).read_text(encoding="utf-8")
+    agent_template = (
+        REPO_ROOT / "config/agents/_examples/basic_agent/agent.yaml"
+    ).read_text(encoding="utf-8")
+    examples_readme = (
+        REPO_ROOT / "config/agents/_examples/README.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Shipped agent definitions live in package-owned bundles" in backend_readme
+    assert (
+        "Agent definitions and LLM provider configuration live outside the backend"
+        not in backend_readme
+    )
+    assert "Agents are defined entirely in YAML configuration files under" not in backend_readme
+    assert "Loads agent definitions from `config/agents" not in backend_readme
+
+    assert "manifest-declared package agent bundles" in group_config
+    assert "from config/agents/*/group_rules/*.yaml" not in group_config
+
+    assert "Shipped agents belong to an owning runtime" in agent_template
+    assert "Copy this folder to config/agents/" not in agent_template
+    assert "packages/<package>/agents/my_agent" in agent_template
+    assert "source Compose explicitly mounts that directory" in agent_template
+
+    assert "packages/<package>/agents/your_agent_name/" in examples_readme
+    assert "agent_bundles" in examples_readme
+    assert "explicit `/runtime/config/agents` mount" in examples_readme
+    assert "../your_agent_name/" not in examples_readme
+
+
 def test_generic_runtime_does_not_ship_alliance_literature_client():
     assert not (REPO_ROOT / "backend/src/lib/literature/client.py").exists()
     assert not (REPO_ROOT / "backend/src/lib/literature/__init__.py").exists()

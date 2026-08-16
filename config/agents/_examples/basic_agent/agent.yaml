@@ -1,15 +1,21 @@
 # =============================================================================
 # AGENT DEFINITION: basic_agent
 # =============================================================================
-# This is a template agent definition. Copy this folder to config/agents/ and
-# customize for your use case.
+# This is an authoring template. Shipped agents belong to an owning runtime
+# package; deployment-specific customizations belong in the explicit runtime
+# override layer.
 #
-# To use this template:
-#   1. Copy this folder: cp -r _examples/basic_agent ../my_agent
-#   2. Rename agent_id and update all fields below
-#   3. Update prompt.yaml with your agent's instructions
-#   4. Update schema.py with your output structure
-#   5. Add group_rules/*.yaml if you need organization-specific behavior
+# To create a shipped agent from the repository root:
+#   1. Choose its owning package (core for project-neutral behavior, or a
+#      project/organization package for specific behavior).
+#   2. Copy this template into packages/<package>/agents/my_agent.
+#   3. Declare my_agent under agent_bundles in the owning package.yaml.
+#   4. Rename agent_id and update the prompt, schema, and group rules below.
+#
+# For an intentional source-development override, copy only the changed assets
+# to config/agents/<agent_id>/; source Compose explicitly mounts that directory
+# at /runtime/config/agents. Installed deployments use their own explicit
+# /runtime/config/agents mount instead of editing this repository template.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
