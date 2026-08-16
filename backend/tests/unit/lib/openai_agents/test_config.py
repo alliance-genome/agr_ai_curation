@@ -539,6 +539,32 @@ def test_pdf_max_file_size_env_override_can_raise_former_ceiling(monkeypatch):
     assert get_pdf_max_file_size_bytes() == 600 * 1024 * 1024
 
 
+def test_pdf_max_file_size_accepts_persisted_integer_boundary(monkeypatch):
+    monkeypatch.setenv("PDF_MAX_FILE_SIZE_BYTES", "2147483647")
+
+    assert get_pdf_max_file_size_bytes() == 2_147_483_647
+
+
+def test_pdf_max_file_size_accepts_leading_zero_representation(monkeypatch):
+    monkeypatch.setenv("PDF_MAX_FILE_SIZE_BYTES", "0000000005")
+
+    assert get_pdf_max_file_size_bytes() == 5
+
+
+@pytest.mark.parametrize(
+    "configured_value",
+    ["", "0", "-1", "500MB", "2147483648", "١٢٣"],
+)
+def test_pdf_max_file_size_rejects_invalid_or_unpersistable_values(
+    monkeypatch,
+    configured_value,
+):
+    monkeypatch.setenv("PDF_MAX_FILE_SIZE_BYTES", configured_value)
+
+    with pytest.raises(ValueError, match="PDF_MAX_FILE_SIZE_BYTES"):
+        get_pdf_max_file_size_bytes()
+
+
 def test_pdf_upload_max_page_count_defaults_to_100(monkeypatch):
     monkeypatch.delenv("PDF_UPLOAD_MAX_PAGE_COUNT", raising=False)
 

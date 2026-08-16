@@ -50,8 +50,12 @@ assert_nginx_variables_survive_rendering() {
 
 assert_rendered_limit 524288000
 assert_rendered_limit 629145600 --env PDF_MAX_FILE_SIZE_BYTES=629145600
+assert_rendered_limit 2147483647 --env PDF_MAX_FILE_SIZE_BYTES=2147483647
+assert_rendered_limit 0000000005 --env PDF_MAX_FILE_SIZE_BYTES=0000000005
 assert_rejected_value malformed "must be a positive integer byte count"
 assert_rejected_value 0 "must be greater than zero"
+assert_rejected_value 2147483648 "must not exceed the persisted file-size capacity of 2147483647 bytes"
+assert_rejected_value 999999999999999999999999999999999999 "must not exceed the persisted file-size capacity of 2147483647 bytes"
 assert_nginx_variables_survive_rendering
 
 echo "Frontend Nginx PDF limit contract tests passed"

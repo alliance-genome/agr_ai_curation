@@ -1881,12 +1881,28 @@ def get_file_output_max_size_bytes() -> int:
 def get_pdf_max_file_size_bytes() -> int:
     """Max byte size of an uploaded/processed PDF (PDF_MAX_FILE_SIZE_BYTES).
 
-    Rejects oversized PDF uploads. Default 524288000 bytes (500 MiB).
+    Rejects oversized PDF uploads. Default 524288000 bytes (500 MiB). The
+    configured value must fit the PostgreSQL ``INTEGER`` storage column used
+    for persisted file sizes.
     """
-    return max(
-        1,
-        _get_env_int_with_fallback("PDF_MAX_FILE_SIZE_BYTES", 500 * 1024 * 1024),
-    )
+    key = "PDF_MAX_FILE_SIZE_BYTES"
+    raw = os.getenv(key)
+    if raw is None:
+        return 500 * 1024 * 1024
+    if not raw.isascii() or not raw.isdigit():
+        raise ValueError(f"{key} must be a positive integer byte count")
+
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"{key} must be greater than zero")
+
+    postgres_integer_max = 2_147_483_647
+    if value > postgres_integer_max:
+        raise ValueError(
+            f"{key} must not exceed the persisted file-size capacity of "
+            f"{postgres_integer_max} bytes"
+        )
+    return value
 
 
 def get_pdf_upload_max_page_count() -> int:
