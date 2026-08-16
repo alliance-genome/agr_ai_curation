@@ -208,6 +208,45 @@ seed_runtime_packages() {
   fi
 }
 
+seed_runtime_overrides() {
+  local runtime_config_dir="$1"
+  local core_package_source_dir="$2"
+  local alliance_package_source_dir="$3"
+  local package_profile="$4"
+  local overrides_source="${core_package_source_dir}/config/runtime_overrides.yaml"
+
+  if install_package_profile_includes_alliance "$package_profile"; then
+    overrides_source="${alliance_package_source_dir}/config/runtime_overrides.yaml"
+  fi
+
+  require_file_exists "$overrides_source"
+  cp "$overrides_source" "${runtime_config_dir}/overrides.yaml"
+  chmod 0644 "${runtime_config_dir}/overrides.yaml"
+}
+
+validate_runtime_overrides_reseed() {
+  local runtime_overrides_path="$1"
+  local core_package_source_dir="$2"
+  local alliance_package_source_dir="$3"
+
+  if [[ ! -f "$runtime_overrides_path" ]]; then
+    return 0
+  fi
+  if cmp -s \
+    "$runtime_overrides_path" \
+    "${core_package_source_dir}/config/runtime_overrides.yaml"; then
+    return 0
+  fi
+  if cmp -s \
+    "$runtime_overrides_path" \
+    "${alliance_package_source_dir}/config/runtime_overrides.yaml"; then
+    return 0
+  fi
+
+  log_error "Refusing to overwrite customized runtime overrides at ${runtime_overrides_path}. Preserve and move that file aside, rerun Stage 2 to write the requested profile template, then merge its operator-owned entries into the new template."
+  return 1
+}
+
 load_existing_package_profile() {
   local existing_profile=""
 
@@ -410,6 +449,10 @@ main() {
   default_package_profile="$(load_existing_package_profile)"
   package_profile="$(resolve_package_profile "$default_package_profile")"
   package_profile_label="$(install_package_profile_label "$package_profile")"
+  validate_runtime_overrides_reseed \
+    "${runtime_config_dir}/overrides.yaml" \
+    "$core_package_source_dir" \
+    "$alliance_package_source_dir"
   template_rerank_provider="$(install_read_env_value "$env_template_path" "RERANK_PROVIDER")"
   template_bedrock_rerank_model_arn="$(
     install_read_env_value "$env_template_path" "BEDROCK_RERANK_MODEL_ARN"
@@ -425,6 +468,11 @@ main() {
     "$config_source_dir"
   seed_runtime_packages \
     "$runtime_packages_dir" \
+    "$core_package_source_dir" \
+    "$alliance_package_source_dir" \
+    "$package_profile"
+  seed_runtime_overrides \
+    "$runtime_config_dir" \
     "$core_package_source_dir" \
     "$alliance_package_source_dir" \
     "$package_profile"

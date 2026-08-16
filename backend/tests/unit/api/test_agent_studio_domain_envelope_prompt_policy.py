@@ -123,20 +123,19 @@ def _display_prompt_path(path: Path) -> str:
 
 
 def _read_runtime_agent_studio_system_prompt() -> tuple[str, str]:
-    from src.api import agent_studio as api_module
+    from src.lib.packages import load_installed_agent_studio_prompt
 
-    for candidate in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES:
-        if candidate.exists():
-            return _display_prompt_path(candidate), candidate.read_text(encoding="utf-8")
-
-    candidate_list = ", ".join(
-        _display_prompt_path(candidate)
-        for candidate in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES
+    loaded = load_installed_agent_studio_prompt(
+        REPO_ROOT / "packages",
+        overrides_path=(
+            REPO_ROOT
+            / "packages"
+            / "alliance"
+            / "config"
+            / "runtime_overrides.yaml"
+        ),
     )
-    raise AssertionError(
-        "No Agent Studio system prompt template candidate exists: "
-        f"{candidate_list}"
-    )
+    return _display_prompt_path(loaded.source.prompt_path), loaded.content
 
 
 def _validator_dispatch_cleanup_surface_paths() -> tuple[str, ...]:
@@ -227,15 +226,21 @@ def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
     assert "Do not recommend fuzzy quote repair" in prompt
 
 
-def test_agent_studio_system_prompt_has_no_backend_core_copy():
+def test_agent_studio_system_prompt_is_owned_by_selected_alliance_package():
     from src.api import agent_studio as api_module
 
-    canonical_path = REPO_ROOT / "alliance_config" / "agent_studio_system_prompt.md"
+    canonical_path = (
+        REPO_ROOT
+        / "packages"
+        / "alliance"
+        / "config"
+        / "agent_studio_system_prompt.md"
+    )
     backend_core_path = REPO_ROOT / "backend/src/api/agent_studio_system_prompt.md"
 
     assert canonical_path.exists()
     assert not backend_core_path.exists()
-    assert backend_core_path not in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES
+    assert not hasattr(api_module, "AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES")
 
 
 def test_validator_dispatch_cleanup_guardrail_rejects_stale_active_surface_terms():

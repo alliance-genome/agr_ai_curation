@@ -124,6 +124,7 @@ class ExportKind(str, Enum):
     CURATION_ADAPTER = "curation_adapter"
     DOCUMENT_SOURCE_PROVIDER = "document_source_provider"
     FLOW_RECIPES = "flow_recipes"
+    AGENT_STUDIO_PROMPT = "agent_studio_prompt"
 
 
 class ToolBindingType(str, Enum):

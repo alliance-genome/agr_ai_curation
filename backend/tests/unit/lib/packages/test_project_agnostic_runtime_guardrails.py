@@ -121,6 +121,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/config/test_reference_validator_result_contract.py"),
     Path("backend/tests/unit/lib/config/test_runtime_config_defaults.py"),
     Path("backend/tests/unit/lib/packages/__init__.py"),
+    Path("backend/tests/unit/lib/packages/test_agent_studio_prompt_loader.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_agent_package.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_literature_reference_tool.py"),
     Path("backend/tests/unit/lib/packages/test_core_package_contract.py"),

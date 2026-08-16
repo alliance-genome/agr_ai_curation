@@ -176,6 +176,9 @@ test_standard_repo_install_apply() {
   local output_path="${temp_root}/standard-apply.out"
 
   prepare_source_repo "$source_repo"
+  cp \
+    "${source_repo}/packages/alliance/config/runtime_overrides.yaml" \
+    "${source_repo}/config/overrides.yaml"
 
   local status
   status="$(run_helper "$output_path" --apply --source-repo "$source_repo" --install-home "$install_home")"
@@ -188,6 +191,8 @@ test_standard_repo_install_apply() {
   assert_contains 'MIGRATION_STATUS=ready' "$output_path"
   assert_contains 'extra migrated packages: 0' "$output_path"
   assert_file_exists "${install_home}/runtime/config/groups.yaml"
+  assert_file_exists "${install_home}/runtime/config/overrides.yaml"
+  assert_contains 'package_id: agr.alliance' "${install_home}/runtime/config/overrides.yaml"
   assert_file_exists "${install_home}/runtime/packages/core/package.yaml"
   assert_file_exists "${install_home}/runtime/packages/alliance/package.yaml"
   assert_file_exists "${install_home}/runtime/state/identifier_prefixes/identifier_prefixes.json"
@@ -201,6 +206,97 @@ test_standard_repo_install_apply() {
   assert_contains "WEAVIATE_DATA_HOST_DIR=${install_home}/data/weaviate" "${install_home}/.env"
   assert_not_contains 'AGENTS_CONFIG_PATH=' "${install_home}/.env"
   assert_not_contains 'GROUPS_CONFIG_PATH=' "${install_home}/.env"
+  assert_dir_not_exists "${install_home}/migration/legacy_local"
+
+  rm -rf "${temp_root}"
+  trap - RETURN
+}
+
+test_source_overrides_require_manual_reconciliation() {
+  local temp_root
+  temp_root="$(mktemp -d)"
+  trap 'rm -rf "${temp_root}"' RETURN
+
+  local source_repo="${temp_root}/source-custom-overrides"
+  local install_home="${temp_root}/install-custom-overrides"
+  local output_path="${temp_root}/custom-overrides.out"
+  local dry_run_output_path="${temp_root}/custom-overrides-dry-run.out"
+  local expected_path="${temp_root}/expected-overrides.yaml"
+  local migration_temp_parent="${temp_root}/migration-tmp"
+
+  prepare_source_repo "$source_repo"
+  mkdir -p "$migration_temp_parent"
+  cat >"${source_repo}/config/overrides.yaml" <<'EOF'
+overrides_api_version: 1.0.0
+disabled_packages: [org.operator.disabled]
+EOF
+  cp "${source_repo}/config/overrides.yaml" "$expected_path"
+
+  local status
+  status="$(TMPDIR="$migration_temp_parent" run_helper "$dry_run_output_path" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
+  if [[ "$status" != "0" ]]; then
+    echo "Expected customized source overrides dry-run to exit 0, got ${status}" >&2
+    cat "$dry_run_output_path" >&2
+    exit 1
+  fi
+
+  assert_contains 'MIGRATION_STATUS=manual_review_required' "$dry_run_output_path"
+  assert_contains 'customized source overrides: 1' "$dry_run_output_path"
+  assert_contains 'modified shipped packages preserved: 0' "$dry_run_output_path"
+  assert_not_contains 'Legacy local code detected' "$dry_run_output_path"
+  cmp "$expected_path" "${source_repo}/config/overrides.yaml"
+  assert_dir_not_exists "${install_home}/runtime"
+  if find "$migration_temp_parent" -mindepth 1 -print -quit | grep -q .; then
+    echo "Expected migration package archives to be removed after dry-run" >&2
+    find "$migration_temp_parent" -mindepth 1 -maxdepth 2 -print >&2
+    exit 1
+  fi
+
+  status="$(TMPDIR="$migration_temp_parent" run_helper "$output_path" --apply --source-repo "$source_repo" --install-home "$install_home")"
+  if [[ "$status" != "3" ]]; then
+    echo "Expected source overrides migration to require manual review, got ${status}" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+
+  assert_contains 'Refusing to replace customized' "$output_path"
+  cmp "$expected_path" "${source_repo}/config/overrides.yaml"
+  assert_dir_not_exists "${install_home}/runtime"
+
+  rm -rf "${temp_root}"
+  trap - RETURN
+}
+
+test_source_overrides_and_legacy_code_report_both_conditions() {
+  local temp_root
+  temp_root="$(mktemp -d)"
+  trap 'rm -rf "${temp_root}"' RETURN
+
+  local source_repo="${temp_root}/source-combined-review"
+  local install_home="${temp_root}/install-combined-review"
+  local output_path="${temp_root}/combined-review.out"
+
+  prepare_source_repo "$source_repo"
+  cat >"${source_repo}/config/overrides.yaml" <<'EOF'
+overrides_api_version: 1.0.0
+disabled_packages: [org.operator.disabled]
+EOF
+  mkdir -p "${source_repo}/packages/local_notes"
+  printf 'operator package notes\n' >"${source_repo}/packages/local_notes/README.txt"
+
+  local status
+  status="$(run_helper "$output_path" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
+  if [[ "$status" != "0" ]]; then
+    echo "Expected combined manual-review dry-run to exit 0, got ${status}" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+
+  assert_contains 'Legacy local code detected' "$output_path"
+  assert_contains 'customized source overrides: 1' "$output_path"
+  assert_contains 'extra non-package dirs preserved: 1' "$output_path"
+  assert_contains 'legacy local code also requires scaffold review' "$output_path"
+  assert_contains 'MIGRATION_STATUS=manual_review_required' "$output_path"
   assert_dir_not_exists "${install_home}/migration/legacy_local"
 
   rm -rf "${temp_root}"
@@ -566,6 +662,8 @@ EOF
 }
 
 test_standard_repo_install_apply
+test_source_overrides_require_manual_reconciliation
+test_source_overrides_and_legacy_code_report_both_conditions
 test_dry_run_allows_missing_data_dirs
 test_non_git_source_ignores_dirty_helper_core
 test_git_source_without_upstream_can_still_be_ready

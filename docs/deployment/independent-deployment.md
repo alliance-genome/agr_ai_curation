@@ -1,6 +1,6 @@
 # Independent Deployment
 
-Last updated: 2026-03-18
+Last updated: 2026-08-15
 
 ## Scope
 
@@ -52,9 +52,7 @@ The standalone installer seeds the modular runtime under
 - Selected package profile state: `~/.agr_ai_curation/.install_package_profile.env`
 - Runtime config: `~/.agr_ai_curation/runtime/config`
 - Repo config mirror for legacy compatibility: `AGR_REPO_CONFIG_HOST_DIR=/path/to/your/repo/config`.
-  The standalone backend also mounts the sibling `alliance_config/` directory
-  from this repo path as the canonical Agent Studio prompt source.
-- Optional package/tool collision selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
+- Package/tool/Agent Studio prompt selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
 - Runtime packages: `~/.agr_ai_curation/runtime/packages`
 - Default shipped package directory: `~/.agr_ai_curation/runtime/packages/core`
 - Optional shipped Alliance defaults directory: `~/.agr_ai_curation/runtime/packages/alliance`
@@ -83,14 +81,24 @@ Package profile [1=core only, 2=core + alliance]
   records `INSTALL_PACKAGE_IDS=agr.core` in
   `~/.agr_ai_curation/.install_package_profile.env`, and is expected to start
   healthy.
+  Agent Studio uses the neutral prompt exported by `agr.core`.
 - `core + alliance` seeds both `agr.core` (Alliance Core) and `agr.alliance`
   (Alliance Defaults), restoring the richer shipped AGR/Alliance specialist and
   tool catalog.
+  The shipped runtime selection activates the richer Agent Studio prompt
+  exported by `agr.alliance`.
 - You can add `agr.alliance` later by re-running Stage 2:
 
   ```bash
   scripts/install/install.sh --from-stage 2 --package-profile core-plus-alliance
   ```
+
+  On every rerun—including key or reranker rotation—Stage 2 stops if
+  `runtime/config/overrides.yaml` has operator-added package, tool, or prompt
+  selections. Reconcile them by preserving and moving the file aside,
+  rerunning Stage 2 to create the Alliance profile template, and then merging
+  the operator-owned entries into that template. The installer never silently
+  replaces a customized overrides file.
 
 On a healthy `core only` install, the main chat still starts in core-only mode
 but without the domain specialist/tool catalog, Agent Studio shows only
@@ -148,6 +156,11 @@ What the helper does:
   `~/.agr_ai_curation/runtime/packages`
 - Copies repo-local mutable data into `~/.agr_ai_curation/data/*`
 - Patches `~/.agr_ai_curation/.env` with the standalone host-directory variables when a repo `.env` already exists
+- Accepts the unchanged shipped Alliance `config/overrides.yaml`, but refuses
+  automatic migration when that source file is customized; preserve it,
+  leave a running deployment's checkout unchanged, and migrate from a stopped
+  or copied checkout with the file moved aside. Then reconcile its
+  operator-owned entries with the installed profile template
 
 Custom local code handling:
 

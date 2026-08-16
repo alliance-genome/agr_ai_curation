@@ -21,6 +21,10 @@ exports:
     name: default_tool_policies
     path: config/tool_policy_defaults.yaml
     description: Default AGR tool policy defaults
+  - kind: agent_studio_prompt
+    name: system
+    path: config/agent_studio_system_prompt.md
+    description: Neutral Agent Studio system prompt for core-only deployments
 agent_bundles:
   - name: supervisor
     group_rules: [mgi, rgd]

@@ -66,6 +66,11 @@ def test_core_package_manifest_exports_foundation_runtime_assets_only():
             "default_tool_policies",
             "config/tool_policy_defaults.yaml",
         ),
+        (
+            ExportKind.AGENT_STUDIO_PROMPT,
+            "system",
+            "config/agent_studio_system_prompt.md",
+        ),
         (ExportKind.AGENT, "supervisor", "agents/supervisor"),
         (ExportKind.PROMPT, "supervisor.system", "agents/supervisor/prompt.yaml"),
         (

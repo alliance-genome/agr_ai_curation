@@ -348,6 +348,7 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
     core_export_kinds = {export.kind for export in core_package.manifest.exports}
     assert core_export_kinds == {
         ExportKind.AGENT,
+        ExportKind.AGENT_STUDIO_PROMPT,
         ExportKind.PROMPT,
         ExportKind.GROUP_RULE,
         ExportKind.MODEL,
@@ -369,6 +370,7 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
     }
     assert alliance_export_kinds == {
         ExportKind.AGENT,
+        ExportKind.AGENT_STUDIO_PROMPT,
         ExportKind.CURATION_ADAPTER,
         ExportKind.DOCUMENT_SOURCE_PROVIDER,
         ExportKind.PROMPT,

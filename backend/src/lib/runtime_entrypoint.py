@@ -32,10 +32,13 @@ from src.lib.packages import (
     get_pdfx_json_storage_dir,
     get_processed_json_storage_dir,
     get_runtime_config_dir,
+    get_runtime_overrides_path,
     get_runtime_packages_dir,
     get_runtime_state_dir,
     load_package_registry,
     load_tool_registry,
+    load_runtime_overrides,
+    resolve_agent_studio_prompt,
     validate_agent_bundle_directory_registration,
 )
 
@@ -125,6 +128,15 @@ def validate_runtime_packages() -> PackageRegistry:
 
     _warn_undeclared_agent_bundle_directories(registry)
 
+    overrides_path = get_runtime_overrides_path()
+    runtime_overrides = (
+        load_runtime_overrides(overrides_path) if overrides_path.is_file() else None
+    )
+    agent_studio_prompt = resolve_agent_studio_prompt(
+        registry,
+        runtime_overrides=runtime_overrides,
+    )
+
     tool_registry = load_tool_registry(
         packages_dir,
         fail_on_validation_error=True,
@@ -158,7 +170,7 @@ def validate_runtime_packages() -> PackageRegistry:
         output_schema_resolver=build_package_scoped_output_schema_resolver(packages_dir),
     )
     logger.info(
-        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s document_source_providers=%s domain_packs=%s flow_recipes=%s/%s-compatible",
+        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s document_source_providers=%s domain_packs=%s flow_recipes=%s/%s-compatible agent_studio_prompt=%s:%s",
         len(registry.loaded_packages),
         len(registry.failed_packages),
         report["status"],
@@ -167,6 +179,8 @@ def validate_runtime_packages() -> PackageRegistry:
         len(domain_pack_registry.loaded_packs),
         len(flow_recipe_catalog.recipes),
         compatible_flow_recipe_count,
+        agent_studio_prompt.source.package_id,
+        agent_studio_prompt.source.export_name,
     )
     if registry.failed_packages:
         for failure in registry.failed_packages:

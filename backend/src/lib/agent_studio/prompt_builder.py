@@ -3,7 +3,6 @@
 import json
 import os
 import re
-from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from src.lib.agent_studio.models import ChatContext
@@ -113,27 +112,6 @@ def resolve_prompt_explorer_model(
     raise ValueError(
         "No Agent Studio Anthropic model configured. Set PROMPT_EXPLORER_MODEL_ID "
         "or add an anthropic model to config/models.yaml."
-    )
-
-
-def load_agent_studio_system_prompt_template(
-    *,
-    candidates: Sequence[Path],
-    logger: Any,
-) -> str:
-    """Load the shared Agent Studio system prompt template from alliance_config."""
-
-    for candidate in candidates:
-        try:
-            if candidate.exists():
-                return candidate.read_text(encoding="utf-8")
-        except OSError:
-            logger.debug("Failed to read Agent Studio system prompt template candidate: %s", candidate)
-
-    candidate_list = ", ".join(str(path) for path in candidates)
-    raise RuntimeError(
-        "Failed to load Agent Studio system prompt template from any candidate path: "
-        f"{candidate_list}"
     )
 
 

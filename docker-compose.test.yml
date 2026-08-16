@@ -100,7 +100,6 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
-      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
       - ./frontend:/app/frontend:ro
@@ -162,7 +161,6 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config
-      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
       - ./frontend:/app/frontend:ro
@@ -224,7 +222,6 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
-      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./scripts/testing:/app/scripts/testing:ro
     environment:
@@ -307,7 +304,6 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
-      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
     environment:
       - PYTHONUNBUFFERED=1
@@ -349,7 +345,6 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
-      - ./alliance_config:/app/alliance_config:ro
       - ./packages:/app/packages:ro
       - ./scripts/testing:/app/scripts/testing:ro
     environment:

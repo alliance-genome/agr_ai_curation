@@ -1,5 +1,13 @@
 """Package runtime contract helpers for modular distribution."""
 
+from .agent_studio_prompt_loader import (
+    AgentStudioPromptLoadError,
+    AgentStudioPromptSource,
+    LoadedAgentStudioPrompt,
+    load_installed_agent_studio_prompt,
+    resolve_agent_studio_prompt,
+)
+
 from .discovery import (
     DiscoveredPackage,
     PackageDiscoveryFailure,
@@ -123,6 +131,8 @@ from .tool_registry import (
 )
 
 __all__ = [
+    "AgentStudioPromptLoadError",
+    "AgentStudioPromptSource",
     "DiscoveredPackage",
     "CurationAdapterLoadError",
     "DocumentSourceProviderCatalog",
@@ -135,6 +145,7 @@ __all__ = [
     "FlowRecipeLoadError",
     "FlowRecipeManifest",
     "LoadedPackage",
+    "LoadedAgentStudioPrompt",
     "LoadedCurationAdapterExport",
     "LoadedDocumentSourceProviderRegistration",
     "LoadedToolBindingExport",
@@ -209,11 +220,13 @@ __all__ = [
     "load_package_document_source_provider_exports",
     "load_package_tool_binding_exports",
     "load_package_manifest",
+    "load_installed_agent_studio_prompt",
     "load_package_registry",
     "load_flow_recipe_catalog",
     "load_runtime_overrides",
     "load_tool_bindings",
     "load_tool_registry",
     "resolve_default_packages_dir",
+    "resolve_agent_studio_prompt",
     "validate_agent_bundle_directory_registration",
 ]
