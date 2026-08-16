@@ -180,14 +180,21 @@ def test_build_agent_runtime_report_allows_unseeded_package_runtime(monkeypatch)
     )
 
 
-def test_allow_unseeded_package_runtime_uses_manifest_derived_agent_set():
+def test_allow_unseeded_package_runtime_requires_empty_database():
     import src.lib.agent_studio.runtime_validation as module
 
     assert module._allow_unseeded_package_runtime(
-        expected_system_agent_keys={"supervisor", "curation_prep", "curation_handoff"},
         actual_system_agent_keys=set(),
         agent_count=0,
     ) is True
+    assert module._allow_unseeded_package_runtime(
+        actual_system_agent_keys={"supervisor"},
+        agent_count=1,
+    ) is False
+    assert module._allow_unseeded_package_runtime(
+        actual_system_agent_keys=set(),
+        agent_count=1,
+    ) is False
 
 
 def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monkeypatch):

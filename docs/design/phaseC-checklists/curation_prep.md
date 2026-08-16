@@ -99,7 +99,7 @@ VERIFIED: `tools: []`, so the core injects no tool-policy lines. Nothing relocat
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
 | PREP-16 | Do not emit CurationPrepCandidate or NormalizedCandidate payload semantics for new domain-envelope review flows. | `<preparation_rules>` (no-legacy-candidate-payloads) |
-| PREP-17 | Do not read or reconstruct legacy semantic stores such as items, annotations, genes, alleles, diseases, chemicals, phenotypes, normalized_payload, or annotation_drafts as review-row truth. | `<preparation_rules>` (no-legacy-stores-as-truth) |
+| PREP-17 | Do not read or reconstruct legacy semantic stores such as items, annotations, normalized_payload, or annotation_drafts as review-row truth. | `<preparation_rules>` (no-legacy-stores-as-truth) |
 | PREP-18 | Preserve provider-agnostic envelope/object/revision references so review rows can be regenerated when materialization logic changes. | `<preparation_rules>` (provider-agnostic refs) |
 
 ## Output contract (CurationPrepAgentOutput fields, terse)

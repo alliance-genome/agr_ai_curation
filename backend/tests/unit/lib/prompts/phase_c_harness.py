@@ -500,11 +500,11 @@ def relocated_phrase_satisfied(entry: DroppedEntry) -> tuple[bool, str]:
 
 
 def config_packages_prompt_pairs() -> tuple[tuple[str, Path, Path], ...]:
-    """Return Alliance ``(agent, config_prompt, packages_prompt)`` shadow pairs.
+    """Return ``(agent, override_prompt, package_prompt)`` source pairs.
 
     Only agents that have a ``prompt.yaml`` in BOTH ``config/agents`` and
-    ``packages/alliance/agents`` are returned. Intentional core runtime-config
-    overrides are outside this retired-shadow guard.
+    a core or Alliance package are returned. The caller decides which intentional
+    source-development divergences are allowlisted.
     """
     pairs: list[tuple[str, Path, Path]] = []
     if not CONFIG_AGENTS_DIR.exists():
@@ -515,12 +515,20 @@ def config_packages_prompt_pairs() -> tuple[tuple[str, Path, Path], ...]:
         config_prompt = config_agent_dir / "prompt.yaml"
         if not config_prompt.exists():
             continue
-        packages_prompt = (
-            PACKAGES_DIR / "alliance" / "agents" / config_agent_dir.name / "prompt.yaml"
+        package_prompts = tuple(
+            candidate
+            for package_name in ("core", "alliance")
+            if (
+                candidate := PACKAGES_DIR
+                / package_name
+                / "agents"
+                / config_agent_dir.name
+                / "prompt.yaml"
+            ).exists()
         )
-        if not packages_prompt.exists():
+        if not package_prompts:
             continue
-        pairs.append((config_agent_dir.name, config_prompt, packages_prompt))
+        pairs.append((config_agent_dir.name, config_prompt, package_prompts[0]))
     return tuple(pairs)
 
 

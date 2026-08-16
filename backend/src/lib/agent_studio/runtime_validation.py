@@ -111,16 +111,11 @@ def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
 
 def _allow_unseeded_package_runtime(
     *,
-    expected_system_agent_keys: set[str],
     actual_system_agent_keys: set[str],
     agent_count: int,
 ) -> bool:
     """Whether an empty database may bootstrap the active package profile."""
-    return (
-        agent_count == 0
-        and not actual_system_agent_keys
-        and bool(expected_system_agent_keys)
-    )
+    return agent_count == 0 and not actual_system_agent_keys
 
 
 def _disable_agents_with_missing_tools(report: Dict[str, Any]) -> None:
@@ -257,7 +252,6 @@ def build_agent_runtime_report(
         if missing_system_agents:
             missing_system_agent_count = len(missing_system_agents)
             if _allow_unseeded_package_runtime(
-                expected_system_agent_keys=expected_system_agent_keys,
                 actual_system_agent_keys=actual_system_agent_keys,
                 agent_count=len(agents),
             ):

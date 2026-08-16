@@ -234,17 +234,24 @@ def test_deleted_dropped_entries_are_reported_for_review(capsys):
 # Config-divergence guard
 # ---------------------------------------------------------------------------
 
-# Agents whose explicit runtime override prompt is intentionally allowed to
-# differ from its package copy. No shipped agent currently has a dual-tree copy.
-_CONFIG_DIVERGENCE_ALLOWLIST: frozenset[str] = frozenset()
+# Agents whose explicit source-development override prompt intentionally differs
+# from its package default. The Alliance-tuned supervisor exercises this boundary.
+_CONFIG_DIVERGENCE_ALLOWLIST: frozenset[str] = frozenset({"supervisor"})
 
-_DUAL_TREE_PAIRS = harness.config_packages_prompt_pairs()
+_OVERRIDE_PACKAGE_PAIRS = harness.config_packages_prompt_pairs()
 
 
-@pytest.mark.skipif(not _DUAL_TREE_PAIRS, reason="no dual-tree (config+packages) agents found")
-@pytest.mark.parametrize("pair", _DUAL_TREE_PAIRS, ids=[pair[0] for pair in _DUAL_TREE_PAIRS])
+@pytest.mark.skipif(
+    not _OVERRIDE_PACKAGE_PAIRS,
+    reason="no source-override/package agent pairs found",
+)
+@pytest.mark.parametrize(
+    "pair",
+    _OVERRIDE_PACKAGE_PAIRS,
+    ids=[pair[0] for pair in _OVERRIDE_PACKAGE_PAIRS],
+)
 def test_config_and_packages_prompts_are_identical(pair):
-    """A dual-tree agent's config + packages prompt.yaml must be byte-identical."""
+    """Unallowlisted source overrides must match their package prompt."""
     agent_key, config_prompt, packages_prompt = pair
     if agent_key in _CONFIG_DIVERGENCE_ALLOWLIST:
         pytest.skip(f"{agent_key} is allowlisted to diverge")
