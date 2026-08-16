@@ -6,9 +6,14 @@ This directory contains template agents for reference. These are **not loaded** 
 
 To create a new agent from these templates:
 
-1. Copy `basic_agent/` to `../your_agent_name/`
-2. Rename and customize all files
+1. Copy `basic_agent/` to `packages/<package>/agents/your_agent_name/`
+2. Rename and customize all files, then declare the agent under
+   `agent_bundles` in the owning package's `package.yaml`
 3. Restart the application (or trigger config reload)
+
+For an intentional source-development override of a packaged agent, copy only
+the changed assets to `config/agents/<agent_id>/`. Deployments provide that
+override layer through an explicit `/runtime/config/agents` mount.
 
 ## Template Contents
 

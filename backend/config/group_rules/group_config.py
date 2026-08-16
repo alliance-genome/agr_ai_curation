@@ -281,8 +281,8 @@ def validate_group_rules(group_id: str, component_type: str, component_name: str
     """
     Validate that rules exist for a specific group/component combination.
 
-    This function checks the prompt cache for group rules, which are loaded
-    from config/agents/*/group_rules/*.yaml at startup.
+    This function checks the prompt cache for group rules loaded from
+    manifest-declared package agent bundles and explicit runtime overrides.
 
     Args:
         group_id: Group identifier

@@ -69,18 +69,19 @@ backend/
 └── Dockerfile                      # Container definition
 ```
 
-### Config Directory (project root)
+### Runtime packages and configuration (project root)
 
-Agent definitions and LLM provider configuration live outside the backend in the
-project-level `config/` directory, which is mounted read-only into the container:
+Shipped agent definitions live in package-owned bundles declared by package
+manifests. Deployment configuration and explicit agent overrides live in the
+project-level `config/` directory. Source Compose mounts both trees read-only:
 
 ```
+packages/
+├── core/agents/             # Project-neutral shipped agents
+└── alliance/agents/         # Alliance-specific shipped agents
 config/
-├── agents/                  # Agent definitions (loaded at startup)
-│   ├── supervisor/          # Core supervisor agent
-│   ├── gene/                # Gene validation agent
-│   ├── disease/             # Disease validation agent
-│   └── [your_agent]/        # Custom agents
+├── agents/                  # Explicit source-development overrides
+│   └── supervisor/          # Intentional supervisor override
 ├── models.yaml              # LLM model catalog (curator-selectable models)
 ├── providers.yaml           # LLM provider definitions (OpenAI, Gemini, Groq)
 ├── groups.yaml              # Group/Cognito mapping
@@ -247,16 +248,19 @@ View traces at: `http://localhost:3000` (when Langfuse is running)
 
 ## Agent Architecture
 
-Agents are defined entirely in YAML configuration files under `config/agents/`. The 16
-hardcoded Python agent files that previously lived in `backend/src/lib/openai_agents/agents/`
-have been replaced by this config-driven approach. The old `agent_factory.py` has also been
+System agents are YAML bundles owned by runtime packages and declared in each
+package's `agent_bundles` manifest section. An optional explicit
+`/runtime/config/agents` tree can override package assets by bundle and filename.
+The hardcoded Python agent files that previously lived in
+`backend/src/lib/openai_agents/agents/` and the old `agent_factory.py` have been
 removed.
 
 At startup the backend:
 
-1. Loads agent definitions from `config/agents/*/agent.yaml` (via `agent_loader.py`)
-2. Loads the LLM model catalog from `config/models.yaml` (via `models_loader.py`)
-3. Loads LLM provider definitions from `config/providers.yaml` (via `providers_loader.py`)
+1. Loads manifest-declared agent bundles from `/runtime/packages` and layers any
+   explicit `/runtime/config/agents` overrides (via `agent_loader.py`)
+2. Loads the merged LLM model catalog (via `models_loader.py`)
+3. Loads merged LLM provider definitions (via `providers_loader.py`)
 4. Cross-validates that every model references a known provider and that required API keys
    are present (via `provider_validation.py`)
 5. Seeds the unified `agents` table in PostgreSQL from the YAML definitions
