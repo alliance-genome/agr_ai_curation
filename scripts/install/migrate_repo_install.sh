@@ -33,10 +33,9 @@ declare -a shipped_package_baseline_unresolved_names=()
 declare -a custom_tool_files=()
 declare -a custom_tool_dirs=()
 customized_source_overrides=0
+migration_temp_root=""
 declare -A helper_canonical_package_dir_cache=()
 declare -A canonical_package_dir_cache=()
-declare -A helper_canonical_package_dir_temp_roots=()
-declare -A canonical_package_dir_temp_roots=()
 declare -A shipped_agent_baseline_dirs=()
 
 usage() {
@@ -143,20 +142,12 @@ directory_has_entries() {
   [[ -d "$dir_path" ]] && find "$dir_path" -mindepth 1 -print -quit | grep -q .
 }
 
-cleanup_temp_roots() {
-  local package_name=""
-
-  for package_name in "${!helper_canonical_package_dir_temp_roots[@]}"; do
-    if [[ -n "${helper_canonical_package_dir_temp_roots[$package_name]:-}" ]]; then
-      rm -rf "${helper_canonical_package_dir_temp_roots[$package_name]}"
-    fi
-  done
-
-  for package_name in "${!canonical_package_dir_temp_roots[@]}"; do
-    if [[ -n "${canonical_package_dir_temp_roots[$package_name]:-}" ]]; then
-      rm -rf "${canonical_package_dir_temp_roots[$package_name]}"
-    fi
-  done
+cleanup_migration_temp_root() {
+  if [[ -n "$migration_temp_root" \
+    && -d "$migration_temp_root" \
+    && "$(basename "$migration_temp_root")" == agr-ai-curation-migration.* ]]; then
+    rm -rf -- "$migration_temp_root"
+  fi
 }
 
 backup_existing_path() {
@@ -312,9 +303,8 @@ resolve_helper_canonical_package_dir() {
     # dirtiness does not make clean source repos look customized.
     head_commit="$(git -C "$helper_repo_root" rev-parse --verify HEAD 2>/dev/null)" || head_commit=""
     if [[ -n "$head_commit" ]]; then
-      temp_root="$(mktemp -d)"
+      temp_root="$(mktemp -d "${migration_temp_root}/archive.XXXXXX")"
       if git -C "$helper_repo_root" archive "$head_commit" "$package_repo_path" | tar -x -C "$temp_root"; then
-        helper_canonical_package_dir_temp_roots["$package_name"]="$temp_root"
         helper_canonical_package_dir_cache["$package_name"]="${temp_root}/${package_repo_path}"
       else
         rm -rf "$temp_root"
@@ -344,9 +334,8 @@ resolve_canonical_package_dir() {
     baseline_commit="$(resolve_git_baseline_commit "$source_repo")" || baseline_commit=""
     if [[ -n "$baseline_commit" ]]; then
       if repo_has_git_path_customizations "$source_repo" "$package_repo_path"; then
-        temp_root="$(mktemp -d)"
+        temp_root="$(mktemp -d "${migration_temp_root}/archive.XXXXXX")"
         if git -C "$source_repo" archive "$baseline_commit" "$package_repo_path" | tar -x -C "$temp_root"; then
-          canonical_package_dir_temp_roots["$package_name"]="$temp_root"
           canonical_package_dir_cache["$package_name"]="${temp_root}/${package_repo_path}"
         else
           rm -rf "$temp_root"
@@ -482,13 +471,16 @@ record_source_scan() {
   fi
 }
 
-has_custom_code() {
-  [[ "$customized_source_overrides" -eq 1 ]] \
-    || [[ "${#modified_shipped_package_names[@]}" -gt 0 ]] \
+has_legacy_local_code() {
+  [[ "${#modified_shipped_package_names[@]}" -gt 0 ]] \
     || [[ "${#non_package_extra_dirs[@]}" -gt 0 ]] \
     || [[ "${#custom_agent_dirs[@]}" -gt 0 ]] \
     || [[ "${#modified_shipped_agent_dirs[@]}" -gt 0 ]] \
     || [[ "${#custom_tool_files[@]}" -gt 0 ]]
+}
+
+has_custom_code() {
+  [[ "$customized_source_overrides" -eq 1 ]] || has_legacy_local_code
 }
 
 copy_runtime_config() {
@@ -948,7 +940,10 @@ print_summary() {
   local status="ready"
   local next_step="Standalone migration inputs are ready."
 
-  if [[ "$customized_source_overrides" -eq 1 ]]; then
+  if [[ "$customized_source_overrides" -eq 1 ]] && has_legacy_local_code; then
+    status="manual_review_required"
+    next_step="Use a stopped or copied checkout with config/overrides.yaml moved aside, then reconcile its entries after migration; legacy local code also requires scaffold review."
+  elif [[ "$customized_source_overrides" -eq 1 ]]; then
     status="manual_review_required"
     next_step="Use a stopped or copied checkout with config/overrides.yaml moved aside, then reconcile its entries after migration."
   elif has_custom_code; then
@@ -980,9 +975,12 @@ print_summary() {
 }
 
 main() {
-  trap cleanup_temp_roots EXIT
-
   parse_args "$@"
+
+  local migration_temp_parent="${TMPDIR:-/tmp}"
+  require_directory_exists "$migration_temp_parent"
+  migration_temp_root="$(mktemp -d "${migration_temp_parent%/}/agr-ai-curation-migration.XXXXXX")"
+  trap cleanup_migration_temp_root EXIT
 
   if [[ "${#shipped_package_names[@]}" -eq 0 ]]; then
     log_error "No shipped packages are configured for repo-install migration."
@@ -1054,7 +1052,7 @@ main() {
     "$file_outputs_dir" \
     "$weaviate_data_dir"
 
-  if has_custom_code; then
+  if has_legacy_local_code; then
     create_legacy_local_scaffold
   fi
 
@@ -1066,7 +1064,7 @@ main() {
     "$file_outputs_dir" \
     "$weaviate_data_dir"
 
-  if has_custom_code && [[ "$apply_mode" -eq 1 ]]; then
+  if has_legacy_local_code && [[ "$apply_mode" -eq 1 ]]; then
     log_warn "Manual review is required before you can safely complete the standalone upgrade."
     exit "$EXIT_MANUAL_REVIEW_REQUIRED"
   fi
