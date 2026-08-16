@@ -142,6 +142,7 @@ class ValidatorCandidate(DomainValidatorBaseModel):
         description="Provider-owned candidate diagnostics",
     )
 
+
 class ValidatorLookupAttempt(DomainValidatorBaseModel):
     """One lookup attempted while resolving a validator target."""
 
@@ -163,6 +164,7 @@ class ValidatorLookupAttempt(DomainValidatorBaseModel):
         default=None,
         description="Short curator- or developer-facing lookup note",
     )
+
 
 class DomainValidatorResultBase(DomainValidatorBaseModel):
     """Dispatcher-required base shape for agent-backed domain validators."""
