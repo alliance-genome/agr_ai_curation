@@ -17,9 +17,8 @@ assembles it straight from the files on disk with no DB and no fake content:
     (no DB — verified),
   * the editable base prompt by resolving the agent's ``prompt.yaml`` the same
     way the existing contract tests do (``resolve_agent_config_sources()`` →
-    ``source.prompt_yaml`` → ``yaml.safe_load(...)["content"]``), which applies
-    the ``config/agents/`` override so supervisor/curation_prep/chat_output
-    resolve to their config copies,
+    ``source.prompt_yaml`` → ``yaml.safe_load(...)["content"]``), using the
+    package-owned source plus any explicitly configured runtime override,
   * the group-rules content (only when a group is requested) read from the
     resolved agent's ``group_rules/<group>.yaml``.
 
@@ -58,22 +57,16 @@ INVENTORY_DIR = Path(__file__).resolve().parent / "phase_c_inventories"
 
 
 # ---------------------------------------------------------------------------
-# Agent config resolution (applies the config/agents override layer)
+# Agent config resolution (package source plus explicit runtime overrides)
 # ---------------------------------------------------------------------------
 
 
 def _sources_by_folder() -> dict[str, agent_sources.AgentConfigSource]:
-    """Resolve every agent bundle with the config/agents override layered in.
+    """Resolve every package-owned agent bundle and explicit runtime override.
 
-    Passing no ``search_path`` uses the default layered search paths
-    (``packages`` then ``config/agents``), so supervisor/curation_prep/chat_output
-    resolve to their config copies — the same precedence production uses. This is
-    deliberately NOT ``resolve_agent_config_sources(PACKAGES_DIR)``: that single
-    path would skip the override layer.
-
-    Note this also surfaces empty ``config/agents`` stub directories that have no
-    agent.yaml (e.g. ``chemical_extractor``, ``ontology_mapping``); those are
-    filtered out by ``_agent_index`` because they have no loadable definition.
+    Passing no ``search_path`` uses the production discovery contract. Package
+    manifests provide shipped agents; only ``/runtime/config/agents`` (or an
+    explicitly configured equivalent) can override them.
     """
     return {
         source.folder_name: source
@@ -126,7 +119,7 @@ def _canonical_id_for_source(source: agent_sources.AgentConfigSource) -> str:
 
 
 def resolved_source(agent_key: str) -> agent_sources.AgentConfigSource:
-    """Return the resolved config source for one agent (override applied).
+    """Return the resolved package or runtime-override source for one agent.
 
     Accepts the canonical agent id or the folder name.
     """
@@ -141,10 +134,10 @@ def resolved_source(agent_key: str) -> agent_sources.AgentConfigSource:
 
 
 def all_agent_keys() -> tuple[str, ...]:
-    """Return every real agent's canonical id (override applied), sorted.
+    """Return every real agent's canonical id, sorted.
 
-    Excludes empty config stub folders and reports each agent exactly once by its
-    canonical system-agent id (the id ``build_agent_core_prompt`` accepts).
+    Reports each agent exactly once by its canonical system-agent id (the id
+    ``build_agent_core_prompt`` accepts).
     """
     sources = _sources_by_folder()
     definitions = load_agent_definitions()
@@ -216,8 +209,8 @@ def assembled_prompt_text(agent_key: str, group_id: str | None = None) -> str:
       3. the requested group's rules content (only when ``group_id`` is given).
 
     This is the same text Phase C retention/invariant guards search. It uses the
-    real files on disk and the config/agents override — never the monkeypatched
-    fake content the assembly unit tests inject.
+    real package/runtime files on disk — never the monkeypatched fake content
+    the assembly unit tests inject.
     """
     source = resolved_source(agent_key)
     # Resolve to the canonical id build_agent_core_prompt accepts, since a few
@@ -507,11 +500,11 @@ def relocated_phrase_satisfied(entry: DroppedEntry) -> tuple[bool, str]:
 
 
 def config_packages_prompt_pairs() -> tuple[tuple[str, Path, Path], ...]:
-    """Return ``(agent, config_prompt, packages_prompt)`` for dual-tree agents.
+    """Return Alliance ``(agent, config_prompt, packages_prompt)`` shadow pairs.
 
     Only agents that have a ``prompt.yaml`` in BOTH ``config/agents`` and
-    ``packages/alliance/agents`` are returned. supervisor/curation_prep are
-    config-only and not included; chat_output is in both and must stay identical.
+    ``packages/alliance/agents`` are returned. Intentional core runtime-config
+    overrides are outside this retired-shadow guard.
     """
     pairs: list[tuple[str, Path, Path]] = []
     if not CONFIG_AGENTS_DIR.exists():

@@ -113,9 +113,10 @@ Two shipped package profiles are supported:
 
 - the main chat still runs through the core supervisor in core-only mode, but
   without the domain specialist/tool catalog,
-- Agent Studio shows only `task_input` plus `supervisor`, and
-- flow helpers report that no flow-capable agents are installed until
-  `agr.alliance` is added.
+- Agent Studio derives its core catalog from `agr.core`: `task_input`,
+  `supervisor`, `curation_prep`, and `curation_handoff`, and
+- `curation_handoff` remains available as the generic terminal flow step while
+  domain extraction and validation agents require another package.
 
 Use `core + alliance` when you want the richer shipped AGR/Alliance defaults,
 including the specialist agent catalog and tool bindings.
@@ -148,11 +149,12 @@ Packages can contribute:
 - Agent Studio flow recipes, agent equivalences, and composition suggestions
 - one Agent Studio system prompt per package profile
 
-`agr.core` ships the default provider/model/tool policy files plus the
-supervisor bundle plus a neutral Agent Studio prompt. `agr.alliance` ships the
-default specialist agent catalog along with shipped tool bindings, flow recipes,
-and the Alliance curator Agent Studio prompt. Keep custom behavior in a separate
-package so upgrades can replace the shipped packages safely.
+`agr.core` ships the default provider/model/tool policy files, the supervisor
+and generic curation handoff bundles, and a neutral Agent Studio prompt.
+`agr.alliance` ships the default specialist agent catalog along with shipped
+tool bindings, flow recipes, and the Alliance curator Agent Studio prompt. Keep
+custom behavior in a separate package so upgrades can replace the shipped
+packages safely.
 
 The standalone installer's bundled profile contract also expects
 `config/runtime_overrides.yaml` in each shipped profile package. The core

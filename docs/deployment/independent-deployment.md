@@ -51,7 +51,6 @@ The standalone installer seeds the modular runtime under
 - Secrets + image tags: `~/.agr_ai_curation/.env`
 - Selected package profile state: `~/.agr_ai_curation/.install_package_profile.env`
 - Runtime config: `~/.agr_ai_curation/runtime/config`
-- Repo config mirror for legacy compatibility: `AGR_REPO_CONFIG_HOST_DIR=/path/to/your/repo/config`.
 - Package/tool/Agent Studio prompt selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
 - Runtime packages: `~/.agr_ai_curation/runtime/packages`
 - Default shipped package directory: `~/.agr_ai_curation/runtime/packages/core`
@@ -101,9 +100,10 @@ Package profile [1=core only, 2=core + alliance]
   replaces a customized overrides file.
 
 On a healthy `core only` install, the main chat still starts in core-only mode
-but without the domain specialist/tool catalog, Agent Studio shows only
-`task_input` plus `supervisor`, and flow helpers report that no flow-capable
-agents are installed until `agr.alliance` is added.
+but without the domain specialist/tool catalog. Agent Studio derives its core
+catalog from `agr.core`: `task_input`, `supervisor`, `curation_prep`, and
+`curation_handoff`. The generic `curation_handoff` terminal remains available,
+while domain extraction and validation agents require another package.
 
 ## Upgrading a standard standalone install
 

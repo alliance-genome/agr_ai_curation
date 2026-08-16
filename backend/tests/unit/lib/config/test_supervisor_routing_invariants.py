@@ -16,9 +16,9 @@ SUPERVISOR_PROMPT_PATH = REPO_ROOT / "config" / "agents" / "supervisor" / "promp
 ALLIANCE_DOMAIN_PACKS_DIR = REPO_ROOT / "packages" / "alliance" / "domain_packs"
 SPECIALIST_TOOL_PATTERN = re.compile(r"ask_[a-z0-9_]+_specialist")
 
-# These config-layer pipeline agents are invoked by flow/curation orchestration,
+# These core package pipeline agents are invoked by flow/curation orchestration,
 # not by the supervisor.
-CONFIG_PIPELINE_AGENT_IDS = frozenset({"curation_prep", "curation_handoff"})
+CORE_PIPELINE_AGENT_IDS = frozenset({"curation_prep", "curation_handoff"})
 
 # Some domain-pack validator bindings intentionally point at public resolver
 # specialists so curators can ask the supervisor to resolve the same kind of
@@ -103,7 +103,7 @@ def test_pipeline_validators_are_not_supervisor_routable(monkeypatch, request):
         for agent in domain_validator_agents.values()
         if agent.agent_id not in SUPERVISOR_ROUTABLE_DOMAIN_VALIDATOR_AGENT_IDS
     ]
-    for agent_id in CONFIG_PIPELINE_AGENT_IDS:
+    for agent_id in CORE_PIPELINE_AGENT_IDS:
         pipeline_agents.append(loaded_agents[agent_id])
 
     routable_pipeline_agents = {

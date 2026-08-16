@@ -1,13 +1,13 @@
 """Additional runtime tests for prompt loader branches."""
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from src.lib.config import prompt_loader
+from src.lib.config import agent_sources, prompt_loader
 from ..packages import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
@@ -31,10 +31,16 @@ def _reset_loader_state():
     prompt_loader.reset_cache()
 
 
-def test_get_default_agents_path_prefers_env(monkeypatch):
+def test_get_default_agents_path_ignores_retired_env(monkeypatch, tmp_path):
+    packages_dir = tmp_path / "runtime-packages"
     monkeypatch.setenv("AGENTS_CONFIG_PATH", "/tmp/custom-agents")
+    monkeypatch.setattr(
+        prompt_loader,
+        "get_default_agent_search_path",
+        lambda: packages_dir,
+    )
     result = prompt_loader._get_default_agents_path()
-    assert result == Path("/tmp/custom-agents")
+    assert result == packages_dir
 
 
 def test_upsert_prompt_noop_when_content_unchanged():
@@ -266,6 +272,11 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
     packages_dir = tmp_path / "runtime" / "packages"
     shutil.copytree(REPO_ROOT / "packages" / "core", packages_dir / "agr.core")
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setattr(
+        agent_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "missing-runtime-config",
+    )
 
     db = MagicMock()
     captured_calls = []
@@ -279,30 +290,24 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
 
     result = prompt_loader.load_prompts(db=db, force_reload=True)
 
-    assert result == {"base_prompts": 4, "group_rules": 2}
+    assert result == {"base_prompts": 3, "group_rules": 2}
     assert db.commit.called
     assert any(
         call["agent_name"] == "supervisor"
         and call["prompt_type"] == "system"
-        and call["source_file"] == "config/agents/supervisor/prompt.yaml"
-        for call in captured_calls
-    )
-    assert any(
-        call["agent_name"] == "chat_output"
-        and call["prompt_type"] == "system"
-        and call["source_file"] == "config/agents/chat_output/prompt.yaml"
+        and call["source_file"] == "packages/agr.core/agents/supervisor/prompt.yaml"
         for call in captured_calls
     )
     assert any(
         call["agent_name"] == "curation_prep"
         and call["prompt_type"] == "system"
-        and call["source_file"] == "config/agents/curation_prep/prompt.yaml"
+        and call["source_file"] == "packages/agr.core/agents/curation_prep/prompt.yaml"
         for call in captured_calls
     )
     assert any(
         call["agent_name"] == "curation_handoff"
         and call["prompt_type"] == "system"
-        and call["source_file"] == "config/agents/curation_handoff/prompt.yaml"
+        and call["source_file"] == "packages/agr.core/agents/curation_handoff/prompt.yaml"
         for call in captured_calls
     )
     assert {

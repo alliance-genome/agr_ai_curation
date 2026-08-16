@@ -1,7 +1,8 @@
 # Phase C semantic-coverage checklist: `supervisor` router (Wave 3 — ROUTING skeleton)
 
-This is the **authoritative inventory source** for the outcome-first rewrite of
-`config/agents/supervisor/prompt.yaml` (agent id `supervisor`). Every load-bearing rule
+This is the **authoritative inventory source** for the outcome-first rewrite of the
+explicit source-development override at `config/agents/supervisor/prompt.yaml`
+(agent id `supervisor`). Every load-bearing rule
 in the pre-rewrite prompt is listed here with a stable ID (SUP-NN) and its new home in
 the rewritten prompt, OR an explicit, justified relocation/deletion. The harness
 inventories (`phase_c_inventories/supervisor.txt`, `.mgi.txt`, `.rgd.txt`,
@@ -12,13 +13,11 @@ inventories (`phase_c_inventories/supervisor.txt`, `.mgi.txt`, `.rgd.txt`,
 The supervisor is **SPECIAL** — it is a ROUTER / orchestration agent, not an extractor,
 validator, or lookup. Verified against the code:
 
-- It is **config-only**: its prompt lives ONLY at `config/agents/supervisor/prompt.yaml`
-  (the production-live config/agents OVERRIDE layer). There is **NO**
-  `packages/alliance/agents/supervisor`. (A generic `packages/core/agents/supervisor/prompt.yaml`
-  exists but is the core fallback, NOT the Alliance config base this rewrite edits; it is
-  guarded by `test_supervisor_prompt_policy::test_core_supervisor_prompt_stays_generic` and
-  is **untouched** here.)
-- Its `config/agents/supervisor/agent.yaml` declares **NO `tools` list and NO
+- The shipped default lives at `packages/core/agents/supervisor/prompt.yaml`.
+  `config/agents/supervisor/prompt.yaml` is an intentional source-development
+  override used only when the repository config is explicitly mounted at
+  `/runtime/config`; it is not discovered from a checkout implicitly.
+- Its override `config/agents/supervisor/agent.yaml` declares **NO `tools` list and NO
   `output_schema`** (`category: Routing`). Verified by rendering
   `build_agent_core_prompt('supervisor').render()`: the assembled core is ONLY the static
   `## Platform Runtime Contract` block — **NO Generated Runtime Contract layer at all**.

@@ -33,8 +33,6 @@ VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS = (
     "frontend/src/services/agentStudioService.ts",
     # Curator/non-Opus prompts, user-facing changelog, and design docs.
     "config/agents/supervisor/prompt.yaml",
-    "config/agents/chat_output/prompt.yaml",
-    "config/agents/curation_prep/prompt.yaml",
     "docs/curator/AGENT_STUDIO.md",
     "docs/curator/CURATION_FLOWS.md",
     "docs/curator/README.md",
@@ -268,28 +266,25 @@ def test_validator_dispatch_cleanup_allowlist_documents_legitimate_contexts():
     assert missing_allowlist_entries == []
 
 
-def test_chat_output_prompts_match_and_preserve_domain_envelope_refs():
-    config_prompt = _read_repo_text("config/agents/chat_output/prompt.yaml")
+def test_package_chat_output_prompt_preserves_domain_envelope_refs():
     package_prompt_paths = _package_agent_prompt_paths("chat_output")
 
     assert package_prompt_paths
-    for package_prompt_path in package_prompt_paths:
-        assert config_prompt == _read_repo_text(package_prompt_path)
-    assert "domain_envelope.extracted_objects" in config_prompt
-    assert "review rows" in config_prompt
-    assert "lookup attempts" in config_prompt
-    assert "export/submission blockers" in config_prompt
-    assert "`lookup_attempts` as an audit trail" in config_prompt
-    assert "`annotation_drafts`" in config_prompt
-    assert "use envelope references as truth" in config_prompt
-    assert "flow validator replacements/skips" in config_prompt
-    assert "opt-outs" not in config_prompt
+    package_prompt = _read_repo_text(package_prompt_paths[0])
+    assert "domain_envelope.extracted_objects" in package_prompt
+    assert "review rows" in package_prompt
+    assert "lookup attempts" in package_prompt
+    assert "export/submission blockers" in package_prompt
+    assert "`lookup_attempts` as an audit trail" in package_prompt
+    assert "`annotation_drafts`" in package_prompt
+    assert "use envelope references as truth" in package_prompt
+    assert "flow validator replacements/skips" in package_prompt
+    assert "opt-outs" not in package_prompt
 
 
 def test_non_opus_runtime_prompts_reject_stale_validator_dispatch_wording():
     surface_paths = (
         "config/agents/supervisor/prompt.yaml",
-        "config/agents/chat_output/prompt.yaml",
         *_package_agent_prompt_paths(),
     )
     stale_phrases = [

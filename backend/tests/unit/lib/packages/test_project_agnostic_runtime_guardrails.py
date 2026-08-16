@@ -357,7 +357,12 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     assert package_registry.get_package("agr.alliance") is None
 
     agents = agent_loader.load_agent_definitions(packages_dir, force_reload=True)
-    assert set(agents) == {"supervisor", "demo_agent_validation"}
+    assert set(agents) == {
+        "curation_handoff",
+        "curation_prep",
+        "demo_agent_validation",
+        "supervisor",
+    }
     assert agents["demo_agent_validation"].folder_name == "demo_agent"
     assert agents["demo_agent_validation"].tools == ["demo_search_tool"]
     assert agents["demo_agent_validation"].curation.adapter_key == "demo"

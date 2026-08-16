@@ -7,8 +7,8 @@
 # output-mandate opener is tracked in curation_prep.dropped.json; the ordered selection path
 # in curation_prep.invariants.txt.
 #
-# CONFIG-ONLY: curation_prep lives ONLY at config/agents/curation_prep/prompt.yaml (no
-# packages twin), so the config-divergence guard does not apply.
+# PACKAGE-OWNED: curation_prep lives under packages/core/agents/curation_prep.
+# It has no explicit runtime-config override, so the config-divergence guard does not apply.
 #
 # curation_prep has output_schema: CurationPrepAgentOutput, so the locked core INJECTS the
 # produce-structured-output mandate. The base's redundant "Produce a CurationPrepAgentOutput

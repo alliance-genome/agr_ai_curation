@@ -284,27 +284,28 @@ def test_find_project_root_prefers_repo_root_over_backend_pytest_ini(monkeypatch
     assert agent_sources._find_project_root() == repo_root
 
 
-def test_get_default_agent_search_path_prefers_env_override(monkeypatch):
+def test_get_default_agent_search_path_ignores_retired_env_override(monkeypatch, tmp_path):
+    packages_dir = tmp_path / "runtime-packages"
+    packages_dir.mkdir()
     monkeypatch.setenv("AGENTS_CONFIG_PATH", "/tmp/custom-agents")
+    monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
 
-    assert agent_sources.get_default_agent_search_path() == Path("/tmp/custom-agents")
+    assert agent_sources.get_default_agent_search_path() == packages_dir
 
 
-def test_get_default_agent_search_paths_layers_repo_config_over_runtime_packages(monkeypatch, tmp_path):
+def test_get_default_agent_search_paths_never_discovers_repo_config(monkeypatch, tmp_path):
     repo_root = tmp_path / "repo"
     packages_dir = repo_root / "packages"
     config_agents_dir = repo_root / "config" / "agents"
     packages_dir.mkdir(parents=True)
     config_agents_dir.mkdir(parents=True)
 
-    monkeypatch.delenv("AGENTS_CONFIG_PATH", raising=False)
     monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
     monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: tmp_path / "runtime-config")
     monkeypatch.setattr(agent_sources, "_find_project_root", lambda: repo_root)
 
     assert agent_sources.get_default_agent_search_paths() == (
         packages_dir.resolve(strict=False),
-        config_agents_dir.resolve(strict=False),
     )
 
 
@@ -317,7 +318,6 @@ def test_get_default_agent_search_paths_layers_runtime_config_over_packages_with
     packages_dir.mkdir(parents=True)
     runtime_agents_dir.mkdir(parents=True)
 
-    monkeypatch.delenv("AGENTS_CONFIG_PATH", raising=False)
     monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
     monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: runtime_config_dir)
     monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
@@ -340,13 +340,17 @@ def test_fallback_packages_dir_ignores_env_override(monkeypatch, tmp_path):
     assert agent_sources._get_fallback_packages_dir() == expected_packages_dir
 
 
-def test_resolve_search_path_marks_env_override_as_non_default(monkeypatch):
+def test_resolve_search_path_ignores_retired_env_override(monkeypatch, tmp_path):
+    packages_dir = tmp_path / "runtime-packages"
+    packages_dir.mkdir()
     monkeypatch.setenv("AGENTS_CONFIG_PATH", "/tmp/custom-agents")
+    monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
+    monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: tmp_path / "runtime-config")
 
     resolved_path, used_default_search_path = agent_sources._resolve_search_path(None)
 
-    assert resolved_path == Path("/tmp/custom-agents")
-    assert used_default_search_path is False
+    assert resolved_path == packages_dir
+    assert used_default_search_path is True
 
 
 def test_discover_agent_schemas_logs_resolved_default_path(monkeypatch, caplog, tmp_path):
@@ -657,7 +661,7 @@ def test_load_prompts_defaults_to_runtime_config_override_without_repo_root(
     )
 
 
-def test_env_override_allows_legacy_agent_directory_loading(tmp_path, monkeypatch):
+def test_explicit_path_allows_legacy_agent_directory_loading(tmp_path, monkeypatch):
     agents_dir = tmp_path / "legacy-agents"
     demo_agent_dir = agents_dir / "demo_agent"
     group_rules_dir = demo_agent_dir / "group_rules"
@@ -698,8 +702,6 @@ def test_env_override_allows_legacy_agent_directory_loading(tmp_path, monkeypatc
     db = MagicMock()
     captured_calls = []
 
-    monkeypatch.setenv("AGENTS_CONFIG_PATH", str(agents_dir))
-    monkeypatch.delenv("AGR_RUNTIME_PACKAGES_DIR", raising=False)
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
 
     def _capture_upsert(**kwargs):
@@ -708,9 +710,19 @@ def test_env_override_allows_legacy_agent_directory_loading(tmp_path, monkeypatc
 
     monkeypatch.setattr(prompt_loader, "_upsert_prompt", _capture_upsert)
 
-    agents = agent_loader.load_agent_definitions(force_reload=True)
-    prompt_result = prompt_loader.load_prompts(db=db, force_reload=True)
-    schemas = schema_discovery.discover_agent_schemas(force_reload=True)
+    agents = agent_loader.load_agent_definitions(
+        agents_path=agents_dir,
+        force_reload=True,
+    )
+    prompt_result = prompt_loader.load_prompts(
+        db=db,
+        agents_path=agents_dir,
+        force_reload=True,
+    )
+    schemas = schema_discovery.discover_agent_schemas(
+        agents_path=agents_dir,
+        force_reload=True,
+    )
 
     assert "demo_agent_validation" in agents
     assert prompt_result == {"base_prompts": 1, "group_rules": 1}

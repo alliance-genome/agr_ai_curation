@@ -654,7 +654,6 @@ patch_installed_env() {
   fi
 
   upsert_env_var "$target_env_path" "AGR_RUNTIME_CONFIG_HOST_DIR" "$runtime_config_dir"
-  upsert_env_var "$target_env_path" "AGR_REPO_CONFIG_HOST_DIR" "${source_repo}/config"
   upsert_env_var "$target_env_path" "AGR_RUNTIME_PACKAGES_HOST_DIR" "$runtime_packages_dir"
   upsert_env_var "$target_env_path" "AGR_RUNTIME_STATE_HOST_DIR" "$runtime_state_dir"
   upsert_env_var "$target_env_path" "PDF_STORAGE_HOST_DIR" "$pdf_storage_dir"
@@ -664,6 +663,7 @@ patch_installed_env() {
   local obsolete_key=""
   for obsolete_key in \
     AGENTS_CONFIG_PATH \
+    AGR_REPO_CONFIG_HOST_DIR \
     GROUPS_CONFIG_PATH \
     CONNECTIONS_CONFIG_PATH \
     MODELS_CONFIG_PATH \

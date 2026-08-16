@@ -388,8 +388,9 @@ print_package_profile_intro() {
   echo
   echo "  The platform ships two packages:"
   echo
-  echo "    agr.core       The minimal runtime: supervisor agent, chat interface,"
-  echo "                   and the plugin system. Always installed."
+  echo "    agr.core       The minimal runtime: supervisor, generic curation"
+  echo "                   handoff agents, chat interface, and plugin system."
+  echo "                   Always installed."
   echo
   echo "    agr.alliance   Domain-specific agents for gene, allele, disease,"
   echo "                   chemical, and phenotype curation, plus tools for the"
@@ -588,7 +589,6 @@ main() {
   upsert_env_var "$env_output_path" "LANGFUSE_DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres'
   upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres'
   upsert_env_var "$env_output_path" "AGR_RUNTIME_CONFIG_HOST_DIR" "$runtime_config_dir"
-  upsert_env_var "$env_output_path" "AGR_REPO_CONFIG_HOST_DIR" "$config_source_dir"
   upsert_env_var "$env_output_path" "AGR_RUNTIME_PACKAGES_HOST_DIR" "$runtime_packages_dir"
   upsert_env_var "$env_output_path" "AGR_RUNTIME_STATE_HOST_DIR" "$runtime_state_dir"
   upsert_env_var "$env_output_path" "PDF_STORAGE_HOST_DIR" "$pdf_storage_dir"

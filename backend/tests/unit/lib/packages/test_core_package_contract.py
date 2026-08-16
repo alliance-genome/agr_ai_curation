@@ -37,12 +37,12 @@ def _iter_source_files(root: Path) -> set[Path]:
     }
 
 
-def test_core_package_contains_only_minimal_supervisor_runtime_assets():
+def test_core_package_contains_only_generic_runtime_agent_assets():
     actual_agent_names = {
         agent_dir.name for agent_dir in _iter_shipped_agent_dirs(CORE_AGENTS_DIR)
     }
 
-    assert actual_agent_names == {"supervisor"}
+    assert actual_agent_names == {"curation_handoff", "curation_prep", "supervisor"}
     assert not (CORE_PACKAGE_DIR / "tools").exists()
     assert not (CORE_AGENTS_DIR / "README.md").exists()
     assert _iter_source_files(CORE_PACKAGE_DIR / "python" / "src" / "agr_ai_curation_core") == {
@@ -70,6 +70,18 @@ def test_core_package_manifest_exports_foundation_runtime_assets_only():
             ExportKind.AGENT_STUDIO_PROMPT,
             "system",
             "config/agent_studio_system_prompt.md",
+        ),
+        (ExportKind.AGENT, "curation_handoff", "agents/curation_handoff"),
+        (
+            ExportKind.PROMPT,
+            "curation_handoff.system",
+            "agents/curation_handoff/prompt.yaml",
+        ),
+        (ExportKind.AGENT, "curation_prep", "agents/curation_prep"),
+        (
+            ExportKind.PROMPT,
+            "curation_prep.system",
+            "agents/curation_prep/prompt.yaml",
         ),
         (ExportKind.AGENT, "supervisor", "agents/supervisor"),
         (ExportKind.PROMPT, "supervisor.system", "agents/supervisor/prompt.yaml"),

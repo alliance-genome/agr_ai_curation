@@ -1,5 +1,6 @@
 """Bundled Alliance-default loader coverage for shipped repo packages."""
 
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -144,6 +145,50 @@ def test_bundled_alliance_load_agent_definitions_defaults_to_runtime_packages(mo
     assert "gene_validation" in agents
     assert agents["gene_validation"].folder_name == "gene"
     assert agents["gene_validation"].output_schema == "GeneResultEnvelope"
+
+
+def _declared_agent_ids(packages_dir: Path) -> set[str]:
+    declared_agent_ids: set[str] = set()
+    for source in agent_sources.resolve_agent_config_sources(packages_dir):
+        if source.agent_yaml is None:
+            continue
+        payload = yaml.safe_load(source.agent_yaml.read_text(encoding="utf-8"))
+        declared_agent_ids.add(str(payload["agent_id"]))
+    return declared_agent_ids
+
+
+def test_core_only_profile_loads_exact_declared_agent_set(monkeypatch, tmp_path):
+    packages_dir = tmp_path / "runtime" / "packages"
+    shutil.copytree(REPO_ROOT / "packages" / "core", packages_dir / "core")
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setattr(
+        agent_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "runtime" / "config",
+    )
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+
+    assert set(agents) == _declared_agent_ids(packages_dir)
+    assert set(agents) == {"curation_handoff", "curation_prep", "supervisor"}
+    assert {agent.package_id for agent in agents.values()} == {"agr.core"}
+
+
+def test_alliance_profile_loads_exact_declared_agent_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    monkeypatch.setattr(
+        agent_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "runtime-config",
+    )
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+
+    assert set(agents) == _declared_agent_ids(REPO_PACKAGES_DIR)
+    assert {agent.package_id for agent in agents.values()} == {
+        "agr.alliance",
+        "agr.core",
+    }
 
 
 def test_bundled_alliance_gene_extractor_declares_record_evidence(monkeypatch):
@@ -305,8 +350,13 @@ def test_bundled_alliance_gene_extractor_prompt_teaches_verified_evidence_flow(m
     assert "Do not write, reconstruct, trim, or paraphrase source quote text yourself." in prompt_content
 
 
-def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch):
+def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    monkeypatch.setattr(
+        agent_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "missing-runtime-config",
+    )
     db = MagicMock()
     captured_calls = []
 
@@ -334,7 +384,7 @@ def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch):
         for call in captured_calls
     )
     assert any(
-        call["source_file"] == "config/agents/supervisor/prompt.yaml"
+        call["source_file"] == "packages/agr.core/agents/supervisor/prompt.yaml"
         and call["prompt_type"] == "system"
         for call in captured_calls
     )

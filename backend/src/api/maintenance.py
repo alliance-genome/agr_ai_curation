@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/maintenance")
 # Path to the maintenance message file (mounted via docker-compose)
 MAINTENANCE_MESSAGE_FILE = os.getenv(
     "MAINTENANCE_MESSAGE_FILE",
-    "/app/config/maintenance_message.txt"
+    "/runtime/config/maintenance_message.txt"
 )
 
 
