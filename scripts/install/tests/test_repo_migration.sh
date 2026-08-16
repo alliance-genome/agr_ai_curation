@@ -220,6 +220,7 @@ test_source_overrides_require_manual_reconciliation() {
   local source_repo="${temp_root}/source-custom-overrides"
   local install_home="${temp_root}/install-custom-overrides"
   local output_path="${temp_root}/custom-overrides.out"
+  local dry_run_output_path="${temp_root}/custom-overrides-dry-run.out"
   local expected_path="${temp_root}/expected-overrides.yaml"
 
   prepare_source_repo "$source_repo"
@@ -230,6 +231,19 @@ EOF
   cp "${source_repo}/config/overrides.yaml" "$expected_path"
 
   local status
+  status="$(run_helper "$dry_run_output_path" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
+  if [[ "$status" != "0" ]]; then
+    echo "Expected customized source overrides dry-run to exit 0, got ${status}" >&2
+    cat "$dry_run_output_path" >&2
+    exit 1
+  fi
+
+  assert_contains 'MIGRATION_STATUS=manual_review_required' "$dry_run_output_path"
+  assert_contains 'customized source overrides: 1' "$dry_run_output_path"
+  assert_contains 'modified shipped packages preserved: 0' "$dry_run_output_path"
+  cmp "$expected_path" "${source_repo}/config/overrides.yaml"
+  assert_dir_not_exists "${install_home}/runtime"
+
   status="$(run_helper "$output_path" --apply --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$status" != "3" ]]; then
     echo "Expected source overrides migration to require manual review, got ${status}" >&2

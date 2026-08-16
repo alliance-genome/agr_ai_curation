@@ -32,6 +32,7 @@ declare -a modified_shipped_package_names=()
 declare -a shipped_package_baseline_unresolved_names=()
 declare -a custom_tool_files=()
 declare -a custom_tool_dirs=()
+customized_source_overrides=0
 declare -A helper_canonical_package_dir_cache=()
 declare -A canonical_package_dir_cache=()
 declare -A helper_canonical_package_dir_temp_roots=()
@@ -359,6 +360,27 @@ resolve_canonical_package_dir() {
   printf '%s\n' "${canonical_package_dir_cache[$package_name]}"
 }
 
+resolve_overrides_template_package_name() {
+  local package_name=""
+
+  for package_name in "${shipped_package_names[@]}"; do
+    if [[ "$package_name" == "alliance" ]]; then
+      printf 'alliance\n'
+      return 0
+    fi
+  done
+  printf 'core\n'
+}
+
+resolve_overrides_template_path() {
+  local package_name=""
+  local canonical_package_dir=""
+
+  package_name="$(resolve_overrides_template_package_name)"
+  canonical_package_dir="$(resolve_canonical_package_dir "$package_name")"
+  printf '%s/config/runtime_overrides.yaml\n' "$canonical_package_dir"
+}
+
 record_source_scan() {
   local packages_dir="${source_repo}/packages"
   local config_agents_dir="${source_repo}/config/agents"
@@ -373,6 +395,13 @@ record_source_scan() {
 
   if command -v git >/dev/null 2>&1 && git -C "$source_repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     source_baseline_commit="$(resolve_git_baseline_commit "$source_repo")" || source_baseline_commit=""
+  fi
+
+  if [[ -f "${source_repo}/config/overrides.yaml" ]] \
+    && ! cmp -s \
+      "${source_repo}/config/overrides.yaml" \
+      "$(resolve_overrides_template_path)"; then
+    customized_source_overrides=1
   fi
 
   for package_name in "${shipped_package_names[@]}"; do
@@ -454,7 +483,8 @@ record_source_scan() {
 }
 
 has_custom_code() {
-  [[ "${#modified_shipped_package_names[@]}" -gt 0 ]] \
+  [[ "$customized_source_overrides" -eq 1 ]] \
+    || [[ "${#modified_shipped_package_names[@]}" -gt 0 ]] \
     || [[ "${#non_package_extra_dirs[@]}" -gt 0 ]] \
     || [[ "${#custom_agent_dirs[@]}" -gt 0 ]] \
     || [[ "${#modified_shipped_agent_dirs[@]}" -gt 0 ]] \
@@ -503,20 +533,8 @@ copy_runtime_packages() {
 
 copy_runtime_overrides() {
   local runtime_config_dir="$1"
-  local package_name=""
-  local selected_package_name="core"
-  local selected_package_dir=""
-
-  for package_name in "${shipped_package_names[@]}"; do
-    if [[ "$package_name" == "alliance" ]]; then
-      selected_package_name="alliance"
-      break
-    fi
-  done
-
-  selected_package_dir="$(resolve_canonical_package_dir "$selected_package_name")"
   copy_file_exact \
-    "${selected_package_dir}/config/runtime_overrides.yaml" \
+    "$(resolve_overrides_template_path)" \
     "${runtime_config_dir}/overrides.yaml"
 }
 
@@ -930,7 +948,10 @@ print_summary() {
   local status="ready"
   local next_step="Standalone migration inputs are ready."
 
-  if has_custom_code; then
+  if [[ "$customized_source_overrides" -eq 1 ]]; then
+    status="manual_review_required"
+    next_step="Use a stopped or copied checkout with config/overrides.yaml moved aside, then reconcile its entries after migration."
+  elif has_custom_code; then
     status="manual_review_required"
     next_step="Review ${install_home_dir}/migration/legacy_local before switching to docker-compose.production.yml."
   fi
@@ -953,6 +974,7 @@ print_summary() {
   printf '  - modified shipped agents preserved: %s\n' "${#modified_shipped_agent_dirs[@]}"
   printf '  - custom tool files preserved: %s\n' "${#custom_tool_files[@]}"
   printf '  - extra non-package dirs preserved: %s\n' "${#non_package_extra_dirs[@]}"
+  printf '  - customized source overrides: %s\n' "$customized_source_overrides"
   printf '  - next step: %s\n' "$next_step"
   printf 'MIGRATION_STATUS=%s\n' "$status"
 }
@@ -971,25 +993,6 @@ main() {
   source_repo="$(cd "$source_repo" && pwd)"
   require_directory_exists "${source_repo}/config"
   require_directory_exists "${source_repo}/packages"
-  if [[ -f "${source_repo}/config/overrides.yaml" ]]; then
-    local overrides_package_name="core"
-    local shipped_package_name=""
-    local canonical_overrides_package_dir=""
-    for shipped_package_name in "${shipped_package_names[@]}"; do
-      if [[ "$shipped_package_name" == "alliance" ]]; then
-        overrides_package_name="alliance"
-        break
-      fi
-    done
-    canonical_overrides_package_dir="$(resolve_helper_canonical_package_dir "$overrides_package_name")"
-    if ! cmp -s \
-      "${source_repo}/config/overrides.yaml" \
-      "${canonical_overrides_package_dir}/config/runtime_overrides.yaml"; then
-      log_error "Refusing to replace customized ${source_repo}/config/overrides.yaml with a shipped package template. Preserve that file, remove it from the source checkout used for automatic migration, rerun the migration, and then reconcile its entries into runtime/config/overrides.yaml."
-      exit "$EXIT_MANUAL_REVIEW_REQUIRED"
-    fi
-  fi
-
   local package_name=""
   for package_name in "${shipped_package_names[@]}"; do
     require_directory_exists "${source_repo}/packages/${package_name}"
@@ -1021,6 +1024,18 @@ main() {
   printf '  Mode: %s\n' "$mode"
 
   record_source_scan
+
+  if [[ "$customized_source_overrides" -eq 1 && "$apply_mode" -eq 1 ]]; then
+    print_summary \
+      "$runtime_config_dir" \
+      "$runtime_packages_dir" \
+      "$runtime_state_dir" \
+      "$pdf_storage_dir" \
+      "$file_outputs_dir" \
+      "$weaviate_data_dir"
+    log_error "Refusing to replace customized ${source_repo}/config/overrides.yaml with the canonical shipped profile template. Keep the live checkout unchanged; use a stopped or copied checkout with that file moved aside, then reconcile its entries into runtime/config/overrides.yaml after migration."
+    exit "$EXIT_MANUAL_REVIEW_REQUIRED"
+  fi
 
   if [[ "$apply_mode" -eq 1 ]]; then
     mkdir -p "$install_home_dir" "$runtime_root_dir" "$data_root_dir"

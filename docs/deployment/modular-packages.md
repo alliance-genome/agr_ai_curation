@@ -446,10 +446,11 @@ The helper:
 
 If the source checkout has a customized `config/overrides.yaml`, the helper
 stops before writing the target and requires manual reconciliation. (The exact
-shipped Alliance template is accepted.) Move the customized source file aside
-without deleting it, run the migration, and then merge its operator-owned
-entries into the installed profile template. The helper never replaces a
-customized overrides file with a shipped template.
+shipped Alliance template is accepted.) Keep a running deployment's checkout
+unchanged. Instead, stop that deployment or copy the checkout, move the
+customized file aside there without deleting it, run the migration, and then
+merge its operator-owned entries into the installed profile template. The
+helper never replaces a customized overrides file with a shipped template.
 
 Manual review is required when the helper finds custom repo-local agents,
 modified shipped `core` or `alliance` files, repo-local tool sources, or extra

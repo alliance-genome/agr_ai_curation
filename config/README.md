@@ -81,8 +81,9 @@ The installer seeds the runtime config for you. After
    installed package profile or adding conflicting tool/prompt exports.
 
 Stage 2 recognizes the unmodified shipped core and Alliance override templates.
-If the installed `overrides.yaml` contains operator changes, Stage 2 refuses to
-replace it. Preserve and move that file aside, rerun the stage to write the
+If the installed `overrides.yaml` contains operator changes, every Stage 2
+rerun refuses to replace it, including reruns for key rotation or reranker
+configuration. Preserve and move that file aside, rerun the stage to write the
 requested profile template, and then merge the operator-owned entries into the
 new template.
 
