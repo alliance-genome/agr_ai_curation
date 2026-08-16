@@ -215,9 +215,14 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
 
 
 def is_domain_validator_result_schema(schema: object) -> bool:
-    """Return whether ``schema`` inherits from ``DomainValidatorResultBase``."""
+    """Return whether ``schema`` preserves the shared validator result contract."""
 
-    return isinstance(schema, type) and issubclass(
-        schema,
-        DomainValidatorResultBase,
+    if not isinstance(schema, type) or not issubclass(
+        schema, DomainValidatorResultBase
+    ):
+        return False
+
+    return all(
+        schema.model_fields[field_name].asdict() == base_field.asdict()
+        for field_name, base_field in DomainValidatorResultBase.model_fields.items()
     )

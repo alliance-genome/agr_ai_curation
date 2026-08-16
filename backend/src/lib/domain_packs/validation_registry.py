@@ -920,7 +920,8 @@ def _validate_active_validator_agent_output_schema(
             f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
             f"'{reference_id}' references validator agent "
             f"'{ref.package_id}:{ref.agent_id}' whose output_schema "
-            f"'{output_schema_key}' must inherit from DomainValidatorResultBase"
+            f"'{output_schema_key}' must preserve the canonical "
+            "DomainValidatorResultBase fields"
         )
 
 

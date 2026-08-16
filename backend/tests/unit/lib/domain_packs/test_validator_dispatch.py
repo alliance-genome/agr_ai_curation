@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 
 from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
@@ -1786,6 +1786,29 @@ def test_embedded_validator_result_becomes_invalid_schema_result():
 
     result = validator_result_from_agent_output(
         SimpleNamespace(final_output=embedded_result),
+        request=request,
+    )
+
+    assert result.status == "unresolved"
+    assert result.lookup_attempts[0].method == "invalid_schema"
+    assert "incompatible output" in result.explanation
+
+
+def test_incompatible_inherited_validator_result_becomes_invalid_schema_result():
+    request = _verbose_validation_request()
+
+    IncompatibleInheritedValidatorResult = create_model(
+        "IncompatibleInheritedValidatorResult",
+        __base__=DomainValidatorResultBase,
+        status=(str | None, None),
+    )
+
+    payload = _result_payload(request)
+    payload["status"] = None
+    incompatible_result = IncompatibleInheritedValidatorResult.model_validate(payload)
+
+    result = validator_result_from_agent_output(
+        SimpleNamespace(final_output=incompatible_result),
         request=request,
     )
 

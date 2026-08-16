@@ -1,7 +1,7 @@
 """Tests for shared domain validator result contracts."""
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, create_model
 
 from src.schemas.domain_validator import (
     DomainValidatorResultBase,
@@ -152,6 +152,12 @@ def test_domain_validator_schema_detection_requires_inheritance():
     class InheritedResult(DomainValidatorResultBase):
         pass
 
+    IncompatibleInheritedResult = create_model(
+        "IncompatibleInheritedResult",
+        __base__=DomainValidatorResultBase,
+        status=(str | None, None),
+    )
+
     class EmbeddedResult(BaseModel):
         result: DomainValidatorResultBase
 
@@ -159,6 +165,7 @@ def test_domain_validator_schema_detection_requires_inheritance():
         summary: str
 
     assert is_domain_validator_result_schema(InheritedResult)
+    assert not is_domain_validator_result_schema(IncompatibleInheritedResult)
     assert not is_domain_validator_result_schema(EmbeddedResult)
     assert not is_domain_validator_result_schema(SummaryOnly)
 
