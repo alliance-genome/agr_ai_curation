@@ -479,10 +479,6 @@ has_legacy_local_code() {
     || [[ "${#custom_tool_files[@]}" -gt 0 ]]
 }
 
-has_custom_code() {
-  [[ "$customized_source_overrides" -eq 1 ]] || has_legacy_local_code
-}
-
 copy_runtime_config() {
   local runtime_config_dir="$1"
   local config_dir="${source_repo}/config"
@@ -946,7 +942,7 @@ print_summary() {
   elif [[ "$customized_source_overrides" -eq 1 ]]; then
     status="manual_review_required"
     next_step="Use a stopped or copied checkout with config/overrides.yaml moved aside, then reconcile its entries after migration."
-  elif has_custom_code; then
+  elif has_legacy_local_code; then
     status="manual_review_required"
     next_step="Review ${install_home_dir}/migration/legacy_local before switching to docker-compose.production.yml."
   fi
