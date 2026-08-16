@@ -80,6 +80,9 @@ vi.mock('@mui/x-data-grid', async () => {
     paginationMode = 'client',
     filterMode = 'client',
     rowCount,
+    loading = false,
+    paginationModel,
+    onPaginationModelChange,
     sortingOrder = ['asc', 'desc', null],
     sx,
   }: {
@@ -94,6 +97,9 @@ vi.mock('@mui/x-data-grid', async () => {
     paginationMode?: 'client' | 'server';
     filterMode?: 'client' | 'server';
     rowCount?: number;
+    loading?: boolean;
+    paginationModel?: { page: number; pageSize: number };
+    onPaginationModelChange?: (model: { page: number; pageSize: number }) => void;
     sortingOrder?: Array<'asc' | 'desc' | null>;
     sx?: Record<string, unknown>;
   }) => {
@@ -147,11 +153,23 @@ vi.mock('@mui/x-data-grid', async () => {
         data-pagination-mode={paginationMode}
         data-filter-mode={filterMode}
         data-row-count={String(rowCount ?? rows.length)}
+        data-loading={String(loading)}
+        data-page={String(paginationModel?.page ?? '')}
+        data-page-size={String(paginationModel?.pageSize ?? '')}
         style={{
           height: typeof sx?.height === 'string' ? sx.height : undefined,
           minHeight: typeof sx?.minHeight === 'number' ? `${sx.minHeight}px` : undefined,
         }}
       >
+        <button
+          type="button"
+          onClick={() => onPaginationModelChange?.({
+            page: (paginationModel?.page ?? 0) + 1,
+            pageSize: paginationModel?.pageSize ?? 20,
+          })}
+        >
+          Request next grid page
+        </button>
         <table>
           <thead>
             <tr>
@@ -474,15 +492,36 @@ describe('DocumentList', () => {
     expect(refreshButtons[1].parentElement).toBeDisabled();
   });
 
-  it('handles pagination changes', async () => {
-    const { container } = render(<DocumentList {...defaultProps} totalCount={100} />);
+  it('forwards controlled pagination, sorting, loading, and total row count to the grid', () => {
+    const onPaginationModelChange = vi.fn();
+    const onSortModelChange = vi.fn();
+    const { container } = render(
+      <DocumentList
+        {...defaultProps}
+        loading
+        totalCount={100}
+        paginationModel={{ page: 2, pageSize: 50 }}
+        onPaginationModelChange={onPaginationModelChange}
+        sortModel={[{ field: 'filename', sort: 'asc' }]}
+        onSortModelChange={onSortModelChange}
+      />
+    );
 
     const grid = container.querySelector('.MuiDataGrid-root');
     expect(grid).toBeInTheDocument();
     expect(grid).toHaveAttribute('data-pagination-mode', 'server');
     expect(grid).toHaveAttribute('data-filter-mode', 'server');
-    expect(grid).toHaveAttribute('data-sorting-mode', 'client');
+    expect(grid).toHaveAttribute('data-sorting-mode', 'server');
     expect(grid).toHaveAttribute('data-row-count', '100');
+    expect(grid).toHaveAttribute('data-loading', 'true');
+    expect(grid).toHaveAttribute('data-page', '2');
+    expect(grid).toHaveAttribute('data-page-size', '50');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Request next grid page' }));
+    expect(onPaginationModelChange).toHaveBeenCalledWith({ page: 3, pageSize: 50 });
+
+    fireEvent.click(screen.getByText('Filename'));
+    expect(onSortModelChange).toHaveBeenCalledWith([{ field: 'filename', sort: 'desc' }]);
   });
 
   it('sorts rows by text, number, and date columns and toggles direction', () => {

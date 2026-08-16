@@ -5,6 +5,11 @@ import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
 import type { DocumentFilter, DocumentSummary } from '../../services/weaviate';
 import DocumentsPage, { buildDocumentListSearchParams, lastDocumentPage } from './DocumentsPage';
 
+vi.hoisted(() => {
+  vi.stubEnv('VITE_DOCUMENTS_LIBRARY_DEFAULT_PAGE_SIZE', '20');
+  vi.stubEnv('VITE_DOCUMENTS_LIBRARY_SEARCH_DEBOUNCE_MS', '300');
+});
+
 interface MockDocumentListProps {
   documents: DocumentSummary[];
   loading: boolean;
@@ -76,6 +81,15 @@ vi.mock('../../components/weaviate/InlineFilterBar', () => ({
         })}
       />
       <button type="button" onClick={onClear}>Clear filters</button>
+      <button
+        type="button"
+        onClick={() => onFilterChange({
+          ...filters,
+          embeddingStatus: ['completed'],
+        })}
+      >
+        Filter completed
+      </button>
     </div>
   ),
 }));
@@ -191,7 +205,7 @@ describe('DocumentsPage request ownership', () => {
     }));
   });
 
-  it('propagates controlled pagination and resets the page when sorting changes', async () => {
+  it('propagates controlled pagination and resets the page for sort and filter changes', async () => {
     vi.mocked(global.fetch).mockResolvedValue(documentListResponse('page-result', 200));
 
     render(<DocumentsPage />);
@@ -207,6 +221,19 @@ describe('DocumentsPage request ownership', () => {
     await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(3));
     expect(fetchUrl(2)).toBe(
       '/api/weaviate/documents?page=1&page_size=50&sort_by=filename&sort_order=asc',
+    );
+    expect(screen.getByTestId('document-list')).toHaveAttribute('data-page', '0');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show page three' }));
+    await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(4));
+    expect(fetchUrl(3)).toBe(
+      '/api/weaviate/documents?page=3&page_size=50&sort_by=filename&sort_order=asc',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter completed' }));
+    await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(5));
+    expect(fetchUrl(4)).toBe(
+      '/api/weaviate/documents?page=1&page_size=50&sort_by=filename&sort_order=asc&embedding_status=completed',
     );
     expect(screen.getByTestId('document-list')).toHaveAttribute('data-page', '0');
   });
