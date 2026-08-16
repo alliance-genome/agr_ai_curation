@@ -1,0 +1,65 @@
+[
+  {
+    "id": "ordinary_prose",
+    "text": "The signal increased after treatment.",
+    "expected_candidate": false,
+    "expected_cardinality": "none",
+    "expected_canonical_references": []
+  },
+  {
+    "id": "non_locator_figure_verb",
+    "text": "We need to figure out why the signal changed.",
+    "expected_candidate": true,
+    "expected_cardinality": "none",
+    "expected_canonical_references": []
+  },
+  {
+    "id": "single_figure_panel",
+    "text": "Fig. 1A shows the measured signal.",
+    "expected_candidate": true,
+    "expected_cardinality": "single",
+    "expected_canonical_references": ["Figure 1A"]
+  },
+  {
+    "id": "single_supplemental_panel",
+    "text": "The control is shown in Figure S2B.",
+    "expected_candidate": true,
+    "expected_cardinality": "single",
+    "expected_canonical_references": ["Figure S2B"]
+  },
+  {
+    "id": "single_table",
+    "text": "Measurements are reported in Table 3.",
+    "expected_candidate": true,
+    "expected_cardinality": "single",
+    "expected_canonical_references": ["Table 3"]
+  },
+  {
+    "id": "comma_panel_shorthand",
+    "text": "Fig. 1A,B shows two related panels.",
+    "expected_candidate": true,
+    "expected_cardinality": "multiple",
+    "expected_canonical_references": []
+  },
+  {
+    "id": "joined_panel_references",
+    "text": "Figure 1A and Figure 1B show different conditions.",
+    "expected_candidate": true,
+    "expected_cardinality": "multiple",
+    "expected_canonical_references": []
+  },
+  {
+    "id": "figure_range",
+    "text": "Figures 2-4 summarize the three experiments.",
+    "expected_candidate": true,
+    "expected_cardinality": "multiple",
+    "expected_canonical_references": []
+  },
+  {
+    "id": "ambiguous_panel",
+    "text": "The upper panel contains the strongest signal.",
+    "expected_candidate": true,
+    "expected_cardinality": "uncertain",
+    "expected_canonical_references": []
+  }
+]

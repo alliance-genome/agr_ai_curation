@@ -89,7 +89,9 @@ async def test_store_to_weaviate_marks_failed_and_raises_when_storage_fails():
     weaviate_client = MagicMock()
 
     async def fake_chunks_store(chunks_arg, doc_id, client, user_id):  # noqa: ANN001
-        raise BatchInsertError("failed", failed_objects=[{"chunk_index": 0}])
+        raise store_module.BatchInsertError(
+            "failed", failed_objects=[{"chunk_index": 0}]
+        )
 
     with patch("src.lib.pipeline.store.store_chunks_to_weaviate", new=fake_chunks_store), patch(
         "src.lib.pipeline.store.update_document_metadata", new=AsyncMock()
@@ -137,6 +139,25 @@ async def test_store_chunks_to_weaviate_success_path():
             "chunk_index": 0,
             "content": "alpha",
             "metadata": {
+                "figure_locator_resolution": {
+                    "schema_version": 1,
+                    "prompt_version": "figure-locator-v1",
+                    "model": "gpt-5.6-terra",
+                    "reasoning": "low",
+                    "status": "resolved",
+                    "annotations": [
+                        {
+                            "text": "Figure 1A",
+                            "char_start": 0,
+                            "char_end": 9,
+                            "cardinality": "single",
+                            "kind": "figure",
+                            "number": "1",
+                            "panels": ["A"],
+                            "canonical_reference": "Figure 1A",
+                        }
+                    ],
+                },
                 "doc_items": [
                     {
                         "element_id": "el-1",
@@ -191,6 +212,15 @@ async def test_store_chunks_to_weaviate_success_path():
     provenance_properties = batch_ctx.add_object.call_args_list[0].kwargs["properties"].get("docItemProvenance")
     import json
     assert json.loads(provenance_properties) == chunks[0]["doc_items"]
+    stored_metadata = json.loads(
+        batch_ctx.add_object.call_args_list[0].kwargs["properties"]["metadata"]
+    )
+    assert (
+        stored_metadata["figure_locator_resolution"]["annotations"][0][
+            "canonical_reference"
+        ]
+        == "Figure 1A"
+    )
 
 
 @pytest.mark.asyncio

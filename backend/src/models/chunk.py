@@ -3,7 +3,14 @@
 from enum import Enum
 import logging
 from typing import Optional, Dict, Any, List, Literal
-from pydantic import BaseModel, Field, field_validator, ConfigDict, ValidationInfo
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +102,82 @@ class ChunkDocItemProvenance(BaseModel):
     bbox: ChunkBoundingBox
 
 
+class FigureLocatorAnnotation(BaseModel):
+    """One ingestion-time semantic figure/table locator mapped to chunk text."""
+
+    text: str = Field(..., min_length=1, description="Verbatim locator text from the chunk")
+    char_start: int = Field(..., ge=0, description="Inclusive chunk-local character offset")
+    char_end: int = Field(..., gt=0, description="Exclusive chunk-local character offset")
+    cardinality: Literal["single", "multiple", "uncertain"]
+    kind: Literal["figure", "table", "unknown"]
+    number: Optional[str] = None
+    panels: List[str] = Field(default_factory=list)
+    canonical_reference: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_semantics(self) -> "FigureLocatorAnnotation":
+        if self.char_end <= self.char_start:
+            raise ValueError("char_end must be greater than char_start")
+        if self.cardinality == "single" and not self.canonical_reference:
+            raise ValueError("single locators require canonical_reference")
+        if self.cardinality != "single" and self.canonical_reference is not None:
+            raise ValueError("only single locators may have canonical_reference")
+        return self
+
+
+class FigureLocatorResolution(BaseModel):
+    """Versioned result of the ingestion-time locator classifier."""
+
+    schema_version: Literal[1] = 1
+    prompt_version: str = Field(..., min_length=1)
+    model: str = Field(..., min_length=1)
+    reasoning: str = Field(..., min_length=1)
+    status: Literal["resolved", "uncertain"]
+    annotations: List[FigureLocatorAnnotation] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_status(self) -> "FigureLocatorResolution":
+        if self.status == "uncertain" and self.annotations:
+            raise ValueError("uncertain resolutions cannot contain mapped annotations")
+        return self
+
+
+class ProviderSemanticRange(BaseModel):
+    """Chunk-local range where one provider reference is applicable."""
+
+    char_start: int = Field(..., ge=0)
+    char_end: int = Field(..., gt=0)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ProviderSemanticRange":
+        if self.char_end <= self.char_start:
+            raise ValueError("char_end must be greater than char_start")
+        return self
+
+
+class ProviderFigureReference(BaseModel):
+    """Deterministic reference derived from structured provider sidecar fields."""
+
+    schema_version: Literal[1] = 1
+    raw_label: Optional[str] = None
+    raw_number: Optional[str] = None
+    status: Literal["single", "multiple", "conflict", "invalid"]
+    kind: Optional[Literal["figure", "table"]] = None
+    number: Optional[str] = None
+    panels: List[str] = Field(default_factory=list)
+    canonical_reference: Optional[str] = None
+    semantic_ranges: List[ProviderSemanticRange] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> "ProviderFigureReference":
+        if self.status == "single":
+            if not self.kind or not self.number or not self.canonical_reference:
+                raise ValueError("single provider references require kind, number, and canonical_reference")
+        elif self.canonical_reference is not None:
+            raise ValueError("non-single provider references cannot have canonical_reference")
+        return self
+
+
 class ChunkMetadata(BaseModel):
     """Chunk-specific metadata."""
 
@@ -108,6 +191,14 @@ class ChunkMetadata(BaseModel):
     doc_items: List[ChunkDocItemProvenance] = Field(
         default_factory=list,
         description="PDFX provenance entries contributing to this chunk",
+    )
+    figure_locator_resolution: Optional[FigureLocatorResolution] = Field(
+        None,
+        description="Versioned ingestion-time semantic locator annotations",
+    )
+    provider_figure_reference: Optional[ProviderFigureReference] = Field(
+        None,
+        description="Structured provider-sidecar figure/table reference",
     )
 
 

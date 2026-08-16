@@ -159,6 +159,8 @@ def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
         "DEFAULT_AGENT_REASONING": "${DEFAULT_AGENT_REASONING:-medium}",
         "HIERARCHY_LLM_MODEL": "${HIERARCHY_LLM_MODEL:-gpt-5.6-terra}",
         "HIERARCHY_LLM_REASONING": "${HIERARCHY_LLM_REASONING:-low}",
+        "FIGURE_LOCATOR_LLM_MODEL": "${FIGURE_LOCATOR_LLM_MODEL:-gpt-5.6-terra}",
+        "FIGURE_LOCATOR_LLM_REASONING": "${FIGURE_LOCATOR_LLM_REASONING:-low}",
         "ABSTRACT_EXTRACTION_MODEL": "${ABSTRACT_EXTRACTION_MODEL:-gpt-5.6-sol}",
     }
     assert {key: dev_env[key] for key in expected_backend_defaults} == (

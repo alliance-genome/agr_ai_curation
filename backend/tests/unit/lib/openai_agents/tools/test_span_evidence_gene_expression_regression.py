@@ -306,7 +306,7 @@ async def test_tln_rpm_colocalization_records_figure_title_and_result_summary_sp
         "TLN-1::GFP overlapped with RPM-1 puncta at presynaptic regions in "
         "the PLM mechanosensory neurons."
     )
-    assert result["figure_reference"] == "Figure 6"
+    assert "figure_reference" not in result
     assert result["source_span_ids"] == [title_span.span_id, summary_span.span_id]
     assert [fragment["text"] for fragment in result["source_fragments"]] == [
         title_span.text,

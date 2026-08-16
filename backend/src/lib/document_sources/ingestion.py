@@ -164,6 +164,13 @@ async def ingest_provider_markdown_document(
         chunks = await chunk_parsed_document(elements, strategy, document_id)
         stages_completed.append(ProcessingStage.CHUNKING)
 
+        from src.lib.pipeline.figure_locator_resolution import resolve_figure_locators
+
+        chunks = await resolve_figure_locators(
+            chunks,
+            provider_figure_metadata=request.provider_figure_metadata,
+        )
+
         await _sync_sql_document_status(
             document_id,
             user_id=user_id,

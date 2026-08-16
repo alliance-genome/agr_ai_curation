@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,14 +37,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_FIGURE_REFERENCE_PATTERN = re.compile(
-    r"\b(?:Fig(?:ure)?\.?\s*\d+[A-Za-z0-9-]*)\b",
-    re.IGNORECASE,
-)
-_TABLE_REFERENCE_PATTERN = re.compile(
-    r"\b(?:Table\.?\s*\d+[A-Za-z0-9-]*)\b",
-    re.IGNORECASE,
-)
 # Env-configurable via RECORD_EVIDENCE_PREVIEW_CHARS (default 300); see config.py.
 _PREVIEW_CHARS = get_record_evidence_preview_chars()
 _SPAN_RETRY_INSTRUCTIONS = (
@@ -90,6 +81,7 @@ class _ResolvedSpanFragment:
     section: str | None
     subsection: str | None
     figure_reference: str | None
+    figure_reference_blocked: bool
 
     def to_source_fragment(self) -> dict[str, Any]:
         parsed_span = parse_evidence_span_id(self.span.span_id)
@@ -217,92 +209,187 @@ def _resolve_exact_chunk_text(chunk: dict[str, Any]) -> str | None:
     return text if isinstance(text, str) else None
 
 
-def _extract_figure_reference(
+@dataclass(frozen=True)
+class _FigureReferenceResolution:
+    reference: str | None
+    blocked: bool = False
+
+
+def _resolve_stored_figure_reference(
     chunk: dict[str, Any],
-    chunk_text: str,
-    span_text: str | None = None,
-) -> str | None:
+    span: EvidenceSpan,
+) -> _FigureReferenceResolution:
+    """Resolve only persisted ingestion-time annotations for this exact span."""
+
     metadata = _metadata_dict(chunk)
-    candidates: list[str | None] = [
-        _first_non_empty(
-            metadata.get("figure_reference"),
-            metadata.get("figureReference"),
-        ),
-    ]
+    raw_resolution = metadata.get("figure_locator_resolution")
+    if not isinstance(raw_resolution, dict) or raw_resolution.get("schema_version") != 1:
+        return _FigureReferenceResolution(reference=None)
+    if raw_resolution.get("status") != "resolved":
+        return _FigureReferenceResolution(reference=None, blocked=True)
 
-    if _is_provider_figure_metadata_chunk(chunk):
-        source_texts = (
-            _strip_provider_figure_metadata_wrapper(span_text or chunk_text),
+    raw_annotations = raw_resolution.get("annotations")
+    if not isinstance(raw_annotations, list):
+        return _FigureReferenceResolution(reference=None, blocked=True)
+    chunk_text = _resolve_exact_chunk_text(chunk)
+    if chunk_text is None:
+        return _FigureReferenceResolution(reference=None, blocked=True)
+
+    overlapping: list[dict[str, Any]] = []
+    for annotation in raw_annotations:
+        if not isinstance(annotation, dict):
+            return _FigureReferenceResolution(reference=None, blocked=True)
+        start = annotation.get("char_start")
+        end = annotation.get("char_end")
+        annotation_text = annotation.get("text")
+        if (
+            not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(end, int)
+            or isinstance(end, bool)
+            or start < 0
+            or end <= start
+        ):
+            return _FigureReferenceResolution(reference=None, blocked=True)
+        if (
+            not isinstance(annotation_text, str)
+            or end > len(chunk_text)
+            or chunk_text[start:end] != annotation_text
+        ):
+            return _FigureReferenceResolution(reference=None, blocked=True)
+        if start < span.char_end and span.char_start < end:
+            overlapping.append(annotation)
+
+    semantic_reference: str | None = None
+    semantic_annotation: dict[str, Any] | None = None
+    if overlapping:
+        if any(annotation.get("cardinality") != "single" for annotation in overlapping):
+            return _FigureReferenceResolution(reference=None, blocked=True)
+        references = _unique_non_empty(
+            [annotation.get("canonical_reference") for annotation in overlapping]
         )
-    else:
-        source_texts = (
-            span_text or chunk_text,
-            _resolve_chunk_section(chunk),
-            _resolve_chunk_subsection(chunk),
+        if len(references) != 1:
+            return _FigureReferenceResolution(reference=None, blocked=True)
+        semantic_reference = references[0]
+        matching_annotations = [
+            annotation
+            for annotation in overlapping
+            if _first_non_empty(annotation.get("canonical_reference"))
+            and str(annotation.get("canonical_reference")).casefold()
+            == semantic_reference.casefold()
+        ]
+        semantic_annotation = matching_annotations[0] if matching_annotations else None
+
+    if not _is_provider_figure_metadata_chunk(chunk):
+        return _FigureReferenceResolution(reference=semantic_reference)
+
+    provider_reference = metadata.get("provider_figure_reference")
+    if not isinstance(provider_reference, dict):
+        return _FigureReferenceResolution(reference=semantic_reference)
+    if provider_reference.get("schema_version") != 1:
+        return _FigureReferenceResolution(reference=None, blocked=True)
+    if provider_reference.get("status") != "single":
+        return _FigureReferenceResolution(reference=None, blocked=True)
+
+    provider_canonical = _first_non_empty(
+        provider_reference.get("canonical_reference")
+    )
+    if not provider_canonical:
+        return _FigureReferenceResolution(reference=None, blocked=True)
+    provider_range_overlap = _provider_semantic_range_overlap(
+        provider_reference,
+        span,
+        chunk_text,
+    )
+    if provider_range_overlap is None:
+        return _FigureReferenceResolution(reference=None, blocked=True)
+    if semantic_reference is None:
+        return _FigureReferenceResolution(
+            reference=provider_canonical if provider_range_overlap else None
         )
+    if not provider_range_overlap:
+        return _FigureReferenceResolution(reference=None, blocked=True)
+    if semantic_annotation is None or not _references_compatible(
+        semantic_annotation,
+        provider_reference,
+    ):
+        return _FigureReferenceResolution(reference=None, blocked=True)
+    return _FigureReferenceResolution(reference=semantic_reference)
 
-    for source_text in source_texts:
-        if not source_text:
-            continue
-        candidates.extend(_FIGURE_REFERENCE_PATTERN.findall(source_text))
-        candidates.extend(_TABLE_REFERENCE_PATTERN.findall(source_text))
 
-    unique_candidates: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        normalized = re.sub(r"\s+", " ", str(candidate or "").strip())
-        if not normalized:
-            continue
-        normalized_key = normalized.lower()
-        if normalized_key in seen:
-            continue
-        seen.add(normalized_key)
-        unique_candidates.append(normalized)
+def _provider_semantic_range_overlap(
+    provider: dict[str, Any],
+    span: EvidenceSpan,
+    chunk_text: str,
+) -> bool | None:
+    raw_ranges = provider.get("semantic_ranges")
+    if not isinstance(raw_ranges, list):
+        return None
+    overlaps = False
+    for raw_range in raw_ranges:
+        if not isinstance(raw_range, dict):
+            return None
+        start = raw_range.get("char_start")
+        end = raw_range.get("char_end")
+        if (
+            not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(end, int)
+            or isinstance(end, bool)
+            or start < 0
+            or end <= start
+            or end > len(chunk_text)
+        ):
+            return None
+        overlaps = overlaps or (start < span.char_end and span.char_start < end)
+    return overlaps
 
-    # If a chunk clearly contains multiple figure/table references, avoid choosing
-    # one so downstream anchors do not inherit ambiguous provenance.
-    if len(unique_candidates) == 1:
-        return unique_candidates[0]
-    return None
+
+def _references_compatible(
+    semantic: dict[str, Any],
+    provider: dict[str, Any],
+) -> bool:
+    semantic_kind = _first_non_empty(semantic.get("kind"))
+    provider_kind = _first_non_empty(provider.get("kind"))
+    semantic_number = _first_non_empty(semantic.get("number"))
+    provider_number = _first_non_empty(provider.get("number"))
+    if (
+        not semantic_kind
+        or not provider_kind
+        or not semantic_number
+        or not provider_number
+        or semantic_kind.casefold() != provider_kind.casefold()
+        or semantic_number.casefold() != provider_number.casefold()
+    ):
+        return False
+
+    semantic_panels = _normalized_panels(semantic.get("panels"))
+    provider_panels = _normalized_panels(provider.get("panels"))
+    return not provider_panels or semantic_panels == provider_panels
+
+
+def _normalized_panels(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(panel).strip().casefold() for panel in value if str(panel).strip())
 
 
 def _is_provider_figure_metadata_chunk(chunk: dict[str, Any]) -> bool:
     section = _resolve_chunk_section(chunk)
     subsection = _resolve_chunk_subsection(chunk)
+    metadata = _metadata_dict(chunk)
+    section_path = chunk.get("section_path") or metadata.get("section_path")
+    path_values = section_path if isinstance(section_path, list) else []
     return (
         section == PROVIDER_FIGURE_METADATA_SECTION
         or subsection == PROVIDER_FIGURE_METADATA_SECTION
         or is_provider_figure_subsection(subsection)
+        or any(
+            title == PROVIDER_FIGURE_METADATA_SECTION
+            or is_provider_figure_subsection(title)
+            for title in path_values
+        )
     )
-
-
-def _strip_provider_figure_metadata_wrapper(text: str) -> str:
-    stripped_lines = []
-    for line in text.splitlines():
-        normalized = line.strip()
-        if not normalized:
-            continue
-        if (
-            normalized == PROVIDER_FIGURE_METADATA_SECTION
-            or is_provider_figure_subsection(normalized)
-            or normalized.startswith(
-                (
-                    "Figure label:",
-                    "Figure number:",
-                    "Source figure artifact:",
-                    "Metadata artifact:",
-                    "Source display name:",
-                    "Source file class:",
-                    "PDFX page_index:",
-                    "PDFX bbox:",
-                    "PDFX polygon:",
-                    "Filename:",
-                )
-            )
-        ):
-            continue
-        stripped_lines.append(line)
-    return "\n".join(stripped_lines)
 
 
 def _optional_output_string(value: Any) -> str | None:
@@ -975,6 +1062,7 @@ def create_record_evidence_tool(
                     verification_method="stale_span_id",
                 )
 
+            figure_resolution = _resolve_stored_figure_reference(chunk, span)
             fragments.append(
                 _ResolvedSpanFragment(
                     span=span,
@@ -984,11 +1072,8 @@ def create_record_evidence_tool(
                     page=page,
                     section=section,
                     subsection=subsection,
-                    figure_reference=_extract_figure_reference(
-                        chunk,
-                        chunk_text,
-                        span.text,
-                    ),
+                    figure_reference=figure_resolution.reference,
+                    figure_reference_blocked=figure_resolution.blocked,
                 )
             )
 
@@ -1020,7 +1105,10 @@ def create_record_evidence_tool(
             payload["section"] = first_fragment.section
         if first_fragment.subsection:
             payload["subsection"] = first_fragment.subsection
-        if len(figure_references) == 1:
+        if (
+            len(figure_references) == 1
+            and not any(fragment.figure_reference_blocked for fragment in fragments)
+        ):
             payload["figure_reference"] = figure_references[0]
 
         payload["evidence_record_id"] = (

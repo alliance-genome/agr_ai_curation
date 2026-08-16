@@ -23,6 +23,7 @@ from src.lib.document_sources.figure_metadata import (
 from src.lib.openai_agents.evidence_spans import build_evidence_spans
 import src.lib.openai_agents.tools.record_evidence as record_evidence
 from src.lib.pipeline.chunk import chunk_parsed_document
+from src.lib.pipeline import figure_locator_resolution as locator
 from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 import src.lib.document_sources.ingestion as ingestion
 from src.models.pipeline import ProcessingStage
@@ -112,6 +113,11 @@ async def test_ingest_provider_markdown_document_runs_pipeline(monkeypatch):
         fake_resolve,
     )
     monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", fake_chunk)
+    figure_locator_mock = AsyncMock(side_effect=lambda chunks, **_kwargs: chunks)
+    monkeypatch.setattr(
+        "src.lib.pipeline.figure_locator_resolution.resolve_figure_locators",
+        figure_locator_mock,
+    )
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", store_mock)
 
     result = await ingest_provider_markdown_document(
@@ -134,6 +140,10 @@ async def test_ingest_provider_markdown_document_runs_pipeline(monkeypatch):
     assert result.element_count == 2
     assert result.chunk_count == 1
     store_mock.assert_awaited_once()
+    figure_locator_mock.assert_awaited_once_with(
+        [{"chunk_index": 0, "content": "Results", "metadata": {}}],
+        provider_figure_metadata=(),
+    )
     persist_mock.assert_awaited_once()
     persisted_call = persist_mock.await_args_list[-1]
     persisted_kwargs = persisted_call.kwargs
@@ -356,6 +366,21 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
 
     async def fake_resolve(elements):
         captured_elements["before_hierarchy"] = elements
+        for element in elements:
+            section_path = element.get("metadata", {}).get("section_path", [])
+            provider_subsection = next(
+                (
+                    title
+                    for title in section_path
+                    if title.startswith("Provider Figure:")
+                ),
+                None,
+            )
+            if provider_subsection:
+                element["parent_section"] = "Provider Figure Metadata"
+                element["subsection"] = provider_subsection
+                element["metadata"]["parent_section"] = "Provider Figure Metadata"
+                element["metadata"]["subsection"] = provider_subsection
         return elements, SimpleNamespace(model_dump=lambda: {"sections": []})
 
     async def fake_chunk(elements, strategy, document_id):
@@ -370,6 +395,39 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
     )
     monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", fake_chunk)
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", AsyncMock())
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    async def fake_locator_classifier(candidates, **_kwargs):
+        return locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id=chunk.id,
+                    mentions=(
+                        [
+                            locator.FigureLocatorMentionOutput(
+                                text="Fig. 1A",
+                                cardinality="single",
+                                kind="figure",
+                                number="1",
+                                panels=["A"],
+                                canonical_reference="Figure 1A",
+                            )
+                        ]
+                        if "Fig. 1A" in candidate_text
+                        else []
+                    ),
+                )
+                for chunk, candidate_text in candidates
+            ]
+        )
+
+    monkeypatch.setattr(
+        locator,
+        "_call_figure_locator_classifier",
+        fake_locator_classifier,
+    )
 
     provider_metadata = normalize_provider_figure_metadata_sidecar(
         b'{"display_name":"paper_image_001","figure_label":"Figure 1",'
@@ -442,6 +500,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
     assert evidence["status"] == "verified"
     assert evidence["page"] == 3
     assert evidence["source_fragments"][0]["page"] == 3
+    assert evidence["figure_reference"] == "Figure 1A"
 
 
 @pytest.mark.asyncio
