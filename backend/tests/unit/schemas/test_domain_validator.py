@@ -167,12 +167,20 @@ def test_domain_validator_schema_detection_requires_inheritance():
             object.__setattr__(self, "status", None)
             return self
 
+    class JsonSchemaWeakeningInheritedResult(DomainValidatorResultBase):
+        @classmethod
+        def __get_pydantic_json_schema__(cls, core_schema, handler):
+            json_schema = super().__get_pydantic_json_schema__(core_schema, handler)
+            json_schema["required"].remove("status")
+            return json_schema
+
     class SummaryOnly(BaseModel):
         summary: str
 
     assert is_domain_validator_result_schema(InheritedResult)
     assert not is_domain_validator_result_schema(IncompatibleInheritedResult)
     assert not is_domain_validator_result_schema(BehaviorWeakeningInheritedResult)
+    assert not is_domain_validator_result_schema(JsonSchemaWeakeningInheritedResult)
     assert not is_domain_validator_result_schema(EmbeddedResult)
     assert not is_domain_validator_result_schema(SummaryOnly)
 

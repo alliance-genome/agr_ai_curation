@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from agents import AgentOutputSchema
 from pydantic import BaseModel, create_model, model_validator
 
 from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -66,6 +67,16 @@ class BehaviorWeakeningValidatorResult(DomainValidatorResultBase):
         return self
 
 
+class JsonSchemaWeakeningValidatorResult(DomainValidatorResultBase):
+    """Nominally compatible schema that weakens the runtime output contract."""
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        json_schema = super().__get_pydantic_json_schema__(core_schema, handler)
+        json_schema["required"].remove("status")
+        return json_schema
+
+
 def _validator_agent(
     *,
     package_id: str = "org.validators",
@@ -90,6 +101,8 @@ def _validator_schema_resolver(schema_key: str):
         return IncompatibleInheritedValidatorResult
     if schema_key == "BehaviorWeakeningValidatorResult":
         return BehaviorWeakeningValidatorResult
+    if schema_key == "JsonSchemaWeakeningValidatorResult":
+        return JsonSchemaWeakeningValidatorResult
     if schema_key == "GeneResultEnvelope":
         return GeneResultEnvelope
     if schema_key == "ReferenceValidationResult":
@@ -438,6 +451,33 @@ def test_active_validator_agent_reference_requires_binding_ready_schema(
         exc_info.value
     )
     assert "and validation behavior" in str(exc_info.value)
+
+
+def test_active_validator_agent_reference_rejects_weakened_runtime_json_schema(
+    tmp_path: Path,
+):
+    runtime_schema = AgentOutputSchema(
+        JsonSchemaWeakeningValidatorResult,
+        strict_json_schema=False,
+    ).json_schema()
+    assert "status" not in runtime_schema["required"]
+
+    pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    with pytest.raises(ValidationRegistryError, match="validation behavior"):
+        validate_active_validator_agent_references(
+            [registry],
+            _package_registry(
+                "org.owner",
+                "org.validators",
+                dependencies={("org.owner", "org.validators")},
+            ),
+            agent_resolver=lambda _package_id, _agent_id: _validator_agent(
+                output_schema="JsonSchemaWeakeningValidatorResult"
+            ),
+            output_schema_resolver=_validator_schema_resolver,
+        )
 
 
 def test_active_validator_agent_reference_requires_output_schema(tmp_path: Path):

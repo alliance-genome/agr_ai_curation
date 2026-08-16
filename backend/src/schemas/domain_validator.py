@@ -26,8 +26,10 @@ _PYDANTIC_DECORATOR_GROUPS = (
 
 _PYDANTIC_MODEL_BEHAVIOR_METHODS = (
     "__get_pydantic_core_schema__",
+    "__get_pydantic_json_schema__",
     "model_dump",
     "model_dump_json",
+    "model_json_schema",
     "model_validate",
     "model_validate_json",
     "model_validate_strings",
@@ -251,7 +253,7 @@ def is_domain_validator_result_schema(schema: object) -> bool:
 def _preserves_domain_validator_model_behavior(
     schema: type[DomainValidatorResultBase],
 ) -> bool:
-    """Reject subclass hooks that can rewrite canonical values or serialization."""
+    """Reject subclass hooks that can rewrite canonical values or schemas."""
 
     if schema.model_config != DomainValidatorResultBase.model_config:
         return False
