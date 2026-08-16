@@ -3,12 +3,16 @@
 import asyncio
 import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 class TestAgentTestEndpoint:
@@ -481,8 +485,20 @@ class TestAgentWorkshopSystemPrompt:
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
 
-        monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", "/app/packages")
-        monkeypatch.setenv("AGR_RUNTIME_CONFIG_DIR", "/app/config")
+        monkeypatch.setenv(
+            "AGR_RUNTIME_PACKAGES_DIR",
+            str(REPO_ROOT / "packages"),
+        )
+        monkeypatch.setenv(
+            "AGR_RUNTIME_OVERRIDES_PATH",
+            str(
+                REPO_ROOT
+                / "packages"
+                / "alliance"
+                / "config"
+                / "runtime_overrides.yaml"
+            ),
+        )
 
         draft = "A" * 12050
         context = ChatContext(

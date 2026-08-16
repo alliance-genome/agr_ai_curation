@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 from .manifest_loader import load_runtime_overrides
@@ -75,7 +76,7 @@ def resolve_agent_studio_prompt(
             f"(loaded packages: {loaded_ids})"
         )
 
-    selected = candidates[0] if len(candidates) == 1 else _select_candidate(
+    selected = _select_candidate(
         candidates,
         runtime_overrides=runtime_overrides,
     )
@@ -97,14 +98,32 @@ def load_installed_agent_studio_prompt(
 ) -> LoadedAgentStudioPrompt:
     """Load the selected Agent Studio prompt from the installed runtime profile."""
 
+    resolved_packages_dir = (packages_dir or get_runtime_packages_dir()).resolve(
+        strict=False
+    )
+    resolved_overrides_path = (
+        overrides_path or get_runtime_overrides_path()
+    ).resolve(strict=False)
+    return _load_installed_agent_studio_prompt_cached(
+        resolved_packages_dir,
+        resolved_overrides_path,
+    )
+
+
+@cache
+def _load_installed_agent_studio_prompt_cached(
+    packages_dir: Path,
+    overrides_path: Path,
+) -> LoadedAgentStudioPrompt:
+    """Load one installed prompt per resolved runtime profile path."""
+
     registry = load_package_registry(
-        packages_dir or get_runtime_packages_dir(),
+        packages_dir,
         fail_on_validation_error=True,
     )
-    resolved_overrides_path = overrides_path or get_runtime_overrides_path()
     runtime_overrides = (
-        load_runtime_overrides(resolved_overrides_path)
-        if resolved_overrides_path.is_file()
+        load_runtime_overrides(overrides_path)
+        if overrides_path.is_file()
         else None
     )
     return resolve_agent_studio_prompt(
@@ -140,28 +159,36 @@ def _select_candidate(
     *,
     runtime_overrides: RuntimeOverrides | None,
 ) -> _PromptCandidate | None:
-    if runtime_overrides is None:
-        return None
-
-    matches = tuple(
-        candidate
-        for candidate in candidates
-        if any(
-            selection.export_kind is ExportKind.AGENT_STUDIO_PROMPT
-            and selection.name == candidate.export.name
-            and selection.package_id == candidate.package.package_id
-            for selection in runtime_overrides.selections
-        )
+    selections = tuple(
+        selection
+        for selection in (runtime_overrides.selections if runtime_overrides else ())
+        if selection.export_kind is ExportKind.AGENT_STUDIO_PROMPT
     )
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        sources = "; ".join(candidate.source.describe() for candidate in matches)
-        raise AgentStudioPromptLoadError(
-            "Multiple runtime override selections match Agent Studio prompt exports: "
-            f"{sources}"
+    if len(selections) > 1:
+        selected_refs = ", ".join(
+            f"'{selection.package_id}:{selection.name}'" for selection in selections
         )
-    return None
+        raise AgentStudioPromptLoadError(
+            "Multiple runtime override selections choose Agent Studio prompts: "
+            f"{selected_refs}. Configure exactly one selection."
+        )
+
+    if selections:
+        selection = selections[0]
+        for candidate in candidates:
+            if (
+                selection.name == candidate.export.name
+                and selection.package_id == candidate.package.package_id
+            ):
+                return candidate
+        sources = "; ".join(candidate.source.describe() for candidate in candidates)
+        raise AgentStudioPromptLoadError(
+            "Runtime override selects Agent Studio prompt "
+            f"'{selection.package_id}:{selection.name}', but it is not an active "
+            f"candidate. Active candidates: {sources}."
+        )
+
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _read_candidate(candidate: _PromptCandidate) -> LoadedAgentStudioPrompt:

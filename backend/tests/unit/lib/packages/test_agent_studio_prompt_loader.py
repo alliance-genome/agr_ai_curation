@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from src.lib.packages.agent_studio_prompt_loader import (
     load_installed_agent_studio_prompt,
     resolve_agent_studio_prompt,
 )
+from src.lib.packages import agent_studio_prompt_loader as prompt_loader
 from src.lib.packages.manifest_loader import load_runtime_overrides
 from src.lib.packages.registry import load_package_registry
 
@@ -43,9 +45,16 @@ def test_core_only_profile_resolves_neutral_package_prompt():
 
 
 def test_shipped_alliance_profile_uses_explicit_runtime_selection():
+    alliance_overrides_path = (
+        PACKAGES_DIR / "alliance" / "config" / "runtime_overrides.yaml"
+    )
+    assert (REPO_ROOT / "config" / "overrides.yaml").read_text(
+        encoding="utf-8"
+    ) == alliance_overrides_path.read_text(encoding="utf-8")
+
     loaded = load_installed_agent_studio_prompt(
         PACKAGES_DIR,
-        overrides_path=REPO_ROOT / "config" / "overrides.yaml",
+        overrides_path=alliance_overrides_path,
     )
 
     assert loaded.source.package_id == "agr.alliance"
@@ -123,3 +132,66 @@ disabled_packages: [agr.alliance]
     )
 
     assert loaded.source.package_id == "agr.core"
+
+
+def test_explicit_selection_must_match_the_only_active_prompt(tmp_path: Path):
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text(
+        """\
+overrides_api_version: 1.0.0
+selections:
+  - export_kind: agent_studio_prompt
+    name: system
+    package_id: agr.alliance
+""",
+        encoding="utf-8",
+    )
+    registry = load_package_registry(PACKAGES_DIR)
+    core_package = registry.get_package("agr.core")
+    assert core_package is not None
+
+    with pytest.raises(AgentStudioPromptLoadError) as exc_info:
+        resolve_agent_studio_prompt(
+            replace(registry, loaded_packages=(core_package,)),
+            runtime_overrides=load_runtime_overrides(overrides_path),
+        )
+
+    message = str(exc_info.value)
+    assert "agr.alliance:system" in message
+    assert "not an active candidate" in message
+    assert "package 'agr.core'" in message
+
+
+def test_installed_prompt_is_cached_per_resolved_runtime_profile(
+    monkeypatch,
+    tmp_path: Path,
+):
+    packages_dir = tmp_path / "packages"
+    shutil.copytree(PACKAGES_DIR / "core", packages_dir / "core")
+    overrides_path = tmp_path / "config" / "overrides.yaml"
+    overrides_path.parent.mkdir()
+    shutil.copy2(
+        PACKAGES_DIR / "core" / "config" / "runtime_overrides.yaml",
+        overrides_path,
+    )
+    real_load_registry = prompt_loader.load_package_registry
+    load_count = 0
+
+    def count_registry_load(*args, **kwargs):
+        nonlocal load_count
+        load_count += 1
+        return real_load_registry(*args, **kwargs)
+
+    monkeypatch.setattr(prompt_loader, "load_package_registry", count_registry_load)
+
+    first = load_installed_agent_studio_prompt(
+        packages_dir,
+        overrides_path=overrides_path,
+    )
+    second = load_installed_agent_studio_prompt(
+        packages_dir,
+        overrides_path=overrides_path,
+    )
+
+    assert second is first
+    assert load_count == 1

@@ -252,11 +252,13 @@ exports:
     description: Organization-specific Agent Studio guidance
 ```
 
-With one active prompt export, that prompt is selected automatically. With
-multiple active exports, startup fails unless `runtime/config/overrides.yaml`
-selects exactly one package/export. The error includes the package ID, manifest,
-export name, and resolved file path for each candidate. There is no filesystem
-fallback or package-order winner.
+With one active prompt export and no prompt selection, that prompt is selected
+automatically. With multiple active exports, startup fails unless
+`runtime/config/overrides.yaml` selects exactly one package/export. An explicit
+selection is always authoritative and fails if it does not name an active
+candidate. The error includes the package ID, manifest, export name, and
+resolved file path for each candidate. There is no silent substitution,
+filesystem fallback, or package-order winner.
 
 ## Merge and override behavior
 
@@ -317,10 +319,15 @@ export.
 
 - A profile with one `agent_studio_prompt` export uses it directly.
 - A profile with multiple prompt exports requires an explicit selection.
-- The shipped `config/overrides.yaml` selects `agr.alliance:system` when both
-  shipped packages are installed. In a core-only profile, the sole
-  `agr.core:system` export remains active even though the Alliance selection has
-  no installed candidate.
+- An explicit selection must resolve even if the profile has only one candidate.
+- Package-owned templates define the shipped profiles:
+  `packages/core/config/runtime_overrides.yaml` is neutral, while
+  `packages/alliance/config/runtime_overrides.yaml` selects
+  `agr.alliance:system`. The installer copies the template for the selected
+  profile into `runtime/config/overrides.yaml`. The source checkout's
+  `config/overrides.yaml` mirrors the Alliance template because the supported
+  source-development and direct Compose profiles mount both shipped packages;
+  it is not unconditionally seeded into standalone installs.
 
 ```yaml
 overrides_api_version: 1.0.0

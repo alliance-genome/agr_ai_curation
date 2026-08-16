@@ -300,8 +300,10 @@ test_core_config_generates_env_and_backups() {
     echo "Expected seeded package selection file at ${runtime_config_dir}/overrides.yaml" >&2
     exit 1
   }
-  assert_contains 'export_kind: agent_studio_prompt' "${runtime_config_dir}/overrides.yaml"
-  assert_contains 'package_id: agr.alliance' "${runtime_config_dir}/overrides.yaml"
+  cmp \
+    "${repo_root}/packages/core/config/runtime_overrides.yaml" \
+    "${runtime_config_dir}/overrides.yaml"
+  assert_not_contains 'agr.alliance' "${runtime_config_dir}/overrides.yaml"
   [[ "$(stat -c '%a' "${runtime_config_dir}/providers.yaml")" == "644" ]] || {
     echo "Expected seeded runtime config file to be readable by published containers" >&2
     exit 1
@@ -395,6 +397,7 @@ test_core_config_seeds_alliance_profile_when_selected() {
   trap 'rm -rf "$temp_home"' RETURN
 
   local runtime_packages_dir="${temp_home}/.agr_ai_curation/runtime/packages"
+  local runtime_config_dir="${temp_home}/.agr_ai_curation/runtime/config"
   local package_profile_state="${temp_home}/.agr_ai_curation/.install_package_profile.env"
 
   run_core_config_with_profile_choice "$temp_home" "2" $'sk-openai-alliance\n\n\n\n\n\n'
@@ -408,6 +411,11 @@ test_core_config_seeds_alliance_profile_when_selected() {
     exit 1
   }
   cmp "${repo_root}/packages/alliance/package.yaml" "${runtime_packages_dir}/alliance/package.yaml"
+  cmp \
+    "${repo_root}/packages/alliance/config/runtime_overrides.yaml" \
+    "${runtime_config_dir}/overrides.yaml"
+  assert_contains 'export_kind: agent_studio_prompt' "${runtime_config_dir}/overrides.yaml"
+  assert_contains 'package_id: agr.alliance' "${runtime_config_dir}/overrides.yaml"
   assert_contains '^INSTALL_PACKAGE_PROFILE=core-plus-alliance$' "$package_profile_state"
   assert_contains '^INSTALL_PACKAGE_IDS=agr.core,agr.alliance$' "$package_profile_state"
 }

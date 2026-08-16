@@ -32,9 +32,11 @@ Repository-development note:
   tests also use fixtures under `backend/tests/fixtures/domain_packs/`.
 - `config/models.yaml`, `config/providers.yaml`, and
   `config/tool_policy_defaults.yaml` remain aligned with `packages/core/config/`.
-- `config/overrides.yaml` selects the shipped Alliance Agent Studio prompt when
-  both shipped packages are installed; core-only profiles still use the sole
-  neutral prompt exported by `agr.core`.
+- Package-profile override templates live with their packages. The installer
+  writes the selected template to `runtime/config/overrides.yaml` instead of
+  copying the source checkout's Alliance-profile selection into every install.
+  The source checkout keeps an Alliance selection because its Compose profile
+  mounts both shipped packages.
 
 ## Directory Structure
 
@@ -46,7 +48,7 @@ config/
 ├── providers.yaml               # LLM runtime provider definitions
 ├── models.yaml                  # LLM model catalog overrides
 ├── tool_policy_defaults.yaml    # Tool policy default overrides
-├── overrides.yaml               # Explicit package export selections
+├── overrides.yaml               # Source checkout's core + Alliance selections
 ├── maintenance_message.txt      # Optional maintenance banner content
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
@@ -306,8 +308,10 @@ At system startup:
 - Tool binding collisions require an explicit selection in
   `runtime/config/overrides.yaml`.
 - Multiple Agent Studio prompt exports require one explicit
-  `agent_studio_prompt` selection in `runtime/config/overrides.yaml`; there is
-  no implicit filesystem or package-order fallback.
+  `agent_studio_prompt` selection in `runtime/config/overrides.yaml`. Any
+  explicit selection must resolve to an active export, even when only one
+  candidate is installed; there is no implicit substitution, filesystem
+  fallback, or package-order winner.
 - Domain-pack IDs must be unique and validated. Domain-pack metadata is the
   canonical home for object definitions, field paths, validator bindings, and
   required/export-blocking policy.

@@ -501,6 +501,25 @@ copy_runtime_packages() {
   done
 }
 
+copy_runtime_overrides() {
+  local runtime_config_dir="$1"
+  local package_name=""
+  local selected_package_name="core"
+  local selected_package_dir=""
+
+  for package_name in "${shipped_package_names[@]}"; do
+    if [[ "$package_name" == "alliance" ]]; then
+      selected_package_name="alliance"
+      break
+    fi
+  done
+
+  selected_package_dir="$(resolve_canonical_package_dir "$selected_package_name")"
+  copy_file_exact \
+    "${selected_package_dir}/config/runtime_overrides.yaml" \
+    "${runtime_config_dir}/overrides.yaml"
+}
+
 copy_runtime_state() {
   local runtime_state_dir="$1"
   local source_state_dir="${source_repo}/runtime_state"
@@ -991,6 +1010,7 @@ main() {
 
   copy_runtime_config "$runtime_config_dir"
   copy_runtime_packages "$runtime_packages_dir"
+  copy_runtime_overrides "$runtime_config_dir"
   copy_runtime_state "$runtime_state_dir"
   copy_data_dirs "$pdf_storage_dir" "$file_outputs_dir" "$weaviate_data_dir"
   patch_installed_env \

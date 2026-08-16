@@ -108,15 +108,6 @@ tool_policies:
     allow_execute: true
 EOF
 
-  cat >"${source_repo}/config/overrides.yaml" <<'EOF'
-overrides_api_version: 1.0.0
-selections:
-  - export_kind: agent_studio_prompt
-    name: system
-    package_id: agr.alliance
-    reason: Use the Alliance curator prompt when installed.
-EOF
-
   cat >"${source_repo}/config/maintenance_message.txt" <<'EOF'
 All systems normal.
 EOF
@@ -197,6 +188,8 @@ test_standard_repo_install_apply() {
   assert_contains 'MIGRATION_STATUS=ready' "$output_path"
   assert_contains 'extra migrated packages: 0' "$output_path"
   assert_file_exists "${install_home}/runtime/config/groups.yaml"
+  assert_file_exists "${install_home}/runtime/config/overrides.yaml"
+  assert_contains 'package_id: agr.alliance' "${install_home}/runtime/config/overrides.yaml"
   assert_file_exists "${install_home}/runtime/packages/core/package.yaml"
   assert_file_exists "${install_home}/runtime/packages/alliance/package.yaml"
   assert_file_exists "${install_home}/runtime/state/identifier_prefixes/identifier_prefixes.json"

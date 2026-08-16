@@ -127,7 +127,13 @@ def _read_runtime_agent_studio_system_prompt() -> tuple[str, str]:
 
     loaded = load_installed_agent_studio_prompt(
         REPO_ROOT / "packages",
-        overrides_path=REPO_ROOT / "config" / "overrides.yaml",
+        overrides_path=(
+            REPO_ROOT
+            / "packages"
+            / "alliance"
+            / "config"
+            / "runtime_overrides.yaml"
+        ),
     )
     return _display_prompt_path(loaded.source.prompt_path), loaded.content
 

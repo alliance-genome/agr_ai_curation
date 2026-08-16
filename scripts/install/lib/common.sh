@@ -230,7 +230,6 @@ connections.yaml
 providers.yaml
 models.yaml
 tool_policy_defaults.yaml
-overrides.yaml
 maintenance_message.txt
 EOF
 }

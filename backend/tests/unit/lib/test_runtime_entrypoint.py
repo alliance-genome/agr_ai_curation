@@ -97,7 +97,10 @@ def test_validate_runtime_packages_accepts_alliance_prompt_selection(
     runtime_entrypoint.ensure_runtime_layout()
     shutil.copytree(REPO_ROOT / "packages" / "core", packages_dir / "core")
     shutil.copytree(REPO_ROOT / "packages" / "alliance", packages_dir / "alliance")
-    shutil.copy2(REPO_ROOT / "config" / "overrides.yaml", config_dir / "overrides.yaml")
+    shutil.copy2(
+        REPO_ROOT / "packages" / "alliance" / "config" / "runtime_overrides.yaml",
+        config_dir / "overrides.yaml",
+    )
 
     registry = runtime_entrypoint.validate_runtime_packages()
 
@@ -153,7 +156,6 @@ recipes:
         "Neutral prompt\n",
         encoding="utf-8",
     )
-
     with pytest.raises(FlowRecipeLoadError) as exc_info:
         runtime_entrypoint.validate_runtime_packages()
 

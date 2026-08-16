@@ -208,6 +208,22 @@ seed_runtime_packages() {
   fi
 }
 
+seed_runtime_overrides() {
+  local runtime_config_dir="$1"
+  local core_package_source_dir="$2"
+  local alliance_package_source_dir="$3"
+  local package_profile="$4"
+  local overrides_source="${core_package_source_dir}/config/runtime_overrides.yaml"
+
+  if install_package_profile_includes_alliance "$package_profile"; then
+    overrides_source="${alliance_package_source_dir}/config/runtime_overrides.yaml"
+  fi
+
+  require_file_exists "$overrides_source"
+  cp "$overrides_source" "${runtime_config_dir}/overrides.yaml"
+  chmod 0644 "${runtime_config_dir}/overrides.yaml"
+}
+
 load_existing_package_profile() {
   local existing_profile=""
 
@@ -425,6 +441,11 @@ main() {
     "$config_source_dir"
   seed_runtime_packages \
     "$runtime_packages_dir" \
+    "$core_package_source_dir" \
+    "$alliance_package_source_dir" \
+    "$package_profile"
+  seed_runtime_overrides \
+    "$runtime_config_dir" \
     "$core_package_source_dir" \
     "$alliance_package_source_dir" \
     "$package_profile"
