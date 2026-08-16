@@ -154,6 +154,12 @@ default specialist agent catalog along with shipped tool bindings, flow recipes,
 and the Alliance curator Agent Studio prompt. Keep custom behavior in a separate
 package so upgrades can replace the shipped packages safely.
 
+The standalone installer's bundled profile contract also expects
+`config/runtime_overrides.yaml` in each shipped profile package. The core
+template is neutral; the Alliance template selects the Alliance Agent Studio
+prompt. This file is an installer profile template, not a manifest export for
+ordinary third-party packages.
+
 ### Minimal custom package layout
 
 ```text
@@ -437,6 +443,13 @@ The helper:
   any already-package-backed content into `~/.agr_ai_curation/runtime/packages/`
 - copies mutable data into `~/.agr_ai_curation/data/`
 - patches `~/.agr_ai_curation/.env` with the standalone host-directory paths
+
+If the source checkout has a customized `config/overrides.yaml`, the helper
+stops before writing the target and requires manual reconciliation. (The exact
+shipped Alliance template is accepted.) Move the customized source file aside
+without deleting it, run the migration, and then merge its operator-owned
+entries into the installed profile template. The helper never replaces a
+customized overrides file with a shipped template.
 
 Manual review is required when the helper finds custom repo-local agents,
 modified shipped `core` or `alliance` files, repo-local tool sources, or extra

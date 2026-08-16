@@ -93,6 +93,13 @@ Package profile [1=core only, 2=core + alliance]
   scripts/install/install.sh --from-stage 2 --package-profile core-plus-alliance
   ```
 
+  If `runtime/config/overrides.yaml` has operator-added package, tool, or prompt
+  selections, Stage 2 stops before changing the installed profile. Reconcile
+  them by preserving and moving the file aside, rerunning Stage 2 to create the
+  Alliance profile template, and then merging the operator-owned entries into
+  that template. The installer never silently replaces a customized overrides
+  file.
+
 On a healthy `core only` install, the main chat still starts in core-only mode
 but without the domain specialist/tool catalog, Agent Studio shows only
 `task_input` plus `supervisor`, and flow helpers report that no flow-capable
@@ -149,6 +156,10 @@ What the helper does:
   `~/.agr_ai_curation/runtime/packages`
 - Copies repo-local mutable data into `~/.agr_ai_curation/data/*`
 - Patches `~/.agr_ai_curation/.env` with the standalone host-directory variables when a repo `.env` already exists
+- Accepts the unchanged shipped Alliance `config/overrides.yaml`, but refuses
+  automatic migration when that source file is customized; preserve it,
+  migrate with it moved aside, and then reconcile its operator-owned entries
+  with the installed profile template
 
 Custom local code handling:
 

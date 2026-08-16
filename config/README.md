@@ -80,6 +80,12 @@ The installer seeds the runtime config for you. After
 4. Review `~/.agr_ai_curation/runtime/config/overrides.yaml` when changing the
    installed package profile or adding conflicting tool/prompt exports.
 
+Stage 2 recognizes the unmodified shipped core and Alliance override templates.
+If the installed `overrides.yaml` contains operator changes, Stage 2 refuses to
+replace it. Preserve and move that file aside, rerun the stage to write the
+requested profile template, and then merge the operator-owned entries into the
+new template.
+
 ### Source development
 
 For repo-local development of the shipped defaults:

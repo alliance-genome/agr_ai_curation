@@ -971,6 +971,24 @@ main() {
   source_repo="$(cd "$source_repo" && pwd)"
   require_directory_exists "${source_repo}/config"
   require_directory_exists "${source_repo}/packages"
+  if [[ -f "${source_repo}/config/overrides.yaml" ]]; then
+    local overrides_package_name="core"
+    local shipped_package_name=""
+    local canonical_overrides_package_dir=""
+    for shipped_package_name in "${shipped_package_names[@]}"; do
+      if [[ "$shipped_package_name" == "alliance" ]]; then
+        overrides_package_name="alliance"
+        break
+      fi
+    done
+    canonical_overrides_package_dir="$(resolve_helper_canonical_package_dir "$overrides_package_name")"
+    if ! cmp -s \
+      "${source_repo}/config/overrides.yaml" \
+      "${canonical_overrides_package_dir}/config/runtime_overrides.yaml"; then
+      log_error "Refusing to replace customized ${source_repo}/config/overrides.yaml with a shipped package template. Preserve that file, remove it from the source checkout used for automatic migration, rerun the migration, and then reconcile its entries into runtime/config/overrides.yaml."
+      exit "$EXIT_MANUAL_REVIEW_REQUIRED"
+    fi
+  fi
 
   local package_name=""
   for package_name in "${shipped_package_names[@]}"; do

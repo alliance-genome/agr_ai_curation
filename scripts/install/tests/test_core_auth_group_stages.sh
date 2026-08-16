@@ -80,6 +80,26 @@ run_core_config_with_profile_override() {
   printf '%s' "$input_text" | HOME="$home_dir" INSTALL_PACKAGE_PROFILE="$package_profile" bash "$core_config_script"
 }
 
+run_core_config_with_profile_choice_expect_fail() {
+  local home_dir="$1"
+  local profile_choice="$2"
+  local input_text="$3"
+  local output_path="$4"
+  local rc=0
+
+  set +e
+  printf '%s\n%s' "$profile_choice" "$input_text" \
+    | HOME="$home_dir" bash "$core_config_script" >"$output_path" 2>&1
+  rc=$?
+  set -e
+
+  if [[ "$rc" -eq 0 ]]; then
+    echo "Expected core config to refuse customized runtime overrides" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+}
+
 run_auth_setup() {
   local home_dir="$1"
   local input_text="$2"
@@ -420,6 +440,39 @@ test_core_config_seeds_alliance_profile_when_selected() {
   assert_contains '^INSTALL_PACKAGE_IDS=agr.core,agr.alliance$' "$package_profile_state"
 }
 
+test_core_config_preserves_custom_runtime_overrides_on_profile_change() {
+  local temp_home
+  local output_path
+  local runtime_config_dir
+  local runtime_packages_dir
+  local overrides_path
+  local expected_path
+  temp_home="$(mktemp -d)"
+  output_path="$(mktemp)"
+  expected_path="$(mktemp)"
+  trap 'rm -rf "$temp_home" "$output_path" "$expected_path"' RETURN
+
+  runtime_config_dir="${temp_home}/.agr_ai_curation/runtime/config"
+  runtime_packages_dir="${temp_home}/.agr_ai_curation/runtime/packages"
+  overrides_path="${runtime_config_dir}/overrides.yaml"
+  run_core_config "$temp_home" $'sk-openai-initial\n\n\n\n\n\n'
+  cat >"$overrides_path" <<'EOF'
+overrides_api_version: 1.0.0
+disabled_packages: [org.operator.disabled]
+EOF
+  cp "$overrides_path" "$expected_path"
+
+  run_core_config_with_profile_choice_expect_fail \
+    "$temp_home" \
+    "2" \
+    $'sk-openai-updated\n\n\n\n\n\n' \
+    "$output_path"
+
+  cmp "$expected_path" "$overrides_path"
+  assert_contains 'Refusing to overwrite customized runtime overrides' "$output_path"
+  assert_not_exists "${runtime_packages_dir}/alliance"
+}
+
 test_auth_setup_dev_and_oidc() {
   local temp_home_dev
   local temp_home_oidc=""
@@ -654,6 +707,7 @@ test_orchestrator_can_add_alliance_later_with_package_profile_flag() {
 test_core_config_generates_env_and_backups
 test_core_config_honors_local_transformers_override
 test_core_config_seeds_alliance_profile_when_selected
+test_core_config_preserves_custom_runtime_overrides_on_profile_change
 test_auth_setup_dev_and_oidc
 test_group_setup_defaults_to_runtime_config_path
 test_group_setup_modes_and_backup
