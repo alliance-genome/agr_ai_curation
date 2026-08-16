@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
-import os
 import re
 from collections.abc import Mapping, Sequence
 from typing import Literal
@@ -31,8 +29,6 @@ from src.models.chunk import (
     ProviderSemanticRange,
 )
 
-logger = logging.getLogger(__name__)
-
 FIGURE_LOCATOR_PROMPT_VERSION = "figure-locator-v1"
 
 _REASONING_LEVELS = ("minimal", "low", "medium", "high")
@@ -42,13 +38,21 @@ _LOCATOR_CANDIDATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _STRUCTURED_REFERENCE_PATTERN = re.compile(
-    r"^\s*(?:(?P<kind>fig(?:ure)?|table)\.?\s*)?"
+    r"^\s*(?:(?:(?P<modifier>supplementary|supplemental)\s+)?"
+    r"(?P<kind>fig(?:ure)?|table)\.?\s*)?"
     r"(?P<number>[A-Za-z]?\d+(?:\.\d+)*)"
-    r"(?P<panels>[A-Za-z](?:\s*[,/&-]\s*[A-Za-z])*)?\s*$",
+    r"(?P<panels>[A-Za-z](?:\s*[,/&-]\s*[A-Za-z])*)?"
+    r"(?:\s*\(\s*continued\s*\))?\s*$",
     re.IGNORECASE,
 )
 _ATOMIC_NUMBER_PATTERN = re.compile(r"^[A-Za-z]?\d+(?:\.\d+)*$")
 _ATOMIC_PANEL_PATTERN = re.compile(r"^[A-Za-z0-9]+$")
+_CLASSIFIER_PROMPT_PREFIX = (
+    "Classify the locator expressions in every candidate below. Return one "
+    "candidate result for every candidate_id.\n\n"
+)
+
+FigureLocatorCandidate = tuple[DocumentChunk, str]
 
 
 class FigureLocatorMentionOutput(BaseModel):
@@ -103,7 +107,7 @@ async def resolve_figure_locators(
     )
     _attach_provider_references(chunks, provider_figure_metadata)
 
-    candidates: list[tuple[DocumentChunk, str]] = []
+    candidates: list[FigureLocatorCandidate] = []
     for chunk in chunks:
         provider_chunk = _is_provider_figure_chunk(chunk)
         candidate_text = (
@@ -125,61 +129,45 @@ async def resolve_figure_locators(
     if not candidates:
         return chunks
 
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.warning(
-            "[FIGURE_LOCATOR] No OpenAI API key; marking %s candidates uncertain",
-            len(candidates),
-        )
-        _mark_candidates_uncertain(candidates, model_name, reasoning_effort)
-        return chunks
+    require_env("OPENAI_API_KEY")
+    from src.lib.openai_agents.config import (
+        get_figure_locator_resolution_batch_max_chars,
+    )
 
-    try:
+    for batch in _batch_candidates(
+        candidates,
+        max_prompt_chars=get_figure_locator_resolution_batch_max_chars(),
+    ):
         output = await _call_figure_locator_classifier(
-            candidates,
+            batch,
             model_name=model_name,
             reasoning_effort=reasoning_effort,
         )
-    except Exception:
-        logger.exception(
-            "[FIGURE_LOCATOR] Classifier failed; marking %s candidates uncertain",
-            len(candidates),
-        )
-        _mark_candidates_uncertain(candidates, model_name, reasoning_effort)
-        return chunks
+        outputs_by_id = _validated_outputs_by_id(output, batch)
 
-    outputs_by_id: dict[str, list[FigureLocatorCandidateOutput]] = {}
-    for result in output.candidates:
-        outputs_by_id.setdefault(result.candidate_id, []).append(result)
-
-    for chunk, _candidate_text in candidates:
-        results = outputs_by_id.get(chunk.id, [])
-        if len(results) != 1:
-            _set_resolution(
-                chunk,
-                status="uncertain",
-                annotations=[],
-                model_name=model_name,
-                reasoning_effort=reasoning_effort,
+        for chunk, _candidate_text in batch:
+            result = outputs_by_id[chunk.id]
+            annotations = _map_mentions_to_chunk(
+                chunk.content,
+                result.mentions,
+                allowed_ranges=_provider_semantic_ranges(chunk),
             )
-            continue
-
-        annotations = _map_mentions_to_chunk(chunk.content, results[0].mentions)
-        if annotations is None:
-            _set_resolution(
-                chunk,
-                status="uncertain",
-                annotations=[],
-                model_name=model_name,
-                reasoning_effort=reasoning_effort,
-            )
-        else:
-            _set_resolution(
-                chunk,
-                status="resolved",
-                annotations=annotations,
-                model_name=model_name,
-                reasoning_effort=reasoning_effort,
-            )
+            if annotations is None:
+                _set_resolution(
+                    chunk,
+                    status="uncertain",
+                    annotations=[],
+                    model_name=model_name,
+                    reasoning_effort=reasoning_effort,
+                )
+            else:
+                _set_resolution(
+                    chunk,
+                    status="resolved",
+                    annotations=annotations,
+                    model_name=model_name,
+                    reasoning_effort=reasoning_effort,
+                )
     return chunks
 
 
@@ -190,7 +178,7 @@ def is_figure_locator_candidate(text: str) -> bool:
 
 
 async def _call_figure_locator_classifier(
-    candidates: Sequence[tuple[DocumentChunk, str]],
+    candidates: Sequence[FigureLocatorCandidate],
     *,
     model_name: str,
     reasoning_effort: str,
@@ -213,15 +201,7 @@ async def _call_figure_locator_classifier(
         model_settings=settings,
         output_type=FigureLocatorBatchOutput,
     )
-    payload = [
-        {"candidate_id": chunk.id, "text": candidate_text}
-        for chunk, candidate_text in candidates
-    ]
-    prompt = (
-        "Classify the locator expressions in every candidate below. Return one "
-        "candidate result for every candidate_id.\n\n"
-        + json.dumps(payload, ensure_ascii=False)
-    )
+    prompt = _classifier_prompt(candidates)
 
     with gen_ai_invoke_agent_span(
         agent_name=agent.name,
@@ -283,10 +263,16 @@ async def _call_figure_locator_classifier(
 def _map_mentions_to_chunk(
     chunk_text: str,
     mentions: Sequence[FigureLocatorMentionOutput],
+    *,
+    allowed_ranges: Sequence[tuple[int, int]] | None = None,
 ) -> list[FigureLocatorAnnotation] | None:
     annotations: list[FigureLocatorAnnotation] = []
     for mention in mentions:
-        offsets = _unique_text_offsets(chunk_text, mention.text)
+        offsets = _unique_text_offsets(
+            chunk_text,
+            mention.text,
+            allowed_ranges=allowed_ranges,
+        )
         if len(offsets) != 1:
             return None
         start = offsets[0]
@@ -340,32 +326,102 @@ def _canonical_from_semantic_mention(
     )
 
 
-def _unique_text_offsets(source: str, target: str) -> list[int]:
+def _unique_text_offsets(
+    source: str,
+    target: str,
+    *,
+    allowed_ranges: Sequence[tuple[int, int]] | None = None,
+) -> list[int]:
     offsets: list[int] = []
-    start = 0
-    while True:
-        index = source.find(target, start)
-        if index < 0:
-            return offsets
-        offsets.append(index)
-        if len(offsets) > 1:
-            return offsets
-        start = index + 1
+    ranges = (
+        ((0, len(source)),)
+        if allowed_ranges is None
+        else allowed_ranges
+    )
+    for range_start, range_end in ranges:
+        start = max(0, range_start)
+        end = min(len(source), range_end)
+        while start < end:
+            index = source.find(target, start, end)
+            if index < 0:
+                break
+            if index not in offsets:
+                offsets.append(index)
+                if len(offsets) > 1:
+                    return offsets
+            start = index + 1
+    return offsets
 
 
-def _mark_candidates_uncertain(
-    candidates: Sequence[tuple[DocumentChunk, str]],
-    model_name: str,
-    reasoning_effort: str,
-) -> None:
-    for chunk, _ in candidates:
-        _set_resolution(
-            chunk,
-            status="uncertain",
-            annotations=[],
-            model_name=model_name,
-            reasoning_effort=reasoning_effort,
+def _provider_semantic_ranges(
+    chunk: DocumentChunk,
+) -> list[tuple[int, int]] | None:
+    if not _is_provider_figure_chunk(chunk):
+        return None
+    reference = chunk.metadata.provider_figure_reference
+    if reference is None:
+        return []
+    return [
+        (semantic_range.char_start, semantic_range.char_end)
+        for semantic_range in reference.semantic_ranges
+    ]
+
+
+def _classifier_prompt(candidates: Sequence[FigureLocatorCandidate]) -> str:
+    payload = [
+        {"candidate_id": chunk.id, "text": candidate_text}
+        for chunk, candidate_text in candidates
+    ]
+    return _CLASSIFIER_PROMPT_PREFIX + json.dumps(payload, ensure_ascii=False)
+
+
+def _batch_candidates(
+    candidates: Sequence[FigureLocatorCandidate],
+    *,
+    max_prompt_chars: int,
+) -> list[list[FigureLocatorCandidate]]:
+    """Partition candidates without truncating any source text."""
+
+    batches: list[list[FigureLocatorCandidate]] = []
+    current: list[FigureLocatorCandidate] = []
+    for candidate in candidates:
+        if len(_classifier_prompt((candidate,))) > max_prompt_chars:
+            raise ValueError(
+                "figure locator candidate exceeds "
+                "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS"
+            )
+        proposed = [*current, candidate]
+        if current and len(_classifier_prompt(proposed)) > max_prompt_chars:
+            batches.append(current)
+            current = [candidate]
+        else:
+            current = proposed
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _validated_outputs_by_id(
+    output: FigureLocatorBatchOutput,
+    candidates: Sequence[FigureLocatorCandidate],
+) -> dict[str, FigureLocatorCandidateOutput]:
+    outputs_by_id: dict[str, list[FigureLocatorCandidateOutput]] = {}
+    for result in output.candidates:
+        outputs_by_id.setdefault(result.candidate_id, []).append(result)
+
+    expected_ids = {chunk.id for chunk, _candidate_text in candidates}
+    if (
+        len(output.candidates) != len(candidates)
+        or set(outputs_by_id) != expected_ids
+        or any(len(results) != 1 for results in outputs_by_id.values())
+    ):
+        raise ValueError(
+            "figure locator classifier violated the exact candidate_id batch contract"
         )
+    return {
+        candidate_id: results[0]
+        for candidate_id, results in outputs_by_id.items()
+    }
 
 
 def _set_resolution(
@@ -526,6 +582,8 @@ def _parse_structured_reference(
         "table" if raw_kind == "table" else default_kind
     )
     number = match.group("number").upper()
+    if match.group("modifier") and not number.startswith("S"):
+        return None
     panels_text = match.group("panels") or ""
     panels = [
         token.upper()

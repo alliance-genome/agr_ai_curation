@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.lib.domain_packs.validator_dispatch import _max_turns_with_validator_finalization
 from src.lib.openai_agents.config import (
+    get_figure_locator_resolution_batch_max_chars,
     get_figure_locator_resolution_max_turns,
     get_guardrail_single_shot_max_turns,
     get_hierarchy_resolution_max_turns,
@@ -138,10 +139,17 @@ def test_single_shot_runner_budget_getters_are_positive_documented_defaults(
     monkeypatch.delenv("GUARDRAIL_SINGLE_SHOT_MAX_TURNS", raising=False)
     monkeypatch.delenv("HIERARCHY_RESOLUTION_MAX_TURNS", raising=False)
     monkeypatch.delenv("FIGURE_LOCATOR_RESOLUTION_MAX_TURNS", raising=False)
+    monkeypatch.delenv(
+        "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS",
+        raising=False,
+    )
 
     guardrail_max_turns = get_guardrail_single_shot_max_turns()
     hierarchy_max_turns = get_hierarchy_resolution_max_turns()
     figure_locator_max_turns = get_figure_locator_resolution_max_turns()
+    figure_locator_batch_max_chars = (
+        get_figure_locator_resolution_batch_max_chars()
+    )
 
     assert isinstance(guardrail_max_turns, int)
     assert guardrail_max_turns == 10
@@ -152,6 +160,9 @@ def test_single_shot_runner_budget_getters_are_positive_documented_defaults(
     assert isinstance(figure_locator_max_turns, int)
     assert figure_locator_max_turns == 10
     assert figure_locator_max_turns >= 1
+    assert isinstance(figure_locator_batch_max_chars, int)
+    assert figure_locator_batch_max_chars == 60_000
+    assert figure_locator_batch_max_chars >= 1
 
 
 def test_validator_finalization_turn_budget_has_two_turn_buffer() -> None:

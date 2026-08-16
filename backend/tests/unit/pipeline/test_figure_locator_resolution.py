@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.lib.config.env import ConfigError
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
 from src.lib.document_sources.figure_metadata import (
     append_provider_figure_metadata_markdown,
@@ -83,6 +84,16 @@ def test_candidate_regex_only_selects_broad_locator_anchors() -> None:
     assert not locator.is_figure_locator_candidate("Ordinary result text.")
 
 
+def test_supplementary_provider_label_requires_explicit_s_number() -> None:
+    assert (
+        locator._parse_structured_reference(
+            "Supplementary Figure 1",
+            default_kind="figure",
+        )
+        is None
+    )
+
+
 def test_labeled_corpus_tracks_candidate_selection_separately() -> None:
     corpus_path = (
         Path(__file__).resolve().parents[2]
@@ -151,6 +162,87 @@ async def test_selected_chunks_are_classified_once_as_a_batch(monkeypatch) -> No
     annotation = _resolution_for(chunks[0]).annotations[0]
     assert chunks[0].content[annotation.char_start : annotation.char_end] == "Fig. 1A"
     assert annotation.canonical_reference == "Figure 1A"
+
+
+@pytest.mark.asyncio
+async def test_selected_chunks_split_at_configured_prompt_char_budget(
+    monkeypatch,
+) -> None:
+    chunks = [
+        _chunk("chunk-0", "Figure 1 shows " + ("signal " * 20)),
+        _chunk("chunk-1", "Figure 2 shows " + ("signal " * 20)),
+    ]
+    single_prompt_limit = max(
+        len(locator._classifier_prompt(((chunk, chunk.content),)))
+        for chunk in chunks
+    )
+    monkeypatch.setenv(
+        "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS",
+        str(single_prompt_limit),
+    )
+    classified_batches: list[list[str]] = []
+
+    async def classifier(candidates, **_kwargs):
+        classified_batches.append([chunk.id for chunk, _text in candidates])
+        return locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id=chunk.id,
+                    mentions=[],
+                )
+                for chunk, _text in candidates
+            ]
+        )
+
+    monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
+
+    await locator.resolve_figure_locators(chunks)
+
+    assert classified_batches == [["chunk-0"], ["chunk-1"]]
+
+
+@pytest.mark.asyncio
+async def test_oversized_single_candidate_fails_without_truncation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS", "1")
+    classifier = AsyncMock()
+    monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
+
+    with pytest.raises(ValueError, match="candidate exceeds"):
+        await locator.resolve_figure_locators(
+            [_chunk("chunk-0", "Figure 1 shows signal.")]
+        )
+
+    classifier.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_classifier_failure_propagates(monkeypatch) -> None:
+    monkeypatch.setattr(
+        locator,
+        "_call_figure_locator_classifier",
+        AsyncMock(side_effect=RuntimeError("provider unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await locator.resolve_figure_locators(
+            [_chunk("chunk-0", "Figure 1 shows signal.")]
+        )
+
+
+@pytest.mark.asyncio
+async def test_missing_candidate_result_violates_batch_contract(monkeypatch) -> None:
+    monkeypatch.setattr(
+        locator,
+        "_call_figure_locator_classifier",
+        AsyncMock(return_value=locator.FigureLocatorBatchOutput(candidates=[])),
+    )
+
+    with pytest.raises(ValueError, match="exact candidate_id batch contract"):
+        await locator.resolve_figure_locators(
+            [_chunk("chunk-0", "Figure 1 shows signal.")]
+        )
 
 
 @pytest.mark.asyncio
@@ -333,6 +425,67 @@ async def test_provider_caption_without_anchor_is_selected_and_structured(monkey
 
 
 @pytest.mark.asyncio
+async def test_provider_mention_offsets_ignore_repeated_wrapper_label(
+    monkeypatch,
+) -> None:
+    content = (
+        "Provider Figure: Figure 1\n"
+        "Figure label: Figure 1\n"
+        "Legend:\n"
+        "Figure 1. Signal expands."
+    )
+    chunk = _chunk(
+        "chunk-0",
+        content,
+        parent_section=None,
+        section_path=[
+            PROVIDER_FIGURE_METADATA_SECTION,
+            "Provider Figure: Figure 1",
+        ],
+        element_type=ElementType.TITLE,
+    )
+    monkeypatch.setattr(
+        locator,
+        "_call_figure_locator_classifier",
+        AsyncMock(
+            return_value=locator.FigureLocatorBatchOutput(
+                candidates=[
+                    locator.FigureLocatorCandidateOutput(
+                        candidate_id=chunk.id,
+                        mentions=[
+                            locator.FigureLocatorMentionOutput(
+                                text="Figure 1",
+                                cardinality="single",
+                                kind="figure",
+                                number="1",
+                                canonical_reference="Figure 1",
+                            )
+                        ],
+                    )
+                ]
+            )
+        ),
+    )
+
+    await locator.resolve_figure_locators(
+        [chunk],
+        provider_figure_metadata=(
+            {
+                "figure_label": "Figure 1",
+                "figure_number": "1",
+                "caption_text": "Figure 1. Signal expands.",
+            },
+        ),
+    )
+
+    resolution = _resolution_for(chunk)
+    assert resolution.status == "resolved"
+    annotation = resolution.annotations[0]
+    assert annotation.char_start == content.rindex("Figure 1")
+    assert content[annotation.char_start : annotation.char_end] == "Figure 1"
+
+
+@pytest.mark.asyncio
 async def test_provider_label_number_conflict_is_explicit(monkeypatch) -> None:
     chunk = _chunk(
         "chunk-0",
@@ -412,6 +565,48 @@ async def test_unparsable_populated_provider_label_cannot_promote_number(
     provider = _provider_reference_for(chunk)
     assert provider.status == "invalid"
     assert provider.canonical_reference is None
+
+
+@pytest.mark.asyncio
+async def test_common_supplementary_continuation_label_is_structured(
+    monkeypatch,
+) -> None:
+    chunk = _chunk(
+        "chunk-0",
+        "Provider Figure: Supplementary Fig. S1 (continued)\nLegend:\nSignal expands.",
+        parent_section=PROVIDER_FIGURE_METADATA_SECTION,
+        subsection="Provider Figure: Supplementary Fig. S1 (continued)",
+        element_type=ElementType.TITLE,
+    )
+    monkeypatch.setattr(
+        locator,
+        "_call_figure_locator_classifier",
+        AsyncMock(
+            return_value=locator.FigureLocatorBatchOutput(
+                candidates=[
+                    locator.FigureLocatorCandidateOutput(
+                        candidate_id=chunk.id,
+                        mentions=[],
+                    )
+                ]
+            )
+        ),
+    )
+
+    await locator.resolve_figure_locators(
+        [chunk],
+        provider_figure_metadata=(
+            {
+                "figure_label": "Supplementary Fig. S1 (continued)",
+                "figure_number": "S1",
+                "caption_text": "Signal expands.",
+            },
+        ),
+    )
+
+    provider = _provider_reference_for(chunk)
+    assert provider.status == "single"
+    assert provider.canonical_reference == "Figure S1"
 
 
 @pytest.mark.asyncio
@@ -511,13 +706,14 @@ async def test_provider_reference_ranges_exclude_cross_title_overlap(
 
 
 @pytest.mark.asyncio
-async def test_missing_api_key_marks_candidates_uncertain(monkeypatch) -> None:
+async def test_missing_api_key_fails_ingestion(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY")
     classifier = AsyncMock()
     monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
     chunk = _chunk("chunk-0", "Figure 1 shows signal.")
 
-    await locator.resolve_figure_locators([chunk])
+    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
+        await locator.resolve_figure_locators([chunk])
 
     classifier.assert_not_awaited()
-    assert _resolution_for(chunk).status == "uncertain"
+    assert chunk.metadata.figure_locator_resolution is None

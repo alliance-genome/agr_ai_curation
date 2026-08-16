@@ -860,6 +860,22 @@ def get_figure_locator_resolution_max_turns() -> int:
     )
 
 
+def get_figure_locator_resolution_batch_max_chars() -> int:
+    """Maximum prompt chars in one figure-locator classifier batch.
+
+    FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS defaults to 60000. Lower it for
+    models with smaller input windows or to reduce the failure scope of one
+    provider call; raise it only after confirming the configured model limit.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS",
+            60_000,
+        ),
+    )
+
+
 def get_standard_chat_context_token_budget() -> int:
     """Model-live context budget for standard assistant chat (STANDARD_CHAT_CONTEXT_TOKEN_BUDGET).
 
