@@ -458,8 +458,37 @@ test_core_config_preserves_custom_runtime_overrides_on_profile_change() {
   run_core_config "$temp_home" $'sk-openai-initial\n\n\n\n\n\n'
   cat >"$overrides_path" <<'EOF'
 overrides_api_version: 1.0.0
-disabled_packages: [org.operator.disabled]
+package_precedence: []
+disabled_packages:
+  - org.operator.disabled
+selections:
+  - package_id: agr.core
+    export_kind: agent_studio_prompt
+    name: system
+    reason: Preserve the package-first prompt selection atomically.
+  - package_id: org.custom
+    export_kind: tool_binding
+    name: default
+    reason: Preserve the operator-owned tool selection atomically.
 EOF
+  python3 - "$overrides_path" <<'PY'
+import sys
+
+import yaml
+
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    overrides = yaml.safe_load(handle)
+
+assert overrides["disabled_packages"] == ["org.operator.disabled"]
+assert isinstance(overrides["selections"], list)
+assert overrides["selections"][0] == {
+    "package_id": "agr.core",
+    "export_kind": "agent_studio_prompt",
+    "name": "system",
+    "reason": "Preserve the package-first prompt selection atomically.",
+}
+PY
   cp "$overrides_path" "$expected_path"
 
   run_core_config_with_profile_choice_expect_fail \
