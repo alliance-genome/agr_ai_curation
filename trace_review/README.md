@@ -100,7 +100,8 @@ trace_review/
 │   │   └── main.py             # FastAPI app
 │   ├── Dockerfile              # Local development image
 │   ├── Dockerfile.prod         # Published standalone image
-│   └── requirements.txt
+│   ├── requirements.txt        # Runtime dependencies
+│   └── requirements-test.txt   # Test-only dependencies
 ├── frontend/
 │   ├── src/
 │   │   ├── components/         # Reusable components
@@ -143,6 +144,19 @@ trace_review/
 **Available Views**: `summary`, `conversation`, `tool_calls`, `pdf_citations`, `token_analysis`, `agent_context`, `trace_summary`, `document_hierarchy`, `agent_configs`, `group_context`, `domain_envelope`, `extraction_timeline`, `evidence_revisions`
 
 ## Development
+
+### Backend Tests
+
+From the repository root, run the complete TraceReview backend suite with:
+
+```bash
+docker compose -f trace_review/docker-compose.yml run --rm --build backend-tests
+```
+
+The test image installs pytest at build time and uses only local fixtures and
+test defaults. It does not require Langfuse, VPN access, or real credentials.
+The test service is behind a Compose profile, so it is not started by the
+ordinary TraceReview development stack.
 
 ### Local Development (Without Docker)
 

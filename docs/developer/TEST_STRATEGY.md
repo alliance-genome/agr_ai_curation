@@ -29,6 +29,23 @@ environment intentionally uses the system daemon. Run only one command against
 the same Compose project at a time, and inspect active containers before any
 manual cleanup.
 
+## TraceReview Backend Tests
+
+TraceReview has an isolated, offline backend suite with its own test-only image
+target. From the repository root, run:
+
+```bash
+docker compose -f trace_review/docker-compose.yml run --rm --build backend-tests
+```
+
+This is the same command used by GitHub Actions. The profiled test service does
+not join the VPN-facing development backend, load its optional `.env`, or
+require real Langfuse credentials. Test dependencies remain outside the
+published TraceReview image, which continues to use `backend/Dockerfile.prod`.
+
+This offline gate does not produce deployed or live release evidence, so it
+does not alter the AI Curation release validation sequence.
+
 Backend test images keep generated caches outside bind-mounted source trees:
 Python bytecode is redirected to `/tmp/agr-ai-curation-python-pycache`, and
 pytest uses `/tmp/agr-ai-curation-pytest-cache`. Both locations are local to

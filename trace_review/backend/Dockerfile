@@ -1,12 +1,28 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS runtime-dependencies
 
 WORKDIR /app
 
-# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application
+
+FROM runtime-dependencies AS test
+
+COPY requirements-test.txt .
+RUN pip install --no-cache-dir -r requirements-test.txt
+
+COPY src/ ./src/
+COPY tests/ ./tests/
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPYCACHEPREFIX=/tmp/trace-review-python-pycache
+
+CMD ["python", "-m", "pytest", "tests", "-q", "-o", "cache_dir=/tmp/trace-review-pytest-cache"]
+
+
+FROM runtime-dependencies AS development
+
 COPY . .
 
 EXPOSE 8001
