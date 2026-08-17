@@ -131,20 +131,7 @@ jobs:
       - name: Verify Docker tests left no backend cache artifacts
         if: always()
         shell: bash
-        run: |
-          cache_paths="$(
-            find backend \
-              \( \
-                \( -type d \( -name __pycache__ -o -name .pytest_cache \) \) -o \
-                \( -type f -name '*.py[co]' \) \
-              \) \
-              -print
-          )"
-          if [[ -n "${cache_paths}" ]]; then
-            echo "Docker-backed tests wrote cache artifacts into the backend workspace:" >&2
-            printf '%s\n' "${cache_paths}" >&2
-            exit 1
-          fi
+        run: bash scripts/testing/assert_no_backend_test_cache_artifacts.sh
 
       - name: Upload backend coverage artifacts
         if: always()
@@ -206,6 +193,11 @@ jobs:
           docker compose -f docker-compose.test.yml up -d --wait postgres-test redis-test weaviate-test
           docker compose -f docker-compose.test.yml run --rm backend-contract-tests \
             bash -lc "alembic upgrade head && bash tests/contract/run_ci_contract_core_tests.sh"
+
+      - name: Verify Docker tests left no backend cache artifacts
+        if: always()
+        shell: bash
+        run: bash scripts/testing/assert_no_backend_test_cache_artifacts.sh
 
       - name: Contract-core Summary
         if: always()

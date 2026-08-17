@@ -34,7 +34,7 @@ Python bytecode is redirected to `/tmp/agr-ai-curation-python-pycache`, and
 pytest uses `/tmp/agr-ai-curation-pytest-cache`. Both locations are local to
 the test container, so rootful and rootless runs leave no `__pycache__` or
 `.pytest_cache` directories in the checkout. New backend test images must use
-the same policy.
+the same policy. Host-side pytest runs retain their normal checkout-local cache.
 
 Frontend validation runs on the host Node toolchain:
 
