@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from src.api import agent_studio as api_module
+from src.lib import http_errors
 
 
 @pytest.fixture(autouse=True)
@@ -185,6 +186,66 @@ def test_chat_with_opus_sanitizes_invalid_request_errors(monkeypatch, caplog):
     assert exc_info.value.detail == "Agent Studio chat request is invalid"
     assert "session context exploded" not in str(exc_info.value.detail)
     assert "session context exploded" in caplog.text
+
+
+def test_chat_with_opus_reports_sanitized_persistence_errors_and_closes_session(
+    monkeypatch,
+):
+    raw_error = RuntimeError("sensitive persisted request payload")
+    calls: dict[str, object] = {}
+
+    class _FakeDb:
+        def close(self):
+            calls["closed"] = True
+
+    def _fake_get_db():
+        yield _FakeDb()
+
+    def _report_runtime_exception(exc, *, component, operation, context):
+        calls["reported"] = {
+            "exc": exc,
+            "component": component,
+            "operation": operation,
+            "context": context,
+        }
+        return True
+
+    monkeypatch.setattr(api_module, "get_db", _fake_get_db)
+    monkeypatch.setattr(
+        api_module,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=1),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "_prepare_agent_studio_turn",
+        lambda **_kwargs: (_ for _ in ()).throw(raw_error),
+    )
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _report_runtime_exception)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_module.chat_with_opus(
+                request=_chat_request(),
+                user={"email": "curator@example.org", "sub": "auth-sub"},
+            )
+        )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Failed to persist Agent Studio chat request"
+    assert "sensitive persisted request payload" not in str(exc_info.value.detail)
+    assert calls["closed"] is True
+    assert calls["reported"] == {
+        "exc": raw_error,
+        "component": "api",
+        "operation": "sanitized_http_exception",
+        "context": {
+            "logger_name": api_module.logger.name,
+            "status_code": 500,
+            "log_level": logging.ERROR,
+            "level_name": "ERROR",
+        },
+    }
 
 
 def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):

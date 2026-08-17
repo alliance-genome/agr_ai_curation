@@ -3208,8 +3208,13 @@ async def chat_with_opus(
             log_message="Failed to persist Agent Studio chat request because the request was invalid",
         )
     except Exception as exc:
-        logger.error('Failed to persist Agent Studio chat request: %s', exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to persist Agent Studio chat request") from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to persist Agent Studio chat request",
+            log_message="Failed to persist Agent Studio chat request",
+            exc=exc,
+        )
 
     replay_assistant_turn = prepared_turn.replay_assistant_turn
     if replay_assistant_turn is not None:

@@ -220,27 +220,60 @@ def test_run_feedback_processing_in_background_uses_new_session(monkeypatch):
     assert calls["bg_closed"] is True
 
 
-def test_run_feedback_processing_in_background_swallows_errors(monkeypatch):
+def test_run_feedback_processing_in_background_reports_and_swallows_errors(
+    monkeypatch,
+    caplog,
+):
     calls = {}
+    secret_text = "SECRET_FEEDBACK_REPORT_TEXT_SHOULD_NOT_APPEAR"
+    raw_error = RuntimeError(f"background failure {secret_text}")
 
     class _FakeService:
         def __init__(self, _db):
             pass
 
         def process_feedback_report(self, _feedback_id):
-            raise RuntimeError("background failure")
+            raise raw_error
 
     class _FakeBgDb:
         def close(self):
             calls["bg_closed"] = True
 
     monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+    monkeypatch.setattr(
+        feedback_api,
+        "report_background_task_exception",
+        lambda exc, *, task_name, tags=None, context=None: calls.update(
+            reported={
+                "exc": exc,
+                "task_name": task_name,
+                "tags": tags,
+                "context": context,
+            }
+        ),
+    )
 
     import src.models.sql.database as db_module
     monkeypatch.setattr(db_module, "FeedbackSessionLocal", lambda: _FakeBgDb())
+    caplog.set_level(logging.ERROR, logger=feedback_api.logger.name)
 
     feedback_api._run_feedback_processing_in_background("feedback-456")
     assert calls["bg_closed"] is True
+    reported = calls["reported"]
+    assert isinstance(reported["exc"], feedback_api._FeedbackApiError)
+    assert "RuntimeError" in str(reported["exc"])
+    assert reported["exc"].__traceback__ is not None
+    assert secret_text not in str(reported["exc"])
+    assert reported == {
+        "exc": reported["exc"],
+        "task_name": "feedback.process_report",
+        "tags": {
+            "component": "feedback",
+            "failure_stage": "process_report",
+        },
+        "context": None,
+    }
+    assert secret_text not in caplog.text
 
 
 def test_dispatch_feedback_report_processing_starts_daemon_thread(monkeypatch):

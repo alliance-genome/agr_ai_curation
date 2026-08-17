@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from src.api.admin.prompts import get_admin_emails
 from src.api.auth import get_auth_dependency
 from src.lib.feedback.service import FeedbackDebugDetailForbidden, FeedbackService
+from src.lib.observability.background_tasks import report_background_task_exception
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.database import get_feedback_db
 from src.schemas.feedback import (
@@ -126,11 +127,21 @@ def _run_feedback_processing_in_background(feedback_id: str) -> None:
     try:
         FeedbackService(bg_db).process_feedback_report(feedback_id)
     except Exception as exc:
+        sanitized = _FeedbackApiError(
+            f"Feedback background processing failed ({type(exc).__name__})"
+        ).with_traceback(exc.__traceback__)
+        report_background_task_exception(
+            sanitized,
+            task_name="feedback.process_report",
+            tags={
+                "component": "feedback",
+                "failure_stage": "process_report",
+            },
+        )
         logger.error(
-            "Background processing failed for feedback %s: %s",
+            "Background processing failed for feedback %s",
             feedback_id,
-            exc,
-            exc_info=True,
+            exc_info=(type(sanitized), sanitized, sanitized.__traceback__),
         )
     finally:
         bg_db.close()
