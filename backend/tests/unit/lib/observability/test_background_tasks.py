@@ -88,6 +88,30 @@ def test_observed_async_background_task_reports_and_reraises(fake_sentry):
     assert ("task_name", "async.task") in fake_sentry["tags"]
 
 
+def test_background_task_sentry_values_respect_configured_cap(monkeypatch, fake_sentry):
+    monkeypatch.setenv("BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS", "7")
+
+    reported = background_tasks.report_background_task_exception(
+        RuntimeError("boom"),
+        task_name="bounded.task",
+        tags={"component": "abcdefghij"},
+        context={"stage": "klmnopqrst", "attempt": 2},
+    )
+
+    assert reported is True
+    assert ("component", "abcdefg") in fake_sentry["tags"]
+    assert fake_sentry["contexts"] == [
+        (
+            "background_task",
+            {
+                "task_name": "bounded.task",
+                "stage": "klmnopq",
+                "attempt": 2,
+            },
+        )
+    ]
+
+
 def test_report_background_task_exception_is_best_effort_when_sentry_missing(monkeypatch):
     def _raise_import(_name):
         raise ImportError("no sentry")

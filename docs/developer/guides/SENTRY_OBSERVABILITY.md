@@ -35,6 +35,8 @@ SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
 SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50
 RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS=200
 RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS=500
+BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS=200
+TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS=500
 ```
 
 Use `SENTRY_RELEASE` for every deployed candidate so events can be tied back to
@@ -62,8 +64,11 @@ path is being finished.
 
 `RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS` and
 `RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS` apply to
-`report_runtime_exception()`. Background-task and tool-failure reporting use
-their own conservative caps.
+`report_runtime_exception()`. `BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS`
+bounds string tag and context values sent by background-task failure reporting.
+`TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS` bounds the raw error and context previews
+in optional SNS tool-failure alert bodies; those raw strings are not sent to
+Sentry.
 
 ## AI Agents Monitoring Trial
 

@@ -116,6 +116,39 @@ def test_notify_tool_failure_publishes_expected_payload(monkeypatch, direct_to_t
     assert "View trace: https://langfuse.alliancegenome.org/trace/abc-123-def" in message
 
 
+def test_notify_tool_failure_sns_previews_respect_configured_cap(
+    monkeypatch,
+    direct_to_thread,
+):
+    mock_client = MagicMock()
+    mock_client.publish.return_value = {"MessageId": "msg-bounded"}
+    monkeypatch.setattr(notifier.boto3, "client", lambda *_args, **_kwargs: mock_client)
+    monkeypatch.setenv("TOOL_FAILURE_ALERTS_ENABLED", "true")
+    monkeypatch.setenv(
+        "PROMPT_SUGGESTIONS_SNS_TOPIC_ARN",
+        "arn:aws:sns:us-east-1:123456789012:test",
+    )
+    monkeypatch.setenv("TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS", "7")
+
+    result = asyncio.run(
+        notifier.notify_tool_failure(
+            error_type="RuntimeError",
+            error_message="abcdefghij",
+            source="infrastructure",
+            specialist_name="gene_expression",
+            trace_id="trace-1",
+            session_id="session-1",
+            curator_id="curator@example.com",
+            context="klmnopqrst",
+        )
+    )
+
+    assert result is True
+    message = mock_client.publish.call_args.kwargs["Message"]
+    assert "Error Message:  abcdefg..." in message
+    assert "Context:        klmnopq..." in message
+
+
 def test_notify_tool_failure_captures_sentry_when_sns_disabled(
     monkeypatch,
     direct_to_thread,
