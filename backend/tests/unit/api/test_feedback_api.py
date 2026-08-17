@@ -220,27 +220,49 @@ def test_run_feedback_processing_in_background_uses_new_session(monkeypatch):
     assert calls["bg_closed"] is True
 
 
-def test_run_feedback_processing_in_background_swallows_errors(monkeypatch):
+def test_run_feedback_processing_in_background_reports_and_swallows_errors(monkeypatch):
     calls = {}
+    raw_error = RuntimeError("background failure")
 
     class _FakeService:
         def __init__(self, _db):
             pass
 
         def process_feedback_report(self, _feedback_id):
-            raise RuntimeError("background failure")
+            raise raw_error
 
     class _FakeBgDb:
         def close(self):
             calls["bg_closed"] = True
 
     monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+    monkeypatch.setattr(
+        feedback_api,
+        "report_background_task_exception",
+        lambda exc, *, task_name, tags=None, context=None: calls.update(
+            reported={
+                "exc": exc,
+                "task_name": task_name,
+                "tags": tags,
+                "context": context,
+            }
+        ),
+    )
 
     import src.models.sql.database as db_module
     monkeypatch.setattr(db_module, "FeedbackSessionLocal", lambda: _FakeBgDb())
 
     feedback_api._run_feedback_processing_in_background("feedback-456")
     assert calls["bg_closed"] is True
+    assert calls["reported"] == {
+        "exc": raw_error,
+        "task_name": "feedback.process_report",
+        "tags": {
+            "component": "feedback",
+            "failure_stage": "process_report",
+        },
+        "context": None,
+    }
 
 
 def test_dispatch_feedback_report_processing_starts_daemon_thread(monkeypatch):
