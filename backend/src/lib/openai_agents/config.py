@@ -1753,6 +1753,30 @@ def get_runtime_observability_context_value_max_chars() -> int:
     )
 
 
+def get_background_task_observability_value_max_chars() -> int:
+    """Char cap for background-task Sentry values (BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS).
+
+    Bounds string tag and context values emitted by background-task failure
+    reporting. Default 200.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS", 200),
+    )
+
+
+def get_tool_failure_alert_summary_max_chars() -> int:
+    """Char cap for SNS tool-failure previews (TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS).
+
+    Bounds error and context string previews emitted in optional SNS alert
+    bodies. Default 500.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS", 500),
+    )
+
+
 def get_flow_list_page_size_default() -> int:
     """Default page size for flow listings (FLOW_LIST_PAGE_SIZE_DEFAULT).
 

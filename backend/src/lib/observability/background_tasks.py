@@ -12,6 +12,8 @@ from typing import Any
 
 from fastapi import BackgroundTasks
 
+from src.lib.openai_agents.config import get_background_task_observability_value_max_chars
+
 logger = logging.getLogger(__name__)
 
 _IDENTIFIER_TAG_KEYS = {
@@ -50,7 +52,7 @@ def _safe_tag_value(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
         return "unknown"
-    return text[:200]
+    return text[:get_background_task_observability_value_max_chars()]
 
 
 def _safe_tags(tags: Mapping[str, Any] | None) -> dict[str, str]:

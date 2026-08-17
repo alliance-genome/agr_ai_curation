@@ -9,19 +9,21 @@ from typing import Any, Optional
 
 import boto3
 
+from src.lib.openai_agents.config import get_tool_failure_alert_summary_max_chars
+
 logger = logging.getLogger(__name__)
 
 _REDACTED = "[Filtered]"
-_MAX_CONTEXT_CHARS = 500
 
 
-def _alert_summary(value: Optional[str], *, max_chars: int = _MAX_CONTEXT_CHARS) -> str:
+def _alert_summary(value: Optional[str]) -> str:
     """Return a bounded, non-sensitive summary for logs/SNS."""
 
     text = str(value or "").strip()
     if not text:
         return "N/A"
     text = " ".join(text.split())
+    max_chars = get_tool_failure_alert_summary_max_chars()
     if len(text) > max_chars:
         return f"{text[:max_chars]}..."
     return text

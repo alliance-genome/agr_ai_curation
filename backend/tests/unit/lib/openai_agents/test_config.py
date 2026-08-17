@@ -18,6 +18,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_step_goal_max_chars,
     get_api_key,
     get_base_url,
+    get_background_task_observability_value_max_chars,
     get_flow_supervisor_parallel_tool_calls_enabled,
     get_flow_definition_max_nodes,
     get_groq_tool_call_max_retries,
@@ -31,11 +32,46 @@ from src.lib.openai_agents.config import (
     get_pdf_max_file_size_bytes,
     get_pdf_upload_max_page_count,
     get_model_for_agent,
+    get_tool_failure_alert_summary_max_chars,
     is_retryable_groq_tool_call_error,
     resolve_model_provider,
     supports_reasoning,
     supports_temperature,
 )
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "getter", "default"),
+    [
+        (
+            "BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS",
+            get_background_task_observability_value_max_chars,
+            200,
+        ),
+        (
+            "TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS",
+            get_tool_failure_alert_summary_max_chars,
+            500,
+        ),
+    ],
+)
+def test_observability_preview_limits_use_env_with_invalid_fallback(
+    monkeypatch,
+    environment_name,
+    getter,
+    default,
+):
+    monkeypatch.delenv(environment_name, raising=False)
+    assert getter() == default
+
+    monkeypatch.setenv(environment_name, "17")
+    assert getter() == 17
+
+    monkeypatch.setenv(environment_name, "invalid")
+    assert getter() == default
+
+    monkeypatch.setenv(environment_name, "0")
+    assert getter() == 1
 
 
 @pytest.mark.parametrize(
