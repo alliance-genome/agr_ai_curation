@@ -19,9 +19,11 @@ _CORPUS_PATH = (
     / "figure_locator"
     / "semantic_cases.json"
 )
-_AGGREGATION_CASES = json.loads(
-    _CORPUS_PATH.read_text(encoding="utf-8")
-)["aggregation_cases"]
+_AGGREGATION_CASES = [
+    case
+    for case in json.loads(_CORPUS_PATH.read_text(encoding="utf-8"))
+    if "aggregate_span_indexes" in case
+]
 
 
 def _span(chunk_id: str, text: str):
@@ -222,30 +224,26 @@ def test_legacy_chunk_text_is_not_reinterpreted_with_regex() -> None:
     assert result.blocked is False
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "case",
     _AGGREGATION_CASES,
     ids=[case["id"] for case in _AGGREGATION_CASES],
 )
-async def test_record_evidence_corpus_aggregates_only_one_safe_reference(
+@pytest.mark.asyncio
+async def test_record_evidence_aggregates_only_one_safe_reference(
     monkeypatch,
     case,
 ) -> None:
     text = case["text"]
     annotations = []
-    for item in case["annotations"]:
-        start = text.index(item["text"])
+    for mention in case["classifier_mentions"]:
+        start = text.index(mention["text"])
         annotations.append(
             {
-                **item,
+                **mention,
                 "char_start": start,
-                "char_end": start + len(item["text"]),
-                "canonical_reference": (
-                    item.get("canonical_reference")
-                    if item["cardinality"] == "single"
-                    else None
-                ),
+                "char_end": start + len(mention["text"]),
+                "canonical_reference": mention.get("canonical_reference"),
             }
         )
     chunk = {
@@ -262,7 +260,7 @@ async def test_record_evidence_corpus_aggregates_only_one_safe_reference(
         section_title="Results",
     )
     selected_span_ids = [
-        spans[index].span_id for index in case["span_indexes"]
+        spans[index].span_id for index in case["aggregate_span_indexes"]
     ]
 
     async def fake_get_chunk_by_id(**_kwargs):

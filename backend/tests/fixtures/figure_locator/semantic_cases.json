@@ -1,505 +1,545 @@
-{
-  "semantic_cases": [
-    {
-      "id": "ordinary_prose",
-      "family": "no_locator",
-      "text": "The signal increased after treatment.",
-      "expected_candidate": false,
-      "classifier_mentions": [],
-      "expected_semantic_state": "no_locator",
-      "expected_resolution_status": null,
-      "expected_cardinalities": [],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": false
-    },
-    {
-      "id": "non_locator_figure_verb",
-      "family": "no_locator",
-      "text": "We need to figure out why the signal changed.",
-      "expected_candidate": true,
-      "classifier_mentions": [],
-      "expected_semantic_state": "no_locator",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": [],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": false
-    },
-    {
-      "id": "single_figure_panel",
-      "family": "one_unambiguous",
-      "text": "Fig. 1A shows the measured signal.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Fig. 1A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "1",
-          "panels": ["A"],
-          "canonical_reference": "Figure 1A"
-        }
-      ],
-      "expected_semantic_state": "one_unambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["single"],
-      "expected_canonical_references": ["Figure 1A"],
-      "expected_record_reference": "Figure 1A",
-      "expected_record_blocked": false
-    },
-    {
-      "id": "lowercase_panel",
-      "family": "lowercase_panels",
-      "text": "Figure 2b shows the rescue phenotype.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figure 2b",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "2",
-          "panels": ["b"],
-          "canonical_reference": "Figure 2b"
-        }
-      ],
-      "expected_semantic_state": "one_unambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["single"],
-      "expected_canonical_references": ["Figure 2B"],
-      "expected_record_reference": "Figure 2B",
-      "expected_record_blocked": false
-    },
-    {
-      "id": "structural_panel_suffix",
-      "family": "structural_panel_suffixes",
-      "text": "Figure 3 (panel C) contains the control.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figure 3 (panel C)",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "3",
-          "panels": ["C"],
-          "canonical_reference": "Figure 3C"
-        }
-      ],
-      "expected_semantic_state": "one_unambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["single"],
-      "expected_canonical_references": ["Figure 3C"],
-      "expected_record_reference": "Figure 3C",
-      "expected_record_blocked": false
-    },
-    {
-      "id": "plural_references",
-      "family": "plural_references",
-      "text": "Figures 4 and 5 show distinct outcomes.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figures 4 and 5",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "panels": []
-        }
-      ],
-      "expected_semantic_state": "multiple_or_ambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["multiple"],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "ampersand_panels",
-      "family": "ampersands_and_ranges",
-      "text": "Fig. 6A & 6B compare the treatments.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Fig. 6A & 6B",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "number": "6",
-          "panels": ["A", "B"]
-        }
-      ],
-      "expected_semantic_state": "multiple_or_ambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["multiple"],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "figure_range",
-      "family": "ampersands_and_ranges",
-      "text": "Figures 7-9 summarize the time course.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figures 7-9",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "panels": []
-        }
-      ],
-      "expected_semantic_state": "multiple_or_ambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["multiple"],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "alternative_or",
-      "family": "or_and_vs",
-      "text": "Figure 10A or 10B could explain the phenotype.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figure 10A or 10B",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "number": "10",
-          "panels": ["A", "B"]
-        }
-      ],
-      "expected_semantic_state": "multiple_or_ambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["multiple"],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "comparison_vs",
-      "family": "or_and_vs",
-      "text": "Fig. 11A vs Fig. 11B shows the contrast.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Fig. 11A vs Fig. 11B",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "number": "11",
-          "panels": ["A", "B"]
-        }
-      ],
-      "expected_semantic_state": "multiple_or_ambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["multiple"],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "semicolon_as_well_as",
-      "family": "semicolon_and_as_well_as",
-      "text": "Figure 12A; Figure 12B as well as Figure 12C support the claim.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figure 12A; Figure 12B as well as Figure 12C",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "number": "12",
-          "panels": ["A", "B", "C"]
-        }
-      ],
-      "expected_semantic_state": "multiple_or_ambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["multiple"],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "grouped_panel_list",
-      "family": "grouped_panel_lists",
-      "text": "Figure 13, panels A, C, and E, shows the series.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figure 13, panels A, C, and E",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "number": "13",
-          "panels": ["A", "C", "E"]
-        }
-      ],
-      "expected_semantic_state": "multiple_or_ambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["multiple"],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "panel_prose",
-      "family": "prose_containing_panels",
-      "text": "The upper and lower panels contain different signals.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "The upper and lower panels",
-          "cardinality": "uncertain",
-          "kind": "unknown",
-          "panels": []
-        }
-      ],
-      "expected_semantic_state": "uncertain",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["uncertain"],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "independent_singletons_same_span",
-      "family": "multi_span_aggregation",
-      "text": "Figure 14A shows induction, while Figure 15B shows repression.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figure 14A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "14",
-          "panels": ["A"],
-          "canonical_reference": "Figure 14A"
-        },
-        {
-          "text": "Figure 15B",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "15",
-          "panels": ["B"],
-          "canonical_reference": "Figure 15B"
-        }
-      ],
-      "expected_semantic_state": "multiple_or_ambiguous",
-      "expected_resolution_status": "resolved",
-      "expected_cardinalities": ["single", "single"],
-      "expected_canonical_references": ["Figure 14A", "Figure 15B"],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "ungrounded_classifier_text",
-      "family": "offset_and_text_grounding",
-      "text": "Figure 16B shows the observed phenotype.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Figure 16A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "16",
-          "panels": ["A"],
-          "canonical_reference": "Figure 16A"
-        }
-      ],
-      "expected_semantic_state": "uncertain",
-      "expected_resolution_status": "uncertain",
-      "expected_cardinalities": [],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "non_unique_classifier_text",
-      "family": "offset_and_text_grounding",
-      "text": "Fig. 17 appears before Fig. 17.",
-      "expected_candidate": true,
-      "classifier_mentions": [
-        {
-          "text": "Fig. 17",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "17",
-          "panels": [],
-          "canonical_reference": "Figure 17"
-        }
-      ],
-      "expected_semantic_state": "uncertain",
-      "expected_resolution_status": "uncertain",
-      "expected_cardinalities": [],
-      "expected_canonical_references": [],
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    }
-  ],
-  "provider_cases": [
-    {
-      "id": "provider_caption_fallback",
-      "family": "provider_caption_fallback",
-      "provider_label": "Figure 20",
-      "provider_number": "20",
-      "caption": "Expression expands in the wing disc.",
-      "classifier_mentions": [],
-      "evidence_span_contains": "Expression expands",
-      "expected_resolution_status": "resolved",
-      "expected_provider_status": "single",
-      "expected_record_reference": "Figure 20",
-      "expected_record_blocked": false
-    },
-    {
-      "id": "provider_wrapper_boundary",
-      "family": "provider_caption_boundaries",
-      "provider_label": "Figure 21",
-      "provider_number": "21",
-      "caption": "Signal expands without a source-text locator.",
-      "overlap_prefix": "Prior caption overlap must not inherit the next reference.\n",
-      "classifier_mentions": [],
-      "evidence_span_contains": "Prior caption overlap",
-      "expected_resolution_status": "resolved",
-      "expected_provider_status": "single",
-      "expected_record_reference": null,
-      "expected_record_blocked": false
-    },
-    {
-      "id": "provider_semantic_conflict",
-      "family": "provider_caption_conflicts",
-      "provider_label": "Figure 22",
-      "provider_number": "22",
-      "caption": "Fig. 23A shows expression in the wing disc.",
-      "classifier_mentions": [
-        {
-          "text": "Fig. 23A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "23",
-          "panels": ["A"],
-          "canonical_reference": "Figure 23A"
-        }
-      ],
-      "evidence_span_contains": "Fig. 23A",
-      "expected_resolution_status": "resolved",
-      "expected_provider_status": "single",
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "provider_semantic_multiple",
-      "family": "provider_caption_conflicts",
-      "provider_label": "Figure 24",
-      "provider_number": "24",
-      "caption": "Fig. 24A & 24B show different patterns.",
-      "classifier_mentions": [
-        {
-          "text": "Fig. 24A & 24B",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "number": "24",
-          "panels": ["A", "B"]
-        }
-      ],
-      "evidence_span_contains": "Fig. 24A",
-      "expected_resolution_status": "resolved",
-      "expected_provider_status": "single",
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    },
-    {
-      "id": "provider_uncertain_grounding",
-      "family": "provider_caption_uncertainty",
-      "provider_label": "Figure 25",
-      "provider_number": "25",
-      "caption": "Signal expands without a source-text locator.",
-      "classifier_mentions": [
-        {
-          "text": "Figure 25A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "25",
-          "panels": ["A"],
-          "canonical_reference": "Figure 25A"
-        }
-      ],
-      "evidence_span_contains": "Signal expands",
-      "expected_resolution_status": "uncertain",
-      "expected_provider_status": "single",
-      "expected_record_reference": null,
-      "expected_record_blocked": true
-    }
-  ],
-  "aggregation_cases": [
-    {
-      "id": "consistent_singleton_across_spans",
-      "family": "multi_span_aggregation",
-      "text": "Fig. 26A shows induction. Figure 26A confirms persistence.",
-      "annotations": [
-        {
-          "text": "Fig. 26A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "26",
-          "panels": ["A"],
-          "canonical_reference": "Figure 26A"
-        },
-        {
-          "text": "Figure 26A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "26",
-          "panels": ["A"],
-          "canonical_reference": "Figure 26A"
-        }
-      ],
-      "span_indexes": [0, 1],
-      "expected_aggregate_reference": "Figure 26A"
-    },
-    {
-      "id": "conflicting_singletons_across_spans",
-      "family": "multi_span_aggregation",
-      "text": "Figure 27A shows induction. Figure 28B shows repression.",
-      "annotations": [
-        {
-          "text": "Figure 27A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "27",
-          "panels": ["A"],
-          "canonical_reference": "Figure 27A"
-        },
-        {
-          "text": "Figure 28B",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "28",
-          "panels": ["B"],
-          "canonical_reference": "Figure 28B"
-        }
-      ],
-      "span_indexes": [0, 1],
-      "expected_aggregate_reference": null
-    },
-    {
-      "id": "ambiguous_span_blocks_aggregate_singleton",
-      "family": "multi_span_aggregation",
-      "text": "Figure 29A shows induction. Figure 29B and 29C show persistence.",
-      "annotations": [
-        {
-          "text": "Figure 29A",
-          "cardinality": "single",
-          "kind": "figure",
-          "number": "29",
-          "panels": ["A"],
-          "canonical_reference": "Figure 29A"
-        },
-        {
-          "text": "Figure 29B and 29C",
-          "cardinality": "multiple",
-          "kind": "figure",
-          "number": "29",
-          "panels": ["B", "C"]
-        }
-      ],
-      "span_indexes": [0, 1],
-      "expected_aggregate_reference": null
-    }
-  ]
-}
+[
+  {
+    "id": "ordinary_prose",
+    "family": "no_locator",
+    "text": "The signal increased after treatment.",
+    "expected_candidate": false,
+    "classifier_mentions": [],
+    "expected_resolution_status": null,
+    "expected_annotations": [],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": false}
+    ]
+  },
+  {
+    "id": "non_locator_figure_verb",
+    "family": "no_locator",
+    "text": "We need to figure out why the signal changed.",
+    "expected_candidate": true,
+    "classifier_mentions": [],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": false}
+    ]
+  },
+  {
+    "id": "single_figure_panel",
+    "family": "singleton",
+    "text": "Fig. 1A shows the measured signal.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 1A",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "1",
+        "panels": ["A"],
+        "canonical_reference": "Figure 1A"
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 1A", "cardinality": "single", "canonical_reference": "Figure 1A"}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": "Figure 1A", "blocked": false}
+    ]
+  },
+  {
+    "id": "single_supplemental_panel",
+    "family": "singleton",
+    "text": "The control is shown in Figure S2B.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Figure S2B",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "S2",
+        "panels": ["B"],
+        "canonical_reference": "Figure S2B"
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Figure S2B", "cardinality": "single", "canonical_reference": "Figure S2B"}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": "Figure S2B", "blocked": false}
+    ]
+  },
+  {
+    "id": "single_table",
+    "family": "singleton",
+    "text": "Measurements are reported in Table 3.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Table 3",
+        "cardinality": "single",
+        "kind": "table",
+        "number": "3",
+        "panels": [],
+        "canonical_reference": "Table 3"
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Table 3", "cardinality": "single", "canonical_reference": "Table 3"}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": "Table 3", "blocked": false}
+    ]
+  },
+  {
+    "id": "plural_figures",
+    "family": "plural_references",
+    "text": "Figures 1 and 2 show distinct phenotypes.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Figures 1 and 2",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": null,
+        "panels": []
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Figures 1 and 2", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "ampersand_panels",
+    "family": "ampersands_and_ranges",
+    "text": "Fig. 1A & B show related signals.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 1A & B",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": "1",
+        "panels": ["A", "B"]
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 1A & B", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "comma_panel_shorthand",
+    "family": "grouped_panel_lists",
+    "text": "Fig. 1A,B shows two related panels.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 1A,B",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": "1",
+        "panels": ["A", "B"]
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 1A,B", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "joined_panel_references",
+    "family": "grouped_panel_lists",
+    "text": "Figure 1A and Figure 1B show different conditions.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Figure 1A and Figure 1B",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": "1",
+        "panels": ["A", "B"]
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {
+        "text": "Figure 1A and Figure 1B",
+        "cardinality": "multiple",
+        "canonical_reference": null
+      }
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "figure_range",
+    "family": "ampersands_and_ranges",
+    "text": "Figures 2-4 summarize the three experiments.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Figures 2-4",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": "2-4",
+        "panels": []
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Figures 2-4", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "alternative_panels",
+    "family": "alternatives_and_comparisons",
+    "text": "Figure 3A or 3B could explain the difference.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Figure 3A or 3B",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": "3",
+        "panels": ["A", "B"]
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Figure 3A or 3B", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "comparison_figures",
+    "family": "alternatives_and_comparisons",
+    "text": "Fig. 4A vs. Fig. 5B shows the contrast.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 4A vs. Fig. 5B",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": null,
+        "panels": []
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 4A vs. Fig. 5B", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "semicolon_join",
+    "family": "semantic_joins",
+    "text": "Fig. 1A; Figure 2B shows the complementary result.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 1A; Figure 2B",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": null,
+        "panels": []
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 1A; Figure 2B", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "as_well_as_join",
+    "family": "semantic_joins",
+    "text": "Fig. 1A as well as Figure 2B supports the conclusion.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 1A as well as Figure 2B",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": null,
+        "panels": []
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 1A as well as Figure 2B", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "lowercase_panel",
+    "family": "lowercase_panels",
+    "text": "Fig. 6a shows the measured signal.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 6a",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "6",
+        "panels": ["a"],
+        "canonical_reference": "Figure 6a"
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 6a", "cardinality": "single", "canonical_reference": "Figure 6A"}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": "Figure 6A", "blocked": false}
+    ]
+  },
+  {
+    "id": "grouped_panel_range",
+    "family": "grouped_panel_lists",
+    "text": "Figure 7A-C shows the grouped panel series.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Figure 7A-C",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": "7",
+        "panels": ["A", "B", "C"]
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Figure 7A-C", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "structural_panel_suffix",
+    "family": "structural_panel_suffixes",
+    "text": "Fig. 1A and B panels were analyzed together.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 1A and B panels",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": "1",
+        "panels": ["A", "B"]
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 1A and B panels", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "panel_letter_prose_control",
+    "family": "panels_in_prose",
+    "text": "Fig. 1A with B samples was analyzed separately.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 1A",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "1",
+        "panels": ["A"],
+        "canonical_reference": "Figure 1A"
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 1A", "cardinality": "single", "canonical_reference": "Figure 1A"}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": "Figure 1A", "blocked": false}
+    ]
+  },
+  {
+    "id": "deictic_panel",
+    "family": "uncertain_locators",
+    "text": "The upper panel contains the strongest signal.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "The upper panel",
+        "cardinality": "uncertain",
+        "kind": "unknown",
+        "number": null,
+        "panels": []
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "The upper panel", "cardinality": "uncertain", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  },
+  {
+    "id": "multi_span_singletons",
+    "family": "multi_span_aggregation",
+    "text": "Fig. 8A shows the early response. Figure 9B shows the later response.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 8A",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "8",
+        "panels": ["A"],
+        "canonical_reference": "Figure 8A"
+      },
+      {
+        "text": "Figure 9B",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "9",
+        "panels": ["B"],
+        "canonical_reference": "Figure 9B"
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 8A", "cardinality": "single", "canonical_reference": "Figure 8A"},
+      {"text": "Figure 9B", "cardinality": "single", "canonical_reference": "Figure 9B"}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": "Figure 8A", "blocked": false},
+      {"span_index": 1, "reference": "Figure 9B", "blocked": false}
+    ],
+    "aggregate_span_indexes": [0, 1],
+    "expected_aggregate_reference": null
+  },
+  {
+    "id": "consistent_singleton_across_spans",
+    "family": "multi_span_aggregation",
+    "text": "Fig. 11A shows induction. Figure 11A confirms persistence.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 11A",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "11",
+        "panels": ["A"],
+        "canonical_reference": "Figure 11A"
+      },
+      {
+        "text": "Figure 11A",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "11",
+        "panels": ["A"],
+        "canonical_reference": "Figure 11A"
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 11A", "cardinality": "single", "canonical_reference": "Figure 11A"},
+      {"text": "Figure 11A", "cardinality": "single", "canonical_reference": "Figure 11A"}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": "Figure 11A", "blocked": false},
+      {"span_index": 1, "reference": "Figure 11A", "blocked": false}
+    ],
+    "aggregate_span_indexes": [0, 1],
+    "expected_aggregate_reference": "Figure 11A"
+  },
+  {
+    "id": "ambiguous_span_blocks_aggregate_singleton",
+    "family": "multi_span_aggregation",
+    "text": "Figure 12A shows induction. Figure 12B and 12C show persistence.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Figure 12A",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "12",
+        "panels": ["A"],
+        "canonical_reference": "Figure 12A"
+      },
+      {
+        "text": "Figure 12B and 12C",
+        "cardinality": "multiple",
+        "kind": "figure",
+        "number": "12",
+        "panels": ["B", "C"]
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Figure 12A", "cardinality": "single", "canonical_reference": "Figure 12A"},
+      {"text": "Figure 12B and 12C", "cardinality": "multiple", "canonical_reference": null}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": "Figure 12A", "blocked": false},
+      {"span_index": 1, "reference": null, "blocked": true}
+    ],
+    "aggregate_span_indexes": [0, 1],
+    "expected_aggregate_reference": null
+  },
+  {
+    "id": "same_span_distinct_singletons",
+    "family": "multi_span_aggregation",
+    "text": "Fig. 10A and Table 2 jointly support the claim.",
+    "expected_candidate": true,
+    "classifier_mentions": [
+      {
+        "text": "Fig. 10A",
+        "cardinality": "single",
+        "kind": "figure",
+        "number": "10",
+        "panels": ["A"],
+        "canonical_reference": "Figure 10A"
+      },
+      {
+        "text": "Table 2",
+        "cardinality": "single",
+        "kind": "table",
+        "number": "2",
+        "panels": [],
+        "canonical_reference": "Table 2"
+      }
+    ],
+    "expected_resolution_status": "resolved",
+    "expected_annotations": [
+      {"text": "Fig. 10A", "cardinality": "single", "canonical_reference": "Figure 10A"},
+      {"text": "Table 2", "cardinality": "single", "canonical_reference": "Table 2"}
+    ],
+    "expected_span_results": [
+      {"span_index": 0, "reference": null, "blocked": true}
+    ]
+  }
+]

@@ -85,9 +85,21 @@ PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache \
 
 The labeled corpus at
 `backend/tests/fixtures/figure_locator/semantic_cases.json` keeps candidate
-selection errors separate from semantic-classifier errors. Unit tests verify
-the broad candidate selector offline. To evaluate the configured live Terra
-classifier, run:
+selection errors separate from semantic-classifier errors and records the
+expected persisted annotations and evidence-span outcomes. Run the complete
+offline corpus and provider-boundary contract with:
+
+```bash
+bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
+  bash -lc "python -m pytest \
+    tests/unit/pipeline/test_figure_locator_resolution.py \
+    tests/unit/lib/openai_agents/test_record_evidence_figure_reference.py \
+    -q --tb=short"
+```
+
+The offline tests use deterministic structured classifier outputs and require
+no provider credentials. To evaluate the configured live Terra classifier
+against the same semantic expectations, run:
 
 ```bash
 bash scripts/testing/docker-test-compose.sh run --rm \
@@ -98,9 +110,10 @@ bash scripts/testing/docker-test-compose.sh run --rm \
   bash -lc "cd /app && python scripts/testing/evaluate_figure_locator_classifier.py"
 ```
 
-The report lists `candidate_misses`, `false_singletons`, `false_omissions`, and
-`cardinality_mismatches` independently. Any false singleton fails the evaluation.
-This is an opt-in classifier-quality diagnostic, not a required release gate.
+The report lists `candidate_misses`, `false_singletons`, `false_omissions`,
+`cardinality_mismatches`, and `resolution_status_mismatches` independently. Any
+reported mismatch fails the evaluation. This is an opt-in classifier-quality
+diagnostic, not a required release gate.
 
 ## Domain-Envelope Release Gates
 
