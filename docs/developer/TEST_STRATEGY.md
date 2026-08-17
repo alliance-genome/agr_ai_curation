@@ -43,8 +43,8 @@ not join the VPN-facing development backend, load its optional `.env`, or
 require real Langfuse credentials. Test dependencies remain outside the
 published TraceReview image, which continues to use `backend/Dockerfile.prod`.
 
-This PR unit gate does not change deployed or live release evidence, so it does
-not alter the AI Curation release validation sequence.
+This offline gate does not produce deployed or live release evidence, so it
+does not alter the AI Curation release validation sequence.
 
 Backend test images keep generated caches outside bind-mounted source trees:
 Python bytecode is redirected to `/tmp/agr-ai-curation-python-pycache`, and
