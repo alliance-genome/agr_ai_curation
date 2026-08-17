@@ -127,8 +127,11 @@ def _run_feedback_processing_in_background(feedback_id: str) -> None:
     try:
         FeedbackService(bg_db).process_feedback_report(feedback_id)
     except Exception as exc:
+        sanitized = _FeedbackApiError(
+            f"Feedback background processing failed ({type(exc).__name__})"
+        ).with_traceback(exc.__traceback__)
         report_background_task_exception(
-            exc,
+            sanitized,
             task_name="feedback.process_report",
             tags={
                 "component": "feedback",
@@ -136,10 +139,9 @@ def _run_feedback_processing_in_background(feedback_id: str) -> None:
             },
         )
         logger.error(
-            "Background processing failed for feedback %s: %s",
+            "Background processing failed for feedback %s",
             feedback_id,
-            exc,
-            exc_info=True,
+            exc_info=(type(sanitized), sanitized, sanitized.__traceback__),
         )
     finally:
         bg_db.close()

@@ -220,9 +220,13 @@ def test_run_feedback_processing_in_background_uses_new_session(monkeypatch):
     assert calls["bg_closed"] is True
 
 
-def test_run_feedback_processing_in_background_reports_and_swallows_errors(monkeypatch):
+def test_run_feedback_processing_in_background_reports_and_swallows_errors(
+    monkeypatch,
+    caplog,
+):
     calls = {}
-    raw_error = RuntimeError("background failure")
+    secret_text = "SECRET_FEEDBACK_REPORT_TEXT_SHOULD_NOT_APPEAR"
+    raw_error = RuntimeError(f"background failure {secret_text}")
 
     class _FakeService:
         def __init__(self, _db):
@@ -251,11 +255,17 @@ def test_run_feedback_processing_in_background_reports_and_swallows_errors(monke
 
     import src.models.sql.database as db_module
     monkeypatch.setattr(db_module, "FeedbackSessionLocal", lambda: _FakeBgDb())
+    caplog.set_level(logging.ERROR, logger=feedback_api.logger.name)
 
     feedback_api._run_feedback_processing_in_background("feedback-456")
     assert calls["bg_closed"] is True
-    assert calls["reported"] == {
-        "exc": raw_error,
+    reported = calls["reported"]
+    assert isinstance(reported["exc"], feedback_api._FeedbackApiError)
+    assert "RuntimeError" in str(reported["exc"])
+    assert reported["exc"].__traceback__ is not None
+    assert secret_text not in str(reported["exc"])
+    assert reported == {
+        "exc": reported["exc"],
         "task_name": "feedback.process_report",
         "tags": {
             "component": "feedback",
@@ -263,6 +273,7 @@ def test_run_feedback_processing_in_background_reports_and_swallows_errors(monke
         },
         "context": None,
     }
+    assert secret_text not in caplog.text
 
 
 def test_dispatch_feedback_report_processing_starts_daemon_thread(monkeypatch):
