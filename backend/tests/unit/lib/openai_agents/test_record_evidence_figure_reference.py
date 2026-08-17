@@ -1,10 +1,27 @@
 """Tests for stored figure locator resolution in record_evidence."""
 
+import json
+from pathlib import Path
+
+import pytest
+
+import src.lib.openai_agents.tools.record_evidence as record_evidence_module
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
 from src.lib.openai_agents.evidence_spans import build_evidence_spans
 from src.lib.openai_agents.tools.record_evidence import (
     _resolve_stored_figure_reference,
 )
+
+
+_CORPUS_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "fixtures"
+    / "figure_locator"
+    / "semantic_cases.json"
+)
+_AGGREGATION_CASES = json.loads(
+    _CORPUS_PATH.read_text(encoding="utf-8")
+)["aggregation_cases"]
 
 
 def _span(chunk_id: str, text: str):
@@ -203,3 +220,74 @@ def test_legacy_chunk_text_is_not_reinterpreted_with_regex() -> None:
 
     assert result.reference is None
     assert result.blocked is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    _AGGREGATION_CASES,
+    ids=[case["id"] for case in _AGGREGATION_CASES],
+)
+async def test_record_evidence_corpus_aggregates_only_one_safe_reference(
+    monkeypatch,
+    case,
+) -> None:
+    text = case["text"]
+    annotations = []
+    for item in case["annotations"]:
+        start = text.index(item["text"])
+        annotations.append(
+            {
+                **item,
+                "char_start": start,
+                "char_end": start + len(item["text"]),
+                "canonical_reference": (
+                    item.get("canonical_reference")
+                    if item["cardinality"] == "single"
+                    else None
+                ),
+            }
+        )
+    chunk = {
+        "id": "chunk-aggregate",
+        "text": text,
+        "parent_section": "Results",
+        "metadata": {
+            "figure_locator_resolution": _resolution(*annotations),
+        },
+    }
+    spans = build_evidence_spans(
+        chunk_id=chunk["id"],
+        chunk_text=text,
+        section_title="Results",
+    )
+    selected_span_ids = [
+        spans[index].span_id for index in case["span_indexes"]
+    ]
+
+    async def fake_get_chunk_by_id(**_kwargs):
+        return chunk
+
+    monkeypatch.setattr(
+        record_evidence_module,
+        "get_chunk_by_id",
+        fake_get_chunk_by_id,
+    )
+    monkeypatch.setattr(
+        record_evidence_module,
+        "function_tool",
+        lambda function: function,
+    )
+    tool = record_evidence_module.create_record_evidence_tool(
+        "doc-aggregate",
+        "user-1",
+    )
+
+    result = await tool(entity="expression", span_ids=selected_span_ids)
+
+    assert result["status"] == "verified"
+    expected_reference = case["expected_aggregate_reference"]
+    if expected_reference is None:
+        assert "figure_reference" not in result
+    else:
+        assert result["figure_reference"] == expected_reference

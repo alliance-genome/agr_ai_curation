@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from src.lib.config.env import ConfigError
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
@@ -26,6 +27,17 @@ from src.models.chunk import (
     ProviderFigureReference,
 )
 from src.models.strategy import ChunkingStrategy
+
+
+_CORPUS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "figure_locator"
+    / "semantic_cases.json"
+)
+_CORPUS = json.loads(_CORPUS_PATH.read_text(encoding="utf-8"))
+_SEMANTIC_CASES = _CORPUS["semantic_cases"]
+_PROVIDER_CASES = _CORPUS["provider_cases"]
 
 
 def _chunk(
@@ -95,20 +107,131 @@ def test_supplementary_provider_label_requires_explicit_s_number() -> None:
 
 
 def test_labeled_corpus_tracks_candidate_selection_separately() -> None:
-    corpus_path = (
-        Path(__file__).resolve().parents[2]
-        / "fixtures"
-        / "figure_locator"
-        / "semantic_cases.json"
-    )
-    cases = json.loads(corpus_path.read_text(encoding="utf-8"))
-
     assert [
         case["id"]
-        for case in cases
+        for case in _SEMANTIC_CASES
         if locator.is_figure_locator_candidate(case["text"])
         != case["expected_candidate"]
     ] == []
+
+
+def test_adversarial_corpus_names_every_required_family_and_state() -> None:
+    families = {
+        case["family"]
+        for section in ("semantic_cases", "provider_cases", "aggregation_cases")
+        for case in _CORPUS[section]
+    }
+
+    assert {
+        "plural_references",
+        "ampersands_and_ranges",
+        "or_and_vs",
+        "semicolon_and_as_well_as",
+        "lowercase_panels",
+        "grouped_panel_lists",
+        "multi_span_aggregation",
+        "prose_containing_panels",
+        "structural_panel_suffixes",
+        "offset_and_text_grounding",
+        "provider_caption_boundaries",
+        "provider_caption_conflicts",
+        "provider_caption_uncertainty",
+    } <= families
+    assert {
+        case["expected_semantic_state"] for case in _SEMANTIC_CASES
+    } == {
+        "one_unambiguous",
+        "multiple_or_ambiguous",
+        "uncertain",
+        "no_locator",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    _SEMANTIC_CASES,
+    ids=[case["id"] for case in _SEMANTIC_CASES],
+)
+async def test_adversarial_semantic_corpus_fails_closed(
+    monkeypatch,
+    case,
+) -> None:
+    chunk = _chunk("chunk-0", case["text"])
+    classifier = AsyncMock(
+        return_value=locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id=chunk.id,
+                    mentions=[
+                        locator.FigureLocatorMentionOutput.model_validate(mention)
+                        for mention in case["classifier_mentions"]
+                    ],
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
+
+    await locator.resolve_figure_locators([chunk])
+
+    if case["expected_candidate"]:
+        classifier.assert_awaited_once()
+    else:
+        classifier.assert_not_awaited()
+    resolution = chunk.metadata.figure_locator_resolution
+    if case["expected_resolution_status"] is None:
+        assert resolution is None
+    else:
+        assert resolution is not None
+        assert resolution.status == case["expected_resolution_status"]
+        assert [
+            annotation.cardinality for annotation in resolution.annotations
+        ] == case["expected_cardinalities"]
+        assert [
+            annotation.canonical_reference
+            for annotation in resolution.annotations
+            if annotation.canonical_reference
+        ] == case["expected_canonical_references"]
+        assert all(
+            chunk.content[annotation.char_start : annotation.char_end]
+            == annotation.text
+            for annotation in resolution.annotations
+        )
+
+    stored_chunk = chunk.model_dump()
+    stored_chunk["text"] = stored_chunk.pop("content")
+    span = build_evidence_spans(
+        chunk_id=chunk.id,
+        chunk_text=chunk.content,
+    )[0]
+    stored = _resolve_stored_figure_reference(stored_chunk, span)
+    assert stored.reference == case["expected_record_reference"]
+    assert stored.blocked is case["expected_record_blocked"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "text": "Figure 1A",
+            "cardinality": "single",
+            "kind": "figure",
+            "number": "1",
+            "panels": ["A"],
+        },
+        {
+            "text": "Figures 1 and 2",
+            "cardinality": "multiple",
+            "kind": "figure",
+            "canonical_reference": "Figure 1",
+        },
+    ],
+    ids=["singleton_without_canonical", "multiple_with_canonical"],
+)
+def test_classifier_output_rejects_invalid_canonical_state(payload) -> None:
+    with pytest.raises(ValidationError):
+        locator.FigureLocatorMentionOutput.model_validate(payload)
 
 
 @pytest.mark.asyncio
@@ -232,11 +355,29 @@ async def test_classifier_failure_propagates(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_candidate_result_violates_batch_contract(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "returned_ids",
+    [[], ["chunk-0", "chunk-0"], ["unexpected"]],
+    ids=["missing", "duplicate", "unexpected"],
+)
+async def test_invalid_candidate_ids_violate_batch_contract(
+    monkeypatch,
+    returned_ids,
+) -> None:
     monkeypatch.setattr(
         locator,
         "_call_figure_locator_classifier",
-        AsyncMock(return_value=locator.FigureLocatorBatchOutput(candidates=[])),
+        AsyncMock(
+            return_value=locator.FigureLocatorBatchOutput(
+                candidates=[
+                    locator.FigureLocatorCandidateOutput(
+                        candidate_id=candidate_id,
+                        mentions=[],
+                    )
+                    for candidate_id in returned_ids
+                ]
+            )
+        ),
     )
 
     with pytest.raises(ValueError, match="exact candidate_id batch contract"):
@@ -483,6 +624,85 @@ async def test_provider_mention_offsets_ignore_repeated_wrapper_label(
     annotation = resolution.annotations[0]
     assert annotation.char_start == content.rindex("Figure 1")
     assert content[annotation.char_start : annotation.char_end] == "Figure 1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    _PROVIDER_CASES,
+    ids=[case["id"] for case in _PROVIDER_CASES],
+)
+async def test_provider_caption_corpus_constrains_fallback_to_semantic_ranges(
+    monkeypatch,
+    case,
+) -> None:
+    content = case.get("overlap_prefix", "") + (
+        f"Provider Figure: {case['provider_label']}\n"
+        f"Figure label: {case['provider_label']}\n"
+        "Legend:\n"
+        f"{case['caption']}"
+    )
+    chunk = _chunk(
+        "chunk-0",
+        content,
+        parent_section=None,
+        section_path=[
+            PROVIDER_FIGURE_METADATA_SECTION,
+            f"Provider Figure: {case['provider_label']}",
+        ],
+        element_type=ElementType.TITLE,
+    )
+    classifier = AsyncMock(
+        return_value=locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id=chunk.id,
+                    mentions=[
+                        locator.FigureLocatorMentionOutput.model_validate(mention)
+                        for mention in case["classifier_mentions"]
+                    ],
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
+
+    await locator.resolve_figure_locators(
+        [chunk],
+        provider_figure_metadata=(
+            {
+                "figure_label": case["provider_label"],
+                "figure_number": case["provider_number"],
+                "caption_text": case["caption"],
+            },
+        ),
+    )
+
+    classifier.assert_awaited_once()
+    assert classifier.await_args is not None
+    assert classifier.await_args.args[0][0][1] == case["caption"]
+    resolution = _resolution_for(chunk)
+    assert resolution.status == case["expected_resolution_status"]
+    assert all(
+        chunk.content[annotation.char_start : annotation.char_end]
+        == annotation.text
+        for annotation in resolution.annotations
+    )
+    assert _provider_reference_for(chunk).status == case["expected_provider_status"]
+
+    stored_chunk = chunk.model_dump()
+    stored_chunk["text"] = stored_chunk.pop("content")
+    span = next(
+        span
+        for span in build_evidence_spans(
+            chunk_id=chunk.id,
+            chunk_text=chunk.content,
+        )
+        if case["evidence_span_contains"] in span.text
+    )
+    stored = _resolve_stored_figure_reference(stored_chunk, span)
+    assert stored.reference == case["expected_record_reference"]
+    assert stored.blocked is case["expected_record_blocked"]
 
 
 @pytest.mark.asyncio
