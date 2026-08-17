@@ -1754,9 +1754,10 @@ def get_runtime_observability_context_value_max_chars() -> int:
 
 
 def get_background_task_observability_value_max_chars() -> int:
-    """Char cap for background-task Sentry tag and context string values.
+    """Char cap for background-task Sentry values (BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS).
 
-    Uses BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS. Default 200.
+    Bounds string tag and context values emitted by background-task failure
+    reporting. Default 200.
     """
     return max(
         1,
@@ -1765,9 +1766,10 @@ def get_background_task_observability_value_max_chars() -> int:
 
 
 def get_tool_failure_alert_summary_max_chars() -> int:
-    """Char cap for SNS tool-failure error and context previews.
+    """Char cap for SNS tool-failure previews (TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS).
 
-    Uses TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS. Default 500.
+    Bounds error and context string previews emitted in optional SNS alert
+    bodies. Default 500.
     """
     return max(
         1,
