@@ -49,6 +49,7 @@ async def main() -> int:
     false_singletons: list[str] = []
     false_omissions: list[str] = []
     cardinality_mismatches: list[str] = []
+    resolution_status_mismatches: list[str] = []
     case_results: list[dict[str, object]] = []
     for case, chunk in zip(cases, chunks, strict=True):
         selected = is_figure_locator_candidate(case["text"])
@@ -61,17 +62,23 @@ async def main() -> int:
             for annotation in (resolution.annotations if resolution else [])
             if annotation.cardinality == "single" and annotation.canonical_reference
         }
-        expected_singletons = set(case["expected_canonical_references"])
+        expected_annotations = case["expected_annotations"]
+        expected_singletons = {
+            annotation["canonical_reference"]
+            for annotation in expected_annotations
+            if annotation["cardinality"] == "single"
+            and annotation["canonical_reference"]
+        }
         actual_cardinalities = (
             [annotation.cardinality for annotation in resolution.annotations]
             if resolution and resolution.status == "resolved"
             else (["uncertain"] if resolution else [])
         )
-        expected_cardinalities = (
-            []
-            if case["expected_cardinality"] == "none"
-            else [case["expected_cardinality"]]
-        )
+        expected_cardinalities = [
+            annotation["cardinality"]
+            for annotation in expected_annotations
+        ]
+        expected_resolution_status = case["expected_resolution_status"]
         case_results.append(
             {
                 "id": case["id"],
@@ -90,6 +97,8 @@ async def main() -> int:
             false_omissions.append(case["id"])
         if actual_cardinalities != expected_cardinalities:
             cardinality_mismatches.append(case["id"])
+        if (resolution.status if resolution else None) != expected_resolution_status:
+            resolution_status_mismatches.append(case["id"])
 
     report = {
         "corpus_cases": len(cases),
@@ -97,6 +106,7 @@ async def main() -> int:
         "false_singletons": false_singletons,
         "false_omissions": false_omissions,
         "cardinality_mismatches": cardinality_mismatches,
+        "resolution_status_mismatches": resolution_status_mismatches,
         "case_results": case_results,
     }
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -106,6 +116,7 @@ async def main() -> int:
             false_singletons,
             false_omissions,
             cardinality_mismatches,
+            resolution_status_mismatches,
         )
     ) else 0
 

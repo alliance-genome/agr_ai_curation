@@ -10,6 +10,7 @@ from src.lib.config.env import ConfigError
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
 from src.lib.document_sources.figure_metadata import (
     append_provider_figure_metadata_markdown,
+    provider_figure_semantic_ranges,
 )
 from src.lib.openai_agents.evidence_spans import build_evidence_spans
 from src.lib.openai_agents.tools.record_evidence import (
@@ -26,6 +27,15 @@ from src.models.chunk import (
     ProviderFigureReference,
 )
 from src.models.strategy import ChunkingStrategy
+
+
+_CORPUS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "figure_locator"
+    / "semantic_cases.json"
+)
+_SEMANTIC_CASES = json.loads(_CORPUS_PATH.read_text(encoding="utf-8"))
 
 
 def _chunk(
@@ -94,21 +104,66 @@ def test_supplementary_provider_label_requires_explicit_s_number() -> None:
     )
 
 
-def test_labeled_corpus_tracks_candidate_selection_separately() -> None:
-    corpus_path = (
-        Path(__file__).resolve().parents[2]
-        / "fixtures"
-        / "figure_locator"
-        / "semantic_cases.json"
+@pytest.mark.parametrize(
+    "case",
+    _SEMANTIC_CASES,
+    ids=[case["id"] for case in _SEMANTIC_CASES],
+)
+@pytest.mark.asyncio
+async def test_semantic_adversarial_corpus(case, monkeypatch) -> None:
+    chunk = _chunk("chunk-0", case["text"])
+    classifier = AsyncMock(
+        return_value=locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id=chunk.id,
+                    mentions=[
+                        locator.FigureLocatorMentionOutput.model_validate(mention)
+                        for mention in case["classifier_mentions"]
+                    ],
+                )
+            ]
+        )
     )
-    cases = json.loads(corpus_path.read_text(encoding="utf-8"))
+    monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
 
-    assert [
-        case["id"]
-        for case in cases
-        if locator.is_figure_locator_candidate(case["text"])
-        != case["expected_candidate"]
-    ] == []
+    await locator.resolve_figure_locators([chunk])
+
+    selected = locator.is_figure_locator_candidate(case["text"])
+    assert selected is case["expected_candidate"]
+    resolution = chunk.metadata.figure_locator_resolution
+    if not selected:
+        classifier.assert_not_awaited()
+        assert resolution is None
+    else:
+        classifier.assert_awaited_once()
+        assert resolution is not None
+        assert resolution.status == case["expected_resolution_status"]
+        actual_annotations = [
+            {
+                "text": annotation.text,
+                "cardinality": annotation.cardinality,
+                "canonical_reference": annotation.canonical_reference,
+            }
+            for annotation in resolution.annotations
+        ]
+        assert actual_annotations == case["expected_annotations"]
+        assert all(
+            chunk.content[annotation.char_start : annotation.char_end]
+            == annotation.text
+            for annotation in resolution.annotations
+        )
+
+    stored_chunk = chunk.model_dump(mode="json")
+    stored_chunk["text"] = chunk.content
+    spans = build_evidence_spans(chunk_id=chunk.id, chunk_text=chunk.content)
+    for expected in case["expected_span_results"]:
+        result = _resolve_stored_figure_reference(
+            stored_chunk,
+            spans[expected["span_index"]],
+        )
+        assert result.reference == expected["reference"]
+        assert result.blocked is expected["blocked"]
 
 
 @pytest.mark.asyncio
@@ -231,12 +286,30 @@ async def test_classifier_failure_propagates(monkeypatch) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "candidate_ids",
+    [[], ["chunk-0", "chunk-0"], ["unexpected-chunk"]],
+    ids=["missing", "duplicate", "unexpected"],
+)
 @pytest.mark.asyncio
-async def test_missing_candidate_result_violates_batch_contract(monkeypatch) -> None:
+async def test_invalid_candidate_ids_violate_batch_contract(
+    monkeypatch,
+    candidate_ids,
+) -> None:
     monkeypatch.setattr(
         locator,
         "_call_figure_locator_classifier",
-        AsyncMock(return_value=locator.FigureLocatorBatchOutput(candidates=[])),
+        AsyncMock(
+            return_value=locator.FigureLocatorBatchOutput(
+                candidates=[
+                    locator.FigureLocatorCandidateOutput(
+                        candidate_id=candidate_id,
+                        mentions=[],
+                    )
+                    for candidate_id in candidate_ids
+                ]
+            )
+        ),
     )
 
     with pytest.raises(ValueError, match="exact candidate_id batch contract"):
@@ -344,9 +417,21 @@ async def test_malformed_singleton_number_is_downgraded_to_uncertain(monkeypatch
     assert annotation.canonical_reference is None
 
 
+@pytest.mark.parametrize(
+    ("source", "mention_text"),
+    [
+        ("Fig. 1 appears before Fig. 1.", "Fig. 1"),
+        ("Figure 1 shows the result.", "Fig. 1"),
+    ],
+    ids=["non_unique", "not_verbatim"],
+)
 @pytest.mark.asyncio
-async def test_non_unique_verbatim_text_marks_only_candidate_uncertain(monkeypatch) -> None:
-    chunk = _chunk("chunk-0", "Fig. 1 appears before Fig. 1.")
+async def test_invalid_verbatim_grounding_marks_candidate_uncertain(
+    monkeypatch,
+    source,
+    mention_text,
+) -> None:
+    chunk = _chunk("chunk-0", source)
     monkeypatch.setattr(
         locator,
         "_call_figure_locator_classifier",
@@ -357,7 +442,7 @@ async def test_non_unique_verbatim_text_marks_only_candidate_uncertain(monkeypat
                         candidate_id=chunk.id,
                         mentions=[
                             locator.FigureLocatorMentionOutput(
-                                text="Fig. 1",
+                                text=mention_text,
                                 cardinality="single",
                                 kind="figure",
                                 number="1",
@@ -703,6 +788,62 @@ async def test_provider_reference_ranges_exclude_cross_title_overlap(
     assert overlap_result.blocked is False
     assert second_result.reference == "Figure 2"
     assert second_result.blocked is False
+
+
+@pytest.mark.parametrize(
+    ("malformed_range", "expected_blocked"),
+    [(False, False), (True, True)],
+    ids=["valid_ranges", "malformed_ranges_fail_closed"],
+)
+def test_provider_reference_does_not_cross_final_subsection_boundary(
+    malformed_range,
+    expected_blocked,
+) -> None:
+    subsection = "Provider Figure: Figure 2"
+    caption = "Current caption has locator-free evidence."
+    content = (
+        "carried overlap without terminal punctuation "
+        f"{subsection}\nLegend:\n{caption}"
+    )
+    semantic_ranges = [
+        {"char_start": start, "char_end": end}
+        for start, end in provider_figure_semantic_ranges(content, subsection)
+    ]
+    if malformed_range:
+        semantic_ranges[0]["char_end"] = len(content) + 1
+    chunk = {
+        "text": content,
+        "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
+        "subsection": subsection,
+        "metadata": {
+            "figure_locator_resolution": {
+                "schema_version": 1,
+                "prompt_version": "figure-locator-v1",
+                "model": "gpt-5.6-terra",
+                "reasoning": "low",
+                "status": "resolved",
+                "annotations": [],
+            },
+            "provider_figure_reference": {
+                "schema_version": 1,
+                "raw_label": "Figure 2",
+                "raw_number": "2",
+                "status": "single",
+                "kind": "figure",
+                "number": "2",
+                "panels": [],
+                "canonical_reference": "Figure 2",
+                "semantic_ranges": semantic_ranges,
+            },
+        },
+    }
+    span = build_evidence_spans(chunk_id="chunk-boundary", chunk_text=content)[0]
+    assert span.char_start < content.rindex(subsection) < span.char_end
+
+    result = _resolve_stored_figure_reference(chunk, span)
+
+    assert result.reference is None
+    assert result.blocked is expected_blocked
 
 
 @pytest.mark.asyncio

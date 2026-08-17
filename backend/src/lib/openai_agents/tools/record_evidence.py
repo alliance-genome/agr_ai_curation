@@ -300,6 +300,11 @@ def _resolve_stored_figure_reference(
         provider_reference,
         span,
         chunk_text,
+        provider_subsection=(
+            _resolve_provider_figure_subsection(chunk)
+            if semantic_reference is None
+            else None
+        ),
     )
     if provider_range_overlap is None:
         return _FigureReferenceResolution(reference=None, blocked=True)
@@ -321,6 +326,8 @@ def _provider_semantic_range_overlap(
     provider: dict[str, Any],
     span: EvidenceSpan,
     chunk_text: str,
+    *,
+    provider_subsection: str | None,
 ) -> bool | None:
     raw_ranges = provider.get("semantic_ranges")
     if not isinstance(raw_ranges, list):
@@ -342,6 +349,10 @@ def _provider_semantic_range_overlap(
         ):
             return None
         overlaps = overlaps or (start < span.char_end and span.char_start < end)
+    if provider_subsection:
+        subsection_start = chunk_text.rfind(provider_subsection)
+        if subsection_start >= 0 and span.char_start < subsection_start < span.char_end:
+            return False
     return overlaps
 
 
@@ -389,6 +400,23 @@ def _is_provider_figure_metadata_chunk(chunk: dict[str, Any]) -> bool:
             or is_provider_figure_subsection(title)
             for title in path_values
         )
+    )
+
+
+def _resolve_provider_figure_subsection(chunk: dict[str, Any]) -> str | None:
+    subsection = _resolve_chunk_subsection(chunk)
+    if is_provider_figure_subsection(subsection):
+        return subsection
+    metadata = _metadata_dict(chunk)
+    section_path = chunk.get("section_path") or metadata.get("section_path")
+    path_values = section_path if isinstance(section_path, list) else []
+    return next(
+        (
+            str(title)
+            for title in reversed(path_values)
+            if is_provider_figure_subsection(title)
+        ),
+        None,
     )
 
 
