@@ -128,6 +128,24 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "${test_status}"
 
+      - name: Verify Docker tests left no backend cache artifacts
+        if: always()
+        shell: bash
+        run: |
+          cache_paths="$(
+            find backend \
+              \( \
+                \( -type d \( -name __pycache__ -o -name .pytest_cache \) \) -o \
+                \( -type f -name '*.py[co]' \) \
+              \) \
+              -print
+          )"
+          if [[ -n "${cache_paths}" ]]; then
+            echo "Docker-backed tests wrote cache artifacts into the backend workspace:" >&2
+            printf '%s\n' "${cache_paths}" >&2
+            exit 1
+          fi
+
       - name: Upload backend coverage artifacts
         if: always()
         uses: actions/upload-artifact@v4

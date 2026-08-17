@@ -34,10 +34,14 @@ RUN apt-get update && apt-get install -y \
 # Copy source code and tests last (changes most frequently)
 COPY src/ ./src/
 COPY tests/ ./tests/
-COPY main.py ./
+COPY main.py pytest.ini ./
 
 # Set Python path
 ENV PYTHONPATH=/app/backend:/app/backend/src:$PYTHONPATH
+
+# Keep interpreter caches out of bind-mounted source trees. This path is
+# container-local for both rootful and rootless Docker test runs.
+ENV PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-python-pycache
 
 # Default command runs all tests
 CMD ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]

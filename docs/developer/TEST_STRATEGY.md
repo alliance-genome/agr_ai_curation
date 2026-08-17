@@ -29,6 +29,13 @@ environment intentionally uses the system daemon. Run only one command against
 the same Compose project at a time, and inspect active containers before any
 manual cleanup.
 
+Backend test images keep generated caches outside bind-mounted source trees:
+Python bytecode is redirected to `/tmp/agr-ai-curation-python-pycache`, and
+pytest uses `/tmp/agr-ai-curation-pytest-cache`. Both locations are local to
+the test container, so rootful and rootless runs leave no `__pycache__` or
+`.pytest_cache` directories in the checkout. New backend test images must use
+the same policy.
+
 Frontend validation runs on the host Node toolchain:
 
 ```bash

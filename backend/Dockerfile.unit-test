@@ -49,5 +49,9 @@ COPY packages/ /app/packages/
 # Set Python path
 ENV PYTHONPATH=/app/backend:/app/backend/src:$PYTHONPATH
 
+# Keep interpreter caches out of bind-mounted source trees. This path is
+# container-local for both rootful and rootless Docker test runs.
+ENV PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-python-pycache
+
 # Default command runs unit tests
 CMD ["python", "-m", "pytest", "tests/unit/", "-v", "--tb=short", "--no-cov", "-o", "testpaths=tests/unit"]
