@@ -37,3 +37,10 @@ services:
       - EXTRACTION_TRACE_EVENT_DIR=${EXTRACTION_TRACE_EVENT_DIR:-/app/extraction_trace_events}
     volumes:
       - ../extraction_trace_events:/app/extraction_trace_events
+
+  backend-tests:
+    profiles:
+      - test
+    build:
+      context: ./backend
+      target: test

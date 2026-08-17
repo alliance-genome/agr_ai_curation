@@ -207,6 +207,21 @@ jobs:
           echo "Contract-core tests completed." >> $GITHUB_STEP_SUMMARY
           echo "Legacy/stale contract tests remain out-of-scope for this gate and are tracked in docs/developer/TEST_STRATEGY.md." >> $GITHUB_STEP_SUMMARY
 
+  trace-review-backend-tests:
+    name: TraceReview Backend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run complete TraceReview backend suite
+        run: docker compose -f trace_review/docker-compose.yml run --rm --build backend-tests
+
+      - name: Cleanup TraceReview test resources
+        if: always()
+        run: docker compose -f trace_review/docker-compose.yml down --volumes --remove-orphans --rmi local
+
   installer-shell-regression-tests:
     name: Installer Shell Regression Suite
     runs-on: ubuntu-latest
