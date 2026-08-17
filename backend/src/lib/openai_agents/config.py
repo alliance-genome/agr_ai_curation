@@ -849,6 +849,33 @@ def get_hierarchy_resolution_max_turns() -> int:
     return _get_single_shot_output_agent_max_turns("HIERARCHY_RESOLUTION_MAX_TURNS")
 
 
+def get_figure_locator_resolution_max_turns() -> int:
+    """Turn budget for the one-shot figure locator classifier.
+
+    FIGURE_LOCATOR_RESOLUTION_MAX_TURNS defaults to 10, matching the Agents
+    SDK default previously inherited by other structured-output classifiers.
+    """
+    return _get_single_shot_output_agent_max_turns(
+        "FIGURE_LOCATOR_RESOLUTION_MAX_TURNS"
+    )
+
+
+def get_figure_locator_resolution_batch_max_chars() -> int:
+    """Maximum prompt chars in one figure-locator classifier batch.
+
+    FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS defaults to 60000. Lower it for
+    models with smaller input windows or to reduce the failure scope of one
+    provider call; raise it only after confirming the configured model limit.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS",
+            60_000,
+        ),
+    )
+
+
 def get_standard_chat_context_token_budget() -> int:
     """Model-live context budget for standard assistant chat (STANDARD_CHAT_CONTEXT_TOKEN_BUDGET).
 

@@ -203,6 +203,103 @@ def is_provider_figure_subsection(title: object) -> bool:
     return value.startswith(PROVIDER_FIGURE_SUBSECTION_PREFIX)
 
 
+def ordered_provider_figure_metadata_entries(
+    entries: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Return indexable provider entries in their stable ingestion order."""
+
+    return sorted(
+        (
+            dict(entry)
+            for entry in (entries or ())
+            if _entry_has_indexable_content(entry)
+        ),
+        key=_entry_sort_key,
+    )
+
+
+def provider_figure_semantic_ranges(
+    text: str,
+    subsection: str | None,
+) -> list[tuple[int, int]]:
+    """Return exact ranges for caption/nearby prose owned by one sidecar item.
+
+    By-title chunk overlap is prepended before the new title without a
+    separator. Starting after the final exact subsection occurrence therefore
+    excludes prose copied from the prior native/provider chunk.
+    """
+
+    if not subsection:
+        return []
+    subsection_offset = text.rfind(subsection)
+    content_start = (
+        subsection_offset + len(subsection)
+        if subsection_offset >= 0
+        else 0
+    )
+    suffix = text[content_start:]
+    wrapper_prefixes = (
+        "Figure label:",
+        "Figure number:",
+        "Source figure artifact:",
+        "Metadata artifact:",
+        "Source display name:",
+        "Source file class:",
+        "PDFX page_index:",
+        "PDFX bbox:",
+        "PDFX polygon:",
+        "Filename:",
+    )
+    semantic_markers = {"Legend:", "Nearby text:"}
+    suffix_lines = suffix.splitlines(keepends=True)
+    has_generated_wrapper = any(
+        any(line.strip().startswith(marker) for marker in semantic_markers)
+        or line.strip().startswith(wrapper_prefixes)
+        for line in suffix_lines
+    )
+    in_semantic_text = subsection_offset < 0 and not has_generated_wrapper
+    ranges: list[tuple[int, int]] = []
+    offset = content_start
+    for line in suffix_lines:
+        line_end = offset + len(line)
+        content_end = line_end
+        while content_end > offset and text[content_end - 1] in "\r\n":
+            content_end -= 1
+        normalized = text[offset:content_end].strip()
+        marker = next(
+            (
+                candidate
+                for candidate in semantic_markers
+                if normalized.startswith(candidate)
+            ),
+            None,
+        )
+        if marker is not None:
+            in_semantic_text = True
+            marker_offset = text.find(marker, offset, content_end)
+            semantic_start = marker_offset + len(marker)
+            while semantic_start < content_end and text[semantic_start].isspace():
+                semantic_start += 1
+            if semantic_start < content_end:
+                ranges.append((semantic_start, content_end))
+        elif normalized and in_semantic_text:
+            ranges.append((offset, content_end))
+        offset = line_end
+    return ranges
+
+
+def strip_provider_figure_metadata_wrapper(
+    text: str,
+    subsection: str | None = None,
+) -> str:
+    """Return only exact semantic sidecar prose for classifier input."""
+
+    return "\n".join(
+        text[start:end]
+        for start, end in provider_figure_semantic_ranges(text, subsection)
+    )
+
+
 def _entry_has_indexable_content(entry: Mapping[str, Any]) -> bool:
     return any(
         _clean_text(entry.get(key))

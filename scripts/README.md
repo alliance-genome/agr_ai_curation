@@ -27,6 +27,7 @@ scripts/
 │   └── run-tests.sh             # Docker Compose test runner
 │   └── llm_provider_smoke_local.sh  # Local LLM provider smoke checks (health/contracts)
 │   └── rerank_provider_smoke_local.sh  # Local rerank provider smoke across bedrock/local/none
+│   └── evaluate_figure_locator_classifier.py # Live Terra evaluation against labeled locator corpus
 │   └── file_output_storage_preflight.sh # Deployment-stage probe for export temp/output writeability
 │   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, optional rerank smoke, cleanup
 │   └── abc_literature_live_smoke.py # ABC Literature stage smoke with ephemeral Cognito users and evidence JSON

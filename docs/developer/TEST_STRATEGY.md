@@ -57,6 +57,27 @@ PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache \
   python3 -m py_compile backend/src/path/to/file.py
 ```
 
+## Figure Locator Classifier Evaluation
+
+The labeled corpus at
+`backend/tests/fixtures/figure_locator/semantic_cases.json` keeps candidate
+selection errors separate from semantic-classifier errors. Unit tests verify
+the broad candidate selector offline. To evaluate the configured live Terra
+classifier, run:
+
+```bash
+bash scripts/testing/docker-test-compose.sh run --rm \
+  -e OPENAI_API_KEY \
+  -e FIGURE_LOCATOR_LLM_MODEL=gpt-5.6-terra \
+  -e FIGURE_LOCATOR_LLM_REASONING=low \
+  backend-integration-tests \
+  bash -lc "cd /app && python scripts/testing/evaluate_figure_locator_classifier.py"
+```
+
+The report lists `candidate_misses`, `false_singletons`, `false_omissions`, and
+`cardinality_mismatches` independently. Any false singleton fails the evaluation.
+This is an opt-in classifier-quality diagnostic, not a required release gate.
+
 ## Domain-Envelope Release Gates
 
 The 0.7.0 domain-envelope gates are recorded in

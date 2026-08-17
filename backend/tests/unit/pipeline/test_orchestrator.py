@@ -42,6 +42,9 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
         "src.lib.pipeline.chunk.chunk_parsed_document",
         new=AsyncMock(return_value=[{"chunk_index": 0, "content": "Foo"}])
     ) as mock_chunk, patch(
+        "src.lib.pipeline.figure_locator_resolution.resolve_figure_locators",
+        new=AsyncMock(side_effect=lambda chunks: chunks),
+    ) as mock_figure_locators, patch(
         "src.lib.pipeline.store.store_to_weaviate",
         new=AsyncMock()
     ) as mock_store:
@@ -60,6 +63,9 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
 
     mock_parser.assert_awaited_once()
     mock_chunk.assert_awaited_once()
+    mock_figure_locators.assert_awaited_once_with(
+        [{"chunk_index": 0, "content": "Foo"}]
+    )
     mock_store.assert_awaited_once()
     assert mock_store.await_args is not None
     args, kwargs = mock_store.await_args
@@ -213,6 +219,9 @@ async def test_process_pdf_document_helper(mock_weaviate_client, sample_pdf):
         "pdfx_json_path": None,
         "processed_json_path": None,
     })), patch("src.lib.pipeline.chunk.chunk_parsed_document", new=AsyncMock(return_value=[])), patch(
+        "src.lib.pipeline.figure_locator_resolution.resolve_figure_locators",
+        new=AsyncMock(side_effect=lambda chunks: chunks),
+    ), patch(
         "src.lib.pipeline.store.store_to_weaviate",
         new=AsyncMock()
     ):

@@ -311,6 +311,9 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     async def _resolve_hierarchy(elements):
         return elements, None
 
+    async def _resolve_figure_locators(chunks, **_kwargs):
+        return chunks
+
     async def _chunk_document(elements, strategy, document_id):
         del strategy
         return [
@@ -373,6 +376,10 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     monkeypatch.setattr(
         "src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy",
         _resolve_hierarchy,
+    )
+    monkeypatch.setattr(
+        "src.lib.pipeline.figure_locator_resolution.resolve_figure_locators",
+        _resolve_figure_locators,
     )
     monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", _chunk_document)
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", _store_to_weaviate)

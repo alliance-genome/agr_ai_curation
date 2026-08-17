@@ -193,6 +193,10 @@ class DocumentPipelineOrchestrator:
                 extra={"duration_ms": round(chunk_duration_ms, 1), "operation": "document_chunking"},
             )
 
+            from .figure_locator_resolution import resolve_figure_locators
+
+            chunks = await resolve_figure_locators(chunks)
+
             # Stage 3: Store to Weaviate (Weaviate handles embeddings)
             logger.info("Storing to Weaviate for document %s", document_id)
             await self._raise_if_cancel_requested(cancel_requested_callback)
