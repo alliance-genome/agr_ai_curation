@@ -71,6 +71,11 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
 
     expected_exports = {
         (
+            ExportKind.IDENTIFIER_PREFIXES,
+            "curation_database",
+            "python/src/agr_ai_curation_alliance/identifier_prefixes.py",
+        ),
+        (
             ExportKind.GROUP_RULE,
             "supervisor.MGI",
             "group_rules/supervisor/mgi.yaml",

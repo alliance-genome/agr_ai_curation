@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Sequence
 from urllib.parse import unquote, urlparse
@@ -23,6 +24,7 @@ from src.lib.packages import (
     PackageRegistry,
     build_document_source_provider_catalog,
     build_flow_recipe_catalog,
+    build_identifier_prefix_provider_catalog,
     build_package_health_report,
     get_file_output_dir,
     get_identifier_prefix_file_path,
@@ -49,14 +51,6 @@ DEFAULT_SERVER_PORT = "8000"
 DEFAULT_SERVER_WORKERS = "1"
 PACKAGE_ENV_BOOTSTRAP_ENV_VAR = "AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START"
 PACKAGE_ENV_BOOTSTRAP_DONE_ENV_VAR = "AGR_PACKAGE_ENVS_PREPARED"
-_PREFIX_QUERIES = (
-    "SELECT DISTINCT split_part(referencedcurie, ':', 1) AS prefix "
-    "FROM crossreference WHERE referencedcurie LIKE '%:%' AND referencedcurie IS NOT NULL;",
-    "SELECT DISTINCT split_part(curie, ':', 1) AS prefix "
-    "FROM ontologyterm WHERE curie LIKE '%:%' AND curie IS NOT NULL;",
-    "SELECT DISTINCT split_part(primaryexternalid, ':', 1) AS prefix "
-    "FROM biologicalentity WHERE primaryexternalid LIKE '%:%' AND primaryexternalid IS NOT NULL;",
-)
 
 
 def configure_startup_logging() -> None:
@@ -143,6 +137,7 @@ def validate_runtime_packages() -> PackageRegistry:
     )
     document_source_provider_catalog = build_document_source_provider_catalog(registry)
     flow_recipe_catalog = build_flow_recipe_catalog(registry)
+    identifier_prefix_provider_catalog = build_identifier_prefix_provider_catalog(registry)
     # Agent eligibility is package-configured and must be resolved only after
     # the package registry has passed structural validation.
     from src.lib.agent_studio.flow_tools import validate_installed_flow_recipe_catalog
@@ -170,12 +165,13 @@ def validate_runtime_packages() -> PackageRegistry:
         output_schema_resolver=build_package_scoped_output_schema_resolver(packages_dir),
     )
     logger.info(
-        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s document_source_providers=%s domain_packs=%s flow_recipes=%s/%s-compatible agent_studio_prompt=%s:%s",
+        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s document_source_providers=%s identifier_prefix_providers=%s domain_packs=%s flow_recipes=%s/%s-compatible agent_studio_prompt=%s:%s",
         len(registry.loaded_packages),
         len(registry.failed_packages),
         report["status"],
         len(tool_registry.bindings),
         len(document_source_provider_catalog.registrations),
+        len(identifier_prefix_provider_catalog.providers),
         len(domain_pack_registry.loaded_packs),
         len(flow_recipe_catalog.recipes),
         compatible_flow_recipe_count,
@@ -354,31 +350,43 @@ def _redact_database_url(database_url: str) -> str:
     return parsed._replace(netloc=netloc).geturl()
 
 
-def refresh_identifier_prefixes() -> bool:
-    """Refresh runtime identifier prefixes using the modular runtime path contract."""
-    database_url = (get_curation_resolver().get_connection_url() or "").strip()
-    if not database_url:
-        logger.info("Curation database is not configured; skipping prefix refresh.")
+def refresh_identifier_prefixes(registry: PackageRegistry) -> bool:
+    """Refresh identifier prefixes from all installed package providers."""
+    provider_catalog = build_identifier_prefix_provider_catalog(registry)
+    prefix_file = get_identifier_prefix_file_path()
+    if not provider_catalog.providers:
+        prefix_file.unlink(missing_ok=True)
+        logger.info(
+            "No identifier-prefix provider is installed; removed stale runtime state."
+        )
         return False
 
-    prefix_file = get_identifier_prefix_file_path()
+    database_url = (get_curation_resolver().get_connection_url() or "").strip()
+    if not database_url:
+        logger.warning(
+            "Identifier-prefix providers are installed but the curation database is "
+            "not configured; leaving existing prefixes in place."
+        )
+        return False
+
     prefix_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(
-        "Refreshing identifier prefixes from %s into %s",
+        "Refreshing identifier prefixes from %s provider(s) using %s into %s",
+        len(provider_catalog.providers),
         _redact_database_url(database_url),
         prefix_file,
     )
 
     prefixes: set[str] = set()
     try:
-        with psycopg2.connect(database_url) as conn:
-            with conn.cursor() as cur:
-                for query in _PREFIX_QUERIES:
-                    cur.execute(query)
-                    for row in cur.fetchall():
-                        prefix = str((row[0] if row else "") or "").strip()
-                        if prefix:
-                            prefixes.add(prefix)
+        for loaded_provider in provider_catalog.providers:
+            contribution = loaded_provider.provider(database_url)
+            prefixes.update(
+                _normalize_identifier_prefix_contribution(
+                    contribution,
+                    source=loaded_provider.source.describe(),
+                )
+            )
     except Exception as exc:
         logger.warning("Prefix refresh failed; leaving existing prefixes in place: %s", exc)
         return False
@@ -387,6 +395,32 @@ def refresh_identifier_prefixes() -> bool:
     _write_json_atomically(prefix_file, payload)
     logger.info("Identifier prefix refresh complete with %s prefix(es).", len(prefixes))
     return True
+
+
+def _normalize_identifier_prefix_contribution(
+    contribution: object,
+    *,
+    source: str,
+) -> set[str]:
+    """Validate and normalize one provider's complete prefix contribution."""
+    if isinstance(contribution, (str, bytes)) or not isinstance(contribution, Iterable):
+        raise ValueError(f"Identifier-prefix provider {source} must return an iterable")
+
+    prefixes: set[str] = set()
+    for index, value in enumerate(contribution):
+        if not isinstance(value, str):
+            raise ValueError(
+                f"Identifier-prefix provider {source} returned a non-string value "
+                f"at index {index}"
+            )
+        prefix = value.strip()
+        if not prefix:
+            raise ValueError(
+                f"Identifier-prefix provider {source} returned an empty prefix "
+                f"at index {index}"
+            )
+        prefixes.add(prefix)
+    return prefixes
 
 
 def _write_json_atomically(path: Path, payload: dict[str, object]) -> None:
@@ -446,7 +480,7 @@ def run_startup(server_command: Sequence[str] | None = None) -> None:
     bootstrap_package_environments(registry)
     maybe_bootstrap_database()
     maybe_run_database_migrations()
-    refresh_identifier_prefixes()
+    refresh_identifier_prefixes(registry)
     exec_server_command(server_command or build_default_server_command())
 
 
