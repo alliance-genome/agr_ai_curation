@@ -10,6 +10,10 @@ dependencies:
   - package_id: agr.core
     version_range: ">=1.0.0,<2.0.0"
 exports:
+  - kind: identifier_prefixes
+    name: curation_database
+    path: python/src/agr_ai_curation_alliance/identifier_prefixes.py
+    description: Alliance curation-schema identifier-prefix discovery
   - kind: group_rule
     name: supervisor.MGI
     path: group_rules/supervisor/mgi.yaml

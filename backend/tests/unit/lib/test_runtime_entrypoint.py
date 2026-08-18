@@ -428,6 +428,28 @@ def test_bootstrap_package_environments_marks_startup_sentinel(monkeypatch, tmp_
     assert os.getenv("AGR_PACKAGE_ENVS_PREPARED") == "1"
 
 
+def _prefix_provider(provider):
+    return SimpleNamespace(
+        provider=provider,
+        source=SimpleNamespace(describe=lambda: "package 'fixture' export 'prefixes'"),
+    )
+
+
+def _prefix_catalog(*providers):
+    return SimpleNamespace(providers=tuple(_prefix_provider(provider) for provider in providers))
+
+
+def _empty_package_registry() -> PackageRegistry:
+    return PackageRegistry(
+        packages_dir=Path("/runtime/packages"),
+        runtime_version="1.0.0",
+        supported_package_api_version="1.0.0",
+        loaded_packages=(),
+        failed_packages=(),
+        validation_errors=(),
+    )
+
+
 def test_refresh_identifier_prefixes_writes_runtime_state_file(monkeypatch, tmp_path: Path):
     runtime_root = tmp_path / "runtime"
     canonical_url = "postgresql://user:pass@localhost:5432/curation"
@@ -438,40 +460,16 @@ def test_refresh_identifier_prefixes_writes_runtime_state_file(monkeypatch, tmp_
         lambda: SimpleNamespace(get_connection_url=lambda: canonical_url),
     )
 
-    class FakeCursor:
-        def __init__(self):
-            self._result = []
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "build_identifier_prefix_provider_catalog",
+        lambda _registry: _prefix_catalog(
+            lambda _url: ["FB", " WB "],
+            lambda _url: (prefix for prefix in ["GO", "MGI", "FB"]),
+        ),
+    )
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def execute(self, query: str):
-            if "crossreference" in query:
-                self._result = [("FB",), ("WB",)]
-            elif "ontologyterm" in query:
-                self._result = [("GO",)]
-            else:
-                self._result = [("MGI",), ("FB",)]
-
-        def fetchall(self):
-            return list(self._result)
-
-    class FakeConnection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def cursor(self):
-            return FakeCursor()
-
-    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", lambda *args, **kwargs: FakeConnection())
-
-    refreshed = runtime_entrypoint.refresh_identifier_prefixes()
+    refreshed = runtime_entrypoint.refresh_identifier_prefixes(_empty_package_registry())
 
     assert refreshed is True
     prefix_file = runtime_root / "state" / "identifier_prefixes" / "identifier_prefixes.json"
@@ -492,43 +490,25 @@ def test_refresh_identifier_prefixes_prefers_canonical_curation_url(
         "get_curation_resolver",
         lambda: SimpleNamespace(get_connection_url=lambda: canonical_url),
     )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "build_identifier_prefix_provider_catalog",
+        lambda _registry: _prefix_catalog(lambda url: connected_urls.append(url) or []),
+    )
 
     connected_urls = []
 
-    class FakeCursor:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def execute(self, _query):
-            return None
-
-        def fetchall(self):
-            return []
-
-    class FakeConnection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def cursor(self):
-            return FakeCursor()
-
-    def connect(url):
-        connected_urls.append(url)
-        return FakeConnection()
-
-    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", connect)
-
-    assert runtime_entrypoint.refresh_identifier_prefixes() is True
+    assert runtime_entrypoint.refresh_identifier_prefixes(_empty_package_registry()) is True
     assert connected_urls == [canonical_url]
 
 
 def test_refresh_identifier_prefixes_propagates_curation_resolution_failure(monkeypatch):
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "build_identifier_prefix_provider_catalog",
+        lambda _registry: _prefix_catalog(lambda _url: []),
+    )
+
     def fail_resolution():
         raise ValueError("curation config is invalid")
 
@@ -539,24 +519,147 @@ def test_refresh_identifier_prefixes_propagates_curation_resolution_failure(monk
     )
 
     with pytest.raises(ValueError, match="curation config is invalid"):
-        runtime_entrypoint.refresh_identifier_prefixes()
+        runtime_entrypoint.refresh_identifier_prefixes(_empty_package_registry())
 
 
-def test_refresh_identifier_prefixes_skips_when_curation_is_unconfigured(
+def test_refresh_identifier_prefixes_with_provider_but_no_database_keeps_known_good(
     monkeypatch,
+    tmp_path: Path,
 ):
+    prefix_file = tmp_path / "runtime" / "state" / "identifier_prefixes.json"
+    prefix_file.parent.mkdir(parents=True)
+    known_good = '{"prefixes":["OLD"]}\n'
+    prefix_file.write_text(known_good, encoding="utf-8")
+    monkeypatch.setenv("IDENTIFIER_PREFIX_FILE_PATH", str(prefix_file))
     monkeypatch.setattr(
         runtime_entrypoint,
         "get_curation_resolver",
         lambda: SimpleNamespace(get_connection_url=lambda: None),
     )
 
-    def unexpected_connect(*_args, **_kwargs):
-        raise AssertionError("unconfigured curation must not connect")
+    def unexpected_provider(_url):
+        raise AssertionError("provider must not run without a connection URL")
 
-    monkeypatch.setattr(runtime_entrypoint.psycopg2, "connect", unexpected_connect)
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "build_identifier_prefix_provider_catalog",
+        lambda _registry: _prefix_catalog(unexpected_provider),
+    )
 
-    assert runtime_entrypoint.refresh_identifier_prefixes() is False
+    assert runtime_entrypoint.refresh_identifier_prefixes(_empty_package_registry()) is False
+    assert prefix_file.read_text(encoding="utf-8") == known_good
+
+
+def test_refresh_identifier_prefixes_without_provider_removes_stale_state_without_resolving_db(
+    monkeypatch, tmp_path: Path
+):
+    prefix_file = tmp_path / "runtime" / "state" / "identifier_prefixes.json"
+    prefix_file.parent.mkdir(parents=True)
+    prefix_file.write_text('{"prefixes":["MGI"]}\n', encoding="utf-8")
+    monkeypatch.setenv("IDENTIFIER_PREFIX_FILE_PATH", str(prefix_file))
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: (_ for _ in ()).throw(AssertionError("database resolution must not run")),
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "build_identifier_prefix_provider_catalog",
+        lambda _registry: _prefix_catalog(),
+    )
+
+    assert runtime_entrypoint.refresh_identifier_prefixes(_empty_package_registry()) is False
+    assert not prefix_file.exists()
+
+
+@pytest.mark.parametrize("invalid_contribution", [["FB", None], "FB", ["FB", " "]])
+def test_refresh_identifier_prefixes_invalid_contribution_keeps_complete_known_good_file(
+    monkeypatch,
+    tmp_path: Path,
+    invalid_contribution,
+):
+    prefix_file = tmp_path / "runtime" / "state" / "identifier_prefixes.json"
+    prefix_file.parent.mkdir(parents=True)
+    known_good = '{"prefixes":["OLD"]}\n'
+    prefix_file.write_text(known_good, encoding="utf-8")
+    monkeypatch.setenv("IDENTIFIER_PREFIX_FILE_PATH", str(prefix_file))
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=lambda: "postgresql://curation"),
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "build_identifier_prefix_provider_catalog",
+        lambda _registry: _prefix_catalog(
+            lambda _url: ["FB"],
+            lambda _url: invalid_contribution,
+        ),
+    )
+
+    assert runtime_entrypoint.refresh_identifier_prefixes(_empty_package_registry()) is False
+    assert prefix_file.read_text(encoding="utf-8") == known_good
+
+
+def test_run_startup_passes_validated_registry_to_prefix_refresh(monkeypatch):
+    registry = _empty_package_registry()
+    calls: list[object] = []
+    monkeypatch.setattr(runtime_entrypoint, "ensure_runtime_layout", lambda: calls.append("layout"))
+    monkeypatch.setattr(runtime_entrypoint, "validate_runtime_packages", lambda: registry)
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "bootstrap_package_environments",
+        lambda value: calls.append(("environments", value)),
+    )
+    monkeypatch.setattr(runtime_entrypoint, "maybe_bootstrap_database", lambda: None)
+    monkeypatch.setattr(runtime_entrypoint, "maybe_run_database_migrations", lambda: None)
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "refresh_identifier_prefixes",
+        lambda value: calls.append(("prefixes", value)),
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "exec_server_command",
+        lambda command: calls.append(("server", command)),
+    )
+
+    runtime_entrypoint.run_startup(["serve"])
+
+    assert calls == [
+        "layout",
+        ("environments", registry),
+        ("prefixes", registry),
+        ("server", ["serve"]),
+    ]
+
+
+def test_refresh_identifier_prefixes_provider_failure_does_not_publish_partial_state(
+    monkeypatch,
+    tmp_path: Path,
+):
+    prefix_file = tmp_path / "runtime" / "state" / "identifier_prefixes.json"
+    prefix_file.parent.mkdir(parents=True)
+    known_good = '{"prefixes":["OLD"]}\n'
+    prefix_file.write_text(known_good, encoding="utf-8")
+    monkeypatch.setenv("IDENTIFIER_PREFIX_FILE_PATH", str(prefix_file))
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_connection_url=lambda: "postgresql://curation"),
+    )
+
+    def fail(_url):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "build_identifier_prefix_provider_catalog",
+        lambda _registry: _prefix_catalog(lambda _url: ["FB"], fail),
+    )
+
+    assert runtime_entrypoint.refresh_identifier_prefixes(_empty_package_registry()) is False
+    assert prefix_file.read_text(encoding="utf-8") == known_good
 
 
 def test_write_json_atomically_uses_replace_in_target_directory(monkeypatch, tmp_path: Path):

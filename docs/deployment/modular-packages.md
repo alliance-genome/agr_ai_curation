@@ -235,6 +235,33 @@ the built-in local upload flow and is not an external provider registration.
 The shipped `agr.alliance` package owns the `abc_literature` registration; a
 core-only install starts without it and continues to use `local_pdf`.
 
+### Identifier-prefix providers
+
+A package that derives valid identifier prefixes from its curation source can
+declare a Python provider:
+
+```yaml
+exports:
+  - kind: identifier_prefixes
+    name: curation_database
+    path: python/src/org_custom/identifier_prefixes.py
+    description: Organization-specific identifier-prefix discovery
+```
+
+The module must define `get_identifier_prefixes(database_url)`. The callable
+receives the resolved curation connection URL and returns an iterable of
+non-empty strings. Core trims, deduplicates, and sorts contributions from every
+installed provider before atomically publishing the shared runtime prefix
+file. Provider loading and contribution validation fail closed: if any
+configured provider fails, the complete last known-good file remains in place
+and no partial contribution is published.
+
+A profile with no `identifier_prefixes` export does not resolve or connect to a
+curation database for prefix discovery. It removes stale generated prefix state
+so switching away from a package cannot retain that package's identifiers. The
+shipped Alliance package owns its curation-schema queries through this export;
+the generic core package contains no database-schema assumptions.
+
 ### Agent Studio flow recipes
 
 A package can export `config/flow_recipes.yaml` with `kind: flow_recipes`.
