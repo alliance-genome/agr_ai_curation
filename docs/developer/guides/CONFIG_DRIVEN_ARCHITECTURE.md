@@ -784,7 +784,7 @@ dependencies:
 exports:
   - kind: group_rule
     name: supervisor.FB
-    path: agents/supervisor/group_rules/fb.yaml
+    path: group_rules/supervisor/fb.yaml
 ```
 
 Dependency ownership, a unique target agent, and a collision-free group name

@@ -25,7 +25,7 @@ validator, or lookup. Verified against the code:
   output-schema mandate for the supervisor. Nothing in this base can be relocated to
   `render` for de-dup; the base owns its tool-call guidance and its prompt-only output
   contract in full.
-- It HAS package-contributed `group_rules`: `packages/alliance/agents/supervisor/group_rules/{mgi,rgd}.yaml`. The base
+- It HAS package-contributed `group_rules`: `packages/alliance/group_rules/supervisor/{mgi,rgd}.yaml`. The base
   rewrite does NOT touch those files; the group inventories
   (`supervisor.mgi.txt`, `supervisor.rgd.txt`) confirm the organism-specific allele-dispatch
   hooks still arrive in the assembled render (core + rewritten base + group rules).
@@ -204,8 +204,8 @@ explicitly, per the routing-skeleton brief.
 
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
-| SUP-67 | MGI allele-dispatch hooks (attribution from `fullname_attribution`, "gifted from"/"obtained from" trigger phrases, strip zygosity, concise lab/institution attribution). | `packages/alliance/agents/supervisor/group_rules/mgi.yaml` (survives in the MGI-rendered assembly — verified by `supervisor.mgi.txt`) |
-| SUP-68 | RGD allele-dispatch hooks (institution attribution from `fullname_attribution`, Medical College of Wisconsin / Sage / Horizon, ignore author names). | `packages/alliance/agents/supervisor/group_rules/rgd.yaml` (survives in the RGD-rendered assembly — verified by `supervisor.rgd.txt`) |
+| SUP-67 | MGI allele-dispatch hooks (attribution from `fullname_attribution`, "gifted from"/"obtained from" trigger phrases, strip zygosity, concise lab/institution attribution). | `packages/alliance/group_rules/supervisor/mgi.yaml` (survives in the MGI-rendered assembly — verified by `supervisor.mgi.txt`) |
+| SUP-68 | RGD allele-dispatch hooks (institution attribution from `fullname_attribution`, Medical College of Wisconsin / Sage / Horizon, ignore author names). | `packages/alliance/group_rules/supervisor/rgd.yaml` (survives in the RGD-rendered assembly — verified by `supervisor.rgd.txt`) |
 
 ## CORE-injected (no base restatement)
 

@@ -212,7 +212,7 @@ def test_alliance_contributes_supervisor_group_rules_with_alliance_provenance():
     } == {"MGI", "RGD"}
     assert all(
         supervisor_source.source_file_display(path).startswith(
-            "packages/agr.alliance/agents/supervisor/group_rules/"
+            "packages/agr.alliance/group_rules/supervisor/"
         )
         for path in supervisor_source.group_rule_files
     )
@@ -417,7 +417,7 @@ def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch, tmp_pat
     )
     assert any(
         call["source_file"]
-        == "packages/agr.alliance/agents/supervisor/group_rules/mgi.yaml"
+        == "packages/agr.alliance/group_rules/supervisor/mgi.yaml"
         and call["prompt_type"] == "group_rules"
         and call["group_id"] == "MGI"
         for call in captured_calls

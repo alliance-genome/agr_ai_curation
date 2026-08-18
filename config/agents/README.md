@@ -66,7 +66,7 @@ dependencies:
 exports:
   - kind: group_rule
     name: supervisor.FB
-    path: agents/supervisor/group_rules/fb.yaml
+    path: group_rules/supervisor/fb.yaml
 ```
 
 The runtime fails closed when the target is missing or ambiguous, the target

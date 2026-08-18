@@ -104,7 +104,7 @@ def _write_group_rule_contribution_fixture(
             {
                 "kind": "group_rule",
                 "name": f"{target_agent}.TEAM",
-                "path": "agents/supervisor/group_rules/team.yaml",
+                "path": "group_rules/supervisor/team.yaml",
             }
         ],
     }
@@ -113,9 +113,7 @@ def _write_group_rule_contribution_fixture(
             {"package_id": "demo.core", "version_range": ">=1.0.0,<2.0.0"}
         ]
     _write_package_manifest(contributor_dir, contributor_manifest)
-    contributed_rule = (
-        contributor_dir / "agents" / "supervisor" / "group_rules" / "team.yaml"
-    )
+    contributed_rule = contributor_dir / "group_rules" / "supervisor" / "team.yaml"
     contributed_rule.parent.mkdir(parents=True)
     contributed_rule.write_text(
         "group_id: TEAM\ncontent: Extension rules\n",
@@ -138,7 +136,7 @@ def test_dependency_package_contributes_group_rule_with_its_own_provenance(tmp_p
     assert supervisor.agent_dir == owner_dir / "agents" / "supervisor"
     assert supervisor.group_rule_files == (contributed_rule,)
     assert supervisor.source_file_display(contributed_rule) == (
-        "packages/demo.extension/agents/supervisor/group_rules/team.yaml"
+        "packages/demo.extension/group_rules/supervisor/team.yaml"
     )
 
     core_only = agent_sources.resolve_agent_config_sources(owner_dir)
@@ -419,7 +417,7 @@ def test_resolve_agent_sources_rejects_package_prompt_exports_without_agent_bund
     with pytest.raises(
         ValueError,
         match=(
-            "Package 'demo.core' exports prompt/schema/group rules for "
+            "Package 'demo.core' exports prompt/schema assets for "
             "unknown agent bundle\\(s\\): demo_agent"
         ),
     ):

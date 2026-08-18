@@ -58,7 +58,7 @@ dependencies:
 exports:
   - kind: group_rule
     name: supervisor.FB
-    path: agents/supervisor/group_rules/fb.yaml
+    path: group_rules/supervisor/fb.yaml
 ```
 
 Composition fails when the dependency is absent, the target is missing or

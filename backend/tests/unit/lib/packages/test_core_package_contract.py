@@ -104,12 +104,12 @@ def test_alliance_package_declares_core_dependency_and_supervisor_rule_exports()
         (
             ExportKind.GROUP_RULE,
             "supervisor.MGI",
-            "agents/supervisor/group_rules/mgi.yaml",
+            "group_rules/supervisor/mgi.yaml",
         ),
         (
             ExportKind.GROUP_RULE,
             "supervisor.RGD",
-            "agents/supervisor/group_rules/rgd.yaml",
+            "group_rules/supervisor/rgd.yaml",
         ),
     }
 
