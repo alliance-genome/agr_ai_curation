@@ -14,6 +14,7 @@ import {
   useWeaviateHealth,
   normalizeDocumentListResponse,
   normalizeDocumentDetailResponse,
+  type DocumentResponse,
 } from './weaviate';
 import { logger } from './logger';
 import { createMockDocument } from '../test/test-utils';
@@ -185,76 +186,39 @@ describe('weaviate service', () => {
   });
 
   describe('useDocument', () => {
-    it('fetches a single document by ID', async () => {
-      const mockRawResponse = {
-        document: {
-          id: 'doc-1',
-          filename: 'mock.pdf',
-          file_size: 2048,
-          creation_date: '2024-01-01T00:00:00Z',
-          last_accessed_date: '2024-01-02T00:00:00Z',
-          processing_status: 'completed',
-          embedding_status: 'completed',
-          chunk_count: 10,
-          vector_count: 8,
-          metadata: {
-            page_count: 10,
-            author: 'Author',
+    it('fetches and normalizes the authoritative flat document response', async () => {
+      const mockResponse: DocumentResponse = {
+        document_id: 'doc-1',
+        job_id: null,
+        user_id: 5,
+        filename: 'mock.pdf',
+        title: null,
+        status: 'COMPLETED',
+        upload_timestamp: '2024-01-01T00:00:00Z',
+        processing_started_at: null,
+        processing_completed_at: null,
+        file_size_bytes: 2048,
+        weaviate_tenant: 'tenant-user-5',
+        chunk_count: 10,
+        error_message: null,
+        source_provenance: {
+          provider: 'abc_literature',
+          provider_metadata: {
+            display_label: 'ABC Literature',
+            reference_label_priority: ['external_ids.fbrf', 'reference_curie'],
           },
-          source_provenance: {
-            provider: 'abc_literature',
-            provider_metadata: {
-              display_label: 'ABC Literature',
-              reference_label_priority: ['external_ids.fbrf', 'reference_curie'],
-            },
-            reference_curie: 'AGRKB:101',
-            external_ids: { pmid: '12345' },
-            converted_artifact_id: 'converted-md-1',
-            source_md5: 'abc123',
-            access_mods: { mods: ['FB'] },
-            viewer_mode: 'local_pdf',
-          },
+          reference_curie: 'AGRKB:101',
+          external_ids: { pmid: '12345' },
+          converted_artifact_id: 'converted-md-1',
+          source_md5: 'abc123',
+          access_mods: { mods: ['FB'] },
+          viewer_mode: 'local_pdf',
         },
-        chunks_preview: [
-          {
-            id: 'chunk-1',
-            content: 'Hello world',
-            chunk_index: 0,
-            page_number: 1,
-            element_type: 'NarrativeText',
-            section_title: 'Intro',
-            embedding_model: 'text-embedding-xyz',
-          },
-        ],
-        total_chunks: 10,
-        embedding_summary: {
-          total_chunks: 10,
-          embedded_chunks: 8,
-          coverage_percentage: 80,
-          last_embedded_at: '2024-01-03T00:00:00Z',
-          primary_model: 'text-embedding-xyz',
-          models: [{ model: 'text-embedding-xyz', chunk_count: 8 }],
-        },
-        pipeline_status: {
-          current_stage: 'completed',
-          progress_percentage: 100,
-          message: 'Finished',
-          updated_at: '2024-01-04T00:00:00Z',
-        },
-        related_documents: [
-          {
-            id: 'doc-2',
-            filename: 'secondary.pdf',
-            chunk_count: 5,
-            vector_count: 5,
-          },
-        ],
-        schema_version: '1.0.0',
       };
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => mockRawResponse,
+        json: async () => mockResponse,
       });
 
       const { result } = renderHook(
@@ -273,15 +237,13 @@ describe('weaviate service', () => {
           title: null,
           fileSize: 2048,
           creationDate: '2024-01-01T00:00:00Z',
-          lastAccessedDate: '2024-01-02T00:00:00Z',
+          lastAccessedDate: null,
           processingStatus: 'completed',
-          embeddingStatus: 'completed',
+          embeddingStatus: null,
+          errorMessage: null,
           chunkCount: 10,
-          vectorCount: 8,
-          metadata: {
-            page_count: 10,
-            author: 'Author',
-          },
+          vectorCount: null,
+          metadata: null,
           sourceProvenance: {
             provider: 'abc_literature',
             providerMetadata: {
@@ -305,54 +267,6 @@ describe('weaviate service', () => {
             viewerMode: 'local_pdf',
           },
         },
-        embeddingSummary: {
-          totalChunks: 10,
-          embeddedChunks: 8,
-          coveragePercentage: 80,
-          lastEmbeddedAt: '2024-01-03T00:00:00Z',
-          primaryModel: 'text-embedding-xyz',
-          models: [{ name: 'text-embedding-xyz', chunkCount: 8 }],
-        },
-        pipelineStatus: {
-          currentStage: 'completed',
-          progressPercentage: 100,
-          message: 'Finished',
-          startedAt: null,
-          updatedAt: '2024-01-04T00:00:00Z',
-          completedAt: null,
-          errorCount: null,
-        },
-        chunksPreview: [
-          {
-            id: 'chunk-1',
-            chunkIndex: 0,
-            content: 'Hello world',
-            pageNumber: 1,
-            elementType: 'NarrativeText',
-            sectionTitle: 'Intro',
-            metadata: null,
-            embeddingModel: 'text-embedding-xyz',
-            embeddingTimestamp: null,
-          },
-        ],
-        totalChunks: 10,
-        relatedDocuments: [
-          {
-            id: 'doc-2',
-            filename: 'secondary.pdf',
-            title: null,
-            fileSize: null,
-            creationDate: null,
-            lastAccessedDate: null,
-            processingStatus: null,
-            embeddingStatus: null,
-            chunkCount: 5,
-            vectorCount: 5,
-            metadata: null,
-            sourceProvenance: null,
-          },
-        ],
-        schemaVersion: '1.0.0',
       });
       expect(mockFetch).toHaveBeenCalledWith(
         '/api/weaviate/documents/doc-1',
@@ -370,98 +284,34 @@ describe('weaviate service', () => {
       expect(result.current.fetchStatus).toBe('idle');
     });
 
-    it('normalizes flat document contract payloads', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          document_id: 'doc-flat',
-          filename: 'flat.pdf',
-          status: 'COMPLETED',
-          upload_timestamp: '2026-06-26T00:00:00Z',
-          file_size_bytes: 4096,
-          chunk_count: 14,
-          source_provenance: {
-            provider: 'abc_literature',
-            reference_id: 'ref-flat',
-            external_ids: { pmid: '98765' },
-            viewer_mode: 'local_pdf',
-          },
-        }),
+    it('keeps unavailable detail-only metrics null', () => {
+      const normalized = normalizeDocumentDetailResponse({
+        document_id: 'doc-null',
+        job_id: null,
+        user_id: 5,
+        filename: 'null.pdf',
+        title: null,
+        status: 'PENDING',
+        upload_timestamp: '2026-08-18T00:00:00Z',
+        processing_started_at: null,
+        processing_completed_at: null,
+        file_size_bytes: 1024,
+        weaviate_tenant: 'tenant-user-5',
+        chunk_count: null,
+        error_message: null,
+        source_provenance: null,
       });
 
-      const { result } = renderHook(
-        () => useDocument('doc-flat'),
-        { wrapper: createWrapper() }
-      );
-
-      await waitFor(() => {
-        expect(result.current.isSuccess).toBe(true);
+      expect(normalized.document).toMatchObject({
+        embeddingStatus: null,
+        chunkCount: null,
+        vectorCount: null,
+        sourceProvenance: null,
       });
-
-      expect(result.current.data?.document).toMatchObject({
-        id: 'doc-flat',
-        filename: 'flat.pdf',
-        processingStatus: 'completed',
-        fileSize: 4096,
-        creationDate: '2026-06-26T00:00:00Z',
-        chunkCount: 14,
-        sourceProvenance: expect.objectContaining({
-          provider: 'abc_literature',
-          referenceId: 'ref-flat',
-          externalIds: { pmid: '98765' },
-          viewerMode: 'local_pdf',
-        }),
-      });
-      expect(result.current.data?.totalChunks).toBe(14);
-    });
-  });
-
-  describe('normalizeDocumentDetailResponse', () => {
-    it('preserves explicit null provenance instead of falling back to stale summary provenance', () => {
-      const normalized = normalizeDocumentDetailResponse(
-        {
-          document: {
-            id: 'doc-null',
-            filename: 'null.pdf',
-            source_provenance: null,
-          },
-        },
-        {
-          fallbackSummary: {
-            id: 'doc-null',
-            filename: 'stale.pdf',
-            title: null,
-            fileSize: null,
-            creationDate: null,
-            lastAccessedDate: null,
-            processingStatus: null,
-            embeddingStatus: null,
-            chunkCount: null,
-            vectorCount: null,
-            metadata: null,
-            sourceProvenance: {
-              provider: 'abc_literature',
-              referenceId: 'stale-ref',
-              referenceCurie: null,
-              sourceFileId: null,
-              pdfArtifactId: null,
-              convertedArtifactId: null,
-              externalIds: null,
-              sourceMd5: null,
-              fileClass: null,
-              fileExtension: null,
-              artifactStatus: null,
-              importStatus: null,
-              importedAt: null,
-              accessScope: null,
-              accessMods: null,
-              viewerMode: null,
-            },
-          },
-        }
-      );
-
-      expect(normalized.document.sourceProvenance).toBeNull();
+      expect(normalized).not.toHaveProperty('embeddingSummary');
+      expect(normalized).not.toHaveProperty('pipelineStatus');
+      expect(normalized).not.toHaveProperty('chunksPreview');
+      expect(normalized).not.toHaveProperty('relatedDocuments');
     });
   });
 

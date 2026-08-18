@@ -12,7 +12,6 @@ import {
   Divider,
   Grid,
   IconButton,
-  LinearProgress,
   List,
   ListItem,
   ListItemText,
@@ -28,8 +27,6 @@ import {
 import {
   DocumentDetailData,
   DocumentSummary,
-  EmbeddingModelBreakdown,
-  ChunkPreviewSummary,
   useDocument,
 } from '../../services/weaviate';
 import {
@@ -116,12 +113,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
     }
     return {
       document: documentSummary,
-      embeddingSummary: undefined,
-      pipelineStatus: undefined,
-      chunksPreview: [],
-      totalChunks: documentSummary.chunkCount ?? 0,
-      relatedDocuments: [],
-      schemaVersion: undefined,
     };
   }, [documentSummary]);
 
@@ -189,8 +180,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
   }, [documentId, onDelete, onRefreshRequested, onClose]);
 
   const documentTitle = details?.document.filename ?? documentSummary?.filename ?? 'Document details';
-  const embeddingSummary = details?.embeddingSummary;
-  const pipelineStatus = details?.pipelineStatus;
   const embeddingStatusCurrent = details?.document.embeddingStatus ?? documentSummary?.embeddingStatus ?? null;
   const processingStatusCurrent = details?.document.processingStatus ?? documentSummary?.processingStatus ?? null;
   const detailSourceProvenance = details?.document.sourceProvenance;
@@ -211,8 +200,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
     </Box>
   );
 
-  const chunkPreview = details?.chunksPreview ?? ([] as ChunkPreviewSummary[]);
-  const previewChunks = chunkPreview.slice(0, 3);
   const rawMetadata = details?.document.metadata;
   const metadata = React.useMemo(() => {
     if (rawMetadata && typeof rawMetadata === 'object') {
@@ -311,23 +298,20 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                 size="small"
               />
               <Chip
-                label={`Embedding: ${details.document.embeddingStatus ?? 'unknown'}`}
+                label={`Embedding: ${details.document.embeddingStatus ?? 'Unavailable'}`}
                 color={getStatusColor(details.document.embeddingStatus)}
                 size="small"
               />
               <Chip
-                label={`Vectors: ${details.document.vectorCount ?? 0}`}
+                label={`Vectors: ${details.document.vectorCount ?? 'Unavailable'}`}
                 size="small"
                 variant="outlined"
               />
               <Chip
-                label={`Chunks: ${details.document.chunkCount ?? details.totalChunks ?? 0}`}
+                label={`Chunks: ${details.document.chunkCount ?? 'Unavailable'}`}
                 size="small"
                 variant="outlined"
               />
-              {details.schemaVersion && (
-                <Chip label={`Schema v${details.schemaVersion}`} size="small" variant="outlined" />
-              )}
             </Stack>
 
             <Grid container spacing={2}>
@@ -351,70 +335,9 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                     Processing & Embeddings
                   </Typography>
                   <Divider sx={{ mb: 2 }} />
-                  {embeddingSummary && (
-                    <Box sx={{ mb: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        Embedding Coverage
-                      </Typography>
-                      <Typography variant="body1">
-                        {embeddingSummary.coveragePercentage !== undefined && embeddingSummary.coveragePercentage !== null
-                          ? `${embeddingSummary.coveragePercentage.toFixed(2)}%`
-                          : `${embeddingSummary.embeddedChunks ?? 0}/${embeddingSummary.totalChunks ?? 0}`}
-                      </Typography>
-                    </Box>
-                  )}
-                  {renderInfoItem('Last Embedded', formatDateTime(embeddingSummary?.lastEmbeddedAt ?? null))}
-                  {renderInfoItem('Embedding Model', embeddingSummary?.primaryModel ?? (embeddingSummary?.models?.[0]?.name ?? '—'))}
-                  {embeddingSummary && embeddingSummary.models.length > 1 && (
-                    <Box sx={{ mb: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        Model Breakdown
-                      </Typography>
-                      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                        {embeddingSummary.models.map((model: EmbeddingModelBreakdown) => (
-                          <Chip
-                            key={model.name}
-                            label={`${model.name}: ${model.chunkCount}`}
-                            size="small"
-                            variant="outlined"
-                          />
-                        ))}
-                      </Stack>
-                    </Box>
-                  )}
-                  {pipelineStatus && (
-                    <Box sx={{ mt: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        Pipeline Stage
-                      </Typography>
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                        <Chip
-                          label={pipelineStatus.currentStage ?? 'unknown'}
-                          size="small"
-                          color={getStatusColor(pipelineStatus.currentStage)}
-                          variant="outlined"
-                        />
-                        {typeof pipelineStatus.progressPercentage === 'number' && (
-                          <Typography variant="body2" color="text.secondary">
-                            {pipelineStatus.progressPercentage}%
-                          </Typography>
-                        )}
-                      </Stack>
-                      <LinearProgress
-                        variant={typeof pipelineStatus.progressPercentage === 'number' ? 'determinate' : 'indeterminate'}
-                        value={pipelineStatus.progressPercentage ?? undefined}
-                        sx={{ height: 6, borderRadius: 999, mb: 1 }}
-                      />
-                      {pipelineStatus.message && (
-                        <Typography variant="body2" color="text.secondary">
-                          {pipelineStatus.message}
-                        </Typography>
-                      )}
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                        Updated: {formatDateTime(pipelineStatus.updatedAt)}
-                      </Typography>
-                    </Box>
-                  )}
+                  {renderInfoItem('Embedding Coverage', 'Unavailable')}
+                  {renderInfoItem('Last Embedded', 'Unavailable')}
+                  {renderInfoItem('Embedding Model', 'Unavailable')}
                 </Paper>
               </Grid>
               <Grid item xs={12}>
@@ -482,81 +405,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
               </Paper>
             )}
 
-            <Paper variant="outlined" sx={{ p: 2 }}>
-              <Typography variant="subtitle2" gutterBottom>
-                Chunk Preview
-              </Typography>
-              <Divider sx={{ mb: 2 }} />
-              {previewChunks.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  No chunks available for preview.
-                </Typography>
-              ) : (
-                <Stack spacing={2}>
-                  {previewChunks.map((chunk: ChunkPreviewSummary) => (
-                    <Box key={chunk.id}>
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                        <Typography variant="subtitle2">
-                          Chunk #{chunk.chunkIndex ?? '—'}
-                        </Typography>
-                        {chunk.sectionTitle && (
-                          <Typography variant="body2" color="text.secondary">
-                            • {chunk.sectionTitle}
-                          </Typography>
-                        )}
-                        {chunk.elementType && (
-                          <Chip label={chunk.elementType} size="small" variant="outlined" />
-                        )}
-                        {chunk.pageNumber && (
-                          <Chip label={`Page ${chunk.pageNumber}`} size="small" variant="outlined" />
-                        )}
-                      </Stack>
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          display: '-webkit-box',
-                          WebkitLineClamp: 3,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden',
-                          whiteSpace: 'pre-wrap',
-                        }}
-                      >
-                        {chunk.content.trim() || '—'}
-                      </Typography>
-                      {chunk.embeddingModel && (
-                        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-                          Embedding model: {chunk.embeddingModel}
-                        </Typography>
-                      )}
-                    </Box>
-                  ))}
-                  {chunkPreview.length > previewChunks.length && (
-                    <Typography variant="caption" color="text.secondary">
-                      Showing first {previewChunks.length} of {chunkPreview.length} preview chunks.
-                    </Typography>
-                  )}
-                </Stack>
-              )}
-            </Paper>
-
-            {details.relatedDocuments.length > 0 && (
-              <Paper variant="outlined" sx={{ p: 2 }}>
-                <Typography variant="subtitle2" gutterBottom>
-                  Related Documents
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-                <List dense disablePadding>
-                  {details.relatedDocuments.map((doc) => (
-                    <ListItem key={doc.id} disableGutters>
-                      <ListItemText
-                        primary={doc.filename}
-                        secondary={`Vectors: ${doc.vectorCount ?? 0} • Chunks: ${doc.chunkCount ?? 0}`}
-                      />
-                    </ListItem>
-                  ))}
-                </List>
-              </Paper>
-            )}
           </Stack>
         )}
 

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '../../test/test-utils';
 import DocumentDetailsDialog from './DocumentDetailsDialog';
-import type { DocumentDetailData } from '../../services/weaviate';
+import {
+  normalizeDocumentDetailResponse,
+  type DocumentResponse,
+} from '../../services/weaviate';
 
 const useDocumentMock = vi.fn();
 
@@ -13,52 +16,48 @@ vi.mock('../../services/weaviate', async () => {
   };
 });
 
-const providerDocument: DocumentDetailData = {
-  document: {
-    id: 'doc-provider',
-    filename: 'provider.pdf',
-    title: null,
-    fileSize: 1024,
-    creationDate: '2026-06-26T00:00:00Z',
-    lastAccessedDate: null,
-    processingStatus: 'completed',
-    embeddingStatus: 'completed',
-    chunkCount: 12,
-    vectorCount: 12,
-    metadata: null,
-    sourceProvenance: {
-      provider: 'archive_gateway',
-      providerMetadata: {
-        displayLabel: 'Genome Archive',
-        referenceLabelPriority: ['external_ids.catalog', 'reference_curie'],
-      },
-      referenceId: 'ref-123',
-      referenceCurie: 'ARCHIVE:101',
-      sourceFileId: 'source-pdf-1',
-      pdfArtifactId: 'source-pdf-1',
-      convertedArtifactId: 'converted-md-1',
-      externalIds: { catalog: 'CAT-123', accession: 'ACC-456' },
-      sourceMd5: 'abc123',
-      fileClass: 'converted_merged_nxml',
-      fileExtension: 'md',
-      artifactStatus: 'ready',
-      importStatus: 'imported',
-      importedAt: null,
-      accessScope: 'restricted',
-      accessMods: { mods: ['GROUP'] },
-      viewerMode: 'local_pdf',
+const flatDocumentResponse: DocumentResponse = {
+  document_id: 'doc-provider',
+  job_id: null,
+  user_id: 5,
+  filename: 'provider.pdf',
+  title: null,
+  status: 'COMPLETED',
+  upload_timestamp: '2026-06-26T00:00:00Z',
+  processing_started_at: null,
+  processing_completed_at: null,
+  file_size_bytes: 1024,
+  weaviate_tenant: 'tenant-user-5',
+  chunk_count: 12,
+  error_message: null,
+  source_provenance: {
+    provider: 'archive_gateway',
+    provider_metadata: {
+      display_label: 'Genome Archive',
+      reference_label_priority: ['external_ids.catalog', 'reference_curie'],
     },
+    reference_id: 'ref-123',
+    reference_curie: 'ARCHIVE:101',
+    source_file_id: 'source-pdf-1',
+    pdf_artifact_id: 'source-pdf-1',
+    converted_artifact_id: 'converted-md-1',
+    external_ids: { catalog: 'CAT-123', accession: 'ACC-456' },
+    source_md5: 'abc123',
+    file_class: 'converted_merged_nxml',
+    file_extension: 'md',
+    artifact_status: 'ready',
+    import_status: 'imported',
+    imported_at: null,
+    access_scope: 'restricted',
+    access_mods: { mods: ['GROUP'] },
+    viewer_mode: 'local_pdf',
   },
-  embeddingSummary: undefined,
-  pipelineStatus: undefined,
-  chunksPreview: [],
-  totalChunks: 12,
-  relatedDocuments: [],
-  schemaVersion: undefined,
 };
 
+const providerDocument = normalizeDocumentDetailResponse(flatDocumentResponse);
+
 describe('DocumentDetailsDialog', () => {
-  it('renders compact provider provenance without raw payload dumps', () => {
+  it('renders a real flat detail response with unavailable embedding metrics', () => {
     useDocumentMock.mockReturnValue({
       data: providerDocument,
       isLoading: false,
@@ -84,6 +83,11 @@ describe('DocumentDetailsDialog', () => {
     expect(screen.getByText('restricted')).toBeInTheDocument();
     expect(screen.getByText('mods: GROUP')).toBeInTheDocument();
     expect(screen.queryByText('conversion_request')).not.toBeInTheDocument();
+    expect(screen.getByText('Vectors: Unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Vectors: 0')).not.toBeInTheDocument();
+    expect(screen.getByText('Embedding Coverage').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.queryByText('Chunk Preview')).not.toBeInTheDocument();
+    expect(screen.queryByText('Related Documents')).not.toBeInTheDocument();
   });
 
   it('renders ordinary uploaded documents as local PDF provenance', () => {
