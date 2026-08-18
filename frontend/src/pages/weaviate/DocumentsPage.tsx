@@ -3,10 +3,9 @@ import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
-import { normalizeDocumentListResponse } from '../../services/weaviate';
+import { fetchDocumentList } from '../../services/weaviate';
 import type {
   DocumentSummary,
-  DocumentListResponse,
   DocumentFilter,
 } from '../../services/weaviate';
 
@@ -39,36 +38,6 @@ const sortFieldForApi = (field: string | undefined): string => {
     default:
       return 'creationDate';
   }
-};
-
-export const buildDocumentListSearchParams = (
-  paginationModel: GridPaginationModel,
-  sortModel: GridSortModel,
-  filters: DocumentFilter,
-): URLSearchParams => {
-  const params = new URLSearchParams({
-    page: String(paginationModel.page + 1),
-    page_size: String(paginationModel.pageSize),
-    sort_by: sortFieldForApi(sortModel[0]?.field),
-    sort_order: sortModel[0]?.sort === 'asc' ? 'asc' : 'desc',
-  });
-  if (filters.searchTerm) {
-    params.set('search', filters.searchTerm);
-  }
-  filters.embeddingStatus?.forEach((status) => params.append('embedding_status', status));
-  if (filters.dateFrom) {
-    params.set('date_from', filters.dateFrom.toISOString());
-  }
-  if (filters.dateTo) {
-    params.set('date_to', filters.dateTo.toISOString());
-  }
-  if (filters.minVectorCount !== undefined) {
-    params.set('min_vector_count', String(filters.minVectorCount));
-  }
-  if (filters.maxVectorCount !== undefined) {
-    params.set('max_vector_count', String(filters.maxVectorCount));
-  }
-  return params;
 };
 
 export const lastDocumentPage = (totalDocuments: number, pageSize: number): number => (
@@ -150,27 +119,23 @@ const DocumentsPage: React.FC = () => {
     setLoading(true);
     try {
       console.log('[DocumentsPage] Refresh start');
-      const params = buildDocumentListSearchParams(paginationModel, sortModel, queryFilters);
-
-      const response = await fetch(`/api/weaviate/documents?${params.toString()}`, {
-        credentials: 'include', // Include httpOnly cookies for authentication
+      const data = await fetchDocumentList({
+        page: paginationModel.page,
+        pageSize: paginationModel.pageSize,
+        sortBy: sortFieldForApi(sortModel[0]?.field),
+        sortOrder: sortModel[0]?.sort === 'asc' ? 'asc' : 'desc',
+        search: queryFilters.searchTerm,
+        embeddingStatus: queryFilters.embeddingStatus,
+        dateFrom: queryFilters.dateFrom,
+        dateTo: queryFilters.dateTo,
+        minVectorCount: queryFilters.minVectorCount,
+        maxVectorCount: queryFilters.maxVectorCount,
+      }, {
         signal: requestController.signal,
-        headers: {
-          Accept: 'application/json',
-        },
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to load documents (${response.status})`);
-      }
-
-      const rawData = (await response.json()) as DocumentListResponse;
       if (requestId !== documentRequestIdRef.current) {
         return;
       }
-      const data = normalizeDocumentListResponse(rawData);
-      // The documents API emits one flat snake_case contract; normalization lives
-      // at the service boundary.
       const totalItems = data.total;
       const lastPage = lastDocumentPage(totalItems, paginationModel.pageSize);
       if (paginationModel.page > lastPage) {
@@ -185,9 +150,11 @@ const DocumentsPage: React.FC = () => {
         return;
       }
       console.error('Error fetching documents:', error);
-      // For now, just set empty data to prevent errors
-      setDocuments([]);
-      setTotalCount(0);
+      setSnackbar({
+        open: true,
+        message: error instanceof Error ? error.message : 'Failed to load documents',
+        severity: 'error',
+      });
     } finally {
       if (requestId === documentRequestIdRef.current) {
         setLoading(false);

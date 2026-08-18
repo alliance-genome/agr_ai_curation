@@ -74,24 +74,6 @@ export const createMockChunk = (overrides = {}) => ({
   ...overrides,
 });
 
-export const createMockFilter = (overrides = {}) => ({
-  searchTerm: '',
-  embeddingStatus: [],
-  dateFrom: null,
-  dateTo: null,
-  minVectorCount: undefined,
-  maxVectorCount: undefined,
-  ...overrides,
-});
-
-export const createMockPaginationParams = (overrides = {}) => ({
-  page: 0,
-  pageSize: 20,
-  sortBy: 'creationDate',
-  sortOrder: 'desc' as const,
-  ...overrides,
-});
-
 // Re-export everything
 export * from '@testing-library/react';
 export { customRender as render };

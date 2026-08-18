@@ -116,6 +116,19 @@ export interface DocumentListData {
   offset: number;
 }
 
+export interface DocumentListQuery {
+  page: number;
+  pageSize: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  search?: string;
+  embeddingStatus?: string[];
+  dateFrom?: Date | null;
+  dateTo?: Date | null;
+  minVectorCount?: number;
+  maxVectorCount?: number;
+}
+
 export interface RawDocumentDetailResponse {
   document?: Record<string, unknown>;
   chunks?: Array<Record<string, unknown>>;
@@ -612,13 +625,6 @@ export interface DocumentFilter {
   maxVectorCount?: number;
 }
 
-interface PaginationParams {
-  page: number;
-  pageSize: number;
-  sortBy?: string;
-  sortOrder?: 'asc' | 'desc';
-}
-
 interface ChunkingStrategy {
   strategyName: string;
   chunkingMethod: string;
@@ -736,23 +742,50 @@ export const fetchApi = async <T>(
 
     return data;
   } catch (error) {
-    // Log network or parsing errors
-    logger.error('API request failed', error as Error, {
-      component: 'weaviate-service',
-      action: 'fetchApi',
-      metadata: {
-        url,
-        method,
-      },
-    });
+    const isAbortError = typeof error === 'object' && error !== null &&
+      'name' in error && error.name === 'AbortError';
+    if (!isAbortError) {
+      // Log network or parsing errors. Request cancellation is expected control flow.
+      logger.error('API request failed', error as Error, {
+        component: 'weaviate-service',
+        action: 'fetchApi',
+        metadata: {
+          url,
+          method,
+        },
+      });
+    }
     throw error;
   }
 };
 
+export const buildDocumentListSearchParams = (
+  query: DocumentListQuery
+): URLSearchParams => {
+  const queryParams = new URLSearchParams({
+    page: String(query.page + 1),
+    page_size: String(query.pageSize),
+  });
+  if (query.sortBy) queryParams.set('sort_by', query.sortBy);
+  if (query.sortOrder) queryParams.set('sort_order', query.sortOrder);
+  if (query.search) queryParams.set('search', query.search);
+  query.embeddingStatus?.forEach((status) => queryParams.append('embedding_status', status));
+  if (query.dateFrom) queryParams.set('date_from', query.dateFrom.toISOString());
+  if (query.dateTo) queryParams.set('date_to', query.dateTo.toISOString());
+  if (query.minVectorCount !== undefined) {
+    queryParams.set('min_vector_count', String(query.minVectorCount));
+  }
+  if (query.maxVectorCount !== undefined) {
+    queryParams.set('max_vector_count', String(query.maxVectorCount));
+  }
+  return queryParams;
+};
+
 export const fetchDocumentList = async (
-  queryParams: URLSearchParams,
+  query: DocumentListQuery,
   options?: RequestInit
 ): Promise<DocumentListData> => {
+  const queryParams = buildDocumentListSearchParams(query);
   const response = await fetchApi<DocumentListResponse>(
     `/documents?${queryParams.toString()}`,
     options
@@ -879,40 +912,6 @@ export const useCancelPdfJob = (
       queryClient.invalidateQueries({ queryKey: ['pdf-jobs'] });
       queryClient.invalidateQueries({ queryKey: ['documents'] });
     },
-    ...options,
-  });
-};
-
-// Query hooks
-export const useDocuments = (
-  filters: DocumentFilter,
-  pagination: PaginationParams,
-  options?: UseQueryOptions<DocumentListData>
-) => {
-  const queryParams = new URLSearchParams({
-    page: pagination.page.toString(),
-    pageSize: pagination.pageSize.toString(),
-    ...(pagination.sortBy && { sortBy: pagination.sortBy }),
-    ...(pagination.sortOrder && { sortOrder: pagination.sortOrder }),
-    ...(filters.searchTerm && { search: filters.searchTerm }),
-    ...(filters.embeddingStatus && {
-      status: filters.embeddingStatus.join(','),
-    }),
-    ...(filters.dateFrom && {
-      dateFrom: filters.dateFrom.toISOString(),
-    }),
-    ...(filters.dateTo && { dateTo: filters.dateTo.toISOString() }),
-    ...(filters.minVectorCount !== undefined && {
-      min_vector_count: filters.minVectorCount.toString(),
-    }),
-    ...(filters.maxVectorCount !== undefined && {
-      max_vector_count: filters.maxVectorCount.toString(),
-    }),
-  });
-
-  return useQuery({
-    queryKey: ['documents', filters, pagination],
-    queryFn: () => fetchDocumentList(queryParams),
     ...options,
   });
 };

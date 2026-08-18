@@ -15,7 +15,8 @@ import {
   CloudSync,
   Check,
 } from '@mui/icons-material';
-import type { DocumentListResponse } from '../../services/weaviate';
+import { fetchDocumentList } from '../../services/weaviate';
+import type { DocumentListData } from '../../services/weaviate';
 
 interface HealthData {
   status: string;
@@ -34,7 +35,7 @@ interface HealthData {
 
 const Dashboard: React.FC = () => {
   const [healthData, setHealthData] = useState<HealthData | null>(null);
-  const [documentStats, setDocumentStats] = useState<DocumentListResponse | null>(null);
+  const [documentStats, setDocumentStats] = useState<DocumentListData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,11 +51,7 @@ const Dashboard: React.FC = () => {
         setHealthData(health);
 
         // Fetch document stats
-        const docsResponse = await fetch('/api/weaviate/documents?page=1&page_size=1');
-        if (!docsResponse.ok) {
-          throw new Error(`Failed to load document stats (${docsResponse.status})`);
-        }
-        const docs = (await docsResponse.json()) as DocumentListResponse;
+        const docs = await fetchDocumentList({ page: 0, pageSize: 1 });
         setDocumentStats(docs);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
 import type { DocumentFilter, DocumentSummary } from '../../services/weaviate';
-import DocumentsPage, { buildDocumentListSearchParams, lastDocumentPage } from './DocumentsPage';
+import DocumentsPage, { lastDocumentPage } from './DocumentsPage';
 
 vi.hoisted(() => {
   vi.stubEnv('VITE_DOCUMENTS_LIBRARY_DEFAULT_PAGE_SIZE', '20');
@@ -19,6 +19,7 @@ interface MockDocumentListProps {
   onPaginationModelChange?: (model: GridPaginationModel) => void;
   sortModel?: GridSortModel;
   onSortModelChange?: (model: GridSortModel) => void;
+  onRefresh?: () => void;
 }
 
 interface MockInlineFilterBarProps {
@@ -37,6 +38,7 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
     onPaginationModelChange,
     sortModel,
     onSortModelChange,
+    onRefresh,
   }: MockDocumentListProps) => (
     <section
       data-testid="document-list"
@@ -63,6 +65,9 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
         onClick={() => onSortModelChange?.([{ field: 'filename', sort: 'asc' }])}
       >
         Sort by filename
+      </button>
+      <button type="button" onClick={() => onRefresh?.()}>
+        Refresh documents
       </button>
     </section>
   ),
@@ -147,29 +152,7 @@ function fetchSignal(callIndex: number): AbortSignal {
   return init?.signal as AbortSignal;
 }
 
-describe('buildDocumentListSearchParams', () => {
-  it('sends search and pagination to the tenant-scoped documents endpoint', () => {
-    const params = buildDocumentListSearchParams(
-      { page: 9, pageSize: 20 },
-      [{ field: 'filename', sort: 'asc' }],
-      { searchTerm: 'J-158751.pdf', embeddingStatus: ['completed'] },
-    );
-
-    expect(params.toString()).toBe(
-      'page=10&page_size=20&sort_by=filename&sort_order=asc&search=J-158751.pdf&embedding_status=completed',
-    );
-  });
-
-  it('uses creation-date descending when the grid has no supported sort', () => {
-    const params = buildDocumentListSearchParams(
-      { page: 0, pageSize: 50 },
-      [{ field: 'lastAccessedDate', sort: 'asc' }],
-      {},
-    );
-
-    expect(params.toString()).toBe('page=1&page_size=50&sort_by=creationDate&sort_order=asc');
-  });
-
+describe('lastDocumentPage', () => {
   it('returns the last valid page after the final page shrinks', () => {
     expect(lastDocumentPage(10, 10)).toBe(0);
     expect(lastDocumentPage(11, 10)).toBe(1);
@@ -182,7 +165,7 @@ describe('DocumentsPage request ownership', () => {
     vi.mocked(global.fetch).mockReset();
   });
 
-  it('loads the canonical response through the direct request contract and passes the server total', async () => {
+  it('loads the normalized service response and passes the server total', async () => {
     vi.mocked(global.fetch).mockResolvedValue(documentListResponse('canonical-document', 37));
 
     render(<DocumentsPage />);
@@ -200,9 +183,39 @@ describe('DocumentsPage request ownership', () => {
     );
     expect(vi.mocked(global.fetch).mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       credentials: 'include',
-      headers: { Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       signal: expect.any(AbortSignal),
     }));
+  });
+
+  it('surfaces an initial list failure instead of presenting it as a successful empty result', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(
+      JSON.stringify({ message: 'Document service unavailable' }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } },
+    ));
+
+    render(<DocumentsPage />);
+
+    expect(await screen.findByText('Document service unavailable')).toBeInTheDocument();
+    expect(screen.getByTestId('document-list')).toHaveAttribute('data-total-count', '0');
+  });
+
+  it('retains loaded rows and total while surfacing a refresh failure', async () => {
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(documentListResponse('retained-document', 37))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ message: 'Refresh failed' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } },
+      ));
+
+    render(<DocumentsPage />);
+    expect(await screen.findByText('retained-document.pdf')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh documents' }));
+
+    expect(await screen.findByText('Refresh failed')).toBeInTheDocument();
+    expect(screen.getByText('retained-document.pdf')).toBeInTheDocument();
+    expect(screen.getByTestId('document-list')).toHaveAttribute('data-total-count', '37');
   });
 
   it('propagates controlled pagination and resets the page for sort and filter changes', async () => {
