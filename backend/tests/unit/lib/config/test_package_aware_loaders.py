@@ -194,17 +194,38 @@ def test_group_rule_contribution_rejects_non_string_group_id(tmp_path):
         agent_sources.resolve_agent_config_sources(packages_dir)
 
 
-def test_group_rule_contribution_rejects_blank_group_id(tmp_path):
+@pytest.mark.parametrize("configured_group_id", ["", "   "])
+def test_group_rule_contribution_rejects_blank_group_id(
+    tmp_path,
+    configured_group_id,
+):
     packages_dir, _owner_dir, contributed_rule = (
         _write_group_rule_contribution_fixture(tmp_path)
     )
     contributed_rule.write_text(
-        "group_id: '   '\ncontent: Extension rules\n",
+        yaml.safe_dump(
+            {"group_id": configured_group_id, "content": "Extension rules"},
+            sort_keys=False,
+        ),
         encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="group_id .* must not be empty"):
         agent_sources.resolve_agent_config_sources(packages_dir)
+
+
+def test_group_rule_contribution_infers_missing_group_id_from_filename(tmp_path):
+    packages_dir, _owner_dir, contributed_rule = (
+        _write_group_rule_contribution_fixture(tmp_path)
+    )
+    contributed_rule.write_text("content: Extension rules\n", encoding="utf-8")
+
+    sources = agent_sources.resolve_agent_config_sources(packages_dir)
+
+    supervisor = next(
+        source for source in sources if source.folder_name == "supervisor"
+    )
+    assert supervisor.group_rule_files == (contributed_rule,)
 
 
 def test_package_scoped_agent_lookup_allows_duplicate_agent_ids(tmp_path):
@@ -419,7 +440,7 @@ def test_resolve_agent_sources_rejects_package_prompt_exports_without_agent_bund
     with pytest.raises(
         ValueError,
         match=(
-            "Package 'demo.core' exports prompt/schema/group rules for "
+            "Package 'demo.core' exports prompt/schema assets for "
             "unknown agent bundle\\(s\\): demo_agent"
         ),
     ):
@@ -618,7 +639,10 @@ def test_resolve_agent_config_sources_allows_config_override_layer(tmp_path):
     assert demo_source.prompt_yaml == (overrides_dir / "demo_agent" / "prompt.yaml")
 
 
-def test_resolve_agent_config_sources_merges_partial_override_without_dropping_package_bundle(tmp_path):
+def test_resolve_agent_config_sources_merges_partial_override_without_dropping_package_bundle(
+    tmp_path,
+    monkeypatch,
+):
     packages_dir = tmp_path / "packages"
     package_dir = packages_dir / "demo_core"
     overrides_dir = tmp_path / "config-agents"
@@ -689,10 +713,12 @@ def test_resolve_agent_config_sources_merges_partial_override_without_dropping_p
         override_agent_dir / "group_rules" / "custom-team.yaml"
     ).endswith("config-agents/demo_agent/group_rules/custom-team.yaml")
 
-    loaded_agents = agent_loader.load_agent_definitions(
-        (packages_dir, overrides_dir),
-        force_reload=True,
+    monkeypatch.setattr(
+        agent_sources,
+        "get_default_agent_search_paths",
+        lambda: (packages_dir, overrides_dir),
     )
+    loaded_agents = agent_loader.load_agent_definitions(force_reload=True)
 
     assert "demo_agent_validation" in loaded_agents
     assert loaded_agents["demo_agent_validation"].name == "Package Demo Agent"

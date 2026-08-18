@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
 from src.lib.config import agent_sources, prompt_loader
 from ..packages import find_repo_root
@@ -146,6 +147,32 @@ def test_load_group_rules_rejects_non_string_group_id(tmp_path):
     )
 
     with pytest.raises(ValueError, match="group_id .* must be a string"):
+        prompt_loader._load_group_rules(source, "gene", MagicMock())
+
+
+@pytest.mark.parametrize("configured_group_id", ["", "   "])
+def test_load_group_rules_rejects_blank_group_id(tmp_path, configured_group_id):
+    agent_folder = tmp_path / "gene"
+    rules_dir = agent_folder / "group_rules"
+    rules_dir.mkdir(parents=True)
+    rule_file = rules_dir / "fb.yaml"
+    rule_file.write_text(
+        yaml.safe_dump(
+            {"group_id": configured_group_id, "content": "rules"},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    source = agent_sources.AgentConfigSource(
+        folder_name="gene",
+        agent_dir=agent_folder,
+        agent_yaml=None,
+        prompt_yaml=None,
+        schema_py=None,
+        group_rule_files=(rule_file,),
+    )
+
+    with pytest.raises(ValueError, match="group_id .* must not be empty"):
         prompt_loader._load_group_rules(source, "gene", MagicMock())
 
 
