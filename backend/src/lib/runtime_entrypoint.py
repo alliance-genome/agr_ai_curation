@@ -51,6 +51,8 @@ DEFAULT_SERVER_PORT = "8000"
 DEFAULT_SERVER_WORKERS = "1"
 PACKAGE_ENV_BOOTSTRAP_ENV_VAR = "AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START"
 PACKAGE_ENV_BOOTSTRAP_DONE_ENV_VAR = "AGR_PACKAGE_ENVS_PREPARED"
+
+
 def configure_startup_logging() -> None:
     """Configure a simple logger for container startup work before app import."""
     logging.basicConfig(

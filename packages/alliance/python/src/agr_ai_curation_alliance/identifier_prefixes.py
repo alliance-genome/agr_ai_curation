@@ -15,13 +15,13 @@ _PREFIX_QUERIES = (
 )
 
 
-def get_identifier_prefixes(database_url: str) -> list[object]:
+def get_identifier_prefixes(database_url: str) -> list[str]:
     """Return the distinct identifier prefixes present in Alliance curation data."""
 
-    prefixes: list[object] = []
+    prefixes: list[str] = []
     with psycopg2.connect(database_url) as connection:
         with connection.cursor() as cursor:
             for query in _PREFIX_QUERIES:
                 cursor.execute(query)
-                prefixes.extend(row[0] if row else None for row in cursor.fetchall())
+                prefixes.extend(row[0] for row in cursor.fetchall())
     return prefixes

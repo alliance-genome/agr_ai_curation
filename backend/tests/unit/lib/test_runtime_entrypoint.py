@@ -490,13 +490,12 @@ def test_refresh_identifier_prefixes_prefers_canonical_curation_url(
         "get_curation_resolver",
         lambda: SimpleNamespace(get_connection_url=lambda: canonical_url),
     )
+    connected_urls = []
     monkeypatch.setattr(
         runtime_entrypoint,
         "build_identifier_prefix_provider_catalog",
         lambda _registry: _prefix_catalog(lambda url: connected_urls.append(url) or []),
     )
-
-    connected_urls = []
 
     assert runtime_entrypoint.refresh_identifier_prefixes(_empty_package_registry()) is True
     assert connected_urls == [canonical_url]
