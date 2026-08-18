@@ -103,19 +103,19 @@ interface BatchResultFile {
 
 interface BatchStatusStreamEvent {
   type: 'BATCH_STATUS';
-  completed_documents?: number;
-  failed_documents?: number;
+  completed_documents: number;
+  failed_documents: number;
 }
 
-interface DocumentStatusStreamEvent {
+interface DocumentStatusStreamEventBase {
   type: 'DOCUMENT_STATUS';
+  batch_id: string;
+  batch_document_id: string;
   document_id: string;
   position: number;
-  status: DocumentStatus;
   result_files: BatchResultFile[];
   output_status?: BatchDocument['output_status'];
   output_branches?: BatchOutputBranch[];
-  error_message?: string;
   processing_time_ms?: number;
   trace_id?: string;
   adapter_keys?: string[];
@@ -125,6 +125,11 @@ interface DocumentStatusStreamEvent {
   origin_session_id?: string;
   review_session_ids?: string[] | null;
 }
+
+type DocumentStatusStreamEvent = DocumentStatusStreamEventBase & (
+  | { status: 'failed'; error_message: string }
+  | { status: Exclude<DocumentStatus, 'failed'>; error_message?: string | null }
+);
 
 interface BatchCompleteStreamEvent {
   type: 'BATCH_COMPLETE';
@@ -137,7 +142,7 @@ interface BatchCompleteStreamEvent {
 
 interface BatchErrorStreamEvent {
   type: 'ERROR';
-  message?: string;
+  message: string;
 }
 
 // These are the non-batch stream events this page actively consumes. Other
@@ -495,15 +500,15 @@ const BatchPage: React.FC = () => {
           case 'BATCH_STATUS':
             setBatchState(prev => ({
               ...prev,
-              completedCount: data.completed_documents ?? prev.completedCount,
-              failedCount: data.failed_documents ?? prev.failedCount,
+              completedCount: data.completed_documents,
+              failedCount: data.failed_documents,
             }));
             break;
 
           case 'DOCUMENT_STATUS': {
             const docStatus = data.status;
             const docId = data.document_id;
-            const docPosition = data.position ?? 0;
+            const docPosition = data.position;
             const docTitle = `Document ${docPosition + 1}`; // Default title
             const resultFiles = requireBatchResultFiles(data.result_files, docId);
 
@@ -541,7 +546,7 @@ const BatchPage: React.FC = () => {
                   toolName: 'batch_document_processor',
                   friendlyName: `Failed: ${docTitle}`,
                   success: false,
-                  error: data.error_message ?? 'Unknown error',
+                  error: data.error_message,
                   agent: 'Batch Processor',
                 },
               });
@@ -579,10 +584,10 @@ const BatchPage: React.FC = () => {
 
           case 'BATCH_COMPLETE': {
             const status = data.status;
-            const completedDocs = data.completed_documents ?? 0;
-            const failedDocs = data.failed_documents ?? 0;
-            const partialDocs = data.partial_documents ?? 0;
-            const totalDocs = data.total_documents ?? 0;
+            const completedDocs = data.completed_documents;
+            const failedDocs = data.failed_documents;
+            const partialDocs = data.partial_documents;
+            const totalDocs = data.total_documents;
             const fullySuccessfulDocs = Math.max(0, completedDocs - partialDocs);
 
             // Add completion audit event
@@ -642,7 +647,7 @@ const BatchPage: React.FC = () => {
               timestamp: new Date(),
               sessionId: batchId,
               details: {
-                error: data.message ?? 'Unknown error',
+                error: data.message,
                 context: 'Batch processing stream error',
               },
             });
@@ -697,7 +702,7 @@ const BatchPage: React.FC = () => {
         }
       } catch (e) {
         console.error('Failed to parse SSE event:', e);
-        const message = e instanceof Error ? e.message : 'Batch progress stream returned invalid data';
+        const message = e instanceof Error ? e.message : String(e);
         addAuditEvent({
           type: 'SUPERVISOR_ERROR',
           timestamp: new Date(),
