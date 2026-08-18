@@ -159,6 +159,19 @@ describe('BatchPage', () => {
       },
       message: 'BATCH_STATUS event omitted or corrupted the canonical completed_documents field',
     },
+    {
+      label: 'batch completion status',
+      payload: {
+        type: 'BATCH_COMPLETE',
+        batch_id: 'batch-live',
+        status: 'finished',
+        total_documents: 1,
+        completed_documents: 1,
+        failed_documents: 0,
+        partial_documents: 0,
+      },
+      message: 'BATCH_COMPLETE event omitted or corrupted the canonical status field',
+    },
   ])('surfaces a malformed $label from the live batch stream', async ({ payload, message }) => {
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
       const url =

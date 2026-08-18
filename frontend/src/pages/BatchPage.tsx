@@ -164,6 +164,9 @@ type BatchStreamEvent =
   | BatchErrorStreamEvent
   | FlowBatchStreamEvent;
 
+const DOCUMENT_STATUSES = ['pending', 'processing', 'completed', 'failed'] as const;
+const BATCH_COMPLETION_STATUSES = ['completed', 'cancelled'] as const;
+
 export const requireBatchResultFiles = (value: unknown, documentId: unknown): BatchResultFile[] => {
   const isCanonicalResultFile = (item: unknown): item is BatchResultFile => {
     if (typeof item !== 'object' || item === null) return false;
@@ -188,6 +191,25 @@ const requireBatchEventNumber = (value: unknown, field: string, eventType: strin
     throw new Error(`${eventType} event omitted or corrupted the canonical ${field} field`);
   }
   return value;
+};
+
+const requireBatchEventString = (value: unknown, field: string, eventType: string): string => {
+  if (typeof value !== 'string') {
+    throw new Error(`${eventType} event omitted or corrupted the canonical ${field} field`);
+  }
+  return value;
+};
+
+const requireBatchEventEnum = <T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  field: string,
+  eventType: string,
+): T => {
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    throw new Error(`${eventType} event omitted or corrupted the canonical ${field} field`);
+  }
+  return value as T;
 };
 
 interface BatchOutputBranch {
@@ -524,8 +546,8 @@ const BatchPage: React.FC = () => {
           }
 
           case 'DOCUMENT_STATUS': {
-            const docStatus = data.status;
-            const docId = data.document_id;
+            const docStatus = requireBatchEventEnum(data.status, DOCUMENT_STATUSES, 'status', data.type);
+            const docId = requireBatchEventString(data.document_id, 'document_id', data.type);
             const docPosition = requireBatchEventNumber(data.position, 'position', data.type);
             const docTitle = `Document ${docPosition + 1}`; // Default title
             const resultFiles = requireBatchResultFiles(data.result_files, docId);
@@ -564,7 +586,7 @@ const BatchPage: React.FC = () => {
                   toolName: 'batch_document_processor',
                   friendlyName: `Failed: ${docTitle}`,
                   success: false,
-                  error: data.error_message,
+                  error: requireBatchEventString(data.error_message, 'error_message', data.type),
                   agent: 'Batch Processor',
                 },
               });
@@ -601,7 +623,12 @@ const BatchPage: React.FC = () => {
           }
 
           case 'BATCH_COMPLETE': {
-            const status = data.status;
+            const status = requireBatchEventEnum(
+              data.status,
+              BATCH_COMPLETION_STATUSES,
+              'status',
+              data.type,
+            );
             const completedDocs = requireBatchEventNumber(
               data.completed_documents,
               'completed_documents',
@@ -662,21 +689,23 @@ const BatchPage: React.FC = () => {
             break;
           }
 
-          case 'ERROR':
+          case 'ERROR': {
+            const errorMessage = requireBatchEventString(data.message, 'message', data.type);
             // Add error audit event
             addAuditEvent({
               type: 'SUPERVISOR_ERROR',
               timestamp: new Date(),
               sessionId: batchId,
               details: {
-                error: data.message,
+                error: errorMessage,
                 context: 'Batch processing stream error',
               },
             });
-            console.error('Batch stream error:', data.message);
+            console.error('Batch stream error:', errorMessage);
             es.close();
             setEventSource(null);
             break;
+          }
 
           default:
             if (data.type === 'CURATION_HANDOFF_READY') {
