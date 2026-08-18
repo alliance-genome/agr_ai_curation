@@ -58,6 +58,7 @@ def _write_group_rule_contribution_fixture(
     target_agent: str = "supervisor",
     owner_group_rules: tuple[str, ...] = (),
     contribution_path: str = "group_rules/supervisor/team.yaml",
+    contributor_agent_root: str | None = None,
 ) -> tuple[Path, Path, Path]:
     packages_dir = tmp_path / "packages"
     owner_dir = packages_dir / "core"
@@ -109,11 +110,26 @@ def _write_group_rule_contribution_fixture(
             }
         ],
     }
+    if contributor_agent_root is not None:
+        contributor_manifest["exports"].append(
+            {
+                "kind": "agent",
+                "name": "local_agent",
+                "path": f"{contributor_agent_root}/local_agent",
+            }
+        )
     if declares_dependency:
         contributor_manifest["dependencies"] = [
             {"package_id": "demo.core", "version_range": ">=1.0.0,<2.0.0"}
         ]
     _write_package_manifest(contributor_dir, contributor_manifest)
+    if contributor_agent_root is not None:
+        local_agent_dir = contributor_dir / contributor_agent_root / "local_agent"
+        local_agent_dir.mkdir(parents=True)
+        (local_agent_dir / "agent.yaml").write_text(
+            "agent_id: local_agent\nname: Local Agent\n",
+            encoding="utf-8",
+        )
     contributed_rule = contributor_dir / contribution_path
     contributed_rule.parent.mkdir(parents=True)
     contributed_rule.write_text(
@@ -160,10 +176,22 @@ def test_group_rule_contribution_requires_declared_target_dependency(tmp_path):
         agent_sources.resolve_agent_config_sources(packages_dir)
 
 
-def test_group_rule_contribution_rejects_foreign_agent_directory_layout(tmp_path):
+@pytest.mark.parametrize(
+    ("contribution_path", "contributor_agent_root"),
+    (
+        ("agents/supervisor/group_rules/team.yaml", None),
+        ("bundles/supervisor/group_rules/team.yaml", "bundles"),
+    ),
+)
+def test_group_rule_contribution_rejects_foreign_agent_directory_layout(
+    tmp_path,
+    contribution_path,
+    contributor_agent_root,
+):
     packages_dir, _owner_dir, _rule = _write_group_rule_contribution_fixture(
         tmp_path,
-        contribution_path="agents/supervisor/group_rules/team.yaml",
+        contribution_path=contribution_path,
+        contributor_agent_root=contributor_agent_root,
     )
 
     with pytest.raises(

@@ -63,8 +63,8 @@ exports:
 
 Composition fails when the dependency is absent, the target is missing or
 ambiguous, or the agent/group pair collides with another export. The rule's
-path must remain outside the contributor's `agents/` directory, and prompt
-provenance identifies the contributing package.
+path must remain outside every agent-bundle root declared by the contributor,
+and prompt provenance identifies the contributing package.
 
 ## Quick Start: Add a Package-owned Agent
 

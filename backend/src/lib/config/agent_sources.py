@@ -447,6 +447,11 @@ def _resolve_registry_agent_sources(
 
     rule_owners: dict[tuple[str, str], str] = {}
     for package in packages:
+        contributor_agent_roots = {
+            (package.package_path / agent_export.path).parent
+            for agent_export in package.manifest.exports
+            if agent_export.kind == ExportKind.AGENT
+        } or {package.package_path / "agents"}
         for export in sorted(package.manifest.exports, key=lambda item: item.name):
             if export.kind != ExportKind.GROUP_RULE:
                 continue
@@ -484,7 +489,10 @@ def _resolve_registry_agent_sources(
                 )
             if (
                 package.package_id != target_package_id
-                and rule_path.is_relative_to(package.package_path / "agents")
+                and any(
+                    rule_path.is_relative_to(agent_root)
+                    for agent_root in contributor_agent_roots
+                )
             ):
                 raise ValueError(
                     f"Package '{package.package_id}' must store contributed group rule "
