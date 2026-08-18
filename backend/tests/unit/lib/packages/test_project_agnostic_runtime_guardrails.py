@@ -62,6 +62,8 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/openai_agents/streaming_tools.py"),
     Path("backend/src/lib/packages/flow_recipes.py"),
     Path("backend/src/lib/packages/document_source_provider_loader.py"),
+    Path("backend/src/lib/packages/identifier_prefix_provider_loader.py"),
+    Path("backend/src/lib/runtime_entrypoint.py"),
 }
 GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"agr\.alliance"),
@@ -71,6 +73,10 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"abc_literature"),
     re.compile(r"ABC Literature"),
     re.compile(r"agr_ai_curation_alliance\.document_sources"),
+    re.compile(
+        r"\b(?:crossreference|ontologyterm|biologicalentity|"
+        r"referencedcurie|primaryexternalid)\b"
+    ),
     re.compile(
         r"\b(?:allele_candidates|gene_candidates|agm_candidates|"
         r"ontology_term_candidates|gene_id|gene_symbol|go_id)\b"
@@ -118,6 +124,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/config/test_groups_loader_identity_provider.py"),
     Path("backend/tests/unit/lib/config/test_ontology_term_validator_contract.py"),
     Path("backend/tests/unit/lib/config/test_prompt_loader_runtime.py"),
+    Path("backend/tests/unit/lib/packages/test_identifier_prefix_provider_loader.py"),
     Path("backend/tests/unit/lib/config/test_reference_validator_result_contract.py"),
     Path("backend/tests/unit/lib/config/test_runtime_config_defaults.py"),
     Path("backend/tests/unit/lib/packages/__init__.py"),

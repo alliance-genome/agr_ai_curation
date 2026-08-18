@@ -46,6 +46,14 @@ from .flow_recipes import (
     load_flow_recipe_catalog,
 )
 from .import_paths import extend_sys_path_for_package
+from .identifier_prefix_provider_loader import (
+    IdentifierPrefixProviderCatalog,
+    IdentifierPrefixProviderLoadError,
+    IdentifierPrefixProviderSource,
+    LoadedIdentifierPrefixProvider,
+    build_identifier_prefix_provider_catalog,
+    load_package_identifier_prefix_provider_exports,
+)
 from .manifest_loader import (
     AgentBundleRegistrationError,
     PackageContractError,
@@ -144,10 +152,14 @@ __all__ = [
     "FlowRecipeCatalog",
     "FlowRecipeLoadError",
     "FlowRecipeManifest",
+    "IdentifierPrefixProviderCatalog",
+    "IdentifierPrefixProviderLoadError",
+    "IdentifierPrefixProviderSource",
     "LoadedPackage",
     "LoadedAgentStudioPrompt",
     "LoadedCurationAdapterExport",
     "LoadedDocumentSourceProviderRegistration",
+    "LoadedIdentifierPrefixProvider",
     "LoadedToolBindingExport",
     "PROTOCOL_VERSION",
     "AgentBundleRegistrationError",
@@ -187,6 +199,7 @@ __all__ = [
     "build_package_health_report",
     "build_document_source_provider_catalog",
     "build_flow_recipe_catalog",
+    "build_identifier_prefix_provider_catalog",
     "build_tool_registry",
     "decode_request",
     "decode_response",
@@ -216,6 +229,7 @@ __all__ = [
     "get_tool_bindings_path",
     "iter_runtime_package_dirs",
     "load_package_curation_adapter_exports",
+    "load_package_identifier_prefix_provider_exports",
     "load_document_source_provider_catalog",
     "load_package_document_source_provider_exports",
     "load_package_tool_binding_exports",
