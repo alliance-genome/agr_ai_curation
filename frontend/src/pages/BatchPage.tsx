@@ -183,6 +183,13 @@ export const requireBatchResultFiles = (value: unknown, documentId: unknown): Ba
   return value;
 };
 
+const requireBatchEventNumber = (value: unknown, field: string, eventType: string): number => {
+  if (typeof value !== 'number') {
+    throw new Error(`${eventType} event omitted or corrupted the canonical ${field} field`);
+  }
+  return value;
+};
+
 interface BatchOutputBranch {
   source_node_id: string;
   output_node_id: string;
@@ -497,18 +504,29 @@ const BatchPage: React.FC = () => {
 
         // Handle batch-specific events (from DB polling)
         switch (data.type) {
-          case 'BATCH_STATUS':
+          case 'BATCH_STATUS': {
+            const completedDocuments = requireBatchEventNumber(
+              data.completed_documents,
+              'completed_documents',
+              data.type,
+            );
+            const failedDocuments = requireBatchEventNumber(
+              data.failed_documents,
+              'failed_documents',
+              data.type,
+            );
             setBatchState(prev => ({
               ...prev,
-              completedCount: data.completed_documents,
-              failedCount: data.failed_documents,
+              completedCount: completedDocuments,
+              failedCount: failedDocuments,
             }));
             break;
+          }
 
           case 'DOCUMENT_STATUS': {
             const docStatus = data.status;
             const docId = data.document_id;
-            const docPosition = data.position;
+            const docPosition = requireBatchEventNumber(data.position, 'position', data.type);
             const docTitle = `Document ${docPosition + 1}`; // Default title
             const resultFiles = requireBatchResultFiles(data.result_files, docId);
 
@@ -584,10 +602,14 @@ const BatchPage: React.FC = () => {
 
           case 'BATCH_COMPLETE': {
             const status = data.status;
-            const completedDocs = data.completed_documents;
-            const failedDocs = data.failed_documents;
-            const partialDocs = data.partial_documents;
-            const totalDocs = data.total_documents;
+            const completedDocs = requireBatchEventNumber(
+              data.completed_documents,
+              'completed_documents',
+              data.type,
+            );
+            const failedDocs = requireBatchEventNumber(data.failed_documents, 'failed_documents', data.type);
+            const partialDocs = requireBatchEventNumber(data.partial_documents, 'partial_documents', data.type);
+            const totalDocs = requireBatchEventNumber(data.total_documents, 'total_documents', data.type);
             const fullySuccessfulDocs = Math.max(0, completedDocs - partialDocs);
 
             // Add completion audit event

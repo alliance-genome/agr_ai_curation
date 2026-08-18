@@ -137,7 +137,29 @@ describe('BatchPage', () => {
     expect(requireBatchResultFiles([], 'doc-1')).toEqual([])
   })
 
-  it('surfaces a malformed document status event from the live batch stream', async () => {
+  it.each([
+    {
+      label: 'document result manifest',
+      payload: {
+        type: 'DOCUMENT_STATUS',
+        batch_id: 'batch-live',
+        document_id: 'doc-1',
+        batch_document_id: 'batch-doc-1',
+        position: 0,
+        status: 'completed',
+      },
+      message: 'DOCUMENT_STATUS event for doc-1 omitted or corrupted the canonical result_files manifest',
+    },
+    {
+      label: 'batch progress counter',
+      payload: {
+        type: 'BATCH_STATUS',
+        batch_id: 'batch-live',
+        failed_documents: 0,
+      },
+      message: 'BATCH_STATUS event omitted or corrupted the canonical completed_documents field',
+    },
+  ])('surfaces a malformed $label from the live batch stream', async ({ payload, message }) => {
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
       const url =
         typeof input === 'string'
@@ -196,18 +218,9 @@ describe('BatchPage', () => {
 
     await waitFor(() => expect(MockEventSource.instances).toHaveLength(1))
     const stream = MockEventSource.instances[0]
-    stream.emit({
-      type: 'DOCUMENT_STATUS',
-      batch_id: 'batch-live',
-      document_id: 'doc-1',
-      batch_document_id: 'batch-doc-1',
-      position: 0,
-      status: 'completed',
-    })
+    stream.emit(payload)
 
-    expect(await screen.findByText(
-      'DOCUMENT_STATUS event for doc-1 omitted or corrupted the canonical result_files manifest',
-    )).toBeInTheDocument()
+    expect(await screen.findByText(message)).toBeInTheDocument()
     expect(stream.close).toHaveBeenCalled()
   })
 
