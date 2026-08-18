@@ -140,6 +140,8 @@ interface BatchErrorStreamEvent {
   message?: string;
 }
 
+// These are the non-batch stream events this page actively consumes. Other
+// broadcaster events fall through and are ignored unless they are audit events.
 interface FlowBatchStreamEvent {
   type: AuditEventType | 'CURATION_HANDOFF_READY' | 'RUN_STARTED' | 'BATCH_STREAM_COMPLETE';
   timestamp?: string;
@@ -499,7 +501,7 @@ const BatchPage: React.FC = () => {
             break;
 
           case 'DOCUMENT_STATUS': {
-            const docStatus = data.status as DocumentStatus;
+            const docStatus = data.status;
             const docId = data.document_id;
             const docPosition = data.position ?? 0;
             const docTitle = `Document ${docPosition + 1}`; // Default title
@@ -702,7 +704,7 @@ const BatchPage: React.FC = () => {
           sessionId: batchId,
           details: {
             error: message,
-            context: 'Batch processing stream returned invalid data',
+            context: 'Batch processing stream handler failed',
           },
         });
         setSnackbar({ open: true, message, severity: 'error' });
