@@ -101,6 +101,72 @@ interface BatchResultFile {
   source_envelope_ids?: string[];
 }
 
+interface BatchStatusStreamEvent {
+  type: 'BATCH_STATUS';
+  completed_documents: number;
+  failed_documents: number;
+}
+
+interface DocumentStatusStreamEventBase {
+  type: 'DOCUMENT_STATUS';
+  batch_id: string;
+  batch_document_id: string;
+  document_id: string;
+  position: number;
+  result_files: BatchResultFile[];
+  output_status?: BatchDocument['output_status'];
+  output_branches?: BatchOutputBranch[];
+  processing_time_ms?: number;
+  trace_id?: string;
+  adapter_keys?: string[];
+  extraction_result_ids?: string[];
+  extraction_result_refs?: Array<Record<string, unknown>>;
+  flow_run_id?: string;
+  origin_session_id?: string;
+  review_session_ids?: string[] | null;
+}
+
+type DocumentStatusStreamEvent = DocumentStatusStreamEventBase & (
+  | { status: 'failed'; error_message: string }
+  | { status: Exclude<DocumentStatus, 'failed'>; error_message?: string | null }
+);
+
+interface BatchCompleteStreamEvent {
+  type: 'BATCH_COMPLETE';
+  status: 'completed' | 'cancelled';
+  completed_documents: number;
+  failed_documents: number;
+  partial_documents: number;
+  total_documents: number;
+}
+
+interface BatchErrorStreamEvent {
+  type: 'ERROR';
+  message: string;
+}
+
+// These are the non-batch stream events this page actively consumes. Other
+// broadcaster events fall through and are ignored unless they are audit events.
+interface FlowBatchStreamEvent {
+  type: AuditEventType | 'CURATION_HANDOFF_READY' | 'RUN_STARTED' | 'BATCH_STREAM_COMPLETE';
+  timestamp?: string;
+  details?: Record<string, unknown>;
+  document_id?: string;
+  origin_session_id?: string;
+  session_id?: string;
+  trace_id?: string;
+}
+
+type BatchStreamEvent =
+  | BatchStatusStreamEvent
+  | DocumentStatusStreamEvent
+  | BatchCompleteStreamEvent
+  | BatchErrorStreamEvent
+  | FlowBatchStreamEvent;
+
+const DOCUMENT_STATUSES = ['pending', 'processing', 'completed', 'failed'] as const;
+const BATCH_COMPLETION_STATUSES = ['completed', 'cancelled'] as const;
+
 export const requireBatchResultFiles = (value: unknown, documentId: unknown): BatchResultFile[] => {
   const isCanonicalResultFile = (item: unknown): item is BatchResultFile => {
     if (typeof item !== 'object' || item === null) return false;
@@ -118,6 +184,32 @@ export const requireBatchResultFiles = (value: unknown, documentId: unknown): Ba
     );
   }
   return value;
+};
+
+const requireBatchEventNumber = (value: unknown, field: string, eventType: string): number => {
+  if (typeof value !== 'number') {
+    throw new Error(`${eventType} event omitted or corrupted the canonical ${field} field`);
+  }
+  return value;
+};
+
+const requireBatchEventString = (value: unknown, field: string, eventType: string): string => {
+  if (typeof value !== 'string') {
+    throw new Error(`${eventType} event omitted or corrupted the canonical ${field} field`);
+  }
+  return value;
+};
+
+const requireBatchEventEnum = <T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  field: string,
+  eventType: string,
+): T => {
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    throw new Error(`${eventType} event omitted or corrupted the canonical ${field} field`);
+  }
+  return value as T;
 };
 
 interface BatchOutputBranch {
@@ -430,25 +522,35 @@ const BatchPage: React.FC = () => {
 
     es.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
+        const data = JSON.parse(event.data) as BatchStreamEvent;
 
         // Handle batch-specific events (from DB polling)
         switch (data.type) {
-          case 'BATCH_STATUS':
+          case 'BATCH_STATUS': {
+            const completedDocuments = requireBatchEventNumber(
+              data.completed_documents,
+              'completed_documents',
+              data.type,
+            );
+            const failedDocuments = requireBatchEventNumber(
+              data.failed_documents,
+              'failed_documents',
+              data.type,
+            );
             setBatchState(prev => ({
               ...prev,
-              completedCount: data.completed_documents ?? data.data?.completed_documents ?? prev.completedCount,
-              failedCount: data.failed_documents ?? data.data?.failed_documents ?? prev.failedCount,
+              completedCount: completedDocuments,
+              failedCount: failedDocuments,
             }));
             break;
+          }
 
           case 'DOCUMENT_STATUS': {
-            const docStatus = (data.status ?? data.data?.status) as DocumentStatus;
-            const docId = data.document_id ?? data.data?.document_id;
-            const docPosition = data.position ?? data.data?.position ?? 0;
+            const docStatus = requireBatchEventEnum(data.status, DOCUMENT_STATUSES, 'status', data.type);
+            const docId = requireBatchEventString(data.document_id, 'document_id', data.type);
+            const docPosition = requireBatchEventNumber(data.position, 'position', data.type);
             const docTitle = `Document ${docPosition + 1}`; // Default title
-            const eventPayload = data.data && typeof data.data === 'object' ? data.data : data;
-            const resultFiles = requireBatchResultFiles(eventPayload.result_files, docId);
+            const resultFiles = requireBatchResultFiles(data.result_files, docId);
 
             // CR-7: Add audit events outside state setter to avoid stale closure issues
             // State setter callbacks should be pure functions
@@ -484,7 +586,7 @@ const BatchPage: React.FC = () => {
                   toolName: 'batch_document_processor',
                   friendlyName: `Failed: ${docTitle}`,
                   success: false,
-                  error: data.error_message ?? data.data?.error_message ?? 'Unknown error',
+                  error: requireBatchEventString(data.error_message, 'error_message', data.type),
                   agent: 'Batch Processor',
                 },
               });
@@ -499,18 +601,18 @@ const BatchPage: React.FC = () => {
                     ...d,
                     status: docStatus,
                     result_files: resultFiles,
-                    output_status: data.output_status ?? data.data?.output_status ?? d.output_status,
-                    output_branches: data.output_branches ?? data.data?.output_branches ?? d.output_branches,
-                    error_message: data.error_message ?? data.data?.error_message ?? d.error_message,
-                    processing_time_ms: data.processing_time_ms ?? data.data?.processing_time_ms ?? d.processing_time_ms,
-                    trace_id: data.trace_id ?? data.data?.trace_id ?? d.trace_id,
-                    adapter_keys: eventPayload.adapter_keys ?? d.adapter_keys,
-                    extraction_result_ids: eventPayload.extraction_result_ids ?? d.extraction_result_ids,
-                    extraction_result_refs: eventPayload.extraction_result_refs ?? d.extraction_result_refs,
-                    flow_run_id: eventPayload.flow_run_id ?? d.flow_run_id,
-                    origin_session_id: eventPayload.origin_session_id ?? d.origin_session_id,
-                    review_session_ids: Object.prototype.hasOwnProperty.call(eventPayload, 'review_session_ids')
-                      ? (Array.isArray(eventPayload.review_session_ids) ? eventPayload.review_session_ids : [])
+                    output_status: data.output_status ?? d.output_status,
+                    output_branches: data.output_branches ?? d.output_branches,
+                    error_message: data.error_message ?? d.error_message,
+                    processing_time_ms: data.processing_time_ms ?? d.processing_time_ms,
+                    trace_id: data.trace_id ?? d.trace_id,
+                    adapter_keys: data.adapter_keys ?? d.adapter_keys,
+                    extraction_result_ids: data.extraction_result_ids ?? d.extraction_result_ids,
+                    extraction_result_refs: data.extraction_result_refs ?? d.extraction_result_refs,
+                    flow_run_id: data.flow_run_id ?? d.flow_run_id,
+                    origin_session_id: data.origin_session_id ?? d.origin_session_id,
+                    review_session_ids: Object.prototype.hasOwnProperty.call(data, 'review_session_ids')
+                      ? (Array.isArray(data.review_session_ids) ? data.review_session_ids : [])
                       : d.review_session_ids,
                   };
                 }
@@ -521,11 +623,20 @@ const BatchPage: React.FC = () => {
           }
 
           case 'BATCH_COMPLETE': {
-            const status = data.status ?? data.data?.status;
-            const completedDocs = data.completed_documents ?? data.data?.completed_documents ?? 0;
-            const failedDocs = data.failed_documents ?? data.data?.failed_documents ?? 0;
-            const partialDocs = data.partial_documents ?? data.data?.partial_documents ?? 0;
-            const totalDocs = data.total_documents ?? data.data?.total_documents ?? 0;
+            const status = requireBatchEventEnum(
+              data.status,
+              BATCH_COMPLETION_STATUSES,
+              'status',
+              data.type,
+            );
+            const completedDocs = requireBatchEventNumber(
+              data.completed_documents,
+              'completed_documents',
+              data.type,
+            );
+            const failedDocs = requireBatchEventNumber(data.failed_documents, 'failed_documents', data.type);
+            const partialDocs = requireBatchEventNumber(data.partial_documents, 'partial_documents', data.type);
+            const totalDocs = requireBatchEventNumber(data.total_documents, 'total_documents', data.type);
             const fullySuccessfulDocs = Math.max(0, completedDocs - partialDocs);
 
             // Add completion audit event
@@ -578,21 +689,23 @@ const BatchPage: React.FC = () => {
             break;
           }
 
-          case 'ERROR':
+          case 'ERROR': {
+            const errorMessage = requireBatchEventString(data.message, 'message', data.type);
             // Add error audit event
             addAuditEvent({
               type: 'SUPERVISOR_ERROR',
               timestamp: new Date(),
               sessionId: batchId,
               details: {
-                error: data.message ?? data.data?.message ?? 'Unknown error',
+                error: errorMessage,
                 context: 'Batch processing stream error',
               },
             });
-            console.error('Batch stream error:', data.message ?? data.data?.message);
+            console.error('Batch stream error:', errorMessage);
             es.close();
             setEventSource(null);
             break;
+          }
 
           default:
             if (data.type === 'CURATION_HANDOFF_READY') {
@@ -640,6 +753,19 @@ const BatchPage: React.FC = () => {
         }
       } catch (e) {
         console.error('Failed to parse SSE event:', e);
+        const message = e instanceof Error ? e.message : String(e);
+        addAuditEvent({
+          type: 'SUPERVISOR_ERROR',
+          timestamp: new Date(),
+          sessionId: batchId,
+          details: {
+            error: message,
+            context: 'Batch processing stream handler failed',
+          },
+        });
+        setSnackbar({ open: true, message, severity: 'error' });
+        es.close();
+        setEventSource(null);
       }
     };
 

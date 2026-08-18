@@ -137,6 +137,106 @@ describe('BatchPage', () => {
     expect(requireBatchResultFiles([], 'doc-1')).toEqual([])
   })
 
+  it.each([
+    {
+      label: 'document result manifest',
+      payload: {
+        type: 'DOCUMENT_STATUS',
+        batch_id: 'batch-live',
+        document_id: 'doc-1',
+        batch_document_id: 'batch-doc-1',
+        position: 0,
+        status: 'completed',
+      },
+      message: 'DOCUMENT_STATUS event for doc-1 omitted or corrupted the canonical result_files manifest',
+    },
+    {
+      label: 'batch progress counter',
+      payload: {
+        type: 'BATCH_STATUS',
+        batch_id: 'batch-live',
+        failed_documents: 0,
+      },
+      message: 'BATCH_STATUS event omitted or corrupted the canonical completed_documents field',
+    },
+    {
+      label: 'batch completion status',
+      payload: {
+        type: 'BATCH_COMPLETE',
+        batch_id: 'batch-live',
+        status: 'finished',
+        total_documents: 1,
+        completed_documents: 1,
+        failed_documents: 0,
+        partial_documents: 0,
+      },
+      message: 'BATCH_COMPLETE event omitted or corrupted the canonical status field',
+    },
+  ])('surfaces a malformed $label from the live batch stream', async ({ payload, message }) => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+
+      if (url === `/api/flows?page=1&page_size=${DEFAULT_FLOW_LIST_PAGE_SIZE}`) {
+        return Promise.resolve(jsonResponse({
+          flows: [],
+          total: 0,
+          page: 1,
+          page_size: DEFAULT_FLOW_LIST_PAGE_SIZE,
+        }))
+      }
+
+      if (url === '/api/batches') {
+        return Promise.resolve(jsonResponse({
+          batches: [{
+            id: 'batch-live',
+            flow_id: 'flow-1',
+            flow_name: 'Evidence Flow',
+            status: 'running',
+            total_documents: 1,
+            completed_documents: 0,
+            failed_documents: 0,
+            created_at: '2026-04-03T00:00:00Z',
+          }],
+        }))
+      }
+
+      if (url === '/api/batches/batch-live') {
+        return Promise.resolve(jsonResponse({
+          id: 'batch-live',
+          flow_id: 'flow-1',
+          status: 'running',
+          total_documents: 1,
+          completed_documents: 0,
+          failed_documents: 0,
+          documents: [{
+            id: 'batch-doc-1',
+            document_id: 'doc-1',
+            document_title: 'Alpha paper',
+            position: 0,
+            status: 'pending',
+            result_files: [],
+          }],
+        }))
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1))
+    const stream = MockEventSource.instances[0]
+    stream.emit(payload)
+
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(stream.close).toHaveBeenCalled()
+  })
+
   it('requests flows through the shared page-size contract', async () => {
     renderPage()
 
