@@ -137,6 +137,80 @@ describe('BatchPage', () => {
     expect(requireBatchResultFiles([], 'doc-1')).toEqual([])
   })
 
+  it('surfaces a malformed document status event from the live batch stream', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+
+      if (url === `/api/flows?page=1&page_size=${DEFAULT_FLOW_LIST_PAGE_SIZE}`) {
+        return Promise.resolve(jsonResponse({
+          flows: [],
+          total: 0,
+          page: 1,
+          page_size: DEFAULT_FLOW_LIST_PAGE_SIZE,
+        }))
+      }
+
+      if (url === '/api/batches') {
+        return Promise.resolve(jsonResponse({
+          batches: [{
+            id: 'batch-live',
+            flow_id: 'flow-1',
+            flow_name: 'Evidence Flow',
+            status: 'running',
+            total_documents: 1,
+            completed_documents: 0,
+            failed_documents: 0,
+            created_at: '2026-04-03T00:00:00Z',
+          }],
+        }))
+      }
+
+      if (url === '/api/batches/batch-live') {
+        return Promise.resolve(jsonResponse({
+          id: 'batch-live',
+          flow_id: 'flow-1',
+          status: 'running',
+          total_documents: 1,
+          completed_documents: 0,
+          failed_documents: 0,
+          documents: [{
+            id: 'batch-doc-1',
+            document_id: 'doc-1',
+            document_title: 'Alpha paper',
+            position: 0,
+            status: 'pending',
+            result_files: [],
+          }],
+        }))
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1))
+    const stream = MockEventSource.instances[0]
+    stream.emit({
+      type: 'DOCUMENT_STATUS',
+      batch_id: 'batch-live',
+      document_id: 'doc-1',
+      batch_document_id: 'batch-doc-1',
+      position: 0,
+      status: 'completed',
+    })
+
+    expect(await screen.findByText(
+      'DOCUMENT_STATUS event for doc-1 omitted or corrupted the canonical result_files manifest',
+    )).toBeInTheDocument()
+    expect(stream.close).toHaveBeenCalled()
+  })
+
   it('requests flows through the shared page-size contract', async () => {
     renderPage()
 
