@@ -51,6 +51,149 @@ def _write_agent_bundle(
     (agent_dir / "prompt.yaml").write_text("content: Demo prompt\n", encoding="utf-8")
 
 
+def _write_group_rule_contribution_fixture(
+    tmp_path: Path,
+    *,
+    declares_dependency: bool = True,
+    target_agent: str = "supervisor",
+    owner_group_rules: tuple[str, ...] = (),
+) -> tuple[Path, Path, Path]:
+    packages_dir = tmp_path / "packages"
+    owner_dir = packages_dir / "core"
+    contributor_dir = packages_dir / "extension"
+    _write_package_manifest(
+        owner_dir,
+        {
+            "package_id": "demo.core",
+            "display_name": "Demo Core",
+            "version": "1.0.0",
+            "package_api_version": "1.0.0",
+            "min_runtime_version": "1.0.0",
+            "max_runtime_version": "2.0.0",
+            "python_package_root": "python/src/demo_core",
+            "requirements_file": "requirements/runtime.txt",
+            "agent_bundles": [
+                {"name": "supervisor", "group_rules": list(owner_group_rules)}
+            ],
+        },
+    )
+    _write_agent_bundle(
+        owner_dir,
+        "supervisor",
+        agent_id="supervisor",
+        name="Demo Supervisor",
+    )
+    for rule_name in owner_group_rules:
+        rule_dir = owner_dir / "agents" / "supervisor" / "group_rules"
+        rule_dir.mkdir(exist_ok=True)
+        (rule_dir / f"{rule_name}.yaml").write_text(
+            f"group_id: {rule_name.upper()}\ncontent: Owner rules\n",
+            encoding="utf-8",
+        )
+
+    contributor_manifest = {
+        "package_id": "demo.extension",
+        "display_name": "Demo Extension",
+        "version": "1.0.0",
+        "package_api_version": "1.0.0",
+        "min_runtime_version": "1.0.0",
+        "max_runtime_version": "2.0.0",
+        "python_package_root": "python/src/demo_extension",
+        "requirements_file": "requirements/runtime.txt",
+        "exports": [
+            {
+                "kind": "group_rule",
+                "name": f"{target_agent}.TEAM",
+                "path": "agents/supervisor/group_rules/team.yaml",
+            }
+        ],
+    }
+    if declares_dependency:
+        contributor_manifest["dependencies"] = [
+            {"package_id": "demo.core", "version_range": ">=1.0.0,<2.0.0"}
+        ]
+    _write_package_manifest(contributor_dir, contributor_manifest)
+    contributed_rule = (
+        contributor_dir / "agents" / "supervisor" / "group_rules" / "team.yaml"
+    )
+    contributed_rule.parent.mkdir(parents=True)
+    contributed_rule.write_text(
+        "group_id: TEAM\ncontent: Extension rules\n",
+        encoding="utf-8",
+    )
+    return packages_dir, owner_dir, contributed_rule
+
+
+def test_dependency_package_contributes_group_rule_with_its_own_provenance(tmp_path):
+    packages_dir, owner_dir, contributed_rule = _write_group_rule_contribution_fixture(
+        tmp_path
+    )
+
+    sources = agent_sources.resolve_agent_config_sources(packages_dir)
+    supervisor = next(
+        source for source in sources if source.folder_name == "supervisor"
+    )
+
+    assert supervisor.package_id == "demo.core"
+    assert supervisor.agent_dir == owner_dir / "agents" / "supervisor"
+    assert supervisor.group_rule_files == (contributed_rule,)
+    assert supervisor.source_file_display(contributed_rule) == (
+        "packages/demo.extension/agents/supervisor/group_rules/team.yaml"
+    )
+
+    core_only = agent_sources.resolve_agent_config_sources(owner_dir)
+    core_supervisor = next(
+        source for source in core_only if source.folder_name == "supervisor"
+    )
+    assert core_supervisor.group_rule_files == ()
+
+
+def test_group_rule_contribution_requires_declared_target_dependency(tmp_path):
+    packages_dir, _owner_dir, _rule = _write_group_rule_contribution_fixture(
+        tmp_path,
+        declares_dependency=False,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="must declare dependency 'demo.core' before contributing group rule",
+    ):
+        agent_sources.resolve_agent_config_sources(packages_dir)
+
+
+def test_group_rule_contribution_rejects_missing_target_agent(tmp_path):
+    packages_dir, _owner_dir, _rule = _write_group_rule_contribution_fixture(
+        tmp_path,
+        target_agent="missing_agent",
+    )
+
+    with pytest.raises(ValueError, match="for unknown agent bundle 'missing_agent'"):
+        agent_sources.resolve_agent_config_sources(packages_dir)
+
+
+def test_group_rule_contribution_rejects_group_collision(tmp_path):
+    packages_dir, _owner_dir, _rule = _write_group_rule_contribution_fixture(
+        tmp_path,
+        owner_group_rules=("team",),
+    )
+
+    with pytest.raises(ValueError, match="Group rule collision for 'supervisor.TEAM'"):
+        agent_sources.resolve_agent_config_sources(packages_dir)
+
+
+def test_group_rule_contribution_rejects_non_string_group_id(tmp_path):
+    packages_dir, _owner_dir, contributed_rule = (
+        _write_group_rule_contribution_fixture(tmp_path)
+    )
+    contributed_rule.write_text(
+        "group_id: 123\ncontent: Extension rules\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="group_id .* must be a string"):
+        agent_sources.resolve_agent_config_sources(packages_dir)
+
+
 def test_package_scoped_agent_lookup_allows_duplicate_agent_ids(tmp_path):
     packages_dir = tmp_path / "packages"
     first_package = packages_dir / "first"
@@ -506,8 +649,8 @@ def test_resolve_agent_config_sources_merges_partial_override_without_dropping_p
 
     override_agent_dir = overrides_dir / "demo_agent"
     (override_agent_dir / "group_rules").mkdir(parents=True)
-    (override_agent_dir / "group_rules" / "team.yaml").write_text(
-        "content: Override TEAM rules\n",
+    (override_agent_dir / "group_rules" / "custom-team.yaml").write_text(
+        "group_id: ' team '\ncontent: Override TEAM rules\n",
         encoding="utf-8",
     )
 
@@ -523,15 +666,15 @@ def test_resolve_agent_config_sources_merges_partial_override_without_dropping_p
     # package bundle's docs.yaml (the exact shadowing bug this asset fix closed).
     assert demo_source.docs_yaml == (package_agent_dir / "docs.yaml")
     assert demo_source.group_rule_files == (
+        override_agent_dir / "group_rules" / "custom-team.yaml",
         package_agent_dir / "group_rules" / "demo.yaml",
-        override_agent_dir / "group_rules" / "team.yaml",
     )
     assert demo_source.source_file_display(package_agent_dir / "prompt.yaml") == (
         "packages/demo.core/agents/demo_agent/prompt.yaml"
     )
     assert demo_source.source_file_display(
-        override_agent_dir / "group_rules" / "team.yaml"
-    ).endswith("config-agents/demo_agent/group_rules/team.yaml")
+        override_agent_dir / "group_rules" / "custom-team.yaml"
+    ).endswith("config-agents/demo_agent/group_rules/custom-team.yaml")
 
     loaded_agents = agent_loader.load_agent_definitions(
         (packages_dir, overrides_dir),
@@ -542,10 +685,13 @@ def test_resolve_agent_config_sources_merges_partial_override_without_dropping_p
     assert loaded_agents["demo_agent_validation"].name == "Package Demo Agent"
 
 
-def test_merge_group_rule_files_prefers_later_paths():
-    demo_package = Path("/tmp/packages/demo_core/agents/demo_agent/group_rules/demo.yaml")
-    team_package = Path("/tmp/packages/demo_core/agents/demo_agent/group_rules/team.yaml")
-    team_override = Path("/tmp/config-agents/demo_agent/group_rules/team.yaml")
+def test_merge_group_rule_files_prefers_later_paths(tmp_path):
+    demo_package = tmp_path / "packages/demo_core/agents/demo_agent/group_rules/demo.yaml"
+    team_package = tmp_path / "packages/demo_core/agents/demo_agent/group_rules/team.yaml"
+    team_override = tmp_path / "config-agents/demo_agent/group_rules/team.yaml"
+    for rule_path in (demo_package, team_package, team_override):
+        rule_path.parent.mkdir(parents=True, exist_ok=True)
+        rule_path.write_text("content: rules\n", encoding="utf-8")
 
     merged = agent_sources._merge_group_rule_files(
         (demo_package, team_package),

@@ -3,7 +3,7 @@
 # Asserts the rewritten base prompt renders cleanly UNDER the MGI group overlay and the
 # organism-specific MGI allele-dispatch hooks still arrive in the assembled render
 # (core + rewritten base + MGI group rules). The base rewrite does NOT touch
-# config/agents/supervisor/group_rules/mgi.yaml; these phrases come from that unchanged
+# packages/alliance/agents/supervisor/group_rules/mgi.yaml; these phrases come from that
 # group-rule file (SUP-67).
 
 # MGI allele-dispatch goal (route mouse allele lookups with enough source attribution).

@@ -350,7 +350,6 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
         ExportKind.AGENT,
         ExportKind.AGENT_STUDIO_PROMPT,
         ExportKind.PROMPT,
-        ExportKind.GROUP_RULE,
         ExportKind.MODEL,
         ExportKind.PROVIDER,
         ExportKind.TOOL_POLICY_DEFAULTS,
@@ -365,6 +364,9 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
         == "python/src/agr_ai_curation_alliance"
     )
     assert alliance_package.manifest.requirements_file == "requirements/runtime.txt"
+    assert [
+        dependency.package_id for dependency in alliance_package.manifest.dependencies
+    ] == ["agr.core"]
     alliance_export_kinds = {
         export.kind for export in alliance_package.manifest.exports
     }

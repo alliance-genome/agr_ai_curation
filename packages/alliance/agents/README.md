@@ -48,6 +48,23 @@ agent_bundles:
     group_rules: [fb]
 ```
 
+An extension package can contribute a group rule to an agent owned by an
+explicit dependency without duplicating that agent bundle:
+
+```yaml
+dependencies:
+  - package_id: org.core
+    version_range: ">=1.0.0,<2.0.0"
+exports:
+  - kind: group_rule
+    name: supervisor.FB
+    path: agents/supervisor/group_rules/fb.yaml
+```
+
+Composition fails when the dependency is absent, the target is missing or
+ambiguous, or the agent/group pair collides with another export. The rule's
+prompt provenance identifies the contributing package.
+
 ## Quick Start: Add a Package-owned Agent
 
 ### Step 1: Create or choose a runtime package

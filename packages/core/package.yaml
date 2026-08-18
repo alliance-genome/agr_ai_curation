@@ -29,4 +29,3 @@ agent_bundles:
   - name: curation_handoff
   - name: curation_prep
   - name: supervisor
-    group_rules: [mgi, rgd]

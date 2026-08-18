@@ -172,6 +172,12 @@ def test_core_only_profile_loads_exact_declared_agent_set(monkeypatch, tmp_path)
     assert set(agents) == _declared_agent_ids(packages_dir)
     assert set(agents) == {"curation_handoff", "curation_prep", "supervisor"}
     assert {agent.package_id for agent in agents.values()} == {"agr.core"}
+    supervisor_source = next(
+        source
+        for source in agent_sources.resolve_agent_config_sources(packages_dir)
+        if source.folder_name == "supervisor"
+    )
+    assert supervisor_source.group_rule_files == ()
 
 
 def test_alliance_profile_loads_exact_declared_agent_set(monkeypatch, tmp_path):
@@ -189,6 +195,27 @@ def test_alliance_profile_loads_exact_declared_agent_set(monkeypatch, tmp_path):
         "agr.alliance",
         "agr.core",
     }
+
+
+def test_alliance_contributes_supervisor_group_rules_with_alliance_provenance():
+    supervisor_source = next(
+        source
+        for source in agent_sources.resolve_agent_config_sources(REPO_PACKAGES_DIR)
+        if source.folder_name == "supervisor"
+    )
+
+    assert supervisor_source.package_id == "agr.core"
+    assert {path.stem for path in supervisor_source.group_rule_files} == {"mgi", "rgd"}
+    assert {
+        yaml.safe_load(path.read_text(encoding="utf-8"))["group_id"]
+        for path in supervisor_source.group_rule_files
+    } == {"MGI", "RGD"}
+    assert all(
+        supervisor_source.source_file_display(path).startswith(
+            "packages/agr.alliance/agents/supervisor/group_rules/"
+        )
+        for path in supervisor_source.group_rule_files
+    )
 
 
 def test_bundled_alliance_gene_extractor_declares_record_evidence(monkeypatch):
@@ -386,6 +413,13 @@ def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch, tmp_pat
     assert any(
         call["source_file"] == "packages/agr.core/agents/supervisor/prompt.yaml"
         and call["prompt_type"] == "system"
+        for call in captured_calls
+    )
+    assert any(
+        call["source_file"]
+        == "packages/agr.alliance/agents/supervisor/group_rules/mgi.yaml"
+        and call["prompt_type"] == "group_rules"
+        and call["group_id"] == "MGI"
         for call in captured_calls
     )
 

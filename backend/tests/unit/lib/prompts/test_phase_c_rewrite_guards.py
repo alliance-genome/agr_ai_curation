@@ -70,6 +70,21 @@ def test_inventory_phrases_are_retained(inventory: harness.InventoryFile):
     )
 
 
+def test_supervisor_alliance_rules_are_selected_only_for_the_matching_group():
+    base = harness.assembled_prompt_text("supervisor")
+    mgi = harness.assembled_prompt_text("supervisor", "MGI")
+    rgd = harness.assembled_prompt_text("supervisor", "RGD")
+    mgi_rule = "Route mouse allele lookups with enough source attribution"
+    rgd_rule = "Route rat allele lookups with enough institution attribution"
+
+    assert mgi_rule in mgi
+    assert mgi_rule not in base
+    assert mgi_rule not in rgd
+    assert rgd_rule in rgd
+    assert rgd_rule not in base
+    assert rgd_rule not in mgi
+
+
 # ---------------------------------------------------------------------------
 # Workflow-invariant guard (retention + ordering)
 # ---------------------------------------------------------------------------

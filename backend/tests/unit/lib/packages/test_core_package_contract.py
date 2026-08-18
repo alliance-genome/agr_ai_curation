@@ -10,6 +10,7 @@ from src.lib.packages.models import ExportKind
 
 REPO_ROOT = find_repo_root(Path(__file__))
 CORE_PACKAGE_DIR = REPO_ROOT / "packages" / "core"
+ALLIANCE_PACKAGE_DIR = REPO_ROOT / "packages" / "alliance"
 CORE_AGENTS_DIR = CORE_PACKAGE_DIR / "agents"
 CORE_CONFIG_DIR = CORE_PACKAGE_DIR / "config"
 RUNTIME_CONFIG_FILES = (
@@ -85,6 +86,21 @@ def test_core_package_manifest_exports_foundation_runtime_assets_only():
         ),
         (ExportKind.AGENT, "supervisor", "agents/supervisor"),
         (ExportKind.PROMPT, "supervisor.system", "agents/supervisor/prompt.yaml"),
+    }
+    assert not any(export.kind is ExportKind.TOOL_BINDING for export in manifest.exports)
+
+
+def test_alliance_package_declares_core_dependency_and_supervisor_rule_exports():
+    manifest = load_package_manifest(ALLIANCE_PACKAGE_DIR / "package.yaml")
+
+    assert [dependency.package_id for dependency in manifest.dependencies] == [
+        "agr.core"
+    ]
+    assert {
+        (export.kind, export.name, export.path)
+        for export in manifest.exports
+        if export.name.startswith("supervisor.")
+    } == {
         (
             ExportKind.GROUP_RULE,
             "supervisor.MGI",
@@ -96,7 +112,29 @@ def test_core_package_manifest_exports_foundation_runtime_assets_only():
             "agents/supervisor/group_rules/rgd.yaml",
         ),
     }
-    assert not any(export.kind is ExportKind.TOOL_BINDING for export in manifest.exports)
+
+
+def test_core_package_and_supervisor_override_omit_alliance_group_rule_content():
+    source_roots = (
+        CORE_PACKAGE_DIR,
+        REPO_ROOT / "config" / "agents" / "supervisor",
+    )
+    forbidden_fragments = (
+        "MGI",
+        "RGD",
+        "Mus musculus",
+        "Rattus norvegicus",
+        "Allele Specialist",
+    )
+
+    for source_root in source_roots:
+        combined = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in source_root.rglob("*")
+            if path.is_file()
+        )
+        for fragment in forbidden_fragments:
+            assert fragment not in combined, f"{fragment!r} found below {source_root}"
 
 
 def test_core_package_mirrors_shipped_runtime_config_files():

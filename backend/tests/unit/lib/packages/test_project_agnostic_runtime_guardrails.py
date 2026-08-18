@@ -156,6 +156,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/prompts/test_assembly_callsite_parity.py"),
     Path("backend/tests/unit/lib/prompts/test_assembly.py"),
     Path("backend/tests/unit/lib/prompts/test_context_tracking.py"),
+    # Phase C includes explicit Alliance group-render retention contracts.
+    Path("backend/tests/unit/lib/prompts/test_phase_c_rewrite_guards.py"),
     Path("backend/tests/unit/lib/prompts/test_service_core.py"),
     Path("backend/tests/unit/lib/agent_studio/test_agent_service.py"),
     Path("backend/tests/unit/lib/agent_studio/test_catalog_service_branches.py"),

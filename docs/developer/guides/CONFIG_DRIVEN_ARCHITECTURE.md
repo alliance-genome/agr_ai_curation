@@ -774,6 +774,23 @@ agent_bundles:
     group_rules: [fb]
 ```
 
+To add group behavior to an agent owned by another package, declare that owner
+as a dependency and export only the adjunct rule. Do not duplicate the agent:
+
+```yaml
+dependencies:
+  - package_id: org.core
+    version_range: ">=1.0.0,<2.0.0"
+exports:
+  - kind: group_rule
+    name: supervisor.FB
+    path: agents/supervisor/group_rules/fb.yaml
+```
+
+Dependency ownership, a unique target agent, and a collision-free group name
+are required. Violations stop package composition rather than resolving by
+load order.
+
 If you are maintaining the shipped `agr.alliance` package from this repository,
 put the canonical bundle in `packages/alliance/agents/my_agent/` and declare it
 in `packages/alliance/package.yaml`.
