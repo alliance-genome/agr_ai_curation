@@ -5,15 +5,18 @@ from __future__ import annotations
 import logging
 import os
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+import yaml
 
 from src.lib.packages import (
     AgentBundleRegistrationError,
     ExportKind,
     LoadedPackage,
     PackageExport,
+    PackageRegistry,
     load_package_registry,
     validate_agent_bundle_directory_registration,
 )
@@ -33,7 +36,9 @@ def _find_project_root() -> Path | None:
             return candidate
         if (candidate / "backend").is_dir() and (candidate / "packages").is_dir():
             return candidate
-        if (candidate / "packages").is_dir() and (candidate / "config" / "agents").is_dir():
+        if (candidate / "packages").is_dir() and (
+            candidate / "config" / "agents"
+        ).is_dir():
             return candidate
     return None
 
@@ -62,9 +67,12 @@ def get_default_agent_search_paths() -> tuple[Path, ...]:
         _get_fallback_packages_dir().expanduser().resolve(strict=False),
     ]
     runtime_config_agents_dir = (
-        get_runtime_config_dir() / "agents"
-    ).expanduser().resolve(strict=False)
-    if runtime_config_agents_dir.exists() and runtime_config_agents_dir not in search_paths:
+        (get_runtime_config_dir() / "agents").expanduser().resolve(strict=False)
+    )
+    if (
+        runtime_config_agents_dir.exists()
+        and runtime_config_agents_dir not in search_paths
+    ):
         search_paths.append(runtime_config_agents_dir)
 
     return tuple(search_paths)
@@ -79,8 +87,7 @@ def _resolve_search_paths(
             return (Path(search_path).expanduser().resolve(strict=False),), False
 
         resolved = tuple(
-            Path(path).expanduser().resolve(strict=False)
-            for path in search_path
+            Path(path).expanduser().resolve(strict=False) for path in search_path
         )
         if not resolved:
             raise ValueError("search_path sequence must not be empty")
@@ -89,10 +96,21 @@ def _resolve_search_paths(
     return get_default_agent_search_paths(), True
 
 
-def _resolve_search_path(search_path: Path | os.PathLike[str] | None) -> tuple[Path, bool]:
+def _resolve_search_path(
+    search_path: Path | os.PathLike[str] | None,
+) -> tuple[Path, bool]:
     """Backward-compatible single-path resolver used by older tests/callers."""
     resolved_paths, used_default_search_paths = _resolve_search_paths(search_path)
     return resolved_paths[0], used_default_search_paths
+
+
+@dataclass(frozen=True)
+class GroupRuleSource:
+    """Package provenance for one contributed or locally owned group rule."""
+
+    path: Path
+    package_id: str
+    package_path: Path
 
 
 @dataclass(frozen=True)
@@ -108,9 +126,18 @@ class AgentConfigSource:
     group_rule_files: tuple[Path, ...] = ()
     package_id: str | None = None
     package_path: Path | None = None
+    group_rule_sources: tuple[GroupRuleSource, ...] = ()
 
     def source_file_display(self, path: Path) -> str:
         """Return a stable provenance string for an asset path."""
+        rule_source = next(
+            (item for item in self.group_rule_sources if item.path == path),
+            None,
+        )
+        if rule_source is not None:
+            relative_path = path.relative_to(rule_source.package_path)
+            return f"packages/{rule_source.package_id}/{relative_path.as_posix()}"
+
         if self.package_id and self.package_path:
             try:
                 relative_path = path.relative_to(self.package_path)
@@ -136,33 +163,51 @@ def _looks_like_single_package(path: Path) -> bool:
 def _looks_like_packages_root(path: Path) -> bool:
     if not path.is_dir():
         return False
-    return any(child.is_dir() and (child / "package.yaml").exists() for child in path.iterdir())
+    return any(
+        child.is_dir() and (child / "package.yaml").exists() for child in path.iterdir()
+    )
 
 
 def _looks_like_agent_directory(path: Path) -> bool:
     if not path.is_dir():
         return False
     return any(
-        child.is_dir() and (child / "agent.yaml").exists()
-        for child in path.iterdir()
+        child.is_dir() and (child / "agent.yaml").exists() for child in path.iterdir()
     )
+
+
+def resolve_group_rule_id(
+    path: Path,
+    payload: object | None = None,
+) -> str:
+    """Return one canonical group-rule identity shared by all config layers."""
+    if payload is None:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    if isinstance(payload, Mapping) and "group_id" in payload:
+        configured_group_id = payload["group_id"]
+        if not isinstance(configured_group_id, str):
+            raise ValueError(f"group_id in {path} must be a string")
+        normalized_group_id = configured_group_id.strip()
+        if not normalized_group_id:
+            raise ValueError(f"group_id in {path} must not be empty")
+        return normalized_group_id.upper()
+
+    return path.stem.upper()
 
 
 def _merge_group_rule_files(
     base_group_rule_files: tuple[Path, ...],
     override_group_rule_files: tuple[Path, ...],
 ) -> tuple[Path, ...]:
-    """Merge group-rule files by filename so later sources override earlier ones."""
+    """Merge group-rule files by logical identity so later sources override."""
     merged: dict[str, Path] = {
-        path.name.casefold(): path
-        for path in base_group_rule_files
+        resolve_group_rule_id(path): path for path in base_group_rule_files
     }
     for path in override_group_rule_files:
-        merged[path.name.casefold()] = path
+        merged[resolve_group_rule_id(path)] = path
 
-    return tuple(
-        sorted(merged.values(), key=lambda item: item.name.casefold())
-    )
+    return tuple(sorted(merged.values(), key=lambda item: item.name.casefold()))
 
 
 def _merge_agent_config_source(
@@ -170,11 +215,16 @@ def _merge_agent_config_source(
     override: AgentConfigSource,
 ) -> AgentConfigSource:
     """Layer one agent-config source on top of another without dropping base assets."""
+
     def _pick_path(base_path: Path | None, override_path: Path | None) -> Path | None:
         if override_path is not None and override_path.exists():
             return override_path
         return base_path
 
+    merged_group_rule_files = _merge_group_rule_files(
+        base.group_rule_files,
+        override.group_rule_files,
+    )
     return AgentConfigSource(
         folder_name=override.folder_name,
         agent_dir=override.agent_dir,
@@ -182,13 +232,19 @@ def _merge_agent_config_source(
         prompt_yaml=_pick_path(base.prompt_yaml, override.prompt_yaml),
         schema_py=_pick_path(base.schema_py, override.schema_py),
         docs_yaml=_pick_path(base.docs_yaml, override.docs_yaml),
-        group_rule_files=_merge_group_rule_files(
-            base.group_rule_files,
-            override.group_rule_files,
-        ),
-        package_id=override.package_id if override.package_id is not None else base.package_id,
+        group_rule_files=merged_group_rule_files,
+        package_id=override.package_id
+        if override.package_id is not None
+        else base.package_id,
         package_path=(
-            override.package_path if override.package_path is not None else base.package_path
+            override.package_path
+            if override.package_path is not None
+            else base.package_path
+        ),
+        group_rule_sources=tuple(
+            source
+            for source in (*base.group_rule_sources, *override.group_rule_sources)
+            if source.path in merged_group_rule_files
         ),
     )
 
@@ -233,11 +289,14 @@ def _warn_undeclared_agent_bundles_once(
         )
 
 
-def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigSource, ...]:
+def _resolve_package_agent_sources(
+    package: LoadedPackage,
+) -> tuple[AgentConfigSource, ...]:
     """Resolve agent-owned config assets exported by one runtime package.
 
-    Prompt, schema, and group-rule exports are treated as adjunct assets of an
-    AGENT export, not standalone load targets, so orphan exports fail fast.
+    Prompt and schema exports are adjunct assets of a same-package AGENT export,
+    so those orphan exports fail fast. Group-rule targets are resolved across the
+    selected package registry after all agent owners are known.
     """
     agent_exports = {
         export.name: export
@@ -245,12 +304,12 @@ def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigS
         if export.kind == ExportKind.AGENT
     }
     prompt_exports = {
-        export.name[:-len(".system")]: export
+        export.name[: -len(".system")]: export
         for export in package.manifest.exports
         if export.kind == ExportKind.PROMPT and export.name.endswith(".system")
     }
     schema_exports = {
-        export.name[:-len(".schema")]: export
+        export.name[: -len(".schema")]: export
         for export in package.manifest.exports
         if export.kind == ExportKind.SCHEMA and export.name.endswith(".schema")
     }
@@ -262,17 +321,12 @@ def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigS
         group_rule_exports.setdefault(agent_name, []).append(export)
 
     orphan_exports = sorted(
-        (
-            set(prompt_exports)
-            | set(schema_exports)
-            | set(group_rule_exports)
-        )
-        - set(agent_exports)
+        (set(prompt_exports) | set(schema_exports)) - set(agent_exports)
     )
     if orphan_exports:
         missing = ", ".join(orphan_exports)
         raise ValueError(
-            f"Package '{package.package_id}' exports prompt/schema/group rules for "
+            f"Package '{package.package_id}' exports prompt/schema assets for "
             f"unknown agent bundle(s): {missing}"
         )
 
@@ -336,14 +390,159 @@ def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigS
                 agent_yaml=agent_yaml,
                 prompt_yaml=prompt_yaml,
                 schema_py=schema_py,
-                docs_yaml=(agent_dir / "docs.yaml") if (agent_dir / "docs.yaml").exists() else None,
+                docs_yaml=(agent_dir / "docs.yaml")
+                if (agent_dir / "docs.yaml").exists()
+                else None,
                 group_rule_files=tuple(group_rule_files),
                 package_id=package.package_id,
                 package_path=package.package_path,
+                group_rule_sources=tuple(
+                    GroupRuleSource(
+                        path=path,
+                        package_id=package.package_id,
+                        package_path=package.package_path,
+                    )
+                    for path in group_rule_files
+                ),
             )
         )
 
     return tuple(sources)
+
+
+def _resolve_registry_agent_sources(
+    registry: PackageRegistry,
+    *,
+    root_package_ids: set[str] | None = None,
+) -> tuple[AgentConfigSource, ...]:
+    """Compose package-owned agents with dependency-scoped group-rule contributions."""
+    selected_ids = set(root_package_ids or registry.packages_by_id)
+    pending_ids = list(selected_ids)
+    while pending_ids:
+        package_id = pending_ids.pop()
+        package = registry.get_package(package_id)
+        if package is None:
+            raise ValueError(f"Runtime package '{package_id}' is not loaded")
+        for dependency in package.manifest.dependencies:
+            if dependency.package_id not in selected_ids:
+                selected_ids.add(dependency.package_id)
+                pending_ids.append(dependency.package_id)
+
+    packages = tuple(
+        package
+        for package in registry.loaded_packages
+        if package.package_id in selected_ids
+    )
+    owners: dict[str, AgentConfigSource] = {}
+    for package in packages:
+        for source in _resolve_package_agent_sources(package):
+            existing = owners.get(source.folder_name)
+            if existing is not None:
+                raise ValueError(
+                    f"Duplicate agent bundle '{source.folder_name}' discovered in "
+                    f"{existing.package_id or existing.agent_dir} and "
+                    f"{source.package_id or source.agent_dir}"
+                )
+            owners[source.folder_name] = source
+
+    rule_owners: dict[tuple[str, str], str] = {}
+    for package in packages:
+        contributor_agent_roots = {
+            (package.package_path / agent_export.path).parent
+            for agent_export in package.manifest.exports
+            if agent_export.kind == ExportKind.AGENT
+        } or {package.package_path / "agents"}
+        for export in sorted(package.manifest.exports, key=lambda item: item.name):
+            if export.kind != ExportKind.GROUP_RULE:
+                continue
+            agent_name, separator, rule_name = export.name.partition(".")
+            if not separator or not rule_name:
+                raise ValueError(
+                    f"Package '{package.package_id}' group rule export "
+                    f"'{export.name}' must use <agent>.<group>"
+                )
+
+            rule_path = package.package_path / export.path
+            if not rule_path.is_file():
+                raise FileNotFoundError(
+                    f"Package '{package.package_id}' group rule export '{export.name}' "
+                    f"points to missing file: {rule_path}"
+                )
+            effective_group_id = resolve_group_rule_id(rule_path)
+            if effective_group_id != rule_name.upper():
+                raise ValueError(
+                    f"Package '{package.package_id}' group rule export '{export.name}' "
+                    f"resolves group_id '{effective_group_id}'"
+                )
+
+            target = owners.get(agent_name)
+            if target is None:
+                raise ValueError(
+                    f"Package '{package.package_id}' exports group rule '{export.name}' "
+                    f"for unknown agent bundle '{agent_name}'"
+                )
+            target_package_id = target.package_id
+            if target_package_id is None:
+                raise ValueError(
+                    f"Package '{package.package_id}' cannot contribute group rule "
+                    f"'{export.name}' to an agent without package ownership"
+                )
+            if (
+                package.package_id != target_package_id
+                and any(
+                    rule_path.is_relative_to(agent_root)
+                    for agent_root in contributor_agent_roots
+                )
+            ):
+                raise ValueError(
+                    f"Package '{package.package_id}' must store contributed group rule "
+                    f"'{export.name}' outside its agents directory; use "
+                    f"group_rules/{agent_name}/"
+                )
+            if (
+                package.package_id != target_package_id
+                and not registry.package_declares_dependency(
+                    package.package_id,
+                    target_package_id,
+                )
+            ):
+                raise ValueError(
+                    f"Package '{package.package_id}' must declare dependency "
+                    f"'{target_package_id}' before contributing group rule '{export.name}'"
+                )
+
+            collision_key = (agent_name, effective_group_id)
+            existing_rule_owner = rule_owners.get(collision_key)
+            if existing_rule_owner is not None:
+                raise ValueError(
+                    f"Group rule collision for '{agent_name}.{rule_name}': "
+                    f"{existing_rule_owner} and {package.package_id}"
+                )
+            rule_owners[collision_key] = package.package_id
+
+            if package.package_id == target_package_id:
+                continue
+            contributed_files = tuple(
+                sorted(
+                    (*target.group_rule_files, rule_path),
+                    key=lambda item: item.name.casefold(),
+                )
+            )
+            target = replace(
+                target,
+                group_rule_files=contributed_files,
+                group_rule_sources=(
+                    *target.group_rule_sources,
+                    GroupRuleSource(
+                        path=rule_path,
+                        package_id=package.package_id,
+                        package_path=package.package_path,
+                    ),
+                ),
+            )
+            owners[agent_name] = target
+
+    return tuple(sorted(owners.values(), key=lambda item: item.folder_name))
 
 
 def _resolve_legacy_agent_sources(agents_path: Path) -> tuple[AgentConfigSource, ...]:
@@ -354,14 +553,18 @@ def _resolve_legacy_agent_sources(agents_path: Path) -> tuple[AgentConfigSource,
             agent_yaml=folder / "agent.yaml",
             prompt_yaml=folder / "prompt.yaml",
             schema_py=folder / "schema.py",
-            docs_yaml=(folder / "docs.yaml") if (folder / "docs.yaml").exists() else None,
+            docs_yaml=(folder / "docs.yaml")
+            if (folder / "docs.yaml").exists()
+            else None,
             group_rule_files=tuple(
                 sorted(
                     path
                     for path in (folder / "group_rules").glob("*.yaml")
                     if path.name != "example.yaml" and not path.name.startswith("_")
                 )
-            ) if (folder / "group_rules").exists() else (),
+            )
+            if (folder / "group_rules").exists()
+            else (),
         )
         for folder in sorted(agents_path.iterdir())
         if folder.is_dir() and not folder.name.startswith("_")
@@ -407,8 +610,13 @@ def _resolve_agent_config_sources_for_path(
             raise FileNotFoundError(
                 f"Package directory is not a loaded runtime package: {resolved_path}"
             )
-        _warn_undeclared_agent_bundles_once(package, warned_bundle_registration_failures)
-        sources = _resolve_package_agent_sources(package)
+        _warn_undeclared_agent_bundles_once(
+            package, warned_bundle_registration_failures
+        )
+        sources = _resolve_registry_agent_sources(
+            registry,
+            root_package_ids={package.package_id},
+        )
     elif _looks_like_packages_root(resolved_path):
         registry = load_package_registry(
             resolved_path,
@@ -416,12 +624,10 @@ def _resolve_agent_config_sources_for_path(
         )
         _warn_failed_packages_once(registry, warned_package_failures)
         for package in registry.loaded_packages:
-            _warn_undeclared_agent_bundles_once(package, warned_bundle_registration_failures)
-        sources = tuple(
-            source
-            for package in registry.loaded_packages
-            for source in _resolve_package_agent_sources(package)
-        )
+            _warn_undeclared_agent_bundles_once(
+                package, warned_bundle_registration_failures
+            )
+        sources = _resolve_registry_agent_sources(registry)
     elif used_default_search_path:
         raise FileNotFoundError(
             "No runtime packages with package manifests were found in the default "
@@ -450,7 +656,10 @@ def _resolve_agent_config_sources_for_path(
 
 
 def resolve_agent_config_sources(
-    search_path: Path | os.PathLike[str] | Sequence[Path | os.PathLike[str]] | None = None,
+    search_path: Path
+    | os.PathLike[str]
+    | Sequence[Path | os.PathLike[str]]
+    | None = None,
 ) -> tuple[AgentConfigSource, ...]:
     """Resolve agent config bundles from layered package and override sources.
 

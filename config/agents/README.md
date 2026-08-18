@@ -55,6 +55,26 @@ agent_bundles:
     group_rules: [fb]
 ```
 
+A package may contribute only `group_rule` exports to an agent owned by one of
+its explicit package dependencies. The contributor must not duplicate the
+agent bundle:
+
+```yaml
+dependencies:
+  - package_id: org.core
+    version_range: ">=1.0.0,<2.0.0"
+exports:
+  - kind: group_rule
+    name: supervisor.FB
+    path: group_rules/supervisor/fb.yaml
+```
+
+The runtime fails closed when the target is missing or ambiguous, the target
+owner is not a declared dependency, or two packages export the same
+agent/group pair. Contributed foreign-agent rules must remain outside every
+agent-bundle root declared by the contributor. Prompt provenance remains
+attached to the contributing package and file.
+
 ## Quick Start: Add a Package-owned Agent
 
 ### Step 1: Create or choose a runtime package

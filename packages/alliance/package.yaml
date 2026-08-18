@@ -6,7 +6,18 @@ min_runtime_version: 1.0.0
 max_runtime_version: 2.0.0
 python_package_root: python/src/agr_ai_curation_alliance
 requirements_file: requirements/runtime.txt
+dependencies:
+  - package_id: agr.core
+    version_range: ">=1.0.0,<2.0.0"
 exports:
+  - kind: group_rule
+    name: supervisor.MGI
+    path: group_rules/supervisor/mgi.yaml
+    description: MGI-specific rules contributed to the agr.core supervisor
+  - kind: group_rule
+    name: supervisor.RGD
+    path: group_rules/supervisor/rgd.yaml
+    description: RGD-specific rules contributed to the agr.core supervisor
   - kind: tool_binding
     name: default
     path: tools/bindings.yaml

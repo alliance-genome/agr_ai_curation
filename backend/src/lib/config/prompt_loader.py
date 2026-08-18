@@ -38,6 +38,7 @@ from src.models.sql.prompts import PromptTemplate
 from .agent_sources import (
     AgentConfigSource,
     get_default_agent_search_path,
+    resolve_group_rule_id,
     resolve_agent_config_sources,
 )
 
@@ -280,13 +281,8 @@ def _load_group_rules(
                 continue
 
             # Extract fields
-            group_id = data.get("group_id")
+            group_id = resolve_group_rule_id(rule_file, data)
             content = data.get("content")
-
-            if not group_id:
-                # Try to infer from filename (e.g., fb.yaml -> FB)
-                group_id = rule_file.stem.upper()
-                logger.debug("Inferred group_id '%s' from filename %s", group_id, rule_file.name)
 
             if not content:
                 logger.warning('Missing content in %s', rule_file)

@@ -108,7 +108,7 @@ def test_load_group_rules_infers_group_and_skips_examples(tmp_path):
     (rules_dir / "_template.yaml").write_text("group_id: XX\ncontent: ignore\n")
     (rules_dir / "example.yaml").write_text("group_id: XX\ncontent: ignore\n")
     (rules_dir / "wb.yaml").write_text("content: WB specific rules\n")
-    (rules_dir / "fb.yaml").write_text("group_id: FB\ncontent: FB specific rules\n")
+    (rules_dir / "fb.yaml").write_text("group_id: ' fb '\ncontent: FB specific rules\n")
 
     db = MagicMock()
     calls = []
@@ -128,6 +128,25 @@ def test_load_group_rules_infers_group_and_skips_examples(tmp_path):
     assert count == 2
     assert {c["group_id"] for c in calls} == {"WB", "FB"}
     assert all(c["prompt_type"] == "group_rules" for c in calls)
+
+
+def test_load_group_rules_rejects_non_string_group_id(tmp_path):
+    agent_folder = tmp_path / "gene"
+    rules_dir = agent_folder / "group_rules"
+    rules_dir.mkdir(parents=True)
+    rule_file = rules_dir / "fb.yaml"
+    rule_file.write_text("group_id: 123\ncontent: rules\n")
+    source = agent_sources.AgentConfigSource(
+        folder_name="gene",
+        agent_dir=agent_folder,
+        agent_yaml=None,
+        prompt_yaml=None,
+        schema_py=None,
+        group_rule_files=(rule_file,),
+    )
+
+    with pytest.raises(ValueError, match="group_id .* must be a string"):
+        prompt_loader._load_group_rules(source, "gene", MagicMock())
 
 
 def test_acquire_advisory_lock_when_immediately_available():
@@ -290,7 +309,7 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
 
     result = prompt_loader.load_prompts(db=db, force_reload=True)
 
-    assert result == {"base_prompts": 3, "group_rules": 2}
+    assert result == {"base_prompts": 3, "group_rules": 0}
     assert db.commit.called
     assert any(
         call["agent_name"] == "supervisor"
@@ -310,8 +329,4 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
         and call["source_file"] == "packages/agr.core/agents/curation_handoff/prompt.yaml"
         for call in captured_calls
     )
-    assert {
-        call["group_id"]
-        for call in captured_calls
-        if call["prompt_type"] == "group_rules"
-    } == {"MGI", "RGD"}
+    assert not any(call["prompt_type"] == "group_rules" for call in captured_calls)

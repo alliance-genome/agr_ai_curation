@@ -70,6 +70,16 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
     assert manifest.display_name == "Alliance Defaults"
 
     expected_exports = {
+        (
+            ExportKind.GROUP_RULE,
+            "supervisor.MGI",
+            "group_rules/supervisor/mgi.yaml",
+        ),
+        (
+            ExportKind.GROUP_RULE,
+            "supervisor.RGD",
+            "group_rules/supervisor/rgd.yaml",
+        ),
         (ExportKind.TOOL_BINDING, "default", "tools/bindings.yaml"),
         (
             ExportKind.TOOL_POLICY_DEFAULTS,
