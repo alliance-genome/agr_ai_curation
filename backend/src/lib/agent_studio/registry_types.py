@@ -158,7 +158,6 @@ class AgentRegistryEntry:
             "required_params": self.required_params,
             "batch_capabilities": self.batch_capabilities,
             "has_group_rules": self.has_group_rules,
-            "has_mod_rules": self.has_group_rules,
         }
         if self.config_defaults:
             result["config_defaults"] = self.config_defaults
@@ -250,6 +249,11 @@ def entry_from_dict(agent_id: str, data: Dict[str, Any]) -> AgentRegistryEntry:
     Raises:
         ValueError: If required fields are missing
     """
+    if "has_mod_rules" in data:
+        raise ValueError(
+            f"Agent '{agent_id}' uses removed field 'has_mod_rules'; use 'has_group_rules'"
+        )
+
     # Extract batching config if present
     batching = None
     if "batching" in data:
@@ -298,7 +302,7 @@ def entry_from_dict(agent_id: str, data: Dict[str, Any]) -> AgentRegistryEntry:
         requires_document=data.get("requires_document", False),
         required_params=data.get("required_params", []),
         batch_capabilities=data.get("batch_capabilities", []),
-        has_group_rules=data.get("has_group_rules", data.get("has_mod_rules", False)),
+        has_group_rules=data.get("has_group_rules", False),
         config_defaults=data.get("config_defaults"),
         batching=batching,
         supervisor=supervisor,
@@ -306,12 +310,6 @@ def entry_from_dict(agent_id: str, data: Dict[str, Any]) -> AgentRegistryEntry:
         curation=curation,
         documentation=data.get("documentation"),
     )
-
-
-AgentRegistryEntry.has_mod_rules = property(
-    lambda self: self.has_group_rules,
-    lambda self, value: setattr(self, "has_group_rules", value),
-)
 
 
 # Backwards-compatibility aliases (deprecated, use AgentRegistryEntry instead)

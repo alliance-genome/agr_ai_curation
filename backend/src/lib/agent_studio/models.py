@@ -9,7 +9,7 @@ Defines data structures for:
 """
 
 from typing import Dict, List, Literal, Optional
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 
@@ -58,13 +58,9 @@ class AgentDocumentation(BaseModel):
 class GroupRuleInfo(BaseModel):
     """Organization-group-specific rule information."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
-    group_id: str = Field(
-        ...,
-        description="Group identifier (e.g., 'WB', 'FB', 'MGI')",
-        validation_alias=AliasChoices("group_id", "mod_id"),
-    )
+    group_id: str = Field(..., description="Group identifier (e.g., 'WB', 'FB', 'MGI')")
     content: str = Field(..., description="Group rule content (YAML or processed text)")
     source_file: str = Field(..., description="Path to source YAML file (legacy) or 'database'")
     description: Optional[str] = Field(None, description="Brief description of what the group rule adds")
@@ -100,22 +96,17 @@ class PromptLayerInfo(BaseModel):
 class PromptInfo(BaseModel):
     """Information about a single agent's prompt."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(..., description="Unique agent identifier (e.g., 'supervisor', 'gene_expression')")
     agent_name: str = Field(..., description="Human-readable agent name")
     description: str = Field(..., description="Brief description of what the agent does")
     base_prompt: str = Field(..., description="Base prompt instructions (before group-rule injection)")
     source_file: str = Field(..., description="Path to the agent source file (legacy) or 'database'")
-    has_group_rules: bool = Field(
-        False,
-        description="Whether this agent supports group-specific rules",
-        validation_alias=AliasChoices("has_group_rules", "has_mod_rules"),
-    )
+    has_group_rules: bool = Field(False, description="Whether this agent supports group-specific rules")
     group_rules: Dict[str, GroupRuleInfo] = Field(
         default_factory=dict,
         description="Group-specific rules keyed by group ID",
-        validation_alias=AliasChoices("group_rules", "mod_rules"),
     )
     prompt_layers: List[PromptLayerInfo] = Field(
         default_factory=list,
@@ -173,7 +164,7 @@ class AgentPrompts(BaseModel):
 
 class PromptCatalog(BaseModel):
     """Complete catalog of all agent prompts."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     categories: List[AgentPrompts] = Field(
         default_factory=list,
@@ -183,7 +174,6 @@ class PromptCatalog(BaseModel):
     available_groups: List[str] = Field(
         default_factory=list,
         description="List of groups with available rules",
-        validation_alias=AliasChoices("available_groups", "available_mods"),
     )
     last_updated: datetime = Field(
         default_factory=datetime.utcnow,
@@ -238,22 +228,16 @@ class FlowContextDefinition(BaseModel):
 class AgentWorkshopContext(BaseModel):
     """Agent Workshop context passed to Opus chat."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(extra="forbid")
 
     template_source: Optional[str] = None
     template_name: Optional[str] = None
     custom_agent_id: Optional[str] = None
     custom_agent_name: Optional[str] = None
     include_group_rules: Optional[bool] = None
-    selected_group_id: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("selected_group_id", "selected_mod_id"),
-    )
+    selected_group_id: Optional[str] = None
     prompt_draft: Optional[str] = None
-    selected_group_prompt_draft: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("selected_group_prompt_draft", "selected_mod_prompt_draft"),
-    )
+    selected_group_prompt_draft: Optional[str] = None
     draft_is_dirty: Optional[bool] = None
     custom_agent_updated_at: Optional[str] = None
     group_prompt_override_count: Optional[int] = None
@@ -268,7 +252,7 @@ class AgentWorkshopContext(BaseModel):
 class ChatContext(BaseModel):
     """Context for the Opus chat session."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     selected_agent_id: Optional[str] = Field(
         None,
@@ -277,7 +261,6 @@ class ChatContext(BaseModel):
     selected_group_id: Optional[str] = Field(
         None,
         description="ID of currently selected group (if viewing group-specific rules)",
-        validation_alias=AliasChoices("selected_group_id", "selected_mod_id"),
     )
     trace_id: Optional[str] = Field(
         None,
@@ -287,7 +270,7 @@ class ChatContext(BaseModel):
         None,
         description="Durable or seeded session ID carried with the Agent Studio chat context",
     )
-    view_mode: str = Field(
+    view_mode: Literal["base", "group", "combined"] = Field(
         "base",
         description="Current view mode: 'base', 'group', or 'combined'"
     )
@@ -308,13 +291,6 @@ class ChatContext(BaseModel):
         None,
         description="Current Agent Workshop state when active tab is agent_workshop",
     )
-
-    @field_validator("view_mode", mode="before")
-    @classmethod
-    def normalize_view_mode(cls, value: object) -> object:
-        if isinstance(value, str) and value.strip().lower() == "mod":
-            return "group"
-        return value
 
 
 class ChatRequest(BaseModel):
@@ -352,7 +328,7 @@ class RoutingDecision(BaseModel):
 
 class PromptExecution(BaseModel):
     """Information about a prompt that was executed in a trace."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(..., description="Agent that executed")
     agent_name: str = Field(..., description="Human-readable agent name")
@@ -360,7 +336,6 @@ class PromptExecution(BaseModel):
     group_applied: Optional[str] = Field(
         None,
         description="Group rules that were applied (if any)",
-        validation_alias=AliasChoices("group_applied", "mod_applied"),
     )
     model: Optional[str] = Field(None, description="Model used")
     tokens_used: Optional[int] = Field(None, description="Tokens consumed")
@@ -424,68 +399,5 @@ class ErrorResponse(BaseModel):
     detail: Optional[str] = Field(None, description="Additional details")
 
 
-def _prompt_info_has_mod_rules(self) -> bool:
-    return self.has_group_rules
-
-
-def _prompt_info_set_mod_rules(self, value: bool) -> None:
-    self.has_group_rules = value
-
-
-def _prompt_info_get_mod_rules(self) -> Dict[str, GroupRuleInfo]:
-    return self.group_rules
-
-
-def _prompt_info_set_mod_rule_map(self, value: Dict[str, GroupRuleInfo]) -> None:
-    self.group_rules = value
-
-
-def _group_rule_info_get_mod_id(self) -> str:
-    return self.group_id
-
-
-def _group_rule_info_set_mod_id(self, value: str) -> None:
-    self.group_id = value
-
-
-def _agent_workshop_get_selected_mod_id(self) -> Optional[str]:
-    return self.selected_group_id
-
-
-def _agent_workshop_set_selected_mod_id(self, value: Optional[str]) -> None:
-    self.selected_group_id = value
-
-
-def _agent_workshop_get_selected_mod_prompt_draft(self) -> Optional[str]:
-    return self.selected_group_prompt_draft
-
-
-def _agent_workshop_set_selected_mod_prompt_draft(self, value: Optional[str]) -> None:
-    self.selected_group_prompt_draft = value
-
-
-def _chat_context_get_selected_mod_id(self) -> Optional[str]:
-    return self.selected_group_id
-
-
-def _chat_context_set_selected_mod_id(self, value: Optional[str]) -> None:
-    self.selected_group_id = value
-
-
-def _prompt_execution_get_mod_applied(self) -> Optional[str]:
-    return self.group_applied
-
-
-def _prompt_execution_set_mod_applied(self, value: Optional[str]) -> None:
-    self.group_applied = value
-
-
-GroupRuleInfo.mod_id = property(_group_rule_info_get_mod_id, _group_rule_info_set_mod_id)
-PromptInfo.has_mod_rules = property(_prompt_info_has_mod_rules, _prompt_info_set_mod_rules)
-PromptInfo.mod_rules = property(_prompt_info_get_mod_rules, _prompt_info_set_mod_rule_map)
-PromptCatalog.available_mods = property(lambda self: self.available_groups, lambda self, value: setattr(self, "available_groups", value))
-AgentWorkshopContext.selected_mod_id = property(_agent_workshop_get_selected_mod_id, _agent_workshop_set_selected_mod_id)
-AgentWorkshopContext.selected_mod_prompt_draft = property(_agent_workshop_get_selected_mod_prompt_draft, _agent_workshop_set_selected_mod_prompt_draft)
-ChatContext.selected_mod_id = property(_chat_context_get_selected_mod_id, _chat_context_set_selected_mod_id)
-PromptExecution.mod_applied = property(_prompt_execution_get_mod_applied, _prompt_execution_set_mod_applied)
-MODRuleInfo = GroupRuleInfo
+# Removed legacy Agent Studio mod_* aliases — superseded by canonical group_*
+# contracts in PR #580.

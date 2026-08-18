@@ -1257,15 +1257,15 @@ def _build_catalog() -> PromptCatalog:
         parts = cache_key.split(":")
         if len(parts) < 3:
             continue
-        agent_name, prompt_type, mod_key = parts[0], parts[1], parts[2]
+        agent_name, prompt_type, group_key = parts[0], parts[1], parts[2]
 
         if agent_name not in prompts_by_agent:
             prompts_by_agent[agent_name] = {"system": None, "group_rules": {}}
 
-        if prompt_type == "system" and mod_key == "base":
+        if prompt_type == "system" and group_key == "base":
             prompts_by_agent[agent_name]["system"] = prompt
-        elif prompt_type == "group_rules" and mod_key != "base":
-            prompts_by_agent[agent_name]["group_rules"][mod_key] = prompt
+        elif prompt_type == "group_rules" and group_key != "base":
+            prompts_by_agent[agent_name]["group_rules"][group_key] = prompt
 
     # Build catalog by combining AGENT_REGISTRY metadata with database prompts
     categories_map: Dict[str, List[PromptInfo]] = {}

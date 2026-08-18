@@ -31,6 +31,7 @@ async def test_get_trace_context_for_explorer_success(monkeypatch):
         output={"response": "Found gene xyz"},
         start_time=now,
         end_time=now + timedelta(seconds=2),
+        metadata={"active_groups": ["WB"]},
     )
     observations = [
         _obs(
@@ -40,7 +41,7 @@ async def test_get_trace_context_for_explorer_success(monkeypatch):
             output={"content": "assistant output"},
             model="gpt-4o",
             usage=SimpleNamespace(total=111),
-            metadata={"active_groups": "WB"},
+            metadata=None,
         ),
         _obs(
             type="SPAN",
@@ -76,6 +77,7 @@ async def test_get_trace_context_for_explorer_success(monkeypatch):
     assert context.agent_count == 1
     assert len(context.prompts_executed) == 1
     assert context.prompts_executed[0].agent_id == "gene_extractor"
+    assert context.prompts_executed[0].group_applied == "WB"
     assert len(context.routing_decisions) == 1
     assert context.routing_decisions[0].to_agent == "gene_extractor"
     assert len(context.tool_calls) == 1
@@ -109,6 +111,7 @@ async def test_get_trace_context_for_explorer_uses_configured_trace_review_expor
                         "output": {"response": "Final flow answer"},
                         "createdAt": "2026-05-06T19:01:58.333Z",
                         "updatedAt": "2026-05-06T19:02:00.333Z",
+                        "metadata": {"active_groups": ["MGI"]},
                     },
                     "observations": [
                         {
@@ -121,7 +124,7 @@ async def test_get_trace_context_for_explorer_uses_configured_trace_review_expor
                             },
                             "model": "gpt-test",
                             "usage": {"total": 321},
-                            "metadata": {"active_groups": "MGI"},
+                            "metadata": {},
                             "startTime": "2026-05-06T19:01:58.500Z",
                             "endTime": "2026-05-06T19:01:58.900Z",
                         },
@@ -321,12 +324,12 @@ def test_extract_and_normalize_helpers():
     assert trace_context_service._agent_id_to_name("ontology_term") == "Ontology Term Resolver Agent"
     assert trace_context_service._agent_id_to_name("made_up_agent") == "made_up_agent"
 
-    obs_group_new = _obs(metadata={"active_groups": "WB"})
+    obs_group_new = _obs(metadata={"active_groups": ["WB", "RGD"]})
     obs_group_old = _obs(metadata={"active_mods": "RGD"})
     obs_group_legacy = _obs(metadata={"mod": "SGD"})
-    assert trace_context_service._extract_group_from_observation(obs_group_new) == "WB"
-    assert trace_context_service._extract_group_from_observation(obs_group_old) == "RGD"
-    assert trace_context_service._extract_group_from_observation(obs_group_legacy) == "SGD"
+    assert trace_context_service._extract_group_from_observation(obs_group_new) == "WB, RGD"
+    assert trace_context_service._extract_group_from_observation(obs_group_old) is None
+    assert trace_context_service._extract_group_from_observation(obs_group_legacy) is None
 
 
 def test_extract_user_query_final_response_and_duration():

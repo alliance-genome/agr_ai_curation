@@ -216,6 +216,32 @@ async def test_get_trace_view_invalid_and_400(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_trace_view_requests_canonical_group_context_path(monkeypatch):
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(
+            200,
+            {
+                "data": {"active_groups": ["group-alpha"]},
+                "token_info": {"estimated_tokens": 10},
+            },
+        ),
+        capture=capture,
+    )
+
+    result = await tools.get_trace_view(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        "group_context",
+    )
+
+    assert result["status"] == "success"
+    assert capture["url"].endswith(
+        "/856df16f1752cb53ee43dcb2f5ecfd16/views/group_context"
+    )
+
+
+@pytest.mark.asyncio
 async def test_search_traces_requires_filter_and_calls_claude_search(monkeypatch):
     missing = await tools.search_traces()
     assert missing["status"] == "error"

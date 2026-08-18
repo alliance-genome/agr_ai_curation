@@ -261,7 +261,6 @@ def _create_get_prompt_handler():
     def handler(
         agent_id: str,
         group_id: Optional[str] = None,
-        mod_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get an agent's prompt from the catalog.
@@ -269,7 +268,6 @@ def _create_get_prompt_handler():
         Args:
             agent_id: Agent identifier (e.g., "supervisor", "gene", "pdf_extraction")
             group_id: Optional group identifier for group-specific rules (e.g., "WB", "FB")
-            mod_id: Legacy alias for group_id
 
         Returns:
             Dict with prompt content and metadata
@@ -288,15 +286,14 @@ def _create_get_prompt_handler():
                 "available_agents": available_agents
             }
 
-        resolved_group_id = group_id or mod_id
-        bundle = catalog.get_effective_prompt_bundle(agent_id, group_id=resolved_group_id)
+        bundle = catalog.get_effective_prompt_bundle(agent_id, group_id=group_id)
         if bundle is None:
             return {
                 "status": "error",
                 "message": f"Agent '{agent_id}' not found",
             }
         has_group_rules = bool(
-            resolved_group_id and any(layer.kind == "group_rules" for layer in bundle.layers)
+            group_id and any(layer.kind == "group_rules" for layer in bundle.layers)
         )
 
         return {
@@ -310,7 +307,7 @@ def _create_get_prompt_handler():
             "layers": [layer.to_manifest() for layer in bundle.layers],
             "source_file": agent.source_file,
             "has_group_rules": agent.has_group_rules,
-            "group_id_applied": resolved_group_id if has_group_rules else None,
+            "group_id_applied": group_id if has_group_rules else None,
             "available_groups": list(agent.group_rules.keys()) if agent.group_rules else [],
             "tools": agent.tools
         }
@@ -846,17 +843,13 @@ Some agents have organism-specific rules. Use these group aliases:
                 "group_id": {
                     "type": "string",
                     "description": "Group identifier for organism-specific rules: WB (worm), FB (fly), MGI (mouse), RGD (rat), SGD (yeast), ZFIN (zebrafish)"
-                },
-                "mod_id": {
-                    "type": "string",
-                    "description": "Legacy alias for group_id. MOD identifier for organism-specific rules: WB (worm), FB (fly), MGI (mouse), RGD (rat), SGD (yeast), ZFIN (zebrafish)"
                 }
             },
             "required": ["agent_id"]
         },
         handler=_create_get_prompt_handler(),
         category="prompt",
-        tags=["prompt", "agent", "debugging", "mod"]
+        tags=["prompt", "agent", "debugging", "group"]
     )
     logger.debug("Registered: get_prompt")
 

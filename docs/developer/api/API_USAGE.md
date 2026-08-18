@@ -767,7 +767,7 @@ Access other analysis views with token metadata.
 
 ```bash
 # Available views: token_analysis, agent_context, pdf_citations,
-#                  document_hierarchy, agent_configs, mod_context, trace_summary,
+#                  document_hierarchy, agent_configs, group_context, trace_summary,
 #                  domain_envelope, extraction_timeline, evidence_revisions
 curl -s http://localhost:8001/api/claude/traces/{trace_id}/views/pdf_citations | jq
 ```

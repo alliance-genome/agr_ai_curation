@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 
 class TestAgentStudioCatalogEndpoints:
@@ -243,7 +244,7 @@ class TestAgentStudioCatalogEndpoints:
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
                 api_module.get_combined_prompt(
-                    request=api_module.CombinedPromptRequest(agent_id="gene", mod_id="WB"),
+                    request=api_module.CombinedPromptRequest(agent_id="gene", group_id="WB"),
                     user={"sub": "auth-sub"},
                     db=SimpleNamespace(),
                 )
@@ -253,9 +254,10 @@ class TestAgentStudioCatalogEndpoints:
         assert "boom" not in str(exc_info.value.detail)
         assert "boom" in caplog.text
 
-    def test_combined_prompt_request_accepts_legacy_mod_id_alias(self):
+    def test_combined_prompt_request_rejects_legacy_mod_id_alias(self):
         import src.api.agent_studio as api_module
 
-        request = api_module.CombinedPromptRequest(agent_id="gene", mod_id="WB")
-
-        assert request.group_id == "WB"
+        with pytest.raises(ValidationError):
+            api_module.CombinedPromptRequest.model_validate(
+                {"agent_id": "gene", "mod_id": "WB"}
+            )

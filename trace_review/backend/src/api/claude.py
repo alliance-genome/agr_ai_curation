@@ -1355,7 +1355,7 @@ async def get_evidence_revisions(
     Get a specific analysis view with token metadata.
 
     Available views: token_analysis, agent_context, pdf_citations,
-    document_hierarchy, agent_configs, mod_context, trace_summary,
+    document_hierarchy, agent_configs, group_context, trace_summary,
     domain_envelope, extraction_timeline, evidence_revisions
 
     Token cost: varies by view (check token_info in response).
@@ -1371,7 +1371,7 @@ async def get_trace_view(
     """Get specific trace view with token metadata."""
     valid_views = [
         "token_analysis", "agent_context", "pdf_citations",
-        "document_hierarchy", "agent_configs", "mod_context", "trace_summary",
+        "document_hierarchy", "agent_configs", "group_context", "trace_summary",
         "domain_envelope", "extraction_timeline", "evidence_revisions",
     ]
 
