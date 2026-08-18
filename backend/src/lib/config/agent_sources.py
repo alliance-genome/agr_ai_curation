@@ -16,6 +16,7 @@ from src.lib.packages import (
     ExportKind,
     LoadedPackage,
     PackageExport,
+    PackageRegistry,
     load_package_registry,
     validate_agent_bundle_directory_registration,
 )
@@ -188,8 +189,9 @@ def resolve_group_rule_id(
         if not isinstance(configured_group_id, str):
             raise ValueError(f"group_id in {path} must be a string")
         normalized_group_id = configured_group_id.strip()
-        if normalized_group_id:
-            return normalized_group_id.upper()
+        if not normalized_group_id:
+            raise ValueError(f"group_id in {path} must not be empty")
+        return normalized_group_id.upper()
 
     return path.stem.upper()
 
@@ -219,6 +221,10 @@ def _merge_agent_config_source(
             return override_path
         return base_path
 
+    merged_group_rule_files = _merge_group_rule_files(
+        base.group_rule_files,
+        override.group_rule_files,
+    )
     return AgentConfigSource(
         folder_name=override.folder_name,
         agent_dir=override.agent_dir,
@@ -226,10 +232,7 @@ def _merge_agent_config_source(
         prompt_yaml=_pick_path(base.prompt_yaml, override.prompt_yaml),
         schema_py=_pick_path(base.schema_py, override.schema_py),
         docs_yaml=_pick_path(base.docs_yaml, override.docs_yaml),
-        group_rule_files=_merge_group_rule_files(
-            base.group_rule_files,
-            override.group_rule_files,
-        ),
+        group_rule_files=merged_group_rule_files,
         package_id=override.package_id
         if override.package_id is not None
         else base.package_id,
@@ -241,11 +244,7 @@ def _merge_agent_config_source(
         group_rule_sources=tuple(
             source
             for source in (*base.group_rule_sources, *override.group_rule_sources)
-            if source.path
-            in _merge_group_rule_files(
-                base.group_rule_files,
-                override.group_rule_files,
-            )
+            if source.path in merged_group_rule_files
         ),
     )
 
@@ -412,7 +411,7 @@ def _resolve_package_agent_sources(
 
 
 def _resolve_registry_agent_sources(
-    registry,
+    registry: PackageRegistry,
     *,
     root_package_ids: set[str] | None = None,
 ) -> tuple[AgentConfigSource, ...]:

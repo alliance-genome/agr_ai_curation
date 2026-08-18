@@ -194,6 +194,19 @@ def test_group_rule_contribution_rejects_non_string_group_id(tmp_path):
         agent_sources.resolve_agent_config_sources(packages_dir)
 
 
+def test_group_rule_contribution_rejects_blank_group_id(tmp_path):
+    packages_dir, _owner_dir, contributed_rule = (
+        _write_group_rule_contribution_fixture(tmp_path)
+    )
+    contributed_rule.write_text(
+        "group_id: '   '\ncontent: Extension rules\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="group_id .* must not be empty"):
+        agent_sources.resolve_agent_config_sources(packages_dir)
+
+
 def test_package_scoped_agent_lookup_allows_duplicate_agent_ids(tmp_path):
     packages_dir = tmp_path / "packages"
     first_package = packages_dir / "first"
