@@ -129,17 +129,21 @@ export interface DocumentListQuery {
   maxVectorCount?: number;
 }
 
-export interface RawDocumentDetailResponse {
-  document?: Record<string, unknown>;
-  chunks?: Array<Record<string, unknown>>;
-  chunks_preview?: Array<Record<string, unknown>>;
-  total_chunks?: number;
-  embedding_summary?: Record<string, unknown>;
-  embeddings?: Record<string, unknown>;
-  pipeline_status?: Record<string, unknown> | null;
-  related_documents?: Array<Record<string, unknown>>;
-  schema_version?: string;
-  [key: string]: unknown;
+export interface DocumentDetailResponse {
+  document_id: string;
+  job_id: string | null;
+  user_id: number;
+  filename: string;
+  title: string | null;
+  status: string;
+  upload_timestamp: string;
+  processing_started_at: string | null;
+  processing_completed_at: string | null;
+  file_size_bytes: number;
+  weaviate_tenant: string;
+  chunk_count: number | null;
+  error_message: string | null;
+  source_provenance: RawDocumentSourceProvenance | null;
 }
 
 export interface DocumentSourceProvenance {
@@ -183,50 +187,8 @@ export interface DocumentSummary {
   sourceProvenance?: DocumentSourceProvenance | null;
 }
 
-export interface EmbeddingModelBreakdown {
-  name: string;
-  chunkCount: number;
-}
-
-export interface EmbeddingSummary {
-  totalChunks: number;
-  embeddedChunks: number;
-  coveragePercentage?: number | null;
-  lastEmbeddedAt?: string | null;
-  primaryModel?: string | null;
-  models: EmbeddingModelBreakdown[];
-}
-
-export interface PipelineStatusSummary {
-  currentStage?: string | null;
-  progressPercentage?: number | null;
-  message?: string | null;
-  startedAt?: string | null;
-  updatedAt?: string | null;
-  completedAt?: string | null;
-  errorCount?: number | null;
-}
-
-export interface ChunkPreviewSummary {
-  id: string;
-  chunkIndex?: number | null;
-  content: string;
-  pageNumber?: number | null;
-  elementType?: string | null;
-  sectionTitle?: string | null;
-  metadata?: Record<string, unknown> | null;
-  embeddingModel?: string | null;
-  embeddingTimestamp?: string | null;
-}
-
 export interface DocumentDetailData {
   document: DocumentSummary;
-  embeddingSummary?: EmbeddingSummary;
-  pipelineStatus?: PipelineStatusSummary;
-  chunksPreview: ChunkPreviewSummary[];
-  totalChunks: number;
-  relatedDocuments: DocumentSummary[];
-  schemaVersion?: string;
 }
 
 export interface PdfExtractionHealthStatus {
@@ -454,165 +416,26 @@ export const normalizeDocumentListResponse = (
   offset: response.offset,
 });
 
-const normalizeDocumentSummary = (
-  raw: Record<string, unknown> | undefined,
-  fallback?: DocumentSummary,
-  fallbackId?: string
-): DocumentSummary => {
-  const metadata = (raw?.metadata ?? raw?.['metadata']) as Record<string, unknown> | undefined;
-  const processingStatus = raw?.processing_status ?? raw?.processingStatus ?? raw?.status;
-  const hasSnakeCaseProvenance =
-    raw != null && Object.prototype.hasOwnProperty.call(raw, 'source_provenance');
-  const hasCamelCaseProvenance =
-    raw != null && Object.prototype.hasOwnProperty.call(raw, 'sourceProvenance');
-  const rawSourceProvenance = hasSnakeCaseProvenance
-    ? raw?.source_provenance
-    : hasCamelCaseProvenance
-      ? raw?.sourceProvenance
-      : undefined;
-
-  return {
-    id: String(raw?.id ?? raw?.document_id ?? raw?.documentId ?? fallback?.id ?? fallbackId ?? ''),
-    filename: String(raw?.filename ?? fallback?.filename ?? 'Untitled'),
-    title: (raw?.title ?? fallback?.title ?? null) as string | null,
-    fileSize: (raw?.file_size_bytes ?? raw?.file_size ?? raw?.fileSize ?? fallback?.fileSize ?? null) as number | null,
-    creationDate: toStringOrNull(
-      raw?.upload_timestamp ?? raw?.creation_date ?? raw?.creationDate ?? fallback?.creationDate ?? null
-    ),
-    lastAccessedDate: toStringOrNull(
-      raw?.last_accessed_date ?? raw?.lastAccessedDate ?? fallback?.lastAccessedDate ?? null
-    ),
-    processingStatus: (typeof processingStatus === 'string'
-      ? processingStatus.toLowerCase()
-      : fallback?.processingStatus ?? null) as string | null,
-    embeddingStatus: (raw?.embedding_status ?? raw?.embeddingStatus ?? fallback?.embeddingStatus ?? null) as string | null,
-    chunkCount: (raw?.chunk_count ?? raw?.chunkCount ?? fallback?.chunkCount ?? null) as number | null,
-    vectorCount: (raw?.vector_count ?? raw?.vectorCount ?? fallback?.vectorCount ?? null) as number | null,
-    metadata: metadata ?? fallback?.metadata ?? null,
-    sourceProvenance: normalizeDocumentSourceProvenance(
-      rawSourceProvenance,
-      fallback?.sourceProvenance
-    ),
-  };
-};
-
-const normalizeEmbeddingSummary = (
-  raw: Record<string, unknown> | undefined,
-  defaults?: { totalChunks?: number; embeddedChunks?: number }
-): EmbeddingSummary | undefined => {
-  if (!raw && !defaults) {
-    return undefined;
-  }
-
-  const modelsRaw = Array.isArray(raw?.models) ? (raw?.models as Array<Record<string, unknown>>) : [];
-  const normalizedDefaults = {
-    totalChunks: defaults?.totalChunks ?? 0,
-    embeddedChunks: defaults?.embeddedChunks ?? 0,
-  };
-
-  const totalChunks = (raw?.total_chunks ?? raw?.totalChunks ?? normalizedDefaults.totalChunks) as number;
-  const embeddedChunks = (raw?.embedded_chunks ?? raw?.embeddedChunks ?? normalizedDefaults.embeddedChunks) as number;
-
-  return {
-    totalChunks,
-    embeddedChunks,
-    coveragePercentage: (raw?.coverage_percentage ?? raw?.coveragePercentage ?? null) as number | null,
-    lastEmbeddedAt: toStringOrNull(raw?.last_embedded_at ?? raw?.lastEmbeddedAt ?? null),
-    primaryModel: (raw?.primary_model ?? raw?.primaryModel ?? null) as string | null,
-    models: modelsRaw.map((model) => ({
-      name: String(model.model ?? model.name ?? 'unknown'),
-      chunkCount: (model.chunk_count ?? model.chunkCount ?? 0) as number,
-    })),
-  };
-};
-
-const normalizePipelineStatus = (
-  raw: Record<string, unknown> | null | undefined
-): PipelineStatusSummary | undefined => {
-  if (!raw) {
-    return undefined;
-  }
-
-  return {
-    currentStage: (raw.current_stage ?? raw.currentStage ?? null) as string | null,
-    progressPercentage: (raw.progress_percentage ?? raw.progressPercentage ?? null) as number | null,
-    message: (raw.message ?? null) as string | null,
-    startedAt: toStringOrNull(raw.started_at ?? raw.startedAt ?? null),
-    updatedAt: toStringOrNull(raw.updated_at ?? raw.updatedAt ?? null),
-    completedAt: toStringOrNull(raw.completed_at ?? raw.completedAt ?? null),
-    errorCount: (raw.error_count ?? raw.errorCount ?? null) as number | null,
-  };
-};
-
-const normalizeChunkPreviews = (
-  chunks: Array<Record<string, unknown>> | undefined,
-  documentId?: string
-): ChunkPreviewSummary[] => {
-  if (!Array.isArray(chunks) || chunks.length === 0) {
-    return [];
-  }
-
-  return chunks.map((chunk, index) => ({
-    id: String(chunk.id ?? `${documentId ?? 'doc'}-chunk-${index}`),
-    chunkIndex: (chunk.chunk_index ?? chunk.chunkIndex ?? index) as number,
-    content: String(chunk.content ?? ''),
-    pageNumber: (chunk.page_number ?? chunk.pageNumber ?? null) as number | null,
-    elementType: (chunk.element_type ?? chunk.elementType ?? null) as string | null,
-    sectionTitle: (chunk.section_title ?? chunk.sectionTitle ?? null) as string | null,
-    metadata: (chunk.metadata ?? null) as Record<string, unknown> | null,
-    embeddingModel: (chunk.embedding_model ?? chunk.embeddingModel ?? null) as string | null,
-    embeddingTimestamp: toStringOrNull(chunk.embedding_timestamp ?? chunk.embeddingTimestamp ?? null),
-  }));
-};
-
-const normalizeRelatedDocuments = (
-  docs: Array<Record<string, unknown>> | undefined
-): DocumentSummary[] => {
-  if (!Array.isArray(docs)) {
-    return [];
-  }
-
-  return docs.map((doc) => normalizeDocumentSummary(doc));
-};
-
-export interface NormalizeDocumentDetailOptions {
-  fallbackSummary?: DocumentSummary;
-  documentId?: string;
-}
-
 export const normalizeDocumentDetailResponse = (
-  payload: RawDocumentDetailResponse,
-  options: NormalizeDocumentDetailOptions = {}
+  payload: DocumentDetailResponse
 ): DocumentDetailData => {
-  const { fallbackSummary, documentId } = options;
-  const rawDocument = payload.document ?? (payload as Record<string, unknown>);
-  const document = normalizeDocumentSummary(rawDocument, fallbackSummary, documentId);
-  const totalChunks = (payload.total_chunks ?? rawDocument.chunk_count ?? rawDocument.chunkCount ?? fallbackSummary?.chunkCount ?? 0) as number;
-  const embeddedChunks = document.vectorCount ?? 0;
-
-  const embeddingSummary =
-    normalizeEmbeddingSummary(payload.embedding_summary, {
-      totalChunks,
-      embeddedChunks,
-    }) ??
-    normalizeEmbeddingSummary(payload.embeddings as Record<string, unknown> | undefined, {
-      totalChunks,
-      embeddedChunks,
-    });
-
-  const chunksPreview = normalizeChunkPreviews(
-    payload.chunks_preview ?? payload.chunks,
-    document.id
-  );
-
+  // Removed legacy nested/camelCase detail fallback — the flat DocumentResponse is authoritative.
   return {
-    document,
-    embeddingSummary,
-    pipelineStatus: normalizePipelineStatus(payload.pipeline_status),
-    chunksPreview,
-    totalChunks,
-    relatedDocuments: normalizeRelatedDocuments(payload.related_documents),
-    schemaVersion: payload.schema_version ?? undefined,
+    document: {
+      id: payload.document_id,
+      filename: payload.filename,
+      title: payload.title,
+      fileSize: payload.file_size_bytes,
+      creationDate: payload.upload_timestamp,
+      lastAccessedDate: null,
+      processingStatus: payload.status.toLowerCase(),
+      embeddingStatus: null,
+      errorMessage: payload.error_message,
+      chunkCount: payload.chunk_count,
+      vectorCount: null,
+      metadata: null,
+      sourceProvenance: normalizeDocumentSourceProvenance(payload.source_provenance),
+    },
   };
 };
 
@@ -917,8 +740,8 @@ export const useCancelPdfJob = (
 };
 
 export const fetchDocumentDetail = async (id: string): Promise<DocumentDetailData> => {
-  const payload = await fetchApi<RawDocumentDetailResponse>(`/documents/${id}`);
-  return normalizeDocumentDetailResponse(payload, { documentId: id });
+  const payload = await fetchApi<DocumentDetailResponse>(`/documents/${id}`);
+  return normalizeDocumentDetailResponse(payload);
 };
 
 export const useDocument = (
