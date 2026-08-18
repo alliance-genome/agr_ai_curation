@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
-  useDocuments,
+  fetchDocumentList,
   useDocument,
   useDocumentChunks,
   useWeaviateSettings,
@@ -15,7 +15,8 @@ import {
   normalizeDocumentListResponse,
   normalizeDocumentDetailResponse,
 } from './weaviate';
-import { createMockDocument, createMockFilter, createMockPaginationParams } from '../test/test-utils';
+import { logger } from './logger';
+import { createMockDocument } from '../test/test-utils';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -39,8 +40,8 @@ describe('weaviate service', () => {
     vi.clearAllMocks();
   });
 
-  describe('useDocuments', () => {
-    it('fetches documents with filters and pagination', async () => {
+  describe('fetchDocumentList', () => {
+    it('serializes the canonical query, propagates request options, and normalizes the response', async () => {
       const mockResponse = {
         documents: [{
           document_id: 'doc-1',
@@ -69,19 +70,24 @@ describe('weaviate service', () => {
         json: async () => mockResponse,
       });
 
-      const filters = createMockFilter({ searchTerm: 'test' });
-      const pagination = createMockPaginationParams({ page: 1 });
-
-      const { result } = renderHook(
-        () => useDocuments(filters, pagination),
-        { wrapper: createWrapper() }
-      );
-
-      await waitFor(() => {
-        expect(result.current.isSuccess).toBe(true);
+      const controller = new AbortController();
+      const result = await fetchDocumentList({
+        page: 1,
+        pageSize: 20,
+        sortBy: 'filename',
+        sortOrder: 'asc',
+        search: 'test',
+        embeddingStatus: ['completed', 'pending'],
+        dateFrom: new Date('2026-08-01T00:00:00Z'),
+        dateTo: new Date('2026-08-02T00:00:00Z'),
+        minVectorCount: 0,
+        maxVectorCount: 10,
+      }, {
+        signal: controller.signal,
+        headers: { Accept: 'application/json' },
       });
 
-      expect(result.current.data).toEqual({
+      expect(result).toEqual({
         documents: [{
           id: 'doc-1',
           filename: 'test-document.pdf',
@@ -102,30 +108,42 @@ describe('weaviate service', () => {
         offset: 0,
       });
       expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/weaviate/documents'),
+        '/api/weaviate/documents?page=2&page_size=20&sort_by=filename&sort_order=asc&search=test&embedding_status=completed&embedding_status=pending&date_from=2026-08-01T00%3A00%3A00.000Z&date_to=2026-08-02T00%3A00%3A00.000Z&min_vector_count=0&max_vector_count=10',
         expect.objectContaining({
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
         })
       );
     });
 
-    it('handles error responses', async () => {
+    it('propagates shared API errors', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,
         json: async () => ({ message: 'Server error' }),
       });
 
-      const { result } = renderHook(
-        () => useDocuments(createMockFilter(), createMockPaginationParams()),
-        { wrapper: createWrapper() }
-      );
+      await expect(fetchDocumentList({ page: 0, pageSize: 20 })).rejects.toThrow('Server error');
+    });
 
-      await waitFor(() => {
-        expect(result.current.isError).toBe(true);
-      });
+    it('propagates request cancellation without logging an expected abort as an API error', async () => {
+      const abortError = new DOMException('The operation was aborted', 'AbortError');
+      const loggerError = vi.spyOn(logger, 'error');
+      const controller = new AbortController();
+      controller.abort();
+      mockFetch.mockRejectedValueOnce(abortError);
 
-      expect(result.current.error?.message).toContain('Server error');
+      await expect(fetchDocumentList(
+        { page: 0, pageSize: 20 },
+        { signal: controller.signal },
+      )).rejects.toBe(abortError);
+      expect(loggerError).not.toHaveBeenCalled();
+
+      loggerError.mockRestore();
     });
   });
 
@@ -694,39 +712,4 @@ describe('weaviate service', () => {
     });
   });
 
-  describe('Error handling', () => {
-    it('handles network errors', async () => {
-      mockFetch.mockRejectedValueOnce(new Error('Network error'));
-
-      const { result } = renderHook(
-        () => useDocuments(createMockFilter(), createMockPaginationParams()),
-        { wrapper: createWrapper() }
-      );
-
-      await waitFor(() => {
-        expect(result.current.isError).toBe(true);
-      });
-
-      expect(result.current.error?.message).toContain('Network error');
-    });
-
-    it('handles non-JSON error responses', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        json: async () => { throw new Error('Invalid JSON'); },
-      });
-
-      const { result } = renderHook(
-        () => useDocuments(createMockFilter(), createMockPaginationParams()),
-        { wrapper: createWrapper() }
-      );
-
-      await waitFor(() => {
-        expect(result.current.isError).toBe(true);
-      });
-
-      expect(result.current.error?.message).toContain('HTTP error');
-    });
-  });
 });
