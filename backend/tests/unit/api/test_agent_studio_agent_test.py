@@ -10,6 +10,7 @@ import uuid
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -137,25 +138,64 @@ class TestAgentTestEndpoint:
         assert run_kwargs["session_id"] == "session-1"
         assert run_kwargs["context_messages"] == [{"role": "user", "content": "test query"}]
 
-    def test_agent_test_request_accepts_legacy_mod_id_alias(self):
+    def test_agent_test_request_rejects_legacy_mod_id_alias(self):
         import src.api.agent_studio as api_module
 
-        request = api_module.AgentTestRequest(input="test query", mod_id="WB")
+        with pytest.raises(ValidationError):
+            api_module.AgentTestRequest.model_validate(
+                {"input": "test query", "mod_id": "WB"}
+            )
 
-        assert request.group_id == "WB"
-
-    def test_manual_suggestion_request_accepts_legacy_mod_id_alias(self):
+    def test_manual_suggestion_request_rejects_legacy_mod_id_alias(self):
         import src.api.agent_studio as api_module
 
-        request = api_module.ManualSuggestionRequest(
-            agent_id="gene",
-            suggestion_type="group_specific",
-            summary="Summary",
-            detailed_reasoning="Reasoning",
-            mod_id="WB",
+        with pytest.raises(ValidationError):
+            api_module.ManualSuggestionRequest.model_validate(
+                {
+                    "agent_id": "gene",
+                    "suggestion_type": "group_specific",
+                    "summary": "Summary",
+                    "detailed_reasoning": "Reasoning",
+                    "mod_id": "WB",
+                }
+            )
+
+    def test_submit_prompt_suggestion_tool_rejects_legacy_mod_id_before_delivery(
+        self,
+        monkeypatch,
+    ):
+        import src.api.agent_studio as api_module
+
+        delivered = False
+
+        async def _unexpected_delivery(**_kwargs):
+            nonlocal delivered
+            delivered = True
+            return {"status": "success"}
+
+        monkeypatch.setattr(api_module, "submit_suggestion_sns", _unexpected_delivery)
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="submit_prompt_suggestion",
+                tool_input={
+                    "suggestion_type": "group_specific",
+                    "summary": "Summary",
+                    "detailed_reasoning": "Reasoning",
+                    "mod_id": "WB",
+                },
+                context=None,
+                user_email="curator@example.org",
+                user_auth_sub="auth-sub-1",
+                messages=[],
+            )
         )
 
-        assert request.group_id == "WB"
+        assert result == {
+            "success": False,
+            "error": "Unsupported field mod_id. Use group_id.",
+        }
+        assert delivered is False
 
     def test_manual_suggestion_endpoint_returns_error_when_sns_publish_fails(self, monkeypatch):
         import src.api.agent_studio as api_module
@@ -471,12 +511,11 @@ class TestAgentTestEndpoint:
 class TestAgentWorkshopSystemPrompt:
     """Tests for agent workshop context injection into Opus system prompt."""
 
-    def test_chat_context_normalizes_legacy_mod_view_mode(self):
+    def test_chat_context_rejects_legacy_mod_view_mode(self):
         from src.lib.agent_studio.models import ChatContext
 
-        context = ChatContext(view_mode="mod")
-
-        assert context.view_mode == "group"
+        with pytest.raises(ValidationError):
+            ChatContext.model_validate({"view_mode": "mod"})
 
     def test_build_opus_system_prompt_includes_workshop_context_and_truncates_draft(
         self,
@@ -979,10 +1018,10 @@ class TestAgentWorkshopSystemPrompt:
         assert result["success"] is True
         assert result["target_prompt"] == "group"
         assert result["target_group_id"] == "WB"
-        assert result["target_mod_id"] == "WB"
+        assert "target_mod_id" not in result
         assert "WormBase IDs" in result["proposed_prompt"]
 
-    def test_handle_update_workshop_prompt_tool_accepts_legacy_mod_target_alias(self):
+    def test_handle_update_workshop_prompt_tool_rejects_legacy_mod_target_field(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
 
@@ -1018,10 +1057,33 @@ class TestAgentWorkshopSystemPrompt:
             )
         )
 
-        assert result["success"] is True
-        assert result["target_prompt"] == "group"
-        assert result["target_group_id"] == "WB"
-        assert result["target_mod_id"] == "WB"
+        assert result == {
+            "success": False,
+            "error": "Unsupported field target_mod_id. Use target_group_id.",
+        }
+
+    def test_handle_update_workshop_prompt_tool_rejects_legacy_mod_target_prompt(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="update_workshop_prompt_draft",
+                tool_input={"target_prompt": "mod"},
+                context=ChatContext(
+                    active_tab="agent_workshop",
+                    agent_workshop=AgentWorkshopContext(prompt_draft="Main prompt"),
+                ),
+                user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
+                messages=[],
+            )
+        )
+
+        assert result == {
+            "success": False,
+            "error": "Unsupported target_prompt. Must be 'main' or 'group'.",
+        }
 
     def test_handle_update_workshop_prompt_tool_rejects_group_target_without_selected_group(self):
         from src.api import agent_studio as api_module

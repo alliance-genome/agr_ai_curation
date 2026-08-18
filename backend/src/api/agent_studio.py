@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, List, NoReturn, Optional, cast
 
 import anthropic
 import boto3
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -215,12 +215,6 @@ def _load_agent_studio_system_prompt_template() -> str:
     """Load the system prompt selected by the active runtime package profile."""
     return load_installed_agent_studio_prompt().content
 
-
-def _normalize_suggestion_type(value: Any) -> Any:
-    """Normalize legacy suggestion type aliases during the MOD->Group migration."""
-    if isinstance(value, str) and value.strip().lower() == "mod_specific":
-        return "group_specific"
-    return value
 
 # Create router with prefix
 router = APIRouter(prefix="/api/agent-studio")
@@ -948,6 +942,15 @@ async def get_combined_prompt(
         )
 
 
+def _reject_removed_prompt_preview_query(request: Request) -> None:
+    """Fail closed when an old client sends the removed MOD selector."""
+    if "mod_id" in request.query_params:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported query parameter mod_id. Use group_id.",
+        )
+
+
 @router.get(
     "/prompt-preview/{agent_id}",
     response_model=PromptPreviewResponse,
@@ -957,19 +960,18 @@ async def get_combined_prompt(
 async def get_prompt_preview(
     agent_id: str = Path(..., description="Agent ID (system ID or custom ca_<uuid>)"),
     group_id: Optional[str] = None,
-    mod_id: Optional[str] = None,
+    _removed_query_guard: None = Depends(_reject_removed_prompt_preview_query),
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> PromptPreviewResponse:
     """Get prompt preview for system or custom agents."""
     try:
-        resolved_group_id = group_id or mod_id
         # Custom agent preview with ownership check
         if agent_id.startswith("ca_"):
             bundle, parent_agent_key, custom_group_rules_enabled = (
                 _build_custom_agent_effective_prompt_bundle(
                     agent_id=agent_id,
-                    group_id=resolved_group_id,
+                    group_id=group_id,
                     user=user,
                     db=db,
                     lookup_custom_agent=get_custom_agent_for_user,
@@ -979,7 +981,7 @@ async def get_prompt_preview(
             return PromptPreviewResponse(
                 agent_id=agent_id,
                 prompt=bundle.render(),
-                group_id=resolved_group_id,
+                group_id=group_id,
                 source="custom_agent",
                 parent_agent_key=parent_agent_key,
                 include_group_rules=custom_group_rules_enabled,
@@ -989,14 +991,14 @@ async def get_prompt_preview(
 
         # System agent preview
         service = get_prompt_catalog()
-        bundle = service.get_effective_prompt_bundle(agent_id, group_id=resolved_group_id)
+        bundle = service.get_effective_prompt_bundle(agent_id, group_id=group_id)
         if bundle is None:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
         return PromptPreviewResponse(
             agent_id=agent_id,
             prompt=bundle.render(),
-            group_id=resolved_group_id,
+            group_id=group_id,
             source="system_agent",
             parent_agent_key=None,
             include_group_rules=None,
@@ -1349,7 +1351,6 @@ _AUDIT_SAFE_VALUE_KEYS = {
     "status",
     "success",
     "target_group_id",
-    "target_mod_id",
     # Refresh-tool selector, not prompt content.
     "target_prompt",
     "tool_name",
@@ -2476,7 +2477,7 @@ async def _handle_tool_call(
                 "data": None,
                 "token_info": None,
                 "error": f"Missing required parameters: {', '.join(missing)}",
-                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, mod_context, trace_summary, domain_envelope, extraction_timeline, evidence_revisions"
+                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, domain_envelope, extraction_timeline, evidence_revisions"
             }
         return await get_trace_view(trace_id=trace_id, view_name=view_name)
 
@@ -2668,6 +2669,12 @@ async def _handle_tool_call(
         )
 
     elif tool_name == "submit_prompt_suggestion":
+        if "mod_id" in tool_input:
+            return {
+                "success": False,
+                "error": "Unsupported field mod_id. Use group_id.",
+            }
+
         # Validate required fields (agent_id is optional for general feedback)
         required_fields = ["suggestion_type", "summary", "detailed_reasoning"]
         missing_fields = [f for f in required_fields if not tool_input.get(f)]
@@ -2679,9 +2686,7 @@ async def _handle_tool_call(
 
         # Validate suggestion_type
         try:
-            suggestion_type = SuggestionType(
-                _normalize_suggestion_type(tool_input["suggestion_type"])
-            )
+            suggestion_type = SuggestionType(tool_input["suggestion_type"])
         except ValueError:
             valid_types = [t.value for t in SuggestionType]
             return {
@@ -2730,19 +2735,23 @@ async def _handle_tool_call(
                 "error": "This tool is only available while the curator is on the Agent Workshop tab.",
             }
 
+        if "target_mod_id" in tool_input:
+            return {
+                "success": False,
+                "error": "Unsupported field target_mod_id. Use target_group_id.",
+            }
+
         target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
-        if target_prompt == "mod":
-            target_prompt = "group"
         if target_prompt not in {"main", "group"}:
             return {
                 "success": False,
-                "error": "Unsupported target_prompt. Must be 'main' or 'group'. Legacy 'mod' is also accepted.",
+                "error": "Unsupported target_prompt. Must be 'main' or 'group'.",
             }
 
         target_group_id = ""
         if target_prompt == "group":
             selected_group_id = (context.agent_workshop.selected_group_id or "").strip().upper()
-            raw_target_group = tool_input.get("target_group_id", tool_input.get("target_mod_id"))
+            raw_target_group = tool_input.get("target_group_id")
             if raw_target_group is not None and not isinstance(raw_target_group, str):
                 return {
                     "success": False,
@@ -2848,7 +2857,6 @@ async def _handle_tool_call(
             "proposed_prompt": updated_prompt,
             "target_prompt": target_prompt,
             "target_group_id": target_group_id if target_prompt == "group" else None,
-            "target_mod_id": target_group_id if target_prompt == "group" else None,
             "change_summary": change_summary.strip() if isinstance(change_summary, str) else "",
             "applied_edits": applied_edits,
             "message": "Prompt update proposal prepared. Awaiting curator approval in the UI.",
@@ -4164,7 +4172,7 @@ async def submit_suggestion(
     """Submit a prompt suggestion manually."""
     # Validate suggestion type
     try:
-        suggestion_type = SuggestionType(_normalize_suggestion_type(request.suggestion_type))
+        suggestion_type = SuggestionType(request.suggestion_type)
     except ValueError:
         valid_types = [t.value for t in SuggestionType]
         raise HTTPException(

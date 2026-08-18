@@ -1,6 +1,7 @@
 """Tests for prompt suggestion submission service."""
 
 import pytest
+from pydantic import ValidationError
 from src.lib.agent_studio import suggestion_service as svc
 
 
@@ -17,17 +18,21 @@ def _build_suggestion(agent_id: str | None = "gene_expression_extractor"):
     )
 
 
-def test_prompt_suggestion_accepts_legacy_mod_specific_alias():
-    suggestion = svc.PromptSuggestion(
-        agent_id="gene",
-        suggestion_type="mod_specific",
-        summary="Legacy alias",
-        detailed_reasoning="Should normalize to group_specific.",
-        mod_id="WB",
-    )
-
-    assert suggestion.suggestion_type == svc.SuggestionType.GROUP_SPECIFIC
-    assert suggestion.group_id == "WB"
+@pytest.mark.parametrize(
+    "legacy_fields",
+    [
+        {"suggestion_type": "mod_specific", "group_id": "WB"},
+        {"suggestion_type": "group_specific", "mod_id": "WB"},
+    ],
+)
+def test_prompt_suggestion_rejects_legacy_mod_aliases(legacy_fields):
+    with pytest.raises(ValidationError):
+        svc.PromptSuggestion(
+            agent_id="gene",
+            summary="Legacy alias",
+            detailed_reasoning="Legacy aliases are no longer accepted.",
+            **legacy_fields,
+        )
 
 
 def test_format_suggestion_email_includes_optional_sections():

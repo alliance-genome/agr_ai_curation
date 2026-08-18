@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Optional
 
 import boto3
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def _format_suggestion_email(message: dict) -> str:
     lines.append("TARGET")
     lines.append("-" * 40)
     lines.append(f"Agent:           {message.get('agent_id', 'N/A')}")
-    group_id = message.get("group_id") or message.get("mod_id")
+    group_id = message.get("group_id")
     if group_id:
         lines.append(f"Group:           {group_id}")
     lines.append(f"Suggestion Type: {message.get('suggestion_type', 'N/A')}")
@@ -112,27 +112,16 @@ class SuggestionType(str, Enum):
 
 class PromptSuggestion(BaseModel):
     """A prompt improvement suggestion."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     agent_id: Optional[str] = Field(None, description="Which agent's prompt this applies to (optional for general feedback)")
     suggestion_type: SuggestionType = Field(..., description="Type of suggestion")
     summary: str = Field(..., description="Brief summary of the suggestion (1-2 sentences)")
     detailed_reasoning: str = Field(..., description="Full explanation of why this change is needed")
     proposed_change: Optional[str] = Field(None, description="Specific text change if applicable")
-    group_id: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("group_id", "mod_id"),
-        description="Group ID if this is group-specific",
-    )
+    group_id: Optional[str] = Field(None, description="Group ID if this is group-specific")
     trace_id: Optional[str] = Field(None, description="Related trace ID for context")
     conversation_context: Optional[str] = Field(None, description="Recent conversation excerpt")
-
-    @field_validator("suggestion_type", mode="before")
-    @classmethod
-    def normalize_suggestion_type(cls, value: object) -> object:
-        if isinstance(value, str) and value.strip().lower() == "mod_specific":
-            return SuggestionType.GROUP_SPECIFIC.value
-        return value
 
 
 class SuggestionSubmission(BaseModel):
@@ -300,8 +289,8 @@ The suggestion will be sent to the development team for review.""",
             },
             "suggestion_type": {
                 "type": "string",
-                "enum": ["improvement", "bug", "clarification", "group_specific", "mod_specific", "missing_case", "general"],
-                "description": "Type of suggestion: improvement (general enhancement), bug (incorrect behavior), clarification (ambiguous), group_specific (group rule change; legacy mod_specific also accepted), missing_case (unhandled scenario), general (feedback based on trace/conversation not tied to specific prompt)"
+                "enum": ["improvement", "bug", "clarification", "group_specific", "missing_case", "general"],
+                "description": "Type of suggestion: improvement (general enhancement), bug (incorrect behavior), clarification (ambiguous), group_specific (group rule change), missing_case (unhandled scenario), general (feedback based on trace/conversation not tied to specific prompt)"
             },
             "summary": {
                 "type": "string",
@@ -318,19 +307,8 @@ The suggestion will be sent to the development team for review.""",
             "group_id": {
                 "type": "string",
                 "description": "Optional group identifier for group-specific prompt changes (for example 'WB')."
-            },
-            "mod_id": {
-                "type": "string",
-                "description": "Legacy alias for group_id. MOD ID if the suggestion only applies to one group."
             }
         },
         "required": ["suggestion_type", "summary", "detailed_reasoning"]
     }
 }
-
-
-PromptSuggestion.mod_id = property(
-    lambda self: self.group_id,
-    lambda self, value: setattr(self, "group_id", value),
-)
-SuggestionType.MOD_SPECIFIC = SuggestionType.GROUP_SPECIFIC

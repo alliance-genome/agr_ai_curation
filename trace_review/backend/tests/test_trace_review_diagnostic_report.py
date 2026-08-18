@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.analyzers.extraction_timeline import ExtractionTimelineAnalyzer
 from src.api import claude, traces
@@ -41,6 +41,30 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
                 "timestamp": "2026-05-29T00:00:00Z",
             },
         }
+
+    @patch("src.api.claude._ensure_trace_analyzed", new_callable=AsyncMock)
+    async def test_claude_generic_view_returns_group_context(
+        self,
+        ensure_trace_analyzed: AsyncMock,
+    ):
+        group_context = {
+            "active_groups": ["WB"],
+            "injection_active": True,
+            "group_count": 1,
+        }
+        ensure_trace_analyzed.return_value = {
+            "analysis": {"group_context": group_context}
+        }
+
+        response = await claude.get_trace_view(
+            "trace-group-context",
+            "group_context",
+            self._make_request(),
+            source="auto",
+        )
+
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.data, group_context)
 
     def test_diagnostic_report_summarizes_reasoning_validation_and_timeline(self):
         timeline = {

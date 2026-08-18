@@ -322,7 +322,7 @@ def generate_registry_entry(config: NewAgentInput) -> dict:
         "name": config.name,
         "description": config.description,
         "category": config.category,
-        "has_mod_rules": False,  # Set to True manually if needed
+        "has_group_rules": False,  # Set to True manually if needed
         "tools": config.tools,
         "factory": f"create_{config.agent_id}_agent",
         "requires_document": config.requires_document,
@@ -586,7 +586,7 @@ def insert_registry_entry(config: NewAgentInput, entry: dict) -> None:
     entry_lines.append(f'        "category": "{entry["category"]}",')
     if entry.get("subcategory"):
         entry_lines.append(f'        "subcategory": "{entry["subcategory"]}",')
-    entry_lines.append(f'        "has_mod_rules": {str(entry.get("has_mod_rules", False))},')
+    entry_lines.append(f'        "has_group_rules": {str(entry.get("has_group_rules", False))},')
     entry_lines.append(f'        "tools": {json.dumps(entry["tools"])},')
     entry_lines.append(f'        "factory": create_{config.agent_id}_agent,')
     entry_lines.append(f'        "requires_document": {str(entry["requires_document"])},')

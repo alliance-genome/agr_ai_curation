@@ -116,7 +116,7 @@ def validate_view(view: str) -> None:
     valid_views = [
         "summary", "tool_calls", "conversation", "pdf_citations",
         "token_analysis", "agent_context", "trace_summary",
-        "document_hierarchy", "agent_configs", "group_context", "mod_context",
+        "document_hierarchy", "agent_configs", "group_context",
         "domain_envelope", "extraction_timeline", "evidence_revisions"
     ]
     if view not in valid_views:
@@ -730,7 +730,7 @@ async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
 
         valid_views = [
             "token_analysis", "agent_context", "pdf_citations",
-            "document_hierarchy", "agent_configs", "group_context", "mod_context",
+            "document_hierarchy", "agent_configs", "group_context",
             "trace_summary", "domain_envelope", "extraction_timeline", "evidence_revisions"
         ]
         if view_name not in valid_views:
@@ -742,8 +742,7 @@ async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
                 "help": "Use get_trace_summary for basic info, get_tool_calls_summary for tool calls"
             }
 
-        trace_review_view_name = "mod_context" if view_name == "group_context" else view_name
-        url = f"{_get_claude_api_url()}/{trace_id}/views/{trace_review_view_name}"
+        url = f"{_get_claude_api_url()}/{trace_id}/views/{view_name}"
         timeout = httpx.Timeout(30.0)
 
         async with httpx.AsyncClient(timeout=timeout) as client:

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.lib.agent_studio import ChatContext, ChatMessage, PromptCatalog
 
@@ -24,13 +24,10 @@ class CatalogResponse(BaseModel):
 class CombinedPromptRequest(BaseModel):
     """Request for a combined prompt (base + group rules)."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     agent_id: str
-    group_id: str = Field(
-        ...,
-        validation_alias=AliasChoices("group_id", "mod_id"),
-    )
+    group_id: str
 
 
 class CombinedPromptResponse(BaseModel):
@@ -61,13 +58,10 @@ class PromptPreviewResponse(BaseModel):
 class AgentTestRequest(BaseModel):
     """Request for isolated agent test streaming."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     input: str
-    group_id: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("group_id", "mod_id"),
-    )
+    group_id: Optional[str] = None
     document_id: Optional[str] = None
     session_id: Optional[str] = None
 
@@ -75,17 +69,14 @@ class AgentTestRequest(BaseModel):
 class ManualSuggestionRequest(BaseModel):
     """Request to manually submit a prompt suggestion."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     agent_id: Optional[str] = None
     suggestion_type: str
     summary: str
     detailed_reasoning: str
     proposed_change: Optional[str] = None
-    group_id: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("group_id", "mod_id"),
-    )
+    group_id: Optional[str] = None
     trace_id: Optional[str] = None
 
 

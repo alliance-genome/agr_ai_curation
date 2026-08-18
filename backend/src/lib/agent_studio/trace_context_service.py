@@ -144,7 +144,13 @@ async def _get_trace_context_from_langfuse_sdk(trace_id: str) -> TraceContext:
             observations = list(obs_response.data)
 
         # Parse the trace data
-        prompts_executed = _extract_prompts_executed(observations)
+        trace_group_applied = _extract_group_from_metadata(
+            getattr(trace, "metadata", None)
+        )
+        prompts_executed = _extract_prompts_executed(
+            observations,
+            default_group_applied=trace_group_applied,
+        )
         routing_decisions = _extract_routing_decisions(observations)
         tool_calls = _extract_tool_calls(observations)
 
@@ -280,7 +286,11 @@ def _trace_context_from_trace_review_export(
             raise TraceReviewExportError("TraceReview observations contains a non-object item")
         observations.append(_observation_from_export(item))
 
-    prompts_executed = _extract_prompts_executed(observations)
+    trace_group_applied = _extract_group_from_metadata(raw_trace.get("metadata"))
+    prompts_executed = _extract_prompts_executed(
+        observations,
+        default_group_applied=trace_group_applied,
+    )
     routing_decisions = _extract_routing_decisions(observations)
     tool_calls = _tool_calls_from_trace_review_analysis(raw_tool_calls)
 
@@ -310,6 +320,7 @@ def _trace_context_from_trace_review_export(
         total_tokens=total_tokens,
         agent_count=agent_count,
     )
+
 
 def _observation_from_export(item: dict[str, Any]) -> SimpleNamespace:
     usage = _usage_from_export(item)
@@ -486,7 +497,11 @@ def _duration_to_ms(value: Any) -> int | None:
     return int(amount)
 
 
-def _extract_prompts_executed(observations: List[Any]) -> List[PromptExecution]:
+def _extract_prompts_executed(
+    observations: List[Any],
+    *,
+    default_group_applied: Optional[str] = None,
+) -> List[PromptExecution]:
     """Extract prompt executions from observations."""
     prompts = []
 
@@ -511,7 +526,10 @@ def _extract_prompts_executed(observations: List[Any]) -> List[PromptExecution]:
                     agent_id=agent_id,
                     agent_name=_agent_id_to_name(agent_id),
                     prompt_preview=prompt_preview,
-                    group_applied=_extract_group_from_observation(obs),
+                    group_applied=(
+                        _extract_group_from_observation(obs)
+                        or default_group_applied
+                    ),
                     model=getattr(obs, 'model', None),
                     tokens_used=obs.usage.total if hasattr(obs, 'usage') and obs.usage else None,
                 ))
@@ -666,13 +684,28 @@ def _agent_id_to_name(agent_id: str) -> str:
     return trace_agent_display_name(agent_id)
 
 
-def _extract_group_from_observation(obs: Any) -> Optional[str]:
-    """Extract group info from observation metadata.
+def _extract_group_from_metadata(metadata: Any) -> Optional[str]:
+    """Normalize canonical active-group metadata for the singular UI field."""
+    if not isinstance(metadata, dict):
+        return None
 
-    Dual-read: supports both active_groups (new) and active_mods (historical).
-    """
-    if hasattr(obs, 'metadata') and obs.metadata:
-        return obs.metadata.get('active_groups', obs.metadata.get('active_mods', obs.metadata.get('mod')))
+    active_groups = metadata.get("active_groups")
+    if isinstance(active_groups, str):
+        return active_groups.strip() or None
+    if isinstance(active_groups, list):
+        normalized = [
+            group.strip()
+            for group in active_groups
+            if isinstance(group, str) and group.strip()
+        ]
+        return ", ".join(normalized) or None
+    return None
+
+
+def _extract_group_from_observation(obs: Any) -> Optional[str]:
+    """Extract canonical group info from observation metadata."""
+    if hasattr(obs, "metadata"):
+        return _extract_group_from_metadata(obs.metadata)
     return None
 
 

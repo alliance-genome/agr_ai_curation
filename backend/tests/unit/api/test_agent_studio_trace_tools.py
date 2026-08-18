@@ -168,6 +168,8 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
     ]
     assert "extraction_timeline" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
     assert "evidence_revisions" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
+    assert "group_context" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
+    assert "mod_context" not in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
 
 
 def test_codebase_tools_are_agents_only():

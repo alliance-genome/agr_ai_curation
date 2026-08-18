@@ -739,6 +739,29 @@ class TestGetRegistryMetadata:
         assert result.source == "system_agent"
         assert result.prompt == "SYSTEM BASE PROMPT"
 
+    def test_prompt_preview_route_rejects_legacy_mod_id_query(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from src.api import auth as auth_module
+        from src.api import agent_studio as api_module
+
+        app = FastAPI()
+        app.include_router(api_module.router)
+        app.dependency_overrides[auth_module.auth.get_user] = lambda: {
+            "sub": "test-sub",
+        }
+        app.dependency_overrides[api_module.get_db] = lambda: SimpleNamespace()
+
+        response = TestClient(app).get(
+            "/api/agent-studio/prompt-preview/gene",
+            params={"mod_id": "WB"},
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "detail": "Unsupported query parameter mod_id. Use group_id."
+        }
+
     def test_get_prompt_preview_custom_agent_with_group_rules(self, monkeypatch):
         """Prompt preview should append group rules for custom agent when enabled."""
         import asyncio
@@ -979,23 +1002,19 @@ class TestGetRegistryMetadata:
         assert "preview exploded" not in str(exc_info.value.detail)
         assert "preview exploded" in caplog.text
 
-    def test_group_rule_info_legacy_alias_serializes_canonical_group_id(self):
+    def test_group_rule_info_rejects_legacy_mod_id_alias(self):
         from src.lib.agent_studio.models import GroupRuleInfo
 
-        rule = GroupRuleInfo(
-            mod_id="WB",
-            content="WormBase rules",
-            source_file="database",
-        )
+        with pytest.raises(ValidationError):
+            GroupRuleInfo.model_validate(
+                {
+                    "mod_id": "WB",
+                    "content": "WormBase rules",
+                    "source_file": "database",
+                }
+            )
 
-        assert rule.group_id == "WB"
-        assert rule.mod_id == "WB"
-
-        dumped = rule.model_dump()
-        assert dumped["group_id"] == "WB"
-        assert "mod_id" not in dumped
-
-    def test_prompt_info_legacy_aliases_dump_canonical_fields(self):
+    def test_prompt_info_canonical_group_fields_and_rejects_legacy_aliases(self):
         from src.lib.agent_studio.models import GroupRuleInfo, PromptInfo
 
         prompt = PromptInfo(
@@ -1004,10 +1023,10 @@ class TestGetRegistryMetadata:
             description="Curate genes",
             base_prompt="Base prompt",
             source_file="database",
-            has_mod_rules=True,
-            mod_rules={
+            has_group_rules=True,
+            group_rules={
                 "WB": GroupRuleInfo(
-                    mod_id="WB",
+                    group_id="WB",
                     content="WormBase rules",
                     source_file="database",
                 )
@@ -1016,28 +1035,36 @@ class TestGetRegistryMetadata:
         )
 
         assert prompt.has_group_rules is True
-        assert prompt.has_mod_rules is True
 
         dumped = prompt.model_dump()
         assert dumped["has_group_rules"] is True
         assert dumped["group_rules"]["WB"]["group_id"] == "WB"
-        assert "has_mod_rules" not in dumped
-        assert "mod_rules" not in dumped
+
+        with pytest.raises(ValidationError):
+            PromptInfo.model_validate(
+                {
+                    "agent_id": "gene",
+                    "agent_name": "Gene Specialist",
+                    "description": "Curate genes",
+                    "base_prompt": "Base prompt",
+                    "source_file": "database",
+                    "has_mod_rules": True,
+                }
+            )
 
     def test_agent_workshop_group_fields_dump_canonical_fields(self):
         from src.lib.agent_studio.models import AgentWorkshopContext
 
         workshop = AgentWorkshopContext(
             include_group_rules=True,
-            selected_mod_id="WB",
-            selected_mod_prompt_draft="WB group draft",
+            selected_group_id="WB",
+            selected_group_prompt_draft="WB group draft",
             group_prompt_override_count=2,
             has_group_prompt_overrides=True,
         )
 
         assert workshop.include_group_rules is True
         assert workshop.selected_group_id == "WB"
-        assert workshop.selected_mod_id == "WB"
 
         dumped = workshop.model_dump()
         assert dumped["include_group_rules"] is True
@@ -1045,18 +1072,72 @@ class TestGetRegistryMetadata:
         assert dumped["selected_group_prompt_draft"] == "WB group draft"
         assert dumped["group_prompt_override_count"] == 2
         assert dumped["has_group_prompt_overrides"] is True
-        assert "include_mod_rules" not in dumped
-        assert "selected_mod_id" not in dumped
-        assert "selected_mod_prompt_draft" not in dumped
-        assert "mod_prompt_override_count" not in dumped
-        assert "has_mod_prompt_overrides" not in dumped
 
     def test_agent_workshop_rejects_removed_prompt_override_aliases(self):
         from src.lib.agent_studio.models import AgentWorkshopContext
 
         with pytest.raises(ValidationError):
-            AgentWorkshopContext(
-                include_mod_rules=True,
-                mod_prompt_override_count=2,
-                has_mod_prompt_overrides=True,
+            AgentWorkshopContext.model_validate(
+                {
+                    "include_mod_rules": True,
+                    "selected_mod_id": "WB",
+                    "selected_mod_prompt_draft": "WB group draft",
+                    "mod_prompt_override_count": 2,
+                    "has_mod_prompt_overrides": True,
+                }
+            )
+
+    @pytest.mark.parametrize(
+        ("model_name", "canonical_fields", "legacy_field"),
+        [
+            ("PromptCatalog", {}, {"available_mods": ["WB"]}),
+            ("ChatContext", {}, {"selected_mod_id": "WB"}),
+            (
+                "PromptExecution",
+                {
+                    "agent_id": "gene",
+                    "agent_name": "Gene Specialist",
+                    "prompt_preview": "Prompt",
+                },
+                {"mod_applied": "WB"},
+            ),
+        ],
+    )
+    def test_agent_studio_models_reject_remaining_mod_aliases(
+        self,
+        model_name,
+        canonical_fields,
+        legacy_field,
+    ):
+        from src.lib.agent_studio import models
+
+        model = getattr(models, model_name)
+        with pytest.raises(ValidationError):
+            model(**canonical_fields, **legacy_field)
+
+    def test_chat_context_rejects_legacy_mod_view_mode(self):
+        from src.lib.agent_studio.models import ChatContext
+
+        with pytest.raises(ValidationError):
+            ChatContext.model_validate({"view_mode": "mod"})
+
+    def test_registry_contract_omits_and_rejects_legacy_mod_rules_field(self):
+        from src.lib.agent_studio.registry_types import AgentRegistryEntry, entry_from_dict
+
+        entry = AgentRegistryEntry(
+            name="Gene Specialist",
+            description="Curate genes",
+            category="Extraction",
+            has_group_rules=True,
+        )
+        assert entry.to_dict()["has_group_rules"] is True
+        assert "has_mod_rules" not in entry.to_dict()
+
+        with pytest.raises(ValueError, match="removed field 'has_mod_rules'"):
+            entry_from_dict(
+                "gene",
+                {
+                    "name": "Gene Specialist",
+                    "has_mod_rules": True,
+                },
             )

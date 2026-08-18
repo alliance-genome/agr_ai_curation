@@ -42,13 +42,13 @@ legacy quote-generation guidance.
         "properties": {
             "target_prompt": {
                 "type": "string",
-                "enum": ["main", "group", "mod"],
-                "description": "Which editable workshop layer to update. Use 'main' for the main/base prompt and 'group' for the selected group prompt override. Legacy 'mod' is accepted during migration.",
+                "enum": ["main", "group"],
+                "description": "Which editable workshop layer to update. Use 'main' for the main/base prompt and 'group' for the selected group prompt override.",
                 "default": "main",
             },
             "target_group_id": {
                 "type": "string",
-                "description": "Optional group ID when target_prompt='group' (for example 'WB'). Must match the currently selected group in Agent Workshop. Legacy 'target_mod_id' is accepted during migration.",
+                "description": "Optional group ID when target_prompt='group' (for example 'WB'). Must match the currently selected group in Agent Workshop.",
             },
             "updated_prompt": {
                 "type": "string",
@@ -402,7 +402,7 @@ GET_TRACE_VIEW_TOOL = {
             },
             "view_name": {
                 "type": "string",
-                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "mod_context", "trace_summary", "domain_envelope", "extraction_timeline", "evidence_revisions"],
+                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "trace_summary", "domain_envelope", "extraction_timeline", "evidence_revisions"],
                 "description": "Which view to fetch",
             },
         },
