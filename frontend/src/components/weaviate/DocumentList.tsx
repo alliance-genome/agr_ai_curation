@@ -41,6 +41,7 @@ import DocumentDownloadDialog from './DocumentDownloadDialog';
 import EditDocumentDialog from './EditDocumentDialog';
 import {
   DocumentSummary,
+  isActiveDocumentStatus,
   DocumentSourceProvenance,
   usePdfExtractionHealth,
 } from '../../services/weaviate';
@@ -103,14 +104,6 @@ const compareTextValues = (left: unknown, right: unknown): number => {
   });
 };
 
-const ACTIVE_DOCUMENT_STATUSES = new Set([
-  'processing',
-  'parsing',
-  'chunking',
-  'embedding',
-  'storing',
-]);
-
 export const documentDisplayStatus = (document: DocumentSummary): string => {
   const processingStatus = String(document.processingStatus || '').toLowerCase();
   const embeddingStatus = String(document.embeddingStatus || '').toLowerCase();
@@ -118,13 +111,13 @@ export const documentDisplayStatus = (document: DocumentSummary): string => {
   if (processingStatus === 'failed') {
     return 'failed';
   }
-  if (ACTIVE_DOCUMENT_STATUSES.has(processingStatus)) {
+  if (isActiveDocumentStatus(processingStatus)) {
     return processingStatus;
   }
   if (embeddingStatus === 'failed' || embeddingStatus === 'partial') {
     return embeddingStatus;
   }
-  if (ACTIVE_DOCUMENT_STATUSES.has(embeddingStatus)) {
+  if (isActiveDocumentStatus(embeddingStatus)) {
     return embeddingStatus;
   }
   return processingStatus || embeddingStatus || 'pending';
@@ -240,7 +233,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const isDocumentBusy = (doc: DocumentSummary): boolean => {
     const processingStatus = String(doc.processingStatus || '').toLowerCase();
     const embeddingStatus = String(doc.embeddingStatus || '').toLowerCase();
-    return ACTIVE_DOCUMENT_STATUSES.has(processingStatus) || embeddingStatus === 'processing';
+    return isActiveDocumentStatus(processingStatus) || embeddingStatus === 'processing';
   };
 
   const formatFileSize = (bytes: number | null | undefined): string => {
@@ -496,17 +489,6 @@ const DocumentList: React.FC<DocumentListProps> = ({
       minWidth: 120,
       sortable: true,
       sortComparator: compareDateValues,
-      valueFormatter: (params) => {
-        const value = params.value as string | null;
-        return value ? new Date(value).toLocaleDateString() : '—';
-      },
-    },
-    {
-      field: 'lastAccessedDate',
-      headerName: 'Accessed',
-      flex: 1,
-      minWidth: 120,
-      sortable: false,
       valueFormatter: (params) => {
         const value = params.value as string | null;
         return value ? new Date(value).toLocaleDateString() : '—';

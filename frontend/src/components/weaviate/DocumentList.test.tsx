@@ -26,19 +26,10 @@ const createTestDocument = (overrides: Partial<DocumentSummary> = {}): DocumentS
   filename: 'test-document.pdf',
   fileSize: 1024000,
   creationDate: '2024-01-01T00:00:00.000Z',
-  lastAccessedDate: '2024-01-02T00:00:00.000Z',
   processingStatus: 'completed',
   embeddingStatus: 'completed',
   chunkCount: 10,
   vectorCount: 100,
-  metadata: {
-    pageCount: 5,
-    author: 'Test Author',
-    title: 'Test Document',
-    checksum: 'abc123',
-    documentType: 'research',
-    lastProcessedStage: 'completed',
-  },
   ...overrides,
 });
 
@@ -636,7 +627,6 @@ describe('DocumentList', () => {
     expect(screen.getByText('Title')).toBeInTheDocument();
     expect(screen.getByText('Size')).toBeInTheDocument();
     expect(screen.getByText('Created')).toBeInTheDocument();
-    expect(screen.getByText('Accessed')).toBeInTheDocument();
     expect(screen.getByText('Status')).toBeInTheDocument();
     expect(screen.getByText('Vectors')).toBeInTheDocument();
     expect(screen.getByText('Chunks')).toBeInTheDocument();
@@ -645,17 +635,14 @@ describe('DocumentList', () => {
 
   it('formats dates correctly', () => {
     const creationDate = new Date('2024-01-01T10:00:00');
-    const lastAccessedDate = new Date('2024-01-02T15:30:00');
     const doc = createTestDocument({
       id: 'date-doc',
       creationDate: '2024-01-01T10:00:00',
-      lastAccessedDate: '2024-01-02T15:30:00',
     });
 
     render(<DocumentList {...defaultProps} documents={[doc]} />);
 
     expect(screen.getByText(creationDate.toLocaleDateString())).toBeInTheDocument();
-    expect(screen.getByText(lastAccessedDate.toLocaleDateString())).toBeInTheDocument();
   });
 
   it('displays vector and chunk counts', () => {

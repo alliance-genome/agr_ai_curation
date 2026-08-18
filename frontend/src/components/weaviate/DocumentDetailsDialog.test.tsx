@@ -79,18 +79,71 @@ describe('DocumentDetailsDialog', () => {
     expect(screen.getByText('converted-md-1')).toBeInTheDocument();
     expect(screen.getByText('restricted')).toBeInTheDocument();
     expect(screen.getByText('mods: GROUP')).toBeInTheDocument();
-    expect(screen.getByText('Embedding: —')).toBeInTheDocument();
-    expect(screen.getByText('Vectors: —')).toBeInTheDocument();
     expect(screen.getByText('Chunks: 12')).toBeInTheDocument();
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Embedding: unknown')).not.toBeInTheDocument();
-    expect(screen.queryByText('Vectors: 0')).not.toBeInTheDocument();
-    expect(screen.queryByText('0/12')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Embedding:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Vectors:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Processing & Embeddings')).not.toBeInTheDocument();
     expect(screen.queryByText('Chunk Preview')).not.toBeInTheDocument();
     expect(screen.queryByText('Pipeline Stage')).not.toBeInTheDocument();
     expect(screen.queryByText('Related Documents')).not.toBeInTheDocument();
     expect(screen.queryByText('Metadata')).not.toBeInTheDocument();
     expect(screen.queryByText('conversion_request')).not.toBeInTheDocument();
+  });
+
+  it('shows the backend processing error when detail loading succeeded', () => {
+    useDocumentMock.mockReturnValue({
+      data: {
+        ...providerDocument,
+        document: {
+          ...providerDocument.document,
+          processingStatus: 'failed',
+          errorMessage: 'Document parsing failed',
+        },
+      },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <DocumentDetailsDialog
+        open
+        documentId="doc-provider"
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Document parsing failed')).toBeInTheDocument();
+  });
+
+  it('disables mutating actions during a stage-specific processing status', () => {
+    useDocumentMock.mockReturnValue({
+      data: {
+        ...providerDocument,
+        document: {
+          ...providerDocument.document,
+          processingStatus: 'embedding',
+        },
+      },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <DocumentDetailsDialog
+        open
+        documentId="doc-provider"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onReembed={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Re-embed' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled();
   });
 
   it('renders ordinary uploaded documents as local PDF provenance', () => {

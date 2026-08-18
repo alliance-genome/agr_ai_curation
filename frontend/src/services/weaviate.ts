@@ -60,28 +60,28 @@ interface DocumentChunk {
 }
 
 interface RawDocumentSourceProvenance {
-  provider: string;
-  provider_metadata?: RawDocumentSourceProviderMetadata;
-  reference_id?: string;
-  reference_curie?: string;
-  source_file_id?: string;
-  pdf_artifact_id?: string;
-  converted_artifact_id?: string;
-  external_ids?: Record<string, string | string[]>;
-  source_md5?: string;
-  file_class?: string;
-  file_extension?: string;
-  artifact_status?: string;
-  import_status?: string;
-  imported_at?: string;
-  access_scope?: string;
-  access_mods?: Record<string, string[]>;
-  viewer_mode?: string;
+  provider?: string | null;
+  provider_metadata?: RawDocumentSourceProviderMetadata | null;
+  reference_id?: string | null;
+  reference_curie?: string | null;
+  source_file_id?: string | null;
+  pdf_artifact_id?: string | null;
+  converted_artifact_id?: string | null;
+  external_ids?: Record<string, string | string[]> | null;
+  source_md5?: string | null;
+  file_class?: string | null;
+  file_extension?: string | null;
+  artifact_status?: string | null;
+  import_status?: string | null;
+  imported_at?: string | null;
+  access_scope?: string | null;
+  access_mods?: Record<string, string[]> | null;
+  viewer_mode?: string | null;
 }
 
 interface RawDocumentSourceProviderMetadata {
-  display_label?: string;
-  reference_label_priority?: string[];
+  display_label?: string | null;
+  reference_label_priority?: string[] | null;
 }
 
 interface RawDocumentListItem {
@@ -177,19 +177,28 @@ export interface DocumentSummary {
   title?: string | null;
   fileSize: number | null;
   creationDate: string | null;
-  lastAccessedDate: string | null;
   processingStatus: string | null;
   embeddingStatus: string | null;
   errorMessage?: string | null;
   chunkCount: number | null;
   vectorCount: number | null;
-  metadata?: Record<string, unknown> | null;
   sourceProvenance?: DocumentSourceProvenance | null;
 }
 
 export interface DocumentDetailData {
   document: DocumentSummary;
 }
+
+const ACTIVE_DOCUMENT_STATUSES = new Set([
+  'processing',
+  'parsing',
+  'chunking',
+  'embedding',
+  'storing',
+]);
+
+export const isActiveDocumentStatus = (status: string | null | undefined): boolean =>
+  ACTIVE_DOCUMENT_STATUSES.has(String(status || '').toLowerCase());
 
 export interface PdfExtractionHealthStatus {
   status: 'healthy' | 'degraded' | 'unreachable' | 'misconfigured' | 'unknown';
@@ -349,45 +358,31 @@ const normalizeDocumentSourceProviderMetadata = (
 };
 
 export const normalizeDocumentSourceProvenance = (
-  raw: unknown,
-  fallback?: DocumentSourceProvenance | null
+  raw: RawDocumentSourceProvenance | null | undefined,
 ): DocumentSourceProvenance | null => {
-  if (raw === null) {
+  if (!raw) {
     return null;
-  }
-  if (raw === undefined) {
-    return fallback ?? null;
-  }
-
-  const source = toRecordOrNull(raw);
-  if (!source) {
-    return fallback ?? null;
   }
 
   const normalized: DocumentSourceProvenance = {
-    provider: toStringOrNull(source.provider) ?? fallback?.provider ?? null,
+    provider: toStringOrNull(raw.provider),
     providerMetadata:
-      normalizeDocumentSourceProviderMetadata(source.provider_metadata) ??
-      fallback?.providerMetadata ??
-      null,
-    referenceId: toStringOrNull(source.reference_id ?? source.referenceId) ?? fallback?.referenceId ?? null,
-    referenceCurie: toStringOrNull(source.reference_curie ?? source.referenceCurie) ?? fallback?.referenceCurie ?? null,
-    sourceFileId: toStringOrNull(source.source_file_id ?? source.sourceFileId) ?? fallback?.sourceFileId ?? null,
-    pdfArtifactId: toStringOrNull(source.pdf_artifact_id ?? source.pdfArtifactId) ?? fallback?.pdfArtifactId ?? null,
-    convertedArtifactId:
-      toStringOrNull(source.converted_artifact_id ?? source.convertedArtifactId) ??
-      fallback?.convertedArtifactId ??
-      null,
-    externalIds: toExternalIdsOrNull(source.external_ids ?? source.externalIds) ?? fallback?.externalIds ?? null,
-    sourceMd5: toStringOrNull(source.source_md5 ?? source.sourceMd5) ?? fallback?.sourceMd5 ?? null,
-    fileClass: toStringOrNull(source.file_class ?? source.fileClass) ?? fallback?.fileClass ?? null,
-    fileExtension: toStringOrNull(source.file_extension ?? source.fileExtension) ?? fallback?.fileExtension ?? null,
-    artifactStatus: toStringOrNull(source.artifact_status ?? source.artifactStatus) ?? fallback?.artifactStatus ?? null,
-    importStatus: toStringOrNull(source.import_status ?? source.importStatus) ?? fallback?.importStatus ?? null,
-    importedAt: toStringOrNull(source.imported_at ?? source.importedAt) ?? fallback?.importedAt ?? null,
-    accessScope: toStringOrNull(source.access_scope ?? source.accessScope) ?? fallback?.accessScope ?? null,
-    accessMods: toStringArrayRecordOrNull(source.access_mods ?? source.accessMods) ?? fallback?.accessMods ?? null,
-    viewerMode: toStringOrNull(source.viewer_mode ?? source.viewerMode) ?? fallback?.viewerMode ?? null,
+      normalizeDocumentSourceProviderMetadata(raw.provider_metadata),
+    referenceId: toStringOrNull(raw.reference_id),
+    referenceCurie: toStringOrNull(raw.reference_curie),
+    sourceFileId: toStringOrNull(raw.source_file_id),
+    pdfArtifactId: toStringOrNull(raw.pdf_artifact_id),
+    convertedArtifactId: toStringOrNull(raw.converted_artifact_id),
+    externalIds: toExternalIdsOrNull(raw.external_ids),
+    sourceMd5: toStringOrNull(raw.source_md5),
+    fileClass: toStringOrNull(raw.file_class),
+    fileExtension: toStringOrNull(raw.file_extension),
+    artifactStatus: toStringOrNull(raw.artifact_status),
+    importStatus: toStringOrNull(raw.import_status),
+    importedAt: toStringOrNull(raw.imported_at),
+    accessScope: toStringOrNull(raw.access_scope),
+    accessMods: toStringArrayRecordOrNull(raw.access_mods),
+    viewerMode: toStringOrNull(raw.viewer_mode),
   };
 
   return normalized.provider ? normalized : null;
@@ -402,13 +397,11 @@ export const normalizeDocumentListResponse = (
     title: document.title,
     fileSize: document.file_size_bytes,
     creationDate: document.upload_timestamp,
-    lastAccessedDate: null,
     processingStatus: document.status.toLowerCase(),
     embeddingStatus: document.embedding_status,
     errorMessage: document.error_message,
     chunkCount: document.chunk_count,
     vectorCount: document.vector_count,
-    metadata: null,
     sourceProvenance: normalizeDocumentSourceProvenance(document.source_provenance),
   })),
   total: response.total,
@@ -419,7 +412,6 @@ export const normalizeDocumentListResponse = (
 export const normalizeDocumentDetailResponse = (
   payload: DocumentDetailResponse
 ): DocumentDetailData => {
-  // Removed legacy nested/camelCase detail fallback — the flat DocumentResponse is authoritative.
   return {
     document: {
       id: payload.document_id,
@@ -427,13 +419,11 @@ export const normalizeDocumentDetailResponse = (
       title: payload.title,
       fileSize: payload.file_size_bytes,
       creationDate: payload.upload_timestamp,
-      lastAccessedDate: null,
       processingStatus: payload.status.toLowerCase(),
       embeddingStatus: null,
       errorMessage: payload.error_message,
       chunkCount: payload.chunk_count,
       vectorCount: null,
-      metadata: null,
       sourceProvenance: normalizeDocumentSourceProvenance(payload.source_provenance),
     },
   };

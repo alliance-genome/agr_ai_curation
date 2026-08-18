@@ -24,6 +24,7 @@ import {
 import {
   DocumentDetailData,
   DocumentSummary,
+  isActiveDocumentStatus,
   useDocument,
 } from '../../services/weaviate';
 import {
@@ -177,7 +178,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
   }, [documentId, onDelete, onRefreshRequested, onClose]);
 
   const documentTitle = details?.document.filename ?? documentSummary?.filename ?? 'Document details';
-  const embeddingStatusCurrent = details?.document.embeddingStatus ?? documentSummary?.embeddingStatus ?? null;
   const processingStatusCurrent = details?.document.processingStatus ?? documentSummary?.processingStatus ?? null;
   const detailSourceProvenance = details?.document.sourceProvenance;
   const sourceProvenance =
@@ -185,8 +185,9 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
       ? detailSourceProvenance
       : documentSummary?.sourceProvenance ?? null;
 
-  const disableReembed = disableActions || actionLoading || isFetching || embeddingStatusCurrent === 'processing';
-  const disableDelete = disableActions || actionLoading || isFetching || processingStatusCurrent === 'processing';
+  const processingActive = isActiveDocumentStatus(processingStatusCurrent);
+  const disableReembed = disableActions || actionLoading || isFetching || processingActive;
+  const disableDelete = disableActions || actionLoading || isFetching || processingActive;
 
   const renderInfoItem = (label: string, value: React.ReactNode) => (
     <Box key={label} sx={{ mb: 1.5 }}>
@@ -267,16 +268,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                 size="small"
               />
               <Chip
-                label={`Embedding: ${details.document.embeddingStatus ?? '—'}`}
-                color={getStatusColor(details.document.embeddingStatus)}
-                size="small"
-              />
-              <Chip
-                label={`Vectors: ${details.document.vectorCount ?? '—'}`}
-                size="small"
-                variant="outlined"
-              />
-              <Chip
                 label={`Chunks: ${details.document.chunkCount ?? '—'}`}
                 size="small"
                 variant="outlined"
@@ -284,7 +275,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
             </Stack>
 
             <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12}>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="subtitle2" gutterBottom>
                     Document Info
@@ -293,18 +284,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                   {renderInfoItem('Filename', details.document.filename)}
                   {renderInfoItem('File Size', formatFileSize(details.document.fileSize))}
                   {renderInfoItem('Created', formatDateTime(details.document.creationDate))}
-                  {renderInfoItem('Last Accessed', formatDateTime(details.document.lastAccessedDate))}
-                </Paper>
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Paper variant="outlined" sx={{ p: 2 }}>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Processing & Embeddings
-                  </Typography>
-                  <Divider sx={{ mb: 2 }} />
-                  {renderInfoItem('Embedding Coverage', '—')}
-                  {renderInfoItem('Last Embedded', '—')}
-                  {renderInfoItem('Embedding Model', '—')}
                 </Paper>
               </Grid>
               <Grid item xs={12}>
@@ -342,6 +321,10 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                 </Paper>
               </Grid>
             </Grid>
+
+            {details.document.errorMessage && (
+              <Alert severity="error">{details.document.errorMessage}</Alert>
+            )}
 
           </Stack>
         )}

@@ -94,13 +94,11 @@ describe('weaviate service', () => {
           title: 'Test Document',
           fileSize: 1024000,
           creationDate: '2024-01-01T00:00:00Z',
-          lastAccessedDate: null,
           processingStatus: 'completed',
           embeddingStatus: 'completed',
           errorMessage: null,
           chunkCount: 10,
           vectorCount: 100,
-          metadata: null,
           sourceProvenance: null,
         }],
         total: 1,
@@ -236,13 +234,11 @@ describe('weaviate service', () => {
           title: 'Mock paper',
           fileSize: 2048,
           creationDate: '2024-01-01T00:00:00Z',
-          lastAccessedDate: null,
           processingStatus: 'completed',
           embeddingStatus: null,
           errorMessage: null,
           chunkCount: 10,
           vectorCount: null,
-          metadata: null,
           sourceProvenance: {
             provider: 'abc_literature',
             providerMetadata: {
@@ -305,6 +301,12 @@ describe('weaviate service', () => {
       });
 
       expect(normalized.document.sourceProvenance).toBeNull();
+    });
+
+    it('rejects the retired nested detail response shape', () => {
+      expect(() => normalizeDocumentDetailResponse({
+        document: { id: 'doc-retired', filename: 'retired.pdf' },
+      } as never)).toThrow();
     });
   });
 

@@ -13,19 +13,10 @@ const createTestDocument = (overrides: Partial<DocumentSummary> = {}): DocumentS
   filename: 'test-document.pdf',
   fileSize: 1024000,
   creationDate: '2024-01-01T00:00:00.000Z',
-  lastAccessedDate: '2024-01-02T00:00:00.000Z',
   processingStatus: 'completed',
   embeddingStatus: 'completed',
   chunkCount: 10,
   vectorCount: 100,
-  metadata: {
-    pageCount: 5,
-    author: 'Test Author',
-    title: 'Test Document',
-    checksum: 'abc123',
-    documentType: 'research',
-    lastProcessedStage: 'completed',
-  },
   ...overrides,
 });
 
