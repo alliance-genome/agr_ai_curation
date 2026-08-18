@@ -71,8 +71,9 @@ exports:
 
 The runtime fails closed when the target is missing or ambiguous, the target
 owner is not a declared dependency, or two packages export the same
-agent/group pair. Prompt provenance remains attached to the contributing
-package and file.
+agent/group pair. Contributed foreign-agent rules must remain outside the
+contributor's `agents/` directory. Prompt provenance remains attached to the
+contributing package and file.
 
 ## Quick Start: Add a Package-owned Agent
 

@@ -57,6 +57,7 @@ def _write_group_rule_contribution_fixture(
     declares_dependency: bool = True,
     target_agent: str = "supervisor",
     owner_group_rules: tuple[str, ...] = (),
+    contribution_path: str = "group_rules/supervisor/team.yaml",
 ) -> tuple[Path, Path, Path]:
     packages_dir = tmp_path / "packages"
     owner_dir = packages_dir / "core"
@@ -104,7 +105,7 @@ def _write_group_rule_contribution_fixture(
             {
                 "kind": "group_rule",
                 "name": f"{target_agent}.TEAM",
-                "path": "group_rules/supervisor/team.yaml",
+                "path": contribution_path,
             }
         ],
     }
@@ -113,7 +114,7 @@ def _write_group_rule_contribution_fixture(
             {"package_id": "demo.core", "version_range": ">=1.0.0,<2.0.0"}
         ]
     _write_package_manifest(contributor_dir, contributor_manifest)
-    contributed_rule = contributor_dir / "group_rules" / "supervisor" / "team.yaml"
+    contributed_rule = contributor_dir / contribution_path
     contributed_rule.parent.mkdir(parents=True)
     contributed_rule.write_text(
         "group_id: TEAM\ncontent: Extension rules\n",
@@ -155,6 +156,19 @@ def test_group_rule_contribution_requires_declared_target_dependency(tmp_path):
     with pytest.raises(
         ValueError,
         match="must declare dependency 'demo.core' before contributing group rule",
+    ):
+        agent_sources.resolve_agent_config_sources(packages_dir)
+
+
+def test_group_rule_contribution_rejects_foreign_agent_directory_layout(tmp_path):
+    packages_dir, _owner_dir, _rule = _write_group_rule_contribution_fixture(
+        tmp_path,
+        contribution_path="agents/supervisor/group_rules/team.yaml",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="must store contributed group rule .* outside its agents directory",
     ):
         agent_sources.resolve_agent_config_sources(packages_dir)
 

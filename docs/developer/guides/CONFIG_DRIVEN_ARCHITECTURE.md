@@ -789,8 +789,10 @@ exports:
 
 Dependency ownership, a unique target agent, and a collision-free group name
 are required. Violations stop package composition rather than resolving by
-load order. Resolving a single package directory also resolves its declared
-dependency closure so contributed rules can attach to their owning agents.
+load order. A foreign-agent contribution must also remain outside the
+contributor's `agents/` directory, as shown above, so it cannot be mistaken for
+an owned bundle. Resolving a single package directory also resolves its
+declared dependency closure so contributed rules can attach to their owning agents.
 
 If you are maintaining the shipped `agr.alliance` package from this repository,
 put the canonical bundle in `packages/alliance/agents/my_agent/` and declare it

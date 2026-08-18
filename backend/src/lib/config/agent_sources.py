@@ -484,6 +484,15 @@ def _resolve_registry_agent_sources(
                 )
             if (
                 package.package_id != target_package_id
+                and rule_path.is_relative_to(package.package_path / "agents")
+            ):
+                raise ValueError(
+                    f"Package '{package.package_id}' must store contributed group rule "
+                    f"'{export.name}' outside its agents directory; use "
+                    f"group_rules/{agent_name}/"
+                )
+            if (
+                package.package_id != target_package_id
                 and not registry.package_declares_dependency(
                     package.package_id,
                     target_package_id,
