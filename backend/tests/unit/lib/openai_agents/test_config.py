@@ -696,6 +696,34 @@ def test_get_base_url_prefers_env_then_default(monkeypatch):
         assert get_base_url("groq") == "https://fallback.groq.local/v1"
 
 
+def test_get_model_for_agent_requires_native_provider_key(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(provider="openai"),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(
+                provider_id="openai",
+                driver="openai_native",
+                api_key_env="OPENAI_API_KEY",
+                base_url_env="OPENAI_BASE_URL",
+                default_base_url=None,
+                litellm_prefix=None,
+                drop_params=False,
+                supports_parallel_tool_calls=True,
+            )
+            if provider_id == "openai"
+            else None
+        ),
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="OPENAI_API_KEY environment variable not set"):
+        get_model_for_agent("gpt-test")
+
+
 def test_get_model_for_agent_supports_synthetic_litellm_provider(monkeypatch):
     captured = {}
 

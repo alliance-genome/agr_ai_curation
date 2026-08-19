@@ -298,6 +298,9 @@ def get_model_for_agent(
     """
     provider_id = resolve_model_provider(model_name, provider_override)
     provider = _get_provider_definition(provider_id)
+    api_key = get_api_key(provider.provider_id)
+    if not api_key:
+        raise ValueError(f"{provider.api_key_env} environment variable not set")
 
     if provider.driver == "openai_native":
         return model_name
@@ -307,10 +310,6 @@ def get_model_for_agent(
         import litellm
 
         litellm.drop_params = bool(provider.drop_params)
-
-        api_key = get_api_key(provider.provider_id)
-        if not api_key:
-            raise ValueError(f"{provider.api_key_env} environment variable not set")
 
         litellm_model_name = model_name
         prefix = str(provider.litellm_prefix or "").strip()
