@@ -5,11 +5,26 @@ import DocumentList from '../../components/weaviate/DocumentList';
 import DocumentDetail from '../../pages/weaviate/DocumentDetail';
 import Settings from '../../pages/weaviate/Settings';
 import ErrorBoundary from '../../components/weaviate/ErrorBoundary';
-import { createMockDocument, createMockChunk } from '../test-utils';
+import type { DocumentSummary } from '../../services/weaviate';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
+
+const createDocumentSummary = (
+  overrides: Partial<DocumentSummary> = {},
+): DocumentSummary => ({
+  id: 'doc-1',
+  filename: 'test.pdf',
+  fileSize: 1024,
+  creationDate: '2026-08-18T00:00:00Z',
+  processingStatus: 'completed',
+  embeddingStatus: 'completed',
+  chunkCount: 1,
+  vectorCount: 1,
+  sourceProvenance: null,
+  ...overrides,
+});
 
 // Mock navigation
 const mockNavigate = vi.fn();
@@ -43,8 +58,8 @@ describe('Weaviate Workflow Integration Tests', () => {
   describe('Document List Workflow', () => {
     it('displays documents in the list view', async () => {
       const mockDocuments = [
-        createMockDocument({ id: 'doc-1', filename: 'test1.pdf' }),
-        createMockDocument({ id: 'doc-2', filename: 'test2.pdf', embeddingStatus: 'processing' }),
+        createDocumentSummary({ id: 'doc-1', filename: 'test1.pdf' }),
+        createDocumentSummary({ id: 'doc-2', filename: 'test2.pdf', embeddingStatus: 'processing' }),
       ];
 
       const onDelete = vi.fn();
@@ -68,7 +83,7 @@ describe('Weaviate Workflow Integration Tests', () => {
     });
 
     it('renders row actions for documents', async () => {
-      const mockDocuments = [createMockDocument({ id: 'doc-1', filename: 'test.pdf' })];
+      const mockDocuments = [createDocumentSummary({ id: 'doc-1', filename: 'test.pdf' })];
       const onDelete = vi.fn().mockResolvedValue(undefined);
 
       render(
@@ -88,7 +103,7 @@ describe('Weaviate Workflow Integration Tests', () => {
 
     it('shows failed document status', async () => {
       const mockDocuments = [
-        createMockDocument({ id: 'doc-1', filename: 'test.pdf', embeddingStatus: 'failed' }),
+        createDocumentSummary({ id: 'doc-1', filename: 'test.pdf', embeddingStatus: 'failed' }),
       ];
 
       render(
@@ -234,19 +249,45 @@ describe('Weaviate Workflow Integration Tests', () => {
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({
-            documents: [createMockDocument({ id: 'doc-1', filename: 'e2e-test.pdf' })],
-            pagination: { currentPage: 1, totalPages: 1, totalItems: 1, pageSize: 20 },
-            filters: {},
+            documents: [{
+              document_id: 'doc-1',
+              user_id: '5',
+              filename: 'e2e-test.pdf',
+              title: null,
+              status: 'COMPLETED',
+              upload_timestamp: '2026-08-18T00:00:00Z',
+              processing_started_at: null,
+              processing_completed_at: null,
+              file_size_bytes: 1024,
+              weaviate_tenant: 'tenant-user-1',
+              chunk_count: 1,
+              vector_count: 1,
+              embedding_status: 'completed',
+              error_message: null,
+              source_provenance: null,
+            }],
+            total: 1,
+            limit: 20,
+            offset: 0,
           }),
         })
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({
-            document: createMockDocument({ id: 'doc-1', filename: 'e2e-test.pdf' }),
-            chunks: [createMockChunk()],
-            embeddings: { totalChunks: 1, embeddedChunks: 1, avgProcessingTime: 100, lastProcessedDate: new Date() },
-            chunkingStrategy: {},
-            relatedDocuments: [],
+            document_id: 'doc-1',
+            job_id: null,
+            user_id: 5,
+            filename: 'e2e-test.pdf',
+            title: null,
+            status: 'COMPLETED',
+            upload_timestamp: '2026-08-18T00:00:00Z',
+            processing_started_at: null,
+            processing_completed_at: null,
+            file_size_bytes: 1024,
+            weaviate_tenant: 'tenant-user-1',
+            chunk_count: 1,
+            error_message: null,
+            source_provenance: null,
           }),
         })
         .mockResolvedValueOnce({

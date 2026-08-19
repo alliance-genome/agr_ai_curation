@@ -12,10 +12,6 @@ import {
   Divider,
   Grid,
   IconButton,
-  LinearProgress,
-  List,
-  ListItem,
-  ListItemText,
   Paper,
   Stack,
   Tooltip,
@@ -28,8 +24,7 @@ import {
 import {
   DocumentDetailData,
   DocumentSummary,
-  EmbeddingModelBreakdown,
-  ChunkPreviewSummary,
+  isActiveDocumentStatus,
   useDocument,
 } from '../../services/weaviate';
 import {
@@ -78,7 +73,7 @@ const formatDateTime = (value?: string | Date | null): string => {
 
 const getStatusColor = (
   status: string | null | undefined
-): 'default' | 'primary' | 'success' | 'error' | 'warning' => {
+): 'default' | 'primary' | 'success' | 'error' => {
   switch (status) {
     case 'completed':
       return 'success';
@@ -90,8 +85,6 @@ const getStatusColor = (
     case 'embedding':
     case 'storing':
       return 'primary';
-    case 'partial':
-      return 'warning';
     default:
       return 'default';
   }
@@ -116,12 +109,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
     }
     return {
       document: documentSummary,
-      embeddingSummary: undefined,
-      pipelineStatus: undefined,
-      chunksPreview: [],
-      totalChunks: documentSummary.chunkCount ?? 0,
-      relatedDocuments: [],
-      schemaVersion: undefined,
     };
   }, [documentSummary]);
 
@@ -188,19 +175,12 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
     }
   }, [documentId, onDelete, onRefreshRequested, onClose]);
 
-  const documentTitle = details?.document.filename ?? documentSummary?.filename ?? 'Document details';
-  const embeddingSummary = details?.embeddingSummary;
-  const pipelineStatus = details?.pipelineStatus;
-  const embeddingStatusCurrent = details?.document.embeddingStatus ?? documentSummary?.embeddingStatus ?? null;
-  const processingStatusCurrent = details?.document.processingStatus ?? documentSummary?.processingStatus ?? null;
-  const detailSourceProvenance = details?.document.sourceProvenance;
-  const sourceProvenance =
-    detailSourceProvenance !== undefined
-      ? detailSourceProvenance
-      : documentSummary?.sourceProvenance ?? null;
+  const documentTitle = details?.document.filename ?? 'Document details';
+  const processingStatusCurrent = details?.document.processingStatus ?? null;
+  const sourceProvenance = details?.document.sourceProvenance ?? null;
 
-  const disableReembed = disableActions || actionLoading || isFetching || embeddingStatusCurrent === 'processing';
-  const disableDelete = disableActions || actionLoading || isFetching || processingStatusCurrent === 'processing';
+  const processingActive = isActiveDocumentStatus(processingStatusCurrent);
+  const actionsDisabled = disableActions || actionLoading || isFetching || processingActive;
 
   const renderInfoItem = (label: string, value: React.ReactNode) => (
     <Box key={label} sx={{ mb: 1.5 }}>
@@ -210,36 +190,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
       <Typography variant="body1">{value ?? '—'}</Typography>
     </Box>
   );
-
-  const chunkPreview = details?.chunksPreview ?? ([] as ChunkPreviewSummary[]);
-  const previewChunks = chunkPreview.slice(0, 3);
-  const rawMetadata = details?.document.metadata;
-  const metadata = React.useMemo(() => {
-    if (rawMetadata && typeof rawMetadata === 'object') {
-      return rawMetadata as Record<string, unknown>;
-    }
-    return undefined;
-  }, [rawMetadata]);
-
-  const getMetadataValue = React.useCallback(
-    (key: string): string | undefined => {
-      if (!metadata) {
-        return undefined;
-      }
-      const value = metadata[key];
-      if (value === undefined || value === null) {
-        return undefined;
-      }
-      return String(value);
-    },
-    [metadata]
-  );
-
-  const metadataPageCount = getMetadataValue('page_count');
-  const metadataDocumentType = getMetadataValue('document_type');
-  const metadataAuthor = getMetadataValue('author');
-  const metadataTitle = getMetadataValue('title');
-  const metadataLastProcessedStage = getMetadataValue('last_processed_stage');
 
   const externalIdsText = React.useMemo(() => {
     const externalIds = sourceProvenance?.externalIds;
@@ -306,32 +256,19 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
           <Stack spacing={3} sx={{ pt: 1 }}>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               <Chip
-                label={`Processing: ${details.document.processingStatus ?? 'unknown'}`}
+                label={`Processing: ${details.document.processingStatus}`}
                 color={getStatusColor(details.document.processingStatus)}
                 size="small"
               />
               <Chip
-                label={`Embedding: ${details.document.embeddingStatus ?? 'unknown'}`}
-                color={getStatusColor(details.document.embeddingStatus)}
-                size="small"
-              />
-              <Chip
-                label={`Vectors: ${details.document.vectorCount ?? 0}`}
+                label={`Chunks: ${details.document.chunkCount ?? '—'}`}
                 size="small"
                 variant="outlined"
               />
-              <Chip
-                label={`Chunks: ${details.document.chunkCount ?? details.totalChunks ?? 0}`}
-                size="small"
-                variant="outlined"
-              />
-              {details.schemaVersion && (
-                <Chip label={`Schema v${details.schemaVersion}`} size="small" variant="outlined" />
-              )}
             </Stack>
 
             <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12}>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="subtitle2" gutterBottom>
                     Document Info
@@ -340,81 +277,6 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                   {renderInfoItem('Filename', details.document.filename)}
                   {renderInfoItem('File Size', formatFileSize(details.document.fileSize))}
                   {renderInfoItem('Created', formatDateTime(details.document.creationDate))}
-                  {renderInfoItem('Last Accessed', formatDateTime(details.document.lastAccessedDate))}
-                  {renderInfoItem('Page Count', metadataPageCount ?? '—')}
-                  {renderInfoItem('Document Type', metadataDocumentType ?? '—')}
-                </Paper>
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Paper variant="outlined" sx={{ p: 2 }}>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Processing & Embeddings
-                  </Typography>
-                  <Divider sx={{ mb: 2 }} />
-                  {embeddingSummary && (
-                    <Box sx={{ mb: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        Embedding Coverage
-                      </Typography>
-                      <Typography variant="body1">
-                        {embeddingSummary.coveragePercentage !== undefined && embeddingSummary.coveragePercentage !== null
-                          ? `${embeddingSummary.coveragePercentage.toFixed(2)}%`
-                          : `${embeddingSummary.embeddedChunks ?? 0}/${embeddingSummary.totalChunks ?? 0}`}
-                      </Typography>
-                    </Box>
-                  )}
-                  {renderInfoItem('Last Embedded', formatDateTime(embeddingSummary?.lastEmbeddedAt ?? null))}
-                  {renderInfoItem('Embedding Model', embeddingSummary?.primaryModel ?? (embeddingSummary?.models?.[0]?.name ?? '—'))}
-                  {embeddingSummary && embeddingSummary.models.length > 1 && (
-                    <Box sx={{ mb: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        Model Breakdown
-                      </Typography>
-                      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                        {embeddingSummary.models.map((model: EmbeddingModelBreakdown) => (
-                          <Chip
-                            key={model.name}
-                            label={`${model.name}: ${model.chunkCount}`}
-                            size="small"
-                            variant="outlined"
-                          />
-                        ))}
-                      </Stack>
-                    </Box>
-                  )}
-                  {pipelineStatus && (
-                    <Box sx={{ mt: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        Pipeline Stage
-                      </Typography>
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                        <Chip
-                          label={pipelineStatus.currentStage ?? 'unknown'}
-                          size="small"
-                          color={getStatusColor(pipelineStatus.currentStage)}
-                          variant="outlined"
-                        />
-                        {typeof pipelineStatus.progressPercentage === 'number' && (
-                          <Typography variant="body2" color="text.secondary">
-                            {pipelineStatus.progressPercentage}%
-                          </Typography>
-                        )}
-                      </Stack>
-                      <LinearProgress
-                        variant={typeof pipelineStatus.progressPercentage === 'number' ? 'determinate' : 'indeterminate'}
-                        value={pipelineStatus.progressPercentage ?? undefined}
-                        sx={{ height: 6, borderRadius: 999, mb: 1 }}
-                      />
-                      {pipelineStatus.message && (
-                        <Typography variant="body2" color="text.secondary">
-                          {pipelineStatus.message}
-                        </Typography>
-                      )}
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                        Updated: {formatDateTime(pipelineStatus.updatedAt)}
-                      </Typography>
-                    </Box>
-                  )}
                 </Paper>
               </Grid>
               <Grid item xs={12}>
@@ -430,133 +292,33 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                         'Reference',
                         sourceReferenceText
                       )}
-                      {renderInfoItem('External IDs', externalIdsText ?? '—')}
-                      {renderInfoItem('Source MD5', sourceProvenance?.sourceMd5 ?? '—')}
+                      {renderInfoItem('External IDs', externalIdsText)}
+                      {renderInfoItem('Source MD5', sourceProvenance?.sourceMd5)}
                     </Grid>
                     <Grid item xs={12} md={6}>
-                      {renderInfoItem('Source File', sourceProvenance?.sourceFileId ?? '—')}
-                      {renderInfoItem('PDF Artifact', sourceProvenance?.pdfArtifactId ?? '—')}
-                      {renderInfoItem('Converted Artifact', sourceProvenance?.convertedArtifactId ?? '—')}
+                      {renderInfoItem('Source File', sourceProvenance?.sourceFileId)}
+                      {renderInfoItem('PDF Artifact', sourceProvenance?.pdfArtifactId)}
+                      {renderInfoItem('Converted Artifact', sourceProvenance?.convertedArtifactId)}
                       {renderInfoItem(
                         'Converted File',
                         [sourceProvenance?.fileClass, sourceProvenance?.fileExtension]
                           .filter(Boolean)
-                          .join(' / ') || '—'
+                          .join(' / ') || null
                       )}
-                      {renderInfoItem('Import Status', sourceProvenance?.importStatus ?? sourceProvenance?.artifactStatus ?? '—')}
-                      {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessModsText ?? '—')}
+                      {renderInfoItem('Import Status', sourceProvenance?.importStatus ?? sourceProvenance?.artifactStatus)}
+                      {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessModsText)}
                       {accessModsText && renderInfoItem('Access MODs', accessModsText)}
-                      {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode ?? 'local_pdf')}
+                      {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode)}
                     </Grid>
                   </Grid>
                 </Paper>
               </Grid>
             </Grid>
 
-            {(metadataAuthor || metadataTitle || metadataLastProcessedStage) && (
-              <Paper variant="outlined" sx={{ p: 2 }}>
-                <Typography variant="subtitle2" gutterBottom>
-                  Metadata
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-                <List dense disablePadding>
-                  {metadataAuthor && (
-                    <ListItem>
-                      <ListItemText primary="Author" secondary={metadataAuthor} />
-                    </ListItem>
-                  )}
-                  {metadataTitle && (
-                    <ListItem>
-                      <ListItemText primary="Title" secondary={metadataTitle} />
-                    </ListItem>
-                  )}
-                  {metadataLastProcessedStage && (
-                    <ListItem>
-                      <ListItemText
-                        primary="Last Processed Stage"
-                        secondary={metadataLastProcessedStage}
-                      />
-                    </ListItem>
-                  )}
-                </List>
-              </Paper>
+            {details.document.errorMessage && (
+              <Alert severity="error">{details.document.errorMessage}</Alert>
             )}
 
-            <Paper variant="outlined" sx={{ p: 2 }}>
-              <Typography variant="subtitle2" gutterBottom>
-                Chunk Preview
-              </Typography>
-              <Divider sx={{ mb: 2 }} />
-              {previewChunks.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  No chunks available for preview.
-                </Typography>
-              ) : (
-                <Stack spacing={2}>
-                  {previewChunks.map((chunk: ChunkPreviewSummary) => (
-                    <Box key={chunk.id}>
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                        <Typography variant="subtitle2">
-                          Chunk #{chunk.chunkIndex ?? '—'}
-                        </Typography>
-                        {chunk.sectionTitle && (
-                          <Typography variant="body2" color="text.secondary">
-                            • {chunk.sectionTitle}
-                          </Typography>
-                        )}
-                        {chunk.elementType && (
-                          <Chip label={chunk.elementType} size="small" variant="outlined" />
-                        )}
-                        {chunk.pageNumber && (
-                          <Chip label={`Page ${chunk.pageNumber}`} size="small" variant="outlined" />
-                        )}
-                      </Stack>
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          display: '-webkit-box',
-                          WebkitLineClamp: 3,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden',
-                          whiteSpace: 'pre-wrap',
-                        }}
-                      >
-                        {chunk.content.trim() || '—'}
-                      </Typography>
-                      {chunk.embeddingModel && (
-                        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-                          Embedding model: {chunk.embeddingModel}
-                        </Typography>
-                      )}
-                    </Box>
-                  ))}
-                  {chunkPreview.length > previewChunks.length && (
-                    <Typography variant="caption" color="text.secondary">
-                      Showing first {previewChunks.length} of {chunkPreview.length} preview chunks.
-                    </Typography>
-                  )}
-                </Stack>
-              )}
-            </Paper>
-
-            {details.relatedDocuments.length > 0 && (
-              <Paper variant="outlined" sx={{ p: 2 }}>
-                <Typography variant="subtitle2" gutterBottom>
-                  Related Documents
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-                <List dense disablePadding>
-                  {details.relatedDocuments.map((doc) => (
-                    <ListItem key={doc.id} disableGutters>
-                      <ListItemText
-                        primary={doc.filename}
-                        secondary={`Vectors: ${doc.vectorCount ?? 0} • Chunks: ${doc.chunkCount ?? 0}`}
-                      />
-                    </ListItem>
-                  ))}
-                </List>
-              </Paper>
-            )}
           </Stack>
         )}
 
@@ -576,7 +338,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
           <Button
             variant="outlined"
             onClick={handleReembed}
-            disabled={disableReembed}
+            disabled={actionsDisabled}
           >
             Re-embed
           </Button>
@@ -586,7 +348,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
             variant="outlined"
             color="error"
             onClick={handleDelete}
-            disabled={disableDelete}
+            disabled={actionsDisabled}
           >
             Delete
           </Button>
