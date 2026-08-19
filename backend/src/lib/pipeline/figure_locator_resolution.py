@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from src.lib.config.env import require_env, require_env_choice
+from src.lib.config.env import require_env
 from src.lib.document_sources.figure_metadata import (
     PROVIDER_FIGURE_METADATA_SECTION,
     is_provider_figure_subsection,
@@ -29,9 +29,11 @@ from src.models.chunk import (
     ProviderSemanticRange,
 )
 
+if TYPE_CHECKING:
+    from src.lib.openai_agents.config import ReasoningEffort
+
 FIGURE_LOCATOR_PROMPT_VERSION = "figure-locator-v1"
 
-_REASONING_LEVELS = ("minimal", "low", "medium", "high")
 # Candidate selection only. This pattern must never be used to derive semantics.
 _LOCATOR_CANDIDATE_PATTERN = re.compile(
     r"\b(?:fig(?:ure)?s?|tables?|panels?)\b",
@@ -101,9 +103,12 @@ async def resolve_figure_locators(
     """
 
     model_name = require_env("FIGURE_LOCATOR_LLM_MODEL")
-    reasoning_effort = require_env_choice(
-        "FIGURE_LOCATOR_LLM_REASONING",
-        _REASONING_LEVELS,
+    configured_reasoning = require_env("FIGURE_LOCATOR_LLM_REASONING")
+    from src.lib.openai_agents.config import require_model_reasoning_effort
+
+    reasoning_effort = require_model_reasoning_effort(
+        model_name,
+        configured_reasoning,
     )
     _attach_provider_references(chunks, provider_figure_metadata)
 
@@ -129,7 +134,6 @@ async def resolve_figure_locators(
     if not candidates:
         return chunks
 
-    require_env("OPENAI_API_KEY")
     from src.lib.openai_agents.config import (
         get_figure_locator_resolution_batch_max_chars,
     )
@@ -181,23 +185,24 @@ async def _call_figure_locator_classifier(
     candidates: Sequence[FigureLocatorCandidate],
     *,
     model_name: str,
-    reasoning_effort: str,
+    reasoning_effort: ReasoningEffort,
 ) -> FigureLocatorBatchOutput:
-    from agents import Agent, ModelSettings, Runner  # pyright: ignore[reportMissingImports]
-    from openai.types.shared import Reasoning
+    from agents import Agent, Runner  # pyright: ignore[reportMissingImports]
     from src.lib.openai_agents.config import (
+        build_model_settings,
         get_figure_locator_resolution_max_turns,
+        get_model_for_agent,
     )
 
-    is_gpt5 = model_name.startswith("gpt-5")
-    settings = ModelSettings(
-        temperature=None if is_gpt5 else 0.0,
-        reasoning=Reasoning(effort=reasoning_effort) if is_gpt5 else None,
+    settings = build_model_settings(
+        model_name,
+        temperature=0.0,
+        reasoning_effort=reasoning_effort,
     )
     agent = Agent(
         name="Figure Locator Classifier",
         instructions=_CLASSIFIER_INSTRUCTIONS,
-        model=model_name,
+        model=get_model_for_agent(model_name),
         model_settings=settings,
         output_type=FigureLocatorBatchOutput,
     )

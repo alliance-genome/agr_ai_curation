@@ -2,11 +2,11 @@
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.lib.config.env import ConfigError
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
 from src.lib.document_sources.figure_metadata import (
     append_provider_figure_metadata_markdown,
@@ -84,7 +84,7 @@ def _provider_reference_for(chunk: DocumentChunk) -> ProviderFigureReference:
 def figure_locator_env(monkeypatch):
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-5.6-terra")
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
 def test_candidate_regex_only_selects_broad_locator_anchors() -> None:
@@ -847,14 +847,112 @@ def test_provider_reference_does_not_cross_final_subsection_boundary(
 
 
 @pytest.mark.asyncio
-async def test_missing_api_key_fails_ingestion(monkeypatch) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY")
+async def test_terra_xhigh_reasoning_is_accepted_from_catalog(monkeypatch) -> None:
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "xhigh")
+    classifier = AsyncMock(
+        return_value=locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id="chunk-0",
+                    mentions=[],
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
+    chunk = _chunk("chunk-0", "Figure 1 shows signal.")
+
+    await locator.resolve_figure_locators([chunk])
+
+    classifier.assert_awaited_once()
+    assert classifier.await_args is not None
+    assert classifier.await_args.kwargs["reasoning_effort"] == "xhigh"
+    assert _resolution_for(chunk).reasoning == "xhigh"
+
+
+@pytest.mark.asyncio
+async def test_terra_minimal_reasoning_is_rejected_from_catalog(monkeypatch) -> None:
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "minimal")
     classifier = AsyncMock()
     monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
     chunk = _chunk("chunk-0", "Figure 1 shows signal.")
 
-    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
+    with pytest.raises(ValueError, match="not supported by model 'gpt-5.6-terra'"):
         await locator.resolve_figure_locators([chunk])
 
     classifier.assert_not_awaited()
     assert chunk.metadata.figure_locator_resolution is None
+
+
+@pytest.mark.asyncio
+async def test_catalog_litellm_model_uses_its_provider_without_openai_key(
+    monkeypatch,
+) -> None:
+    model_id = "catalog-gemini"
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda selected: SimpleNamespace(
+            model_id=model_id,
+            provider="gemini",
+            supports_reasoning=True,
+            supports_temperature=True,
+            reasoning_options=["low", "high"],
+        )
+        if selected == model_id
+        else None,
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda selected: SimpleNamespace(
+            provider_id="gemini",
+            driver="litellm",
+            api_key_env="GEMINI_API_KEY",
+            base_url_env=None,
+            default_base_url=None,
+            litellm_prefix="gemini",
+            drop_params=True,
+            supports_parallel_tool_calls=True,
+        )
+        if selected == "gemini"
+        else None,
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    model_object = object()
+    litellm_model = MagicMock(return_value=model_object)
+    monkeypatch.setattr(
+        "agents.extensions.models.litellm_model.LitellmModel",
+        litellm_model,
+    )
+    agent_factory = MagicMock(
+        side_effect=lambda **kwargs: SimpleNamespace(name=kwargs["name"])
+    )
+    monkeypatch.setattr("agents.Agent", agent_factory)
+
+    output = locator.FigureLocatorBatchOutput(
+        candidates=[
+            locator.FigureLocatorCandidateOutput(
+                candidate_id="chunk-0",
+                mentions=[],
+            )
+        ]
+    )
+    runner = AsyncMock(return_value=SimpleNamespace(final_output=output))
+    monkeypatch.setattr("agents.Runner.run", runner)
+
+    result = await locator._call_figure_locator_classifier(
+        [(_chunk("chunk-0", "Figure 1 shows signal."), "Figure 1 shows signal.")],
+        model_name=model_id,
+        reasoning_effort="high",
+    )
+
+    assert result is output
+    litellm_model.assert_called_once_with(
+        model="gemini/catalog-gemini",
+        base_url=None,
+        api_key="test-gemini-key",
+    )
+    assert agent_factory.call_args is not None
+    assert agent_factory.call_args.kwargs["model"] is model_object
+    runner.assert_awaited_once()

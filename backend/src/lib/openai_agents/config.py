@@ -298,6 +298,9 @@ def get_model_for_agent(
     """
     provider_id = resolve_model_provider(model_name, provider_override)
     provider = _get_provider_definition(provider_id)
+    api_key = get_api_key(provider.provider_id)
+    if not str(api_key or "").strip():
+        raise ValueError(f"{provider.api_key_env} environment variable not set")
 
     if provider.driver == "openai_native":
         return model_name
@@ -307,10 +310,6 @@ def get_model_for_agent(
         import litellm
 
         litellm.drop_params = bool(provider.drop_params)
-
-        api_key = get_api_key(provider.provider_id)
-        if not api_key:
-            raise ValueError(f"{provider.api_key_env} environment variable not set")
 
         litellm_model_name = model_name
         prefix = str(provider.litellm_prefix or "").strip()
@@ -399,6 +398,30 @@ def normalize_reasoning_effort(value: object) -> Optional[ReasoningEffort]:
         return normalized  # type: ignore[return-value]
     logger.debug("Dropping invalid reasoning effort %r (treated as no reasoning)", value)
     return None
+
+
+def require_model_reasoning_effort(
+    model: str,
+    value: object,
+) -> ReasoningEffort:
+    """Validate a required reasoning effort against one catalog model."""
+
+    model_def = _get_model_definition(model)
+    normalized = str(value or "").strip().lower()
+    allowed = tuple(model_def.reasoning_options)
+    if (
+        not model_def.supports_reasoning
+        or normalized not in _VALID_REASONING_EFFORTS
+        or normalized not in allowed
+    ):
+        allowed_text = ", ".join(allowed) if allowed else "none"
+        raise ValueError(
+            f"Reasoning effort '{normalized or value}' is not supported by model "
+            f"'{model_def.model_id}'; allowed values: {allowed_text}"
+        )
+    return normalized  # type: ignore[return-value]
+
+
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
 
 
