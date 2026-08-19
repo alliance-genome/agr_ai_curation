@@ -73,7 +73,7 @@ const formatDateTime = (value?: string | Date | null): string => {
 
 const getStatusColor = (
   status: string | null | undefined
-): 'default' | 'primary' | 'success' | 'error' | 'warning' => {
+): 'default' | 'primary' | 'success' | 'error' => {
   switch (status) {
     case 'completed':
       return 'success';
@@ -85,8 +85,6 @@ const getStatusColor = (
     case 'embedding':
     case 'storing':
       return 'primary';
-    case 'partial':
-      return 'warning';
     default:
       return 'default';
   }
@@ -186,8 +184,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
       : documentSummary?.sourceProvenance ?? null;
 
   const processingActive = isActiveDocumentStatus(processingStatusCurrent);
-  const disableReembed = disableActions || actionLoading || isFetching || processingActive;
-  const disableDelete = disableActions || actionLoading || isFetching || processingActive;
+  const actionsDisabled = disableActions || actionLoading || isFetching || processingActive;
 
   const renderInfoItem = (label: string, value: React.ReactNode) => (
     <Box key={label} sx={{ mb: 1.5 }}>
@@ -315,7 +312,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                       {renderInfoItem('Import Status', sourceProvenance?.importStatus ?? sourceProvenance?.artifactStatus ?? '—')}
                       {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessModsText ?? '—')}
                       {accessModsText && renderInfoItem('Access MODs', accessModsText)}
-                      {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode ?? 'local_pdf')}
+                      {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode ?? '—')}
                     </Grid>
                   </Grid>
                 </Paper>
@@ -345,7 +342,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
           <Button
             variant="outlined"
             onClick={handleReembed}
-            disabled={disableReembed}
+            disabled={actionsDisabled}
           >
             Re-embed
           </Button>
@@ -355,7 +352,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
             variant="outlined"
             color="error"
             onClick={handleDelete}
-            disabled={disableDelete}
+            disabled={actionsDisabled}
           >
             Delete
           </Button>

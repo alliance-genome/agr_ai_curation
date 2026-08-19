@@ -235,10 +235,8 @@ describe('weaviate service', () => {
           fileSize: 2048,
           creationDate: '2024-01-01T00:00:00Z',
           processingStatus: 'completed',
-          embeddingStatus: null,
           errorMessage: null,
           chunkCount: 10,
-          vectorCount: null,
           sourceProvenance: {
             provider: 'abc_literature',
             providerMetadata: {

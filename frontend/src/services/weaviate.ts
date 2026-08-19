@@ -186,7 +186,7 @@ export interface DocumentSummary {
 }
 
 export interface DocumentDetailData {
-  document: DocumentSummary;
+  document: Omit<DocumentSummary, 'embeddingStatus' | 'vectorCount'>;
 }
 
 const ACTIVE_DOCUMENT_STATUSES = new Set([
@@ -420,10 +420,8 @@ export const normalizeDocumentDetailResponse = (
       fileSize: payload.file_size_bytes,
       creationDate: payload.upload_timestamp,
       processingStatus: payload.status.toLowerCase(),
-      embeddingStatus: null,
       errorMessage: payload.error_message,
       chunkCount: payload.chunk_count,
-      vectorCount: null,
       sourceProvenance: normalizeDocumentSourceProvenance(payload.source_provenance),
     },
   };

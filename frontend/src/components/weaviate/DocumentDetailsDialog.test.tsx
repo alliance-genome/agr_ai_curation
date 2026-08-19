@@ -4,6 +4,7 @@ import DocumentDetailsDialog from './DocumentDetailsDialog';
 import {
   normalizeDocumentDetailResponse,
   type DocumentDetailData,
+  type DocumentSummary,
 } from '../../services/weaviate';
 
 const useDocumentMock = vi.fn();
@@ -52,6 +53,12 @@ const providerDocument: DocumentDetailData = normalizeDocumentDetailResponse({
     viewer_mode: 'local_pdf',
   },
 });
+
+const providerSummary: DocumentSummary = {
+  ...providerDocument.document,
+  embeddingStatus: 'completed',
+  vectorCount: 12,
+};
 
 describe('DocumentDetailsDialog', () => {
   it('renders compact provider provenance without raw payload dumps', () => {
@@ -173,6 +180,7 @@ describe('DocumentDetailsDialog', () => {
 
     expect(screen.getByText('Local PDF')).toBeInTheDocument();
     expect(screen.getByText('Uploaded PDF')).toBeInTheDocument();
+    expect(screen.queryByText('local_pdf')).not.toBeInTheDocument();
   });
 
   it('renders sparse provider provenance as a provider import', () => {
@@ -242,7 +250,7 @@ describe('DocumentDetailsDialog', () => {
       <DocumentDetailsDialog
         open
         documentId="doc-null"
-        documentSummary={providerDocument.document}
+        documentSummary={providerSummary}
         onClose={vi.fn()}
       />,
     );
