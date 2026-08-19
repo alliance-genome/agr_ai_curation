@@ -175,13 +175,9 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
     }
   }, [documentId, onDelete, onRefreshRequested, onClose]);
 
-  const documentTitle = details?.document.filename ?? documentSummary?.filename ?? 'Document details';
-  const processingStatusCurrent = details?.document.processingStatus ?? documentSummary?.processingStatus ?? null;
-  const detailSourceProvenance = details?.document.sourceProvenance;
-  const sourceProvenance =
-    detailSourceProvenance !== undefined
-      ? detailSourceProvenance
-      : documentSummary?.sourceProvenance ?? null;
+  const documentTitle = details?.document.filename ?? 'Document details';
+  const processingStatusCurrent = details?.document.processingStatus ?? null;
+  const sourceProvenance = details?.document.sourceProvenance ?? null;
 
   const processingActive = isActiveDocumentStatus(processingStatusCurrent);
   const actionsDisabled = disableActions || actionLoading || isFetching || processingActive;
@@ -260,7 +256,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
           <Stack spacing={3} sx={{ pt: 1 }}>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               <Chip
-                label={`Processing: ${details.document.processingStatus ?? 'unknown'}`}
+                label={`Processing: ${details.document.processingStatus}`}
                 color={getStatusColor(details.document.processingStatus)}
                 size="small"
               />
@@ -296,23 +292,23 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                         'Reference',
                         sourceReferenceText
                       )}
-                      {renderInfoItem('External IDs', externalIdsText ?? '—')}
-                      {renderInfoItem('Source MD5', sourceProvenance?.sourceMd5 ?? '—')}
+                      {renderInfoItem('External IDs', externalIdsText)}
+                      {renderInfoItem('Source MD5', sourceProvenance?.sourceMd5)}
                     </Grid>
                     <Grid item xs={12} md={6}>
-                      {renderInfoItem('Source File', sourceProvenance?.sourceFileId ?? '—')}
-                      {renderInfoItem('PDF Artifact', sourceProvenance?.pdfArtifactId ?? '—')}
-                      {renderInfoItem('Converted Artifact', sourceProvenance?.convertedArtifactId ?? '—')}
+                      {renderInfoItem('Source File', sourceProvenance?.sourceFileId)}
+                      {renderInfoItem('PDF Artifact', sourceProvenance?.pdfArtifactId)}
+                      {renderInfoItem('Converted Artifact', sourceProvenance?.convertedArtifactId)}
                       {renderInfoItem(
                         'Converted File',
                         [sourceProvenance?.fileClass, sourceProvenance?.fileExtension]
                           .filter(Boolean)
-                          .join(' / ') || '—'
+                          .join(' / ') || null
                       )}
-                      {renderInfoItem('Import Status', sourceProvenance?.importStatus ?? sourceProvenance?.artifactStatus ?? '—')}
-                      {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessModsText ?? '—')}
+                      {renderInfoItem('Import Status', sourceProvenance?.importStatus ?? sourceProvenance?.artifactStatus)}
+                      {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessModsText)}
                       {accessModsText && renderInfoItem('Access MODs', accessModsText)}
-                      {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode ?? '—')}
+                      {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode)}
                     </Grid>
                   </Grid>
                 </Paper>
