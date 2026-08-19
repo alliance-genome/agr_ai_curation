@@ -399,6 +399,30 @@ def normalize_reasoning_effort(value: object) -> Optional[ReasoningEffort]:
         return normalized  # type: ignore[return-value]
     logger.debug("Dropping invalid reasoning effort %r (treated as no reasoning)", value)
     return None
+
+
+def require_model_reasoning_effort(
+    model: str,
+    value: object,
+) -> ReasoningEffort:
+    """Validate a required reasoning effort against one catalog model."""
+
+    model_def = _get_model_definition(model)
+    normalized = str(value or "").strip().lower()
+    allowed = tuple(model_def.reasoning_options)
+    if (
+        not model_def.supports_reasoning
+        or normalized not in _VALID_REASONING_EFFORTS
+        or normalized not in allowed
+    ):
+        allowed_text = ", ".join(allowed) if allowed else "none"
+        raise ValueError(
+            f"Reasoning effort '{normalized or value}' is not supported by model "
+            f"'{model_def.model_id}'; allowed values: {allowed_text}"
+        )
+    return normalized  # type: ignore[return-value]
+
+
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
 
 
