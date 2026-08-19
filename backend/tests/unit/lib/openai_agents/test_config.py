@@ -349,6 +349,22 @@ def test_validate_model_reasoning_effort_rejects_option_absent_from_catalog():
         validate_model_reasoning_effort("gpt-5.6-terra", "minimal")
 
 
+def test_validate_model_reasoning_effort_rejects_noncanonical_catalog_option(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(
+            model_id="package-model",
+            supports_reasoning=True,
+            reasoning_options=["turbo"],
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"Reasoning effort 'turbo'.*recognized"):
+        validate_model_reasoning_effort("package-model", "turbo")
+
+
 def test_is_retryable_groq_tool_call_error_matches_known_signatures():
     assert is_retryable_groq_tool_call_error(
         RuntimeError("GroqException - Failed to parse tool call arguments as JSON")

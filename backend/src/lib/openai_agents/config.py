@@ -389,6 +389,12 @@ def validate_model_reasoning_effort(
 
     model_def = _get_model_definition(model)
     normalized = str(reasoning_effort or "").strip().lower()
+    if normalized not in _VALID_REASONING_EFFORTS:
+        raise ValueError(
+            f"Reasoning effort {normalized!r} declared by model "
+            f"'{model_def.model_id}' is not recognized; expected one of "
+            f"{tuple(sorted(_VALID_REASONING_EFFORTS))}."
+        )
     allowed = (
         tuple(model_def.reasoning_options)
         if model_def.supports_reasoning
