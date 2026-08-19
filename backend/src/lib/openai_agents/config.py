@@ -299,7 +299,7 @@ def get_model_for_agent(
     provider_id = resolve_model_provider(model_name, provider_override)
     provider = _get_provider_definition(provider_id)
     api_key = get_api_key(provider.provider_id)
-    if not api_key:
+    if not str(api_key or "").strip():
         raise ValueError(f"{provider.api_key_env} environment variable not set")
 
     if provider.driver == "openai_native":
