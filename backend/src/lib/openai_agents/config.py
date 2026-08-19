@@ -375,6 +375,32 @@ def supports_temperature(model: str) -> bool:
 # Type alias for reasoning effort levels
 ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 
+
+def validate_model_reasoning_effort(
+    model: str,
+    reasoning_effort: object,
+) -> ReasoningEffort:
+    """Return a reasoning effort declared by the selected catalog model.
+
+    This is the strict counterpart to :func:`normalize_reasoning_effort` for
+    runtime stages whose configured reasoning level must not be silently
+    dropped or translated.
+    """
+
+    model_def = _get_model_definition(model)
+    normalized = str(reasoning_effort or "").strip().lower()
+    allowed = (
+        tuple(model_def.reasoning_options)
+        if model_def.supports_reasoning
+        else ()
+    )
+    if normalized not in allowed:
+        raise ValueError(
+            f"Reasoning effort {normalized!r} is not supported by model "
+            f"'{model_def.model_id}'; expected one of {allowed}."
+        )
+    return normalized  # type: ignore[return-value]
+
 # Reasoning-effort values the model layer accepts. Agent and flow-builder configs
 # can carry values the model's Reasoning schema rejects (notably "disabled"/"none"
 # emitted by the AI flow builder). Treat anything else as "no reasoning" and

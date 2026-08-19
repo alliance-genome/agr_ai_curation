@@ -2,11 +2,12 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
-from src.lib.config.env import ConfigError
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
 from src.lib.document_sources.figure_metadata import (
     append_provider_figure_metadata_markdown,
@@ -36,6 +37,42 @@ _CORPUS_PATH = (
     / "semantic_cases.json"
 )
 _SEMANTIC_CASES = json.loads(_CORPUS_PATH.read_text(encoding="utf-8"))
+
+
+def _write_litellm_model_package(packages_dir: Path) -> None:
+    package_dir = packages_dir / "test-models"
+    (package_dir / "config").mkdir(parents=True)
+    (package_dir / "requirements").mkdir()
+    (package_dir / "requirements" / "runtime.txt").write_text("", encoding="utf-8")
+    (package_dir / "package.yaml").write_text(
+        """package_id: test.models
+display_name: Test Models
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/test_models
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: model
+    name: test_models
+    path: config/models.yaml
+    description: Test model catalog
+""",
+        encoding="utf-8",
+    )
+    (package_dir / "config" / "models.yaml").write_text(
+        """models:
+  - model_id: locator-groq-model
+    name: Locator Groq Model
+    provider: groq
+    supports_reasoning: true
+    supports_temperature: true
+    reasoning_options: [low]
+    default_reasoning: low
+""",
+        encoding="utf-8",
+    )
 
 
 def _chunk(
@@ -84,7 +121,7 @@ def _provider_reference_for(chunk: DocumentChunk) -> ProviderFigureReference:
 def figure_locator_env(monkeypatch):
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-5.6-terra")
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
 def test_candidate_regex_only_selects_broad_locator_anchors() -> None:
@@ -92,6 +129,102 @@ def test_candidate_regex_only_selects_broad_locator_anchors() -> None:
     assert locator.is_figure_locator_candidate("See panels A and B.")
     assert not locator.is_figure_locator_candidate("Configuration was unchanged.")
     assert not locator.is_figure_locator_candidate("Ordinary result text.")
+
+
+@pytest.mark.asyncio
+async def test_terra_xhigh_reasoning_is_accepted(monkeypatch) -> None:
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "xhigh")
+    chunk = _chunk("chunk-0", "Figure 1 shows signal.")
+    classifier = AsyncMock(
+        return_value=locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id=chunk.id,
+                    mentions=[],
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
+
+    await locator.resolve_figure_locators([chunk])
+
+    call = classifier.await_args
+    assert call is not None
+    assert call.kwargs["reasoning_effort"] == "xhigh"
+
+
+@pytest.mark.asyncio
+async def test_terra_minimal_reasoning_is_rejected(monkeypatch) -> None:
+    monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "minimal")
+    chunk = _chunk("chunk-0", "Figure 1 shows signal.")
+    classifier = AsyncMock()
+    monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
+
+    with pytest.raises(
+        ValueError,
+        match=r"Reasoning effort 'minimal'.*gpt-5\.6-terra.*xhigh",
+    ):
+        await locator.resolve_figure_locators([chunk])
+
+    classifier.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_classifier_uses_package_catalog_litellm_model_without_openai_key(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import agents  # pyright: ignore[reportMissingImports]
+    from src.lib.config import models_loader
+
+    packages_dir = tmp_path / "packages"
+    _write_litellm_model_package(packages_dir)
+    models_loader.load_models(packages_dir=packages_dir, force_reload=True)
+    monkeypatch.setenv("GROQ_API_KEY", "groq-test-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    captured: dict[str, Any] = {}
+
+    class FakeLitellmModel:
+        def __init__(self, model, base_url=None, api_key=None):
+            self.model = model
+            self.base_url = base_url
+            self.api_key = api_key
+
+    def fake_agent(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    output = locator.FigureLocatorBatchOutput(
+        candidates=[
+            locator.FigureLocatorCandidateOutput(
+                candidate_id="chunk-0",
+                mentions=[],
+            )
+        ]
+    )
+    runner = AsyncMock(return_value=SimpleNamespace(final_output=output))
+    monkeypatch.setattr(
+        "agents.extensions.models.litellm_model.LitellmModel",
+        FakeLitellmModel,
+    )
+    monkeypatch.setattr(agents, "Agent", fake_agent)
+    monkeypatch.setattr(agents.Runner, "run", runner)
+
+    try:
+        result = await locator._call_figure_locator_classifier(
+            [(_chunk("chunk-0", "Figure 1 shows signal."), "Figure 1 shows signal.")],
+            model_name="locator-groq-model",
+            reasoning_effort="low",
+        )
+    finally:
+        models_loader.reset_cache()
+
+    assert result == output
+    assert isinstance(captured["model"], FakeLitellmModel)
+    assert captured["model"].model == "groq/locator-groq-model"
+    assert captured["model"].api_key == "groq-test-key"
+    assert captured["model_settings"].reasoning.effort == "low"
 
 
 def test_supplementary_provider_label_requires_explicit_s_number() -> None:
@@ -847,14 +980,21 @@ def test_provider_reference_does_not_cross_final_subsection_boundary(
 
 
 @pytest.mark.asyncio
-async def test_missing_api_key_fails_ingestion(monkeypatch) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY")
-    classifier = AsyncMock()
+async def test_openai_catalog_model_does_not_require_api_key(monkeypatch) -> None:
+    classifier = AsyncMock(
+        return_value=locator.FigureLocatorBatchOutput(
+            candidates=[
+                locator.FigureLocatorCandidateOutput(
+                    candidate_id="chunk-0",
+                    mentions=[],
+                )
+            ]
+        )
+    )
     monkeypatch.setattr(locator, "_call_figure_locator_classifier", classifier)
     chunk = _chunk("chunk-0", "Figure 1 shows signal.")
 
-    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
-        await locator.resolve_figure_locators([chunk])
+    await locator.resolve_figure_locators([chunk])
 
-    classifier.assert_not_awaited()
-    assert chunk.metadata.figure_locator_resolution is None
+    classifier.assert_awaited_once()
+    assert _resolution_for(chunk).status == "resolved"

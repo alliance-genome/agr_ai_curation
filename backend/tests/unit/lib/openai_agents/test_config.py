@@ -37,6 +37,7 @@ from src.lib.openai_agents.config import (
     resolve_model_provider,
     supports_reasoning,
     supports_temperature,
+    validate_model_reasoning_effort,
 )
 
 
@@ -334,6 +335,18 @@ def test_support_flags_read_model_catalog(monkeypatch):
     )
     assert supports_reasoning("custom-model") is False
     assert supports_temperature("custom-model") is True
+
+
+def test_validate_model_reasoning_effort_accepts_catalog_option():
+    assert validate_model_reasoning_effort("gpt-5.6-terra", "xhigh") == "xhigh"
+
+
+def test_validate_model_reasoning_effort_rejects_option_absent_from_catalog():
+    with pytest.raises(
+        ValueError,
+        match=r"Reasoning effort 'minimal'.*gpt-5\.6-terra.*xhigh",
+    ):
+        validate_model_reasoning_effort("gpt-5.6-terra", "minimal")
 
 
 def test_is_retryable_groq_tool_call_error_matches_known_signatures():
