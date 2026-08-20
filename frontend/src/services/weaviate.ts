@@ -75,7 +75,7 @@ interface RawDocumentSourceProvenance {
   import_status?: string | null;
   imported_at?: string | null;
   access_scope?: string | null;
-  access_mods?: Record<string, string[]> | null;
+  access_group_ids?: string[] | null;
   viewer_mode?: string | null;
 }
 
@@ -162,7 +162,7 @@ export interface DocumentSourceProvenance {
   importStatus?: string | null;
   importedAt?: string | null;
   accessScope?: string | null;
-  accessMods?: Record<string, string[]> | null;
+  accessGroupIds?: string[] | null;
   viewerMode?: string | null;
 }
 
@@ -285,25 +285,15 @@ const toRecordOrNull = (value: unknown): Record<string, unknown> | null => {
   return null;
 };
 
-const toStringArrayRecordOrNull = (value: unknown): Record<string, string[]> | null => {
-  const record = toRecordOrNull(value);
-  if (!record) {
+const toStringArrayOrNull = (value: unknown): string[] | null => {
+  if (!Array.isArray(value)) {
     return null;
   }
 
-  const normalized = Object.entries(record).reduce<Record<string, string[]>>((acc, [key, item]) => {
-    if (Array.isArray(item)) {
-      const values = item
-        .map((entry) => (typeof entry === 'string' ? entry : null))
-        .filter((entry): entry is string => Boolean(entry));
-      if (values.length > 0) {
-        acc[key] = values;
-      }
-    }
-    return acc;
-  }, {});
-
-  return Object.keys(normalized).length > 0 ? normalized : null;
+  const normalized = value
+    .map((entry) => (typeof entry === 'string' ? entry : null))
+    .filter((entry): entry is string => Boolean(entry));
+  return normalized.length > 0 ? normalized : null;
 };
 
 const toExternalIdsOrNull = (value: unknown): Record<string, string | string[]> | null => {
@@ -381,7 +371,7 @@ export const normalizeDocumentSourceProvenance = (
     importStatus: toStringOrNull(raw.import_status),
     importedAt: toStringOrNull(raw.imported_at),
     accessScope: toStringOrNull(raw.access_scope),
-    accessMods: toStringArrayRecordOrNull(raw.access_mods),
+    accessGroupIds: toStringArrayOrNull(raw.access_group_ids),
     viewerMode: toStringOrNull(raw.viewer_mode),
   };
 

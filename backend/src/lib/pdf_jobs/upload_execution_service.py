@@ -1222,7 +1222,6 @@ def _conversion_job_metadata(result: SourceConversionResult) -> dict[str, Any]:
         "conversion_status": result.status.value,
         "converted_classes": list(result.converted_classes),
         "per_file_progress": [_json_safe_mapping(item) for item in result.per_file_progress],
-        "per_mod_status": [_json_safe_mapping(item) for item in result.per_mod_status],
     }
     if result.job_id:
         document_source["conversion_job_id"] = result.job_id

@@ -107,7 +107,7 @@ Persist compact provenance on AI Curation documents:
 - source PDF/referencefile ID
 - converted Markdown referencefile ID
 - source MD5 and external IDs when known
-- source access scope/MODs
+- source access scope/group IDs
 - viewer mode
 
 Raw Literature payloads, if retained for debugging, belong in storage paths or

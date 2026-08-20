@@ -208,7 +208,7 @@ describe('weaviate service', () => {
           external_ids: { pmid: '12345' },
           converted_artifact_id: 'converted-md-1',
           source_md5: 'abc123',
-          access_mods: { mods: ['FB'] },
+          access_group_ids: ['FB'],
           viewer_mode: 'local_pdf',
         },
       };
@@ -256,7 +256,7 @@ describe('weaviate service', () => {
             importStatus: null,
             importedAt: null,
             accessScope: null,
-            accessMods: { mods: ['FB'] },
+            accessGroupIds: ['FB'],
             viewerMode: 'local_pdf',
           },
         },

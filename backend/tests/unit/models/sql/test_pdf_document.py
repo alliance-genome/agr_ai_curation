@@ -83,7 +83,7 @@ class TestPDFDocumentModel:
         assert doc.source_provider_reference_curie is None
         assert doc.source_provider_converted_artifact_id is None
         assert doc.source_external_ids is None
-        assert doc.source_access_mods is None
+        assert doc.source_access_group_ids is None
         assert doc.viewer_mode is None
 
     def test_literature_provenance_is_settable(self):
@@ -101,7 +101,7 @@ class TestPDFDocumentModel:
             source_md5="md5abc123",
             source_external_ids={"pmid": "12345"},
             source_access_scope="mod",
-            source_access_mods={"mods": ["FB"]},
+            source_access_group_ids=["FB"],
             viewer_mode="text_only",
         )
 
@@ -109,5 +109,5 @@ class TestPDFDocumentModel:
         assert doc.source_provider_reference_curie == "AGRKB:101"
         assert doc.source_provider_converted_artifact_id == "555"
         assert doc.source_external_ids == {"pmid": "12345"}
-        assert doc.source_access_mods == {"mods": ["FB"]}
+        assert doc.source_access_group_ids == ["FB"]
         assert doc.viewer_mode == "text_only"

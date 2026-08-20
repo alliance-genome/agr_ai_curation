@@ -52,7 +52,7 @@ class PDFDocument(Base):
     # Stores: sections, top_level_sections, created_at, model_used, llm_raw_response
     hierarchy_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    # Optional upstream document-source provenance for ABC Literature imports.
+    # Optional upstream provenance for provider-backed document imports.
     source_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_provider_reference_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -90,7 +90,7 @@ class PDFDocument(Base):
     source_payload_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     source_markdown_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     source_access_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    source_access_mods: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_access_group_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     viewer_mode: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Every supported PDF document has an authenticated owner. The database

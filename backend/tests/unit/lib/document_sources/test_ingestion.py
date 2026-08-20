@@ -73,7 +73,7 @@ def _source_provenance(**overrides):
         "file_class": "converted_merged_main",
         "file_extension": "md",
         "access_scope": "restricted",
-        "access_mods": {"mods": ["FB"]},
+        "access_group_ids": ["FB"],
         "viewer_mode": "local_pdf",
     }
     payload.update(overrides)
@@ -199,9 +199,9 @@ async def test_ingest_provider_markdown_document_rejects_unknown_access_scope(
     status_mock.assert_not_awaited()
 
 
-def test_provider_markdown_ingestion_allows_global_without_mods() -> None:
+def test_provider_markdown_ingestion_allows_global_without_group_ids() -> None:
     provenance = ingestion._require_ingestable_provenance(
-        _source_provenance(access_scope="GLOBAL", access_mods=None)
+        _source_provenance(access_scope="GLOBAL", access_group_ids=None)
     )
 
     assert provenance["access_scope"] == "global"
@@ -544,18 +544,18 @@ async def test_sync_sql_document_status_does_not_mutate_on_user_mismatch(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_ingest_provider_markdown_document_requires_restricted_mods(monkeypatch):
+async def test_ingest_provider_markdown_document_requires_restricted_group_ids(monkeypatch):
     status_mock = AsyncMock()
     monkeypatch.setattr(ingestion, "_sync_sql_document_status", status_mock)
 
-    with pytest.raises(DocumentSourceIngestionError, match="source access MODs"):
+    with pytest.raises(DocumentSourceIngestionError, match="source access group IDs"):
         await ingest_provider_markdown_document(
             ProviderMarkdownIngestionRequest(
                 document_id="doc-1",
                 user_id="user-1",
                 document_owner_user_id=42,
                 markdown="# Results\n\nText.\n",
-                source_provenance=_source_provenance(access_mods={"mods": []}),
+                source_provenance=_source_provenance(access_group_ids=[]),
             ),
             weaviate_client=object(),
         )

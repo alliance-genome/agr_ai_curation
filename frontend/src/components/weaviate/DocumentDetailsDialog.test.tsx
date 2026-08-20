@@ -49,7 +49,7 @@ const providerDocument: DocumentDetailData = normalizeDocumentDetailResponse({
     artifact_status: 'ready',
     import_status: 'imported',
     access_scope: 'restricted',
-    access_mods: { mods: ['GROUP'] },
+    access_group_ids: ['team-alpha'],
     viewer_mode: 'local_pdf',
   },
 });
@@ -85,7 +85,8 @@ describe('DocumentDetailsDialog', () => {
     expect(screen.getByText('CATALOG: CAT-123 · ACCESSION: ACC-456')).toBeInTheDocument();
     expect(screen.getByText('converted-md-1')).toBeInTheDocument();
     expect(screen.getByText('restricted')).toBeInTheDocument();
-    expect(screen.getByText('mods: GROUP')).toBeInTheDocument();
+    expect(screen.getByText('Access groups')).toBeInTheDocument();
+    expect(screen.getByText('team-alpha')).toBeInTheDocument();
     expect(screen.getByText('Chunks: 12')).toBeInTheDocument();
     expect(screen.queryByText(/^Embedding:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Vectors:/)).not.toBeInTheDocument();
@@ -206,7 +207,7 @@ describe('DocumentDetailsDialog', () => {
             importStatus: null,
             importedAt: null,
             accessScope: null,
-            accessMods: null,
+            accessGroupIds: null,
             viewerMode: null,
           },
         },

@@ -398,7 +398,7 @@ def _access_policy_is_authorized(
         return False
 
     authorized = _normalize_group_ids(authorized_group_ids)
-    required = _normalize_group_ids(access_policy.mods)
+    required = _normalize_group_ids(access_policy.group_ids)
     return bool(authorized.intersection(required))
 
 
@@ -491,8 +491,6 @@ def _conversion_metadata(result: SourceConversionResult) -> dict[str, Any]:
         metadata["converted_classes"] = list(result.converted_classes)
     if result.per_file_progress:
         metadata["per_file_progress"] = list(result.per_file_progress)
-    if result.per_mod_status:
-        metadata["per_mod_status"] = list(result.per_mod_status)
     return metadata
 
 

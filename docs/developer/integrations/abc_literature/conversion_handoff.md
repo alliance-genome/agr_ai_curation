@@ -115,8 +115,10 @@ endpoint names:
 - Provider hooks own conversion readiness, canonical-main identification, and
   main-text ranking. Reusable upload/import code applies only the normalized
   `AVAILABLE` requirement and provider-declared hooks.
-- Provider metadata such as `converted_classes`, `per_file_progress`, and
-  `per_mod_status` may be sanitized into local job metadata for UI/debugging.
+- Generic job metadata may include provider-neutral `converted_classes` and
+  `per_file_progress`. ABC `per_mod_status` remains adapter-private: the
+  adapter may derive generic readiness from it, but must not persist or expose
+  the payload.
 - Providers without conversion support can return ready text, PDF-only/source
   artifacts, or no match according to their own capability.
 

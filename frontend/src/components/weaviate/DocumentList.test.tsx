@@ -327,7 +327,7 @@ describe('DocumentList', () => {
           importStatus: 'imported',
           importedAt: null,
           accessScope: 'restricted',
-          accessMods: { mods: ['GROUP'] },
+          accessGroupIds: ['team-alpha'],
           viewerMode: 'local_pdf',
         },
       }),

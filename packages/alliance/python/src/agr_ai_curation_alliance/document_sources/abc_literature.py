@@ -186,14 +186,14 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             for group_id in authorized_group_ids
             if str(group_id).strip()
         }
-        artifact_mods = {
-            mod.strip().casefold()
-            for mod in artifact.access_policy.mods
-            if mod.strip()
+        artifact_group_ids = {
+            group_id.strip().casefold()
+            for group_id in artifact.access_policy.group_ids
+            if group_id.strip()
         }
         if (
             artifact.access_policy.scope is SourceAccessScope.RESTRICTED
-            and authorized.intersection(artifact_mods)
+            and authorized.intersection(artifact_group_ids)
         ):
             return (0,)
         if artifact.access_policy.scope is SourceAccessScope.GLOBAL:
@@ -208,9 +208,6 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             if not isinstance(converted, Mapping):
                 continue
             if converted.get("file_class") == "converted_merged_main":
-                return True
-        for mod_status in result.per_mod_status:
-            if mod_status.get("main_converted") is True:
                 return True
         return False
 
@@ -569,6 +566,9 @@ def _map_conversion_result(
     *,
     provider: str,
 ) -> SourceConversionResult:
+    converted_classes = set(_string_tuple(payload.get("converted_classes")))
+    if _per_mod_status_exposes_main_text(payload.get("per_mod_status")):
+        converted_classes.add("converted_merged_main")
     return SourceConversionResult(
         provider=provider,
         status=_map_conversion_status(_first_string(payload, "status")),
@@ -576,13 +576,21 @@ def _map_conversion_result(
         reference_curie=_first_string(payload, "reference_curie"),
         job_id=_first_string(payload, "job_id"),
         error_message=_first_string(payload, "error_message"),
-        converted_classes=_string_tuple(payload.get("converted_classes")),
+        converted_classes=tuple(sorted(converted_classes)),
         per_file_progress=_mapping_tuple(payload.get("per_file_progress")),
-        per_mod_status=_mapping_tuple(payload.get("per_mod_status")),
         metadata=_compact_metadata(
             payload,
             exclude={"per_file_progress", "per_mod_status"},
         ),
+    )
+
+
+def _per_mod_status_exposes_main_text(value: object) -> bool:
+    """Interpret ABC conversion diagnostics without leaking them into core contracts."""
+
+    return any(
+        status.get("main_converted") is True
+        for status in _mapping_tuple(value)
     )
 
 
@@ -711,11 +719,11 @@ def _map_access_policy(
     *,
     source_pdf_null_mods_are_global: bool,
 ) -> SourceAccessPolicy:
-    mods = _extract_mods(payload)
-    if mods:
+    group_ids = _extract_group_ids(payload)
+    if group_ids:
         return SourceAccessPolicy(
             scope=SourceAccessScope.RESTRICTED,
-            mods=tuple(sorted(mods)),
+            group_ids=tuple(sorted(group_ids)),
         )
     if source_pdf_null_mods_are_global and _has_null_mod_entry(payload):
         return SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
@@ -724,37 +732,31 @@ def _map_access_policy(
     return SourceAccessPolicy(scope=SourceAccessScope.UNKNOWN)
 
 
-def _extract_mods(payload: Mapping[str, Any]) -> set[str]:
-    raw_mods = payload.get("referencefile_mods") or payload.get("mods") or []
+def _extract_group_ids(payload: Mapping[str, Any]) -> set[str]:
+    raw_mods = payload.get("referencefile_mods") or []
     if not _is_non_string_sequence(raw_mods):
         return set()
 
-    mods: set[str] = set()
+    group_ids: set[str] = set()
     for item in raw_mods:
-        if isinstance(item, Mapping):
-            value = (
-                item.get("mod_abbreviation")
-                or item.get("abbreviation")
-                or item.get("mod")
-            )
-        else:
-            value = item
+        value = item.get("mod_abbreviation") if isinstance(item, Mapping) else None
         if isinstance(value, str) and value.strip():
-            mods.add(value.strip())
-    return mods
+            group_ids.add(value.strip())
+    return group_ids
 
 
 def _has_null_mod_entry(payload: Mapping[str, Any]) -> bool:
-    raw_mods = payload.get("referencefile_mods") or payload.get("mods") or []
+    raw_mods = payload.get("referencefile_mods") or []
     if not _is_non_string_sequence(raw_mods):
         return False
 
-    recognized_keys = {"mod_abbreviation", "abbreviation", "mod"}
     for item in raw_mods:
-        if isinstance(item, Mapping):
-            for key in recognized_keys:
-                if key in item and item[key] is None:
-                    return True
+        if (
+            isinstance(item, Mapping)
+            and "mod_abbreviation" in item
+            and item["mod_abbreviation"] is None
+        ):
+            return True
     return False
 
 

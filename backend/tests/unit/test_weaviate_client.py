@@ -73,9 +73,9 @@ async def test_async_list_documents_normalises_results():
         error_message=None,
         upload_timestamp=datetime(2024, 1, 1),
         file_size=2048,
-        source_provider="abc_literature",
+        source_provider="genome_archive",
         source_provider_reference_id="101",
-        source_provider_reference_curie="AGRKB:101",
+        source_provider_reference_curie="ARCHIVE:101",
         source_provider_source_file_id="source-file-1",
         source_provider_pdf_artifact_id="pdf-file-1",
         source_provider_converted_artifact_id="converted-file-1",
@@ -87,7 +87,7 @@ async def test_async_list_documents_normalises_results():
         source_import_status="completed",
         source_imported_at=datetime(2024, 1, 2),
         source_access_scope="restricted",
-        source_access_mods={"mods": ["FB"]},
+        source_access_group_ids=["research-team"],
         viewer_mode="text_only",
     )
 
@@ -124,21 +124,9 @@ async def test_async_list_documents_normalises_results():
     assert result["documents"][0]["vector_count"] == 10
     assert result["documents"][0]["weaviate_tenant"] == "test_tenant"
     assert result["documents"][0]["source_provenance"] == {
-        "provider": "abc_literature",
-        "provider_metadata": {
-            "display_label": "ABC Literature",
-            "reference_label_priority": [
-                "external_ids.fbrf",
-                "reference_curie",
-                "reference_id",
-                "external_ids.pmid",
-                "external_ids.pmcid",
-                "external_ids.doi",
-                "source_md5",
-            ],
-        },
+        "provider": "genome_archive",
         "reference_id": "101",
-        "reference_curie": "AGRKB:101",
+        "reference_curie": "ARCHIVE:101",
         "source_file_id": "source-file-1",
         "pdf_artifact_id": "pdf-file-1",
         "converted_artifact_id": "converted-file-1",
@@ -150,7 +138,7 @@ async def test_async_list_documents_normalises_results():
         "import_status": "completed",
         "imported_at": "2024-01-02T00:00:00",
         "access_scope": "restricted",
-        "access_mods": {"mods": ["FB"]},
+        "access_group_ids": ["research-team"],
         "viewer_mode": "text_only",
     }
 

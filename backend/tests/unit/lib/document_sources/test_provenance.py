@@ -63,7 +63,7 @@ def test_build_document_source_provenance_uses_neutral_non_secret_fields() -> No
         source_payload_path="/internal/raw.json",
         source_markdown_path="/internal/paper.md",
         source_access_scope="restricted",
-        source_access_mods={"mods": ["FB"], "raw_mod_objects": [{"secret": "drop"}]},
+        source_access_group_ids=["FB"],
         viewer_mode="local_pdf",
     )
 
@@ -97,7 +97,7 @@ def test_build_document_source_provenance_uses_neutral_non_secret_fields() -> No
         "import_status": "completed",
         "imported_at": "2026-06-24T12:00:00",
         "access_scope": "restricted",
-        "access_mods": {"mods": ["FB"]},
+        "access_group_ids": ["FB"],
         "viewer_mode": "local_pdf",
     }
     assert "source_payload_path" not in provenance
@@ -122,10 +122,7 @@ def test_sanitize_document_source_provenance_drops_unknown_nested_raw_values() -
                 "client_secret": "drop-me",
                 "bearer_token": "drop-me-too",
             },
-            "access_mods": {
-                "mods": ["FB", {"drop": True}, "WB"],
-                "referencefile_mods": [{"secret": "drop"}],
-            },
+            "access_group_ids": ["FB", {"drop": True}, "WB"],
         }
     )
 
@@ -137,7 +134,7 @@ def test_sanitize_document_source_provenance_drops_unknown_nested_raw_values() -
             "pmid": "12345",
             "doi": ["10.1/example"],
         },
-        "access_mods": {"mods": ["FB", "WB"]},
+        "access_group_ids": ["FB", "WB"],
     }
 
 

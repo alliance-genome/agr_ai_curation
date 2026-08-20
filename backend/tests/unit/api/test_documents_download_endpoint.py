@@ -493,7 +493,7 @@ async def test_get_download_info_reports_pdf_backed_provider_markdown(monkeypatc
         source_import_status="imported",
         source_imported_at=None,
         source_access_scope="restricted",
-        source_access_mods={"mods": ["FB"]},
+        source_access_group_ids=["FB"],
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -534,7 +534,7 @@ async def test_get_download_info_reports_pdf_backed_provider_markdown(monkeypatc
         "access_scope": "restricted",
         "viewer_mode": "local_pdf",
         "external_ids": {"pmid": "12345"},
-        "access_mods": {"mods": ["FB"]},
+        "access_group_ids": ["FB"],
     }
 
 

@@ -80,8 +80,11 @@ ABC conversion response fields are stored under PDF job
 - `conversion_job_id`
 - `converted_classes`
 - `per_file_progress`
-- `per_mod_status`
 - `conversion_error_message`
+
+ABC `per_mod_status` is interpreted only inside the Alliance adapter. It may
+contribute generic `converted_classes` readiness but is not copied into job
+metadata or public contracts.
 
 | ABC status/signal | Local mapping |
 | --- | --- |

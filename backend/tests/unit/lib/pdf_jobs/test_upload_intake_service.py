@@ -860,7 +860,7 @@ async def test_intake_upload_enabled_provider_ready_dispatches_markdown_import(t
         md5sum=FAKE_UPLOAD_MD5,
         access_policy=SourceAccessPolicy(
             scope=SourceAccessScope.RESTRICTED,
-            mods=("MGI",),
+            group_ids=("research-team",),
         ),
         metadata={"external_ids": {"doi": "10.123/example"}},
     )
@@ -919,8 +919,8 @@ async def test_intake_upload_enabled_provider_ready_dispatches_markdown_import(t
         file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
         user={"sub": "user-1"},
         document_source_context=DocumentSourceRequestContext(
-            provider_groups=("MGIStaff",),
-            authorized_group_ids=("MGI",),
+            provider_groups=("research-team-members",),
+            authorized_group_ids=("research-team",),
             curator_token="curator-token",
         ),
     )
@@ -936,7 +936,7 @@ async def test_intake_upload_enabled_provider_ready_dispatches_markdown_import(t
     assert record.source_provider_converted_artifact_id == "markdown-1"
     assert record.source_import_status == "pending"
     assert record.source_access_scope == "restricted"
-    assert record.source_access_mods == {"mods": ["MGI"]}
+    assert record.source_access_group_ids == ["research-team"]
     assert dispatch.calls == []
     assert len(dispatch.provider_markdown_calls) == 1
     provider_request = dispatch.provider_markdown_calls[0]["request"]
@@ -968,7 +968,7 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
         md5sum=FAKE_UPLOAD_MD5,
         access_policy=SourceAccessPolicy(
             scope=SourceAccessScope.RESTRICTED,
-            mods=("MGI",),
+            group_ids=("research-team",),
         ),
         metadata={"external_ids": {"doi": "10.123/example"}},
     )
@@ -1069,7 +1069,7 @@ async def test_intake_upload_provider_source_only_ready_uses_presentation_label(
         md5sum=FAKE_UPLOAD_MD5,
         access_policy=SourceAccessPolicy(
             scope=SourceAccessScope.RESTRICTED,
-            mods=("MGI",),
+            group_ids=("research-team",),
         ),
     )
 

@@ -258,10 +258,13 @@ def _fake_reference_source_artifact_sort_key(
     ):
         return (20,)
     authorized = {str(group_id).strip().casefold() for group_id in authorized_group_ids}
-    artifact_mods = {mod.strip().casefold() for mod in artifact.access_policy.mods}
+    artifact_group_ids = {
+        group_id.strip().casefold()
+        for group_id in artifact.access_policy.group_ids
+    }
     if (
         artifact.access_policy.scope is SourceAccessScope.RESTRICTED
-        and authorized.intersection(artifact_mods)
+        and authorized.intersection(artifact_group_ids)
     ):
         return (0,)
     if artifact.access_policy.scope is SourceAccessScope.GLOBAL:
@@ -285,7 +288,7 @@ def _fake_conversion_exposes_main_text(
         converted = progress.get("converted")
         if isinstance(converted, dict) and converted.get("file_class") == "converted_merged_main":
             return True
-    return any(status.get("main_converted") is True for status in result.per_mod_status)
+    return False
 
 
 def _ready_artifacts():
@@ -301,7 +304,7 @@ def _ready_artifacts():
         md5sum="source-md5",
         access_policy=SourceAccessPolicy(
             scope=SourceAccessScope.RESTRICTED,
-            mods=("FB",),
+            group_ids=("FB",),
         ),
     )
     converted = SourceArtifact(
@@ -324,7 +327,7 @@ def _source_artifact(
     artifact_id="pdf-1",
     provider="fake_provider",
     access_scope=SourceAccessScope.RESTRICTED,
-    mods=("FB",),
+    group_ids=("FB",),
     display_name="provider-paper.pdf",
     md5sum="source-md5",
     metadata=None,
@@ -339,7 +342,7 @@ def _source_artifact(
         reference_curie="AGRKB:123",
         display_name=display_name,
         md5sum=md5sum,
-        access_policy=SourceAccessPolicy(scope=access_scope, mods=mods),
+        access_policy=SourceAccessPolicy(scope=access_scope, group_ids=group_ids),
         metadata=metadata or {},
     )
 
@@ -463,7 +466,7 @@ async def test_select_reference_import_candidate_prefers_abc_mod_pdf_over_shared
             _source_artifact(
                 artifact_id=mod_pdf_id,
                 provider="abc_literature",
-                mods=("FB",),
+                group_ids=("FB",),
                 display_name=pmid,
                 md5sum="fb-pdf-md5",
                 metadata={
@@ -476,7 +479,7 @@ async def test_select_reference_import_candidate_prefers_abc_mod_pdf_over_shared
                 artifact_id=shared_pdf_id,
                 provider="abc_literature",
                 access_scope=SourceAccessScope.GLOBAL,
-                mods=(),
+                group_ids=(),
                 display_name=pmc_stem,
                 md5sum="pmc-pdf-md5",
                 metadata={
@@ -518,7 +521,7 @@ async def test_select_reference_import_candidate_keeps_true_abc_mod_tie_ambiguou
             _source_artifact(
                 artifact_id="fb-pdf",
                 provider="abc_literature",
-                mods=("FB",),
+                group_ids=("FB",),
                 display_name="flybase-paper",
                 md5sum="fb-pdf-md5",
                 metadata={
@@ -530,7 +533,7 @@ async def test_select_reference_import_candidate_keeps_true_abc_mod_tie_ambiguou
             _source_artifact(
                 artifact_id="wb-pdf",
                 provider="abc_literature",
-                mods=("WB",),
+                group_ids=("WB",),
                 display_name="wormbase-paper",
                 md5sum="wb-pdf-md5",
                 metadata={
@@ -543,7 +546,7 @@ async def test_select_reference_import_candidate_keeps_true_abc_mod_tie_ambiguou
                 artifact_id="pmc-pdf",
                 provider="abc_literature",
                 access_scope=SourceAccessScope.GLOBAL,
-                mods=(),
+                group_ids=(),
                 display_name="PMC-paper",
                 md5sum="pmc-pdf-md5",
                 metadata={
@@ -689,7 +692,7 @@ async def test_select_reference_import_candidate_uses_reference_nxml_after_conve
 
 
 @pytest.mark.asyncio
-async def test_select_reference_import_candidate_accepts_per_mod_only_readiness():
+async def test_select_reference_import_candidate_accepts_adapter_derived_readiness():
     source = _source_artifact(artifact_id="pdf-1", provider="abc_literature")
     markdown = _converted_artifact(
         artifact_id="md-1",
@@ -702,7 +705,7 @@ async def test_select_reference_import_candidate_accepts_per_mod_only_readiness(
         conversion_result=SourceConversionResult(
             provider="abc_literature",
             status=SourceConversionStatus.RUNNING,
-            per_mod_status=({"mod": "FB", "main_converted": True},),
+            converted_classes=("converted_merged_main",),
         ),
     )
     provider.provider_id = "abc_literature"

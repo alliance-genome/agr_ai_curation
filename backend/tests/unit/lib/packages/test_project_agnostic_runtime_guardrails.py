@@ -96,6 +96,23 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
     ),
     re.compile(r"\b(?:FB|WB|MGI|RGD|SGD|ZFIN|HGNC)\b"),
 )
+NEUTRAL_DOCUMENT_ACCESS_GUARD_PATHS = {
+    Path("backend/src/lib/document_sources/models.py"),
+    Path("backend/src/lib/document_sources/import_selection.py"),
+    Path("backend/src/lib/document_sources/identifier_import.py"),
+    Path("backend/src/lib/document_sources/ingestion.py"),
+    Path("backend/src/lib/document_sources/provenance.py"),
+    Path("backend/src/lib/pdf_jobs/upload_intake_service.py"),
+    Path("backend/src/lib/pdf_jobs/upload_execution_service.py"),
+    Path("backend/src/models/api_schemas.py"),
+    Path("backend/src/models/sql/pdf_document.py"),
+    Path("frontend/src/components/weaviate/DocumentDetailsDialog.tsx"),
+    Path("frontend/src/services/weaviate.ts"),
+}
+MOD_ORIENTED_DOCUMENT_ACCESS_PATTERNS = (
+    re.compile(r"\b(?:mods|access_mods|source_access_mods|per_mod_status)\b"),
+    re.compile(r"accessMods|Access MODs"),
+)
 GENERIC_FLOW_RECIPE_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/agent_studio/flow_tools.py"),
     Path("backend/src/lib/packages/flow_recipes.py"),
@@ -869,6 +886,17 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
     for relative_path in sorted(GENERIC_RUNTIME_SOURCE_GUARD_PATHS):
         text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         for pattern in GENERIC_RUNTIME_SOURCE_PATTERNS:
+            if pattern.search(text):
+                violations.append(f"{relative_path}: {pattern.pattern}")
+
+    assert violations == []
+
+
+def test_provider_neutral_document_access_contracts_do_not_use_mod_terms():
+    violations = []
+    for relative_path in sorted(NEUTRAL_DOCUMENT_ACCESS_GUARD_PATHS):
+        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        for pattern in MOD_ORIENTED_DOCUMENT_ACCESS_PATTERNS:
             if pattern.search(text):
                 violations.append(f"{relative_path}: {pattern.pattern}")
 
