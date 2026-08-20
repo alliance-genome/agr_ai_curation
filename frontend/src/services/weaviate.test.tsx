@@ -3,6 +3,9 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   fetchDocumentList,
+  fetchDocumentSourceProviderConfiguration,
+  importSourceIdentifiers,
+  resolveSourceIdentifiers,
   useDocument,
   useDocumentChunks,
   useWeaviateSettings,
@@ -38,6 +41,167 @@ const createWrapper = () => {
 describe('weaviate service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('document-source identifier contracts', () => {
+    it('posts resolve requests and normalizes canonical statuses and artifact provenance', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          imported_count: 0,
+          results: [
+            {
+              identifier: 'SOURCE:1',
+              normalized_identifier: 'SOURCE:1',
+              status: 'resolved',
+              message: 'Ready.',
+              source_provenance: {
+                provider: 'example_source',
+                viewer_mode: 'local_pdf',
+                pdf_artifact_id: 'pdf-1',
+                converted_artifact_id: 'text-1',
+                source_md5: 'abc',
+              },
+            },
+            {
+              identifier: 'SOURCE:2',
+              status: 'error',
+              error_code: 'document_source_access_denied',
+              message: 'Denied.',
+            },
+          ],
+        }),
+      });
+
+      await expect(resolveSourceIdentifiers('SOURCE:1\nSOURCE:2')).resolves.toEqual({
+        importedCount: 0,
+        results: [
+          expect.objectContaining({
+            identifier: 'SOURCE:1',
+            status: 'resolved',
+            source: {
+              provider: 'example_source',
+              viewerMode: 'local_pdf',
+              pdfArtifactId: 'pdf-1',
+              convertedArtifactId: 'text-1',
+              sourceMd5: 'abc',
+            },
+          }),
+          expect.objectContaining({ identifier: 'SOURCE:2', status: 'access_denied' }),
+        ],
+      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/documents/resolve/source-identifiers',
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifiers: 'SOURCE:1\nSOURCE:2' }),
+        },
+      );
+    });
+
+    it('rejects malformed successful response envelopes and result contracts', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ imported_count: 0 }) })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            imported_count: 0,
+            results: [{ identifier: 'SOURCE:1', status: 'resolved' }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => { throw new SyntaxError('bad json'); },
+        });
+
+      await expect(resolveSourceIdentifiers('SOURCE:1')).rejects.toThrow(
+        'Document-source response is missing required batch fields.',
+      );
+      await expect(resolveSourceIdentifiers('SOURCE:1')).rejects.toThrow(
+        'Document-source result is missing its required message.',
+      );
+      await expect(resolveSourceIdentifiers('SOURCE:1')).rejects.toThrow('bad json');
+    });
+
+    it('posts imports and rejects obsolete short errors and referencefile provenance aliases', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          imported_count: 1,
+          results: [
+            {
+              identifier: 'SOURCE:1',
+              status: 'imported',
+              message: 'Queued.',
+              source_provenance: {
+                provider: 'example_source',
+                viewer_mode: 'local_pdf',
+                pdf_referencefile_id: 'legacy-pdf',
+                converted_referencefile_id: 'legacy-text',
+              },
+            },
+            ...[
+              'access_denied',
+              'provider_unavailable',
+              'conversion_running',
+              'conversion_failed',
+              'ambiguous_match',
+              'no_source_artifact',
+              'no_converted_text',
+            ].map((errorCode, index) => ({
+              identifier: `SOURCE:${index + 2}`,
+              status: 'error',
+              error_code: errorCode,
+              message: 'Legacy alias.',
+            })),
+          ],
+        }),
+      });
+
+      const result = await importSourceIdentifiers('SOURCE:1,SOURCE:2');
+
+      expect(result.importedCount).toBe(1);
+      expect(result.results[0].source).toBeUndefined();
+      expect(result.results.slice(1).map(({ status }) => status)).toEqual(
+        Array.from({ length: 7 }, () => 'invalid'),
+      );
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/documents/import/source-identifiers',
+        expect.objectContaining({ body: JSON.stringify({ identifiers: 'SOURCE:1,SOURCE:2' }) }),
+      );
+    });
+
+    it('normalizes configured provider presentation from the shared metadata endpoint', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          provider: 'example_source',
+          import_enabled: true,
+          presentation: {
+            display_label: 'Example Source',
+            identifier_help_label: 'Use example source IDs.',
+            identifier_examples: ['SOURCE:1', 'SOURCE:2'],
+          },
+        }),
+      });
+
+      await expect(fetchDocumentSourceProviderConfiguration()).resolves.toEqual({
+        provider: 'example_source',
+        importEnabled: true,
+        presentation: {
+          displayLabel: 'Example Source',
+          referenceLabelPriority: null,
+          identifierHelpLabel: 'Use example source IDs.',
+          identifierExamples: ['SOURCE:1', 'SOURCE:2'],
+        },
+      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/documents/source-provider',
+        expect.objectContaining({ credentials: 'include' }),
+      );
+    });
   });
 
   describe('fetchDocumentList', () => {

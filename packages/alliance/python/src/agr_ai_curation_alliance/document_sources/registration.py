@@ -105,6 +105,15 @@ def get_document_source_provider_registrations(
             development_token_resolver=_resolve_abc_literature_development_token,
             presentation=DocumentSourceProviderPresentation(
                 display_label="ABC Literature",
+                identifier_help_label=(
+                    "PMID, PubMed ID, AGRKB, or ABC identifiers; comma or newline "
+                    "separated."
+                ),
+                identifier_examples=(
+                    "PMID:23970418",
+                    "PubMed ID 23970418",
+                    "AGRKB:101000000055784",
+                ),
                 reference_label_priority=(
                     "external_ids.fbrf",
                     "reference_curie",

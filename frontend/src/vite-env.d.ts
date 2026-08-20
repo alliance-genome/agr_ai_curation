@@ -14,6 +14,10 @@ interface ImportMetaEnv {
   readonly VITE_AI_CURATION_BATCH_AUDIT_CACHE_MAX_ENTRIES: string;
   readonly VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS: string;
   readonly VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS: string;
+  readonly VITE_PDF_UPLOAD_MAX_SELECTED_FILES: string;
+  readonly VITE_PDF_JOB_WINDOW_DAYS: string;
+  readonly VITE_PDF_JOB_LIMIT: string;
+  readonly VITE_PDF_JOB_FALLBACK_POLL_INTERVAL_MS: string;
 }
 
 interface ImportMeta {

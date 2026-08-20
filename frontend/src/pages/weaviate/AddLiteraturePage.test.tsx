@@ -16,7 +16,6 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('@/features/documents/pdfUploadFlow', () => ({
-  MAX_UPLOAD_FILES_PER_SELECTION: 10,
   validatePdfSelection: vi.fn((files: File[]) => ({
     ok: files.length > 0 && files.every((file) => file.type === 'application/pdf' || file.name.endsWith('.pdf')),
     files,
@@ -40,6 +39,16 @@ const emptyPdfJobsResponse = {
 };
 
 const SOURCE_MD5 = ['000c0dd769dd7326', '8e3c752102337c96'].join('');
+
+const defaultProviderConfiguration = {
+  provider: 'abc_literature',
+  import_enabled: true,
+  presentation: {
+    display_label: 'ABC Literature',
+    identifier_help_label: 'Use configured literature identifiers.',
+    identifier_examples: ['SOURCE:123', 'SOURCE:456'],
+  },
+};
 
 const defaultImportResponse = {
   imported_count: 1,
@@ -67,17 +76,28 @@ class MockEventSource {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
 
-  constructor(public readonly url: string) {}
+  constructor(public readonly url: string) {
+    mockEventSources.push(this);
+  }
 
   close = vi.fn();
 }
 
+const mockEventSources: MockEventSource[] = [];
+
 const stubRoutedFetch = (
   identifierResponses: Array<unknown | Response | Promise<Response>> = [defaultImportResponse],
+  providerConfiguration: unknown = defaultProviderConfiguration,
 ) => {
   const responses = [...identifierResponses];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith('/api/weaviate/documents/source-provider')) {
+      if (providerConfiguration instanceof Response) {
+        return providerConfiguration;
+      }
+      return okJson(providerConfiguration);
+    }
     if (url.includes('/api/weaviate/pdf-jobs')) {
       return okJson(emptyPdfJobsResponse);
     }
@@ -94,6 +114,7 @@ const stubRoutedFetch = (
 describe('AddLiteraturePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockEventSources.length = 0;
     vi.mocked(uploadPdfDocument).mockResolvedValue('mock-doc-uploaded');
     vi.stubGlobal('EventSource', MockEventSource);
     stubRoutedFetch();
@@ -113,6 +134,61 @@ describe('AddLiteraturePage', () => {
     expect(screen.getByText('No import results yet.')).toBeInTheDocument();
     expect(screen.queryByText(/Successful source retrievals/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Review states')).not.toBeInTheDocument();
+  });
+
+  it('renders identifier help and examples owned by provider presentation', async () => {
+    render(<AddLiteraturePage />);
+
+    await screen.findByText('Use configured literature identifiers.');
+    const input = screen.getByLabelText('Source identifiers');
+    expect(input).toHaveAttribute('placeholder', 'SOURCE:123\nSOURCE:456');
+    expect(input).toHaveAccessibleDescription('Use configured literature identifiers.');
+    expect(screen.queryByText(/PMID|PubMed|AGRKB|ABC identifiers/)).not.toBeInTheDocument();
+  });
+
+  it('renders honest generic guidance when no identifier provider is configured', async () => {
+    stubRoutedFetch([defaultImportResponse], {
+      provider: null,
+      import_enabled: false,
+      presentation: null,
+    });
+    render(<AddLiteraturePage />);
+
+    expect(await screen.findByText(
+      'Identifier guidance is not configured for the current document source; use commas or new lines to separate values.',
+    )).toBeInTheDocument();
+    expect(screen.getByLabelText('Source identifiers')).not.toHaveAttribute('placeholder');
+    expect(screen.queryByText(/PMID|PubMed|AGRKB|ABC identifiers/)).not.toBeInTheDocument();
+  });
+
+  it('distinguishes a provider-guidance request failure from unconfigured guidance', async () => {
+    stubRoutedFetch([defaultImportResponse], new Response(null, { status: 500 }));
+    render(<AddLiteraturePage />);
+
+    expect(await screen.findByText(
+      'Identifier guidance could not be loaded. Try refreshing the page.',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(
+      'Identifier guidance is not configured for the current document source; use commas or new lines to separate values.',
+    )).not.toBeInTheDocument();
+  });
+
+  it('uses shared job-window, result-limit, and fallback-poll configuration', async () => {
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
+    render(<AddLiteraturePage />);
+
+    await act(async () => undefined);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/weaviate/pdf-jobs?window_days=7&limit=50',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(mockEventSources[0]?.url).toBe(
+      '/api/weaviate/pdf-jobs/stream?window_days=7&limit=50',
+    );
+
+    act(() => mockEventSources[0]?.onerror?.());
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
+    setIntervalSpy.mockRestore();
   });
 
   it('resolves identifiers through the dry-run backend endpoint', async () => {
@@ -374,6 +450,13 @@ describe('AddLiteraturePage', () => {
           message: 'Document-source lookup is unavailable.',
         },
         {
+          identifier: 'PMID:7',
+          normalized_identifier: 'PMID:7',
+          status: 'error',
+          error_code: 'document_source_import_unavailable',
+          message: 'Document-source import is unavailable.',
+        },
+        {
           identifier: 'PMID:3',
           normalized_identifier: 'PMID:3',
           status: 'error',
@@ -410,7 +493,7 @@ describe('AddLiteraturePage', () => {
 
     expect(await screen.findByText('No source PDF is accessible to this curator.')).toBeInTheDocument();
     expect(screen.getByText('Access denied')).toBeInTheDocument();
-    expect(screen.getByText('Provider unavailable')).toBeInTheDocument();
+    expect(screen.getAllByText('Provider unavailable')).toHaveLength(2);
     expect(screen.getByText('Conversion running')).toBeInTheDocument();
     expect(screen.getByText('No source PDF')).toBeInTheDocument();
     expect(screen.getByText('Needs selection')).toBeInTheDocument();

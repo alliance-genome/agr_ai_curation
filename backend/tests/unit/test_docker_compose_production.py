@@ -229,6 +229,31 @@ def test_pdf_size_limit_is_shared_by_backend_and_frontend_compose_services(
     assert int(image_default.group(1)) == get_pdf_max_file_size_bytes()
 
 
+def test_document_intake_vite_limits_reach_standard_frontend_builds():
+    frontend_build_args = _load_dev_compose()["services"]["frontend"]["build"]["args"]
+    expected = {
+        "VITE_PDF_UPLOAD_MAX_SELECTED_FILES": (
+            "${VITE_PDF_UPLOAD_MAX_SELECTED_FILES:-10}"
+        ),
+        "VITE_PDF_JOB_WINDOW_DAYS": "${VITE_PDF_JOB_WINDOW_DAYS:-7}",
+        "VITE_PDF_JOB_LIMIT": "${VITE_PDF_JOB_LIMIT:-50}",
+        "VITE_PDF_JOB_FALLBACK_POLL_INTERVAL_MS": (
+            "${VITE_PDF_JOB_FALLBACK_POLL_INTERVAL_MS:-5000}"
+        ),
+    }
+    assert {key: frontend_build_args[key] for key in expected} == expected
+
+    dockerfile = FRONTEND_DOCKERFILE_PATH.read_text(encoding="utf-8")
+    for name, default in (
+        ("VITE_PDF_UPLOAD_MAX_SELECTED_FILES", "10"),
+        ("VITE_PDF_JOB_WINDOW_DAYS", "7"),
+        ("VITE_PDF_JOB_LIMIT", "50"),
+        ("VITE_PDF_JOB_FALLBACK_POLL_INTERVAL_MS", "5000"),
+    ):
+        assert f"ARG {name}={default}" in dockerfile
+        assert f"ENV {name}=${name}" in dockerfile
+
+
 def test_dev_compose_uses_package_mount_for_agent_studio_prompt_source():
     compose = _load_dev_compose()
     backend_volumes = compose["services"]["backend"]["volumes"]

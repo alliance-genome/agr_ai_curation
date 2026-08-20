@@ -114,8 +114,16 @@ class DocumentSourceIdentifierImportRequest(BaseModel):
     identifiers: str = Field(
         ...,
         min_length=1,
-        description="Comma- or newline-separated PMID/PubMed/ABC/AGRKB identifiers",
+        description="Comma- or newline-separated document-source identifiers",
     )
+
+
+class DocumentSourceProviderConfiguration(BaseModel):
+    """Configured non-secret document-source presentation for public UI use."""
+
+    provider: Optional[str] = None
+    import_enabled: bool
+    presentation: Optional[Dict[str, str | List[str]]] = None
 
 
 class DocumentSourceIdentifierImportResult(BaseModel):
