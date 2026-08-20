@@ -7,9 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   EXTRACTION_AGENTS,
-  VALIDATION_AGENTS,
   isExtractionAgent,
-  isValidationAgent,
   countExtractors,
 } from './smartDefaultUtils'
 import type { AgentNode, AgentNodeData } from './types'
@@ -69,89 +67,6 @@ describe('isExtractionAgent', () => {
 
   it('includes all expected extraction agents', () => {
     expect(EXTRACTION_AGENTS).toEqual(['pdf_extraction', 'gene_expression'])
-  })
-})
-
-// =============================================================================
-// isValidationAgent Tests
-// =============================================================================
-
-describe('isValidationAgent', () => {
-  it('returns true for gene validator', () => {
-    expect(isValidationAgent('gene_validation')).toBe(true)
-  })
-
-  it('returns true for allele agent', () => {
-    expect(isValidationAgent('allele_validation')).toBe(true)
-  })
-
-  it('returns true for disease agent', () => {
-    expect(isValidationAgent('disease_validation')).toBe(true)
-  })
-
-  it('returns true for chemical agent', () => {
-    expect(isValidationAgent('chemical_validation')).toBe(true)
-  })
-
-  it('returns true for gene_ontology agent', () => {
-    expect(isValidationAgent('gene_ontology')).toBe(true)
-  })
-
-  it('returns true for go_annotations agent', () => {
-    expect(isValidationAgent('go_annotations')).toBe(true)
-  })
-
-  it('returns true for orthologs agent', () => {
-    expect(isValidationAgent('orthologs')).toBe(true)
-  })
-
-  it('returns true for ontology_term_validation agent', () => {
-    expect(isValidationAgent('ontology_term_validation')).toBe(true)
-  })
-
-  it('does not expose retired ontology mapping validation defaults', () => {
-    // Keep the retired ids assembled so grep-based retirement checks can prove
-    // they are gone from active runtime and frontend surfaces.
-    const retiredOntologyMappingAgentId = ['ontology', 'mapping'].join('_')
-    const retiredOntologyMappingLookupAgentId = [
-      'ontology',
-      'mapping',
-      'lookup',
-    ].join('_')
-
-    expect(isValidationAgent(retiredOntologyMappingAgentId)).toBe(false)
-    expect(isValidationAgent(retiredOntologyMappingLookupAgentId)).toBe(false)
-    expect(VALIDATION_AGENTS).not.toContain(retiredOntologyMappingAgentId)
-    expect(VALIDATION_AGENTS).not.toContain(retiredOntologyMappingLookupAgentId)
-  })
-
-  it('rejects retired validator folder aliases', () => {
-    for (const alias of ['gene', 'allele', 'disease', 'chemical']) {
-      expect(isValidationAgent(alias)).toBe(false)
-      expect(VALIDATION_AGENTS).not.toContain(alias)
-    }
-  })
-
-  it('returns false for extraction agents', () => {
-    expect(isValidationAgent('pdf_extraction')).toBe(false)
-    expect(isValidationAgent('gene_expression')).toBe(false)
-  })
-
-  it('returns false for output agents', () => {
-    expect(isValidationAgent('chat_output')).toBe(false)
-    expect(isValidationAgent('csv_formatter')).toBe(false)
-  })
-
-  it('returns false for unknown agents', () => {
-    expect(isValidationAgent('unknown_agent')).toBe(false)
-    expect(isValidationAgent('')).toBe(false)
-  })
-
-  it('includes all expected validation agents', () => {
-    expect(VALIDATION_AGENTS).toEqual([
-      'gene_validation', 'allele_validation', 'disease_validation', 'chemical_validation',
-      'gene_ontology', 'go_annotations', 'orthologs', 'ontology_term_validation'
-    ])
   })
 })
 

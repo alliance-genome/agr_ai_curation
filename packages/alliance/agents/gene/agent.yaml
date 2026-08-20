@@ -10,6 +10,7 @@
 # -----------------------------------------------------------------------------
 agent_id: gene_validation
 system_agent_key: gene_validation
+retired_agent_ids: [gene]
 
 name: "Gene Validation Agent"
 

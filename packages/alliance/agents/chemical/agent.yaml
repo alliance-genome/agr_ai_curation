@@ -10,6 +10,7 @@
 # -----------------------------------------------------------------------------
 agent_id: chemical_validation
 system_agent_key: chemical_validation
+retired_agent_ids: [chemical]
 
 name: "Chemical Ontology Agent"
 

@@ -70,7 +70,17 @@ def migration_connection():
                     CREATE TABLE prompt_execution_log (
                         id uuid PRIMARY KEY,
                         agent_name varchar(100) NOT NULL
-                    )
+                    );
+                    CREATE UNIQUE INDEX idx_prompt_templates_base_unique
+                        ON prompt_templates (agent_name, prompt_type, version)
+                        WHERE group_id IS NULL;
+                    CREATE UNIQUE INDEX uq_prompt_templates_with_group
+                        ON prompt_templates (
+                            agent_name, prompt_type, group_id, version
+                        ) WHERE group_id IS NOT NULL;
+                    CREATE UNIQUE INDEX uq_prompt_templates_single_active
+                        ON prompt_templates (agent_name, prompt_type, group_id)
+                        WHERE is_active = true
                     """
                 )
             )
@@ -159,22 +169,28 @@ def test_upgrade_migrates_all_validator_references_and_is_idempotent(
     )
 
     legacy_gene_prompt_id = uuid4()
-    for prompt_id, agent_name, version, active in (
-        (legacy_gene_prompt_id, "gene", 1, True),
-        (uuid4(), "gene_validation", 1, True),
-        (uuid4(), "allele", 2, True),
+    legacy_disease_prompt_id = uuid4()
+    for prompt_id, agent_name, group_id, version, active in (
+        (legacy_gene_prompt_id, "gene", None, 1, True),
+        (uuid4(), "gene_validation", None, 1, True),
+        (uuid4(), "allele", None, 2, True),
+        (legacy_disease_prompt_id, "disease", "WB", 1, True),
+        (uuid4(), "disease_validation", "WB", 2, True),
     ):
         migration_connection.execute(
             text(
                 """
                 INSERT INTO prompt_templates (
                     id, agent_name, prompt_type, group_id, version, is_active
-                ) VALUES (:id, :agent_name, 'system', NULL, :version, :active)
+                ) VALUES (
+                    :id, :agent_name, 'system', :group_id, :version, :active
+                )
                 """
             ),
             {
                 "id": prompt_id,
                 "agent_name": agent_name,
+                "group_id": group_id,
                 "version": version,
                 "active": active,
             },
@@ -244,9 +260,20 @@ def test_upgrade_migrates_all_validator_references_and_is_idempotent(
     ).one()
     assert legacy_gene_prompt.agent_name == "gene"
     assert legacy_gene_prompt.is_active is False
-    assert migration_connection.execute(
-        text("SELECT agent_name FROM prompt_templates WHERE version = 2")
-    ).scalar_one() == "allele_validation"
+    assert set(
+        migration_connection.execute(
+            text("SELECT agent_name FROM prompt_templates WHERE version = 2")
+        ).scalars()
+    ) == {"allele_validation", "disease_validation"}
+    migrated_disease_prompt = migration_connection.execute(
+        text(
+            "SELECT agent_name, is_active FROM prompt_templates "
+            "WHERE id = :id"
+        ),
+        {"id": legacy_disease_prompt_id},
+    ).one()
+    assert migrated_disease_prompt.agent_name == "disease_validation"
+    assert migrated_disease_prompt.is_active is False
     assert migration_connection.execute(
         text("SELECT agent_name FROM prompt_execution_log WHERE id = :id"),
         {"id": execution_log_id},

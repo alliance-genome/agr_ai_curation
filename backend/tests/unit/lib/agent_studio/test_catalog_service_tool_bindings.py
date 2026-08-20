@@ -541,7 +541,7 @@ def test_create_db_agent_rejects_retired_custom_template_parent(retired_alias):
         group_rules_component=retired_alias,
     )
 
-    with pytest.raises(ValueError, match="retired validator alias"):
+    with pytest.raises(ValueError, match="retired agent ID"):
         catalog_service._create_db_agent(fake_row)
 
 

@@ -1,20 +1,23 @@
-"""Canonical public identity rules for Agent Studio agents."""
+"""Package-configured canonical public identity rules for Agent Studio agents."""
 
 from __future__ import annotations
 
+def retired_agent_id_replacement(value: object) -> str | None:
+    """Return the package-declared canonical replacement for a retired ID."""
+    from src.lib.config.agent_loader import get_retired_agent_id_replacements
 
-RETIRED_VALIDATOR_AGENT_ALIASES = frozenset(
-    {"gene", "allele", "disease", "chemical"}
-)
+    normalized = str(value or "").strip()
+    return get_retired_agent_id_replacements().get(normalized)
 
 
 def require_canonical_agent_identity(value: object, *, field_name: str) -> str:
-    """Return a normalized agent identity or reject a retired validator alias."""
+    """Return a normalized identity or reject a package-declared retired ID."""
 
     normalized = str(value or "").strip()
-    if normalized in RETIRED_VALIDATOR_AGENT_ALIASES:
+    replacement = retired_agent_id_replacement(normalized)
+    if replacement is not None:
         raise ValueError(
-            f"{field_name} '{normalized}' is a retired validator alias; "
-            f"use '{normalized}_validation'."
+            f"{field_name} '{normalized}' is a retired agent ID; "
+            f"use '{replacement}'."
         )
     return normalized

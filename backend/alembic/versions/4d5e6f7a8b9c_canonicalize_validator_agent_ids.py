@@ -84,6 +84,29 @@ def upgrade() -> None:
         )
     )
 
+    # Deactivate a legacy active prompt before renaming when the canonical owner
+    # already has an active prompt for the same type/group. This preserves the
+    # canonical active row and avoids the production single-active unique index.
+    bind.execute(
+        sa.text(
+            f"""
+            UPDATE prompt_templates AS legacy
+            SET is_active = false
+            WHERE legacy.agent_name IN ({_ALIASES})
+              AND legacy.is_active = true
+              AND EXISTS (
+                  SELECT 1
+                  FROM prompt_templates AS canonical
+                  WHERE canonical.agent_name =
+                        {_CANONICAL_CASE.format(value="legacy.agent_name")}
+                    AND canonical.prompt_type = legacy.prompt_type
+                    AND canonical.group_id IS NOT DISTINCT FROM legacy.group_id
+                    AND canonical.is_active = true
+              )
+            """
+        )
+    )
+
     # Rename prompt versions when that exact canonical version is absent. If it
     # already exists, retain the legacy row for audit references but deactivate it.
     bind.execute(

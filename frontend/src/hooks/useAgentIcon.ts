@@ -2,7 +2,7 @@
  * Hook to get agent icon from registry metadata.
  *
  * Usage:
- *   const icon = useAgentIcon('gene')  // Returns "🧬"
+ *   const icon = useAgentIcon('gene_validation')  // Returns "🧬"
  *   const icon = useAgentIcon('unknown')  // Returns "❓"
  */
 
@@ -14,7 +14,7 @@ const DEFAULT_ICON = '❓'
 /**
  * Get the icon for an agent from the registry metadata.
  *
- * @param agentId - The agent ID (e.g., 'gene', 'allele')
+ * @param agentId - The agent ID (e.g., 'gene_validation', 'allele_validation')
  * @returns The agent's icon emoji, or DEFAULT_ICON if not found
  */
 export function useAgentIcon(agentId: string | undefined): string {
@@ -33,7 +33,7 @@ export function useAgentIcon(agentId: string | undefined): string {
 /**
  * Get the name for an agent from the registry metadata.
  *
- * @param agentId - The agent ID (e.g., 'gene', 'allele')
+ * @param agentId - The agent ID (e.g., 'gene_validation', 'allele_validation')
  * @returns The agent's display name, or the agentId if not found
  */
 export function useAgentName(agentId: string | undefined): string {

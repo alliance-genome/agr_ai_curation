@@ -57,7 +57,6 @@ from .models import (
 )
 from .flow_agent_policy import flow_palette_show_in_palette
 from .agent_identity import (
-    RETIRED_VALIDATOR_AGENT_ALIASES,
     require_canonical_agent_identity,
 )
 
@@ -2070,11 +2069,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     Raises:
         ValueError: If agent_id is not found in the unified agents table
     """
-    if agent_id in RETIRED_VALIDATOR_AGENT_ALIASES:
-        raise ValueError(
-            f"Unknown agent_id: {agent_id}. Use '{agent_id}_validation' for the "
-            "validator agent; the short value is domain vocabulary, not an agent ID."
-        )
+    require_canonical_agent_identity(agent_id, field_name="Agent ID")
 
     from src.lib.config.agent_loader import get_agent_definition
 
@@ -2189,11 +2184,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
 def get_active_visible_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     """Return metadata only for an active unified row visible to the caller."""
 
-    if agent_id in RETIRED_VALIDATOR_AGENT_ALIASES:
-        raise ValueError(
-            f"Agent '{agent_id}' is a retired validator alias; "
-            f"use '{agent_id}_validation'."
-        )
+    require_canonical_agent_identity(agent_id, field_name="Agent ID")
     db_agent = _get_db_agent_row(agent_id, dict(kwargs))
     if db_agent is None:
         raise ValueError(

@@ -301,7 +301,7 @@ def test_system_template_resolver_rejects_retired_alias_before_query(retired_ali
         def query(self, *_args, **_kwargs):
             raise AssertionError("retired aliases must fail before querying stale rows")
 
-    with pytest.raises(ValueError, match="retired validator alias"):
+    with pytest.raises(ValueError, match="retired agent ID"):
         service._resolve_system_template_agent(QueryRejectingDB(), retired_alias)
 
 

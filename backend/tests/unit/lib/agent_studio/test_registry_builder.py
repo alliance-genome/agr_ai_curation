@@ -9,6 +9,7 @@ from pathlib import Path
 
 from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
 from src.lib.config import agent_loader
+from src.lib.agent_studio.agent_identity import require_canonical_agent_identity
 from src.lib.agent_studio.registry_builder import (
     _build_config_defaults,
     build_agent_registry,
@@ -110,6 +111,7 @@ class TestAgentDocumentationCoverage:
         """Every configured agent should expose a non-empty documentation summary."""
         configured_agents = load_agent_definitions(force_reload=True)
         registry = build_agent_registry()
+
         missing_summaries = []
 
         for agent_id in sorted(configured_agents):
@@ -235,5 +237,6 @@ class TestAgentDocumentationCoverage:
         }
         assert "pdf_extraction" not in registry
         assert "gene" not in registry
+        assert require_canonical_agent_identity("gene", field_name="Agent ID") == "gene"
 
         agent_loader.reset_cache()

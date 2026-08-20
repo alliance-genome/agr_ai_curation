@@ -114,7 +114,7 @@ def test_resolve_system_template_agent_paths():
         == "gene_validation"
     )
 
-    with pytest.raises(ValueError, match="retired validator alias"):
+    with pytest.raises(ValueError, match="retired agent ID"):
         service._resolve_system_template_agent(db, "gene")
 
     with pytest.raises(ValueError, match="template_source is required"):

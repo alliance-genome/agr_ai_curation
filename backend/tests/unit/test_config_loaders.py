@@ -269,7 +269,11 @@ class TestAgentLoader:
 
     def test_get_agent_by_tool_name(self):
         """Test getting agent by supervisor tool name."""
-        from src.lib.config.agent_loader import load_agent_definitions, get_agent_by_tool_name
+        from src.lib.config.agent_loader import (
+            get_agent_by_tool_name,
+            get_retired_agent_id_replacements,
+            load_agent_definitions,
+        )
 
         load_agent_definitions(ALLIANCE_AGENTS_PATH)
         gene = get_agent_by_tool_name("ask_gene_validation_specialist")
@@ -278,6 +282,12 @@ class TestAgentLoader:
         assert gene.agent_id == "gene_validation"
         assert gene.folder_name == "gene"
         assert get_agent_by_tool_name("ask_gene_specialist") is None
+        assert get_retired_agent_id_replacements() == {
+            "gene": "gene_validation",
+            "allele": "allele_validation",
+            "disease": "disease_validation",
+            "chemical": "chemical_validation",
+        }
 
     def test_get_agent_by_tool_name_uses_explicit_system_agent_key(self):
         """Agents with explicit system keys resolve by public supervisor tool name."""

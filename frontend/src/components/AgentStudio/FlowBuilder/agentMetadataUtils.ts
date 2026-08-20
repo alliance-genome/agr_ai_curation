@@ -1,6 +1,6 @@
 import type { AgentMetadata } from '@/services/agentStudioService'
 
-import { isExtractionAgent, isValidationAgent } from './smartDefaultUtils'
+import { isExtractionAgent } from './smartDefaultUtils'
 
 type AgentMetadataLookup = Record<string, AgentMetadata>
 
@@ -63,8 +63,6 @@ export const isValidationAgentFromMetadata = (
   agentId: string,
   agentMetadata: AgentMetadataLookup
 ): boolean => {
-  if (isValidationAgent(agentId)) return true
-
   return matchesMetadataClassification(agentId, agentMetadata, {
     categoryIncludes: ['validation'],
     subcategoryIncludes: ['data validation'],

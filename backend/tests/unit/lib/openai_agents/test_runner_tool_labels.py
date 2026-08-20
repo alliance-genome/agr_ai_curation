@@ -58,16 +58,12 @@ def test_resolve_tool_display_name_uses_builtin_specialist_labels():
     [
         ("ask_pdf_extraction_specialist", "General PDF Extraction Agent"),
         ("ask_gene_validation_specialist", "Gene Validation Agent"),
-        ("ask_gene_specialist", "Gene Validation Agent"),
         ("ask_gene_extractor_specialist", "Gene Extraction Agent"),
         ("ask_allele_validation_specialist", "Allele Validation Agent"),
-        ("ask_allele_specialist", "Allele Validation Agent"),
         ("ask_allele_extractor_specialist", "Allele/Variant Extraction Agent"),
         ("ask_disease_validation_specialist", "Disease Ontology Agent"),
-        ("ask_disease_specialist", "Disease Ontology Agent"),
         ("ask_disease_extractor_specialist", "Disease Extraction Agent"),
         ("ask_chemical_validation_specialist", "Chemical Ontology Agent"),
-        ("ask_chemical_specialist", "Chemical Ontology Agent"),
         ("ask_gene_expression_specialist", "Gene Expression Extractor"),
         ("ask_phenotype_extractor_specialist", "Phenotype Extraction Agent"),
         ("ask_gene_ontology_specialist", "Gene Ontology Agent"),
@@ -93,12 +89,12 @@ def test_resolve_tool_display_name_marks_missing_custom_label():
 
 
 def test_build_tool_start_friendly_name_formats_specialist_label():
-    label = _build_tool_start_friendly_name("ask_gene_specialist", {})
+    label = _build_tool_start_friendly_name("ask_gene_validation_specialist", {})
     assert label == "Calling Gene Validation Agent..."
 
 
 def test_build_tool_complete_friendly_name_formats_specialist_label():
-    label = _build_tool_complete_friendly_name("ask_gene_specialist", {})
+    label = _build_tool_complete_friendly_name("ask_gene_validation_specialist", {})
     assert label == "Gene Validation Agent complete"
 
 

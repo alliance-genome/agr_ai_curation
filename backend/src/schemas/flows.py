@@ -123,7 +123,7 @@ class FlowNodeData(BaseModel):
         ...,
         min_length=1,
         max_length=50,
-        description="Agent ID from catalog (e.g., 'pdf_extraction', 'gene') or 'task_input' for initial instructions"
+        description="Agent ID from catalog (e.g., 'pdf_extraction', 'gene_validation') or 'task_input' for initial instructions"
     )
     agent_display_name: str = Field(
         ...,

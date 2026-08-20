@@ -24,9 +24,9 @@ def test_get_prompt_key_for_agent_rejects_retired_validator_folder_alias():
 @pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
 def test_get_agent_metadata_rejects_retired_validator_alias(retired_alias):
     """Stale unified rows cannot revive retired public identities."""
-    with pytest.raises(ValueError, match="short value is domain vocabulary"):
+    with pytest.raises(ValueError, match="retired agent ID"):
         catalog_service.get_agent_metadata(retired_alias)
-    with pytest.raises(ValueError, match="retired validator alias"):
+    with pytest.raises(ValueError, match="retired agent ID"):
         catalog_service.get_active_visible_agent_metadata(retired_alias)
 
 

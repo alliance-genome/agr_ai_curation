@@ -10,6 +10,7 @@
 # -----------------------------------------------------------------------------
 agent_id: disease_validation
 system_agent_key: disease_validation
+retired_agent_ids: [disease]
 
 name: "Disease Ontology Agent"
 

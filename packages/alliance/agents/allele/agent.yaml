@@ -10,6 +10,7 @@
 # -----------------------------------------------------------------------------
 agent_id: allele_validation
 system_agent_key: allele_validation
+retired_agent_ids: [allele]
 
 name: "Allele Validation Agent"
 
