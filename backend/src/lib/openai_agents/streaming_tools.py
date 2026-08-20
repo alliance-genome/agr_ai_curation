@@ -1132,7 +1132,7 @@ def _emit_specialist_evidence_summary_or_raise(
     expected_output_type: Any,
     final_output: Any,
     live_evidence_records: List[Dict[str, Any]],
-    authored_evidence_record_ids: Optional[set[str]] = None,
+    authored_evidence_record_ids: set[str],
 ):
     """Emit specialist evidence summary from live tool-verified evidence or fail fast."""
     evidence_records = extract_evidence_records_from_structured_result(final_output)
@@ -1161,11 +1161,7 @@ def _emit_specialist_evidence_summary_or_raise(
         final_output,
         preferred_evidence_records=live_evidence_records,
     )
-    authored_record_ids = (
-        set(authored_evidence_record_ids)
-        if authored_evidence_record_ids is not None
-        else _evidence_reference_ids_from_payload(final_output)
-    )
+    authored_record_ids = set(authored_evidence_record_ids)
     canonical_record_ids = _evidence_reference_ids_from_payload(canonical_payload)
     live_records_by_id = _live_evidence_records_by_id(live_evidence_records)
     unverified_record_ids = sorted(
@@ -1244,6 +1240,7 @@ def _canonicalize_structured_output_text(
     final_output: str,
     *,
     expected_output_type: Any,
+    preferred_evidence_records: List[Dict[str, Any]],
 ) -> str:
     """Collapse duplicate normalized items before the supervisor reads structured output."""
 
@@ -1258,7 +1255,10 @@ def _canonicalize_structured_output_text(
     if not isinstance(payload, dict):
         return final_output
 
-    canonical_payload = canonicalize_structured_result_payload(payload)
+    canonical_payload = canonicalize_structured_result_payload(
+        payload,
+        preferred_evidence_records=preferred_evidence_records,
+    )
     if not isinstance(canonical_payload, dict):
         return final_output
 
@@ -5760,6 +5760,7 @@ async def run_specialist_with_events(
     final_output = _canonicalize_structured_output_text(
         final_output,
         expected_output_type=expected_output_type,
+        preferred_evidence_records=live_evidence_records,
     )
     builder_finalization = builder_workspace.finalization
     if builder_materializer_agent:
