@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import re
 import shutil
 from pathlib import Path
@@ -10,6 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest  # type: ignore[reportMissingImports]
 import yaml
+import src.lib.curation_workspace.adapter_registry as adapter_registry_module
+import src.lib.domain_packs.registry as domain_pack_registry_module
 from src.lib.agent_studio import runtime_validation
 from src.lib.agent_studio import flow_tools
 from src.lib.agent_studio.registry_builder import build_agent_registry
@@ -63,6 +66,7 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/agent_studio/catalog_service.py"),
     Path("backend/src/lib/agent_studio/flow_tools.py"),
     Path("backend/src/lib/config/agent_loader.py"),
+    Path("backend/src/lib/curation_workspace/adapter_registry.py"),
     Path("backend/src/lib/openai_agents/config.py"),
     Path("backend/src/lib/document_sources/registry.py"),
     Path("backend/src/lib/flows/output_projection.py"),
@@ -81,7 +85,7 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"alliancegenome"),
     re.compile(r"abc_literature"),
     re.compile(r"ABC Literature"),
-    re.compile(r"agr_ai_curation_alliance\.document_sources"),
+    re.compile(r"agr_ai_curation_alliance"),
     re.compile(
         r"\b(?:crossreference|ontologyterm|biologicalentity|"
         r"referencedcurie|primaryexternalid)\b"
@@ -869,6 +873,29 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
                 violations.append(f"{relative_path}: {pattern.pattern}")
 
     assert violations == []
+
+
+def test_generic_domain_pack_resolution_requires_a_registered_package(monkeypatch):
+    original_import = builtins.__import__
+
+    def reject_alliance_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.startswith("agr_ai_curation_alliance"):
+            raise AssertionError(f"Core resolver imported Alliance module: {name}")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", reject_alliance_import)
+    monkeypatch.setattr(
+        domain_pack_registry_module,
+        "load_domain_pack_registry",
+        lambda: SimpleNamespace(get_pack=lambda _pack_id: None),
+    )
+    monkeypatch.setattr(
+        adapter_registry_module,
+        "load_curation_adapter_registry",
+        adapter_registry_module.CurationAdapterRegistry,
+    )
+
+    assert adapter_registry_module.resolve_curation_domain_pack_by_id("generic") is None
 
 
 def test_active_agent_docs_keep_package_and_explicit_override_contract():
