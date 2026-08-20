@@ -1134,7 +1134,7 @@ def _emit_specialist_evidence_summary_or_raise(
     live_evidence_records: List[Dict[str, Any]],
 ):
     """Emit specialist evidence summary from live tool-verified evidence or fail fast."""
-    evidence_records = extract_evidence_records_from_structured_result(final_output)
+    structured_evidence_records = extract_evidence_records_from_structured_result(final_output)
     requires_evidence = structured_result_requires_evidence(
         final_output,
         expected_output_type=expected_output_type,
@@ -1148,20 +1148,29 @@ def _emit_specialist_evidence_summary_or_raise(
         else False
     )
 
-    if evidence_records and not missing_record_refs:
-        _emit_specialist_evidence_summary(
-            tool_name=tool_name,
-            evidence_records=evidence_records,
-        )
-        return
-
     if not requires_evidence:
         return
 
-    if live_evidence_records and not missing_record_refs:
+    structured_payload = coerce_tool_event_dict(final_output) or {}
+    structured_reference_ids = _evidence_reference_ids_from_payload(structured_payload)
+    live_records_by_id = _live_evidence_records_by_id(live_evidence_records)
+    unknown_record_refs = sorted(structured_reference_ids - set(live_records_by_id))
+    referenced_live_records = [
+        record
+        for record_id, record in live_records_by_id.items()
+        if record_id in structured_reference_ids
+    ]
+
+    # Span-backed record_evidence output is canonical; structured output only
+    # associates retained items with those live records by reference ID.
+    if (
+        referenced_live_records
+        and not missing_record_refs
+        and not unknown_record_refs
+    ):
         _emit_specialist_evidence_summary(
             tool_name=tool_name,
-            evidence_records=live_evidence_records,
+            evidence_records=referenced_live_records,
         )
         return
 
@@ -1174,12 +1183,13 @@ def _emit_specialist_evidence_summary_or_raise(
         expected_output_type=expected_output_type,
     )
     logger.error(
-        "%s requires_evidence=%s missing_record_refs=%s structured_evidence_count=%s "
-        "live_evidence_count=%s evidence_reference_report=%s",
+        "%s requires_evidence=%s missing_record_refs=%s unknown_record_refs=%s "
+        "structured_evidence_count=%s live_evidence_count=%s evidence_reference_report=%s",
         error_message,
         requires_evidence,
         missing_record_refs,
-        len(evidence_records),
+        unknown_record_refs,
+        len(structured_evidence_records),
         len(live_evidence_records),
         evidence_reference_report,
     )
@@ -1193,7 +1203,8 @@ def _emit_specialist_evidence_summary_or_raise(
             "reason": "missing_evidence_records",
             "requires_evidence": requires_evidence,
             "missing_record_refs": missing_record_refs,
-            "structured_evidence_count": len(evidence_records),
+            "unknown_record_refs": unknown_record_refs,
+            "structured_evidence_count": len(structured_evidence_records),
             "live_evidence_count": len(live_evidence_records),
             "evidence_reference_report": evidence_reference_report,
             "severity": "error",
