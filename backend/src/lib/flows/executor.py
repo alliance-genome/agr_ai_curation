@@ -3220,7 +3220,8 @@ def build_supervisor_instructions(
     flow: CurationFlow,
     has_document: bool = False,
     document_name: Optional[str] = None,
-    available_tools: Optional[Set[str]] = None,
+    *,
+    available_tools: set[str],
 ) -> str:
     """Build supervisor system instructions that list all flow steps.
 
@@ -3231,7 +3232,7 @@ def build_supervisor_instructions(
     knows to use PDF tools without asking the user for a document. This fixes
     flows that lack task_input nodes (where the prompt doesn't mention documents).
 
-    When available_tools is provided, steps whose tools were not created
+    Steps whose tools were not created
     (e.g., requires_document but no document, missing unified-agent metadata, or
     agent build error) are marked as [unavailable] and their tool references are
     suppressed. This prevents the supervisor from trying to call non-existent tools.
@@ -3241,9 +3242,8 @@ def build_supervisor_instructions(
         has_document: Whether a document is loaded for this flow execution
         document_name: Optional filename for context in the guidance
         available_tools: Set of tool names actually created by get_all_agent_tools().
-            When provided, only these tools are referenced. Steps with missing
-            tools are marked unavailable. When None (backward compat), all steps
-            are assumed available.
+            Only these tools are referenced; steps with missing tools are marked
+            unavailable.
 
     Returns:
         System instructions string for the flow supervisor
@@ -3274,9 +3274,9 @@ def build_supervisor_instructions(
         else:
             tool_ref = f"ask_{tool_agent_segment}_specialist"
 
-        # Check if this step's tool was actually created
-        # When available_tools is None (backward compat), assume all steps are available
-        step_available = available_tools is None or tool_ref in available_tools
+        # ALL-794 removed the permissive available_tools=None compatibility path;
+        # production always supplies the exact created tool names.
+        step_available = tool_ref in available_tools
 
         if not step_available:
             step_desc = f"Step {step_num}: {agent_name} [unavailable - tool not loaded, skip this step]"

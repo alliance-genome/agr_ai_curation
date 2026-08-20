@@ -4484,7 +4484,9 @@ class TestBuildSupervisorCustomInstructions:
             _task_input_node(),
             _agent_node("n1", "gene", step_goal="Extract genes", custom_instructions="WB only"),
         ])
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow, available_tools={"ask_gene_specialist"}
+        )
         assert "[has custom instructions]" in result
         assert "Step 1: Gene" in result
 
@@ -4493,7 +4495,9 @@ class TestBuildSupervisorCustomInstructions:
             _task_input_node(),
             _agent_node("n1", "gene", step_goal="Extract genes"),
         ])
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow, available_tools={"ask_gene_specialist"}
+        )
         assert "[has custom instructions]" not in result
 
     def test_empty_custom_instructions_not_annotated(self):
@@ -4501,7 +4505,9 @@ class TestBuildSupervisorCustomInstructions:
             _task_input_node(),
             _agent_node("n1", "gene", custom_instructions=""),
         ])
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow, available_tools={"ask_gene_specialist"}
+        )
         assert "[has custom instructions]" not in result
 
     def test_whitespace_custom_instructions_not_annotated(self):
@@ -4509,7 +4515,9 @@ class TestBuildSupervisorCustomInstructions:
             _task_input_node(),
             _agent_node("n1", "gene", custom_instructions="   "),
         ])
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow, available_tools={"ask_gene_specialist"}
+        )
         assert "[has custom instructions]" not in result
 
     def test_mixed_steps_only_customized_annotated(self):
@@ -4518,7 +4526,10 @@ class TestBuildSupervisorCustomInstructions:
             _agent_node("n1", "gene", step_goal="Extract genes", custom_instructions="WB only"),
             _agent_node("n2", "disease", step_goal="Extract diseases"),
         ])
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow,
+            available_tools={"ask_gene_specialist", "ask_disease_specialist"},
+        )
         lines = result.split("\n")
         gene_line = next(line for line in lines if "Gene" in line)
         disease_line = next(line for line in lines if "Disease" in line)
@@ -4531,7 +4542,13 @@ class TestBuildSupervisorCustomInstructions:
             _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output", include_evidence=True),
         ], source_node_id="extract", output_node_id="n1")
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow,
+            available_tools={
+                "ask_gene_extractor_specialist",
+                "ask_chat_output_formatter_specialist",
+            },
+        )
         assert "[includes evidence in output]" in result
 
     def test_output_formatter_without_flag_defaults_to_include_evidence_annotation(self):
@@ -4540,7 +4557,13 @@ class TestBuildSupervisorCustomInstructions:
             _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output"),
         ], source_node_id="extract", output_node_id="n1")
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow,
+            available_tools={
+                "ask_gene_extractor_specialist",
+                "ask_chat_output_formatter_specialist",
+            },
+        )
         assert "[includes evidence in output]" in result
 
     def test_output_formatter_false_flag_annotated_as_excluding_evidence(self):
@@ -4549,7 +4572,13 @@ class TestBuildSupervisorCustomInstructions:
             _agent_node("extract", "gene_extractor", step_goal="Extract genes"),
             _agent_node("n1", "chat_output_formatter", step_goal="Format output", include_evidence=False),
         ], source_node_id="extract", output_node_id="n1")
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow,
+            available_tools={
+                "ask_gene_extractor_specialist",
+                "ask_chat_output_formatter_specialist",
+            },
+        )
         assert "[excludes evidence from output]" in result
 
     def test_validation_attachments_are_annotated_as_schedule_metadata(self):
@@ -4577,7 +4606,9 @@ class TestBuildSupervisorCustomInstructions:
             ),
         ])
 
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow, available_tools={"ask_gene_extractor_specialist"}
+        )
 
         assert "[schedule 1 validator(s)]" in result
         assert "[validation opt-outs recorded: 1]" in result
@@ -4595,7 +4626,14 @@ class TestBuildSupervisorToolRefs:
             _agent_node("n2", "disease", step_goal="Extract diseases"),
             _agent_node("n3", "gene", step_goal="Validate genes"),
         ])
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow,
+            available_tools={
+                "ask_gene_step1_specialist",
+                "ask_disease_specialist",
+                "ask_gene_step3_specialist",
+            },
+        )
         assert "ask_gene_step1_specialist" in result
         assert "ask_gene_step3_specialist" in result
         assert "ask_disease_specialist" in result
@@ -4606,7 +4644,10 @@ class TestBuildSupervisorToolRefs:
             _agent_node("n1", "gene", step_goal="Extract genes"),
             _agent_node("n2", "disease", step_goal="Extract diseases"),
         ])
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow,
+            available_tools={"ask_gene_specialist", "ask_disease_specialist"},
+        )
         assert "Step 1: Gene - Extract genes (use tool: ask_gene_specialist)" in result
         assert (
             "Step 2: Disease - Extract diseases "
@@ -4862,18 +4903,6 @@ class TestBuildSupervisorUnavailableSteps:
         assert "Step 1: Gene - Extract genes" in result
         assert "Step 2: Disease - Extract diseases" in result
 
-    def test_none_available_tools_backward_compat(self):
-        """When available_tools is None, all steps assumed available (backward compat)."""
-        flow = _make_flow([
-            _task_input_node(),
-            _agent_node("n1", "gene", step_goal="Extract genes"),
-        ])
-
-        result = build_supervisor_instructions(flow, available_tools=None)
-
-        assert "[unavailable" not in result
-        assert "Step 1: Gene - Extract genes" in result
-
     def test_duplicate_agent_one_step_unavailable(self):
         """Duplicate agent where one step's tool was not created."""
         flow = _make_flow([
@@ -5036,7 +5065,10 @@ class TestBackwardCompatibility:
             _agent_node("n1", "gene", step_goal="Extract genes"),
             _agent_node("n2", "disease", step_goal="Extract diseases"),
         ])
-        result = build_supervisor_instructions(flow)
+        result = build_supervisor_instructions(
+            flow,
+            available_tools={"ask_gene_specialist", "ask_disease_specialist"},
+        )
 
         assert "[has custom instructions]" not in result
         assert "Step 1: Gene - Extract genes (use tool: ask_gene_specialist)" in result
