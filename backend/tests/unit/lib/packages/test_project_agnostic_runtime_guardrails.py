@@ -45,6 +45,9 @@ from src.schemas.curation_workspace import SubmissionMode
 from . import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
+WORKSPACE_ROOT = Path("/workspace")
+if not (WORKSPACE_ROOT / "docker-compose.test.yml").exists():
+    WORKSPACE_ROOT = REPO_ROOT
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ORG_CUSTOM_FIXTURE = FIXTURES_DIR / "org_custom_runtime"
 GUARDRAIL_TEST_PATH = Path("backend/tests/unit/lib/packages/test_project_agnostic_runtime_guardrails.py")
@@ -97,6 +100,7 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"\b(?:FB|WB|MGI|RGD|SGD|ZFIN|HGNC)\b"),
 )
 NEUTRAL_DOCUMENT_ACCESS_GUARD_PATHS = {
+    Path("backend/src/api/auth.py"),
     Path("backend/src/lib/document_sources/models.py"),
     Path("backend/src/lib/document_sources/import_selection.py"),
     Path("backend/src/lib/document_sources/identifier_import.py"),
@@ -106,11 +110,19 @@ NEUTRAL_DOCUMENT_ACCESS_GUARD_PATHS = {
     Path("backend/src/lib/pdf_jobs/upload_execution_service.py"),
     Path("backend/src/models/api_schemas.py"),
     Path("backend/src/models/sql/pdf_document.py"),
+    Path("docs/developer/api/API_USAGE.md"),
     Path("frontend/src/components/weaviate/DocumentDetailsDialog.tsx"),
     Path("frontend/src/services/weaviate.ts"),
 }
+NEUTRAL_DOCUMENT_ACCESS_CONFIG_GUARD_PATHS = {
+    Path(".env.example"),
+    Path("docker-compose.production.yml"),
+    Path("docker-compose.test.yml"),
+    Path("docker-compose.yml"),
+}
 MOD_ORIENTED_DOCUMENT_ACCESS_PATTERNS = (
     re.compile(r"\b(?:mods|access_mods|source_access_mods|per_mod_status)\b"),
+    re.compile(r"\b(?:DEV_USER_MODS|TESTING_API_KEY_MODS)\b"),
     re.compile(r"accessMods|Access MODs"),
 )
 GENERIC_FLOW_RECIPE_SOURCE_GUARD_PATHS = {
@@ -894,11 +906,16 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
 
 def test_provider_neutral_document_access_contracts_do_not_use_mod_terms():
     violations = []
-    for relative_path in sorted(NEUTRAL_DOCUMENT_ACCESS_GUARD_PATHS):
-        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
-        for pattern in MOD_ORIENTED_DOCUMENT_ACCESS_PATTERNS:
-            if pattern.search(text):
-                violations.append(f"{relative_path}: {pattern.pattern}")
+    guarded_roots = (
+        (REPO_ROOT, NEUTRAL_DOCUMENT_ACCESS_GUARD_PATHS),
+        (WORKSPACE_ROOT, NEUTRAL_DOCUMENT_ACCESS_CONFIG_GUARD_PATHS),
+    )
+    for root, relative_paths in guarded_roots:
+        for relative_path in sorted(relative_paths):
+            text = (root / relative_path).read_text(encoding="utf-8")
+            for pattern in MOD_ORIENTED_DOCUMENT_ACCESS_PATTERNS:
+                if pattern.search(text):
+                    violations.append(f"{relative_path}: {pattern.pattern}")
 
     assert violations == []
 

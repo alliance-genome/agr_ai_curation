@@ -141,8 +141,8 @@ def test_upgrade_preserves_restricted_group_ids_as_flat_json_array() -> None:
 
 @pytest.mark.parametrize(
     "access_scope",
-    ["restricted", " restricted "],
-    ids=["normalized", "surrounding-whitespace"],
+    ["restricted", " restricted ", "\trestricted\t", "\nrestricted\n"],
+    ids=["normalized", "spaces", "tabs", "newlines"],
 )
 def test_upgrade_fails_closed_before_renaming_restricted_row_without_groups(
     access_scope: str,

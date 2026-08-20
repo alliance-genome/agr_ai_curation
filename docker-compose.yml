@@ -286,7 +286,6 @@ services:
       - TESTING_API_KEY_USER=${TESTING_API_KEY_USER:-testuser}
       - TESTING_API_KEY_EMAIL=${TESTING_API_KEY_EMAIL:-testuser@example.org}
       - TESTING_API_KEY_GROUPS=${TESTING_API_KEY_GROUPS:-developers}
-      - TESTING_API_KEY_MODS=${TESTING_API_KEY_MODS:-}
       # Redis for cross-worker state (requires password for Langfuse compatibility)
       - REDIS_URL=${REDIS_URL:-redis://:${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}@redis:6379/0}
       - EXTRACTION_TRACE_EVENT_DIR=${EXTRACTION_TRACE_EVENT_DIR:-/app/extraction_trace_events}

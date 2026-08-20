@@ -213,7 +213,7 @@ async def _get_user_from_cookie_impl(
         return _build_mock_user(_with_group_claim_aliases(payload, claim_groups))
 
     if is_dev_mode():
-        dev_user_groups = os.getenv("DEV_USER_GROUPS") or os.getenv("DEV_USER_MODS", "")
+        dev_user_groups = os.getenv("DEV_USER_GROUPS", "")
         claim_groups: List[str] = ["developers"]
         if dev_user_groups:
             parsed_groups = [g.strip().upper() for g in dev_user_groups.split(",") if g.strip()]

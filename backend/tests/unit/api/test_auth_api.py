@@ -36,11 +36,26 @@ async def test_get_user_from_cookie_api_key_bypass(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_user_from_cookie_dev_mode(monkeypatch):
     monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    monkeypatch.setenv("DEV_USER_GROUPS", "team-alpha")
     monkeypatch.setattr(auth_api, "is_dev_mode", lambda: True)
+    monkeypatch.setattr(auth_api, "get_group", lambda _id: None)
 
     result = await auth_api._get_user_from_cookie_impl(_request(), SecurityScopes())
     assert result["sub"] == "dev-user-123"
     assert "developers" in result["groups"]
+    assert "team-alpha-curators" in result["groups"]
+
+
+@pytest.mark.asyncio
+async def test_get_user_from_cookie_dev_mode_ignores_removed_mod_alias(monkeypatch):
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    monkeypatch.delenv("DEV_USER_GROUPS", raising=False)
+    monkeypatch.setenv("DEV_USER_MODS", "team-alpha")
+    monkeypatch.setattr(auth_api, "is_dev_mode", lambda: True)
+
+    result = await auth_api._get_user_from_cookie_impl(_request(), SecurityScopes())
+
+    assert result["groups"] == ["developers"]
 
 
 @pytest.mark.asyncio

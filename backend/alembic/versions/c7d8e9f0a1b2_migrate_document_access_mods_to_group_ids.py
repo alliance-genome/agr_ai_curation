@@ -90,8 +90,6 @@ def _invalid_legacy_document_ids(connection: Any) -> list[str]:
             """
             SELECT id, source_access_scope, source_access_mods
             FROM pdf_documents
-            WHERE source_access_mods IS NOT NULL
-               OR lower(trim(coalesce(source_access_scope, ''))) = 'restricted'
             ORDER BY id
             """
         )
@@ -101,6 +99,10 @@ def _invalid_legacy_document_ids(connection: Any) -> list[str]:
     for row in rows:
         scope = str(row["source_access_scope"] or "").strip().lower()
         value = row["source_access_mods"]
+        if value is None:
+            if scope == "restricted":
+                invalid.append(str(row["id"]))
+            continue
         group_ids = _legacy_group_ids(value)
         if group_ids is None or (scope == "restricted" and not group_ids):
             invalid.append(str(row["id"]))

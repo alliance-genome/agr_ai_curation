@@ -116,7 +116,6 @@ TESTING_API_KEY=your-secret-api-key-here
 TESTING_API_KEY_USER=api-user-id        # Default: "test-user"
 TESTING_API_KEY_EMAIL=api@example.com   # Default: "test@localhost"
 TESTING_API_KEY_GROUPS=developers       # Default: "developers"
-TESTING_API_KEY_MODS=MGI,WB             # Default: "" (empty = all MODs)
 ```
 
 **Usage**:
