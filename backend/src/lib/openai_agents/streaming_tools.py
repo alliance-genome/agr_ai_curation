@@ -1132,6 +1132,7 @@ def _emit_specialist_evidence_summary_or_raise(
     expected_output_type: Any,
     final_output: Any,
     live_evidence_records: List[Dict[str, Any]],
+    authored_evidence_record_ids: set[str],
 ):
     """Emit specialist evidence summary from live tool-verified evidence or fail fast."""
     evidence_records = extract_evidence_records_from_structured_result(final_output)
@@ -1148,17 +1149,28 @@ def _emit_specialist_evidence_summary_or_raise(
         else False
     )
 
-    if evidence_records and not missing_record_refs:
-        _emit_specialist_evidence_summary(
-            tool_name=tool_name,
-            evidence_records=evidence_records,
-        )
-        return
-
     if not requires_evidence:
+        if evidence_records:
+            _emit_specialist_evidence_summary(
+                tool_name=tool_name,
+                evidence_records=evidence_records,
+            )
         return
 
-    if live_evidence_records and not missing_record_refs:
+    canonical_payload = canonicalize_structured_result_payload(
+        final_output,
+        preferred_evidence_records=live_evidence_records,
+    )
+    authored_record_ids = set(authored_evidence_record_ids)
+    canonical_record_ids = _evidence_reference_ids_from_payload(canonical_payload)
+    live_records_by_id = _live_evidence_records_by_id(live_evidence_records)
+    unverified_record_ids = sorted(
+        (authored_record_ids | canonical_record_ids) - set(live_records_by_id)
+    )
+
+    # Span-backed record_evidence output is canonical. Structured output may only
+    # reference records that were verified during this specialist run.
+    if live_records_by_id and not missing_record_refs and not unverified_record_ids:
         _emit_specialist_evidence_summary(
             tool_name=tool_name,
             evidence_records=live_evidence_records,
@@ -1175,12 +1187,13 @@ def _emit_specialist_evidence_summary_or_raise(
     )
     logger.error(
         "%s requires_evidence=%s missing_record_refs=%s structured_evidence_count=%s "
-        "live_evidence_count=%s evidence_reference_report=%s",
+        "live_evidence_count=%s unverified_record_ids=%s evidence_reference_report=%s",
         error_message,
         requires_evidence,
         missing_record_refs,
         len(evidence_records),
         len(live_evidence_records),
+        unverified_record_ids,
         evidence_reference_report,
     )
     add_specialist_event({
@@ -1195,6 +1208,7 @@ def _emit_specialist_evidence_summary_or_raise(
             "missing_record_refs": missing_record_refs,
             "structured_evidence_count": len(evidence_records),
             "live_evidence_count": len(live_evidence_records),
+            "unverified_evidence_record_ids": unverified_record_ids,
             "evidence_reference_report": evidence_reference_report,
             "severity": "error",
         }
@@ -1226,6 +1240,7 @@ def _canonicalize_structured_output_text(
     final_output: str,
     *,
     expected_output_type: Any,
+    preferred_evidence_records: List[Dict[str, Any]],
 ) -> str:
     """Collapse duplicate normalized items before the supervisor reads structured output."""
 
@@ -1240,7 +1255,10 @@ def _canonicalize_structured_output_text(
     if not isinstance(payload, dict):
         return final_output
 
-    canonical_payload = canonicalize_structured_result_payload(payload)
+    canonical_payload = canonicalize_structured_result_payload(
+        payload,
+        preferred_evidence_records=preferred_evidence_records,
+    )
     if not isinstance(canonical_payload, dict):
         return final_output
 
@@ -1409,6 +1427,12 @@ def _live_evidence_records_by_id(
 
 def _evidence_reference_ids_from_payload(value: Any) -> set[str]:
     ids: set[str] = set()
+
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        value = model_dump()
+    elif isinstance(value, str):
+        value = coerce_tool_event_dict(value)
 
     def visit(node: Any, *, inside_evidence_registry: bool = False) -> None:
         if isinstance(node, dict):
@@ -5732,9 +5756,11 @@ async def run_specialist_with_events(
                         message=error_message,
                     )
 
+    authored_evidence_record_ids = _evidence_reference_ids_from_payload(final_output)
     final_output = _canonicalize_structured_output_text(
         final_output,
         expected_output_type=expected_output_type,
+        preferred_evidence_records=live_evidence_records,
     )
     builder_finalization = builder_workspace.finalization
     if builder_materializer_agent:
@@ -5837,6 +5863,7 @@ async def run_specialist_with_events(
                 expected_output_type=expected_output_type,
                 final_output=final_output,
                 live_evidence_records=live_evidence_records,
+                authored_evidence_record_ids=authored_evidence_record_ids,
             )
         except SpecialistOutputError:
             builder_workspace.record_validation_failure(
