@@ -44,9 +44,12 @@ def test_legacy_access_groups_migrate_without_widening_or_loss():
                 """
             )
             for document_id, access_policy in (
-                (retained_id, {"mods": ["FB", "WB"]}),
-                (malformed_ids[0], {"unexpected": ["FB"]}),
-                (malformed_ids[1], {"mods": ["FB", {"unexpected": "WB"}]}),
+                (retained_id, {"mods": ["GROUP_A", "GROUP_B"]}),
+                (malformed_ids[0], {"unexpected": ["GROUP_A"]}),
+                (
+                    malformed_ids[1],
+                    {"mods": ["GROUP_A", {"unexpected": "GROUP_B"}]},
+                ),
             ):
                 connection.execute(
                     insert,
@@ -78,7 +81,7 @@ def test_legacy_access_groups_migrate_without_widening_or_loss():
                     },
                 ).all()
             )
-            assert rows[retained_id] == ["FB", "WB"]
+            assert rows[retained_id] == ["GROUP_A", "GROUP_B"]
             assert rows[malformed_ids[0]] is None
             assert rows[malformed_ids[1]] is None
     finally:
