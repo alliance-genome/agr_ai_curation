@@ -1329,6 +1329,48 @@ def test_specialist_prefers_live_id_when_structured_registry_has_duplicate_alias
     assert evidence_summary["evidence_records"] == [live_record]
 
 
+def test_specialist_rejects_duplicate_structured_alias_without_live_id_reference(monkeypatch):
+    live_record = _build_expected_evidence_record(
+        entity="crumbs",
+        chunk_id="chunk-live",
+        verified_quote="Crumbs was verified from the live document span.",
+        page=1,
+        section="Results",
+    )
+    structured_alias = {
+        **live_record,
+        "evidence_record_id": "ev-model-authored-alias",
+    }
+    captured_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        streaming_tools._emit_specialist_evidence_summary_or_raise(
+            specialist_name="Gene Validation Agent",
+            tool_name="ask_gene_specialist",
+            expected_output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
+            final_output={
+                "items": [
+                    {
+                        "label": "crumbs",
+                        "evidence_record_ids": [structured_alias["evidence_record_id"]],
+                    }
+                ],
+                "evidence_records": [structured_alias],
+                "run_summary": {"kept_count": 1},
+            },
+            live_evidence_records=[live_record],
+        )
+
+    specialist_error = next(
+        event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"
+    )
+    assert specialist_error["details"]["unverified_evidence_record_ids"] == [
+        structured_alias["evidence_record_id"]
+    ]
+    assert not any(event.get("type") == "evidence_summary" for event in captured_events)
+
+
 @pytest.mark.asyncio
 async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(monkeypatch):
     captured_events = []

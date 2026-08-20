@@ -1160,9 +1160,12 @@ def _emit_specialist_evidence_summary_or_raise(
         final_output,
         preferred_evidence_records=live_evidence_records,
     )
-    referenced_record_ids = _evidence_reference_ids_from_payload(canonical_payload)
+    authored_record_ids = _evidence_reference_ids_from_payload(final_output)
+    canonical_record_ids = _evidence_reference_ids_from_payload(canonical_payload)
     live_records_by_id = _live_evidence_records_by_id(live_evidence_records)
-    unverified_record_ids = sorted(referenced_record_ids - set(live_records_by_id))
+    unverified_record_ids = sorted(
+        (authored_record_ids | canonical_record_ids) - set(live_records_by_id)
+    )
 
     # Span-backed record_evidence output is canonical. Structured output may only
     # reference records that were verified during this specialist run.
@@ -1419,6 +1422,12 @@ def _live_evidence_records_by_id(
 
 def _evidence_reference_ids_from_payload(value: Any) -> set[str]:
     ids: set[str] = set()
+
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        value = model_dump()
+    elif isinstance(value, str):
+        value = coerce_tool_event_dict(value)
 
     def visit(node: Any, *, inside_evidence_registry: bool = False) -> None:
         if isinstance(node, dict):
