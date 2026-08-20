@@ -13,7 +13,14 @@ import yaml
 from src.lib.agent_studio import runtime_validation
 from src.lib.agent_studio import flow_tools
 from src.lib.agent_studio.registry_builder import build_agent_registry
-from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
+from src.lib.config import (
+    agent_loader,
+    agent_sources,
+    models_loader,
+    prompt_loader,
+    providers_loader,
+    schema_discovery,
+)
 from src.lib.curation_workspace.adapter_registry import build_curation_adapter_registry
 from src.lib.curation_workspace.export_adapters.registry import ExportAdapterRegistry
 from src.lib.document_sources.registry import (
@@ -23,6 +30,7 @@ from src.lib.document_sources.registry import (
 )
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.flows.output_projection import build_flow_output_artifact_bundle
+from src.lib.openai_agents.config import get_model_for_agent, resolve_model_provider
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.flow_recipes import load_flow_recipe_catalog
 from src.lib.packages.document_source_provider_loader import (
@@ -293,13 +301,17 @@ def _reset_runtime_caches():
     from src.lib.openai_agents import streaming_tools
 
     agent_loader.reset_cache()
+    models_loader.reset_cache()
     prompt_loader.reset_cache()
+    providers_loader.reset_cache()
     schema_discovery.reset_cache()
     _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
     yield
     agent_loader.reset_cache()
+    models_loader.reset_cache()
     prompt_loader.reset_cache()
+    providers_loader.reset_cache()
     schema_discovery.reset_cache()
     _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
@@ -381,6 +393,13 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
         agents["demo_agent_validation"].output_projection.row_list_field
         == "projected_records"
     )
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-openai-key")
+    for agent in agents.values():
+        if agent.model_config is None:
+            continue
+        model_id = agent.model_config.model
+        provider_id = resolve_model_provider(model_id)
+        assert get_model_for_agent(model_id, provider_override=provider_id) == model_id
 
     schemas = schema_discovery.discover_agent_schemas(packages_dir, force_reload=True)
     assert set(schemas) == {
