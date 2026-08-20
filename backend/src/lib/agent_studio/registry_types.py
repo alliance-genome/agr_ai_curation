@@ -83,7 +83,7 @@ class SupervisorMetadata:
 
     Attributes:
         enabled: Whether this agent appears as a supervisor tool (default True)
-        tool_name: The function_tool name (e.g., "ask_gene_specialist")
+        tool_name: The function_tool name (e.g., "ask_gene_validation_specialist")
         tool_description: Description shown to the LLM for routing decisions
     """
     enabled: bool = True

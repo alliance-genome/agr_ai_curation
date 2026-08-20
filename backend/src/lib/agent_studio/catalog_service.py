@@ -1119,7 +1119,7 @@ def expand_tools_for_agent(agent_id: str, tools: List[str]) -> List[str]:
         -> ["search_genes", "get_gene_by_exact_symbol", "get_gene_by_id"]
 
     Args:
-        agent_id: Agent identifier (e.g., 'gene', 'allele')
+        agent_id: Agent identifier (e.g., 'gene_validation', 'allele_validation')
         tools: Original list of tool IDs
 
     Returns:
@@ -1192,7 +1192,7 @@ def get_tool_for_agent(tool_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
 
     Args:
         tool_id: Tool identifier or method identifier
-        agent_id: Agent identifier (e.g., 'gene', 'allele')
+        agent_id: Agent identifier (e.g., 'gene_validation', 'allele_validation')
 
     Returns:
         Tool metadata with agent-specific context, or None if not found

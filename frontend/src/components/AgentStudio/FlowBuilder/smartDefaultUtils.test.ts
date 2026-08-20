@@ -52,9 +52,9 @@ describe('isExtractionAgent', () => {
   })
 
   it('returns false for validation agents', () => {
-    expect(isExtractionAgent('gene')).toBe(false)
-    expect(isExtractionAgent('allele')).toBe(false)
-    expect(isExtractionAgent('disease')).toBe(false)
+    expect(isExtractionAgent('gene_validation')).toBe(false)
+    expect(isExtractionAgent('allele_validation')).toBe(false)
+    expect(isExtractionAgent('disease_validation')).toBe(false)
   })
 
   it('returns false for output agents', () => {
@@ -77,20 +77,27 @@ describe('isExtractionAgent', () => {
 // =============================================================================
 
 describe('isValidationAgent', () => {
-  it('returns true for gene agent', () => {
-    expect(isValidationAgent('gene')).toBe(true)
+  it('returns true for gene validator', () => {
+    expect(isValidationAgent('gene_validation')).toBe(true)
   })
 
-  it('returns true for allele agent', () => {
-    expect(isValidationAgent('allele')).toBe(true)
+  it('returns true for allele validator', () => {
+    expect(isValidationAgent('allele_validation')).toBe(true)
   })
 
-  it('returns true for disease agent', () => {
-    expect(isValidationAgent('disease')).toBe(true)
+  it('returns true for disease validator', () => {
+    expect(isValidationAgent('disease_validation')).toBe(true)
   })
 
-  it('returns true for chemical agent', () => {
-    expect(isValidationAgent('chemical')).toBe(true)
+  it('returns true for chemical validator', () => {
+    expect(isValidationAgent('chemical_validation')).toBe(true)
+  })
+
+  it('rejects retired validator aliases', () => {
+    for (const retiredAlias of ['gene', 'allele', 'disease', 'chemical']) {
+      expect(isValidationAgent(retiredAlias)).toBe(false)
+      expect(VALIDATION_AGENTS).not.toContain(retiredAlias)
+    }
   })
 
   it('returns true for gene_ontology agent', () => {
@@ -142,7 +149,7 @@ describe('isValidationAgent', () => {
 
   it('includes all expected validation agents', () => {
     expect(VALIDATION_AGENTS).toEqual([
-      'gene', 'allele', 'disease', 'chemical',
+      'gene_validation', 'allele_validation', 'disease_validation', 'chemical_validation',
       'gene_ontology', 'go_annotations', 'orthologs', 'ontology_term_validation'
     ])
   })
@@ -155,8 +162,8 @@ describe('countExtractors', () => {
 
   it('returns 0 when no extractors present', () => {
     const nodes = [
-      createMockNode('node_0', 'gene'),
-      createMockNode('node_1', 'allele'),
+      createMockNode('node_0', 'gene_validation'),
+      createMockNode('node_1', 'allele_validation'),
     ]
     expect(countExtractors(nodes)).toBe(0)
   })
@@ -164,7 +171,7 @@ describe('countExtractors', () => {
   it('returns 1 for single PDF extractor', () => {
     const nodes = [
       createMockNode('node_0', 'pdf_extraction'),
-      createMockNode('node_1', 'gene'),
+      createMockNode('node_1', 'gene_validation'),
     ]
     expect(countExtractors(nodes)).toBe(1)
   })
@@ -172,7 +179,7 @@ describe('countExtractors', () => {
   it('returns 1 for single gene_expression extractor', () => {
     const nodes = [
       createMockNode('node_0', 'gene_expression'),
-      createMockNode('node_1', 'gene'),
+      createMockNode('node_1', 'gene_validation'),
     ]
     expect(countExtractors(nodes)).toBe(1)
   })
@@ -181,7 +188,7 @@ describe('countExtractors', () => {
     const nodes = [
       createMockNode('node_0', 'pdf_extraction'),
       createMockNode('node_1', 'gene_expression'),
-      createMockNode('node_2', 'gene'),
+      createMockNode('node_2', 'gene_validation'),
     ]
     expect(countExtractors(nodes)).toBe(2)
   })
@@ -190,7 +197,7 @@ describe('countExtractors', () => {
     const nodes = [
       createMockNode('node_0', 'pdf_extraction'),
       createMockNode('node_1', 'pdf_extraction'),
-      createMockNode('node_2', 'gene'),
+      createMockNode('node_2', 'gene_validation'),
     ]
     expect(countExtractors(nodes)).toBe(2)
   })

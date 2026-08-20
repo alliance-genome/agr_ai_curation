@@ -296,7 +296,7 @@ export interface NodeEditorProps {
 //
 // Example:
 //   import { useAgentIcon } from '@/hooks/useAgentIcon'
-//   const icon = useAgentIcon('gene')  // Returns "🧬"
+//   const icon = useAgentIcon('gene_validation')  // Returns "🧬"
 // ============================================================================
 
 // ============================================================================

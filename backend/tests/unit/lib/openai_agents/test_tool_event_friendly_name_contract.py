@@ -192,7 +192,7 @@ def _agent_updated_stream_event(agent_name: str):
 @pytest.mark.asyncio
 async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
     fake_events = [
-        _tool_call_stream_event("ask_gene_specialist"),
+        _tool_call_stream_event("ask_gene_validation_specialist"),
         _tool_output_stream_event(),
     ]
 
@@ -212,7 +212,7 @@ async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
         name="Query Supervisor",
         tools=[
             SimpleNamespace(
-                name="ask_gene_specialist",
+                name="ask_gene_validation_specialist",
                 description="Ask the Gene Validation Agent",
             )
         ],

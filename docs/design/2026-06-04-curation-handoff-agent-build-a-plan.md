@@ -158,7 +158,7 @@ def _flow_ending_in(exit_agent_id: str) -> dict:
         "entry_node_id": "1",
         "nodes": [
             {"id": "1", "type": "agent", "data": {"agent_id": "pdf_extraction"}},
-            {"id": "2", "type": "agent", "data": {"agent_id": "gene"}},
+            {"id": "2", "type": "agent", "data": {"agent_id": "gene_validation"}},
             {"id": "3", "type": "agent", "data": {"agent_id": exit_agent_id}},
         ],
         "edges": [

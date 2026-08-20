@@ -184,13 +184,19 @@ class TestAgentDocumentationCoverage:
             )
 
     def test_explicit_system_agent_key_suppresses_folder_alias(self):
-        """The ontology resolver exposes only `ontology_term_validation` publicly."""
+        """Explicit public keys suppress package folder aliases."""
         registry = build_agent_registry()
 
-        ontology_entry = registry.get("ontology_term_validation")
-
-        assert ontology_entry is not None
-        assert registry.get("ontology_term") is None
+        canonical_ids = {
+            "ontology_term": "ontology_term_validation",
+            "gene": "gene_validation",
+            "allele": "allele_validation",
+            "disease": "disease_validation",
+            "chemical": "chemical_validation",
+        }
+        for folder_alias, canonical_id in canonical_ids.items():
+            assert registry.get(canonical_id) is not None
+            assert registry.get(folder_alias) is None
 
     def test_supervisor_declares_medium_reasoning_default(self, monkeypatch):
         """Supervisor reasoning should not inherit the low global agent default."""

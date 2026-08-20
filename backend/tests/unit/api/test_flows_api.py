@@ -155,6 +155,68 @@ def test_flow_definition_payload_defaults_saved_edges_to_control_flow():
     assert payload["edges"][0]["role"] == "control_flow"
 
 
+@pytest.mark.parametrize(
+    ("retired_alias", "canonical_id"),
+    [
+        ("gene", "gene_validation"),
+        ("allele", "allele_validation"),
+        ("disease", "disease_validation"),
+        ("chemical", "chemical_validation"),
+    ],
+)
+def test_flow_save_rejects_retired_validator_aliases_and_accepts_canonical_ids(
+    monkeypatch,
+    retired_alias,
+    canonical_id,
+):
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda agent_id, **_kwargs: (
+            {
+                "name": canonical_id,
+                "category": "Validation",
+                "supervisor": {"enabled": True},
+            }
+            if agent_id == canonical_id
+            else None
+        ),
+    )
+    payload = _minimal_flow_definition_payload()
+    payload["nodes"][1]["data"].update(
+        {
+            "agent_id": retired_alias,
+            "agent_display_name": retired_alias.title(),
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload),
+            enforce_agent_references=True,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert f"missing agent_id '{retired_alias}'" in str(exc_info.value.detail)
+
+    payload["nodes"][1]["data"].update(
+        {
+            "agent_id": canonical_id,
+            "agent_display_name": canonical_id,
+        }
+    )
+    saved = flows._validated_flow_definition_payload(
+        FlowDefinition.model_validate(payload),
+        enforce_agent_references=True,
+    )
+    assert saved["nodes"][1]["data"]["agent_id"] == canonical_id
+
+
 def test_flow_response_defaults_legacy_saved_edge_roles(monkeypatch):
     flow_id = uuid4()
     now = datetime.now(timezone.utc)

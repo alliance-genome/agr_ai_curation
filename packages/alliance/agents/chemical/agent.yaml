@@ -2,13 +2,14 @@
 # AGENT DEFINITION: chemical
 # =============================================================================
 # Maps chemical names to ChEBI ontology identifiers.
-# Tool name generated at runtime: ask_chemical_specialist
+# Tool name generated at runtime: ask_chemical_validation_specialist
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
 agent_id: chemical_validation
+system_agent_key: chemical_validation
 
 name: "Chemical Ontology Agent"
 
@@ -22,7 +23,7 @@ subcategory: "Data Validation"
 # -----------------------------------------------------------------------------
 # SUPERVISOR ROUTING
 # -----------------------------------------------------------------------------
-# Tool name is generated at runtime as: ask_{folder}_specialist
+# Tool name is generated from system_agent_key: ask_chemical_validation_specialist
 supervisor_routing:
   enabled: true
   description: >

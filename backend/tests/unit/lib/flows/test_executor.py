@@ -1484,6 +1484,46 @@ class TestDbUserIdPropagation:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    @pytest.mark.parametrize(
+        "retired_alias",
+        ["gene", "allele", "disease", "chemical"],
+    )
+    def test_retired_validator_alias_cannot_create_execution_tool(
+        self,
+        mock_get_agent,
+        mock_streaming,
+        monkeypatch,
+        retired_alias,
+    ):
+        def _missing_metadata(agent_id, **_kwargs):
+            assert agent_id == retired_alias
+            raise ValueError(f"Unknown agent_id: {agent_id}")
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.get_agent_metadata",
+            _missing_metadata,
+        )
+        flow = _make_flow([_agent_node("validator", retired_alias)])
+
+        tools, created_names, unavailable_steps, _execution_state = (
+            get_all_agent_tools(flow, include_unavailable=True)
+        )
+
+        assert tools == []
+        assert created_names == set()
+        assert unavailable_steps == [
+            {
+                "step": 1,
+                "agent_id": retired_alias,
+                "agent_name": retired_alias.title(),
+                "reason": "agent could not be resolved from unified registry",
+            }
+        ]
+        mock_get_agent.assert_not_called()
+        mock_streaming.assert_not_called()
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     def test_attachment_only_validator_is_not_ordinary_flow_step(
         self, mock_get_agent, mock_streaming, monkeypatch
     ):

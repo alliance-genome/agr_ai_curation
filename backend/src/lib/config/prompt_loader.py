@@ -100,7 +100,7 @@ def _upsert_prompt(
 
     Args:
         db: Database session
-        agent_name: Short agent name (e.g., "gene", "pdf_extraction")
+        agent_name: Canonical agent name (e.g., "gene_validation", "pdf_extraction")
         prompt_type: "system" for base prompts, "group_rules" for group rules
         content: The prompt content
         group_id: None for base prompts, group ID for group rules
@@ -260,7 +260,7 @@ def _load_group_rules(
 
     Args:
         source: Resolved agent config source
-        agent_name: Agent name (e.g., "gene", "go_annotations")
+        agent_name: Agent name (e.g., "gene_validation", "go_annotations")
         db: Database session
 
     Returns:

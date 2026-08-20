@@ -6,8 +6,8 @@ Usage:
     # Anywhere in the codebase - no dependencies needed
     # Agent IDs match catalog_service.py AGENT_REGISTRY keys
     prompt = get_prompt("pdf_extraction")  # Base prompt
-    prompt = get_prompt("gene", group_id="FB")  # Group-specific rules for FlyBase
-    prompt = get_prompt_by_version("gene", version=3, group_id="WB")  # Pinned version
+    prompt = get_prompt("gene_validation", group_id="FB")  # FlyBase rules
+    prompt = get_prompt_by_version("gene_validation", version=3, group_id="WB")
 """
 
 from typing import Dict, Optional
@@ -96,7 +96,7 @@ def get_prompt(
     Get the active prompt for an agent. Zero DB queries.
 
     Args:
-        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
+        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene_validation', 'supervisor'
         prompt_type: e.g., 'system' (default), 'group_rules'
         group_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 
@@ -162,7 +162,7 @@ def get_prompt_by_version(
     Get a specific version of a prompt (for pinned flows). Zero DB queries.
 
     Args:
-        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
+        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene_validation', 'supervisor'
         version: Specific version number to retrieve
         prompt_type: e.g., 'system' (default), 'group_rules'
         group_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
@@ -201,7 +201,7 @@ def get_prompt_optional(
     Use this for optional prompts like group rules where missing is acceptable.
 
     Args:
-        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
+        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene_validation', 'supervisor'
         prompt_type: e.g., 'system' (default), 'group_rules'
         group_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 

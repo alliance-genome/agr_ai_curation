@@ -1,23 +1,19 @@
 flow_recipes_api_version: 1.0.0
 
 equivalence_groups:
-  - agent_ids: [gene, gene_validation]
-  - agent_ids: [allele, allele_validation]
-  - agent_ids: [disease, disease_validation]
-  - agent_ids: [chemical, chemical_validation]
   - agent_ids: [gene_expression, gene_expression_extraction]
   - agent_ids: [gene_ontology, gene_ontology_lookup]
 
 suggestions:
   - name: document_extraction_first
     when_present:
-      - gene
+      - gene_validation
       - gene_extractor
-      - allele
+      - allele_validation
       - allele_extractor
-      - disease
+      - disease_validation
       - disease_extractor
-      - chemical
+      - chemical_validation
       - gene_expression
       - phenotype_extractor
     when_absent: [pdf_extraction]
@@ -26,8 +22,8 @@ suggestions:
     message: "Consider adding '{suggested_agent_id}' step first to extract entities from documents"
   - name: validate_expression_gene_identifiers
     when_present: [gene_expression]
-    when_absent: [gene]
-    suggested_agent_id: gene
+    when_absent: [gene_validation]
+    suggested_agent_id: gene_validation
     placement: after
     message: "Consider adding '{suggested_agent_id}' step after '{trigger_agent_id}' to validate gene identifiers"
 
@@ -37,7 +33,7 @@ recipes:
     steps:
       - agent_id: pdf_extraction
         step_goal: Find gene symbols and identifiers
-      - agent_id: gene
+      - agent_id: gene_validation
         step_goal: Validate genes in Alliance database
       - agent_id: chat_output
         step_goal: Display validated results
@@ -57,7 +53,7 @@ recipes:
     steps:
       - agent_id: pdf_extraction
         step_goal: Find disease mentions
-      - agent_id: disease
+      - agent_id: disease_validation
         step_goal: Map to Disease Ontology terms
       - agent_id: chat_output
         step_goal: Display annotation results
@@ -77,7 +73,7 @@ recipes:
     steps:
       - agent_id: pdf_extraction
         step_goal: Extract chemical names
-      - agent_id: chemical
+      - agent_id: chemical_validation
         step_goal: Map to ChEBI identifiers
   - name: Gene Expression Analysis
     description: Extract gene expression data from methods sections
@@ -86,7 +82,7 @@ recipes:
         step_goal: Find experimental methods
       - agent_id: gene_expression
         step_goal: Extract expression patterns
-      - agent_id: gene
+      - agent_id: gene_validation
         step_goal: Validate gene identifiers
       - agent_id: chat_output
         step_goal: Display expression data
@@ -116,7 +112,7 @@ recipes:
     steps:
       - agent_id: pdf_extraction
         step_goal: Find allele/variant mentions
-      - agent_id: allele
+      - agent_id: allele_validation
         step_goal: Validate alleles in Alliance database
       - agent_id: chat_output
         step_goal: Display allele results
@@ -126,7 +122,7 @@ recipes:
     steps:
       - agent_id: pdf_extraction
         step_goal: Find GO term mentions and gene functions
-      - agent_id: gene
+      - agent_id: gene_validation
         step_goal: Validate gene identifiers
       - agent_id: gene_ontology
         step_goal: Validate GO terms

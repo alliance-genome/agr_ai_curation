@@ -61,7 +61,7 @@ class TestAgentLoader:
         assert gene.folder_name == "gene"
         assert gene.agent_id == "gene_validation"
         assert gene.name == "Gene Validation Agent"
-        assert gene.tool_name == "ask_gene_specialist"
+        assert gene.tool_name == "ask_gene_validation_specialist"
 
         # Check supervisor routing
         # The gene validation agent is intentionally NOT supervisor-callable:
@@ -195,14 +195,18 @@ class TestAgentLoader:
         # The gene validation agent is intentionally NOT supervisor-callable now;
         # validators run via the extractor's binding dispatch, not as standalone
         # supervisor chat tools.
-        assert "ask_gene_specialist" not in tool_names
+        assert "ask_gene_validation_specialist" not in tool_names
         assert "ask_gene_extractor_specialist" in tool_names
         assert "ask_pdf_extraction_specialist" in tool_names
         assert "ask_ontology_term_validation_specialist" in tool_names
         assert "ask_ontology_term_specialist" not in tool_names
 
         # Check batchable flags
-        chemical_tool = next(t for t in tools if t["tool_name"] == "ask_chemical_specialist")
+        chemical_tool = next(
+            t
+            for t in tools
+            if t["tool_name"] == "ask_chemical_validation_specialist"
+        )
         assert chemical_tool["batchable"] is True
         assert chemical_tool["agent_id"] == "chemical_validation"
 
@@ -252,7 +256,7 @@ class TestAgentLoader:
         from src.lib.config.agent_loader import load_agent_definitions, get_agent_by_tool_name
 
         load_agent_definitions(ALLIANCE_AGENTS_PATH)
-        gene = get_agent_by_tool_name("ask_gene_specialist")
+        gene = get_agent_by_tool_name("ask_gene_validation_specialist")
 
         assert gene is not None
         assert gene.agent_id == "gene_validation"

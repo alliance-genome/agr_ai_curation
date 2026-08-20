@@ -266,7 +266,7 @@ def _create_get_prompt_handler():
         Get an agent's prompt from the catalog.
 
         Args:
-            agent_id: Agent identifier (e.g., "supervisor", "gene", "pdf_extraction")
+            agent_id: Agent identifier (e.g., "supervisor", "gene_validation", "pdf_extraction")
             group_id: Optional group identifier for group-specific rules (e.g., "WB", "FB")
 
         Returns:

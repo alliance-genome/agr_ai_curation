@@ -132,7 +132,7 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
     monkeypatch.setattr(
         module,
         "_get_active_system_prompt",
-        lambda _db, *, folder_name, agent_id: f"prompt:{folder_name}:{agent_id}",
+        lambda _db, *, agent_key: f"prompt:{agent_key}",
     )
 
     result = module.sync_system_agents(db, force_reload=True)
@@ -149,14 +149,14 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
 
     inserted = db.added[0]
     assert inserted.agent_key == "disease"
-    assert inserted.instructions == "prompt:disease:disease_validation"
+    assert inserted.instructions == "prompt:disease"
     assert inserted.tool_ids == ["agr_curation_query"]
 
     assert inactive_gene.is_active is True
     assert inactive_gene.name == "Gene Agent"
     assert inactive_gene.group_rules_enabled is True
     assert inactive_gene.group_rules_component == "gene"
-    assert inactive_gene.instructions == "prompt:gene:gene_validation"
+    assert inactive_gene.instructions == "prompt:gene"
 
     assert stale_agent.is_active is False
     assert stale_agent.supervisor_enabled is False
@@ -193,7 +193,7 @@ def test_sync_uses_explicit_system_agent_key_and_deactivates_folder_alias(monkey
     monkeypatch.setattr(
         module,
         "_get_active_system_prompt",
-        lambda _db, *, folder_name, agent_id: f"prompt:{folder_name}:{agent_id}",
+        lambda _db, *, agent_key: f"prompt:{agent_key}",
     )
 
     result = module.sync_system_agents(db, force_reload=True)
@@ -205,6 +205,63 @@ def test_sync_uses_explicit_system_agent_key_and_deactivates_folder_alias(monkey
     assert db.added[0].template_source == "ontology_term_validation"
     assert stale_folder_alias.is_active is False
     assert stale_folder_alias.supervisor_enabled is False
+
+
+def test_sync_cuts_over_all_entity_validator_folder_aliases(monkeypatch):
+    """Canonical validator rows replace and deactivate all four folder keys."""
+    import src.lib.agent_studio.system_agent_sync as module
+
+    aliases = ("gene", "allele", "disease", "chemical")
+    stale_rows = [
+        SimpleNamespace(
+            agent_key=alias,
+            is_active=True,
+            supervisor_enabled=True,
+        )
+        for alias in aliases
+    ]
+    db = _DBStub(stale_rows)
+
+    monkeypatch.setattr(
+        module,
+        "resolve_agent_config_sources",
+        lambda _agents_path=None: tuple(
+            SimpleNamespace(folder_name=alias) for alias in aliases
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "load_agent_definitions",
+        lambda _agents_path=None, force_reload=False: {
+            f"{alias}_validation": _agent_definition(
+                alias,
+                f"{alias}_validation",
+                system_agent_key=f"{alias}_validation",
+            )
+            for alias in aliases
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_active_system_prompt",
+        lambda _db, *, agent_key: f"prompt:{agent_key}",
+    )
+
+    result = module.sync_system_agents(db, force_reload=True)
+
+    assert result == {
+        "inserted": 4,
+        "updated": 0,
+        "reactivated": 0,
+        "deactivated": 4,
+        "discovered": 4,
+    }
+    assert {row.agent_key for row in db.added} == {
+        f"{alias}_validation" for alias in aliases
+    }
+    assert all(row.template_source == row.agent_key for row in db.added)
+    assert all(row.is_active is False for row in stale_rows)
+    assert all(row.supervisor_enabled is False for row in stale_rows)
 
 
 def test_sync_skips_agent_with_missing_prompt(monkeypatch):
@@ -229,7 +286,7 @@ def test_sync_skips_agent_with_missing_prompt(monkeypatch):
     monkeypatch.setattr(
         module,
         "_get_active_system_prompt",
-        lambda _db, *, folder_name, agent_id: None,
+        lambda _db, *, agent_key: None,
     )
     monkeypatch.setattr(
         module,
@@ -329,7 +386,7 @@ def test_sync_auto_attaches_record_evidence_to_structured_document_extraction_ag
     monkeypatch.setattr(
         module,
         "_get_active_system_prompt",
-        lambda _db, *, folder_name, agent_id: f"prompt:{folder_name}:{agent_id}",
+        lambda _db, *, agent_key: f"prompt:{agent_key}",
     )
 
     result = module.sync_system_agents(db, force_reload=True)
@@ -374,7 +431,7 @@ def test_sync_does_not_auto_attach_record_evidence_to_unstructured_pdf_agent(mon
     monkeypatch.setattr(
         module,
         "_get_active_system_prompt",
-        lambda _db, *, folder_name, agent_id: f"prompt:{folder_name}:{agent_id}",
+        lambda _db, *, agent_key: f"prompt:{agent_key}",
     )
 
     result = module.sync_system_agents(db, force_reload=True)
@@ -431,7 +488,7 @@ def test_sync_reactivates_discovered_disabled_agent(monkeypatch):
     monkeypatch.setattr(
         module,
         "_get_active_system_prompt",
-        lambda _db, *, folder_name, agent_id: "prompt:gene",
+        lambda _db, *, agent_key: "prompt:gene",
     )
 
     result = module.sync_system_agents(db, force_reload=True)

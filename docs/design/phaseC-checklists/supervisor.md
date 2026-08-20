@@ -94,7 +94,7 @@ explicitly, per the routing-skeleton brief.
 
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
-| SUP-17 | The full specialist routing table (Tool / Use For / Triggers / Input -> Output) for all 12 tools: ask_pdf_extraction_specialist, ask_gene_extractor_specialist, ask_gene_expression_specialist, format_data, ask_gene_specialist, ask_allele_specialist, ask_disease_specialist, ask_chemical_specialist, ask_gene_ontology_specialist, ask_go_annotations_specialist, ask_orthologs_specialist, ask_ontology_term_validation_specialist. | `<routing_rules>` (Routing map table — every tool + when, KEPT verbatim) |
+| SUP-17 | The full specialist routing table (Tool / Use For / Triggers / Input -> Output) for all 12 tools: ask_pdf_extraction_specialist, ask_gene_extractor_specialist, ask_gene_expression_specialist, format_data, ask_gene_validation_specialist, ask_allele_validation_specialist, ask_disease_validation_specialist, ask_chemical_validation_specialist, ask_gene_ontology_specialist, ask_go_annotations_specialist, ask_orthologs_specialist, ask_ontology_term_validation_specialist. | `<routing_rules>` (Routing map table — every tool + when, KEPT verbatim) |
 
 ## Data flow types
 
@@ -173,7 +173,7 @@ explicitly, per the routing-skeleton brief.
 
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
-| SUP-51 | simple_lookup example (ask_gene_specialist single call). | `<examples>` (KEPT) |
+| SUP-51 | simple_lookup example (ask_gene_validation_specialist single call). | `<examples>` (KEPT) |
 | SUP-52 | curator_grade_handoff example (gene-extractor focal-gene reformulation). | `<examples>` (KEPT verbatim — the canonical curator-grade reformulation demo) |
 | SUP-53 | chained_extraction example (Document -> PDF extraction -> batched allele lookup -> synthesize). | `<examples>` (KEPT; routing comment trimmed to the chain) |
 | SUP-54 | enrichment_chain example (gene resolver -> go_annotations enricher). | `<examples>` (KEPT) |

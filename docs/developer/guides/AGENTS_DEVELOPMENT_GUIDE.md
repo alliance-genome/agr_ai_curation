@@ -333,7 +333,7 @@ curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh
 curl -X POST http://localhost:8000/api/admin/prompts \
   -H 'Content-Type: application/json' \
   -d '{
-    "agent_name": "gene",
+    "agent_name": "gene_validation",
     "prompt_type": "system",
     "content": "Updated prompt text...",
     "change_notes": "Improved search strategy",
@@ -370,8 +370,8 @@ The supervisor's routing instructions include a dynamically generated markdown t
 ```
 | Tool | When to Use |
 |------|-------------|
-| ask_gene_specialist | Use for validating genes against the database... |
-| ask_allele_specialist | Use for validating allele/variant identifiers... |
+| ask_gene_validation_specialist | Use for validating genes against the database... |
+| ask_allele_validation_specialist | Use for validating allele/variant identifiers... |
 ```
 
 This table is built from `supervisor_description` fields in the `agents` table.

@@ -93,7 +93,7 @@ def _agent_definition_to_registry_entry(
     batching = None
     if agent_def.supervisor_routing.batchable:
         entity = agent_def.supervisor_routing.batching_entity
-        # Generate example: ask_gene_specialist("Look up these genes: ...")
+        # Generate example: ask_gene_validation_specialist("Look up these genes: ...")
         batching = {
             "entity": entity,
             "example": f'{supervisor_tool_name}("Look up these {entity}: ...")',

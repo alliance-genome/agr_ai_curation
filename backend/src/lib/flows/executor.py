@@ -2266,7 +2266,7 @@ def is_agent_in_flow(flow: CurationFlow, agent_id: str) -> bool:
 
     Args:
         flow: The CurationFlow object containing flow_definition
-        agent_id: The agent ID to check (e.g., "gene", "disease")
+        agent_id: The agent ID to check (e.g., "gene_validation", "disease_validation")
 
     Returns:
         True if the agent is in the flow, False otherwise
@@ -2283,7 +2283,7 @@ def get_flow_agent_ids(flow: CurationFlow) -> Set[str]:
         flow: The CurationFlow object containing flow_definition
 
     Returns:
-        Set of agent IDs (e.g., {"gene", "disease", "allele"})
+        Set of agent IDs (e.g., {"gene_validation", "disease_validation"})
     """
     return {
         agent_id
@@ -2414,7 +2414,7 @@ def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
     """Count occurrences of each agent_id in the flow (excluding task_input).
 
     Used to detect duplicate agent usage so tools can be named uniquely
-    per step (e.g., ask_gene_step1_specialist, ask_gene_step3_specialist).
+    per step (e.g., ask_gene_validation_step1_specialist and step3_specialist).
 
     Args:
         flow: The CurationFlow object containing flow_definition
@@ -2473,7 +2473,7 @@ def get_all_agent_tools(
     Creates one tool per flow node (not per unique agent_id). This means
     if the same agent appears in multiple steps, each step gets its own
     agent instance with its own custom_instructions. Duplicate agent_ids
-    get step-numbered tool names (e.g., ask_gene_step1_specialist).
+    get step-numbered tool names (e.g., ask_gene_validation_step1_specialist).
 
     Uses _create_streaming_tool() to wrap each agent, which captures internal
     tool calls via run_specialist_with_events() and emits events for the audit

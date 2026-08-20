@@ -691,7 +691,7 @@ def get_agent_config(agent_id: str) -> AgentConfig:
     3. Global fallback defaults
 
     Args:
-        agent_id: The agent ID (e.g., "gene", "pdf_extraction", "allele")
+        agent_id: The agent ID (e.g., "gene_validation", "pdf_extraction", "allele_validation")
 
     Returns:
         AgentConfig instance with resolved settings

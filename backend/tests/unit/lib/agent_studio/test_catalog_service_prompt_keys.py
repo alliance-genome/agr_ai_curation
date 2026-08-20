@@ -10,14 +10,19 @@ from src.lib.agent_studio.models import AgentPrompts, PromptCatalog, PromptInfo
 from src.lib.prompts.context import get_prompt_override
 
 
-def test_get_prompt_key_for_agent_resolves_registry_alias():
-    """Config registry alias (agent_id) should resolve to canonical folder key."""
-    assert catalog_service.get_prompt_key_for_agent("gene_validation") == "gene"
+def test_get_prompt_key_for_agent_resolves_canonical_validator_id():
+    """Validator IDs should resolve to their canonical prompt keys."""
+    assert (
+        catalog_service.get_prompt_key_for_agent("gene_validation")
+        == "gene_validation"
+    )
 
 
-def test_get_prompt_key_for_agent_accepts_canonical_key():
-    """Canonical prompt key (folder name) should resolve to itself."""
-    assert catalog_service.get_prompt_key_for_agent("gene") == "gene"
+@pytest.mark.parametrize("folder_alias", ["gene", "allele", "disease", "chemical"])
+def test_get_prompt_key_for_agent_rejects_retired_validator_alias(folder_alias):
+    """Retired validator folder names are not public prompt keys."""
+    with pytest.raises(ValueError, match="Unknown agent_id"):
+        catalog_service.get_prompt_key_for_agent(folder_alias)
 
 
 def test_get_prompt_key_for_gene_expression_accepts_flow_alias_and_package_id():
@@ -47,7 +52,7 @@ def test_prompt_catalog_get_agent_accepts_validator_agent_id_from_validation_pla
     """Validator-agent IDs from validation plans should inspect the bundled prompt."""
     service = catalog_service.PromptCatalogService()
     gene_prompt = PromptInfo(
-        agent_id="gene",
+        agent_id="gene_validation",
         agent_name="Gene Validation Agent",
         description="Validates genes",
         base_prompt="Gene validator prompt",
@@ -61,6 +66,7 @@ def test_prompt_catalog_get_agent_accepts_validator_agent_id_from_validation_pla
     )
 
     assert service.get_agent("gene_validation") == gene_prompt
+    assert service.get_agent("gene") is None
 
 
 def test_get_prompt_key_for_agent_rejects_unknown_key():

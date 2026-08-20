@@ -142,8 +142,15 @@ def test_bundled_alliance_load_agent_definitions_defaults_to_runtime_packages(mo
 
     agents = agent_loader.load_agent_definitions(force_reload=True)
 
-    assert "gene_validation" in agents
-    assert agents["gene_validation"].folder_name == "gene"
+    expected_validator_ids = {
+        "gene": "gene_validation",
+        "allele": "allele_validation",
+        "disease": "disease_validation",
+        "chemical": "chemical_validation",
+    }
+    for folder_name, agent_id in expected_validator_ids.items():
+        assert agents[agent_id].folder_name == folder_name
+        assert agents[agent_id].system_agent_key == agent_id
     assert agents["gene_validation"].output_schema == "GeneResultEnvelope"
 
 
@@ -401,15 +408,29 @@ def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch, tmp_pat
     assert result["group_rules"] >= 1
     assert any(
         call["source_file"] == "packages/agr.alliance/agents/gene/prompt.yaml"
+        and call["agent_name"] == "gene_validation"
         and call["prompt_type"] == "system"
         for call in captured_calls
     )
     assert any(
         call["source_file"] == "packages/agr.alliance/agents/gene/group_rules/fb.yaml"
+        and call["agent_name"] == "gene_validation"
         and call["prompt_type"] == "group_rules"
         and call["group_id"] == "FB"
         for call in captured_calls
     )
+    for folder_name, agent_id in {
+        "allele": "allele_validation",
+        "disease": "disease_validation",
+        "chemical": "chemical_validation",
+    }.items():
+        assert any(
+            call["source_file"]
+            == f"packages/agr.alliance/agents/{folder_name}/prompt.yaml"
+            and call["agent_name"] == agent_id
+            and call["prompt_type"] == "system"
+            for call in captured_calls
+        )
     assert any(
         call["source_file"] == "packages/agr.core/agents/supervisor/prompt.yaml"
         and call["prompt_type"] == "system"
