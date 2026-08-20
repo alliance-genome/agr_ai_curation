@@ -23,6 +23,7 @@ from src.lib.document_sources.registry import (
 )
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.flows.output_projection import build_flow_output_artifact_bundle
+from src.lib.openai_agents.config import get_model_for_agent, resolve_model_provider
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.flow_recipes import load_flow_recipe_catalog
 from src.lib.packages.document_source_provider_loader import (
@@ -381,6 +382,13 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
         agents["demo_agent_validation"].output_projection.row_list_field
         == "projected_records"
     )
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-openai-key")
+    for agent in agents.values():
+        if agent.model_config is None:
+            continue
+        model_id = agent.model_config.model
+        provider_id = resolve_model_provider(model_id)
+        assert get_model_for_agent(model_id, provider_override=provider_id) == model_id
 
     schemas = schema_discovery.discover_agent_schemas(packages_dir, force_reload=True)
     assert set(schemas) == {
