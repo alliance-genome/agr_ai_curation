@@ -12,6 +12,12 @@ import {
 } from './agentMetadataUtils'
 
 const metadata: Record<string, AgentMetadata> = {
+  gene_validation: {
+    name: 'Gene Validator',
+    icon: 'G',
+    category: 'Validation',
+    subcategory: 'Data Validation',
+  },
   custom_extractor: {
     name: 'Custom Extractor',
     icon: 'EX',
@@ -60,10 +66,13 @@ describe('agentMetadataUtils', () => {
     expect(isExtractionAgentFromMetadata('custom_validator', metadata)).toBe(false)
   })
 
-  it('detects validation agents from built-in ids or metadata', () => {
-    expect(isValidationAgentFromMetadata('gene', metadata)).toBe(true)
+  it('detects validation agents only from registry metadata', () => {
+    expect(isValidationAgentFromMetadata('gene_validation', metadata)).toBe(true)
     expect(isValidationAgentFromMetadata('custom_validator', metadata)).toBe(true)
     expect(isValidationAgentFromMetadata('custom_output', metadata)).toBe(false)
+    for (const alias of ['gene', 'allele', 'disease', 'chemical']) {
+      expect(isValidationAgentFromMetadata(alias, metadata)).toBe(false)
+    }
   })
 
   it('accepts only output agents with a runtime formatter implementation', () => {

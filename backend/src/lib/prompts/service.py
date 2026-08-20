@@ -164,7 +164,7 @@ class PromptService:
         Note: Caller must commit the session after calling this method.
 
         Args:
-            agent_name: Catalog ID (e.g., 'pdf_extraction', 'gene', 'supervisor')
+            agent_name: Catalog ID (e.g., 'pdf_extraction', 'gene_validation', 'supervisor')
             content: The prompt text
             prompt_type: e.g., 'system', 'group_rules' (default: 'system')
             group_id: NULL for base prompts, e.g., 'FB' for group rules
@@ -225,7 +225,7 @@ class PromptService:
         """Activate a specific version and refresh cache.
 
         Args:
-            agent_name: Catalog ID (e.g., 'pdf_extraction', 'gene', 'supervisor')
+            agent_name: Catalog ID (e.g., 'pdf_extraction', 'gene_validation', 'supervisor')
             version: Specific version number to activate
             prompt_type: e.g., 'system', 'group_rules' (default: 'system')
             group_id: NULL for base prompts, e.g., 'FB' for group rules

@@ -120,6 +120,7 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
     # Bundled Alliance package contracts and prompt/tool policy coverage.
+    Path("backend/tests/integration/persistence/test_validator_agent_identity_migration.py"),
     Path("backend/tests/unit/test_config_loaders.py"),
     Path("backend/tests/unit/test_gene_allele_validator_result_contract.py"),
     Path("backend/tests/unit/test_subject_entity_validator_result_contract.py"),

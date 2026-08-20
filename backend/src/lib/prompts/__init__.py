@@ -11,10 +11,10 @@ Usage:
 
     # Get active prompt (nanosecond lookup)
     prompt = get_prompt("pdf_extraction")  # Base prompt
-    prompt = get_prompt("gene", group_id="FB")  # Group-specific rules
+    prompt = get_prompt("gene_validation", group_id="FB")  # Group-specific rules
 
     # Get pinned version (for flows)
-    prompt = get_prompt_by_version("gene", version=3)
+    prompt = get_prompt_by_version("gene_validation", version=3)
 """
 
 from .cache import (

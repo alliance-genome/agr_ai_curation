@@ -56,6 +56,9 @@ from .models import (
     DataSourceInfo,
 )
 from .flow_agent_policy import flow_palette_show_in_palette
+from .agent_identity import (
+    require_canonical_agent_identity,
+)
 
 logger = logging.getLogger(__name__)
 _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
@@ -1115,11 +1118,11 @@ def expand_tools_for_agent(agent_id: str, tools: List[str]) -> List[str]:
     list more intuitive for users.
 
     Example:
-        expand_tools_for_agent("gene", ["package_lookup_tool"])
+        expand_tools_for_agent("gene_validation", ["package_lookup_tool"])
         -> ["search_genes", "get_gene_by_exact_symbol", "get_gene_by_id"]
 
     Args:
-        agent_id: Agent identifier (e.g., 'gene', 'allele')
+        agent_id: Agent identifier (e.g., 'gene_validation', 'allele_validation')
         tools: Original list of tool IDs
 
     Returns:
@@ -1192,7 +1195,7 @@ def get_tool_for_agent(tool_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
 
     Args:
         tool_id: Tool identifier or method identifier
-        agent_id: Agent identifier (e.g., 'gene', 'allele')
+        agent_id: Agent identifier (e.g., 'gene_validation', 'allele_validation')
 
     Returns:
         Tool metadata with agent-specific context, or None if not found
@@ -1733,6 +1736,24 @@ def validate_active_agent_output_schemas(db: Any) -> None:
 
 def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     """Create an agent from a row in the unified agents table."""
+    visibility = str(getattr(db_agent, "visibility", "") or "").strip()
+    if visibility == "system":
+        require_canonical_agent_identity(
+            getattr(db_agent, "agent_key", None),
+            field_name="System agent key",
+        )
+    else:
+        parent_key = (
+            getattr(db_agent, "template_source", None)
+            or getattr(db_agent, "group_rules_component", None)
+        )
+        require_canonical_agent_identity(
+            parent_key,
+            field_name=(
+                f"Custom agent '{getattr(db_agent, 'agent_key', '')}' template parent"
+            ),
+        )
+
     from src.lib.openai_agents.guardrails import (
         ToolCallTracker,
         create_tool_required_output_guardrail,
@@ -2015,6 +2036,10 @@ def _inherited_curation_definition_for_db_agent(db_agent: Any) -> Any | None:
         normalized_candidate = str(candidate_key or "").strip()
         if not normalized_candidate:
             continue
+        normalized_candidate = require_canonical_agent_identity(
+            normalized_candidate,
+            field_name=f"Custom agent '{db_agent.agent_key}' template parent",
+        )
         inherited_definition = get_agent_definition(normalized_candidate)
         if inherited_definition is None:
             inherited_definition = get_agent_by_folder(normalized_candidate)
@@ -2044,6 +2069,8 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     Raises:
         ValueError: If agent_id is not found in the unified agents table
     """
+    require_canonical_agent_identity(agent_id, field_name="Agent ID")
+
     from src.lib.config.agent_loader import get_agent_definition
 
     agent_definition = get_agent_definition(agent_id)
@@ -2157,6 +2184,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
 def get_active_visible_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     """Return metadata only for an active unified row visible to the caller."""
 
+    require_canonical_agent_identity(agent_id, field_name="Agent ID")
     db_agent = _get_db_agent_row(agent_id, dict(kwargs))
     if db_agent is None:
         raise ValueError(

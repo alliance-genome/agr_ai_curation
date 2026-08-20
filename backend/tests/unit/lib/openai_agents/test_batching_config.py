@@ -13,9 +13,9 @@ class TestGetBatchingConfig:
     def test_get_batching_config_has_gene_specialist(self):
         """Config should include gene specialist."""
         config = get_batching_config()
-        assert "ask_gene_specialist" in config
-        assert "entity" in config["ask_gene_specialist"]
-        assert "example" in config["ask_gene_specialist"]
+        assert "ask_gene_validation_specialist" in config
+        assert "entity" in config["ask_gene_validation_specialist"]
+        assert "example" in config["ask_gene_validation_specialist"]
 
     def test_get_batching_config_excludes_non_batching_agents(self):
         """Agents without batching config should not appear."""
@@ -36,10 +36,10 @@ class TestGetBatchingConfig:
         """Config should have all expected batching tools."""
         config = get_batching_config()
         expected_tools = [
-            "ask_gene_specialist",
-            "ask_allele_specialist",
-            "ask_disease_specialist",
-            "ask_chemical_specialist",
+            "ask_gene_validation_specialist",
+            "ask_allele_validation_specialist",
+            "ask_disease_validation_specialist",
+            "ask_chemical_validation_specialist",
             "ask_ontology_term_validation_specialist",
             "ask_gene_ontology_specialist",
             "ask_go_annotations_specialist",

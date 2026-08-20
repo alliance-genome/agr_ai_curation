@@ -7,9 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   EXTRACTION_AGENTS,
-  VALIDATION_AGENTS,
   isExtractionAgent,
-  isValidationAgent,
   countExtractors,
 } from './smartDefaultUtils'
 import type { AgentNode, AgentNodeData } from './types'
@@ -52,9 +50,9 @@ describe('isExtractionAgent', () => {
   })
 
   it('returns false for validation agents', () => {
-    expect(isExtractionAgent('gene')).toBe(false)
-    expect(isExtractionAgent('allele')).toBe(false)
-    expect(isExtractionAgent('disease')).toBe(false)
+    expect(isExtractionAgent('gene_validation')).toBe(false)
+    expect(isExtractionAgent('allele_validation')).toBe(false)
+    expect(isExtractionAgent('disease_validation')).toBe(false)
   })
 
   it('returns false for output agents', () => {
@@ -72,82 +70,6 @@ describe('isExtractionAgent', () => {
   })
 })
 
-// =============================================================================
-// isValidationAgent Tests
-// =============================================================================
-
-describe('isValidationAgent', () => {
-  it('returns true for gene agent', () => {
-    expect(isValidationAgent('gene')).toBe(true)
-  })
-
-  it('returns true for allele agent', () => {
-    expect(isValidationAgent('allele')).toBe(true)
-  })
-
-  it('returns true for disease agent', () => {
-    expect(isValidationAgent('disease')).toBe(true)
-  })
-
-  it('returns true for chemical agent', () => {
-    expect(isValidationAgent('chemical')).toBe(true)
-  })
-
-  it('returns true for gene_ontology agent', () => {
-    expect(isValidationAgent('gene_ontology')).toBe(true)
-  })
-
-  it('returns true for go_annotations agent', () => {
-    expect(isValidationAgent('go_annotations')).toBe(true)
-  })
-
-  it('returns true for orthologs agent', () => {
-    expect(isValidationAgent('orthologs')).toBe(true)
-  })
-
-  it('returns true for ontology_term_validation agent', () => {
-    expect(isValidationAgent('ontology_term_validation')).toBe(true)
-  })
-
-  it('does not expose retired ontology mapping validation defaults', () => {
-    // Keep the retired ids assembled so grep-based retirement checks can prove
-    // they are gone from active runtime and frontend surfaces.
-    const retiredOntologyMappingAgentId = ['ontology', 'mapping'].join('_')
-    const retiredOntologyMappingLookupAgentId = [
-      'ontology',
-      'mapping',
-      'lookup',
-    ].join('_')
-
-    expect(isValidationAgent(retiredOntologyMappingAgentId)).toBe(false)
-    expect(isValidationAgent(retiredOntologyMappingLookupAgentId)).toBe(false)
-    expect(VALIDATION_AGENTS).not.toContain(retiredOntologyMappingAgentId)
-    expect(VALIDATION_AGENTS).not.toContain(retiredOntologyMappingLookupAgentId)
-  })
-
-  it('returns false for extraction agents', () => {
-    expect(isValidationAgent('pdf_extraction')).toBe(false)
-    expect(isValidationAgent('gene_expression')).toBe(false)
-  })
-
-  it('returns false for output agents', () => {
-    expect(isValidationAgent('chat_output')).toBe(false)
-    expect(isValidationAgent('csv_formatter')).toBe(false)
-  })
-
-  it('returns false for unknown agents', () => {
-    expect(isValidationAgent('unknown_agent')).toBe(false)
-    expect(isValidationAgent('')).toBe(false)
-  })
-
-  it('includes all expected validation agents', () => {
-    expect(VALIDATION_AGENTS).toEqual([
-      'gene', 'allele', 'disease', 'chemical',
-      'gene_ontology', 'go_annotations', 'orthologs', 'ontology_term_validation'
-    ])
-  })
-})
-
 describe('countExtractors', () => {
   it('returns 0 for empty nodes array', () => {
     expect(countExtractors([])).toBe(0)
@@ -155,8 +77,8 @@ describe('countExtractors', () => {
 
   it('returns 0 when no extractors present', () => {
     const nodes = [
-      createMockNode('node_0', 'gene'),
-      createMockNode('node_1', 'allele'),
+      createMockNode('node_0', 'gene_validation'),
+      createMockNode('node_1', 'allele_validation'),
     ]
     expect(countExtractors(nodes)).toBe(0)
   })
@@ -164,7 +86,7 @@ describe('countExtractors', () => {
   it('returns 1 for single PDF extractor', () => {
     const nodes = [
       createMockNode('node_0', 'pdf_extraction'),
-      createMockNode('node_1', 'gene'),
+      createMockNode('node_1', 'gene_validation'),
     ]
     expect(countExtractors(nodes)).toBe(1)
   })
@@ -172,7 +94,7 @@ describe('countExtractors', () => {
   it('returns 1 for single gene_expression extractor', () => {
     const nodes = [
       createMockNode('node_0', 'gene_expression'),
-      createMockNode('node_1', 'gene'),
+      createMockNode('node_1', 'gene_validation'),
     ]
     expect(countExtractors(nodes)).toBe(1)
   })
@@ -181,7 +103,7 @@ describe('countExtractors', () => {
     const nodes = [
       createMockNode('node_0', 'pdf_extraction'),
       createMockNode('node_1', 'gene_expression'),
-      createMockNode('node_2', 'gene'),
+      createMockNode('node_2', 'gene_validation'),
     ]
     expect(countExtractors(nodes)).toBe(2)
   })
@@ -190,7 +112,7 @@ describe('countExtractors', () => {
     const nodes = [
       createMockNode('node_0', 'pdf_extraction'),
       createMockNode('node_1', 'pdf_extraction'),
-      createMockNode('node_2', 'gene'),
+      createMockNode('node_2', 'gene_validation'),
     ]
     expect(countExtractors(nodes)).toBe(2)
   })

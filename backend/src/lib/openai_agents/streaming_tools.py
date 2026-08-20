@@ -3900,7 +3900,7 @@ def get_batching_config() -> Dict[str, Any]:
     """
     Generate batching config from AGENT_REGISTRY.
 
-    Returns dict keyed by supervisor tool name (e.g., "ask_gene_specialist")
+    Returns dict keyed by supervisor tool name (e.g., "ask_gene_validation_specialist")
     with entity and example for batching nudge prompts.
     """
     try:
@@ -3950,7 +3950,7 @@ def _track_specialist_call(tool_name: str) -> int:
     Thread-safe via ContextVar - each request has isolated state.
 
     Args:
-        tool_name: The tool being called (e.g., "ask_gene_specialist")
+        tool_name: The tool being called (e.g., "ask_gene_validation_specialist")
 
     Returns:
         The number of consecutive calls to this tool (1 = first call)
@@ -4363,7 +4363,7 @@ async def run_specialist_with_events(
         specialist_name: Human-readable name for logging
         run_config: Optional run configuration
         max_turns: Maximum turns for the specialist
-        tool_name: The tool name (e.g., "ask_gene_specialist") for batching nudge tracking
+        tool_name: The tool name (e.g., "ask_gene_validation_specialist") for batching nudge tracking
         inline_chat_persistence: When True (chat supervisor path), validated builder
             finalization is persisted inline as a CHAT-source extraction result and the
             INTERNAL_EXTRACTION_RESULT event carries the persisted identifiers. When

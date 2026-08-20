@@ -10,6 +10,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.agent_service import get_agent_by_key, get_project_ids_for_user
+from src.lib.agent_studio.agent_identity import require_canonical_agent_identity
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.config.models_loader import get_model
 from src.lib.prompts.assembly import build_agent_prompt_layers
@@ -481,7 +482,10 @@ def _validate_model_id(model_id: str) -> str:
 
 def _resolve_system_template_agent(db: Session, template_source: str) -> CustomAgent:
     """Resolve a system template by canonical unified `agent_key` only."""
-    raw_id = str(template_source or "").strip()
+    raw_id = require_canonical_agent_identity(
+        template_source,
+        field_name="template_source",
+    )
     if not raw_id:
         raise ValueError("template_source is required")
 

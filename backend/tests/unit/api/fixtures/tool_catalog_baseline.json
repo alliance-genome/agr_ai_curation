@@ -9,7 +9,7 @@
           "map_entity_names_to_curies"
         ]
       },
-      "allele": {
+      "allele_validation": {
         "agent_name": "Allele Validation Agent",
         "description": "The Allele specialist confirms allele and variant identities against the Alliance database.",
         "methods": [
@@ -49,16 +49,6 @@
           "get_data_providers"
         ]
       },
-      "gene": {
-        "agent_name": "Gene Validation Agent",
-        "description": "The Gene specialist confirms gene identities and pulls full gene details against the Alliance database.",
-        "methods": [
-          "search_genes",
-          "search_genes_bulk",
-          "get_gene_by_exact_symbol",
-          "get_gene_by_id"
-        ]
-      },
       "gene_expression": {
         "agent_name": "Gene Expression Extractor",
         "description": "The Gene Expression agent confirms gene names it found while reading the PDF.",
@@ -73,6 +63,16 @@
         "description": "The Gene Ontology agent looks up GO terms.",
         "methods": [
           "search_go_terms"
+        ]
+      },
+      "gene_validation": {
+        "agent_name": "Gene Validation Agent",
+        "description": "The Gene specialist confirms gene identities and pulls full gene details against the Alliance database.",
+        "methods": [
+          "search_genes",
+          "search_genes_bulk",
+          "get_gene_by_exact_symbol",
+          "get_gene_by_id"
         ]
       },
       "ontology_term_validation": {

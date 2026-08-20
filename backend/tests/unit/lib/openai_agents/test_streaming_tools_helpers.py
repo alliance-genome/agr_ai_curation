@@ -706,19 +706,19 @@ def test_structured_finalization_attempt_config_defaults_to_six_and_hard_caps():
 def test_lookup_structured_finalization_tool_names_are_enabled():
     assert (
         streaming_tools._structured_specialist_finalization_tool_name(
-            _finalization_config("ask_gene_specialist")
+            _finalization_config("ask_gene_validation_specialist")
         )
         == "finalize_gene_lookup"
     )
     assert (
         streaming_tools._structured_specialist_finalization_tool_name(
-            _finalization_config("ask_allele_specialist")
+            _finalization_config("ask_allele_validation_specialist")
         )
         == "finalize_allele_lookup"
     )
     assert (
         streaming_tools._structured_specialist_finalization_tool_name(
-            _finalization_config("ask_disease_specialist")
+            _finalization_config("ask_disease_validation_specialist")
         )
         == "finalize_disease_lookup"
     )
@@ -742,7 +742,7 @@ def test_lookup_structured_finalization_tool_names_are_enabled():
     )
     assert (
         streaming_tools._structured_specialist_finalization_tool_name(
-            _finalization_config("ask_chemical_specialist")
+            _finalization_config("ask_chemical_validation_specialist")
         )
         == "finalize_chemical_lookup"
     )
@@ -853,7 +853,7 @@ def test_gene_finalization_rejects_invented_resolved_gene(
     feedback = streaming_tools._structured_specialist_finalization_feedback(
         payload,
         expected_output_type=_package_schema("GeneResultEnvelope"),
-        finalization_config=_finalization_config("ask_gene_specialist"),
+        finalization_config=_finalization_config("ask_gene_validation_specialist"),
         tool_calls=[
             streaming_tools.SpecialistToolCall(
                 tool_name="agr_curation_query",
@@ -928,7 +928,7 @@ def test_gene_finalization_accepts_api_grounded_gene(
     feedback = streaming_tools._structured_specialist_finalization_feedback(
         payload,
         expected_output_type=_package_schema("GeneResultEnvelope"),
-        finalization_config=_finalization_config("ask_gene_specialist"),
+        finalization_config=_finalization_config("ask_gene_validation_specialist"),
         tool_calls=[
             streaming_tools.SpecialistToolCall(
                 tool_name="agr_curation_query",
@@ -976,7 +976,7 @@ def test_disease_finalization_rejects_ungrounded_unresolved_candidate(
     feedback = streaming_tools._structured_specialist_finalization_feedback(
         payload,
         expected_output_type=_package_schema("DiseaseValidationResult"),
-        finalization_config=_finalization_config("ask_disease_specialist"),
+        finalization_config=_finalization_config("ask_disease_validation_specialist"),
         tool_calls=[],
         live_evidence_records=[],
     )
@@ -1377,7 +1377,7 @@ def test_chemical_finalization_rejects_invented_resolved_identity(
     feedback = streaming_tools._structured_specialist_finalization_feedback(
         payload,
         expected_output_type=_package_schema("ChemicalValidationResult"),
-        finalization_config=_finalization_config("ask_chemical_specialist"),
+        finalization_config=_finalization_config("ask_chemical_validation_specialist"),
         tool_calls=[
             _lookup_tool_call(
                 tool_name="chebi_api_call",
@@ -1418,7 +1418,7 @@ def test_lookup_finalization_rejects_partial_scalar_identity_match(
     feedback = streaming_tools._structured_specialist_finalization_feedback(
         payload,
         expected_output_type=_package_schema("ChemicalValidationResult"),
-        finalization_config=_finalization_config("ask_chemical_specialist"),
+        finalization_config=_finalization_config("ask_chemical_validation_specialist"),
         tool_calls=[
             _lookup_tool_call(
                 tool_name="chebi_api_call",
@@ -2157,17 +2157,17 @@ def test_consecutive_tracker_and_batching_nudge_generation(monkeypatch):
         streaming_tools,
         "get_batching_config",
         lambda: {
-            "ask_gene_specialist": {
+            "ask_gene_validation_specialist": {
                 "entity": "genes",
-                "example": 'ask_gene_specialist("Look up these genes: daf-16, lin-3")',
+                "example": 'ask_gene_validation_specialist("Look up these genes: daf-16, lin-3")',
             }
         },
     )
 
-    assert streaming_tools._track_specialist_call("ask_gene_specialist") == 1
-    assert streaming_tools._generate_batching_nudge("ask_gene_specialist", 1) is None
-    assert streaming_tools._track_specialist_call("ask_gene_specialist") == 2
-    nudge = streaming_tools._generate_batching_nudge("ask_gene_specialist", 3)
+    assert streaming_tools._track_specialist_call("ask_gene_validation_specialist") == 1
+    assert streaming_tools._generate_batching_nudge("ask_gene_validation_specialist", 1) is None
+    assert streaming_tools._track_specialist_call("ask_gene_validation_specialist") == 2
+    nudge = streaming_tools._generate_batching_nudge("ask_gene_validation_specialist", 3)
     assert nudge is not None
     assert "individual genes" in nudge
 

@@ -106,8 +106,16 @@ def test_validate_model_id_paths(monkeypatch):
 
 
 def test_resolve_system_template_agent_paths():
-    db = _FakeDB([_FakeQuery(first_value=SimpleNamespace(agent_key="gene"))])
-    assert service._resolve_system_template_agent(db, "gene").agent_key == "gene"
+    db = _FakeDB(
+        [_FakeQuery(first_value=SimpleNamespace(agent_key="gene_validation"))]
+    )
+    assert (
+        service._resolve_system_template_agent(db, "gene_validation").agent_key
+        == "gene_validation"
+    )
+
+    with pytest.raises(ValueError, match="retired agent ID"):
+        service._resolve_system_template_agent(db, "gene")
 
     with pytest.raises(ValueError, match="template_source is required"):
         service._resolve_system_template_agent(_FakeDB([_FakeQuery(first_value=None)]), "")

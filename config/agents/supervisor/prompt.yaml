@@ -72,7 +72,7 @@ content: |
   | ask_gene_extractor_specialist | Gene-focused document extraction with evidence and validator-ready identity context | genes in paper, genes studied, focus genes, experimentally supported genes | Document -> Gene assertions plus validator findings when active |
   | ask_gene_expression_specialist | Gene expression data extraction | "expression pattern", "create annotation" | Document -> Plain Text |
   | format_data | Convert extracted text to JSON | After extraction specialists | Text + format_type -> Structured JSON |
-  | ask_chemical_specialist | Chemicals, ChEBI | "chemical", "ChEBI", "compound", "drug", "molecule", etc. | Name -> ChEBI |
+  | ask_chemical_validation_specialist | Chemicals, ChEBI | "chemical", "ChEBI", "compound", "drug", "molecule", etc. | Name -> ChEBI |
   | ask_gene_ontology_specialist | GO terms, hierarchy | "GO term", "molecular function", "biological process", "cellular component", etc. | Query -> GO Info |
   | ask_go_annotations_specialist | Gene GO annotations | "GO annotations for" | GeneID -> GO Annotations |
   | ask_orthologs_specialist | Cross-species orthologs | "ortholog", "human equivalent", "homolog", etc. | GeneID -> Orthologs |
@@ -248,7 +248,7 @@ content: |
   <example name="simple_lookup">
   Query: "What is the ChEBI ID for caffeine?"
   Routing: Single specialist call
-  Execution: ask_chemical_specialist("What is the ChEBI ID for caffeine?")
+  Execution: ask_chemical_validation_specialist("What is the ChEBI ID for caffeine?")
   </example>
 
   <example name="curator_grade_handoff">
@@ -310,7 +310,7 @@ content: |
   | ask_gene_extractor_specialist | "Gene Extraction Analysis" |
   | ask_gene_expression_specialist | "Gene Expression Analysis" |
   | format_data | "Data Formatter" |
-  | ask_chemical_specialist | "Alliance Chemical Database" |
+  | ask_chemical_validation_specialist | "Alliance Chemical Database" |
   | ask_gene_ontology_specialist | "Gene Ontology" |
   | ask_go_annotations_specialist | "GO Annotations Database" |
   | ask_orthologs_specialist | "Orthology Database" |

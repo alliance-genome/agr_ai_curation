@@ -10,14 +10,24 @@ from src.lib.agent_studio.models import AgentPrompts, PromptCatalog, PromptInfo
 from src.lib.prompts.context import get_prompt_override
 
 
-def test_get_prompt_key_for_agent_resolves_registry_alias():
-    """Config registry alias (agent_id) should resolve to canonical folder key."""
-    assert catalog_service.get_prompt_key_for_agent("gene_validation") == "gene"
+def test_get_prompt_key_for_agent_accepts_canonical_validator_id():
+    """The validator agent ID is also its canonical prompt key."""
+    assert catalog_service.get_prompt_key_for_agent("gene_validation") == "gene_validation"
 
 
-def test_get_prompt_key_for_agent_accepts_canonical_key():
-    """Canonical prompt key (folder name) should resolve to itself."""
-    assert catalog_service.get_prompt_key_for_agent("gene") == "gene"
+def test_get_prompt_key_for_agent_rejects_retired_validator_folder_alias():
+    """The package folder is not a public validator or prompt identity."""
+    with pytest.raises(ValueError, match="Unknown agent_id"):
+        catalog_service.get_prompt_key_for_agent("gene")
+
+
+@pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
+def test_get_agent_metadata_rejects_retired_validator_alias(retired_alias):
+    """Stale unified rows cannot revive retired public identities."""
+    with pytest.raises(ValueError, match="retired agent ID"):
+        catalog_service.get_agent_metadata(retired_alias)
+    with pytest.raises(ValueError, match="retired agent ID"):
+        catalog_service.get_active_visible_agent_metadata(retired_alias)
 
 
 def test_get_prompt_key_for_gene_expression_accepts_flow_alias_and_package_id():
@@ -47,7 +57,7 @@ def test_prompt_catalog_get_agent_accepts_validator_agent_id_from_validation_pla
     """Validator-agent IDs from validation plans should inspect the bundled prompt."""
     service = catalog_service.PromptCatalogService()
     gene_prompt = PromptInfo(
-        agent_id="gene",
+        agent_id="gene_validation",
         agent_name="Gene Validation Agent",
         description="Validates genes",
         base_prompt="Gene validator prompt",

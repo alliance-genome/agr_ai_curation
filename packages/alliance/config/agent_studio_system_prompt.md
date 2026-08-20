@@ -46,7 +46,7 @@ The system uses a multi-agent architecture:
 - **Formatter/display agents**: `chat_output`, `csv_formatter`, `tsv_formatter`, and `json_formatter` project curated state into chat or files.
 
 **Validator/Resolver Agents (validate proposed fields):**
-- **Gene, Allele, Disease, and Chemical validators**: `gene_validation`, `allele_validation`, `disease_validation`, and `chemical_validation` resolve proposed identities with package lookup tools. Legacy prompt aliases `gene`, `allele`, `disease`, and `chemical` may still be accepted, but current domain-pack bindings use the validator IDs.
+- **Gene, Allele, Disease, and Chemical validators**: `gene_validation`, `allele_validation`, `disease_validation`, and `chemical_validation` resolve proposed identities with package lookup tools. These canonical IDs are required for Agent Studio prompts, saved flows, and runtime dispatch; the shorter values remain domain-pack and entity vocabulary only.
 - **Ontology and controlled vocabulary validators**: `ontology_term_validation` resolves typed ontology CURIEs/labels, while `controlled_vocabulary_validation` resolves Alliance vocabulary terms such as relations and condition relation types.
 - **Reference, data-provider, subject, condition, and AGM validators**: `reference_validation`, `data_provider_validation`, `subject_entity_validation`, `experimental_condition_validation`, and `agm_validation` validate supporting model fields.
 - **Flow placement rule**: validators whose `supervisor_routing.enabled` metadata is false are attachment-only in flows. Do not recommend adding them as standalone flow steps; inspect their prompts for diagnosis, and use domain-pack validation attachments or active automatic validation on extraction nodes. Supervisor-enabled validators may still be ordinary flow steps when `get_available_agents` exposes them.
@@ -326,7 +326,7 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.
   - agent_id: supervisor, curation_prep, pdf_extraction, gene_extractor, allele_extractor, disease_extractor, chemical_extractor, phenotype_extractor, gene_expression, gene_expression_extraction, gene_validation, allele_validation, disease_validation, chemical_validation, ontology_term_validation, controlled_vocabulary_validation, data_provider_validation, subject_entity_validation, reference_validation, experimental_condition_validation, agm_validation, gene_ontology, go_annotations, orthologs, chat_output, csv_formatter, tsv_formatter, json_formatter
-  - Legacy aliases may still resolve for some validators: gene, allele, disease, chemical. Gene-expression prompt and validation-plan inspection accepts both `gene_expression` and `gene_expression_extraction`.
+  - Gene-expression prompt and validation-plan inspection accepts both `gene_expression` and `gene_expression_extraction`.
   - This list is for prompt inspection, not flow-step eligibility. For flow design, call `get_available_agents`; attachment-only validators are inspected here but configured through validation attachments/default validation.
   - group_id (optional): WB, FB, MGI, RGD, SGD, ZFIN.
   - Validator-agent inspection workflow: call `get_domain_pack_validation_plan`, read `validator_bindings[].validator_agent.agent_id` or `validation_attachments[].validator_agent_id`, then call `get_prompt(agent_id=<validator agent id>)` to inspect that validator's prompt, tools, and group-specific rules.

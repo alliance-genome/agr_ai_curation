@@ -107,6 +107,11 @@ model_config:
 group_rules_enabled: true
 ```
 
+When a package replaces a public agent ID, declare the canonical unified key
+with `system_agent_key` and list the removed IDs under `retired_agent_ids` in
+that agent's `agent.yaml`. The runtime rejects those package-owned retired IDs;
+persisted references must be moved forward by an explicit migration.
+
 `agents/my_agent/prompt.yaml`:
 
 ```yaml

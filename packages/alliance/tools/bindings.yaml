@@ -367,11 +367,11 @@ tools:
             - map_entity_curies_to_info
             - map_entity_names_to_curies
           description: The Subject specialist confirms the affected entity — sending it to the gene, allele, or modified-organism path depending on what it is.
-        gene:
+        gene_validation:
           agent_name: Gene Validation Agent
           methods: [search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id]
           description: The Gene specialist confirms gene identities and pulls full gene details against the Alliance database.
-        allele:
+        allele_validation:
           agent_name: Allele Validation Agent
           methods: [search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id]
           description: The Allele specialist confirms allele and variant identities against the Alliance database.

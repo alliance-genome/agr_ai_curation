@@ -57,7 +57,7 @@ def _write_package(
     return package_dir
 
 
-def test_shipped_alliance_flow_recipe_contract_owns_all_recipes_and_domain_aliases():
+def test_shipped_alliance_flow_recipe_contract_uses_canonical_validator_ids():
     registry = load_package_registry(REPO_ROOT / "packages")
 
     catalog = build_flow_recipe_catalog(registry)
@@ -75,13 +75,18 @@ def test_shipped_alliance_flow_recipe_contract_owns_all_recipes_and_domain_alias
         "GO Annotation Pipeline",
     ]
     assert {tuple(group.agent_ids) for group in catalog.equivalence_groups} == {
-        ("gene", "gene_validation"),
-        ("allele", "allele_validation"),
-        ("disease", "disease_validation"),
-        ("chemical", "chemical_validation"),
         ("gene_expression", "gene_expression_extraction"),
         ("gene_ontology", "gene_ontology_lookup"),
     }
+    recipe_agent_ids = {
+        step.agent_id
+        for recipe in catalog.recipes
+        for step in recipe.steps
+    }
+    assert {"gene_validation", "allele_validation", "disease_validation", "chemical_validation"}.issubset(
+        recipe_agent_ids
+    )
+    assert not {"gene", "allele", "disease", "chemical"} & recipe_agent_ids
     assert {suggestion.name for suggestion in catalog.suggestions} == {
         "document_extraction_first",
         "validate_expression_gene_identifiers",

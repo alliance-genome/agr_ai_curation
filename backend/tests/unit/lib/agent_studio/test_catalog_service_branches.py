@@ -316,7 +316,7 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     monkeypatch.setattr(catalog_service, "build_agent_prompt_layers", _fake_build_agent_prompt_layers)
 
     db_agent = SimpleNamespace(
-        agent_key="gene",
+        agent_key="gene_validation",
         instructions="BASE",
         visibility="system",
         group_rules_enabled=True,
@@ -336,7 +336,7 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
         canonical_tool_ids=["search_document", "record_evidence"],
     )
     runtime_text = runtime_bundle.render()
-    assert captured_assembly["agent_id"] == "gene"
+    assert captured_assembly["agent_id"] == "gene_validation"
     assert captured_assembly["group_id"] == ["WB"]
     assert "CTX" in captured_assembly["runtime_context"]
     assert runtime_text.startswith('You are helping the user with the document: "Paper A"')
@@ -400,18 +400,18 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
         "src.lib.agent_studio.agent_service.get_agent_by_key",
         lambda _db, _agent_id, user_id=None: (_ for _ in ()).throw(RuntimeError("db fail")),
     )
-    assert catalog_service._get_db_agent_row("gene", {}) is None
+    assert catalog_service._get_db_agent_row("gene_validation", {}) is None
 
     monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda _aid, _kwargs: SimpleNamespace())
     monkeypatch.setattr(catalog_service, "_create_db_agent", lambda _row, **_kwargs: None)
     with pytest.raises(ValueError, match="could not be built"):
-        catalog_service.get_agent_by_id("gene")
+        catalog_service.get_agent_by_id("gene_validation")
 
     monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda _aid, _kwargs: None)
     assert catalog_service.get_agent_metadata("task_input")["display_name"] == "Initial Instructions"
     with pytest.raises(ValueError, match="Unknown agent_id"):
         catalog_service.get_agent_metadata("missing")
-    with pytest.raises(ValueError, match="not an active unified agent"):
+    with pytest.raises(ValueError, match="retired agent ID"):
         catalog_service.get_active_visible_agent_metadata("gene", db_user_id=7)
 
 
@@ -436,7 +436,7 @@ def test_list_available_agents_filters_invalid_metadata(monkeypatch):
 def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
     fake_row = SimpleNamespace(
         id="agent-id",
-        agent_key="gene",
+        agent_key="gene_validation",
         instructions="BASE",
         group_prompt_overrides={},
         group_rules_enabled=False,
@@ -468,7 +468,11 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
             hash="hash-1",
-            to_manifest=lambda: {"agent_id": "gene", "layers": [], "hash": "hash-1"},
+            to_manifest=lambda: {
+                "agent_id": "gene_validation",
+                "layers": [],
+                "hash": "hash-1",
+            },
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
@@ -527,7 +531,7 @@ def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
     fake_schema = object()
     fake_row = SimpleNamespace(
         id="agent-id",
-        agent_key="gene",
+        agent_key="gene_validation",
         visibility="system",
         instructions="BASE",
         group_prompt_overrides={},
@@ -554,7 +558,11 @@ def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
         lambda **_kwargs: SimpleNamespace(
             render=lambda: "INSTR",
             hash="hash-1",
-            to_manifest=lambda: {"agent_id": "gene", "layers": [], "hash": "hash-1"},
+            to_manifest=lambda: {
+                "agent_id": "gene_validation",
+                "layers": [],
+                "hash": "hash-1",
+            },
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])

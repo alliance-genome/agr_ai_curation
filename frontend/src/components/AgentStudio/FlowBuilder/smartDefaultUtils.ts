@@ -13,25 +13,12 @@ import type { AgentNode } from './types'
 /** Extraction agents produce raw data from documents */
 export const EXTRACTION_AGENTS = ['pdf_extraction', 'gene_expression']
 
-/** Validation agents validate/lookup entities - should typically use extractor output */
-export const VALIDATION_AGENTS = [
-  'gene', 'allele', 'disease', 'chemical',
-  'gene_ontology', 'go_annotations', 'orthologs', 'ontology_term_validation'
-]
-
 /**
  * Check if an agent is an extraction agent.
  * Extraction agents produce raw data from documents.
  */
 export const isExtractionAgent = (agentId: string): boolean =>
   EXTRACTION_AGENTS.includes(agentId)
-
-/**
- * Check if an agent is a validation agent.
- * Validation agents validate/lookup entities and should typically use extractor output.
- */
-export const isValidationAgent = (agentId: string): boolean =>
-  VALIDATION_AGENTS.includes(agentId)
 
 // =============================================================================
 // Extractor Count Helpers
