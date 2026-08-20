@@ -1332,7 +1332,7 @@ async def _collect_flow_validator_materialization_inputs(
         ValidatorResultMaterializationInput | ValidatorDispatchJob
     ] = []
     automatic_jobs: list[ValidatorDispatchJob] = []
-    automatic_metadata_by_request_id: dict[str, dict[str, Any]] = {}
+    automatic_metadata_entries: list[tuple[str, dict[str, Any]]] = []
     selector_findings: list[ValidationFinding] = []
     result_metadata: list[dict[str, Any]] = []
     runtime_context = _validator_runtime_context_for_flow(
@@ -1442,7 +1442,9 @@ async def _collect_flow_validator_materialization_inputs(
                     "request_id": request.request_id,
                 }
                 result_metadata.append(metadata_entry)
-                automatic_metadata_by_request_id[request.request_id] = metadata_entry
+                automatic_metadata_entries.append(
+                    (request.request_id, metadata_entry)
+                )
                 continue
 
             try:
@@ -1510,13 +1512,13 @@ async def _collect_flow_validator_materialization_inputs(
             "batch_validator_run_count": job_dispatch.batch_validator_run_count,
             "validator_batch_groups": list(job_dispatch.validator_batch_groups),
         }
-        for request_id, metadata_entry in automatic_metadata_by_request_id.items():
+        for request_id, metadata_entry in automatic_metadata_entries:
             item = dispatched_by_request_id[request_id]
             base = {
                 "group_id": metadata_entry["group_id"],
                 "state": metadata_entry["state"],
                 "validator_binding_id": metadata_entry["validator_binding_id"],
-                "dispatch_metadata": dispatch_metadata,
+                "dispatch_metadata": dict(dispatch_metadata),
             }
             metadata_entry.clear()
             metadata_entry.update(
