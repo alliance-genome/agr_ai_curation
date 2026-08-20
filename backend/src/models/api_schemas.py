@@ -104,7 +104,7 @@ class DocumentSourceProvenance(BaseModel):
     import_status: Optional[str] = None
     imported_at: Optional[datetime] = None
     access_scope: Optional[str] = None
-    access_mods: Optional[Dict[str, List[str]]] = None
+    access_group_ids: Optional[List[str]] = None
     viewer_mode: Optional[str] = None
 
 

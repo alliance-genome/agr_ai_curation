@@ -49,7 +49,7 @@ const providerDocument: DocumentDetailData = normalizeDocumentDetailResponse({
     artifact_status: 'ready',
     import_status: 'imported',
     access_scope: 'restricted',
-    access_mods: { mods: ['GROUP'] },
+    access_group_ids: ['GROUP'],
     viewer_mode: 'local_pdf',
   },
 });
@@ -85,7 +85,8 @@ describe('DocumentDetailsDialog', () => {
     expect(screen.getByText('CATALOG: CAT-123 · ACCESSION: ACC-456')).toBeInTheDocument();
     expect(screen.getByText('converted-md-1')).toBeInTheDocument();
     expect(screen.getByText('restricted')).toBeInTheDocument();
-    expect(screen.getByText('mods: GROUP')).toBeInTheDocument();
+    expect(screen.getByText('Access groups')).toBeInTheDocument();
+    expect(screen.getByText('GROUP')).toBeInTheDocument();
     expect(screen.getByText('Chunks: 12')).toBeInTheDocument();
     expect(screen.queryByText(/^Embedding:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Vectors:/)).not.toBeInTheDocument();
@@ -95,6 +96,34 @@ describe('DocumentDetailsDialog', () => {
     expect(screen.queryByText('Related Documents')).not.toBeInTheDocument();
     expect(screen.queryByText('Metadata')).not.toBeInTheDocument();
     expect(screen.queryByText('conversion_request')).not.toBeInTheDocument();
+  });
+
+  it('does not relabel access groups as a missing access scope', () => {
+    useDocumentMock.mockReturnValue({
+      data: {
+        ...providerDocument,
+        document: {
+          ...providerDocument.document,
+          sourceProvenance: {
+            ...providerDocument.document.sourceProvenance!,
+            accessScope: null,
+            accessGroupIds: ['GROUP'],
+          },
+        },
+      },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <DocumentDetailsDialog open documentId="doc-provider" onClose={vi.fn()} />,
+    );
+
+    expect(screen.getByText('Access').parentElement).toHaveTextContent('Access—');
+    expect(screen.getByText('Access groups')).toBeInTheDocument();
+    expect(screen.getByText('GROUP')).toBeInTheDocument();
   });
 
   it('shows the backend processing error when detail loading succeeded', () => {
@@ -206,7 +235,7 @@ describe('DocumentDetailsDialog', () => {
             importStatus: null,
             importedAt: null,
             accessScope: null,
-            accessMods: null,
+            accessGroupIds: null,
             viewerMode: null,
           },
         },

@@ -210,7 +210,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     local_checksum = "sha256-provider-source"
     access_policy = SourceAccessPolicy(
         scope=SourceAccessScope.RESTRICTED,
-        mods=("FAKE",),
+        group_ids=("FAKE",),
     )
     source_artifact = SourceArtifact(
         provider="mock_literature",
@@ -466,7 +466,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     assert record.source_file_extension == "md"
     assert record.source_md5 == checksum
     assert record.source_access_scope == "restricted"
-    assert record.source_access_mods == {"mods": ["FAKE"]}
+    assert record.source_access_group_ids == ["FAKE"]
     assert record.source_import_status == "pending"
     assert session.commit_calls == 1
     assert session.closed is True
@@ -510,9 +510,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
         "doi": "10.5555/provider-flow"
     }
     assert "token" not in persisted_metadata[0]["source_provenance"]["external_ids"]
-    assert persisted_metadata[0]["source_provenance"]["access_mods"] == {
-        "mods": ["FAKE"]
-    }
+    assert persisted_metadata[0]["source_provenance"]["access_group_ids"] == ["FAKE"]
     assert persisted_metadata[0]["source_markdown_path"] == (
         f"user-provider/source_markdown/{result.document_id}.md"
     )

@@ -68,7 +68,7 @@ class SourceAccessPolicy:
     """Access policy normalized from the provider's source artifact metadata."""
 
     scope: SourceAccessScope = SourceAccessScope.UNKNOWN
-    mods: tuple[str, ...] = ()
+    group_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +126,6 @@ class SourceConversionResult:
     error_message: str | None = None
     converted_classes: tuple[str, ...] = ()
     per_file_progress: tuple[Mapping[str, Any], ...] = ()
-    per_mod_status: tuple[Mapping[str, Any], ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 

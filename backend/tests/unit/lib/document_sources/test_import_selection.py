@@ -215,7 +215,7 @@ def _fake_conversion_exposes_main_text(
         converted = progress.get("converted")
         if isinstance(converted, dict) and converted.get("file_class") == "converted_merged_main":
             return True
-    return any(status.get("main_converted") is True for status in result.per_mod_status)
+    return False
 
 
 def _source(
@@ -223,7 +223,7 @@ def _source(
     *,
     provider: str = "fake_provider",
     scope: SourceAccessScope = SourceAccessScope.GLOBAL,
-    mods: tuple[str, ...] = (),
+    group_ids: tuple[str, ...] = (),
     reference_curie: str = "AGRKB:101",
 ) -> SourceArtifact:
     return SourceArtifact(
@@ -236,7 +236,7 @@ def _source(
         reference_curie=reference_curie,
         display_name=f"{artifact_id}.pdf",
         md5sum="abc123",
-        access_policy=SourceAccessPolicy(scope=scope, mods=mods),
+        access_policy=SourceAccessPolicy(scope=scope, group_ids=group_ids),
     )
 
 
@@ -522,7 +522,7 @@ async def test_select_checksum_import_candidate_requires_source_artifact():
 async def test_select_checksum_import_candidate_blocks_inaccessible_restricted_match():
     provider = FakeChecksumProvider(
         [
-            _source("source-1", scope=SourceAccessScope.RESTRICTED, mods=("FB",)),
+            _source("source-1", scope=SourceAccessScope.RESTRICTED, group_ids=("FB",)),
             _converted("md-1", "source-1"),
         ]
     )
@@ -541,7 +541,7 @@ async def test_select_checksum_import_candidate_blocks_inaccessible_restricted_m
 async def test_select_checksum_import_candidate_allows_restricted_group_case_insensitive():
     provider = FakeChecksumProvider(
         [
-            _source("source-1", scope=SourceAccessScope.RESTRICTED, mods=("fb",)),
+            _source("source-1", scope=SourceAccessScope.RESTRICTED, group_ids=("fb",)),
             _converted("md-1", "source-1"),
         ]
     )
@@ -716,7 +716,7 @@ async def test_select_checksum_import_candidate_blocks_ambiguous_post_conversion
 
 
 @pytest.mark.asyncio
-async def test_select_checksum_import_candidate_accepts_per_mod_only_readiness():
+async def test_select_checksum_import_candidate_accepts_provider_mapped_readiness():
     source = _source("source-1", provider="abc_literature")
     markdown = _converted("md-1", "source-1", provider="abc_literature")
     provider = FakeConversionProvider(
@@ -725,7 +725,7 @@ async def test_select_checksum_import_candidate_accepts_per_mod_only_readiness()
             provider="abc_literature",
             status=SourceConversionStatus.RUNNING,
             reference_curie="AGRKB:101",
-            per_mod_status=({"mod": "FB", "main_converted": True},),
+            converted_classes=("converted_merged_main",),
         ),
         listed_artifacts=[source, markdown],
     )

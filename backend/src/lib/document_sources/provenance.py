@@ -45,7 +45,7 @@ _SQL_TO_PUBLIC_FIELD = {
     "source_import_status": "import_status",
     "source_imported_at": "imported_at",
     "source_access_scope": "access_scope",
-    "source_access_mods": "access_mods",
+    "source_access_group_ids": "access_group_ids",
     "viewer_mode": "viewer_mode",
 }
 
@@ -103,9 +103,9 @@ def sanitize_document_source_provenance(raw: Any) -> dict[str, Any] | None:
     if external_ids:
         sanitized["external_ids"] = external_ids
 
-    access_mods = _sanitize_access_mods(raw_mapping.get("access_mods"))
-    if access_mods:
-        sanitized["access_mods"] = access_mods
+    access_group_ids = _sanitize_access_group_ids(raw_mapping.get("access_group_ids"))
+    if access_group_ids:
+        sanitized["access_group_ids"] = access_group_ids
 
     return sanitized
 
@@ -212,24 +212,16 @@ def _sanitize_external_ids(value: object) -> dict[str, str | list[str]] | None:
     return sanitized or None
 
 
-def _sanitize_access_mods(value: object) -> dict[str, list[str]] | None:
-    if not isinstance(value, dict):
+def _sanitize_access_group_ids(value: object) -> list[str] | None:
+    if not isinstance(value, list):
         return None
 
-    raw_mods = value.get("mods")
-    if isinstance(raw_mods, str):
-        raw_values: list[object] = [raw_mods]
-    elif isinstance(raw_mods, list):
-        raw_values = raw_mods
-    else:
-        return None
-
-    mods = [
-        mod
-        for mod in (_string_or_none(raw_value) for raw_value in raw_values)
-        if mod is not None
+    group_ids = [
+        group_id
+        for group_id in (_string_or_none(raw_value) for raw_value in value)
+        if group_id is not None
     ]
-    return {"mods": mods} if mods else None
+    return group_ids or None
 
 
 def _is_sensitive_key(key: str) -> bool:

@@ -276,7 +276,7 @@ async def test_create_document_includes_source_provenance_metadata():
             "reference_curie": "AGRKB:101",
             "converted_artifact_id": "converted-file-1",
             "access_scope": "restricted",
-            "access_mods": {"mods": ["FB"], "raw_mod_objects": [{"secret": "drop"}]},
+            "access_group_ids": ["FB", {"secret": "drop"}],
             "source_payload_path": "/internal/raw.json",
             "curator_token": "secret-token",
             "full_markdown": "# Full content",
@@ -297,7 +297,7 @@ async def test_create_document_includes_source_provenance_metadata():
         "reference_curie": "AGRKB:101",
         "converted_artifact_id": "converted-file-1",
         "access_scope": "restricted",
-        "access_mods": {"mods": ["FB"]},
+        "access_group_ids": ["FB"],
     }
     assert "curator_token" not in metadata["source_provenance"]
     assert "source_payload_path" not in metadata["source_provenance"]

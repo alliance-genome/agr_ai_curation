@@ -392,7 +392,7 @@ class UploadIntakeService:
                     "pending" if provider_import_plan is not None else None
                 ),
                 source_access_scope=source_provenance.get("access_scope"),
-                source_access_mods=source_provenance.get("access_mods"),
+                source_access_group_ids=source_provenance.get("access_group_ids"),
             )
             session.add(record)
             session.commit()
@@ -731,7 +731,7 @@ class UploadIntakeService:
             or _enum_or_string(source_artifact.artifact_format),
             "artifact_status": _enum_or_string(source_artifact.status),
             "access_scope": _enum_or_string(source_artifact.access_policy.scope),
-            "access_mods": {"mods": list(source_artifact.access_policy.mods)},
+            "access_group_ids": list(source_artifact.access_policy.group_ids),
             "viewer_mode": ViewerMode.LOCAL_PDF.value,
         }
         if converted_artifact is not None:

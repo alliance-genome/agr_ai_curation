@@ -1042,7 +1042,7 @@ class IdentifierImportService:
                     else None
                 ),
                 source_access_scope=source_provenance.get("access_scope"),
-                source_access_mods=source_provenance.get("access_mods"),
+                source_access_group_ids=source_provenance.get("access_group_ids"),
             )
             session.add(record)
             session.commit()
@@ -1400,8 +1400,6 @@ def _reference_conversion_metadata(result: SourceConversionResult) -> dict[str, 
         metadata["converted_classes"] = list(result.converted_classes)
     if result.per_file_progress:
         metadata["per_file_progress"] = list(result.per_file_progress)
-    if result.per_mod_status:
-        metadata["per_mod_status"] = list(result.per_mod_status)
     return metadata
 
 
@@ -1442,7 +1440,7 @@ def _build_reference_source_provenance(decision: ReferenceImportDecision) -> dic
         or _enum_value(source_artifact.artifact_format),
         "artifact_status": _enum_value(source_artifact.status),
         "access_scope": _enum_value(source_artifact.access_policy.scope),
-        "access_mods": {"mods": list(source_artifact.access_policy.mods)},
+        "access_group_ids": list(source_artifact.access_policy.group_ids),
         "viewer_mode": ViewerMode.LOCAL_PDF.value,
     }
     if converted_artifact is not None:

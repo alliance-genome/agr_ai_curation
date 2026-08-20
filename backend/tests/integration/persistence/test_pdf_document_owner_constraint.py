@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from alembic import command
 from alembic.config import Config
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from src.models.sql.database import SessionLocal, engine
@@ -130,12 +130,13 @@ def test_upgrade_reports_all_bad_rows_without_partial_data_or_schema_changes():
         assert str(valid_id) not in str(exc_info.value)
         assert str(invalid_id) in str(exc_info.value)
         with SessionLocal() as session:
-            rows = {
-                row.id: row.user_id
-                for row in session.query(PDFDocument)
-                .filter(PDFDocument.id.in_([valid_id, invalid_id]))
-                .all()
-            }
+            rows = dict(
+                session.execute(
+                    select(PDFDocument.id, PDFDocument.user_id).where(
+                        PDFDocument.id.in_([valid_id, invalid_id])
+                    )
+                ).all()
+            )
         assert rows == {valid_id: None, invalid_id: None}
         assert _column_is_nullable() is True
     finally:

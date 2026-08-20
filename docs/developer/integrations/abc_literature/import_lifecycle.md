@@ -80,13 +80,12 @@ ABC conversion response fields are stored under PDF job
 - `conversion_job_id`
 - `converted_classes`
 - `per_file_progress`
-- `per_mod_status`
 - `conversion_error_message`
 
 | ABC status/signal | Local mapping |
 | --- | --- |
 | `running` without main text | Job `running`, stage `provider_conversion`, progress around 20%, message `ABC Literature conversion running` or pending-file count. |
-| `running` with `converted_merged_main`, `per_file_progress[].converted.file_class=converted_merged_main`, or `per_mod_status[].main_converted=true` | Re-list artifacts with `show_all`; if one canonical non-TEI Markdown artifact is available, continue to provider-Markdown ingestion. |
+| `running` with a normalized `converted_merged_main` class or `per_file_progress[].converted.file_class=converted_merged_main` | Re-list artifacts with `show_all`; if one canonical non-TEI Markdown artifact is available, continue to provider-Markdown ingestion. The ABC adapter folds its private per-MOD readiness payload into the normalized class signal. |
 | `converted` with one canonical non-TEI Markdown artifact | Continue to provider-Markdown ingestion. |
 | `converted` but no canonical non-TEI Markdown artifact | Mark failed: `Provider conversion completed without canonical converted Markdown`. |
 | `failed` | Mark failed with ABC `error_message` or failed per-file errors. |
