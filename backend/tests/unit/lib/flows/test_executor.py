@@ -5,6 +5,7 @@ import importlib
 import json
 import logging
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID
 import pytest
 from unittest.mock import MagicMock, patch
@@ -3252,22 +3253,29 @@ class TestGetAllAgentToolsStepOrderRuntime:
             lambda: _batch_runner,
         )
 
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=4,
-                registry=_Registry(),
-                groups=[
-                    {
-                        "group_id": "automatic-lookup",
-                        "state": "automatic",
-                        "binding_id": "fixture.identifier_lookup",
-                    }
-                ],
-                flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
+        from src.lib.openai_agents.streaming_tools import set_live_event_list
+
+        live_events: list[dict[str, Any]] = []
+        set_live_event_list(live_events)
+        try:
+            materialization_inputs, selector_findings, metadata = asyncio.run(
+                executor._collect_flow_validator_materialization_inputs(
+                    source_envelope=envelope,
+                    source_envelope_revision=4,
+                    registry=_Registry(),
+                    groups=[
+                        {
+                            "group_id": "automatic-lookup",
+                            "state": "automatic",
+                            "binding_id": "fixture.identifier_lookup",
+                        }
+                    ],
+                    flow=_make_flow([]),
+                    agent_context={"user_id": "curator-1"},
+                )
             )
-        )
+        finally:
+            set_live_event_list(None)
 
         assert selector_findings == []
         assert batch_calls == [
@@ -3293,6 +3301,37 @@ class TestGetAllAgentToolsStepOrderRuntime:
             item["lookup_attempts"][0]["method"] == "identifier_batch_lookup"
             for item in metadata
         )
+        assert all(
+            item["dispatch_metadata"]["validator_agent_run_count"] == 2
+            and item["dispatch_metadata"]["batch_validator_run_count"] == 2
+            and len(item["dispatch_metadata"]["validator_batch_groups"]) == 2
+            for item in metadata
+        )
+        assert all(
+            item["dispatch_metadata"] is not metadata[0]["dispatch_metadata"]
+            and item["dispatch_metadata"]["validator_batch_groups"]
+            is not metadata[0]["dispatch_metadata"]["validator_batch_groups"]
+            for item in metadata[1:]
+        )
+        assert sorted(event["event"] for event in live_events) == [
+            "validator_batch_complete",
+            "validator_batch_complete",
+            "validator_batch_start",
+            "validator_batch_start",
+        ]
+        assert {
+            (
+                event["event"],
+                event["dispatch_job_count"],
+                event["unique_request_count"],
+                event["deduplicated_job_count"],
+                event["request_count"],
+            )
+            for event in live_events
+        } == {
+            ("validator_batch_start", 5, 4, 1, 2),
+            ("validator_batch_complete", 5, 4, 1, 2),
+        }
 
     def test_automatic_validation_group_skips_non_dispatch_binding(
         self, monkeypatch

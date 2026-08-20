@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import copy
 import json
 import logging
@@ -657,6 +658,22 @@ def _run_validator_jobs(
             len(grouped_jobs),
         )
 
+    planned_event_emitter: ValidatorDispatchEventEmitter | None = None
+    if event_emitter is not None:
+        underlying_event_emitter = event_emitter
+        dispatch_event_metadata = {
+            "dispatch_job_count": len(jobs),
+            "unique_request_count": len(grouped_jobs),
+            "deduplicated_job_count": len(jobs) - len(grouped_jobs),
+            "validator_agent_run_count": len(run_groups),
+            "batch_validator_run_count": batch_run_count,
+        }
+
+        def _emit_planned_validator_event(event: dict[str, Any]) -> None:
+            underlying_event_emitter({**dispatch_event_metadata, **event})
+
+        planned_event_emitter = _emit_planned_validator_event
+
     group_results: dict[int, list[DomainValidatorResultBase]] = {}
     validator_agent_run_count = 0
     batch_validator_run_count = 0
@@ -669,7 +686,7 @@ def _run_validator_jobs(
                 grouped_jobs=grouped_jobs,
                 agent_runner=agent_runner,
                 batch_runner=batch_runner,
-                event_emitter=event_emitter,
+                event_emitter=planned_event_emitter,
             )
             group_results.update(result.dedupe_group_results)
             validator_agent_run_count += result.validator_agent_run_count
@@ -680,17 +697,19 @@ def _run_validator_jobs(
             max_workers=worker_count,
             thread_name_prefix="domain-validator-dispatch",
         ) as executor:
-            future_by_run_group = {
-                executor.submit(
+            future_by_run_group = {}
+            for run_group in run_groups:
+                dispatch_context = contextvars.copy_context()
+                future = executor.submit(
+                    dispatch_context.run,
                     _execute_validator_run_group,
                     run_group,
                     grouped_jobs=grouped_jobs,
                     agent_runner=agent_runner,
                     batch_runner=batch_runner,
-                    event_emitter=event_emitter,
-                ): run_group
-                for run_group in run_groups
-            }
+                    event_emitter=planned_event_emitter,
+                )
+                future_by_run_group[future] = run_group
             for future in concurrent.futures.as_completed(future_by_run_group):
                 result = future.result()
                 group_results.update(result.dedupe_group_results)

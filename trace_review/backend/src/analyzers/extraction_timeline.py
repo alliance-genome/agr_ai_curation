@@ -159,7 +159,7 @@ def _build_timeline_payload_size(
     event_chars = _size_chars(event_size)
     total_exchange_chars = input_chars + output_chars
     max_chars = max(input_chars, output_chars, event_chars)
-    payload = {
+    payload: Dict[str, Any] = {
         "input_json_chars": input_chars,
         "output_json_chars": output_chars,
         "event_json_chars": event_chars,
@@ -278,6 +278,108 @@ def _summary_text(summary: Mapping[str, Any] | None) -> str:
     if isinstance(preview, str):
         return preview
     return ""
+
+
+def _validator_batch_details(event: Mapping[str, Any]) -> Dict[str, Any] | None:
+    payload: Mapping[str, Any] | None = None
+    for summary_key in ("input_summary", "output_summary"):
+        summary = event.get(summary_key)
+        if not isinstance(summary, Mapping):
+            continue
+        preview = summary.get("preview")
+        if isinstance(preview, Mapping):
+            event_name = str(preview.get("event") or "")
+            if event_name in {"validator_batch_start", "validator_batch_complete"}:
+                payload = preview
+                break
+    if payload is None:
+        return None
+
+    event_name = str(payload["event"])
+    details = {
+        "event": event_name,
+        "phase": event_name.removeprefix("validator_batch_"),
+    }
+    for key in (
+        "validator_binding_id",
+        "validator_agent",
+        "batch_family",
+        "dispatch_job_count",
+        "unique_request_count",
+        "deduplicated_job_count",
+        "validator_agent_run_count",
+        "batch_validator_run_count",
+        "request_count",
+        "request_ids",
+        "first_request_id",
+        "status",
+        "resolved_count",
+        "unresolved_count",
+        "duration_seconds",
+        "runner_duration_seconds",
+        "output_validation_duration_seconds",
+        "error",
+    ):
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            details[key] = value
+    return details
+
+
+def _validator_dispatch_summary(
+    timeline: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    completed_batches = [
+        item["validator_batch"]
+        for item in timeline
+        if isinstance(item.get("validator_batch"), Mapping)
+        and item["validator_batch"].get("phase") == "complete"
+    ]
+    if not completed_batches:
+        return None
+
+    dispatch_counts = completed_batches[0]
+    group_keys = (
+        "validator_binding_id",
+        "validator_agent",
+        "batch_family",
+        "request_count",
+        "request_ids",
+        "first_request_id",
+        "status",
+        "resolved_count",
+        "unresolved_count",
+        "duration_seconds",
+        "runner_duration_seconds",
+        "output_validation_duration_seconds",
+        "error",
+    )
+    groups = [
+        {
+            key: batch[key]
+            for key in group_keys
+            if key in batch
+        }
+        for batch in completed_batches
+    ]
+    return {
+        "validator_agent_run_count": int(
+            dispatch_counts.get("validator_agent_run_count")
+            or len(completed_batches)
+        ),
+        "batch_validator_run_count": int(
+            dispatch_counts.get("batch_validator_run_count")
+            or len(completed_batches)
+        ),
+        "dispatch_job_count": int(dispatch_counts.get("dispatch_job_count") or 0),
+        "unique_request_count": int(
+            dispatch_counts.get("unique_request_count") or 0
+        ),
+        "deduplicated_job_count": int(
+            dispatch_counts.get("deduplicated_job_count") or 0
+        ),
+        "validator_batch_groups": groups,
+    }
 
 
 def _coerce_mapping(value: Any) -> Mapping[str, Any] | None:
@@ -677,7 +779,9 @@ def _event_matches(
         if tool_name not in haystack:
             return False
     if event_type and event.get("event_type") != event_type:
-        return False
+        validator_batch = _validator_batch_details(event)
+        if validator_batch is None or validator_batch.get("event") != event_type:
+            return False
     if candidate_id:
         haystack = json.dumps(event, sort_keys=True, default=str)
         if candidate_id not in haystack:
@@ -976,6 +1080,7 @@ class ExtractionTimelineAnalyzer:
 
         timeline = []
         for index, event in enumerate(filtered, start=1):
+            validator_batch = _validator_batch_details(event)
             input_size = _summary_payload_size(event.get("input_summary"))
             output_size = _summary_payload_size(event.get("output_summary"))
             event_size = _event_payload_size(event)
@@ -987,7 +1092,11 @@ class ExtractionTimelineAnalyzer:
                 if event.get("event_id") in durable_event_ids
                 else event.get("metadata", {}).get("source", "observation"),
                 "event_trace_id": event.get("trace_id"),
-                "event_type": event.get("event_type"),
+                "event_type": (
+                    validator_batch.get("event")
+                    if validator_batch is not None
+                    else event.get("event_type")
+                ),
                 "event_id": event.get("event_id"),
                 "observation_id": event.get("observation_id"),
                 "tool_call_id": event.get("tool_call_id"),
@@ -1007,14 +1116,18 @@ class ExtractionTimelineAnalyzer:
                 ),
                 "validation": event.get("validation") or {},
             }
+            if validator_batch is not None:
+                item["validator_batch"] = validator_batch
             timeline.append(item)
 
         counts: Dict[str, int] = {}
-        for event in filtered:
-            key = str(event.get("event_type") or "unknown")
+        for item in timeline:
+            key = str(item.get("event_type") or "unknown")
             counts[key] = counts.get(key, 0) + 1
 
-        return {
+        validator_dispatch_summary = _validator_dispatch_summary(timeline)
+
+        result = {
             "schema_version": ANALYZER_SCHEMA_VERSION,
             "trace_id": trace_id,
             "trace_name": (raw_trace or {}).get("name"),
@@ -1038,6 +1151,9 @@ class ExtractionTimelineAnalyzer:
             "sibling_trace_ids": sibling_ids,
             "timeline": timeline,
         }
+        if validator_dispatch_summary is not None:
+            result["validator_dispatch_summary"] = validator_dispatch_summary
+        return result
 
     @staticmethod
     def diagnostic_report(timeline: Dict[str, Any]) -> Dict[str, Any]:
@@ -1050,6 +1166,7 @@ class ExtractionTimelineAnalyzer:
         finalization_events = [
             item for item in timeline.get("timeline", []) if "final" in str(item.get("event_type") or "")
         ]
+        validator_dispatch_summary = timeline.get("validator_dispatch_summary", {})
         return {
             "schema_version": timeline.get("schema_version"),
             "trace_id": timeline.get("trace_id"),
@@ -1067,9 +1184,22 @@ class ExtractionTimelineAnalyzer:
                 "estimated_payload_exchange_tokens": timeline.get(
                     "size_summary", {}
                 ).get("estimated_exchange_tokens", 0),
+                "validator_agent_run_count": validator_dispatch_summary.get(
+                    "validator_agent_run_count",
+                    0,
+                ),
+                "batch_validator_run_count": validator_dispatch_summary.get(
+                    "batch_validator_run_count",
+                    0,
+                ),
+                "deduplicated_validator_job_count": validator_dispatch_summary.get(
+                    "deduplicated_job_count",
+                    0,
+                ),
             },
             "size_summary": timeline.get("size_summary", {}),
             "reasoning_summary": timeline.get("reasoning_summary", {}),
+            "validator_dispatch_summary": validator_dispatch_summary,
             "validation_failures": validation_failures,
             "timeline": timeline.get("timeline", []),
         }

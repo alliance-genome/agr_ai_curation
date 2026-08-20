@@ -19,6 +19,7 @@ Architecture:
     events for the audit panel and PDF highlighting.
 """
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -1484,12 +1485,18 @@ async def _collect_flow_validator_materialization_inputs(
         automatic_dispatch = await asyncio.to_thread(
             dispatch_validator_binding_matches,
             [entry[1] for entry in automatic_entries],
+            event_emitter=_emit_flow_runtime_event,
             runtime_context=runtime_context,
         )
         automatic_materialization_inputs.extend(
             automatic_dispatch.materialization_inputs
         )
         selector_findings.extend(automatic_dispatch.selector_findings)
+        dispatch_metadata = {
+            "validator_agent_run_count": automatic_dispatch.validator_agent_run_count,
+            "batch_validator_run_count": automatic_dispatch.batch_validator_run_count,
+            "validator_batch_groups": list(automatic_dispatch.validator_batch_groups),
+        }
 
         remaining_entry_indexes = list(range(len(automatic_entries)))
         for outcome in automatic_dispatch.outcomes:
@@ -1508,6 +1515,7 @@ async def _collect_flow_validator_materialization_inputs(
                     "validator_binding_id": binding_id,
                     "status": "selector_failed",
                     "finding_count": len(outcome.selector_findings),
+                    "dispatch_metadata": copy.deepcopy(dispatch_metadata),
                 }
             elif outcome.request is None or outcome.result is None:
                 result_metadata[metadata_index] = {
@@ -1515,12 +1523,14 @@ async def _collect_flow_validator_materialization_inputs(
                     "state": "automatic",
                     "validator_binding_id": binding_id,
                     "status": "request_not_available",
+                    "dispatch_metadata": copy.deepcopy(dispatch_metadata),
                 }
             else:
                 result_metadata[metadata_index] = _flow_validator_result_metadata(
                     group=group,
                     request=outcome.request,
                     validator_result=outcome.result,
+                    dispatch_metadata=dispatch_metadata,
                 )
 
     return (
@@ -1535,10 +1545,11 @@ def _flow_validator_result_metadata(
     group: Mapping[str, Any],
     request: DomainValidationRequest,
     validator_result: DomainValidatorResultBase,
+    dispatch_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Adapt a canonical validator result to flow-specific event metadata."""
 
-    return {
+    metadata = {
         "group_id": group.get("group_id"),
         "state": str(group.get("state") or ""),
         "validator_binding_id": _binding_id_from_group(group),
@@ -1559,6 +1570,9 @@ def _flow_validator_result_metadata(
         "curator_message": validator_result.curator_message,
         "missing_expected_fields": list(validator_result.missing_expected_fields),
     }
+    if dispatch_metadata is not None:
+        metadata["dispatch_metadata"] = copy.deepcopy(dict(dispatch_metadata))
+    return metadata
 
 
 def _source_envelope_has_validator_finding(

@@ -115,6 +115,113 @@ def test_analyzer_merges_durable_events_and_agents_sdk_tool_observations(tmp_pat
     ]
 
 
+def test_analyzer_summarizes_flow_validator_batch_events(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    batch_groups = [
+        ("req-1", ["req-1", "req-2"]),
+        ("req-3", ["req-3", "req-4"]),
+    ]
+    sequence = 0
+    for phase in ("start", "complete"):
+        for first_request_id, request_ids in batch_groups:
+            sequence += 1
+            payload = {
+                "event": f"validator_batch_{phase}",
+                "validator_binding_id": "fixture.identifier_lookup",
+                "batch_family": "fixture_identifiers",
+                "dispatch_job_count": 5,
+                "unique_request_count": 4,
+                "deduplicated_job_count": 1,
+                "validator_agent_run_count": 2,
+                "batch_validator_run_count": 2,
+                "request_count": 2,
+                "request_ids": request_ids,
+                "first_request_id": first_request_id,
+                **(
+                    {
+                        "status": "completed",
+                        "resolved_count": 2,
+                        "unresolved_count": 0,
+                    }
+                    if phase == "complete"
+                    else {}
+                ),
+            }
+            _write_event(
+                tmp_path,
+                "trace-main",
+                _event(
+                    "trace-main",
+                    sequence,
+                    "runtime.event",
+                    input_summary={"preview": payload, "bounded": True},
+                    output_summary={"preview": payload, "bounded": True},
+                ),
+            )
+
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=[],
+    )
+
+    assert [item["validator_batch"]["phase"] for item in timeline["timeline"]] == [
+        "start",
+        "start",
+        "complete",
+        "complete",
+    ]
+    assert timeline["event_type_counts"] == {
+        "validator_batch_start": 2,
+        "validator_batch_complete": 2,
+    }
+    assert timeline["validator_dispatch_summary"] == {
+        "validator_agent_run_count": 2,
+        "batch_validator_run_count": 2,
+        "dispatch_job_count": 5,
+        "unique_request_count": 4,
+        "deduplicated_job_count": 1,
+        "validator_batch_groups": [
+            {
+                "validator_binding_id": "fixture.identifier_lookup",
+                "batch_family": "fixture_identifiers",
+                "request_count": 2,
+                "request_ids": ["req-1", "req-2"],
+                "first_request_id": "req-1",
+                "status": "completed",
+                "resolved_count": 2,
+                "unresolved_count": 0,
+            },
+            {
+                "validator_binding_id": "fixture.identifier_lookup",
+                "batch_family": "fixture_identifiers",
+                "request_count": 2,
+                "request_ids": ["req-3", "req-4"],
+                "first_request_id": "req-3",
+                "status": "completed",
+                "resolved_count": 2,
+                "unresolved_count": 0,
+            },
+        ],
+    }
+    report = ExtractionTimelineAnalyzer.diagnostic_report(timeline)
+    assert report["summary"]["validator_agent_run_count"] == 2
+    assert report["summary"]["batch_validator_run_count"] == 2
+    assert report["summary"]["deduplicated_validator_job_count"] == 1
+    assert report["validator_dispatch_summary"] == timeline[
+        "validator_dispatch_summary"
+    ]
+
+    completed_only = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=[],
+        event_type="validator_batch_complete",
+    )
+    assert completed_only["event_count"] == 2
+    assert completed_only["event_type_counts"] == {"validator_batch_complete": 2}
+
+
 def test_analyzer_filters_and_expands_sibling_durable_events(tmp_path, monkeypatch):
     monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
     _write_event(
