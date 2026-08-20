@@ -295,7 +295,7 @@ def test_create_db_agent_propagates_tool_resolution_errors(monkeypatch):
     fake_row = SimpleNamespace(
         id="agent-id",
         agent_key="disease_validation",
-        template_source="disease",
+        template_source="disease_validation",
         instructions="do work",
         group_prompt_overrides={},
         group_rules_enabled=False,
@@ -477,7 +477,7 @@ def test_create_db_agent_requires_package_declared_lookup_tool_call(monkeypatch)
     fake_row = SimpleNamespace(
         id="agent-id",
         agent_key="ca_custom_gene_validation",
-        template_source="gene",
+        template_source="gene_validation",
         instructions="validate genes",
         group_prompt_overrides={},
         group_rules_enabled=False,
@@ -530,6 +530,19 @@ def test_create_db_agent_requires_package_declared_lookup_tool_call(monkeypatch)
     assert captured["minimum_calls"] == 1
     assert "package-declared curation lookup tool" in captured["error_message"]
     assert built.kwargs["output_guardrails"] == [{"kind": "tool_required", "minimum_calls": 1}]
+
+
+@pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
+def test_create_db_agent_rejects_retired_custom_template_parent(retired_alias):
+    fake_row = SimpleNamespace(
+        agent_key="ca_stale_template",
+        visibility="private",
+        template_source=retired_alias,
+        group_rules_component=retired_alias,
+    )
+
+    with pytest.raises(ValueError, match="retired validator alias"):
+        catalog_service._create_db_agent(fake_row)
 
 
 def test_validate_active_agent_output_schemas_passes(monkeypatch):

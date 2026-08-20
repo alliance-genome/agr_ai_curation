@@ -56,11 +56,12 @@ from .models import (
     DataSourceInfo,
 )
 from .flow_agent_policy import flow_palette_show_in_palette
+from .agent_identity import (
+    RETIRED_VALIDATOR_AGENT_ALIASES,
+    require_canonical_agent_identity,
+)
 
 logger = logging.getLogger(__name__)
-_RETIRED_VALIDATOR_AGENT_ALIASES = frozenset(
-    {"gene", "allele", "disease", "chemical"}
-)
 _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
 _HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
 _RECORD_EVIDENCE_RUNTIME_NOTE = (
@@ -1736,6 +1737,24 @@ def validate_active_agent_output_schemas(db: Any) -> None:
 
 def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     """Create an agent from a row in the unified agents table."""
+    visibility = str(getattr(db_agent, "visibility", "") or "").strip()
+    if visibility == "system":
+        require_canonical_agent_identity(
+            getattr(db_agent, "agent_key", None),
+            field_name="System agent key",
+        )
+    else:
+        parent_key = (
+            getattr(db_agent, "template_source", None)
+            or getattr(db_agent, "group_rules_component", None)
+        )
+        require_canonical_agent_identity(
+            parent_key,
+            field_name=(
+                f"Custom agent '{getattr(db_agent, 'agent_key', '')}' template parent"
+            ),
+        )
+
     from src.lib.openai_agents.guardrails import (
         ToolCallTracker,
         create_tool_required_output_guardrail,
@@ -2018,6 +2037,10 @@ def _inherited_curation_definition_for_db_agent(db_agent: Any) -> Any | None:
         normalized_candidate = str(candidate_key or "").strip()
         if not normalized_candidate:
             continue
+        normalized_candidate = require_canonical_agent_identity(
+            normalized_candidate,
+            field_name=f"Custom agent '{db_agent.agent_key}' template parent",
+        )
         inherited_definition = get_agent_definition(normalized_candidate)
         if inherited_definition is None:
             inherited_definition = get_agent_by_folder(normalized_candidate)
@@ -2047,7 +2070,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     Raises:
         ValueError: If agent_id is not found in the unified agents table
     """
-    if agent_id in _RETIRED_VALIDATOR_AGENT_ALIASES:
+    if agent_id in RETIRED_VALIDATOR_AGENT_ALIASES:
         raise ValueError(
             f"Unknown agent_id: {agent_id}. Use '{agent_id}_validation' for the "
             "validator agent; the short value is domain vocabulary, not an agent ID."
@@ -2166,7 +2189,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
 def get_active_visible_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     """Return metadata only for an active unified row visible to the caller."""
 
-    if agent_id in _RETIRED_VALIDATOR_AGENT_ALIASES:
+    if agent_id in RETIRED_VALIDATOR_AGENT_ALIASES:
         raise ValueError(
             f"Agent '{agent_id}' is a retired validator alias; "
             f"use '{agent_id}_validation'."

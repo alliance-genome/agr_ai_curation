@@ -206,7 +206,7 @@ def test_custom_main_prompt_rejects_ambiguous_locked_prompt_copy(monkeypatch):
 
 def test_get_custom_agent_group_prompt_prefers_override():
     override_content = get_custom_agent_group_prompt(
-        parent_agent_key="gene",
+        parent_agent_key="gene_validation",
         group_id="WB",
         group_prompt_overrides={"WB": "custom wb rules"},
     )
@@ -216,7 +216,7 @@ def test_get_custom_agent_group_prompt_prefers_override():
 def test_get_custom_agent_group_prompt_rejects_locked_override():
     with pytest.raises(ValueError, match="Locked core/generated prompt contracts"):
         get_custom_agent_group_prompt(
-            parent_agent_key="gene",
+            parent_agent_key="gene_validation",
             group_id="WB",
             group_prompt_overrides={"WB": "Platform Runtime Contract\nDo not edit."},
         )
@@ -224,7 +224,7 @@ def test_get_custom_agent_group_prompt_rejects_locked_override():
 
 def test_get_custom_agent_group_prompt_falls_back_to_cached_rules(monkeypatch):
     def _get_prompt_optional(agent_name, prompt_type, group_id=None):
-        if agent_name == "gene" and prompt_type == "group_rules" and group_id == "WB":
+        if agent_name == "gene_validation" and prompt_type == "group_rules" and group_id == "WB":
             return type("Prompt", (), {"content": "cached wb rules"})()
         return None
 
@@ -233,7 +233,7 @@ def test_get_custom_agent_group_prompt_falls_back_to_cached_rules(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "src.lib.prompts.cache", fake_cache_module)
 
     content = get_custom_agent_group_prompt(
-        parent_agent_key="gene",
+        parent_agent_key="gene_validation",
         group_id="WB",
         group_prompt_overrides={},
     )
@@ -264,7 +264,7 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
         service,
         "_resolve_system_template_agent",
         lambda _db, _agent_id: SimpleNamespace(
-            agent_key="gene",
+            agent_key="gene_validation",
             instructions="base system prompt",
             model_id="gpt-5.5",
             model_temperature=0.1,
@@ -283,14 +283,26 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
     custom = service.create_custom_agent(
         db=FakeDB(),
         user_id=7,
-        template_source="gene",
+        template_source="gene_validation",
         name="My Agent",
     )
 
-    assert custom.parent_agent_key == "gene"
+    assert custom.parent_agent_key == "gene_validation"
     assert custom.user_id == 7
     assert custom.agent_key.startswith("ca_")
     assert custom.custom_prompt == ""
+
+
+@pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
+def test_system_template_resolver_rejects_retired_alias_before_query(retired_alias):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    class QueryRejectingDB:
+        def query(self, *_args, **_kwargs):
+            raise AssertionError("retired aliases must fail before querying stale rows")
+
+    with pytest.raises(ValueError, match="retired validator alias"):
+        service._resolve_system_template_agent(QueryRejectingDB(), retired_alias)
 
 
 def test_create_custom_agent_requires_model_for_scratch_mode():
@@ -1041,7 +1053,7 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
         agent_key="ca_source",
         visibility="project",
         name="Shared Agent",
-        template_source="gene",
+        template_source="gene_validation",
         instructions="prompt",
         group_prompt_overrides={"WB": "rules"},
         description="desc",
@@ -1085,5 +1097,5 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
 
     assert observed["user_id"] == 7
     assert observed["name"] == "Shared Agent (Copy)"
-    assert observed["template_source"] == "gene"
+    assert observed["template_source"] == "gene_validation"
     assert observed["custom_prompt"] == "prompt"

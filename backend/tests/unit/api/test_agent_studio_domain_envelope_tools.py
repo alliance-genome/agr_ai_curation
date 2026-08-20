@@ -47,6 +47,11 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
         get_prompt_description
     )
     assert "gene_expression_extraction" in get_prompt_description
+    assert "gene_validation, allele_validation" in get_prompt_description
+    assert "also available as gene" not in get_prompt_description
+    assert "allele_validation (allele)" not in get_prompt_description
+    assert "disease_validation (disease)" not in get_prompt_description
+    assert "chemical_validation (chemical)" not in get_prompt_description
     assert "group_id" in tools_by_name["get_prompt"]["input_schema"]["properties"]
     assert "mod_id" not in tools_by_name["get_prompt"]["input_schema"]["properties"]
     # Keep this split so the ticket guardrail grep reports only product strings.
