@@ -1278,12 +1278,11 @@ def _build_runtime_tool_availability_note(
         )
     else:
         notes.append(
-            "CORE-ONLY MODE: No domain specialist tools are currently installed. "
+            "CORE-ONLY MODE: No optional domain-specialist tools are currently installed. "
             "Treat this as a minimal general-purpose chat runtime and answer "
-            "general questions directly. If the user asks for Alliance-specific "
-            "database lookups, document extraction, annotation workflows, or other "
-            "specialist tasks, explain briefly that those specialist tools are not "
-            "installed in this environment."
+            "general questions directly. If a request requires capabilities supplied "
+            "by an optional specialist package, explain briefly that those tools are "
+            "not installed in this environment."
         )
 
     if document_loaded and available_document_tools:
