@@ -1,7 +1,7 @@
 """Tests for hybrid tool registry (introspection + overrides)."""
 import pytest
 
-from src.lib.agent_studio.catalog_service import get_tool_registry
+from src.lib.agent_studio.catalog_service import expand_tools_for_agent, get_tool_registry
 
 
 def test_get_tool_registry_returns_dict():
@@ -46,6 +46,28 @@ def test_get_prompt_diagnostic_documents_current_extractor_and_validator_targets
     assert "data_provider_validation" in description
     assert "reference_validation" in description
     assert "experimental_condition_validation" in description
+    for canonical_id in (
+        "gene_validation",
+        "allele_validation",
+        "disease_validation",
+        "chemical_validation",
+    ):
+        assert canonical_id in description
+    for retired_alias_claim in (
+        "gene_validation (also available as gene)",
+        "allele_validation (allele)",
+        "disease_validation (disease)",
+        "chemical_validation (chemical)",
+    ):
+        assert retired_alias_claim not in description
+
+
+def test_expand_tools_for_agent_documents_canonical_validator_identity():
+    docstring = expand_tools_for_agent.__doc__
+
+    assert docstring is not None
+    assert 'expand_tools_for_agent("gene_validation",' in docstring
+    assert 'expand_tools_for_agent("gene",' not in docstring
 
 
 def test_tool_inventory_diagnostic_reports_agent_attached_tools():

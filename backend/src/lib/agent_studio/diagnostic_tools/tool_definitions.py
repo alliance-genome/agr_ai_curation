@@ -806,9 +806,8 @@ answering validator-agent inspection questions from domain-pack validation plans
 - Domain-envelope extractors: gene_extractor, allele_extractor,
   disease_extractor, phenotype_extractor, gene_expression
   (flow/prompt alias for the packaged gene_expression_extraction agent).
-- Validator/resolver agents: gene_validation (also available as gene),
-  allele_validation (allele), disease_validation (disease),
-  chemical_validation (chemical), ontology_term_validation,
+- Validator/resolver agents: gene_validation, allele_validation,
+  disease_validation, chemical_validation, ontology_term_validation,
   controlled_vocabulary_validation, data_provider_validation,
   subject_entity_validation, reference_validation,
   experimental_condition_validation, agm_validation.

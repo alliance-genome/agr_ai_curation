@@ -1115,7 +1115,7 @@ def expand_tools_for_agent(agent_id: str, tools: List[str]) -> List[str]:
     list more intuitive for users.
 
     Example:
-        expand_tools_for_agent("gene", ["package_lookup_tool"])
+        expand_tools_for_agent("gene_validation", ["package_lookup_tool"])
         -> ["search_genes", "get_gene_by_exact_symbol", "get_gene_by_id"]
 
     Args:
