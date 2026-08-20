@@ -50,6 +50,7 @@ from src.lib.document_sources.provenance import (
 from src.lib.document_sources.registry import (
     LOCAL_PDF_PROVIDER_ID,
     get_configured_document_source_provider,
+    get_document_source_provider_metadata,
 )
 from src.lib.openai_agents.config import (
     get_document_source_import_enabled,
@@ -109,7 +110,7 @@ _CHECKSUM_DECISION_ERROR_FIELDS: dict[
         403,
         "document_source_access_denied",
         "No matching source document is accessible to this curator.",
-        "Confirm you are signed in with the correct MOD account.",
+        "Confirm you are signed in with an account authorized by {provider_label}.",
     ),
     ChecksumImportDecisionStatus.AMBIGUOUS_MATCH: (
         409,
@@ -606,8 +607,7 @@ class UploadIntakeService:
             return None
 
         wait_for_conversion = (
-            decision.provider == "abc_literature"
-            and decision.status is ChecksumImportDecisionStatus.CONVERSION_RUNNING
+            decision.status is ChecksumImportDecisionStatus.CONVERSION_RUNNING
             and decision.selected is not None
         )
         if not decision.is_ready and not wait_for_conversion:
@@ -617,23 +617,23 @@ class UploadIntakeService:
             self._cleanup_saved_file_artifacts(saved_path)
             raise self._provider_decision_error(decision)
         if (
-            decision.provider == "abc_literature"
-            and decision.selected.converted_artifact is None
+            decision.selected.converted_artifact is None
             and not wait_for_conversion
         ):
+            provider_label = _provider_display_label(decision.provider)
             self._cleanup_saved_file_artifacts(saved_path)
             raise UploadIntakeProviderDecisionError(
                 status_code=409,
                 detail={
                     "error": "document_source_no_converted_text",
                     "message": (
-                        "The ABC Literature match does not have converted Markdown "
+                        f"The {provider_label} match does not have converted Markdown "
                         "available for import."
                     ),
                     "provider": decision.provider,
                     "status": decision.status.value,
                     "suggestion": (
-                        "Try again after ABC Literature conversion completes for this paper."
+                        f"Try again after {provider_label} conversion completes for this paper."
                     ),
                 },
             )
@@ -767,7 +767,8 @@ class UploadIntakeService:
         decision: ChecksumImportDecision,
     ) -> UploadIntakeProviderDecisionError:
         status_code, error, message, suggestion = _provider_decision_error_fields(
-            decision.status
+            decision.status,
+            provider=decision.provider,
         )
         detail: dict[str, Any] = {
             "error": error,
@@ -973,8 +974,27 @@ class UploadIntakeService:
 
 def _provider_decision_error_fields(
     status: ChecksumImportDecisionStatus,
+    *,
+    provider: str,
 ) -> tuple[int, str, str, str]:
-    return _CHECKSUM_DECISION_ERROR_FIELDS[status]
+    status_code, error, message, suggestion = _CHECKSUM_DECISION_ERROR_FIELDS[status]
+    provider_label = _provider_display_label(provider)
+    return (
+        status_code,
+        error,
+        message.format(provider_label=provider_label),
+        suggestion.format(provider_label=provider_label),
+    )
+
+
+def _provider_display_label(provider: str) -> str:
+    metadata = get_document_source_provider_metadata(provider)
+    display_label = metadata.get("display_label") if metadata is not None else None
+    if not isinstance(display_label, str) or not display_label.strip():
+        raise DocumentSourceConfigError(
+            f"Document-source provider '{provider}' has no presentation display label"
+        )
+    return display_label.strip()
 
 
 def _provider_reference_from_provenance(source_provenance: dict[str, Any]) -> str:

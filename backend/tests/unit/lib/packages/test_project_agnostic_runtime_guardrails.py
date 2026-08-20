@@ -63,6 +63,7 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/packages/flow_recipes.py"),
     Path("backend/src/lib/packages/document_source_provider_loader.py"),
     Path("backend/src/lib/packages/identifier_prefix_provider_loader.py"),
+    Path("backend/src/lib/pdf_jobs/upload_intake_service.py"),
     Path("backend/src/lib/runtime_entrypoint.py"),
 }
 GENERIC_RUNTIME_SOURCE_PATTERNS = (
