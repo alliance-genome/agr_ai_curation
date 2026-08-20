@@ -192,6 +192,15 @@ class TestAgentDocumentationCoverage:
         assert ontology_entry is not None
         assert registry.get("ontology_term") is None
 
+    def test_original_validators_expose_only_canonical_public_ids(self):
+        """Validator folder names remain internal package organization only."""
+        registry = build_agent_registry()
+
+        for alias in ("gene", "allele", "disease", "chemical"):
+            canonical_id = f"{alias}_validation"
+            assert registry.get(canonical_id) is not None
+            assert registry.get(alias) is None
+
     def test_supervisor_declares_medium_reasoning_default(self, monkeypatch):
         """Supervisor reasoning should not inherit the low global agent default."""
         monkeypatch.delenv("AGENT_SUPERVISOR_REASONING", raising=False)

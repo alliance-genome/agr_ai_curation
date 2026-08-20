@@ -51,21 +51,19 @@ def _load_prompt_content_from_source(source: AgentConfigSource | None) -> Option
 def _get_active_system_prompt(
     db: Session,
     *,
-    folder_name: str,
-    agent_id: str,
+    agent_key: str,
 ) -> Optional[str]:
-    for agent_name in (folder_name, agent_id):
-        prompt = (
-            db.query(PromptTemplate)
-            .filter(PromptTemplate.agent_name == agent_name)
-            .filter(PromptTemplate.prompt_type == "system")
-            .filter(PromptTemplate.group_id.is_(None))
-            .filter(PromptTemplate.is_active == True)  # noqa: E712
-            .order_by(PromptTemplate.version.desc())
-            .first()
-        )
-        if prompt is not None and str(prompt.content or "").strip():
-            return str(prompt.content)
+    prompt = (
+        db.query(PromptTemplate)
+        .filter(PromptTemplate.agent_name == agent_key)
+        .filter(PromptTemplate.prompt_type == "system")
+        .filter(PromptTemplate.group_id.is_(None))
+        .filter(PromptTemplate.is_active == True)  # noqa: E712
+        .order_by(PromptTemplate.version.desc())
+        .first()
+    )
+    if prompt is not None and str(prompt.content or "").strip():
+        return str(prompt.content)
     return None
 
 
@@ -156,8 +154,7 @@ def sync_system_agents(
 
         instructions = _get_active_system_prompt(
             db,
-            folder_name=agent.folder_name,
-            agent_id=agent.agent_id,
+            agent_key=agent_key,
         ) or _load_prompt_content_from_source(source_by_folder.get(agent.folder_name))
         if not instructions:
             logger.warning(

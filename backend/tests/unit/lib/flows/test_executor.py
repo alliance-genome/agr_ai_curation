@@ -336,6 +336,18 @@ def test_resolved_flow_agent_entry_rejects_unresolvable_validation_schema(monkey
     assert _executor_module().agent_can_source_output_attachment(entry) is False
 
 
+@pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
+def test_flow_executor_rejects_retired_validator_alias(retired_alias, monkeypatch):
+    from src.lib.agent_studio.catalog_service import get_active_visible_agent_metadata
+
+    monkeypatch.setattr(
+        _executor_module(),
+        "get_agent_metadata",
+        get_active_visible_agent_metadata,
+    )
+    assert _executor_module()._resolve_flow_agent_entry(retired_alias) is None
+
+
 def test_terminal_formatter_bundle_filters_all_and_only_bound_sources(monkeypatch):
     captured_steps = []
     expected_bundle = SimpleNamespace(

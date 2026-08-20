@@ -521,6 +521,23 @@ def test_flow_definition_payload_rejects_missing_agent_reference(monkeypatch):
     assert "fixture_agent_without_pack" in str(exc.value.detail)
 
 
+@pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
+def test_flow_definition_payload_rejects_retired_validator_alias(retired_alias):
+    payload = _minimal_flow_definition_payload()
+    payload["nodes"][1]["data"]["agent_id"] = retired_alias
+    payload["nodes"][1]["data"]["agent_display_name"] = retired_alias.title()
+
+    with pytest.raises(HTTPException) as exc:
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload),
+            db_user_id=7,
+            enforce_agent_references=True,
+        )
+
+    assert exc.value.status_code == 422
+    assert f"missing agent_id '{retired_alias}'" in str(exc.value.detail)
+
+
 def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
     flow_id = uuid4()
     now = datetime.now(timezone.utc)

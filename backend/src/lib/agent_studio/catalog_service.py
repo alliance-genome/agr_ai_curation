@@ -58,6 +58,9 @@ from .models import (
 from .flow_agent_policy import flow_palette_show_in_palette
 
 logger = logging.getLogger(__name__)
+_RETIRED_VALIDATOR_AGENT_ALIASES = frozenset(
+    {"gene", "allele", "disease", "chemical"}
+)
 _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
 _HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
 _RECORD_EVIDENCE_RUNTIME_NOTE = (
@@ -1115,11 +1118,11 @@ def expand_tools_for_agent(agent_id: str, tools: List[str]) -> List[str]:
     list more intuitive for users.
 
     Example:
-        expand_tools_for_agent("gene", ["package_lookup_tool"])
+        expand_tools_for_agent("gene_validation", ["package_lookup_tool"])
         -> ["search_genes", "get_gene_by_exact_symbol", "get_gene_by_id"]
 
     Args:
-        agent_id: Agent identifier (e.g., 'gene', 'allele')
+        agent_id: Agent identifier (e.g., 'gene_validation', 'allele_validation')
         tools: Original list of tool IDs
 
     Returns:
@@ -1192,7 +1195,7 @@ def get_tool_for_agent(tool_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
 
     Args:
         tool_id: Tool identifier or method identifier
-        agent_id: Agent identifier (e.g., 'gene', 'allele')
+        agent_id: Agent identifier (e.g., 'gene_validation', 'allele_validation')
 
     Returns:
         Tool metadata with agent-specific context, or None if not found
@@ -2044,6 +2047,12 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     Raises:
         ValueError: If agent_id is not found in the unified agents table
     """
+    if agent_id in _RETIRED_VALIDATOR_AGENT_ALIASES:
+        raise ValueError(
+            f"Unknown agent_id: {agent_id}. Use '{agent_id}_validation' for the "
+            "validator agent; the short value is domain vocabulary, not an agent ID."
+        )
+
     from src.lib.config.agent_loader import get_agent_definition
 
     agent_definition = get_agent_definition(agent_id)
@@ -2157,6 +2166,11 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
 def get_active_visible_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     """Return metadata only for an active unified row visible to the caller."""
 
+    if agent_id in _RETIRED_VALIDATOR_AGENT_ALIASES:
+        raise ValueError(
+            f"Agent '{agent_id}' is a retired validator alias; "
+            f"use '{agent_id}_validation'."
+        )
     db_agent = _get_db_agent_row(agent_id, dict(kwargs))
     if db_agent is None:
         raise ValueError(

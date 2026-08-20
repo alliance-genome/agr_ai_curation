@@ -95,7 +95,7 @@ def test_validate_flow_handler_reports_errors_warnings_and_suggestions(monkeypat
     monkeypatch.setattr(
         flow_tools,
         "FLOW_AGENT_IDS",
-        ["pdf_extraction", "gene_expression", "chat_output", "gene"],
+        ["pdf_extraction", "gene_expression", "chat_output", "gene_validation"],
     )
     validate = flow_tools._validate_flow_handler()
 
@@ -116,18 +116,18 @@ def test_validate_flow_handler_reports_errors_warnings_and_suggestions(monkeypat
     assert any("step_goal exceeds 500" in e for e in result["errors"])
     assert any("Flow name cannot be empty" in e for e in result["errors"])
     assert any("used multiple times" in w for w in result["warnings"])
-    assert any("Consider adding 'gene' step" in s for s in result["suggestions"])
+    assert any("Consider adding 'gene_validation' step" in s for s in result["suggestions"])
 
 
 def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
         "FLOW_AGENT_IDS",
-        ["gene", "disease", "pdf_extraction", "chat_output"],
+        ["gene_validation", "disease_validation", "pdf_extraction", "chat_output"],
     )
     validate = flow_tools._validate_flow_handler()
     result = validate(
-        steps=[{"agent_id": "gene"}, {"agent_id": "disease"}],
+        steps=[{"agent_id": "gene_validation"}, {"agent_id": "disease_validation"}],
         name="Flow Name",
     )
 
@@ -169,7 +169,7 @@ def test_validate_flow_handler_accepts_gene_expression_alias_pair(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
         "FLOW_AGENT_IDS",
-        ["gene_expression", "gene_expression_extraction", "gene"],
+        ["gene_expression", "gene_expression_extraction", "gene_validation"],
     )
     validate = flow_tools._validate_flow_handler()
 
@@ -187,11 +187,11 @@ def test_validate_flow_handler_accepts_gene_expression_alias_pair(monkeypatch):
     assert flow_alias_result["errors"] == []
     assert package_agent_result["errors"] == []
     assert any(
-        "Consider adding 'gene' step after 'gene_expression'" in suggestion
+        "Consider adding 'gene_validation' step after 'gene_expression'" in suggestion
         for suggestion in flow_alias_result["suggestions"]
     )
     assert any(
-        "Consider adding 'gene' step after 'gene_expression'" in suggestion
+        "Consider adding 'gene_validation' step after 'gene_expression'" in suggestion
         for suggestion in package_agent_result["suggestions"]
     )
 
@@ -561,7 +561,11 @@ def test_effective_step_limit_fits_required_task_input_node(monkeypatch):
 
 
 def test_get_flow_templates_handler_uses_registry(monkeypatch):
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "gene_validation"],
+    )
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
@@ -572,7 +576,7 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
                 "category": "Extraction",
                 "requires_document": True,
             },
-            "gene": {
+            "gene_validation": {
                 "name": "Gene Specialist",
                 "description": "Validate genes",
                 "category": "Validation",
@@ -585,7 +589,10 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
 
     assert len(result["templates"]) >= 1
     assert len(result["available_agents"]) == 2
-    assert result["available_agents"][0]["agent_id"] in {"pdf_extraction", "gene"}
+    assert result["available_agents"][0]["agent_id"] in {
+        "pdf_extraction",
+        "gene_validation",
+    }
     assert "Found" in result["message"]
 
 

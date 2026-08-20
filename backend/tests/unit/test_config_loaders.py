@@ -61,7 +61,8 @@ class TestAgentLoader:
         assert gene.folder_name == "gene"
         assert gene.agent_id == "gene_validation"
         assert gene.name == "Gene Validation Agent"
-        assert gene.tool_name == "ask_gene_specialist"
+        assert gene.system_agent_key == "gene_validation"
+        assert gene.tool_name == "ask_gene_validation_specialist"
 
         # Check supervisor routing
         # The gene validation agent is intentionally NOT supervisor-callable:
@@ -93,6 +94,22 @@ class TestAgentLoader:
         assert ontology_term.system_agent_key == "ontology_term_validation"
         assert canonical_system_agent_key(ontology_term) == "ontology_term_validation"
         assert ontology_term.tool_name == "ask_ontology_term_validation_specialist"
+
+    def test_original_validators_declare_canonical_system_keys(self):
+        """Package folder names are not public validator identities."""
+        from src.lib.config.agent_loader import (
+            canonical_system_agent_key,
+            load_agent_definitions,
+        )
+
+        agents = load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        for alias in ("gene", "allele", "disease", "chemical"):
+            canonical_id = f"{alias}_validation"
+            agent = agents[canonical_id]
+            assert agent.folder_name == alias
+            assert agent.system_agent_key == canonical_id
+            assert canonical_system_agent_key(agent) == canonical_id
+            assert agent.tool_name == f"ask_{canonical_id}_specialist"
 
     def test_pdf_agent_not_batchable(self):
         """Test that PDF agent is marked as not batchable."""
@@ -202,7 +219,10 @@ class TestAgentLoader:
         assert "ask_ontology_term_specialist" not in tool_names
 
         # Check batchable flags
-        chemical_tool = next(t for t in tools if t["tool_name"] == "ask_chemical_specialist")
+        chemical_tool = next(
+            t for t in tools
+            if t["tool_name"] == "ask_chemical_validation_specialist"
+        )
         assert chemical_tool["batchable"] is True
         assert chemical_tool["agent_id"] == "chemical_validation"
 
@@ -252,11 +272,12 @@ class TestAgentLoader:
         from src.lib.config.agent_loader import load_agent_definitions, get_agent_by_tool_name
 
         load_agent_definitions(ALLIANCE_AGENTS_PATH)
-        gene = get_agent_by_tool_name("ask_gene_specialist")
+        gene = get_agent_by_tool_name("ask_gene_validation_specialist")
 
         assert gene is not None
         assert gene.agent_id == "gene_validation"
         assert gene.folder_name == "gene"
+        assert get_agent_by_tool_name("ask_gene_specialist") is None
 
     def test_get_agent_by_tool_name_uses_explicit_system_agent_key(self):
         """Agents with explicit system keys resolve by public supervisor tool name."""
