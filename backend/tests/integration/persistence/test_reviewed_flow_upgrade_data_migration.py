@@ -58,7 +58,7 @@ def _formatter_free_definition() -> dict:
         "type": "agent",
         "position": {"x": 250, "y": 0},
         "data": {
-            "agent_id": "gene",
+            "agent_id": "gene_validation",
             "agent_display_name": "Gene Validation Agent",
             "output_key": "gene_result",
         },
