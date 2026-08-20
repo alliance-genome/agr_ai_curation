@@ -98,6 +98,34 @@ describe('DocumentDetailsDialog', () => {
     expect(screen.queryByText('conversion_request')).not.toBeInTheDocument();
   });
 
+  it('does not relabel access groups as a missing access scope', () => {
+    useDocumentMock.mockReturnValue({
+      data: {
+        ...providerDocument,
+        document: {
+          ...providerDocument.document,
+          sourceProvenance: {
+            ...providerDocument.document.sourceProvenance!,
+            accessScope: null,
+            accessGroupIds: ['GROUP'],
+          },
+        },
+      },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <DocumentDetailsDialog open documentId="doc-provider" onClose={vi.fn()} />,
+    );
+
+    expect(screen.getByText('Access').parentElement).toHaveTextContent('Access—');
+    expect(screen.getByText('Access groups')).toBeInTheDocument();
+    expect(screen.getByText('GROUP')).toBeInTheDocument();
+  });
+
   it('shows the backend processing error when detail loading succeeded', () => {
     useDocumentMock.mockReturnValue({
       data: {

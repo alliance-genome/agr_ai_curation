@@ -1268,7 +1268,7 @@ def test_select_preferred_main_text_reports_ambiguous_equal_candidates():
 
 
 @pytest.mark.asyncio
-async def test_upload_selection_accepts_per_mod_only_readiness():
+async def test_upload_selection_accepts_provider_mapped_readiness():
     provider = _Provider()
     artifact = SourceArtifact(
         provider="abc_literature",

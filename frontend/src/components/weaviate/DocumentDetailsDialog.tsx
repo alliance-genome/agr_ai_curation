@@ -301,7 +301,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                           .join(' / ') || null
                       )}
                       {renderInfoItem('Import Status', sourceProvenance?.importStatus ?? sourceProvenance?.artifactStatus)}
-                      {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessGroupIdsText)}
+                      {renderInfoItem('Access', sourceProvenance?.accessScope)}
                       {accessGroupIdsText && renderInfoItem('Access groups', accessGroupIdsText)}
                       {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode)}
                     </Grid>
