@@ -44,6 +44,22 @@ function projectionMatchesRef(
   )
 }
 
+export function envelopeValidationSummariesForProjection(
+  summaries: readonly DomainEnvelopeValidationSummaryProjection[],
+  projectionRef: DomainEnvelopeProjectionRef | null | undefined,
+): DomainEnvelopeValidationSummaryProjection[] {
+  if (!projectionRef) {
+    return []
+  }
+
+  return summaries.filter((summary) => (
+    summary.envelope_id === projectionRef.envelope_id
+    && summary.envelope_revision === projectionRef.envelope_revision
+    && summary.object_id == null
+    && summary.field_path == null
+  ))
+}
+
 export function buildWorkspaceEnvelopeObjectReviewRows({
   candidates,
   evidenceAnchorProjections = [],

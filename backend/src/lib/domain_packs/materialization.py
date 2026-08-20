@@ -2600,12 +2600,11 @@ def _validation_finding_projection(
     field_path: str | None,
 ) -> DomainEnvelopeValidationFindingProjection:
     summary_status = _validation_status(finding)
-    finding_id = finding.finding_id or _projection_id(
-        "validation-finding",
-        envelope.envelope_id,
-        envelope_revision,
-        finding_index,
-        finding.model_dump(mode="json"),
+    finding_id = validation_finding_projection_id(
+        envelope=envelope,
+        envelope_revision=envelope_revision,
+        finding=finding,
+        finding_index=finding_index,
     )
     return DomainEnvelopeValidationFindingProjection(
         finding_id=finding_id,
@@ -2620,6 +2619,24 @@ def _validation_finding_projection(
         code=finding.code,
         message=finding.message,
         details=dict(finding.details),
+    )
+
+
+def validation_finding_projection_id(
+    *,
+    envelope: DomainEnvelope,
+    envelope_revision: int,
+    finding: ValidationFinding,
+    finding_index: int,
+) -> str:
+    """Return the authored finding ID or its stable projection identity."""
+
+    return finding.finding_id or _projection_id(
+        "validation-finding",
+        envelope.envelope_id,
+        envelope_revision,
+        finding_index,
+        finding.model_dump(mode="json"),
     )
 
 

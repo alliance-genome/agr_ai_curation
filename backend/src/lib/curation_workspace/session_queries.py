@@ -35,6 +35,7 @@ from src.lib.curation_workspace.session_serializers import (
     _candidate_detail,
     _candidate_has_entity_tag_fields,
     _candidate_payload,
+    _domain_validation_summary_projections,
     _entity_tag_payload,
     _load_documents,
     _load_users,
@@ -662,7 +663,8 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
             candidate_payloads
         ),
         validation_summary_projections=_workspace_validation_summary_projections(
-            candidate_payloads
+            session.candidates,
+            candidate_payloads,
         ),
         active_candidate_id=(
             str(session.current_candidate_id)
@@ -700,12 +702,32 @@ def _workspace_evidence_anchor_projections(
 
 
 def _workspace_validation_summary_projections(
-    candidates: Sequence[CurationCandidatePayload],
+    candidates: Sequence[CurationCandidate],
+    candidate_payloads: Sequence[CurationCandidatePayload],
 ) -> list[DomainEnvelopeValidationSummaryProjection]:
     projections: list[DomainEnvelopeValidationSummaryProjection] = []
     seen_summary_ids: set[str] = set()
+    for candidate_payload in candidate_payloads:
+        for projection in candidate_payload.validation_summary_projections:
+            if projection.summary_id in seen_summary_ids:
+                continue
+            seen_summary_ids.add(projection.summary_id)
+            projections.append(projection)
+
+    seen_envelopes: set[tuple[str, int]] = set()
     for candidate in candidates:
-        for projection in candidate.validation_summary_projections:
+        if candidate.envelope_id is None or candidate.envelope_revision is None:
+            continue
+        envelope_key = (candidate.envelope_id, candidate.envelope_revision)
+        if envelope_key in seen_envelopes:
+            continue
+        seen_envelopes.add(envelope_key)
+        for projection in _domain_validation_summary_projections(
+            candidate,
+            object_id=None,
+        ):
+            if projection.object_id is not None:
+                continue
             if projection.summary_id in seen_summary_ids:
                 continue
             seen_summary_ids.add(projection.summary_id)

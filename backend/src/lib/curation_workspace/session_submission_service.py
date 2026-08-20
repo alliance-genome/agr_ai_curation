@@ -291,6 +291,10 @@ def _finding_target(
     return None, None
 
 
+def _finding_is_envelope_scoped(finding: ValidationFinding) -> bool:
+    return finding.object_ref is None and finding.field_ref is None
+
+
 def _readiness_blocker(
     *,
     envelope_id: str,
@@ -303,6 +307,7 @@ def _readiness_blocker(
     provider_refs: Mapping[str, Any] | None = None,
     projection_ref: Mapping[str, Any] | None = None,
     details: Mapping[str, Any] | None = None,
+    canonical_finding_override: bool = False,
 ) -> CurationSubmissionReadinessBlocker:
     return CurationSubmissionReadinessBlocker(
         envelope_id=envelope_id,
@@ -314,15 +319,29 @@ def _readiness_blocker(
         message=message,
         provider_refs=dict(provider_refs or {}),
         projection_ref=dict(projection_ref or {}),
-        details=_readiness_blocker_details(details),
+        details=_readiness_blocker_details(
+            details,
+            canonical_finding_override=canonical_finding_override,
+        ),
     )
 
 
 def _readiness_blocker_details(
     details: Mapping[str, Any] | None,
+    *,
+    canonical_finding_override: bool = False,
 ) -> dict[str, Any]:
     normalized = dict(details or {})
-    metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
+    if canonical_finding_override:
+        normalized.pop("curator_override", None)
+        raw_validation_metadata = normalized.get("validation_metadata")
+        metadata_sources = (
+            (raw_validation_metadata,)
+            if isinstance(raw_validation_metadata, Mapping)
+            else ()
+        )
+    else:
+        metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
     if any(_metadata_allows_curator_override(metadata) for metadata in metadata_sources):
         normalized["curator_override"] = {"allowed": True}
     return normalized
@@ -753,7 +772,8 @@ def _validation_finding_blockers(
     blockers: list[CurationSubmissionReadinessBlocker] = []
     for finding_index, finding in enumerate(envelope.validation_findings):
         target_object_id, field_path = _finding_target(finding, object_id_by_ref)
-        if target_object_id != object_id:
+        envelope_scoped = _finding_is_envelope_scoped(finding)
+        if not envelope_scoped and target_object_id != object_id:
             continue
         if not _finding_blocks_readiness(finding):
             continue
@@ -778,12 +798,20 @@ def _validation_finding_blockers(
                 code=code,
                 message=finding.message,
                 provider_refs=_metadata_provider_refs(finding.details),
-                projection_ref=projection_ref,
+                projection_ref=(
+                    projection_ref
+                    if not envelope_scoped
+                    else {
+                        "envelope_id": envelope.envelope_id,
+                        "envelope_revision": projection_ref["envelope_revision"],
+                    }
+                ),
                 details={
                     **dict(finding.details or {}),
                     "finding_index": finding_index,
                     "finding_id": finding.finding_id,
                 },
+                canonical_finding_override=True,
             )
         )
     return blockers
@@ -827,23 +855,11 @@ def _policy_metadata_blocks_readiness(metadata: Mapping[str, Any]) -> bool:
 
 def _finding_waiver_allowed(finding: ValidationFinding) -> bool:
     details = finding.details or {}
-    for metadata in _finding_policy_metadata_sources(details):
-        if _metadata_allows_curator_override(metadata):
-            return True
-    return False
-
-
-def _finding_policy_metadata_sources(
-    details: Mapping[str, Any],
-) -> tuple[Mapping[str, Any], ...]:
-    metadata_sources: list[Mapping[str, Any]] = [details]
     raw_validation_metadata = details.get("validation_metadata")
-    if isinstance(raw_validation_metadata, Mapping):
-        metadata_sources.append(raw_validation_metadata)
-        raw_field_policy = raw_validation_metadata.get("field_policy")
-        if isinstance(raw_field_policy, Mapping):
-            metadata_sources.append(raw_field_policy)
-    return tuple(metadata_sources)
+    return (
+        isinstance(raw_validation_metadata, Mapping)
+        and _metadata_allows_curator_override(raw_validation_metadata)
+    )
 
 
 def _domain_object_for_id(
@@ -1160,7 +1176,8 @@ def _domain_envelope_snapshot(
         "validation_findings": [
             finding.model_dump(mode="json")
             for finding in envelope.validation_findings
-            if _finding_target(finding, object_id_by_ref)[0] in selected
+            if _finding_is_envelope_scoped(finding)
+            or _finding_target(finding, object_id_by_ref)[0] in selected
         ],
         "metadata": dict(envelope.metadata or {}),
     }
@@ -1444,6 +1461,53 @@ def _readiness_blocker_payloads(
         for item in readiness
         for blocker in item.blockers
     ]
+
+
+def _dedupe_envelope_scoped_readiness(
+    readiness: Sequence[CurationCandidateSubmissionReadiness],
+) -> list[CurationCandidateSubmissionReadiness]:
+    """Keep one structured envelope blocker while every affected object stays blocked."""
+
+    seen: set[tuple[str, str | None, tuple[str, str]]] = set()
+    normalized: list[CurationCandidateSubmissionReadiness] = []
+    for item in readiness:
+        blockers: list[CurationSubmissionReadinessBlocker] = []
+        blocking_reasons = list(item.blocking_reasons)
+        for blocker in item.blockers:
+            if blocker.object_id is not None or blocker.field_path is not None:
+                blockers.append(blocker)
+                continue
+            finding_id = blocker.details.get("finding_id")
+            finding_index = blocker.details.get("finding_index")
+            if finding_id is not None and str(finding_id):
+                identity = ("finding_id", str(finding_id))
+            elif isinstance(finding_index, int):
+                identity = ("finding_index", str(finding_index))
+            else:
+                identity = (
+                    "blocker",
+                    f"{blocker.status}\0{blocker.severity}\0{blocker.message}",
+                )
+            key = (blocker.envelope_id, blocker.code, identity)
+            if key in seen:
+                reason = (
+                    f"Envelope-level validation blocks objects from {blocker.envelope_id}."
+                )
+                if reason not in blocking_reasons:
+                    blocking_reasons.append(reason)
+                continue
+            seen.add(key)
+            blockers.append(blocker)
+        normalized.append(
+            item.model_copy(
+                update={
+                    "ready": item.ready and not blocking_reasons and not blockers,
+                    "blocking_reasons": blocking_reasons,
+                    "blockers": blockers,
+                }
+            )
+        )
+    return normalized
 
 
 class _SharedSubmissionPreviewAdapter:
@@ -2411,7 +2475,7 @@ def submission_preview(
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,
     )
-    readiness = [
+    readiness = _dedupe_envelope_scoped_readiness([
         _candidate_submission_readiness(
             candidate_map[candidate_id],
             next(
@@ -2425,7 +2489,7 @@ def submission_preview(
             domain_context=domain_context,
         )
         for candidate_id in target_candidate_ids
-    ]
+    ])
     ready_candidates = [
         candidate_map[readiness_item.candidate_id]
         for readiness_item in readiness
@@ -2525,7 +2589,7 @@ def execute_submission(
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,
     )
-    readiness = [
+    readiness = _dedupe_envelope_scoped_readiness([
         _candidate_submission_readiness(
             candidate_map[candidate_id],
             next(
@@ -2539,7 +2603,7 @@ def execute_submission(
             domain_context=domain_context,
         )
         for candidate_id in target_candidate_ids
-    ]
+    ])
     _reject_direct_submit_with_domain_blockers(readiness)
     ready_candidates = [
         candidate_map[readiness_item.candidate_id]
@@ -2666,7 +2730,7 @@ def retry_submission(
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,
     )
-    readiness = [
+    readiness = _dedupe_envelope_scoped_readiness([
         _candidate_submission_readiness(
             candidate_map[candidate_id],
             next(
@@ -2680,7 +2744,7 @@ def retry_submission(
             domain_context=domain_context,
         )
         for candidate_id in target_candidate_ids
-    ]
+    ])
     _reject_direct_submit_with_domain_blockers(readiness)
     ready_candidates = [
         candidate_map[readiness_item.candidate_id]

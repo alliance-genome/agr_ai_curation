@@ -226,7 +226,7 @@ function BlockerList({
             <Stack spacing={0.75}>
               <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                 <Chip
-                  label={`Object ${blocker.object_id ?? 'session'}`}
+                  label={blocker.object_id ? `Object ${blocker.object_id}` : 'Envelope-level'}
                   size="small"
                   variant="outlined"
                 />

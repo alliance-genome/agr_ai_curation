@@ -81,10 +81,8 @@ def domain_envelope_field_validation_results(
         if summary.object_id == object_id and summary.field_path is None
     ]
     field_summaries_by_path: dict[str, list[DomainEnvelopeValidationSummaryProjection]] = {}
-    global_summaries: list[DomainEnvelopeValidationSummaryProjection] = []
     for summary in summaries:
         if summary.object_id is None:
-            global_summaries.append(summary)
             continue
         if summary.object_id == object_id and summary.field_path is not None:
             field_summaries_by_path.setdefault(summary.field_path, []).append(summary)
@@ -113,14 +111,12 @@ def domain_envelope_field_validation_results(
             all_warnings.extend(result.warnings)
             continue
 
-        warnings = _global_validation_warnings(global_summaries)
-        if not warnings:
-            warnings = [
-                (
-                    "No envelope validation findings targeted this field; "
-                    "validation status was not inferred from the populated draft value."
-                )
-            ]
+        warnings = [
+            (
+                "No envelope validation findings targeted this field; "
+                "validation status was not inferred from the populated draft value."
+            )
+        ]
         results[field_key] = FieldValidationResult(
             status=FieldValidationStatus.SKIPPED,
             resolver=resolver,
@@ -367,17 +363,6 @@ def _candidate_match_from_mapping(
         ),
         score=score,
     )
-
-
-def _global_validation_warnings(
-    summaries: Sequence[DomainEnvelopeValidationSummaryProjection],
-) -> list[str]:
-    warnings: list[str] = []
-    for summary in summaries:
-        status_label = summary.status.value.replace("_", " ")
-        for message in summary.messages:
-            warnings.append(f"Envelope-level validation is {status_label}: {message}")
-    return dedupe(warnings)
 
 
 def _optional_string(value: Any) -> str | None:

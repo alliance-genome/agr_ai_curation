@@ -28,6 +28,7 @@ const serviceMocks = vi.hoisted(() => ({
   updateCurationSession: vi.fn(),
   validateAllCurationSessionCandidates: vi.fn(),
   validateCurationCandidate: vi.fn(),
+  waiveCurationValidationFinding: vi.fn(),
   focusGrid: vi.fn(),
   showPdf: vi.fn(),
 }))
@@ -62,6 +63,7 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   updateCurationSession: serviceMocks.updateCurationSession,
   validateAllCurationSessionCandidates: serviceMocks.validateAllCurationSessionCandidates,
   validateCurationCandidate: serviceMocks.validateCurationCandidate,
+  waiveCurationValidationFinding: serviceMocks.waiveCurationValidationFinding,
 }))
 
 vi.mock('@/components/pdfViewer/PersistentPdfWorkspaceLayout', () => ({
@@ -363,6 +365,38 @@ function buildEnvelopeWorkspace(): CurationWorkspace {
     messages: ['Needs curator review'],
     findings: [],
   }
+  const envelopeValidationSummaryProjection = {
+    ...validationSummaryProjection,
+    summary_id: 'validation-summary-envelope',
+    object_id: null,
+    object_type: null,
+    field_path: null,
+    status: 'blocked' as const,
+    highest_severity: 'blocker' as const,
+    finding_ids: ['finding-envelope'],
+    codes: ['fixture.provider_unavailable'],
+    messages: ['Required envelope validation was unavailable.'],
+    findings: [
+      {
+        finding_id: 'finding-envelope',
+        envelope_id: 'tmem67-envelope',
+        object_id: null,
+        object_type: null,
+        field_path: null,
+        envelope_revision: 4,
+        severity: 'blocker',
+        finding_status: 'open',
+        summary_status: 'blocked' as const,
+        code: 'fixture.provider_unavailable',
+        message: 'Required envelope validation was unavailable.',
+        details: {
+          validation_metadata: {
+            curator_override: { allowed: true },
+          },
+        },
+      },
+    ],
+  }
   const candidate = {
     ...baseWorkspace.candidates[1],
     candidate_id: 'candidate-tmem67',
@@ -397,7 +431,10 @@ function buildEnvelopeWorkspace(): CurationWorkspace {
     ...baseWorkspace,
     candidates: [candidate],
     evidence_anchor_projections: [evidenceProjection],
-    validation_summary_projections: [validationSummaryProjection],
+    validation_summary_projections: [
+      validationSummaryProjection,
+      envelopeValidationSummaryProjection,
+    ],
     active_candidate_id: 'candidate-tmem67',
     session: {
       ...baseWorkspace.session,
@@ -530,6 +567,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.updateCurationSession.mockReset()
     serviceMocks.validateAllCurationSessionCandidates.mockReset()
     serviceMocks.validateCurationCandidate.mockReset()
+    serviceMocks.waiveCurationValidationFinding.mockReset()
     serviceMocks.focusGrid.mockReset()
     serviceMocks.showPdf.mockReset()
   })
@@ -570,6 +608,7 @@ describe('CurationWorkspacePage', () => {
   })
 
   it('uses persisted review-row projections in the horizontal grid', async () => {
+    const user = userEvent.setup()
     const workspace = buildEnvelopeWorkspace()
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
@@ -610,6 +649,9 @@ describe('CurationWorkspacePage', () => {
 
     expect(screen.getAllByText('TMEM67').length).toBeGreaterThan(0)
     expect(screen.getByText('Needs curator review')).toBeInTheDocument()
+    expect(screen.getByText(
+      /Required envelope validation was unavailable\. All objects from this envelope are affected\./,
+    )).toBeInTheDocument()
     expect(screen.getByRole('button', {
       name: 'Select Gene symbol for gene.symbol',
     })).toBeInTheDocument()
@@ -635,6 +677,51 @@ describe('CurationWorkspacePage', () => {
 
     expect(screen.getByRole('button', { name: 'Accept Legacy candidate label' })).toBeDisabled()
     expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Waive finding' }))
+    expect(serviceMocks.waiveCurationValidationFinding).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      envelope_id: 'tmem67-envelope',
+      expected_revision: 4,
+      finding_id: 'finding-envelope',
+    })
+  })
+
+  it('shows a waived envelope blocker when its override policy does not allow waiver', async () => {
+    const workspace = buildEnvelopeWorkspace()
+    const envelopeSummary = (workspace.validation_summary_projections ?? []).find(
+      (summary) => summary.object_id === null,
+    )
+    if (!envelopeSummary) {
+      throw new Error('Expected the envelope validation summary fixture')
+    }
+    envelopeSummary.status = 'waived'
+    envelopeSummary.open_finding_count = 0
+    envelopeSummary.findings[0] = {
+      ...envelopeSummary.findings[0],
+      finding_status: 'waived',
+      summary_status: 'waived',
+      details: {
+        validation_metadata: {
+          blocking: true,
+          required: true,
+        },
+      },
+    }
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
+      buildEnvelopeReviewRows(),
+    ])
+
+    renderPage('/curation/session-1')
+
+    expect(await screen.findByText(
+      /Required envelope validation was unavailable\. All objects from this envelope are affected\./,
+    )).toBeInTheDocument()
+    expect(screen.getByText(
+      'Rerun validation or correct the underlying problem.',
+    )).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Waive finding' })).not.toBeInTheDocument()
   })
 
   it('creates a manual object from the envelope work pane toolbar', async () => {

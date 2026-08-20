@@ -4,8 +4,12 @@ import type {
   CurationCandidate,
   DomainEnvelopeReviewRow,
   DomainEnvelopeReviewRowsResponse,
+  DomainEnvelopeValidationSummaryProjection,
 } from '@/features/curation/types'
-import { buildWorkspaceEnvelopeObjectReviewRows } from './envelopeObjectReviewRows'
+import {
+  buildWorkspaceEnvelopeObjectReviewRows,
+  envelopeValidationSummariesForProjection,
+} from './envelopeObjectReviewRows'
 
 function candidateForObject(objectId: string): CurationCandidate {
   return {
@@ -81,6 +85,42 @@ function reviewRowsResponse(rows: DomainEnvelopeReviewRow[]): DomainEnvelopeRevi
 }
 
 describe('workspace envelope object review rows', () => {
+  it('routes envelope summaries by envelope and revision without copying them into object rows', () => {
+    const envelopeSummary: DomainEnvelopeValidationSummaryProjection = {
+      summary_id: 'summary-envelope',
+      envelope_id: 'tmem67-envelope',
+      object_id: null,
+      field_path: null,
+      envelope_revision: 3,
+      status: 'blocked',
+      highest_severity: 'blocker',
+      finding_count: 1,
+      open_finding_count: 1,
+      finding_ids: ['finding-envelope'],
+      codes: ['fixture.provider_unavailable'],
+      messages: ['Required envelope validation was unavailable.'],
+      findings: [],
+    }
+    const otherEnvelopeSummary = {
+      ...envelopeSummary,
+      summary_id: 'summary-other-envelope',
+      envelope_id: 'other-envelope',
+    }
+    const candidate = candidateForObject('tmem67-gene')
+
+    expect(envelopeValidationSummariesForProjection(
+      [envelopeSummary, otherEnvelopeSummary],
+      candidate.projection_ref,
+    )).toEqual([envelopeSummary])
+
+    const [row] = buildWorkspaceEnvelopeObjectReviewRows({
+      candidates: [candidate],
+      reviewRowResponses: [reviewRowsResponse([])],
+      validationSummaryProjections: [envelopeSummary],
+    })
+    expect(row.validationSummaries).toEqual([])
+  })
+
   it('projects tmem67 and first-pass domain fixtures through one envelope-object row shape', () => {
     const fixtureObjects = [
       ['tmem67-gene', 'Gene'],

@@ -23,6 +23,7 @@ from src.lib.domain_envelopes.persistence import (
     DomainEnvelopePersistenceError,
     write_domain_envelope_checkpoint,
 )
+from src.lib.domain_packs.materialization import validation_finding_projection_id
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
@@ -1112,7 +1113,11 @@ def waive_validation_finding(
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
-    finding_index, finding = _validation_finding_by_id(envelope, request.finding_id)
+    finding_index, finding = _validation_finding_by_id(
+        envelope,
+        envelope_revision=envelope_row.revision,
+        finding_id=request.finding_id,
+    )
     if finding.status is not ValidationFindingStatus.OPEN:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1225,10 +1230,17 @@ def waive_validation_finding(
 
 def _validation_finding_by_id(
     envelope: DomainEnvelope,
+    *,
+    envelope_revision: int,
     finding_id: str,
 ) -> tuple[int, ValidationFinding]:
     for index, finding in enumerate(envelope.validation_findings):
-        if finding.finding_id == finding_id:
+        if validation_finding_projection_id(
+            envelope=envelope,
+            envelope_revision=envelope_revision,
+            finding=finding,
+            finding_index=index,
+        ) == finding_id:
             return index, finding
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -1238,8 +1250,6 @@ def _validation_finding_by_id(
 
 def _finding_curator_override_allowed(finding: ValidationFinding) -> bool:
     details = finding.details or {}
-    if _metadata_allows_curator_override(details):
-        return True
     raw_validation_metadata = details.get("validation_metadata")
     return (
         isinstance(raw_validation_metadata, Mapping)

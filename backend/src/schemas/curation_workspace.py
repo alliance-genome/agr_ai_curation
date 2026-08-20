@@ -947,7 +947,7 @@ class DomainEnvelopeValidationFindingProjection(CurationWorkspaceBaseModel):
 
 
 class DomainEnvelopeValidationSummaryProjection(CurationWorkspaceBaseModel):
-    """Validation summary grouped by envelope object and field path."""
+    """Validation summary grouped at envelope, object, or field scope."""
 
     summary_id: str = Field(description="Stable summary projection identifier")
     envelope_id: str = Field(description="Source domain envelope identifier")
@@ -1112,7 +1112,7 @@ class CurationCandidate(CurationWorkspaceBaseModel):
     )
     validation_summary_projections: list[DomainEnvelopeValidationSummaryProjection] = Field(
         default_factory=list,
-        description="Regenerable validation summaries projected from envelope findings",
+        description="Object- and field-scoped validation summaries projected from envelope findings",
     )
     evidence_summary: Optional[CurationEvidenceSummary] = Field(
         default=None,
@@ -1654,7 +1654,7 @@ class CurationWorkspace(CurationWorkspaceBaseModel):
     )
     validation_summary_projections: list[DomainEnvelopeValidationSummaryProjection] = Field(
         default_factory=list,
-        description="Session-scoped validation summaries regenerated from domain envelopes",
+        description="Session-scoped validation summaries, including envelope-level findings",
     )
     active_candidate_id: Optional[str] = Field(
         default=None,

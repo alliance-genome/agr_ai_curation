@@ -37,12 +37,14 @@ import {
   submitCurationCandidateDecision,
   validateAllCurationSessionCandidates,
   validateCurationCandidate,
+  waiveCurationValidationFinding,
 } from '@/features/curation/services/curationWorkspaceService'
 import AddManualObjectDialog, {
   type ManualObjectDraft,
 } from '@/features/curation/workspace/AddManualObjectDialog'
 import type {
   CurationCandidate,
+  DomainEnvelopeValidationFindingProjection,
   CurationSubmissionPreviewResponse,
   CurationWorkspace,
 } from '@/features/curation/types'
@@ -60,7 +62,10 @@ import {
   curationWorkspaceEnvelopeReviewRowsQueryOptions,
   refreshCurationWorkspaceEnvelopeReviewRows,
 } from '@/features/curation/workspace/envelopeReviewRowsQuery'
-import { buildWorkspaceEnvelopeObjectReviewRows } from '@/features/curation/workspace/envelopeObjectReviewRows'
+import {
+  buildWorkspaceEnvelopeObjectReviewRows,
+  envelopeValidationSummariesForProjection,
+} from '@/features/curation/workspace/envelopeObjectReviewRows'
 import {
   type PdfToFormEvidence,
   usePdfToFormLinking,
@@ -90,6 +95,36 @@ function queryErrorMessage(error: unknown): string | null {
   }
 
   return String(error)
+}
+
+function findingAllowsCuratorOverride(
+  finding: DomainEnvelopeValidationFindingProjection,
+): boolean {
+  const validationMetadata = finding.details.validation_metadata
+  if (
+    validationMetadata === null
+    || typeof validationMetadata !== 'object'
+    || Array.isArray(validationMetadata)
+  ) {
+    return false
+  }
+  const curatorOverride = (validationMetadata as Record<string, unknown>).curator_override
+  return (
+    curatorOverride !== null
+    && typeof curatorOverride === 'object'
+    && !Array.isArray(curatorOverride)
+    && (curatorOverride as Record<string, unknown>).allowed === true
+  )
+}
+
+function envelopeFindingRequiresAttention(
+  finding: DomainEnvelopeValidationFindingProjection,
+): boolean {
+  return finding.finding_status === 'open'
+    || (
+      finding.finding_status === 'waived'
+      && !findingAllowsCuratorOverride(finding)
+    )
 }
 
 function findCandidate(
@@ -185,6 +220,7 @@ function CurationWorkspacePageContent({
   const [validatingAll, setValidatingAll] = useState(false)
   const [validatingCandidateIds, setValidatingCandidateIds] = useState<Set<string>>(new Set())
   const [decidingCandidateIds, setDecidingCandidateIds] = useState<Set<string>>(new Set())
+  const [waivingFindingId, setWaivingFindingId] = useState<string | null>(null)
   const envelopeRowsQueryOptions = useMemo(
     () => curationWorkspaceEnvelopeReviewRowsQueryOptions(workspace),
     [workspace],
@@ -209,6 +245,18 @@ function CurationWorkspacePageContent({
       workspace.evidence_anchor_projections,
       workspace.validation_summary_projections,
     ],
+  )
+  const activeEnvelopeValidationSummaries = useMemo(
+    () => {
+      const activeCandidate = candidates.find(
+        (candidate) => candidate.candidate_id === activeCandidateId,
+      )
+      return envelopeValidationSummariesForProjection(
+        workspace.validation_summary_projections ?? [],
+        activeCandidate?.projection_ref,
+      )
+    },
+    [activeCandidateId, candidates, workspace.validation_summary_projections],
   )
   const expectedEnvelopeRevisions = useMemo(
     () => buildWorkspaceExpectedEnvelopeRevisions(candidates),
@@ -398,6 +446,30 @@ function CurationWorkspacePageContent({
       setValidatingAll(false)
     }
   }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
+
+  const handleWaiveEnvelopeFinding = useCallback(async (
+    envelopeId: string,
+    envelopeRevision: number,
+    findingId: string,
+  ) => {
+    setTableError(null)
+    setWaivingFindingId(findingId)
+    try {
+      await waiveCurationValidationFinding({
+        session_id: workspace.session.session_id,
+        envelope_id: envelopeId,
+        expected_revision: envelopeRevision,
+        finding_id: findingId,
+      })
+      await refreshWorkspace(activeCandidateId)
+    } catch (error) {
+      setTableError(
+        error instanceof Error ? error.message : 'Unable to waive this validation finding.',
+      )
+    } finally {
+      setWaivingFindingId(null)
+    }
+  }, [activeCandidateId, refreshWorkspace, workspace.session.session_id])
 
   const handleAcceptTag = useCallback(async (tagId: string) => {
     setTableError(null)
@@ -657,6 +729,45 @@ function CurationWorkspacePageContent({
               onTogglePdf={isPdfVisible ? focusGrid : showPdf}
               onValidateAll={() => void handleValidateAll()}
             />
+            {activeEnvelopeValidationSummaries
+              .filter((summary) => summary.findings.some(envelopeFindingRequiresAttention))
+              .map((summary) => (
+                <Alert
+                  key={summary.summary_id}
+                  severity={summary.highest_severity === 'blocker' ? 'error' : 'warning'}
+                  sx={{ borderRadius: 0 }}
+                >
+                  <strong>Envelope-level validation:</strong>{' '}
+                  {summary.messages.join(' ')} All objects from this envelope are affected.
+                  <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                    {summary.findings
+                      .filter(envelopeFindingRequiresAttention)
+                      .map((finding) => (
+                        findingAllowsCuratorOverride(finding) ? (
+                          <Button
+                            disabled={waivingFindingId !== null}
+                            key={finding.finding_id}
+                            onClick={() => void handleWaiveEnvelopeFinding(
+                              summary.envelope_id,
+                              summary.envelope_revision,
+                              finding.finding_id,
+                            )}
+                            size="small"
+                            variant="outlined"
+                          >
+                            {waivingFindingId === finding.finding_id
+                              ? 'Waiving…'
+                              : 'Waive finding'}
+                          </Button>
+                        ) : (
+                          <Typography key={finding.finding_id} variant="caption">
+                            Rerun validation or correct the underlying problem.
+                          </Typography>
+                        )
+                      ))}
+                  </Stack>
+                </Alert>
+              ))}
             <InteractiveHorizontalCurationGrid
               model={horizontalGridModel}
               renderRowActions={renderRowActions}
