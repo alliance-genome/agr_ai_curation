@@ -325,6 +325,74 @@ describe('Chat persistence', () => {
     expect(markEventsProcessed).toHaveBeenCalledWith(4, 2)
   })
 
+  it('advances past stale-only events without rendering them', async () => {
+    const markEventsProcessed = vi.fn()
+    renderChat({
+      sessionId: 'session-1',
+      eventStreamVersion: 8,
+      processedEventCount: 0,
+      markEventsProcessed,
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'stale-session',
+          turn_id: 'stale-turn',
+          content: 'Stale session response.',
+        },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(markEventsProcessed).toHaveBeenCalledWith(8, 1)
+    })
+    expect(screen.queryByText('Stale session response.')).not.toBeInTheDocument()
+  })
+
+  it('advances a mixed-session batch and renders the current event only once', async () => {
+    const markEventsProcessed = vi.fn()
+    const events = [
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        session_id: 'stale-session',
+        turn_id: 'stale-turn',
+        content: 'Stale session response.',
+      },
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        session_id: 'session-1',
+        turn_id: 'current-turn',
+        content: 'Current session response.',
+      },
+    ]
+    const chat = (processedEventCount: number) => (
+      <MemoryRouter>
+        <Chat
+          sessionId="session-1"
+          events={events}
+          eventStreamVersion={9}
+          processedEventCount={processedEventCount}
+          isLoading={false}
+          sendMessage={vi.fn().mockResolvedValue(undefined)}
+          markEventsProcessed={markEventsProcessed}
+          onSessionChange={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    const view = render(chat(0))
+    expect(await screen.findByText('Current session response.')).toBeInTheDocument()
+    expect(screen.queryByText('Stale session response.')).not.toBeInTheDocument()
+    expect(markEventsProcessed).toHaveBeenCalledWith(9, 2)
+
+    view.rerender(chat(2))
+    expect(screen.getAllByText('Current session response.')).toHaveLength(1)
+
+    view.unmount()
+    render(chat(2))
+    expect(await screen.findAllByText('Current session response.')).toHaveLength(1)
+    expect(screen.queryByText('Stale session response.')).not.toBeInTheDocument()
+  })
+
   it('replaces streamed supervisor prose with ordered typed flow chat outputs', async () => {
     const { container } = renderChat({
       sessionId: 'session-1',

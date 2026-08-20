@@ -536,12 +536,10 @@ export function useChatController({
     // lives with useChatStream so route remounts do not replay old deltas.
     const startIndex = Math.min(processedEventCount, events.length)
     const newEvents = events.slice(startIndex)
-    let sawEventForAnotherSession = false
 
     newEvents.forEach((parsed: ChatStreamEvent) => {
       const eventSessionId = getStreamEventSessionId(parsed)
       if (eventSessionId && propSessionId && eventSessionId !== propSessionId) {
-        sawEventForAnotherSession = true
         debug.log('[SSE] Ignoring event for stale session:', {
           eventType: parsed.type,
           eventSessionId,
@@ -990,9 +988,7 @@ export function useChatController({
       }
     })
 
-    if (!sawEventForAnotherSession) {
-      markEventsProcessed(eventStreamVersion, events.length)
-    }
+    markEventsProcessed(eventStreamVersion, events.length)
   }, [
     events,
     activeDocument,
