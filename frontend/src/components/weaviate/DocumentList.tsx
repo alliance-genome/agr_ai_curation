@@ -51,7 +51,6 @@ import {
   documentSourceReferenceLabel,
 } from '../../utils/documentSourcePresentation';
 import {
-  MAX_UPLOAD_FILES_PER_SELECTION,
   uploadPdfDocument,
   validatePdfSelection,
 } from '@/features/documents/pdfUploadFlow';
@@ -390,7 +389,6 @@ const DocumentList: React.FC<DocumentListProps> = ({
     }
 
     const validation = validatePdfSelection(selectedFiles, {
-      maxFiles: MAX_UPLOAD_FILES_PER_SELECTION,
       allowMultiple: true,
     });
     if (!validation.ok) {

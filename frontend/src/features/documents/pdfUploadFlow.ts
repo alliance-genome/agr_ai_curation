@@ -1,4 +1,4 @@
-export const MAX_UPLOAD_FILES_PER_SELECTION = 10;
+import { getAddLiteratureConfig } from '@/config/addLiterature';
 
 const TERMINAL_STAGES = new Set([
   'completed',
@@ -223,7 +223,7 @@ export const validatePdfSelection = (
   files: File[],
   options: { maxFiles?: number; allowMultiple?: boolean } = {},
 ): PdfValidationResult => {
-  const maxFiles = options.maxFiles ?? MAX_UPLOAD_FILES_PER_SELECTION;
+  const maxFiles = options.maxFiles ?? getAddLiteratureConfig().maxSelectedFiles;
   const allowMultiple = options.allowMultiple ?? true;
 
   if (files.length === 0) {

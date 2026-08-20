@@ -36,6 +36,51 @@ def _resolve_request() -> Request:
 
 
 @pytest.mark.asyncio
+async def test_document_source_provider_presentation_uses_public_registry_boundary(
+    monkeypatch,
+):
+    monkeypatch.setattr(documents, "get_document_source_provider", lambda: " ABC_LITERATURE ")
+    monkeypatch.setattr(
+        documents,
+        "get_document_source_provider_metadata",
+        lambda provider_id: {
+            "identifier_help_label": f"Help for {provider_id}",
+            "identifier_examples": ["SOURCE:1"],
+        },
+    )
+
+    response = await documents.get_document_source_provider_presentation(
+        _user={"sub": "user-1"},
+    )
+
+    assert response == {
+        "provider_id": "abc_literature",
+        "presentation": {
+            "identifier_help_label": "Help for abc_literature",
+            "identifier_examples": ["SOURCE:1"],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_document_source_provider_presentation_has_honest_unconfigured_state(
+    monkeypatch,
+):
+    monkeypatch.setattr(documents, "get_document_source_provider", lambda: "local_pdf")
+    monkeypatch.setattr(
+        documents,
+        "get_document_source_provider_metadata",
+        lambda _provider_id: None,
+    )
+
+    response = await documents.get_document_source_provider_presentation(
+        _user={"sub": "user-1"},
+    )
+
+    assert response == {"provider_id": "local_pdf", "presentation": None}
+
+
+@pytest.mark.asyncio
 async def test_import_documents_by_source_identifiers_delegates_to_service(monkeypatch):
     captured = {}
 

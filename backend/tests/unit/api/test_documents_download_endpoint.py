@@ -520,6 +520,15 @@ async def test_get_download_info_reports_pdf_backed_provider_markdown(monkeypatc
                 "external_ids.doi",
                 "source_md5",
             ],
+            "identifier_help_label": (
+                "PMID, PubMed ID, AGRKB, ABC, or FBrf identifiers; "
+                "comma or newline separated."
+            ),
+            "identifier_examples": [
+                "PMID:23970418",
+                "PubMed ID 23970418",
+                "AGRKB:101000000055784",
+            ],
         },
         "reference_id": "ref-123",
         "reference_curie": "AGRKB:101",

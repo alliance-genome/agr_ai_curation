@@ -38,31 +38,25 @@ import {
   WarningAmber as WarningAmberIcon,
 } from '@mui/icons-material';
 import {
-  MAX_UPLOAD_FILES_PER_SELECTION,
   uploadPdfDocument,
   validatePdfSelection,
 } from '@/features/documents/pdfUploadFlow';
+import { getAddLiteratureConfig } from '@/config/addLiterature';
 import { buildPdfTerminalNotification } from '@/features/documents/pdfTerminalNotifications';
 import { emitGlobalToast } from '@/lib/globalNotifications';
 import PdfJobsPanel from '../../components/weaviate/PdfJobsPanel';
 import {
+  buildPdfJobsStreamUrl,
   cancelPdfJob,
+  fetchConfiguredDocumentSourcePresentation,
   fetchPdfJobs,
+  importSourceIdentifiers,
+  resolveSourceIdentifiers,
+  type DocumentSourceProviderMetadata,
+  type LiteratureImportResult,
+  type LiteratureImportStatus,
   type PdfProcessingJob,
 } from '../../services/weaviate';
-
-type ImportStatus =
-  | 'resolved'
-  | 'imported'
-  | 'duplicate'
-  | 'invalid'
-  | 'access_denied'
-  | 'conversion_running'
-  | 'conversion_failed'
-  | 'needs_selection'
-  | 'no_source_pdf'
-  | 'no_converted_text'
-  | 'provider_unavailable';
 
 type ImportMode = 'identifiers' | 'upload';
 type PendingAction = 'resolve' | 'import' | null;
@@ -72,44 +66,8 @@ type IdentifierFeedback = {
   message: string;
 };
 
-interface LiteratureImportResult {
-  identifier: string;
-  normalizedIdentifier: string | null;
-  status: ImportStatus;
-  message: string;
-  documentId?: string;
-  filename?: string;
-  jobId?: string;
-  source?: {
-    provider: string;
-    viewerMode: 'local_pdf';
-    pdfArtifactId: string;
-    convertedArtifactId?: string;
-    sourceMd5: string;
-    chunks?: number;
-  };
-}
-
-interface IdentifierImportApiResult {
-  identifier: string;
-  normalized_identifier?: string | null;
-  status: string;
-  message?: string | null;
-  document_id?: string | null;
-  job_id?: string | null;
-  filename?: string | null;
-  error_code?: string | null;
-  existing_document_id?: string | null;
-  source_provenance?: Record<string, unknown> | null;
-}
-
-interface IdentifierImportApiResponse {
-  results?: IdentifierImportApiResult[];
-  imported_count?: number;
-}
-
 const statusTone: Record<
-  ImportStatus,
+  LiteratureImportStatus,
   {
     label: string;
     chipColor: 'success' | 'info' | 'warning' | 'error' | 'default';
@@ -173,116 +131,6 @@ const statusTone: Record<
   },
 };
 
-const postIdentifierBatch = async (
-  endpoint: string,
-  rawIdentifiers: string,
-): Promise<IdentifierImportApiResponse> => {
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ identifiers: rawIdentifiers }),
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = typeof payload === 'object' && payload && 'detail' in payload
-      ? String((payload as { detail?: unknown }).detail ?? '')
-      : '';
-    throw new Error(detail || 'Failed to process source identifiers.');
-  }
-
-  return payload as IdentifierImportApiResponse;
-};
-
-const resolveSourceIdentifiers = (rawIdentifiers: string): Promise<IdentifierImportApiResponse> => (
-  postIdentifierBatch('/api/weaviate/documents/resolve/source-identifiers', rawIdentifiers)
-);
-
-const importSourceIdentifiers = (rawIdentifiers: string): Promise<IdentifierImportApiResponse> => (
-  postIdentifierBatch('/api/weaviate/documents/import/source-identifiers', rawIdentifiers)
-);
-
-const statusFromApiResult = (result: IdentifierImportApiResult): ImportStatus => {
-  const errorCode = result.error_code ?? '';
-  if (result.status === 'resolved') {
-    return 'resolved';
-  }
-  if (result.status === 'imported') {
-    return 'imported';
-  }
-  if (result.status === 'duplicate') {
-    return 'duplicate';
-  }
-  if (errorCode === 'access_denied' || errorCode === 'document_source_access_denied') {
-    return 'access_denied';
-  }
-  if (
-    errorCode === 'provider_unavailable' ||
-    errorCode === 'document_source_unavailable' ||
-    errorCode === 'document_source_curator_token_unavailable'
-  ) {
-    return 'provider_unavailable';
-  }
-  if (errorCode === 'conversion_running' || errorCode === 'document_source_conversion_running') {
-    return 'conversion_running';
-  }
-  if (errorCode === 'conversion_failed' || errorCode === 'document_source_conversion_failed') {
-    return 'conversion_failed';
-  }
-  if (errorCode === 'ambiguous_match' || errorCode === 'document_source_ambiguous_match') {
-    return 'needs_selection';
-  }
-  if (errorCode === 'no_source_artifact' || errorCode === 'document_source_no_source_artifact') {
-    return 'no_source_pdf';
-  }
-  if (errorCode === 'no_converted_text' || errorCode === 'document_source_no_converted_text') {
-    return 'no_converted_text';
-  }
-  return 'invalid';
-};
-
-const stringFromRecord = (record: Record<string, unknown>, key: string): string | undefined => {
-  const value = record[key];
-  return typeof value === 'string' && value.trim() ? value : undefined;
-};
-
-const numberFromRecord = (record: Record<string, unknown>, key: string): number | undefined => {
-  const value = record[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-};
-
-const resultFromApiResult = (result: IdentifierImportApiResult): LiteratureImportResult => {
-  const provenance = result.source_provenance ?? undefined;
-  const viewerMode = provenance ? stringFromRecord(provenance, 'viewer_mode') : undefined;
-  const pdfArtifactId = provenance
-    ? stringFromRecord(provenance, 'pdf_artifact_id') ?? stringFromRecord(provenance, 'pdf_referencefile_id')
-    : undefined;
-
-  return {
-    identifier: result.identifier,
-    normalizedIdentifier: result.normalized_identifier ?? null,
-    status: statusFromApiResult(result),
-    message: result.message || 'Source identifier returned without a message.',
-    documentId: result.document_id ?? result.existing_document_id ?? undefined,
-    filename: result.filename ?? undefined,
-    jobId: result.job_id ?? undefined,
-    source: viewerMode === 'local_pdf' && pdfArtifactId
-      ? {
-          provider: stringFromRecord(provenance!, 'provider') ?? 'document_source',
-          viewerMode: 'local_pdf',
-          pdfArtifactId,
-          convertedArtifactId: stringFromRecord(provenance!, 'converted_artifact_id')
-            ?? stringFromRecord(provenance!, 'converted_referencefile_id'),
-          sourceMd5: stringFromRecord(provenance!, 'source_md5') ?? 'unknown',
-          chunks: numberFromRecord(provenance!, 'chunks') ?? numberFromRecord(provenance!, 'chunk_count'),
-        }
-      : undefined,
-  };
-};
-
 const canOpenInDocuments = (result: LiteratureImportResult) => (
   Boolean(result.documentId) && result.status !== 'conversion_running'
 );
@@ -330,6 +178,7 @@ const convertedSourceLabel = (result: LiteratureImportResult): string => {
 const AddLiteraturePage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  const config = React.useMemo(() => getAddLiteratureConfig(), []);
   const [mode, setMode] = React.useState<ImportMode>('identifiers');
   const [identifiers, setIdentifiers] = React.useState('');
   const [results, setResults] = React.useState<LiteratureImportResult[]>([]);
@@ -339,6 +188,7 @@ const AddLiteraturePage: React.FC = () => {
   const [uploadMessage, setUploadMessage] = React.useState<string | null>(null);
   const [jobs, setJobs] = React.useState<PdfProcessingJob[]>([]);
   const [jobsLoading, setJobsLoading] = React.useState(false);
+  const [providerPresentation, setProviderPresentation] = React.useState<DocumentSourceProviderMetadata | null>(null);
   const identifierRequestVersionRef = React.useRef(0);
   const jobsEventSourceRef = React.useRef<EventSource | null>(null);
   const jobsPollingRef = React.useRef<number | null>(null);
@@ -387,7 +237,11 @@ const AddLiteraturePage: React.FC = () => {
     }
 
     try {
-      const payload = await fetchPdfJobs({ windowDays: 7, limit: 50, offset: 0 });
+      const payload = await fetchPdfJobs({
+        windowDays: config.pdfJobWindowDays,
+        limit: config.pdfJobLimit,
+        offset: 0,
+      });
       applyJobsUpdate(payload.jobs);
     } catch (error) {
       console.error('Error fetching PDF jobs:', error);
@@ -396,7 +250,24 @@ const AddLiteraturePage: React.FC = () => {
         setJobsLoading(false);
       }
     }
-  }, [applyJobsUpdate]);
+  }, [applyJobsUpdate, config.pdfJobLimit, config.pdfJobWindowDays]);
+
+  React.useEffect(() => {
+    let active = true;
+    fetchConfiguredDocumentSourcePresentation()
+      .then((payload) => {
+        if (active) {
+          setProviderPresentation(payload.presentation);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load document-source presentation:', error);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     const startJobsPolling = () => {
@@ -405,13 +276,16 @@ const AddLiteraturePage: React.FC = () => {
       }
       jobsPollingRef.current = window.setInterval(() => {
         void refreshJobs(true);
-      }, 5000);
+      }, config.fallbackPollingIntervalMs);
     };
 
     void refreshJobs();
 
     try {
-      const source = new EventSource('/api/weaviate/pdf-jobs/stream?window_days=7&limit=50');
+      const source = new EventSource(buildPdfJobsStreamUrl({
+        windowDays: config.pdfJobWindowDays,
+        limit: config.pdfJobLimit,
+      }));
       jobsEventSourceRef.current = source;
 
       source.onmessage = (event) => {
@@ -448,7 +322,13 @@ const AddLiteraturePage: React.FC = () => {
         jobsPollingRef.current = null;
       }
     };
-  }, [applyJobsUpdate, refreshJobs]);
+  }, [
+    applyJobsUpdate,
+    config.fallbackPollingIntervalMs,
+    config.pdfJobLimit,
+    config.pdfJobWindowDays,
+    refreshJobs,
+  ]);
 
   const handleCancelJob = React.useCallback(async (jobId: string) => {
     try {
@@ -474,7 +354,7 @@ const AddLiteraturePage: React.FC = () => {
         if (identifierRequestVersionRef.current !== requestVersion) {
           return;
         }
-        const nextResults = payload.results?.map(resultFromApiResult) ?? [];
+        const nextResults = payload.results;
         setResults(nextResults);
         const unresolvedCount = nextResults.filter((result) => result.status !== 'resolved').length;
         setIdentifierFeedback({
@@ -515,8 +395,8 @@ const AddLiteraturePage: React.FC = () => {
         if (identifierRequestVersionRef.current !== requestVersion) {
           return;
         }
-        const nextResults = payload.results?.map(resultFromApiResult) ?? [];
-        const importedCount = payload.imported_count ?? 0;
+        const nextResults = payload.results;
+        const importedCount = payload.importedCount;
         setResults(nextResults);
         setIdentifierFeedback({
           severity: importedCount > 0 ? 'success' : 'warning',
@@ -592,7 +472,7 @@ const AddLiteraturePage: React.FC = () => {
     identifierRequestVersionRef.current += 1;
     setPendingAction(null);
     const validation = validatePdfSelection(selectedFiles, {
-      maxFiles: MAX_UPLOAD_FILES_PER_SELECTION,
+      maxFiles: config.maxSelectedFiles,
       allowMultiple: true,
     });
 
@@ -659,7 +539,7 @@ const AddLiteraturePage: React.FC = () => {
 
     setUploadStatus('complete');
     setUploadMessage(`Queued ${succeeded} PDF${succeeded === 1 ? '' : 's'} for background processing.`);
-  }, [refreshJobs]);
+  }, [config.maxSelectedFiles, refreshJobs]);
 
   const handleFileSelect = React.useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -740,10 +620,9 @@ const AddLiteraturePage: React.FC = () => {
                   multiline
                   minRows={5}
                   fullWidth
-                  placeholder={`PMID:23970418
-PubMed ID 23970418
-AGRKB:101000000055784`}
-                  helperText="PMID, PubMed ID, AGRKB, or ABC identifiers; comma or newline separated. PMCID/FBrf can be added when backend resolution supports them."
+                  placeholder={providerPresentation?.identifierExamples?.join('\n')}
+                  helperText={providerPresentation?.identifierHelpLabel
+                    ?? 'Enter identifiers supported by the configured document source; comma or newline separated.'}
                   InputProps={{
                     sx: {
                       alignItems: 'flex-start',
@@ -958,7 +837,7 @@ AGRKB:101000000055784`}
                               PDF {result.source.pdfArtifactId} / {convertedSourceLabel(result)}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
-                              {result.source.viewerMode} - {result.source.chunks ?? 'pending'} chunks
+                              {result.source.viewerMode}
                             </Typography>
                           </Stack>
                         ) : (

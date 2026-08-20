@@ -82,6 +82,34 @@ interface RawDocumentSourceProvenance {
 interface RawDocumentSourceProviderMetadata {
   display_label?: string | null;
   reference_label_priority?: string[] | null;
+  identifier_help_label?: string | null;
+  identifier_examples?: string[] | null;
+}
+
+interface RawDocumentSourceProviderPresentationResponse {
+  provider_id: string;
+  presentation?: RawDocumentSourceProviderMetadata | null;
+}
+
+interface RawIdentifierImportApiResult {
+  identifier: string;
+  normalized_identifier?: string | null;
+  status: string;
+  message?: string | null;
+  document_id?: string | null;
+  job_id?: string | null;
+  filename?: string | null;
+  error_code?: string | null;
+  existing_document_id?: string | null;
+  source_provenance?: Record<string, unknown> | null;
+}
+
+interface RawIdentifierImportApiResponse {
+  results?: RawIdentifierImportApiResult[];
+  requested_count?: number;
+  imported_count?: number;
+  duplicate_count?: number;
+  error_count?: number;
 }
 
 interface RawDocumentListItem {
@@ -169,6 +197,51 @@ export interface DocumentSourceProvenance {
 export interface DocumentSourceProviderMetadata {
   displayLabel?: string | null;
   referenceLabelPriority?: string[] | null;
+  identifierHelpLabel?: string | null;
+  identifierExamples?: string[] | null;
+}
+
+export interface ConfiguredDocumentSourcePresentation {
+  providerId: string;
+  presentation: DocumentSourceProviderMetadata | null;
+}
+
+export type LiteratureImportStatus =
+  | 'resolved'
+  | 'imported'
+  | 'duplicate'
+  | 'invalid'
+  | 'access_denied'
+  | 'conversion_running'
+  | 'conversion_failed'
+  | 'needs_selection'
+  | 'no_source_pdf'
+  | 'no_converted_text'
+  | 'provider_unavailable';
+
+export interface LiteratureImportResult {
+  identifier: string;
+  normalizedIdentifier: string | null;
+  status: LiteratureImportStatus;
+  message: string;
+  documentId?: string;
+  filename?: string;
+  jobId?: string;
+  source?: {
+    provider: string;
+    viewerMode: 'local_pdf';
+    pdfArtifactId: string;
+    convertedArtifactId?: string;
+    sourceMd5: string;
+  };
+}
+
+export interface LiteratureIdentifierBatch {
+  results: LiteratureImportResult[];
+  requestedCount: number;
+  importedCount: number;
+  duplicateCount: number;
+  errorCount: number;
 }
 
 export interface DocumentSummary {
@@ -342,9 +415,16 @@ const normalizeDocumentSourceProviderMetadata = (
       referenceLabelPriority && referenceLabelPriority.length > 0
         ? referenceLabelPriority
         : null,
+    identifierHelpLabel: toStringOrNull(record.identifier_help_label),
+    identifierExamples: toStringArrayOrNull(record.identifier_examples),
   };
 
-  return metadata.displayLabel || metadata.referenceLabelPriority ? metadata : null;
+  return metadata.displayLabel
+    || metadata.referenceLabelPriority
+    || metadata.identifierHelpLabel
+    || metadata.identifierExamples
+    ? metadata
+    : null;
 };
 
 export const normalizeDocumentSourceProvenance = (
@@ -511,7 +591,12 @@ export const fetchApi = async <T>(
         message: `HTTP error! status: ${response.status}`,
       }));
 
-      const errorMessage = error.message || `Failed to fetch ${path}`;
+      const detailMessage = typeof error.detail === 'string'
+        ? error.detail
+        : error.detail && typeof error.detail === 'object' && typeof error.detail.message === 'string'
+          ? error.detail.message
+          : null;
+      const errorMessage = error.message || detailMessage || `Failed to fetch ${path}`;
 
       // Log API error
       logger.error('API request failed', new Error(errorMessage), {
@@ -661,19 +746,143 @@ export const usePdfExtractionHealth = (
     ...options,
   });
 
-export const fetchPdfJobs = async (
-  params: {
-    status?: PdfJobStatus[];
-    windowDays?: number;
-    limit?: number;
-    offset?: number;
-  } = {}
-): Promise<PdfJobListResponse> => {
+const identifierStatusFromApiResult = (
+  result: RawIdentifierImportApiResult,
+): LiteratureImportStatus => {
+  if (result.status === 'resolved' || result.status === 'imported' || result.status === 'duplicate') {
+    return result.status;
+  }
+
+  // The backend contract uses document_source_* errors; legacy short aliases are intentionally not mapped.
+  switch (result.error_code) {
+    case 'document_source_access_denied':
+      return 'access_denied';
+    case 'document_source_unavailable':
+    case 'document_source_import_unavailable':
+    case 'document_source_curator_token_unavailable':
+      return 'provider_unavailable';
+    case 'document_source_conversion_running':
+      return 'conversion_running';
+    case 'document_source_conversion_failed':
+      return 'conversion_failed';
+    case 'document_source_ambiguous_match':
+      return 'needs_selection';
+    case 'document_source_no_source_artifact':
+      return 'no_source_pdf';
+    case 'document_source_no_converted_text':
+      return 'no_converted_text';
+    default:
+      return 'invalid';
+  }
+};
+
+const nonEmptyRecordString = (
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined => {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+};
+
+const normalizeIdentifierImportResult = (
+  result: RawIdentifierImportApiResult,
+): LiteratureImportResult => {
+  const provenance = result.source_provenance ?? undefined;
+  const viewerMode = provenance
+    ? nonEmptyRecordString(provenance, 'viewer_mode')
+    : undefined;
+  // Canonical provenance is artifact-based; retired *_referencefile_id aliases are intentionally ignored.
+  const pdfArtifactId = provenance
+    ? nonEmptyRecordString(provenance, 'pdf_artifact_id')
+    : undefined;
+
+  return {
+    identifier: result.identifier,
+    normalizedIdentifier: result.normalized_identifier ?? null,
+    status: identifierStatusFromApiResult(result),
+    message: result.message || 'Source identifier returned without a message.',
+    documentId: result.document_id ?? result.existing_document_id ?? undefined,
+    filename: result.filename ?? undefined,
+    jobId: result.job_id ?? undefined,
+    source: viewerMode === 'local_pdf' && pdfArtifactId
+      ? {
+          provider: nonEmptyRecordString(provenance!, 'provider') ?? 'document_source',
+          viewerMode: 'local_pdf',
+          pdfArtifactId,
+          convertedArtifactId: nonEmptyRecordString(provenance!, 'converted_artifact_id'),
+          sourceMd5: nonEmptyRecordString(provenance!, 'source_md5') ?? 'unknown',
+        }
+      : undefined,
+  };
+};
+
+const postIdentifierBatch = async (
+  endpoint: string,
+  rawIdentifiers: string,
+): Promise<LiteratureIdentifierBatch> => {
+  const payload = await fetchApi<RawIdentifierImportApiResponse>(endpoint, {
+    method: 'POST',
+    body: JSON.stringify({ identifiers: rawIdentifiers }),
+  });
+
+  return {
+    results: (payload.results ?? []).map(normalizeIdentifierImportResult),
+    requestedCount: payload.requested_count ?? 0,
+    importedCount: payload.imported_count ?? 0,
+    duplicateCount: payload.duplicate_count ?? 0,
+    errorCount: payload.error_count ?? 0,
+  };
+};
+
+export const resolveSourceIdentifiers = (
+  rawIdentifiers: string,
+): Promise<LiteratureIdentifierBatch> => (
+  postIdentifierBatch('/documents/resolve/source-identifiers', rawIdentifiers)
+);
+
+export const importSourceIdentifiers = (
+  rawIdentifiers: string,
+): Promise<LiteratureIdentifierBatch> => (
+  postIdentifierBatch('/documents/import/source-identifiers', rawIdentifiers)
+);
+
+export const fetchConfiguredDocumentSourcePresentation = async (
+): Promise<ConfiguredDocumentSourcePresentation> => {
+  const payload = await fetchApi<RawDocumentSourceProviderPresentationResponse>(
+    '/document-source/provider-presentation',
+  );
+  return {
+    providerId: payload.provider_id,
+    presentation: normalizeDocumentSourceProviderMetadata(payload.presentation),
+  };
+};
+
+export interface PdfJobsQuery {
+  status?: PdfJobStatus[];
+  windowDays?: number;
+  limit?: number;
+  offset?: number;
+}
+
+const buildPdfJobsSearchParams = (params: PdfJobsQuery): URLSearchParams => {
   const query = new URLSearchParams();
   (params.status ?? []).forEach((statusValue) => query.append('status', statusValue));
-  if (params.windowDays) query.set('window_days', String(params.windowDays));
-  if (params.limit) query.set('limit', String(params.limit));
-  if (params.offset) query.set('offset', String(params.offset));
+  if (params.windowDays !== undefined) query.set('window_days', String(params.windowDays));
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  return query;
+};
+
+export const buildPdfJobsStreamUrl = (params: PdfJobsQuery = {}): string => {
+  const query = buildPdfJobsSearchParams(params);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return `${API_BASE_URL}/pdf-jobs/stream${suffix}`;
+};
+
+export const fetchPdfJobs = async (
+  params: PdfJobsQuery = {}
+): Promise<PdfJobListResponse> => {
+  const query = buildPdfJobsSearchParams(params);
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return fetchApi<PdfJobListResponse>(`/pdf-jobs${suffix}`);
 };

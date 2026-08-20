@@ -30,6 +30,7 @@ from agr_ai_curation_alliance.document_sources.abc_literature import (
 from agr_ai_curation_alliance.document_sources.registration import (
     _build_abc_literature_client_config,
     _resolve_abc_literature_development_token,
+    get_document_source_provider_registrations,
 )
 from src.lib.document_sources.registry import (
     get_configured_document_source_dev_mode_static_curator_token,
@@ -190,6 +191,19 @@ class FakeABCLiteratureClient:
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+def test_alliance_registration_owns_identifier_presentation_guidance() -> None:
+    registration = get_document_source_provider_registrations()[0]
+
+    assert registration.presentation.identifier_help_label == (
+        "PMID, PubMed ID, AGRKB, ABC, or FBrf identifiers; comma or newline separated."
+    )
+    assert registration.presentation.identifier_examples == (
+        "PMID:23970418",
+        "PubMed ID 23970418",
+        "AGRKB:101000000055784",
+    )
 
 
 def provider_from_fake(

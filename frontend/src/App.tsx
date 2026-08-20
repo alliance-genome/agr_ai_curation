@@ -36,6 +36,8 @@ import {
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
+import { getAddLiteratureConfig } from './config/addLiterature'
+import { fetchPdfJobs } from './services/weaviate'
 import {
   CHAT_RUN_TERMINAL_EVENT,
   type ChatRunTerminalEventDetail,
@@ -502,36 +504,34 @@ export function AppContent() {
 
       if (!onPdfJobsPage) {
         try {
-          const response = await fetch('/api/weaviate/pdf-jobs?window_days=7&limit=50&offset=0', {
-            credentials: 'include',
+          const addLiteratureConfig = getAddLiteratureConfig()
+          const payload = await fetchPdfJobs({
+            windowDays: addLiteratureConfig.pdfJobWindowDays,
+            limit: addLiteratureConfig.pdfJobLimit,
+            offset: 0,
           });
-          if (response.ok) {
-            const payload = (await response.json()) as {
-              jobs?: Array<{ job_id: string; status: string; filename?: string; document_id: string; cancel_requested?: boolean }>;
-            };
-            const jobs = payload.jobs ?? [];
+          const jobs = payload.jobs ?? [];
 
-            for (const job of jobs) {
-              const notification = buildPdfTerminalNotification(job);
-              if (!notification) {
-                continue;
-              }
-              const terminalKey = notification.key;
-              const alreadySeen = seenPdfTerminalRef.current.has(terminalKey);
-              if (!seededPdfJobsRef.current) {
-                seenPdfTerminalRef.current.add(terminalKey);
-                continue;
-              }
-              if (alreadySeen) {
-                continue;
-              }
-
+          for (const job of jobs) {
+            const notification = buildPdfTerminalNotification(job);
+            if (!notification) {
+              continue;
+            }
+            const terminalKey = notification.key;
+            const alreadySeen = seenPdfTerminalRef.current.has(terminalKey);
+            if (!seededPdfJobsRef.current) {
               seenPdfTerminalRef.current.add(terminalKey);
-              setGlobalSnackbar({ open: true, message: notification.message, severity: notification.severity });
+              continue;
+            }
+            if (alreadySeen) {
+              continue;
             }
 
-            seededPdfJobsRef.current = true;
+            seenPdfTerminalRef.current.add(terminalKey);
+            setGlobalSnackbar({ open: true, message: notification.message, severity: notification.severity });
           }
+
+          seededPdfJobsRef.current = true;
         } catch (error) {
           console.error('Global PDF job notification poll failed:', error);
         }

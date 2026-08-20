@@ -62,6 +62,40 @@ def _unused_factory() -> DocumentSourceProvider:
     raise AssertionError("factory must not run")
 
 
+def test_provider_presentation_exposes_optional_identifier_guidance() -> None:
+    presentation = DocumentSourceProviderPresentation(
+        display_label=" Example Source ",
+        identifier_help_label=" Enter configured identifiers. ",
+        identifier_examples=(" SOURCE:1 ", "SOURCE:2"),
+    )
+
+    assert presentation.as_public_dict() == {
+        "display_label": "Example Source",
+        "reference_label_priority": [],
+        "identifier_help_label": "Enter configured identifiers.",
+        "identifier_examples": ["SOURCE:1", "SOURCE:2"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"identifier_help_label": "  "}, "identifier_help_label"),
+        ({"identifier_examples": ("SOURCE:1", " ")}, "identifier_examples"),
+        (
+            {"identifier_examples": ("SOURCE:1", "SOURCE:1")},
+            "identifier_examples entries must be unique",
+        ),
+    ],
+)
+def test_provider_presentation_rejects_invalid_identifier_guidance(
+    kwargs,
+    message,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        DocumentSourceProviderPresentation(display_label="Example", **kwargs)
+
+
 def test_unknown_provider_lists_registered_package_export_provenance(
     monkeypatch,
     tmp_path,

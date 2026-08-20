@@ -136,6 +136,15 @@ async def test_async_list_documents_normalises_results():
                 "external_ids.doi",
                 "source_md5",
             ],
+            "identifier_help_label": (
+                "PMID, PubMed ID, AGRKB, ABC, or FBrf identifiers; "
+                "comma or newline separated."
+            ),
+            "identifier_examples": [
+                "PMID:23970418",
+                "PubMed ID 23970418",
+                "AGRKB:101000000055784",
+            ],
         },
         "reference_id": "101",
         "reference_curie": "AGRKB:101",

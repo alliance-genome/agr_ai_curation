@@ -1,8 +1,8 @@
 import { act } from 'react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, screen } from '../../test/test-utils';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { fireEvent, screen, waitFor } from '../../test/test-utils';
 import { render, userEvent } from '../../test/test-utils';
-import { uploadPdfDocument } from '@/features/documents/pdfUploadFlow';
+import { uploadPdfDocument, validatePdfSelection } from '@/features/documents/pdfUploadFlow';
 import AddLiteraturePage from './AddLiteraturePage';
 
 const mockNavigate = vi.fn();
@@ -16,7 +16,6 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('@/features/documents/pdfUploadFlow', () => ({
-  MAX_UPLOAD_FILES_PER_SELECTION: 10,
   validatePdfSelection: vi.fn((files: File[]) => ({
     ok: files.length > 0 && files.every((file) => file.type === 'application/pdf' || file.name.endsWith('.pdf')),
     files,
@@ -64,22 +63,35 @@ const defaultImportResponse = {
 };
 
 class MockEventSource {
+  static instances: MockEventSource[] = [];
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
 
-  constructor(public readonly url: string) {}
+  constructor(public readonly url: string) {
+    MockEventSource.instances.push(this);
+  }
 
   close = vi.fn();
 }
 
 const stubRoutedFetch = (
   identifierResponses: Array<unknown | Response | Promise<Response>> = [defaultImportResponse],
+  providerPresentation: unknown = {
+    provider_id: 'abc_literature',
+    presentation: {
+      identifier_help_label: 'Configured source identifier help.',
+      identifier_examples: ['SOURCE:123', 'SOURCE:456'],
+    },
+  },
 ) => {
   const responses = [...identifierResponses];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes('/api/weaviate/pdf-jobs')) {
       return okJson(emptyPdfJobsResponse);
+    }
+    if (url.includes('/api/weaviate/document-source/provider-presentation')) {
+      return okJson(providerPresentation);
     }
 
     const nextResponse = responses.length > 0 ? responses.shift() : defaultImportResponse;
@@ -94,9 +106,15 @@ const stubRoutedFetch = (
 describe('AddLiteraturePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    MockEventSource.instances = [];
     vi.mocked(uploadPdfDocument).mockResolvedValue('mock-doc-uploaded');
     vi.stubGlobal('EventSource', MockEventSource);
     stubRoutedFetch();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it('renders production Add Literature controls with an empty shared results table', () => {
@@ -113,6 +131,70 @@ describe('AddLiteraturePage', () => {
     expect(screen.getByText('No import results yet.')).toBeInTheDocument();
     expect(screen.queryByText(/Successful source retrievals/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Review states')).not.toBeInTheDocument();
+  });
+
+  it('renders identifier guidance supplied by the configured provider', async () => {
+    render(<AddLiteraturePage />);
+
+    expect(await screen.findByText('Configured source identifier help.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Source identifiers')).toHaveAttribute(
+      'placeholder',
+      'SOURCE:123\nSOURCE:456',
+    );
+    expect(screen.queryByText(/PMID, PubMed ID, AGRKB, or ABC identifiers/)).not.toBeInTheDocument();
+  });
+
+  it('keeps generic identifier guidance when no provider presentation is configured', async () => {
+    stubRoutedFetch([defaultImportResponse], {
+      provider_id: 'local_pdf',
+      presentation: null,
+    });
+    render(<AddLiteraturePage />);
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/weaviate/document-source/provider-presentation',
+        expect.any(Object),
+      );
+    });
+    expect(screen.getByText(
+      'Enter identifiers supported by the configured document source; comma or newline separated.',
+    )).toBeInTheDocument();
+    expect(screen.getByLabelText('Source identifiers')).not.toHaveAttribute('placeholder');
+  });
+
+  it('uses configured upload and PDF-job limits for validation, requests, SSE, and fallback polling', async () => {
+    vi.stubEnv('VITE_ADD_LITERATURE_MAX_SELECTED_FILES', '2');
+    vi.stubEnv('VITE_ADD_LITERATURE_PDF_JOB_WINDOW_DAYS', '3');
+    vi.stubEnv('VITE_ADD_LITERATURE_PDF_JOB_LIMIT', '4');
+    vi.stubEnv('VITE_ADD_LITERATURE_FALLBACK_POLL_INTERVAL_MS', '1234');
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
+    const user = userEvent.setup();
+
+    render(<AddLiteraturePage />);
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/weaviate/pdf-jobs?window_days=3&limit=4&offset=0',
+        expect.any(Object),
+      );
+    });
+    expect(MockEventSource.instances[0]?.url).toBe(
+      '/api/weaviate/pdf-jobs/stream?window_days=3&limit=4',
+    );
+    act(() => {
+      MockEventSource.instances[0]?.onerror?.();
+    });
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1234);
+
+    await user.click(screen.getByRole('tab', { name: /Upload PDFs/i }));
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const pdf = new File(['mock pdf'], 'configured.pdf', { type: 'application/pdf' });
+    fireEvent.change(fileInput, { target: { files: [pdf] } });
+    expect(validatePdfSelection).toHaveBeenCalledWith([pdf], {
+      maxFiles: 2,
+      allowMultiple: true,
+    });
   });
 
   it('resolves identifiers through the dry-run backend endpoint', async () => {
@@ -148,11 +230,6 @@ describe('AddLiteraturePage', () => {
     expect(screen.getByText('Resolved')).toBeInTheDocument();
     expect(screen.getByText('FBrf0223182.pdf')).toBeInTheDocument();
     expect(screen.getByText('PDF 4040596 / MD 4672234')).toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith('/api/weaviate/documents/resolve/source-identifiers', expect.objectContaining({
-      method: 'POST',
-      credentials: 'include',
-      body: JSON.stringify({ identifiers: 'PMID:23970418' }),
-    }));
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -250,9 +327,6 @@ describe('AddLiteraturePage', () => {
     await user.click(screen.getByRole('button', { name: 'Resolve and Import' }));
 
     expect(await screen.findByText('new-paper.pdf')).toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith('/api/weaviate/documents/import/source-identifiers', expect.objectContaining({
-      body: JSON.stringify({ identifiers: 'PMID:1' }),
-    }));
   });
 
   it('ignores in-flight resolve results after identifiers change', async () => {
@@ -346,11 +420,6 @@ describe('AddLiteraturePage', () => {
 
     expect(await screen.findByText('paper-from-api.pdf')).toBeInTheDocument();
     expect(screen.getByText('Job job-api-1')).toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith('/api/weaviate/documents/import/source-identifiers', expect.objectContaining({
-      method: 'POST',
-      credentials: 'include',
-      body: JSON.stringify({ identifiers: 'PMID:23970418\nAGRKB:101000000055784' }),
-    }));
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 

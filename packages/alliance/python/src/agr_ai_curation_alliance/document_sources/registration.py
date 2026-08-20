@@ -114,6 +114,15 @@ def get_document_source_provider_registrations(
                     "external_ids.doi",
                     "source_md5",
                 ),
+                identifier_help_label=(
+                    "PMID, PubMed ID, AGRKB, ABC, or FBrf identifiers; "
+                    "comma or newline separated."
+                ),
+                identifier_examples=(
+                    "PMID:23970418",
+                    "PubMed ID 23970418",
+                    "AGRKB:101000000055784",
+                ),
             ),
             capabilities={
                 "identifier_import": True,

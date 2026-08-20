@@ -14,6 +14,11 @@ import {
   useWeaviateHealth,
   normalizeDocumentListResponse,
   normalizeDocumentDetailResponse,
+  buildPdfJobsStreamUrl,
+  fetchConfiguredDocumentSourcePresentation,
+  fetchPdfJobs,
+  importSourceIdentifiers,
+  resolveSourceIdentifiers,
 } from './weaviate';
 import { logger } from './logger';
 import { createMockDocument } from '../test/test-utils';
@@ -38,6 +43,177 @@ const createWrapper = () => {
 describe('weaviate service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('Add Literature contracts', () => {
+    it('posts identifiers to the canonical endpoints and normalizes canonical status and artifact provenance', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          requested_count: 3,
+          imported_count: 1,
+          duplicate_count: 0,
+          error_count: 2,
+          results: [
+            {
+              identifier: 'PMID:1',
+              normalized_identifier: 'PMID:1',
+              status: 'imported',
+              message: 'Queued.',
+              document_id: 'doc-1',
+              job_id: 'job-1',
+              filename: 'one.pdf',
+              source_provenance: {
+                provider: 'abc_literature',
+                viewer_mode: 'local_pdf',
+                pdf_artifact_id: 'pdf-1',
+                converted_artifact_id: 'markdown-1',
+                source_md5: 'abc123',
+                pdf_referencefile_id: 'retired-pdf',
+                converted_referencefile_id: 'retired-markdown',
+              },
+            },
+            {
+              identifier: 'PMID:2',
+              status: 'error',
+              error_code: 'document_source_access_denied',
+              message: 'Denied.',
+            },
+            {
+              identifier: 'PMID:3',
+              status: 'error',
+              error_code: 'access_denied',
+              message: 'Retired alias.',
+              source_provenance: {
+                viewer_mode: 'local_pdf',
+                pdf_referencefile_id: 'retired-only',
+              },
+            },
+          ],
+        }),
+      });
+
+      const result = await importSourceIdentifiers('PMID:1\nPMID:2\nPMID:3');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/documents/import/source-identifiers',
+        expect.objectContaining({
+          method: 'POST',
+          credentials: 'include',
+          body: JSON.stringify({ identifiers: 'PMID:1\nPMID:2\nPMID:3' }),
+        }),
+      );
+      expect(result).toMatchObject({
+        requestedCount: 3,
+        importedCount: 1,
+        duplicateCount: 0,
+        errorCount: 2,
+      });
+      expect(result.results[0]).toMatchObject({
+        status: 'imported',
+        source: {
+          pdfArtifactId: 'pdf-1',
+          convertedArtifactId: 'markdown-1',
+        },
+      });
+      expect(result.results[1].status).toBe('access_denied');
+      expect(result.results[2]).toMatchObject({ status: 'invalid', source: undefined });
+    });
+
+    it('maps every canonical document-source failure status', async () => {
+      const expectedStatuses = [
+        ['document_source_unavailable', 'provider_unavailable'],
+        ['document_source_import_unavailable', 'provider_unavailable'],
+        ['document_source_curator_token_unavailable', 'provider_unavailable'],
+        ['document_source_conversion_running', 'conversion_running'],
+        ['document_source_conversion_failed', 'conversion_failed'],
+        ['document_source_ambiguous_match', 'needs_selection'],
+        ['document_source_no_source_artifact', 'no_source_pdf'],
+        ['document_source_no_converted_text', 'no_converted_text'],
+      ] as const;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          results: expectedStatuses.map(([errorCode], index) => ({
+            identifier: `source-${index}`,
+            status: 'error',
+            error_code: errorCode,
+            message: errorCode,
+          })),
+        }),
+      });
+
+      const result = await resolveSourceIdentifiers('sources');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/documents/resolve/source-identifiers',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(result.results.map(({ status }) => status)).toEqual(
+        expectedStatuses.map(([, status]) => status),
+      );
+    });
+
+    it('surfaces FastAPI detail errors from identifier requests', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({ detail: 'Invalid document-source import request' }),
+      });
+
+      await expect(importSourceIdentifiers('invalid')).rejects.toThrow(
+        'Invalid document-source import request',
+      );
+    });
+
+    it('fetches and normalizes configured provider presentation metadata', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          provider_id: 'abc_literature',
+          presentation: {
+            display_label: 'ABC Literature',
+            identifier_help_label: 'Configured identifier help.',
+            identifier_examples: ['PMID:1', 'AGRKB:2'],
+          },
+        }),
+      });
+
+      await expect(fetchConfiguredDocumentSourcePresentation()).resolves.toEqual({
+        providerId: 'abc_literature',
+        presentation: {
+          displayLabel: 'ABC Literature',
+          referenceLabelPriority: null,
+          identifierHelpLabel: 'Configured identifier help.',
+          identifierExamples: ['PMID:1', 'AGRKB:2'],
+        },
+      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/document-source/provider-presentation',
+        expect.objectContaining({ credentials: 'include' }),
+      );
+    });
+
+    it('builds exact configured PDF-job request and stream URLs', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ jobs: [], total: 0, limit: 4, offset: 0 }),
+      });
+
+      await fetchPdfJobs({ windowDays: 3, limit: 4, offset: 0 });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/pdf-jobs?window_days=3&limit=4&offset=0',
+        expect.any(Object),
+      );
+      expect(buildPdfJobsStreamUrl({ windowDays: 3, limit: 4 })).toBe(
+        '/api/weaviate/pdf-jobs/stream?window_days=3&limit=4',
+      );
+    });
   });
 
   describe('fetchDocumentList', () => {
@@ -242,6 +418,8 @@ describe('weaviate service', () => {
             providerMetadata: {
               displayLabel: 'ABC Literature',
               referenceLabelPriority: ['external_ids.pmid', 'reference_curie'],
+              identifierHelpLabel: null,
+              identifierExamples: null,
             },
             referenceId: null,
             referenceCurie: 'AGRKB:101',

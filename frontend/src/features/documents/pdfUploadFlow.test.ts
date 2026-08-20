@@ -1,10 +1,26 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { uploadPdfDocument } from './pdfUploadFlow';
+import { uploadPdfDocument, validatePdfSelection } from './pdfUploadFlow';
 
 describe('uploadPdfDocument', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('uses the configured maximum selected-file limit', () => {
+    vi.stubEnv('VITE_ADD_LITERATURE_MAX_SELECTED_FILES', '2');
+    const files = [
+      new File(['one'], 'one.pdf', { type: 'application/pdf' }),
+      new File(['two'], 'two.pdf', { type: 'application/pdf' }),
+      new File(['three'], 'three.pdf', { type: 'application/pdf' }),
+    ];
+
+    expect(validatePdfSelection(files)).toEqual({
+      ok: false,
+      files,
+      error: 'Please select up to 2 PDF files at a time',
+    });
   });
 
   it('identifies the existing filename when an upload matches stored document content', async () => {
