@@ -19,6 +19,7 @@ from src.lib.document_sources.import_selection import (
     ChecksumImportDecisionStatus,
 )
 from src.lib.document_sources.models import (
+    DocumentSourceConfigError,
     DocumentSourceHealth,
     SourceAccessPolicy,
     SourceAccessScope,
@@ -49,6 +50,63 @@ def test_provider_decision_error_fields_cover_every_status():
     assert set(upload_intake_module._CHECKSUM_DECISION_ERROR_FIELDS) == set(
         ChecksumImportDecisionStatus
     )
+
+
+def test_provider_decision_error_uses_registered_presentation_label(monkeypatch):
+    monkeypatch.setattr(
+        upload_intake_module,
+        "get_document_source_provider_metadata",
+        lambda provider_id: {"display_label": "Example Literature"}
+        if provider_id == "fake_provider"
+        else None,
+    )
+
+    _, _, message, suggestion = upload_intake_module._provider_decision_error_fields(
+        ChecksumImportDecisionStatus.ACCESS_DENIED,
+        provider="fake_provider",
+    )
+
+    assert message == "No matching source document is accessible to this curator."
+    assert suggestion == (
+        "Confirm you are signed in with an account authorized by Example Literature."
+    )
+
+
+def test_provider_decision_error_rejects_missing_presentation_label(monkeypatch):
+    monkeypatch.setattr(
+        upload_intake_module,
+        "get_document_source_provider_metadata",
+        lambda _provider_id: None,
+    )
+
+    with pytest.raises(
+        DocumentSourceConfigError,
+        match="fake_provider.*no presentation display label",
+    ):
+        upload_intake_module._provider_decision_error_fields(
+            ChecksumImportDecisionStatus.ACCESS_DENIED,
+            provider="fake_provider",
+        )
+
+
+def test_provider_decision_error_skips_unused_presentation_label(monkeypatch):
+    def _unexpected_metadata_lookup(_provider_id):
+        raise AssertionError("provider metadata should not be loaded for generic copy")
+
+    monkeypatch.setattr(
+        upload_intake_module,
+        "get_document_source_provider_metadata",
+        _unexpected_metadata_lookup,
+    )
+
+    fields = upload_intake_module._provider_decision_error_fields(
+        ChecksumImportDecisionStatus.NO_SOURCE_ARTIFACT,
+        provider="fake_provider",
+    )
+
+    assert fields == upload_intake_module._CHECKSUM_DECISION_ERROR_FIELDS[
+        ChecksumImportDecisionStatus.NO_SOURCE_ARTIFACT
+    ]
 
 
 class _ExecuteResult:
@@ -897,10 +955,10 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
     session = _FakeSession()
     dispatch = _DispatchRecorder()
     provider = _FakeDocumentSourceProvider()
-    provider.provider_id = "abc_literature"
+    provider.provider_id = "fake_provider"
     create_document_calls = []
     source_artifact = SourceArtifact(
-        provider="abc_literature",
+        provider="fake_provider",
         artifact_id="source-pdf-1",
         role=SourceArtifactRole.SOURCE_PDF,
         artifact_format=SourceArtifactFormat.PDF,
@@ -924,7 +982,7 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
             selected=candidate,
             candidates=(candidate,),
             source_artifacts=(source_artifact,),
-            metadata={"conversion_status": "running", "conversion_job_id": "job-abc"},
+            metadata={"conversion_status": "running", "conversion_job_id": "job-fake"},
         )
 
     async def _create_document(user_sub, document):
@@ -963,11 +1021,11 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
     )
 
     assert result.job_id == "job-ready"
-    assert create_document_calls[0][1].source_provenance["provider"] == "abc_literature"
+    assert create_document_calls[0][1].source_provenance["provider"] == "fake_provider"
     assert len(session.added) == 1
     record = session.added[0]
     assert record.viewer_mode == "local_pdf"
-    assert record.source_provider == "abc_literature"
+    assert record.source_provider == "fake_provider"
     assert record.source_import_status == "pending"
     assert dispatch.provider_markdown_calls == []
     assert dispatch.calls == []
@@ -984,14 +1042,24 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
 
 
 @pytest.mark.asyncio
-async def test_intake_upload_abc_source_only_ready_does_not_dispatch_pdf_processing(tmp_path):
+async def test_intake_upload_provider_source_only_ready_uses_presentation_label(
+    tmp_path,
+    monkeypatch,
+):
     session = _FakeSession()
     dispatch = _DispatchRecorder()
     provider = _FakeDocumentSourceProvider()
-    provider.provider_id = "abc_literature"
+    provider.provider_id = "fake_provider"
+    monkeypatch.setattr(
+        upload_intake_module,
+        "get_document_source_provider_metadata",
+        lambda provider_id: {"display_label": "Example Literature"}
+        if provider_id == "fake_provider"
+        else None,
+    )
     create_document_calls = []
     source_artifact = SourceArtifact(
-        provider="abc_literature",
+        provider="fake_provider",
         artifact_id="source-pdf-1",
         role=SourceArtifactRole.SOURCE_PDF,
         artifact_format=SourceArtifactFormat.PDF,
@@ -1054,6 +1122,9 @@ async def test_intake_upload_abc_source_only_ready_does_not_dispatch_pdf_process
 
     assert exc.value.status_code == 409
     assert exc.value.detail["error"] == "document_source_no_converted_text"
+    assert "Example Literature" in exc.value.detail["message"]
+    assert "Example Literature" in exc.value.detail["suggestion"]
+    assert "fake_provider" not in exc.value.detail["message"]
     assert create_document_calls == []
     assert session.added == []
     assert dispatch.provider_markdown_calls == []
