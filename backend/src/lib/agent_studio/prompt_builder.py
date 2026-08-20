@@ -65,6 +65,9 @@ def list_anthropic_catalog_models(
         logger.warning("Failed to load model catalog while resolving prompt explorer model: %s", exc)
         return []
 
+    # Agent Studio coaching intentionally uses Claude for the current product;
+    # keep its model filtering coordinated with the Messages API contract, and
+    # revisit provider neutrality only as an explicit product/runtime redesign.
     anthropic_models = [
         model
         for model in models
