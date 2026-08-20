@@ -940,6 +940,7 @@ metadata:
   validator_bindings:
     active:
       - binding_id: phenotype_term_ontology_validator
+        preflight_policy: provider_taxon_mapping_required
         display_name: Phenotype ontology term lookup
         validator_agent:
           package_id: agr.alliance

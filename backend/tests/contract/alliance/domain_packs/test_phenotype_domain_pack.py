@@ -177,6 +177,7 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         "experimental_condition_validation",
     ]
     term_binding = active_bindings[0]
+    assert term_binding["preflight_policy"] == "provider_taxon_mapping_required"
     assert term_binding["validator_agent"] == {
         "package_id": "agr.alliance",
         "agent_id": "ontology_term_validation",

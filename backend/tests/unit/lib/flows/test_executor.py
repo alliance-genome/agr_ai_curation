@@ -2891,8 +2891,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
 
         monkeypatch.setattr(
-            executor,
-            "run_package_scoped_validator_agent",
+            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
             _fake_package_validator,
         )
 
@@ -2950,6 +2949,154 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "message": None,
             }
         ]
+        assert metadata[0]["dispatch_metadata"] == {
+            "validator_agent_run_count": 1,
+            "batch_validator_run_count": 0,
+            "validator_batch_groups": [],
+        }
+
+    def test_automatic_validation_group_uses_shared_batch_dedupe_and_split(
+        self, monkeypatch
+    ):
+        executor = _executor_module()
+        from src.lib.domain_packs.validation_registry import (
+            ValidationBindingState,
+            ValidatorAgentRef as RegistryValidatorAgentRef,
+            ValidatorBinding,
+            ValidatorBindingMatch,
+        )
+        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+        from src.schemas.domain_pack_metadata import DomainPackInputSelector
+
+        identifiers = ["AGR:0001", "AGR:0001", "AGR:0002", "AGR:0003", "AGR:0004"]
+        objects = [
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id=f"object-{index}",
+                payload={"gene": {"identifier": identifier}},
+            )
+            for index, identifier in enumerate(identifiers, start=1)
+        ]
+        envelope = DomainEnvelope(
+            envelope_id="env-automatic-batch",
+            domain_pack_id="fixture.validation",
+            extracted_objects=objects,
+        )
+        binding = ValidatorBinding(
+            binding_id="fixture.identifier_lookup",
+            state=ValidationBindingState.ACTIVE,
+            source_scope="field",
+            source_object_type="GeneAssertion",
+            source_field_path="gene.identifier",
+            validator_agent=RegistryValidatorAgentRef(
+                package_id="fixture.validators",
+                agent_id="package_agent",
+            ),
+            object_types=("GeneAssertion",),
+            field_paths=("gene.identifier",),
+            input_fields={
+                "identifier": DomainPackInputSelector(
+                    source="payload",
+                    path="gene.identifier",
+                )
+            },
+            expected_result_fields={"identifier": "gene.identifier"},
+            batch_enabled=True,
+            batch_family="fixture.identifier",
+            batch_max_size=2,
+        )
+        matches = tuple(
+            ValidatorBindingMatch(
+                binding=binding,
+                envelope=envelope,
+                object_envelope=object_envelope,
+            )
+            for object_envelope in objects
+        )
+
+        class _Registry:
+            def match_bindings(self, _envelope, *, states):
+                assert states == [ValidationBindingState.ACTIVE]
+                return matches
+
+        batch_calls = []
+
+        def _fake_batch_validator(jobs, *, binding, runtime_context=None):
+            batch_calls.append(
+                [job.request.selected_inputs["identifier"] for job in jobs]
+            )
+            return [
+                {
+                    "status": "resolved",
+                    "request_id": job.request.request_id,
+                    "validator_binding_id": job.request.validator_binding_id,
+                    "validator_agent": job.request.validator_agent.model_dump(
+                        mode="json"
+                    ),
+                    "target": job.request.target.model_dump(mode="json"),
+                    "resolved_values": {
+                        "identifier": job.request.selected_inputs["identifier"]
+                    },
+                    "resolved_objects": [],
+                    "missing_expected_fields": [],
+                    "candidates": [],
+                    "lookup_attempts": [
+                        {
+                            "provider": "fixture",
+                            "method": "identifier_lookup",
+                            "query": dict(job.request.selected_inputs),
+                            "result_count": 1,
+                            "outcome": "success",
+                        }
+                    ],
+                    "curator_message": None,
+                    "explanation": "Package validator passed.",
+                }
+                for job in jobs
+            ]
+
+        monkeypatch.setattr(
+            "src.lib.domain_packs.validator_dispatch."
+            "run_package_scoped_validator_agent_batch",
+            _fake_batch_validator,
+        )
+
+        materialization_inputs, selector_findings, metadata = asyncio.run(
+            executor._collect_flow_validator_materialization_inputs(
+                source_envelope=envelope,
+                source_envelope_revision=3,
+                registry=_Registry(),
+                groups=[
+                    {
+                        "group_id": "automatic-lookup",
+                        "state": "automatic",
+                        "binding_id": "fixture.identifier_lookup",
+                    }
+                ],
+                flow=_make_flow([]),
+                agent_context={"user_id": "curator-1"},
+            )
+        )
+
+        assert selector_findings == []
+        assert batch_calls == [
+            ["AGR:0001", "AGR:0002"],
+            ["AGR:0003", "AGR:0004"],
+        ]
+        assert len(materialization_inputs) == 5
+        assert [item.result.status for item in materialization_inputs] == [
+            "resolved",
+            "resolved",
+            "resolved",
+            "resolved",
+            "resolved",
+        ]
+        assert all(
+            item["dispatch_metadata"]["validator_agent_run_count"] == 2
+            and item["dispatch_metadata"]["batch_validator_run_count"] == 2
+            and len(item["dispatch_metadata"]["validator_batch_groups"]) == 2
+            for item in metadata
+        )
 
     def test_automatic_validation_group_preflight_blocks_unsupported_context(
         self, monkeypatch
@@ -2983,6 +3130,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         binding = ValidatorBinding(
             binding_id="phenotype_term_ontology_validator",
             state=ValidationBindingState.ACTIVE,
+            preflight_policy="provider_taxon_mapping_required",
             source_scope="object",
             source_object_type="PhenotypeTerm",
             validator_agent=RegistryValidatorAgentRef(
@@ -3049,8 +3197,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             raise AssertionError("unsupported phenotype context should preflight-block")
 
         monkeypatch.setattr(
-            executor,
-            "run_package_scoped_validator_agent",
+            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
             _unexpected_package_validator,
         )
 
@@ -3153,8 +3300,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             raise AssertionError("non-dispatch automatic binding should not run")
 
         monkeypatch.setattr(
-            executor,
-            "run_package_scoped_validator_agent",
+            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
             _fake_package_validator,
         )
 
@@ -3270,8 +3416,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             raise AssertionError("package validator should not rerun")
 
         monkeypatch.setattr(
-            executor,
-            "run_package_scoped_validator_agent",
+            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
             _unexpected_package_validator,
         )
 
@@ -3387,8 +3532,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             raise AssertionError("package validator should not rerun")
 
         monkeypatch.setattr(
-            executor,
-            "run_package_scoped_validator_agent",
+            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
             _unexpected_package_validator,
         )
 

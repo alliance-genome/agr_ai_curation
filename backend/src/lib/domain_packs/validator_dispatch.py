@@ -134,7 +134,7 @@ class DomainValidatorBatchAgentRunner(Protocol):
 
     def __call__(
         self,
-        jobs: list["_DispatchJob"],
+        jobs: list["ValidatorDispatchJob"],
         *,
         binding: ValidatorBinding,
     ) -> Any:
@@ -171,9 +171,22 @@ class ValidatorRuntimeContext:
 
 
 @dataclass(frozen=True)
-class _DispatchJob:
+class ValidatorDispatchJob:
+    """One prepared binding request for the shared dispatch planner."""
+
     match: ValidatorBindingMatch
     request: DomainValidationRequest
+
+
+@dataclass(frozen=True)
+class ValidatorJobDispatchResult:
+    """Canonical execution result for prepared validator jobs."""
+
+    materialization_inputs: tuple[ValidatorResultMaterializationInput, ...]
+    validator_results: tuple[DomainValidatorResultBase, ...]
+    validator_agent_run_count: int
+    batch_validator_run_count: int
+    validator_batch_groups: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
@@ -226,6 +239,108 @@ class _ValidatorBatchAgentRunOutput:
     accepted_results: tuple[DomainValidatorResultBase, ...]
 
 
+def dispatch_validator_jobs(
+    jobs: list[ValidatorDispatchJob],
+    *,
+    runner: DomainValidatorAgentRunner | None = None,
+    batch_runner: DomainValidatorBatchAgentRunner | None = None,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
+    max_parallel_validators: int = DEFAULT_MAX_PARALLEL_VALIDATORS,
+    runtime_context: ValidatorRuntimeContext | None = None,
+) -> ValidatorJobDispatchResult:
+    """Run prepared jobs through the canonical preflight, dedupe, and batch path."""
+
+    if runner is None:
+        default_runner = _default_package_scoped_validator_runner()
+
+        def agent_runner(
+            request: DomainValidationRequest,
+            *,
+            binding: ValidatorBinding,
+        ) -> Any:
+            if runtime_context is None:
+                return default_runner(request, binding=binding)
+            return cast(Any, default_runner)(
+                request,
+                binding=binding,
+                runtime_context=runtime_context,
+            )
+
+    else:
+        agent_runner = runner
+
+    if batch_runner is None:
+        default_batch_runner = _default_package_scoped_validator_batch_runner()
+
+        def agent_batch_runner(
+            jobs: list[ValidatorDispatchJob],
+            *,
+            binding: ValidatorBinding,
+        ) -> Any:
+            if runtime_context is None:
+                return default_batch_runner(jobs, binding=binding)
+            return cast(Any, default_batch_runner)(
+                jobs,
+                binding=binding,
+                runtime_context=runtime_context,
+            )
+
+    else:
+        agent_batch_runner = batch_runner
+
+    executable_jobs: list[ValidatorDispatchJob] = []
+    ordered_units: list[ValidatorDispatchJob | ValidatorResultMaterializationInput] = []
+    for job in jobs:
+        validator_result = preflight_unresolved_validator_result(
+            job.request,
+            policy=job.match.binding.preflight_policy,
+        )
+        if validator_result is None:
+            executable_jobs.append(job)
+            ordered_units.append(job)
+            continue
+        ordered_units.append(
+            ValidatorResultMaterializationInput(
+                match=job.match,
+                request=job.request,
+                result=_finalize_validator_result(
+                    validator_result,
+                    request=job.request,
+                ),
+            )
+        )
+
+    execution_started_at = time.monotonic()
+    _, executed_items, run_metadata = _run_validator_jobs(
+        executable_jobs,
+        agent_runner=agent_runner,
+        batch_runner=agent_batch_runner,
+        event_emitter=event_emitter,
+        max_parallel_validators=max_parallel_validators,
+    )
+    LOGGER.info(
+        "Executed %s prepared validator dispatch job(s) in %.3fs",
+        len(executable_jobs),
+        time.monotonic() - execution_started_at,
+    )
+    executed_items_by_request_id = {
+        item.request.request_id: item for item in executed_items
+    }
+    materialization_inputs = tuple(
+        executed_items_by_request_id[unit.request.request_id]
+        if isinstance(unit, ValidatorDispatchJob)
+        else unit
+        for unit in ordered_units
+    )
+    return ValidatorJobDispatchResult(
+        materialization_inputs=materialization_inputs,
+        validator_results=tuple(item.result for item in materialization_inputs),
+        validator_agent_run_count=int(run_metadata["validator_agent_run_count"]),
+        batch_validator_run_count=int(run_metadata["batch_validator_run_count"]),
+        validator_batch_groups=tuple(run_metadata["validator_batch_groups"]),
+    )
+
+
 def dispatch_active_validator_bindings(
     envelope: DomainEnvelope,
     domain_pack: LoadedDomainPack,
@@ -248,55 +363,8 @@ def dispatch_active_validator_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
-    if runner is None:
-        default_runner = _default_package_scoped_validator_runner()
-
-        def agent_runner(
-            request: DomainValidationRequest,
-            *,
-            binding: ValidatorBinding,
-        ) -> Any:
-            if runtime_context is None:
-                return default_runner(
-                    request,
-                    binding=binding,
-                )
-            return cast(Any, default_runner)(
-                request,
-                binding=binding,
-                runtime_context=runtime_context,
-            )
-
-    else:
-        agent_runner = runner
-
-    if batch_runner is None:
-        default_batch_runner = _default_package_scoped_validator_batch_runner()
-
-        def agent_batch_runner(
-            jobs: list["_DispatchJob"],
-            *,
-            binding: ValidatorBinding,
-        ) -> Any:
-            if runtime_context is None:
-                return default_batch_runner(
-                    jobs,
-                    binding=binding,
-                )
-            return cast(Any, default_batch_runner)(
-                jobs,
-                binding=binding,
-                runtime_context=runtime_context,
-            )
-
-    else:
-        agent_batch_runner = batch_runner
-
     selector_findings: list[ValidationFinding] = []
-    jobs: list[_DispatchJob] = []
-    ordered_dispatch_units: list[
-        _DispatchJob | ValidatorResultMaterializationInput
-    ] = []
+    jobs: list[ValidatorDispatchJob] = []
     for match in _ordered_matches(matches):
         if not _binding_has_dispatch_contract(match.binding):
             LOGGER.info(
@@ -312,52 +380,17 @@ def dispatch_active_validator_bindings(
         if selector_result.request is None:
             continue
 
-        request = selector_result.request
-        validator_result = preflight_unresolved_validator_result(request)
-        if validator_result is not None:
-            validator_result = _finalize_validator_result(
-                validator_result,
-                request=request,
-            )
-            ordered_dispatch_units.append(
-                ValidatorResultMaterializationInput(
-                    match=match,
-                    request=request,
-                    result=validator_result,
-                )
-            )
-            continue
+        jobs.append(ValidatorDispatchJob(match=match, request=selector_result.request))
 
-        job = _DispatchJob(match=match, request=request)
-        jobs.append(job)
-        ordered_dispatch_units.append(job)
-
-    execution_started_at = time.monotonic()
-    _, executed_items, run_metadata = _run_validator_jobs(
+    job_dispatch = dispatch_validator_jobs(
         jobs,
-        agent_runner=agent_runner,
-        batch_runner=agent_batch_runner,
+        runner=runner,
+        batch_runner=batch_runner,
         event_emitter=event_emitter,
         max_parallel_validators=max_parallel_validators,
+        runtime_context=runtime_context,
     )
-    LOGGER.info(
-        "Executed %s active validator dispatch job(s) in %.3fs",
-        len(jobs),
-        time.monotonic() - execution_started_at,
-    )
-    executed_items_by_request_id = {
-        item.request.request_id: item for item in executed_items
-    }
-
-    materialization_items: list[ValidatorResultMaterializationInput] = []
-    validator_results: list[DomainValidatorResultBase] = []
-    for unit in ordered_dispatch_units:
-        if isinstance(unit, _DispatchJob):
-            materialization_item = executed_items_by_request_id[unit.request.request_id]
-        else:
-            materialization_item = unit
-        materialization_items.append(materialization_item)
-        validator_results.append(materialization_item.result)
+    materialization_items = list(job_dispatch.materialization_inputs)
 
     updated_envelope = envelope
     appended_findings: list[ValidationFinding] = []
@@ -396,10 +429,10 @@ def dispatch_active_validator_bindings(
         registry=validation_registry,
         matched_bindings=matches,
         appended_findings=tuple(appended_findings),
-        validator_results=tuple(validator_results),
-        validator_agent_run_count=int(run_metadata["validator_agent_run_count"]),
-        batch_validator_run_count=int(run_metadata["batch_validator_run_count"]),
-        validator_batch_groups=tuple(run_metadata["validator_batch_groups"]),
+        validator_results=job_dispatch.validator_results,
+        validator_agent_run_count=job_dispatch.validator_agent_run_count,
+        batch_validator_run_count=job_dispatch.batch_validator_run_count,
+        validator_batch_groups=job_dispatch.validator_batch_groups,
     )
 
 
@@ -505,7 +538,7 @@ def _replace_evidence_records_in_mapping(
 
 
 def _run_validator_jobs(
-    jobs: list[_DispatchJob],
+    jobs: list[ValidatorDispatchJob],
     *,
     agent_runner: DomainValidatorAgentRunner,
     batch_runner: DomainValidatorBatchAgentRunner,
@@ -622,7 +655,7 @@ def _run_validator_jobs(
 
 
 def _plan_validator_run_groups(
-    grouped_jobs: list[list[_DispatchJob]],
+    grouped_jobs: list[list[ValidatorDispatchJob]],
 ) -> list[_ValidatorRunGroup]:
     batch_indexes_by_key: dict[str, list[int]] = {}
     # ``slots`` preserves first-appearance order. Each slot is either a ready
@@ -667,7 +700,7 @@ def _plan_validator_run_groups(
 
 
 def _effective_validator_batch_max_size(
-    grouped_jobs: list[list[_DispatchJob]],
+    grouped_jobs: list[list[ValidatorDispatchJob]],
     indexes: list[int],
 ) -> int:
     binding = grouped_jobs[indexes[0]][0].match.binding
@@ -681,7 +714,7 @@ def _chunk_indexes(indexes: list[int], size: int) -> list[list[int]]:
     return [indexes[start : start + size] for start in range(0, len(indexes), size)]
 
 
-def _batch_group_key_for_deduped_job_group(group: list[_DispatchJob]) -> str | None:
+def _batch_group_key_for_deduped_job_group(group: list[ValidatorDispatchJob]) -> str | None:
     representative = group[0]
     binding = representative.match.binding
     if not binding.batch_enabled or binding.validator_agent is None:
@@ -701,7 +734,7 @@ def _batch_group_key_for_deduped_job_group(group: list[_DispatchJob]) -> str | N
 def _execute_validator_run_group(
     run_group: _ValidatorRunGroup,
     *,
-    grouped_jobs: list[list[_DispatchJob]],
+    grouped_jobs: list[list[ValidatorDispatchJob]],
     agent_runner: DomainValidatorAgentRunner,
     batch_runner: DomainValidatorBatchAgentRunner,
     event_emitter: ValidatorDispatchEventEmitter | None,
@@ -750,9 +783,9 @@ def _execute_validator_run_group(
     )
 
 
-def _dedupe_validator_jobs(jobs: list[_DispatchJob]) -> list[list[_DispatchJob]]:
-    groups_by_key: dict[str, list[_DispatchJob]] = {}
-    ordered_groups: list[list[_DispatchJob]] = []
+def _dedupe_validator_jobs(jobs: list[ValidatorDispatchJob]) -> list[list[ValidatorDispatchJob]]:
+    groups_by_key: dict[str, list[ValidatorDispatchJob]] = {}
+    ordered_groups: list[list[ValidatorDispatchJob]] = []
     for job in jobs:
         key = _validator_request_dedupe_key(job.request)
         group = groups_by_key.get(key)
@@ -799,7 +832,7 @@ def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
 
 
 def _run_validator_job_group(
-    jobs: list[_DispatchJob],
+    jobs: list[ValidatorDispatchJob],
     *,
     agent_runner: DomainValidatorAgentRunner,
 ) -> list[DomainValidatorResultBase]:
@@ -817,7 +850,7 @@ def _run_validator_job_group(
 
 
 def _run_validator_job_batch(
-    jobs: list[_DispatchJob],
+    jobs: list[ValidatorDispatchJob],
     *,
     batch_runner: DomainValidatorBatchAgentRunner,
     event_emitter: ValidatorDispatchEventEmitter | None,
@@ -907,7 +940,7 @@ def _run_validator_job_batch(
 
 
 def _run_single_validator_job(
-    job: _DispatchJob,
+    job: ValidatorDispatchJob,
     *,
     agent_runner: DomainValidatorAgentRunner,
 ) -> DomainValidatorResultBase:
@@ -1182,7 +1215,7 @@ def run_package_scoped_validator_agent(
 
 
 def run_package_scoped_validator_agent_batch(
-    jobs: list[_DispatchJob],
+    jobs: list[ValidatorDispatchJob],
     *,
     binding: ValidatorBinding,
     runtime_context: ValidatorRuntimeContext | None = None,
@@ -1817,7 +1850,7 @@ def _build_finalize_validator_result_tool(
 
 
 def _build_finalize_validator_batch_results_tool(
-    jobs: list[_DispatchJob],
+    jobs: list[ValidatorDispatchJob],
     *,
     finalization_state: _ValidatorFinalizationState,
     function_tool_factory: Any,
@@ -1925,7 +1958,7 @@ def _validator_result_finalization_feedback(
 def _validator_batch_results_finalization_feedback(
     raw_results: Any,
     *,
-    jobs: list[_DispatchJob],
+    jobs: list[ValidatorDispatchJob],
 ) -> _ValidatorFinalizationFeedback:
     if not isinstance(raw_results, list):
         message = (
@@ -2128,7 +2161,7 @@ def run_package_scoped_validator_agent_in_worker_thread(
 
 
 def run_package_scoped_validator_agent_batch_in_worker_thread(
-    jobs: list[_DispatchJob],
+    jobs: list[ValidatorDispatchJob],
     *,
     binding: ValidatorBinding,
     runtime_context: ValidatorRuntimeContext | None = None,
@@ -2228,7 +2261,7 @@ def _validated_result_from_agent_output(
 def _validated_results_from_agent_batch_output(
     raw_output: Any,
     *,
-    jobs: list[_DispatchJob],
+    jobs: list[ValidatorDispatchJob],
 ) -> list[DomainValidatorResultBase]:
     if isinstance(raw_output, _ValidatorBatchAgentRunOutput):
         return list(raw_output.accepted_results)
@@ -2398,7 +2431,7 @@ def _raw_result_request_id(raw_result: Any) -> str | None:
     return None
 
 
-def _validator_batch_summary(jobs: list[_DispatchJob]) -> dict[str, Any]:
+def _validator_batch_summary(jobs: list[ValidatorDispatchJob]) -> dict[str, Any]:
     representative = jobs[0]
     binding = representative.match.binding
     validator_agent = (
@@ -2570,10 +2603,15 @@ def _unresolved_result_for_dispatch_problem(
 
 def preflight_unresolved_validator_result(
     request: DomainValidationRequest,
+    *,
+    policy: str | None = None,
 ) -> DomainValidatorResultBase | None:
     """Return deterministic unresolved results for requests that should not run."""
 
-    explanation = _unsupported_phenotype_provider_taxon_explanation(request)
+    if policy != "provider_taxon_mapping_required":
+        return None
+
+    explanation = _provider_taxon_mapping_policy_explanation(request)
     if explanation is None:
         return None
 
@@ -2613,12 +2651,10 @@ def preflight_unresolved_validator_result(
     )
 
 
-def _unsupported_phenotype_provider_taxon_explanation(
+def _provider_taxon_mapping_policy_explanation(
     request: DomainValidationRequest,
 ) -> str | None:
     selected_inputs = request.selected_inputs
-    if selected_inputs.get("ontology_family") != "phenotype":
-        return None
     if _present(selected_inputs.get("curie")) or _present(
         selected_inputs.get("ontology_term_type")
     ):
@@ -2648,9 +2684,9 @@ def _unsupported_phenotype_provider_taxon_explanation(
         f"taxon_id={taxon_id or '<missing>'}"
     )
     return (
-        "Phenotype ontology label lookup is blocked because no active "
+        "Ontology label lookup is blocked because no active "
         f"provider/taxon ontology mapping matched {context}. "
-        "The dispatcher will not infer a phenotype ontology term type from "
+        "The dispatcher will not infer an ontology term type from "
         f"accepted prefixes or free text. Active mappings: {mapping_summary}."
     )
 
@@ -2785,9 +2821,12 @@ __all__ = [
     "ActiveValidatorDispatchResult",
     "DomainValidatorAgentRunner",
     "DomainValidatorBatchAgentRunner",
+    "ValidatorDispatchJob",
     "ValidatorDispatchEventEmitter",
+    "ValidatorJobDispatchResult",
     "ValidatorRuntimeContext",
     "dispatch_active_validator_bindings",
+    "dispatch_validator_jobs",
     "preflight_unresolved_validator_result",
     "run_package_scoped_validator_agent_batch",
     "run_package_scoped_validator_agent_batch_in_worker_thread",

@@ -27,6 +27,7 @@ from src.lib.domain_packs.validator_dispatch import (
     _validator_request_dedupe_key,
     _validator_result_finalization_feedback,
     dispatch_active_validator_bindings,
+    preflight_unresolved_validator_result,
     run_package_scoped_validator_agent_batch,
     run_package_scoped_validator_agent,
     validator_request_payload_for_agent,
@@ -960,6 +961,39 @@ def test_dispatch_active_binding_returns_unresolved_validator_result(
     assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
     assert result.validator_results[0].status == "unresolved"
+
+
+def test_provider_taxon_preflight_requires_explicit_binding_policy():
+    request = _validation_request().model_copy(
+        update={
+            "selected_inputs": {
+                "ontology_family": "project-neutral-fixture",
+                "label": "fixture label",
+                "taxon_id": "NCBITaxon:9999",
+                "provider_taxon_ontology_mappings": [
+                    {
+                        "data_provider": "FIXTURE",
+                        "taxon_id": "NCBITaxon:1111",
+                        "ontology_term_type": "FixtureTerm",
+                        "accepted_prefixes": ["FIX"],
+                    }
+                ],
+            }
+        },
+        deep=True,
+    )
+
+    assert preflight_unresolved_validator_result(request) is None
+
+    result = preflight_unresolved_validator_result(
+        request,
+        policy="provider_taxon_mapping_required",
+    )
+
+    assert result is not None
+    assert result.status == "unresolved"
+    assert result.lookup_attempts[0].method == "unsupported_provider_taxon_mapping"
+    assert "Phenotype" not in (result.explanation or "")
 
 
 def test_dispatch_deduplicates_equivalent_identity_requests_before_validation(
