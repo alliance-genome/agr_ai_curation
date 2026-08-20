@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import copy
 import json
 import logging
@@ -603,17 +604,19 @@ def _run_validator_jobs(
             max_workers=worker_count,
             thread_name_prefix="domain-validator-dispatch",
         ) as executor:
-            future_by_run_group = {
-                executor.submit(
+            future_by_run_group = {}
+            for run_group in run_groups:
+                dispatch_context = contextvars.copy_context()
+                future = executor.submit(
+                    dispatch_context.run,
                     _execute_validator_run_group,
                     run_group,
                     grouped_jobs=grouped_jobs,
                     agent_runner=agent_runner,
                     batch_runner=batch_runner,
                     event_emitter=event_emitter,
-                ): run_group
-                for run_group in run_groups
-            }
+                )
+                future_by_run_group[future] = run_group
             for future in concurrent.futures.as_completed(future_by_run_group):
                 result = future.result()
                 group_results.update(result.dedupe_group_results)

@@ -3061,22 +3061,29 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _fake_batch_validator,
         )
 
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=3,
-                registry=_Registry(),
-                groups=[
-                    {
-                        "group_id": "automatic-lookup",
-                        "state": "automatic",
-                        "binding_id": "fixture.identifier_lookup",
-                    }
-                ],
-                flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
+        from src.lib.openai_agents.streaming_tools import set_live_event_list
+
+        live_events = []
+        set_live_event_list(live_events)
+        try:
+            materialization_inputs, selector_findings, metadata = asyncio.run(
+                executor._collect_flow_validator_materialization_inputs(
+                    source_envelope=envelope,
+                    source_envelope_revision=3,
+                    registry=_Registry(),
+                    groups=[
+                        {
+                            "group_id": "automatic-lookup",
+                            "state": "automatic",
+                            "binding_id": "fixture.identifier_lookup",
+                        }
+                    ],
+                    flow=_make_flow([]),
+                    agent_context={"user_id": "curator-1"},
+                )
             )
-        )
+        finally:
+            set_live_event_list(None)
 
         assert selector_findings == []
         assert batch_calls == [
@@ -3097,6 +3104,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
             and len(item["dispatch_metadata"]["validator_batch_groups"]) == 2
             for item in metadata
         )
+        assert sorted(event["event"] for event in live_events) == [
+            "validator_batch_complete",
+            "validator_batch_complete",
+            "validator_batch_start",
+            "validator_batch_start",
+        ]
 
     def test_automatic_validation_group_preflight_blocks_unsupported_context(
         self, monkeypatch
