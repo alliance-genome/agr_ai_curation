@@ -1,8 +1,4 @@
-"""Custom-agent compatibility models.
-
-`CustomAgent` now aliases the unified `agents` table model to keep
-legacy imports working during migration cleanup.
-"""
+"""Custom-agent version snapshot model."""
 
 import uuid
 
@@ -18,16 +14,17 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-from .agent import Agent
 from .database import Base
 
-CustomAgent = Agent
-
-__all__ = ["CustomAgent", "CustomAgentVersion"]
+__all__ = ["CustomAgentVersion"]
 
 
 class CustomAgentVersion(Base):
-    """Version snapshots of custom agent prompt content."""
+    """Version snapshots of unified agent prompt content.
+
+    The unified ``Agent`` model is canonical; this module retains only its
+    version-history model after removal of the legacy ``CustomAgent`` alias.
+    """
 
     __tablename__ = "custom_agent_versions"
 
