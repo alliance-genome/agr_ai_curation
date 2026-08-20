@@ -414,6 +414,32 @@ describe('SubmissionPreviewDialog', () => {
     )).toBeInTheDocument()
   })
 
+  it('labels null-target readiness findings as envelope-level', async () => {
+    const blocker: CurationSubmissionReadinessBlocker = {
+      envelope_id: 'envelope-1',
+      object_id: null,
+      field_path: null,
+      severity: 'blocker',
+      status: 'open',
+      code: 'domain_envelope.validation_finding_open',
+      message: 'Required envelope validation could not be completed.',
+      provider_refs: {},
+      projection_ref: { envelope_id: 'envelope-1', envelope_revision: 3 },
+      details: { finding_id: 'finding-envelope' },
+    }
+    serviceMocks.fetchSubmissionPreview.mockResolvedValue(
+      buildResponse({
+        readyCandidateIds: ['candidate-pending'],
+        readyCandidateBlockers: [blocker],
+      }),
+    )
+
+    renderDialog()
+
+    expect(await screen.findByText('Envelope-level')).toBeInTheDocument()
+    expect(screen.queryByText('Object session')).not.toBeInTheDocument()
+  })
+
   it('ignores non-canonical frontend override metadata keys', async () => {
     const blocker: CurationSubmissionReadinessBlocker = {
       envelope_id: 'envelope-1',

@@ -56,6 +56,7 @@ from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
     CurationCandidateAction,
+    CurationCandidateSubmissionReadiness,
     CurationCandidateValidationRequest,
     CurationCandidateDecisionRequest,
     CurationCandidateSource,
@@ -3260,6 +3261,12 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
                     object_type="MuseumSource",
                 ),
             ),
+            ValidationFinding(
+                severity=ValidationFindingSeverity.WARNING,
+                status=ValidationFindingStatus.WAIVED,
+                code="museum.envelope.checked",
+                message="Envelope was reviewed.",
+            ),
         ],
     )
 
@@ -3282,8 +3289,11 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
         "artifact-1",
     ]
     assert [finding["code"] for finding in snapshot["validation_findings"]] == [
-        "museum.artifact.checked"
+        "museum.artifact.checked",
+        "museum.envelope.checked",
     ]
+    assert snapshot["validation_findings"][1]["object_ref"] is None
+    assert snapshot["validation_findings"][1]["field_ref"] is None
     validation_payload = {
         key: snapshot[key]
         for key in (
@@ -3927,7 +3937,131 @@ def test_submission_export_blocks_open_blocking_validation_findings(
     assert exc.value.detail["blockers"][0]["code"] == "museum.catalog.title_unverified"
 
 
-def test_submission_export_keeps_required_non_blocking_findings_visible_without_blocking(
+def test_submission_export_blocks_envelope_scoped_finding_with_null_targets(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    loaded_pack = _loaded_museum_pack(tmp_path)
+    blocking_finding = ValidationFinding(
+        finding_id="finding-envelope-provider",
+        severity=ValidationFindingSeverity.BLOCKER,
+        message="Required envelope validation could not be completed.",
+        code="museum.catalog.provider_unavailable",
+        details={
+            "validation_metadata": {
+                "validator_binding_id": "museum.required_provider",
+                "binding_state": "active",
+                "required": True,
+                "blocking": True,
+            },
+        },
+    )
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            },
+        },
+        validation_findings=[blocking_finding],
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "run_domain_envelope_structural_checks",
+        lambda envelope, _domain_pack: SimpleNamespace(
+            envelope=envelope,
+            registry=SimpleNamespace(domain_pack=loaded_pack),
+            appended_findings=(),
+        ),
+    )
+    _patch_workspace_validation_dispatch(
+        monkeypatch,
+        loaded_pack,
+        expected_title="Bronze astrolabe",
+        finding=blocking_finding,
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is False
+    assert len(readiness.blockers) == 1
+    blocker = readiness.blockers[0]
+    assert blocker.envelope_id == seeded["envelope_id"]
+    assert blocker.object_id is None
+    assert blocker.field_path is None
+    assert blocker.code == "museum.catalog.provider_unavailable"
+    assert blocker.projection_ref == {
+        "envelope_id": seeded["envelope_id"],
+        "envelope_revision": int(seeded["envelope_revision"]),
+    }
+
+
+def test_envelope_readiness_emits_one_blocker_and_keeps_each_object_blocked():
+    blocker = CurationSubmissionReadinessBlocker(
+        envelope_id="museum-envelope-1",
+        object_id=None,
+        field_path=None,
+        severity="blocker",
+        status="open",
+        code="museum.catalog.provider_unavailable",
+        message="Required envelope validation could not be completed.",
+        details={"finding_id": "finding-envelope-provider"},
+    )
+    unrelated_blocker = blocker.model_copy(
+        update={
+            "envelope_id": "museum-envelope-2",
+            "details": {"finding_id": "finding-other-envelope-provider"},
+        }
+    )
+
+    readiness = submission_module._dedupe_envelope_scoped_readiness(
+        [
+            CurationCandidateSubmissionReadiness(
+                candidate_id="candidate-1",
+                ready=False,
+                blockers=[blocker],
+            ),
+            CurationCandidateSubmissionReadiness(
+                candidate_id="candidate-2",
+                ready=False,
+                blockers=[blocker],
+            ),
+            CurationCandidateSubmissionReadiness(
+                candidate_id="candidate-3",
+                ready=False,
+                blockers=[unrelated_blocker],
+            ),
+        ]
+    )
+
+    assert readiness[0].blockers == [blocker]
+    assert readiness[1].blockers == []
+    assert readiness[2].blockers == [unrelated_blocker]
+    assert readiness[0].ready is False
+    assert readiness[1].ready is False
+    assert readiness[1].blocking_reasons == [
+        "Envelope-level validation blocks objects from museum-envelope-1."
+    ]
+    assert submission_module._readiness_blocker_payloads(readiness) == [
+        blocker.model_dump(mode="json"),
+        unrelated_blocker.model_dump(mode="json"),
+    ]
+
+
+def test_submission_export_keeps_envelope_non_blocking_findings_visible_without_blocking(
     db_session,
     tmp_path,
     monkeypatch,
@@ -3945,15 +4079,8 @@ def test_submission_export_keeps_required_non_blocking_findings_visible_without_
         validation_findings=[
             ValidationFinding(
                 severity=ValidationFindingSeverity.BLOCKER,
-                message="Title still needs reviewer completeness confirmation.",
-                code="museum.catalog.title_review_required",
-                field_ref=FieldRef(
-                    object_ref=ObjectRef(
-                        object_id="artifact-1",
-                        object_type="MuseumArtifact",
-                    ),
-                    field_path="artifact.title",
-                ),
+                message="Envelope still needs reviewer completeness confirmation.",
+                code="museum.catalog.envelope_review_required",
                 details={
                     "validation_metadata": {
                         "validator_binding_id": "museum.title_catalog_check",
@@ -3987,8 +4114,10 @@ def test_submission_export_keeps_required_non_blocking_findings_visible_without_
         if item["envelope_id"] == seeded["envelope_id"]
     )
     assert envelope_snapshot["validation_findings"][0]["code"] == (
-        "museum.catalog.title_review_required"
+        "museum.catalog.envelope_review_required"
     )
+    assert envelope_snapshot["validation_findings"][0]["object_ref"] is None
+    assert envelope_snapshot["validation_findings"][0]["field_ref"] is None
 
 
 def test_submission_export_ignores_under_development_validation_metadata(
@@ -4292,19 +4421,24 @@ def test_waive_validation_finding_records_audit_action(
                 "title": "Bronze astrolabe",
             }
         },
+        additional_objects=[
+            CuratableObjectEnvelope(
+                object_type="MuseumArtifact",
+                object_id="artifact-2",
+                payload={
+                    "artifact": {
+                        "accession_id": "A-2",
+                        "title": "Silver astrolabe",
+                    }
+                },
+            )
+        ],
         validation_findings=[
             ValidationFinding(
-                finding_id="finding-title",
+                finding_id="finding-envelope",
                 severity=ValidationFindingSeverity.BLOCKER,
-                message="Title requires external catalog verification.",
-                code="museum.catalog.title_unverified",
-                field_ref=FieldRef(
-                    object_ref=ObjectRef(
-                        object_id="artifact-1",
-                        object_type="MuseumArtifact",
-                    ),
-                    field_path="artifact.title",
-                ),
+                message="Envelope requires external catalog verification.",
+                code="museum.catalog.envelope_unverified",
                 details={
                     "validation_metadata": {
                         "validator_binding_id": "museum.title_catalog_check",
@@ -4343,6 +4477,44 @@ def test_waive_validation_finding_records_audit_action(
             ),
         ],
     )
+    primary_candidate = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    assert primary_candidate is not None
+    second_candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=primary_candidate.session_id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.ACCEPTED,
+        order=1,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        profile_key="primary",
+        display_label="Artifact two",
+        envelope_id=seeded["envelope_id"],
+        object_id="artifact-2",
+        envelope_revision=1,
+        candidate_metadata={"semantic_source": "domain_envelope.extracted_objects"},
+        normalized_payload={},
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    db_session.add(second_candidate)
+    db_session.flush()
+    db_session.add(
+        DraftModel(
+            id=uuid4(),
+            candidate_id=second_candidate.id,
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            version=1,
+            fields=[],
+            created_at=_now(),
+            updated_at=_now(),
+            draft_metadata={},
+        )
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.total_candidates = 2
+    session_row.accepted_candidates = 2
+    db_session.commit()
 
     response = module.waive_validation_finding(
         db_session,
@@ -4351,7 +4523,7 @@ def test_waive_validation_finding_records_audit_action(
             session_id=seeded["session_id"],
             envelope_id=seeded["envelope_id"],
             expected_revision=1,
-            finding_id="finding-title",
+            finding_id="finding-envelope",
         ),
         {"sub": "curator-42", "email": "curator@example.org"},
     )
@@ -4380,16 +4552,22 @@ def test_waive_validation_finding_records_audit_action(
         ValidationFindingStatus.WAIVED,
         ValidationFindingStatus.OPEN,
     ]
+    assert primary_candidate.envelope_revision == 2
+    assert second_candidate.envelope_revision == 2
     assert review_action["action"] == "waive_validation_finding"
-    assert review_action["finding_id"] == "finding-title"
+    assert review_action["finding_id"] == "finding-envelope"
     assert review_action["validator_binding_id"] == "museum.title_catalog_check"
     assert review_action["validator_run_id"] == "validation-run-1"
     assert review_action["envelope_revision"] == 1
     assert review_action["checkpoint_envelope_revision"] == 2
+    assert set(review_action["projection_candidate_ids"]) == {
+        str(primary_candidate.id),
+        str(second_candidate.id),
+    }
     assert review_action["target"] == {
-        "object_id": "artifact-1",
-        "object_type": "MuseumArtifact",
-        "field_path": "artifact.title",
+        "object_id": None,
+        "object_type": None,
+        "field_path": None,
     }
     assert review_action["actor"] == {
         "actor_type": "human",
@@ -4401,7 +4579,7 @@ def test_waive_validation_finding_records_audit_action(
     history_seed = {
         "envelope_id": seeded["envelope_id"],
         "envelope_revision": 1,
-        "finding_id": "finding-title",
+        "finding_id": "finding-envelope",
         "event_type": "curator_validation_override",
         "new_status": "waived",
     }

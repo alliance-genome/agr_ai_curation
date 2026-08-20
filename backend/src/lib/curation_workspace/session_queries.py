@@ -35,6 +35,7 @@ from src.lib.curation_workspace.session_serializers import (
     _candidate_detail,
     _candidate_has_entity_tag_fields,
     _candidate_payload,
+    _domain_validation_summary_projections,
     _entity_tag_payload,
     _load_documents,
     _load_users,
@@ -662,7 +663,7 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
             candidate_payloads
         ),
         validation_summary_projections=_workspace_validation_summary_projections(
-            candidate_payloads
+            session.candidates
         ),
         active_candidate_id=(
             str(session.current_candidate_id)
@@ -700,12 +701,15 @@ def _workspace_evidence_anchor_projections(
 
 
 def _workspace_validation_summary_projections(
-    candidates: Sequence[CurationCandidatePayload],
+    candidates: Sequence[CurationCandidate],
 ) -> list[DomainEnvelopeValidationSummaryProjection]:
     projections: list[DomainEnvelopeValidationSummaryProjection] = []
     seen_summary_ids: set[str] = set()
     for candidate in candidates:
-        for projection in candidate.validation_summary_projections:
+        for projection in _domain_validation_summary_projections(
+            candidate,
+            object_id=None,
+        ):
             if projection.summary_id in seen_summary_ids:
                 continue
             seen_summary_ids.add(projection.summary_id)

@@ -515,6 +515,41 @@ def test_field_validation_maps_partial_lookup_success_to_conflict():
     ]
 
 
+def test_envelope_findings_do_not_create_fake_field_validation_messages():
+    envelope = DomainEnvelope(
+        envelope_id="env-global-finding",
+        domain_pack_id="fixture-pack",
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                object_id="gene-1",
+                payload={"gene": {"symbol": "abc-1"}},
+            )
+        ],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                code="fixture.provider_unavailable",
+                message="Required envelope validation was unavailable.",
+            )
+        ],
+    )
+
+    field_results, warnings = domain_envelope_field_validation_results(
+        envelope,
+        envelope_revision=2,
+        object_id="gene-1",
+        field_keys=["gene.symbol"],
+    )
+
+    assert field_results["gene.symbol"].status is FieldValidationStatus.SKIPPED
+    assert "Required envelope validation was unavailable." not in warnings
+    assert warnings == [
+        "No envelope validation findings targeted this field; "
+        "validation status was not inferred from the populated draft value."
+    ]
+
+
 def test_field_validation_matches_selector_leaf_aliases():
     envelope = DomainEnvelope(
         envelope_id="env-selector-alias",
@@ -556,6 +591,19 @@ def test_workspace_response_includes_domain_envelope_projections():
     db_session = next(session_iter)
     try:
         now = _now()
+        envelope = _envelope()
+        envelope = envelope.model_copy(
+            update={
+                "validation_findings": [
+                    *envelope.validation_findings,
+                    ValidationFinding(
+                        severity=ValidationFindingSeverity.BLOCKER,
+                        code="fixture.envelope_provider_unavailable",
+                        message="Required envelope validation was unavailable.",
+                    ),
+                ],
+            }
+        )
         document = PDFDocument(
             id=uuid4(),
             user_id=1,
@@ -591,7 +639,7 @@ def test_workspace_response_includes_domain_envelope_projections():
             status=DomainEnvelopeStatus.EXTRACTED,
             document_id=document.id,
             session_id=review_session.id,
-            envelope_json=_envelope().model_dump(mode="json"),
+            envelope_json=envelope.model_dump(mode="json"),
             checkpointed_at=now,
             created_at=now,
             updated_at=now,
@@ -636,6 +684,18 @@ def test_workspace_response_includes_domain_envelope_projections():
         )
         assert workspace.evidence_anchor_projections[0].envelope_revision == 3
         assert workspace.validation_summary_projections
+        envelope_summaries = [
+            summary
+            for summary in workspace.validation_summary_projections
+            if summary.object_id is None and summary.field_path is None
+        ]
+        assert [summary.codes for summary in envelope_summaries] == [
+            ["fixture.envelope_provider_unavailable"]
+        ]
+        assert all(
+            summary.object_id == "gene-1"
+            for summary in candidate_payload.validation_summary_projections
+        )
         assert {
             summary.status
             for summary in workspace.validation_summary_projections

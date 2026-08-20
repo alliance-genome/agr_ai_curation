@@ -338,14 +338,16 @@ def _domain_evidence_anchor_projections(
 
 def _domain_validation_summary_projections(
     candidate: CurationCandidate,
+    *,
+    object_id: str | None,
 ) -> list[DomainEnvelopeValidationSummaryProjection]:
     envelope = _candidate_domain_envelope(candidate)
-    if envelope is None or candidate.object_id is None:
+    if envelope is None:
         return []
     return project_validation_summary_projections(
         envelope,
         envelope_revision=_candidate_envelope_revision(candidate),
-        object_id=candidate.object_id,
+        object_id=object_id,
     )
 
 
@@ -385,7 +387,10 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
         evidence_anchors=[_evidence_record(record) for record in ordered_evidence],
         evidence_anchor_projections=_domain_evidence_anchor_projections(candidate),
         validation=_validation_summary(candidate.validation_snapshots),
-        validation_summary_projections=_domain_validation_summary_projections(candidate),
+        validation_summary_projections=_domain_validation_summary_projections(
+            candidate,
+            object_id=candidate.object_id,
+        ),
         evidence_summary=_evidence_summary_from_records(candidate.evidence_anchors),
         created_at=candidate.created_at,
         updated_at=candidate.updated_at,
@@ -975,7 +980,10 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
         evidence_anchors=evidence_records,
         evidence_anchor_projections=_domain_evidence_anchor_projections(candidate),
         validation=_candidate_validation_summary(candidate),
-        validation_summary_projections=_domain_validation_summary_projections(candidate),
+        validation_summary_projections=_domain_validation_summary_projections(
+            candidate,
+            object_id=candidate.object_id,
+        ),
         evidence_summary=_evidence_summary_from_records(candidate.evidence_anchors),
         created_at=candidate.created_at,
         updated_at=candidate.updated_at,
