@@ -9,12 +9,16 @@ logger = logging.getLogger(__name__)
 
 BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
     "ask_pdf_extraction_specialist": "General PDF Extraction Agent",
+    "ask_gene_validation_specialist": "Gene Validation Agent",
     "ask_gene_specialist": "Gene Validation Agent",
     "ask_gene_extractor_specialist": "Gene Extraction Agent",
+    "ask_allele_validation_specialist": "Allele Validation Agent",
     "ask_allele_specialist": "Allele Validation Agent",
     "ask_allele_extractor_specialist": "Allele/Variant Extraction Agent",
+    "ask_disease_validation_specialist": "Disease Ontology Agent",
     "ask_disease_specialist": "Disease Ontology Agent",
     "ask_disease_extractor_specialist": "Disease Extraction Agent",
+    "ask_chemical_validation_specialist": "Chemical Ontology Agent",
     "ask_chemical_specialist": "Chemical Ontology Agent",
     "ask_gene_expression_specialist": "Gene Expression Extractor",
     "ask_phenotype_extractor_specialist": "Phenotype Extraction Agent",
