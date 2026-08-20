@@ -291,6 +291,28 @@ def test_trace_agent_metadata_handles_registry_patterns_directly():
     assert trace_agent_display_name("made_up_agent", registry) == "made_up_agent"
 
 
+@pytest.mark.parametrize(
+    ("observation_label", "canonical_agent_id"),
+    [
+        ("gene_agent", "gene_validation"),
+        ("allele_agent", "allele_validation"),
+        ("disease_agent", "disease_validation"),
+        ("chemical_agent", "chemical_validation"),
+    ],
+)
+def test_validator_observation_labels_resolve_to_canonical_agents(
+    observation_label: str,
+    canonical_agent_id: str,
+):
+    assert normalize_trace_agent_id(observation_label) == canonical_agent_id
+
+    observation = _obs(name=observation_label, metadata=None)
+    assert (
+        trace_context_service._identify_agent_from_observation(observation)
+        == canonical_agent_id
+    )
+
+
 def test_extract_and_normalize_helpers():
     assert trace_context_service._normalize_agent_id("pdf_specialist") == "pdf_extraction"
     assert trace_context_service._normalize_agent_id("gene_extractor") == "gene_extractor"

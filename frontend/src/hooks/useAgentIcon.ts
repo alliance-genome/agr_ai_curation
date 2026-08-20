@@ -2,7 +2,7 @@
  * Hook to get agent icon from registry metadata.
  *
  * Usage:
- *   const icon = useAgentIcon('gene')  // Returns "🧬"
+ *   const icon = useAgentIcon('gene_validation')  // Returns "🧬"
  *   const icon = useAgentIcon('unknown')  // Returns "❓"
  */
 

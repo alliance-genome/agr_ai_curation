@@ -11,7 +11,7 @@ Validates consistency of AGENT_REGISTRY in catalog_service.py:
 Run as part of pre-commit hook or CI to catch registry issues early.
 """
 import sys
-from typing import List, Dict
+from typing import List
 import inspect
 
 # Import ValidationResult from canonical location
@@ -141,18 +141,6 @@ def validate_batching_config() -> ValidationResult:
             errors=[f"Failed to import required modules: {e}"]
         )
 
-    # Build mapping from transfer tool name to agent_id
-    # e.g., "ask_gene_specialist" -> "gene"
-    transfer_tool_to_agent: Dict[str, str] = {}
-    for agent_id, config in AGENT_REGISTRY.items():
-        tools = config.get("tools", [])
-        # Check if any transfer tools reference this agent
-        # Transfer tools follow pattern: transfer_to_{agent}_agent or ask_{agent}_specialist
-        for tool in tools:
-            if tool.startswith("transfer_to_"):
-                # Extract agent name from transfer_to_X_agent
-                pass  # Transfer tools are in supervisor, not in individual agents
-
     # Verify batching config tools are valid
     batching_tools = set(BATCHING_NUDGE_CONFIG.keys())
 
@@ -259,9 +247,9 @@ def run_all_validations() -> bool:
         result = validator()
 
         if result.passed:
-            print(f"  ✅ PASSED")
+            print("  ✅ PASSED")
         else:
-            print(f"  ❌ FAILED")
+            print("  ❌ FAILED")
             all_passed = False
 
         for error in result.errors:
