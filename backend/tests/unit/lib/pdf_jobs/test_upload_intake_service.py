@@ -89,6 +89,26 @@ def test_provider_decision_error_rejects_missing_presentation_label(monkeypatch)
         )
 
 
+def test_provider_decision_error_skips_unused_presentation_label(monkeypatch):
+    def _unexpected_metadata_lookup(_provider_id):
+        raise AssertionError("provider metadata should not be loaded for generic copy")
+
+    monkeypatch.setattr(
+        upload_intake_module,
+        "get_document_source_provider_metadata",
+        _unexpected_metadata_lookup,
+    )
+
+    fields = upload_intake_module._provider_decision_error_fields(
+        ChecksumImportDecisionStatus.NO_SOURCE_ARTIFACT,
+        provider="fake_provider",
+    )
+
+    assert fields == upload_intake_module._CHECKSUM_DECISION_ERROR_FIELDS[
+        ChecksumImportDecisionStatus.NO_SOURCE_ARTIFACT
+    ]
+
+
 class _ExecuteResult:
     def __init__(self, row):
         self._row = row

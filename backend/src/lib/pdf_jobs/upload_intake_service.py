@@ -978,12 +978,15 @@ def _provider_decision_error_fields(
     provider: str,
 ) -> tuple[int, str, str, str]:
     status_code, error, message, suggestion = _CHECKSUM_DECISION_ERROR_FIELDS[status]
+    if "{provider_label}" not in message and "{provider_label}" not in suggestion:
+        return status_code, error, message, suggestion
+
     provider_label = _provider_display_label(provider)
     return (
         status_code,
         error,
-        message.format(provider_label=provider_label),
-        suggestion.format(provider_label=provider_label),
+        message.replace("{provider_label}", provider_label),
+        suggestion.replace("{provider_label}", provider_label),
     )
 
 
