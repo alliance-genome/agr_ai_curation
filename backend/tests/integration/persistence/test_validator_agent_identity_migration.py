@@ -170,6 +170,7 @@ def test_upgrade_migrates_all_validator_references_and_is_idempotent(
 
     legacy_gene_prompt_id = uuid4()
     legacy_disease_prompt_id = uuid4()
+    legacy_chemical_old_prompt_id = uuid4()
     legacy_chemical_prompt_id = uuid4()
     for prompt_id, agent_name, group_id, version, active in (
         (legacy_gene_prompt_id, "gene", None, 1, True),
@@ -177,8 +178,10 @@ def test_upgrade_migrates_all_validator_references_and_is_idempotent(
         (uuid4(), "allele", None, 2, True),
         (legacy_disease_prompt_id, "disease", "WB", 1, True),
         (uuid4(), "disease_validation", "WB", 2, True),
-        (legacy_chemical_prompt_id, "chemical", None, 1, True),
+        (legacy_chemical_old_prompt_id, "chemical", None, 1, True),
+        (legacy_chemical_prompt_id, "chemical", None, 2, True),
         (uuid4(), "chemical_validation", None, 1, False),
+        (uuid4(), "chemical_validation", None, 2, False),
     ):
         migration_connection.execute(
             text(
@@ -285,8 +288,26 @@ def test_upgrade_migrates_all_validator_references_and_is_idempotent(
         {"id": legacy_chemical_prompt_id},
     ).one()
     assert migrated_chemical_prompt.agent_name == "chemical_validation"
-    assert migrated_chemical_prompt.version == 2
+    assert migrated_chemical_prompt.version == 3
     assert migrated_chemical_prompt.is_active is True
+    old_chemical_prompt = migration_connection.execute(
+        text(
+            "SELECT agent_name, version, is_active FROM prompt_templates "
+            "WHERE id = :id"
+        ),
+        {"id": legacy_chemical_old_prompt_id},
+    ).one()
+    assert old_chemical_prompt.agent_name == "chemical"
+    assert old_chemical_prompt.version == 1
+    assert old_chemical_prompt.is_active is False
+    assert migration_connection.execute(
+        text(
+            "SELECT count(*) FROM prompt_templates "
+            "WHERE agent_name = 'chemical_validation' "
+            "AND prompt_type = 'system' AND group_id IS NULL "
+            "AND is_active = true"
+        )
+    ).scalar_one() == 1
     assert migration_connection.execute(
         text("SELECT agent_name FROM prompt_execution_log WHERE id = :id"),
         {"id": execution_log_id},

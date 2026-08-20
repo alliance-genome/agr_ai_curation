@@ -28,6 +28,10 @@ CASE {value}
 END
 """
 _ALIASES = "'gene', 'allele', 'disease', 'chemical'"
+_CANONICAL_IDS = (
+    "'gene_validation', 'allele_validation', "
+    "'disease_validation', 'chemical_validation'"
+)
 
 
 def upgrade() -> None:
@@ -79,6 +83,30 @@ def upgrade() -> None:
                   SELECT 1
                   FROM jsonb_array_elements(flow_definition -> 'nodes') AS nodes(node)
                   WHERE node #>> '{{data,agent_id}}' IN ({_ALIASES})
+              )
+            """
+        )
+    )
+
+    # PostgreSQL treats NULL group IDs as distinct in the historical
+    # single-active index, so base prompts can contain multiple active versions.
+    # Normalize affected identities to their highest active version before
+    # reconciling legacy and canonical owners.
+    bind.execute(
+        sa.text(
+            f"""
+            UPDATE prompt_templates AS older
+            SET is_active = false
+            WHERE older.agent_name IN ({_ALIASES}, {_CANONICAL_IDS})
+              AND older.is_active = true
+              AND EXISTS (
+                  SELECT 1
+                  FROM prompt_templates AS newer
+                  WHERE newer.agent_name = older.agent_name
+                    AND newer.prompt_type = older.prompt_type
+                    AND newer.group_id IS NOT DISTINCT FROM older.group_id
+                    AND newer.is_active = true
+                    AND newer.version > older.version
               )
             """
         )
