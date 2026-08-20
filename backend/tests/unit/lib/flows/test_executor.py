@@ -2812,6 +2812,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ValidatorBinding,
             ValidatorBindingMatch,
         )
+        from src.lib.domain_packs import validator_dispatch as validator_dispatch_module
         from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
         from src.schemas.domain_pack_metadata import DomainPackInputSelector
 
@@ -2891,9 +2892,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
 
         monkeypatch.setattr(
-            executor,
-            "run_package_scoped_validator_agent",
-            _fake_package_validator,
+            validator_dispatch_module,
+            "_default_package_scoped_validator_runner",
+            lambda: _fake_package_validator,
         )
 
         materialization_inputs, selector_findings, metadata = asyncio.run(
@@ -2961,6 +2962,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ValidatorBinding,
             ValidatorBindingMatch,
         )
+        from src.lib.domain_packs import validator_dispatch as validator_dispatch_module
         from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
         from src.schemas.domain_pack_metadata import DomainPackInputSelector
 
@@ -3033,6 +3035,33 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ),
             },
             expected_result_fields={"curie": "curie", "label": "label"},
+            preflight_policy={
+                "policy": "require_mapping_match",
+                "mapping_input": "provider_taxon_ontology_mappings",
+                "match_inputs": ["data_provider", "taxon_id"],
+                "case_insensitive_inputs": ["data_provider"],
+                "when_any_present": ["label"],
+                "bypass_if_any_present": ["curie", "ontology_term_type"],
+                "query_inputs": [
+                    "ontology_family",
+                    "label",
+                    "data_provider",
+                    "taxon_id",
+                    "accepted_prefixes",
+                ],
+                "mapping_summary_fields": [
+                    "data_provider",
+                    "taxon_id",
+                    "ontology_term_type",
+                    "accepted_prefixes",
+                ],
+                "mappings_query_key": "active_provider_taxon_ontology_mappings",
+                "lookup_method": "unsupported_provider_taxon_mapping",
+                "explanation": (
+                    "Phenotype ontology label lookup is blocked because no active "
+                    "provider/taxon ontology mapping matched."
+                ),
+            },
         )
         match = ValidatorBindingMatch(
             binding=binding,
@@ -3049,9 +3078,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             raise AssertionError("unsupported phenotype context should preflight-block")
 
         monkeypatch.setattr(
-            executor,
-            "run_package_scoped_validator_agent",
-            _unexpected_package_validator,
+            validator_dispatch_module,
+            "_default_package_scoped_validator_runner",
+            lambda: _unexpected_package_validator,
         )
 
         materialization_inputs, selector_findings, metadata = asyncio.run(
@@ -3100,6 +3129,169 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert (
             metadata[0]["lookup_attempts"][0]["method"]
             == "unsupported_provider_taxon_mapping"
+        )
+
+    def test_automatic_validation_groups_share_batch_split_and_dedupe_planner(
+        self, monkeypatch
+    ):
+        executor = _executor_module()
+        from src.lib.domain_packs import validator_dispatch as validator_dispatch_module
+        from src.lib.domain_packs.validation_registry import (
+            ValidationBindingState,
+            ValidatorAgentRef as RegistryValidatorAgentRef,
+            ValidatorBinding,
+            ValidatorBindingMatch,
+        )
+        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+        from src.schemas.domain_pack_metadata import DomainPackInputSelector
+
+        identifiers = [
+            "BAD:0001",
+            "BAD:0001",
+            "BAD:0002",
+            "BAD:0003",
+            "BAD:0004",
+        ]
+        envelope = DomainEnvelope(
+            envelope_id="env-batched-automatic",
+            domain_pack_id="fixture.validation",
+            extracted_objects=[
+                CuratableObjectEnvelope(
+                    object_type="GeneAssertion",
+                    pending_ref_id=f"object-{index}",
+                    payload={"gene": {"identifier": identifier}},
+                )
+                for index, identifier in enumerate(identifiers, start=1)
+            ],
+        )
+        binding = ValidatorBinding(
+            binding_id="fixture.identifier_lookup",
+            state=ValidationBindingState.ACTIVE,
+            source_scope="field",
+            source_object_type="GeneAssertion",
+            source_field_path="gene.identifier",
+            validator_agent=RegistryValidatorAgentRef(
+                package_id="fixture.validators",
+                agent_id="package_agent",
+            ),
+            object_types=("GeneAssertion",),
+            field_paths=("gene.identifier",),
+            input_fields={
+                "identifier": DomainPackInputSelector(
+                    source="payload",
+                    path="gene.identifier",
+                )
+            },
+            expected_result_fields={"identifier": "gene.identifier"},
+            batch_enabled=True,
+            batch_family="fixture_identifiers",
+            batch_max_size=2,
+        )
+        matches = tuple(
+            ValidatorBindingMatch(
+                binding=binding,
+                envelope=envelope,
+                object_envelope=domain_object,
+            )
+            for domain_object in envelope.extracted_objects
+        )
+
+        class _Registry:
+            def match_bindings(self, _envelope, *, states):
+                assert states == [ValidationBindingState.ACTIVE]
+                return matches
+
+        batch_calls: list[list[str]] = []
+
+        def _unexpected_single_runner(*_args, **_kwargs):  # pragma: no cover
+            raise AssertionError("batch-enabled flow matches should use batch dispatch")
+
+        def _batch_runner(jobs, *, binding):
+            assert binding.batch_max_size == 2
+            batch_calls.append(
+                [job.request.selected_inputs["identifier"] for job in jobs]
+            )
+            return [
+                {
+                    "status": "resolved",
+                    "request_id": job.request.request_id,
+                    "validator_binding_id": job.request.validator_binding_id,
+                    "validator_agent": job.request.validator_agent.model_dump(
+                        mode="json"
+                    ),
+                    "target": job.request.target.model_dump(mode="json"),
+                    "resolved_values": {
+                        "identifier": job.request.selected_inputs["identifier"]
+                    },
+                    "resolved_objects": [],
+                    "missing_expected_fields": [],
+                    "candidates": [],
+                    "lookup_attempts": [
+                        {
+                            "provider": "fixture",
+                            "method": "identifier_batch_lookup",
+                            "query": dict(job.request.selected_inputs),
+                            "result_count": 1,
+                            "outcome": "success",
+                        }
+                    ],
+                    "curator_message": None,
+                    "explanation": "Batch validator passed.",
+                }
+                for job in jobs
+            ]
+
+        monkeypatch.setattr(
+            validator_dispatch_module,
+            "_default_package_scoped_validator_runner",
+            lambda: _unexpected_single_runner,
+        )
+        monkeypatch.setattr(
+            validator_dispatch_module,
+            "_default_package_scoped_validator_batch_runner",
+            lambda: _batch_runner,
+        )
+
+        materialization_inputs, selector_findings, metadata = asyncio.run(
+            executor._collect_flow_validator_materialization_inputs(
+                source_envelope=envelope,
+                source_envelope_revision=4,
+                registry=_Registry(),
+                groups=[
+                    {
+                        "group_id": "automatic-lookup",
+                        "state": "automatic",
+                        "binding_id": "fixture.identifier_lookup",
+                    }
+                ],
+                flow=_make_flow([]),
+                agent_context={"user_id": "curator-1"},
+            )
+        )
+
+        assert selector_findings == []
+        assert batch_calls == [
+            ["BAD:0001", "BAD:0002"],
+            ["BAD:0003", "BAD:0004"],
+        ]
+        assert len(materialization_inputs) == 5
+        assert len(metadata) == 5
+        assert [item.request.request_id for item in materialization_inputs] == [
+            item["request_id"] for item in metadata
+        ]
+        assert [item.result.status for item in materialization_inputs] == [
+            "resolved",
+            "resolved",
+            "resolved",
+            "resolved",
+            "resolved",
+        ]
+        assert [item["selected_inputs"]["identifier"] for item in metadata] == (
+            identifiers
+        )
+        assert all(
+            item["lookup_attempts"][0]["method"] == "identifier_batch_lookup"
+            for item in metadata
         )
 
     def test_automatic_validation_group_skips_non_dispatch_binding(
@@ -3154,7 +3346,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         monkeypatch.setattr(
             executor,
-            "run_package_scoped_validator_agent",
+            "dispatch_validator_binding_matches",
             _fake_package_validator,
         )
 
@@ -3271,7 +3463,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         monkeypatch.setattr(
             executor,
-            "run_package_scoped_validator_agent",
+            "dispatch_validator_binding_matches",
             _unexpected_package_validator,
         )
 
@@ -3388,7 +3580,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         monkeypatch.setattr(
             executor,
-            "run_package_scoped_validator_agent",
+            "dispatch_validator_binding_matches",
             _unexpected_package_validator,
         )
 

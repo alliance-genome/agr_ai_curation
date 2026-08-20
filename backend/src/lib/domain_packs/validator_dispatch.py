@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, cast
+from typing import Any, Iterable, Mapping, Protocol, cast
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
@@ -48,6 +48,7 @@ from src.lib.observability.sentry import (
 from .input_selectors import build_domain_validation_request
 from .materialization import (
     ValidatorResultMaterializationInput,
+    ValidatorResultMaterializationResult,
     materialize_validator_results_into_envelope,
 )
 from .registry import LoadedDomainPack
@@ -163,6 +164,28 @@ class ActiveValidatorDispatchResult:
 
 
 @dataclass(frozen=True)
+class ValidatorBindingDispatchOutcome:
+    """Planner/result outcome for one validator-binding match."""
+
+    match: ValidatorBindingMatch
+    request: DomainValidationRequest | None
+    result: DomainValidatorResultBase | None
+    selector_findings: tuple[ValidationFinding, ...] = ()
+
+
+@dataclass(frozen=True)
+class ValidatorBindingDispatchResult:
+    """Project-neutral execution result for an explicit set of matches."""
+
+    outcomes: tuple[ValidatorBindingDispatchOutcome, ...]
+    materialization_inputs: tuple[ValidatorResultMaterializationInput, ...]
+    selector_findings: tuple[ValidationFinding, ...]
+    validator_agent_run_count: int
+    batch_validator_run_count: int
+    validator_batch_groups: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class ValidatorRuntimeContext:
     """Runtime document/user context available to validator agent tools."""
 
@@ -248,6 +271,70 @@ def dispatch_active_validator_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
+    dispatch_result = dispatch_validator_binding_matches(
+        matches,
+        runner=runner,
+        batch_runner=batch_runner,
+        event_emitter=event_emitter,
+        max_parallel_validators=max_parallel_validators,
+        runtime_context=runtime_context,
+    )
+
+    materialization_items = list(dispatch_result.materialization_inputs)
+    validator_results = [item.result for item in materialization_items]
+    selector_findings = list(dispatch_result.selector_findings)
+
+    updated_envelope = envelope
+    appended_findings: list[ValidationFinding] = []
+    if selector_findings:
+        updated_envelope, selector_appended_findings = (
+            append_validation_findings_to_envelope(
+                updated_envelope,
+                selector_findings,
+                actor_id=actor_id,
+            )
+        )
+        appended_findings.extend(selector_appended_findings)
+    if materialization_items:
+        materialization_started_at = time.monotonic()
+        materialization_result = materialize_dispatched_validator_results(
+            updated_envelope,
+            domain_pack,
+            materialization_items,
+            actor_id=actor_id,
+            source_envelope_revision=source_envelope_revision,
+        )
+        LOGGER.info(
+            "Materialized %s active validator result(s) in %.3fs",
+            len(materialization_items),
+            time.monotonic() - materialization_started_at,
+        )
+        updated_envelope = materialization_result.envelope
+        appended_findings.extend(materialization_result.appended_findings)
+
+    return ActiveValidatorDispatchResult(
+        envelope=updated_envelope,
+        registry=validation_registry,
+        matched_bindings=matches,
+        appended_findings=tuple(appended_findings),
+        validator_results=tuple(validator_results),
+        validator_agent_run_count=dispatch_result.validator_agent_run_count,
+        batch_validator_run_count=dispatch_result.batch_validator_run_count,
+        validator_batch_groups=dispatch_result.validator_batch_groups,
+    )
+
+
+def dispatch_validator_binding_matches(
+    matches: tuple[ValidatorBindingMatch, ...] | list[ValidatorBindingMatch],
+    *,
+    runner: DomainValidatorAgentRunner | None = None,
+    batch_runner: DomainValidatorBatchAgentRunner | None = None,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
+    max_parallel_validators: int = DEFAULT_MAX_PARALLEL_VALIDATORS,
+    runtime_context: ValidatorRuntimeContext | None = None,
+) -> ValidatorBindingDispatchResult:
+    """Plan and execute explicit matches through the canonical dispatch path."""
+
     if runner is None:
         default_runner = _default_package_scoped_validator_runner()
 
@@ -292,12 +379,17 @@ def dispatch_active_validator_bindings(
     else:
         agent_batch_runner = batch_runner
 
+    selection_outcomes: list[
+        tuple[
+            ValidatorBindingMatch,
+            DomainValidationRequest | None,
+            tuple[ValidationFinding, ...],
+        ]
+    ] = []
     selector_findings: list[ValidationFinding] = []
     jobs: list[_DispatchJob] = []
-    ordered_dispatch_units: list[
-        _DispatchJob | ValidatorResultMaterializationInput
-    ] = []
-    for match in _ordered_matches(matches):
+    preflight_items: list[ValidatorResultMaterializationInput] = []
+    for match in _ordered_matches(tuple(matches)):
         if not _binding_has_dispatch_contract(match.binding):
             LOGGER.info(
                 "Skipping active validator binding %s because it declares no "
@@ -308,18 +400,26 @@ def dispatch_active_validator_bindings(
         selector_result = build_domain_validation_request(match)
         if selector_result.findings:
             selector_findings.extend(selector_result.findings)
+            selection_outcomes.append(
+                (match, None, tuple(selector_result.findings))
+            )
             continue
         if selector_result.request is None:
+            selection_outcomes.append((match, None, ()))
             continue
 
         request = selector_result.request
-        validator_result = preflight_unresolved_validator_result(request)
+        selection_outcomes.append((match, request, ()))
+        validator_result = preflight_unresolved_validator_result(
+            request,
+            binding=match.binding,
+        )
         if validator_result is not None:
             validator_result = _finalize_validator_result(
                 validator_result,
                 request=request,
             )
-            ordered_dispatch_units.append(
+            preflight_items.append(
                 ValidatorResultMaterializationInput(
                     match=match,
                     request=request,
@@ -330,7 +430,6 @@ def dispatch_active_validator_bindings(
 
         job = _DispatchJob(match=match, request=request)
         jobs.append(job)
-        ordered_dispatch_units.append(job)
 
     execution_started_at = time.monotonic()
     _, executed_items, run_metadata = _run_validator_jobs(
@@ -345,61 +444,72 @@ def dispatch_active_validator_bindings(
         len(jobs),
         time.monotonic() - execution_started_at,
     )
-    executed_items_by_request_id = {
-        item.request.request_id: item for item in executed_items
+    materialization_items_by_request_id = {
+        item.request.request_id: item for item in preflight_items
     }
+    materialization_items_by_request_id.update({
+        item.request.request_id: item for item in executed_items
+    })
 
     materialization_items: list[ValidatorResultMaterializationInput] = []
-    validator_results: list[DomainValidatorResultBase] = []
-    for unit in ordered_dispatch_units:
-        if isinstance(unit, _DispatchJob):
-            materialization_item = executed_items_by_request_id[unit.request.request_id]
-        else:
-            materialization_item = unit
+    outcomes: list[ValidatorBindingDispatchOutcome] = []
+    for match, request, findings in selection_outcomes:
+        if request is None:
+            outcomes.append(
+                ValidatorBindingDispatchOutcome(
+                    match=match,
+                    request=None,
+                    result=None,
+                    selector_findings=findings,
+                )
+            )
+            continue
+        executed_item = materialization_items_by_request_id[request.request_id]
+        materialization_item = ValidatorResultMaterializationInput(
+            match=match,
+            request=request,
+            result=executed_item.result,
+        )
         materialization_items.append(materialization_item)
-        validator_results.append(materialization_item.result)
-
-    updated_envelope = envelope
-    appended_findings: list[ValidationFinding] = []
-    if selector_findings:
-        updated_envelope, selector_appended_findings = (
-            append_validation_findings_to_envelope(
-                updated_envelope,
-                selector_findings,
-                actor_id=actor_id,
+        outcomes.append(
+            ValidatorBindingDispatchOutcome(
+                match=match,
+                request=request,
+                result=materialization_item.result,
             )
         )
-        appended_findings.extend(selector_appended_findings)
-    if materialization_items:
-        updated_envelope = _apply_validator_evidence_updates_to_envelope(
-            updated_envelope,
-            materialization_items,
-        )
-        materialization_started_at = time.monotonic()
-        materialization_result = materialize_validator_results_into_envelope(
-            updated_envelope,
-            domain_pack.metadata,
-            materialization_items,
-            actor_id=actor_id,
-            source_envelope_revision=source_envelope_revision,
-        )
-        LOGGER.info(
-            "Materialized %s active validator result(s) in %.3fs",
-            len(materialization_items),
-            time.monotonic() - materialization_started_at,
-        )
-        updated_envelope = materialization_result.envelope
-        appended_findings.extend(materialization_result.appended_findings)
 
-    return ActiveValidatorDispatchResult(
-        envelope=updated_envelope,
-        registry=validation_registry,
-        matched_bindings=matches,
-        appended_findings=tuple(appended_findings),
-        validator_results=tuple(validator_results),
+    return ValidatorBindingDispatchResult(
+        outcomes=tuple(outcomes),
+        materialization_inputs=tuple(materialization_items),
+        selector_findings=tuple(selector_findings),
         validator_agent_run_count=int(run_metadata["validator_agent_run_count"]),
         batch_validator_run_count=int(run_metadata["batch_validator_run_count"]),
         validator_batch_groups=tuple(run_metadata["validator_batch_groups"]),
+    )
+
+
+def materialize_dispatched_validator_results(
+    envelope: DomainEnvelope,
+    domain_pack: LoadedDomainPack,
+    items: Iterable[ValidatorResultMaterializationInput],
+    *,
+    actor_id: str = "domain_validator_materialization",
+    source_envelope_revision: int | None = None,
+) -> ValidatorResultMaterializationResult:
+    """Apply canonical evidence updates and result materialization to an envelope."""
+
+    materialization_items = list(items)
+    updated_envelope = _apply_validator_evidence_updates_to_envelope(
+        envelope,
+        materialization_items,
+    )
+    return materialize_validator_results_into_envelope(
+        updated_envelope,
+        domain_pack.metadata,
+        materialization_items,
+        actor_id=actor_id,
+        source_envelope_revision=source_envelope_revision,
     )
 
 
@@ -2570,24 +2680,71 @@ def _unresolved_result_for_dispatch_problem(
 
 def preflight_unresolved_validator_result(
     request: DomainValidationRequest,
+    *,
+    binding: ValidatorBinding,
 ) -> DomainValidatorResultBase | None:
-    """Return deterministic unresolved results for requests that should not run."""
+    """Apply a binding-owned declarative preflight before agent execution."""
 
-    explanation = _unsupported_phenotype_provider_taxon_explanation(request)
-    if explanation is None:
+    policy = binding.preflight_policy
+    if policy.get("policy") != "require_mapping_match":
         return None
 
+    selected_inputs = request.selected_inputs
+    when_any_present = _policy_string_list(policy.get("when_any_present"))
+    if when_any_present and not any(
+        _present(selected_inputs.get(input_name))
+        for input_name in when_any_present
+    ):
+        return None
+    if any(
+        _present(selected_inputs.get(input_name))
+        for input_name in _policy_string_list(policy.get("bypass_if_any_present"))
+    ):
+        return None
+
+    mapping_input = _optional_string(policy.get("mapping_input"))
+    match_inputs = _policy_string_list(policy.get("match_inputs"))
+    if mapping_input is None or not match_inputs:
+        return None
+    raw_mappings = selected_inputs.get(mapping_input)
+    mappings = raw_mappings if isinstance(raw_mappings, list) else []
+    case_insensitive_inputs = frozenset(
+        _policy_string_list(policy.get("case_insensitive_inputs"))
+    )
+    if _configured_mapping_matches(
+        mappings,
+        selected_inputs=selected_inputs,
+        match_inputs=match_inputs,
+        case_insensitive_inputs=case_insensitive_inputs,
+    ):
+        return None
+
+    summary_fields = _policy_string_list(policy.get("mapping_summary_fields"))
+    mapping_summaries = _mapping_summaries(
+        mappings,
+        fields=summary_fields or match_inputs,
+    )
     query = {
-        "ontology_family": request.selected_inputs.get("ontology_family"),
-        "label": request.selected_inputs.get("label"),
-        "name": request.selected_inputs.get("name"),
-        "data_provider": request.selected_inputs.get("data_provider"),
-        "taxon_id": request.selected_inputs.get("taxon_id"),
-        "accepted_prefixes": request.selected_inputs.get("accepted_prefixes"),
-        "active_provider_taxon_ontology_mappings": _mapping_summaries(
-            request.selected_inputs.get("provider_taxon_ontology_mappings")
-        ),
+        input_name: selected_inputs.get(input_name)
+        for input_name in _policy_string_list(policy.get("query_inputs"))
     }
+    mappings_query_key = _optional_string(policy.get("mappings_query_key"))
+    if mappings_query_key is not None:
+        query[mappings_query_key] = mapping_summaries
+
+    requested_context = ", ".join(
+        f"{input_name}={selected_inputs.get(input_name) or '<missing>'}"
+        for input_name in match_inputs
+    )
+    mapping_summary = json.dumps(mapping_summaries, sort_keys=True)
+    explanation_prefix = str(policy.get("explanation") or "").strip()
+    explanation = (
+        f"{explanation_prefix} Requested context: {requested_context}. "
+        f"Configured mappings: {mapping_summary}."
+    )
+    lookup_method = _optional_string(policy.get("lookup_method"))
+    if lookup_method is None:
+        return None
     return DomainValidatorResultBase(
         status="unresolved",
         request_id=request.request_id,
@@ -2601,7 +2758,7 @@ def preflight_unresolved_validator_result(
         lookup_attempts=[
             ValidatorLookupAttempt(
                 provider="domain_validator_dispatch",
-                method="unsupported_provider_taxon_mapping",
+                method=lookup_method,
                 query=query,
                 result_count=0,
                 outcome="blocked",
@@ -2613,72 +2770,46 @@ def preflight_unresolved_validator_result(
     )
 
 
-def _unsupported_phenotype_provider_taxon_explanation(
-    request: DomainValidationRequest,
-) -> str | None:
-    selected_inputs = request.selected_inputs
-    if selected_inputs.get("ontology_family") != "phenotype":
-        return None
-    if _present(selected_inputs.get("curie")) or _present(
-        selected_inputs.get("ontology_term_type")
-    ):
-        return None
-    if not (
-        _present(selected_inputs.get("label"))
-        or _present(selected_inputs.get("name"))
-    ):
-        return None
-
-    mappings = selected_inputs.get("provider_taxon_ontology_mappings")
-    if not isinstance(mappings, list) or not mappings:
-        return None
-
-    data_provider = _optional_string(selected_inputs.get("data_provider"))
-    taxon_id = _optional_string(selected_inputs.get("taxon_id"))
-    if _provider_taxon_mapping_matches(
-        mappings,
-        data_provider=data_provider,
-        taxon_id=taxon_id,
-    ):
-        return None
-
-    mapping_summary = _active_mapping_summary_text(mappings)
-    context = (
-        f"data_provider={data_provider or '<missing>'}, "
-        f"taxon_id={taxon_id or '<missing>'}"
-    )
-    return (
-        "Phenotype ontology label lookup is blocked because no active "
-        f"provider/taxon ontology mapping matched {context}. "
-        "The dispatcher will not infer a phenotype ontology term type from "
-        f"accepted prefixes or free text. Active mappings: {mapping_summary}."
-    )
-
-
-def _provider_taxon_mapping_matches(
+def _configured_mapping_matches(
     mappings: list[Any],
     *,
-    data_provider: str | None,
-    taxon_id: str | None,
+    selected_inputs: Mapping[str, Any],
+    match_inputs: list[str],
+    case_insensitive_inputs: frozenset[str],
 ) -> bool:
-    if data_provider is None or taxon_id is None:
+    if any(not _present(selected_inputs.get(name)) for name in match_inputs):
         return False
-    expected_provider = data_provider.upper()
     for mapping in mappings:
-        if not isinstance(mapping, dict):
+        if not isinstance(mapping, Mapping):
             continue
-        mapping_provider = _optional_string(mapping.get("data_provider"))
-        mapping_taxon = _optional_string(mapping.get("taxon_id"))
-        if (
-            mapping_provider is not None
-            and mapping_provider.upper() == expected_provider
-            and mapping_taxon == taxon_id
+        if all(
+            _mapping_value_matches(
+                selected_inputs.get(input_name),
+                mapping.get(input_name),
+                case_insensitive=input_name in case_insensitive_inputs,
+            )
+            for input_name in match_inputs
         ):
             return True
     return False
 
 
-def _mapping_summaries(value: Any) -> list[dict[str, Any]]:
+def _mapping_value_matches(
+    expected: Any,
+    actual: Any,
+    *,
+    case_insensitive: bool,
+) -> bool:
+    if case_insensitive and isinstance(expected, str) and isinstance(actual, str):
+        return expected.strip().casefold() == actual.strip().casefold()
+    return expected == actual
+
+
+def _mapping_summaries(
+    value: Any,
+    *,
+    fields: list[str],
+) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     summaries: list[dict[str, Any]] = []
@@ -2687,12 +2818,7 @@ def _mapping_summaries(value: Any) -> list[dict[str, Any]]:
             continue
         summary = {
             key: item.get(key)
-            for key in (
-                "data_provider",
-                "taxon_id",
-                "ontology_term_type",
-                "accepted_prefixes",
-            )
+            for key in fields
             if item.get(key) is not None
         }
         if summary:
@@ -2700,14 +2826,10 @@ def _mapping_summaries(value: Any) -> list[dict[str, Any]]:
     return summaries
 
 
-def _active_mapping_summary_text(mappings: list[Any]) -> str:
-    summaries = []
-    for mapping in _mapping_summaries(mappings):
-        provider = mapping.get("data_provider") or "<unknown-provider>"
-        taxon = mapping.get("taxon_id") or "<unknown-taxon>"
-        term_type = mapping.get("ontology_term_type") or "<unknown-term-type>"
-        summaries.append(f"{provider}/{taxon}->{term_type}")
-    return ", ".join(summaries) if summaries else "<none>"
+def _policy_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
 def _present(value: Any) -> bool:
@@ -2785,9 +2907,13 @@ __all__ = [
     "ActiveValidatorDispatchResult",
     "DomainValidatorAgentRunner",
     "DomainValidatorBatchAgentRunner",
+    "ValidatorBindingDispatchOutcome",
+    "ValidatorBindingDispatchResult",
     "ValidatorDispatchEventEmitter",
     "ValidatorRuntimeContext",
     "dispatch_active_validator_bindings",
+    "dispatch_validator_binding_matches",
+    "materialize_dispatched_validator_results",
     "preflight_unresolved_validator_result",
     "run_package_scoped_validator_agent_batch",
     "run_package_scoped_validator_agent_batch_in_worker_thread",

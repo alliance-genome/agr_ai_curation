@@ -376,6 +376,61 @@ class DomainPackValidatorBatchConfig(DomainPackMetadataBaseModel):
         return _validate_symbolic_name(value, "validator_bindings.batch.family")
 
 
+class DomainPackValidatorPreflightPolicy(DomainPackMetadataBaseModel):
+    """Declarative request policy evaluated before a validator agent runs."""
+
+    policy: Literal["require_mapping_match"]
+    mapping_input: str
+    match_inputs: list[str] = Field(min_length=1)
+    case_insensitive_inputs: list[str] = Field(default_factory=list)
+    when_any_present: list[str] = Field(default_factory=list)
+    bypass_if_any_present: list[str] = Field(default_factory=list)
+    query_inputs: list[str] = Field(default_factory=list)
+    mapping_summary_fields: list[str] = Field(default_factory=list)
+    mappings_query_key: str
+    lookup_method: str
+    explanation: str = Field(min_length=1)
+
+    @field_validator(
+        "mapping_input",
+        "mappings_query_key",
+        "lookup_method",
+    )
+    @classmethod
+    def _validate_symbolic_fields(cls, value: str) -> str:
+        return _validate_symbolic_name(value, "validator_bindings.preflight")
+
+    @field_validator(
+        "match_inputs",
+        "case_insensitive_inputs",
+        "when_any_present",
+        "bypass_if_any_present",
+        "query_inputs",
+        "mapping_summary_fields",
+    )
+    @classmethod
+    def _validate_input_names(cls, value: list[str]) -> list[str]:
+        validated = [
+            _validate_symbolic_name(item, "validator_bindings.preflight")
+            for item in value
+        ]
+        _require_unique(validated, "validator_bindings.preflight")
+        return validated
+
+    @model_validator(mode="after")
+    def _validate_policy_inputs(self) -> "DomainPackValidatorPreflightPolicy":
+        unknown_case_insensitive = sorted(
+            set(self.case_insensitive_inputs) - set(self.match_inputs)
+        )
+        if unknown_case_insensitive:
+            raise ValueError(
+                "validator_bindings.preflight.case_insensitive_inputs must be "
+                "declared in match_inputs: "
+                + ", ".join(unknown_case_insensitive)
+            )
+        return self
+
+
 class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     """Executable package-scoped validator binding metadata."""
 
@@ -393,6 +448,7 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     batch: DomainPackValidatorBatchConfig = Field(
         default_factory=DomainPackValidatorBatchConfig
     )
+    preflight: Optional[DomainPackValidatorPreflightPolicy] = None
     curator_override: DomainPackValidatorCuratorOverride = Field(
         default_factory=DomainPackValidatorCuratorOverride
     )
@@ -908,6 +964,7 @@ __all__ = [
     "DomainPackValidatorAppliesTo",
     "DomainPackValidatorBindings",
     "DomainPackValidatorBatchConfig",
+    "DomainPackValidatorPreflightPolicy",
     "DomainPackValidatorCuratorOverride",
     "DomainPackInputSelector",
 ]

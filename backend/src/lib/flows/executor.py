@@ -72,7 +72,6 @@ from src.lib.domain_envelopes.persistence import (
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
     ValidatorResultMaterializationInput,
-    materialize_validator_results_into_envelope,
 )
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -82,8 +81,8 @@ from src.lib.domain_packs.validation_registry import (
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorRuntimeContext,
-    preflight_unresolved_validator_result,
-    run_package_scoped_validator_agent,
+    dispatch_validator_binding_matches,
+    materialize_dispatched_validator_results,
     unresolved_validator_result_for_dispatch_problem,
     validator_request_payload_for_agent,
     validator_result_from_agent_output,
@@ -133,7 +132,11 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding
-from src.schemas.domain_validator import DomainValidationRequest, ValidatorAgentRef
+from src.schemas.domain_validator import (
+    DomainValidationRequest,
+    DomainValidatorResultBase,
+    ValidatorAgentRef,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1324,7 +1327,10 @@ async def _collect_flow_validator_materialization_inputs(
         )
     )
     nodes_by_id = _flow_node_by_id(flow)
-    materialization_inputs: list[ValidatorResultMaterializationInput] = []
+    automatic_entries: list[
+        tuple[dict[str, Any], ValidatorBindingMatch, int]
+    ] = []
+    custom_materialization_inputs: list[ValidatorResultMaterializationInput] = []
     selector_findings: list[ValidationFinding] = []
     result_metadata: list[dict[str, Any]] = []
     runtime_context = _validator_runtime_context_for_flow(
@@ -1395,6 +1401,12 @@ async def _collect_flow_validator_materialization_inputs(
                 )
                 continue
 
+            if state == "automatic":
+                metadata_index = len(result_metadata)
+                result_metadata.append({})
+                automatic_entries.append((group, match, metadata_index))
+                continue
+
             selector_result = build_domain_validation_request(match)
             if selector_result.findings:
                 selector_findings.extend(selector_result.findings)
@@ -1420,56 +1432,39 @@ async def _collect_flow_validator_materialization_inputs(
                 continue
 
             request = selector_result.request
-            if state in {"replaced", "supplemental"} and validator_node is not None:
+            if validator_node is not None:
                 request = _request_for_flow_validator_node(request, validator_node)
-            validator_result = (
-                None
-                if state in {"replaced", "supplemental"}
-                else preflight_unresolved_validator_result(request)
-            )
-            if validator_result is None:
-                try:
-                    if state in {"replaced", "supplemental"}:
-                        if validator_node is None:
-                            raise ValueError(
-                                "custom validator node is missing from the flow definition"
-                            )
-                        raw_output = await _run_custom_flow_validator_agent(
-                            request,
-                            binding_match=match,
-                            validator_node=validator_node,
-                            agent_context=agent_context,
-                            source_envelope_id=source_envelope.envelope_id,
-                            source_envelope_revision=source_envelope_revision,
-                        )
-                    else:
-                        validator_kwargs: dict[str, Any] = {
-                            "binding": match.binding,
-                            "runtime_context": runtime_context,
-                        }
-                        raw_output = await asyncio.to_thread(
-                            run_package_scoped_validator_agent,
-                            request,
-                            **validator_kwargs,
-                        )
-                    validator_result = validator_result_from_agent_output(
-                        raw_output,
-                        request=request,
+            try:
+                if validator_node is None:
+                    raise ValueError(
+                        "custom validator node is missing from the flow definition"
                     )
-                except Exception as exc:
-                    logger.warning(
-                        "[Flow Executor] Validator group '%s' failed for binding %s",
-                        group.get("group_id"),
-                        binding_id,
-                        exc_info=exc,
-                    )
-                    validator_result = unresolved_validator_result_for_dispatch_problem(
-                        request,
-                        reason="validator_agent_error",
-                        explanation=f"Validator agent execution failed: {exc}",
-                    )
+                raw_output = await _run_custom_flow_validator_agent(
+                    request,
+                    binding_match=match,
+                    validator_node=validator_node,
+                    agent_context=agent_context,
+                    source_envelope_id=source_envelope.envelope_id,
+                    source_envelope_revision=source_envelope_revision,
+                )
+                validator_result = validator_result_from_agent_output(
+                    raw_output,
+                    request=request,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Flow Executor] Validator group '%s' failed for binding %s",
+                    group.get("group_id"),
+                    binding_id,
+                    exc_info=exc,
+                )
+                validator_result = unresolved_validator_result_for_dispatch_problem(
+                    request,
+                    reason="validator_agent_error",
+                    explanation=f"Validator agent execution failed: {exc}",
+                )
 
-            materialization_inputs.append(
+            custom_materialization_inputs.append(
                 ValidatorResultMaterializationInput(
                     match=match,
                     request=request,
@@ -1477,32 +1472,93 @@ async def _collect_flow_validator_materialization_inputs(
                 )
             )
             result_metadata.append(
-                {
-                    "group_id": group.get("group_id"),
-                    "state": state,
-                    "validator_binding_id": binding_id,
-                    "status": validator_result.status,
-                    "request_id": request.request_id,
-                    "validator_agent": request.validator_agent.model_dump(mode="json"),
-                    "target": request.target.model_dump(mode="json"),
-                    "selected_inputs": dict(request.selected_inputs),
-                    "input_selectors": dict(request.input_selectors),
-                    "expected_result_fields": dict(request.expected_result_fields),
-                    "lookup_attempts": [
-                        attempt.model_dump(mode="json")
-                        if hasattr(attempt, "model_dump")
-                        else dict(attempt)
-                        for attempt in (validator_result.lookup_attempts or [])
-                        if hasattr(attempt, "model_dump") or isinstance(attempt, Mapping)
-                    ],
-                    "curator_message": validator_result.curator_message,
-                    "missing_expected_fields": list(
-                        validator_result.missing_expected_fields
-                    ),
-                }
+                _flow_validator_result_metadata(
+                    group=group,
+                    request=request,
+                    validator_result=validator_result,
+                )
             )
 
-    return materialization_inputs, selector_findings, result_metadata
+    automatic_materialization_inputs: list[ValidatorResultMaterializationInput] = []
+    if automatic_entries:
+        automatic_dispatch = await asyncio.to_thread(
+            dispatch_validator_binding_matches,
+            [entry[1] for entry in automatic_entries],
+            runtime_context=runtime_context,
+        )
+        automatic_materialization_inputs.extend(
+            automatic_dispatch.materialization_inputs
+        )
+        selector_findings.extend(automatic_dispatch.selector_findings)
+
+        remaining_entry_indexes = list(range(len(automatic_entries)))
+        for outcome in automatic_dispatch.outcomes:
+            entry_index = next(
+                index
+                for index in remaining_entry_indexes
+                if automatic_entries[index][1] is outcome.match
+            )
+            remaining_entry_indexes.remove(entry_index)
+            group, _, metadata_index = automatic_entries[entry_index]
+            binding_id = _binding_id_from_group(group)
+            if outcome.selector_findings:
+                result_metadata[metadata_index] = {
+                    "group_id": group.get("group_id"),
+                    "state": "automatic",
+                    "validator_binding_id": binding_id,
+                    "status": "selector_failed",
+                    "finding_count": len(outcome.selector_findings),
+                }
+            elif outcome.request is None or outcome.result is None:
+                result_metadata[metadata_index] = {
+                    "group_id": group.get("group_id"),
+                    "state": "automatic",
+                    "validator_binding_id": binding_id,
+                    "status": "request_not_available",
+                }
+            else:
+                result_metadata[metadata_index] = _flow_validator_result_metadata(
+                    group=group,
+                    request=outcome.request,
+                    validator_result=outcome.result,
+                )
+
+    return (
+        automatic_materialization_inputs + custom_materialization_inputs,
+        selector_findings,
+        result_metadata,
+    )
+
+
+def _flow_validator_result_metadata(
+    *,
+    group: Mapping[str, Any],
+    request: DomainValidationRequest,
+    validator_result: DomainValidatorResultBase,
+) -> dict[str, Any]:
+    """Adapt a canonical validator result to flow-specific event metadata."""
+
+    return {
+        "group_id": group.get("group_id"),
+        "state": str(group.get("state") or ""),
+        "validator_binding_id": _binding_id_from_group(group),
+        "status": validator_result.status,
+        "request_id": request.request_id,
+        "validator_agent": request.validator_agent.model_dump(mode="json"),
+        "target": request.target.model_dump(mode="json"),
+        "selected_inputs": dict(request.selected_inputs),
+        "input_selectors": dict(request.input_selectors),
+        "expected_result_fields": dict(request.expected_result_fields),
+        "lookup_attempts": [
+            attempt.model_dump(mode="json")
+            if hasattr(attempt, "model_dump")
+            else dict(attempt)
+            for attempt in (validator_result.lookup_attempts or [])
+            if hasattr(attempt, "model_dump") or isinstance(attempt, Mapping)
+        ],
+        "curator_message": validator_result.curator_message,
+        "missing_expected_fields": list(validator_result.missing_expected_fields),
+    }
 
 
 def _source_envelope_has_validator_finding(
@@ -1731,9 +1787,9 @@ async def _execute_validation_groups_for_step(
             )
         if materialization_inputs:
             result_materialization_started_at = time.monotonic()
-            materialization_result = materialize_validator_results_into_envelope(
+            materialization_result = materialize_dispatched_validator_results(
                 working_envelope,
-                domain_pack.metadata,
+                domain_pack,
                 materialization_inputs,
                 actor_id="flow_validator_group",
                 source_envelope_revision=source_envelope_revision,

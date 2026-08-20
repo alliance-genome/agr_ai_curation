@@ -46,7 +46,11 @@ from .structural_checks import (
 )
 from .validator_dispatch import (
     ActiveValidatorDispatchResult,
+    ValidatorBindingDispatchOutcome,
+    ValidatorBindingDispatchResult,
     dispatch_active_validator_bindings,
+    dispatch_validator_binding_matches,
+    materialize_dispatched_validator_results,
 )
 from .materialization import (
     project_evidence_anchor_projections,
@@ -61,6 +65,8 @@ __all__ = [
     "DomainEnvelopeRevisionUnavailableError",
     "DomainEnvelopeReviewRowMaterializer",
     "ActiveValidatorDispatchResult",
+    "ValidatorBindingDispatchOutcome",
+    "ValidatorBindingDispatchResult",
     "DomainPackMetadataReviewRowMaterializer",
     "DomainPackMetadataError",
     "DomainPackRegistry",
@@ -81,6 +87,8 @@ __all__ = [
     "ValidatorResultMaterializationResult",
     "append_validation_findings_to_envelope",
     "dispatch_active_validator_bindings",
+    "dispatch_validator_binding_matches",
+    "materialize_dispatched_validator_results",
     "load_domain_fixture_pack",
     "load_domain_pack_metadata",
     "load_package_domain_pack_registry",

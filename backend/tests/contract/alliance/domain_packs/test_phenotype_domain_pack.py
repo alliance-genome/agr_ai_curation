@@ -653,9 +653,25 @@ def test_unsupported_phenotype_provider_taxon_label_lookup_is_blocked_preflight(
     def _runner(request, *, binding):  # pragma: no cover - must not be called
         raise AssertionError("unsupported phenotype mapping should preflight-block")
 
+    registry = DomainPackValidationRegistry.from_domain_pack(_phenotype_pack())
+    binding = next(
+        item
+        for item in registry.bindings
+        if item.binding_id == "phenotype_term_ontology_validator"
+    )
+    assert binding.preflight_policy["policy"] == "require_mapping_match"
+    assert binding.preflight_policy["mapping_input"] == (
+        "provider_taxon_ontology_mappings"
+    )
+    assert binding.preflight_policy["match_inputs"] == [
+        "data_provider",
+        "taxon_id",
+    ]
+
     result = dispatch_active_validator_bindings(
         envelope,
         _phenotype_pack(),
+        registry=registry,
         runner=_runner,
     )
 

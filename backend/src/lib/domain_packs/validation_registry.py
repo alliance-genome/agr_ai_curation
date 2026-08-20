@@ -130,6 +130,7 @@ class ValidatorBinding:
     batch_enabled: bool = False
     batch_family: str | None = None
     batch_max_size: int | None = None
+    preflight_policy: dict[str, Any] = field(default_factory=dict)
     curator_override_allowed: bool = False
     applies_to_domain_pack_id: str | None = None
     object_types: tuple[str, ...] = ()
@@ -202,6 +203,8 @@ class ValidatorBinding:
                 }.items()
                 if value is not None
             }
+        if self.preflight_policy:
+            details["preflight"] = dict(self.preflight_policy)
         if self.curator_override_allowed:
             details["curator_override"] = {"allowed": True}
         return details
@@ -1038,6 +1041,9 @@ def _collect_validator_bindings(
                 batch_enabled=active and _optional_bool(batch_config.get("enabled")),
                 batch_family=_optional_string(batch_config.get("family")),
                 batch_max_size=_optional_int(batch_config.get("max_size")),
+                preflight_policy=dict(
+                    _optional_mapping(raw_item.get("preflight"), "preflight")
+                ),
                 curator_override_allowed=active
                 and _optional_bool(curator_override.get("allowed")),
                 raw=dict(raw_item),

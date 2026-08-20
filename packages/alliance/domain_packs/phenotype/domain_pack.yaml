@@ -1026,6 +1026,39 @@ metadata:
                   representative_terms:
                     - MP:0001569
                     - MP:0003733
+        preflight:
+          policy: require_mapping_match
+          mapping_input: provider_taxon_ontology_mappings
+          match_inputs:
+            - data_provider
+            - taxon_id
+          case_insensitive_inputs:
+            - data_provider
+          when_any_present:
+            - label
+            - name
+          bypass_if_any_present:
+            - curie
+            - ontology_term_type
+          query_inputs:
+            - ontology_family
+            - label
+            - name
+            - data_provider
+            - taxon_id
+            - accepted_prefixes
+          mapping_summary_fields:
+            - data_provider
+            - taxon_id
+            - ontology_term_type
+            - accepted_prefixes
+          mappings_query_key: active_provider_taxon_ontology_mappings
+          lookup_method: unsupported_provider_taxon_mapping
+          explanation: >-
+            Phenotype ontology label lookup is blocked because no active
+            provider/taxon ontology mapping matched. The validator will not
+            infer a phenotype ontology term type from accepted prefixes or
+            free text.
         expected_result_fields:
           curie: curie
           label: label

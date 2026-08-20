@@ -27,6 +27,9 @@ from src.lib.domain_packs.validator_dispatch import (
     _validator_request_dedupe_key,
     _validator_result_finalization_feedback,
     dispatch_active_validator_bindings,
+    dispatch_validator_binding_matches,
+    materialize_dispatched_validator_results,
+    preflight_unresolved_validator_result,
     run_package_scoped_validator_agent_batch,
     run_package_scoped_validator_agent,
     validator_request_payload_for_agent,
@@ -962,6 +965,91 @@ def test_dispatch_active_binding_returns_unresolved_validator_result(
     assert result.validator_results[0].status == "unresolved"
 
 
+def test_preflight_mapping_policy_is_project_neutral_and_declarative():
+    from src.lib.domain_packs.validation_registry import (
+        ValidationBindingState,
+        ValidatorAgentRef as RegistryValidatorAgentRef,
+        ValidatorBinding,
+    )
+
+    policy = {
+        "policy": "require_mapping_match",
+        "mapping_input": "configured_routes",
+        "match_inputs": ["source", "category"],
+        "case_insensitive_inputs": ["source"],
+        "when_any_present": ["label"],
+        "bypass_if_any_present": ["canonical_id"],
+        "query_inputs": ["label", "source", "category"],
+        "mapping_summary_fields": ["source", "category", "resolver"],
+        "mappings_query_key": "active_routes",
+        "lookup_method": "unsupported_route",
+        "explanation": "Resolution is blocked because no configured route matched.",
+    }
+    binding = ValidatorBinding(
+        binding_id="fixture.route_lookup",
+        state=ValidationBindingState.ACTIVE,
+        source_scope="object",
+        validator_agent=RegistryValidatorAgentRef(
+            package_id="fixture.validators",
+            agent_id="route_validator",
+        ),
+        preflight_policy=policy,
+    )
+    request = _validation_request().model_copy(
+        update={
+            "selected_inputs": {
+                "label": "candidate",
+                "source": "SOURCE-B",
+                "category": "category-2",
+                "configured_routes": [
+                    {
+                        "source": "source-a",
+                        "category": "category-1",
+                        "resolver": "resolver-a",
+                    }
+                ],
+            }
+        },
+        deep=True,
+    )
+
+    result = preflight_unresolved_validator_result(request, binding=binding)
+
+    assert result is not None
+    assert result.status == "unresolved"
+    assert result.lookup_attempts[0].method == "unsupported_route"
+    assert result.lookup_attempts[0].query == {
+        "label": "candidate",
+        "source": "SOURCE-B",
+        "category": "category-2",
+        "active_routes": [
+            {
+                "source": "source-a",
+                "category": "category-1",
+                "resolver": "resolver-a",
+            }
+        ],
+    }
+    assert result.explanation.startswith(
+        "Resolution is blocked because no configured route matched."
+    )
+
+    matching_request = request.model_copy(
+        update={
+            "selected_inputs": {
+                **request.selected_inputs,
+                "source": "SOURCE-A",
+                "category": "category-1",
+            }
+        },
+        deep=True,
+    )
+    assert (
+        preflight_unresolved_validator_result(matching_request, binding=binding)
+        is None
+    )
+
+
 def test_dispatch_deduplicates_equivalent_identity_requests_before_validation(
     tmp_path: Path,
 ):
@@ -1096,6 +1184,92 @@ def test_dispatch_batches_after_dedupe_and_remaps_to_original_requests(
     assert len(result.validator_results) == 3
     assert result.validator_results[0].request_id != result.validator_results[1].request_id
     assert {item.status for item in result.validator_results} == {"resolved"}
+
+
+def test_explicit_match_dispatch_materializes_with_direct_dispatch_parity(
+    tmp_path: Path,
+):
+    from src.lib.domain_packs.validation_registry import (
+        DomainPackValidationRegistry,
+        ValidationBindingState,
+    )
+
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+    envelope = _multi_object_envelope(
+        ["BAD:0001", "BAD:0001", "BAD:0002"],
+        evidence_quotes=[
+            "First paper quote.",
+            "Second paper quote.",
+            "Third paper quote.",
+        ],
+    )
+
+    def _batch_runner(jobs, *, binding):
+        return [_result_payload(job.request) for job in jobs]
+
+    direct = dispatch_active_validator_bindings(
+        envelope,
+        pack,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    matches = registry.match_bindings(
+        envelope,
+        states=[ValidationBindingState.ACTIVE],
+    )
+    explicit = dispatch_validator_binding_matches(
+        matches,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+    materialized = materialize_dispatched_validator_results(
+        envelope,
+        pack,
+        explicit.materialization_inputs,
+        actor_id="domain_validator_dispatch",
+    )
+
+    assert explicit.validator_agent_run_count == direct.validator_agent_run_count
+    assert explicit.batch_validator_run_count == direct.batch_validator_run_count
+    assert len(explicit.validator_batch_groups) == len(direct.validator_batch_groups)
+    stable_batch_fields = {
+        "validator_binding_id",
+        "validator_agent",
+        "batch_family",
+        "request_count",
+        "request_ids",
+        "first_request_id",
+        "payload_summary",
+        "status",
+        "resolved_count",
+        "unresolved_count",
+    }
+    assert [
+        {key: summary[key] for key in stable_batch_fields}
+        for summary in explicit.validator_batch_groups
+    ] == [
+        {key: summary[key] for key in stable_batch_fields}
+        for summary in direct.validator_batch_groups
+    ]
+    assert [
+        item.result.model_dump(mode="json")
+        for item in explicit.materialization_inputs
+    ] == [result.model_dump(mode="json") for result in direct.validator_results]
+    assert [
+        item.model_dump(mode="json")
+        for item in materialized.envelope.extracted_objects
+    ] == [item.model_dump(mode="json") for item in direct.envelope.extracted_objects]
+    assert [
+        finding.model_dump(mode="json")
+        for finding in materialized.envelope.validation_findings
+    ] == [
+        finding.model_dump(mode="json")
+        for finding in direct.envelope.validation_findings
+    ]
+    assert [finding.model_dump(mode="json") for finding in materialized.appended_findings] == [
+        finding.model_dump(mode="json") for finding in direct.appended_findings
+    ]
 
 
 def test_dispatch_batches_mixed_validator_agents_separately_and_preserves_order(
