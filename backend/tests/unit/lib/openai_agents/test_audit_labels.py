@@ -48,7 +48,7 @@ def test_resolve_tool_display_name_marks_missing_label():
 
 
 def test_build_tool_start_friendly_name_for_specialist():
-    assert build_tool_start_friendly_name("ask_gene_specialist") == "Calling Gene Validation Agent..."
+    assert build_tool_start_friendly_name("ask_gene_validation_specialist") == "Calling Gene Validation Agent..."
 
 
 def test_build_tool_start_friendly_name_for_internal_tool():
@@ -71,7 +71,7 @@ def test_active_evidence_workspace_tools_have_display_labels():
 
 
 def test_build_tool_complete_friendly_name():
-    assert build_tool_complete_friendly_name("ask_gene_specialist") == "Gene Validation Agent complete"
+    assert build_tool_complete_friendly_name("ask_gene_validation_specialist") == "Gene Validation Agent complete"
 
 
 def test_build_specialist_internal_friendly_name_marks_missing_specialist():

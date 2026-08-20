@@ -69,7 +69,7 @@ ask_pdf_extraction_specialist
 ask_gene_extractor_specialist
 ask_gene_expression_specialist
 format_data
-ask_chemical_specialist
+ask_chemical_validation_specialist
 ask_gene_ontology_specialist
 ask_go_annotations_specialist
 ask_orthologs_specialist

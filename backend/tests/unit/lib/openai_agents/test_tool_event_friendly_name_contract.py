@@ -35,7 +35,7 @@ class _FakeRunResultWithLiveEvidence(_FakeRunResult):
         events,
         live_event_list_ref,
         *,
-        tool_name: str | None = "ask_gene_specialist",
+        tool_name: str | None = "ask_gene_validation_specialist",
         final_output: Any = "ok",
     ):
         super().__init__(events, final_output=final_output)
@@ -192,7 +192,7 @@ def _agent_updated_stream_event(agent_name: str):
 @pytest.mark.asyncio
 async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
     fake_events = [
-        _tool_call_stream_event("ask_gene_specialist"),
+        _tool_call_stream_event("ask_gene_validation_specialist"),
         _tool_output_stream_event(),
     ]
 
@@ -212,7 +212,7 @@ async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
         name="Query Supervisor",
         tools=[
             SimpleNamespace(
-                name="ask_gene_specialist",
+                name="ask_gene_validation_specialist",
                 description="Ask the Gene Validation Agent",
             )
         ],
@@ -629,8 +629,8 @@ async def test_runner_buffers_live_specialist_evidence_until_completion(monkeypa
     assert event_types.count("evidence_summary") == 1
     assert event_types[-2:] == ["evidence_summary", "RUN_FINISHED"]
     evidence_event = next(event for event in emitted_events if event.get("type") == "evidence_summary")
-    assert evidence_event["tool_name"] == "ask_gene_specialist"
-    assert evidence_event["tool_names"] == ["ask_gene_specialist"]
+    assert evidence_event["tool_name"] == "ask_gene_validation_specialist"
+    assert evidence_event["tool_names"] == ["ask_gene_validation_specialist"]
 
 
 @pytest.mark.asyncio
@@ -1017,7 +1017,7 @@ async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch
         input_text="extract findings",
         specialist_name="Gene Validation Agent",
         max_turns=3,
-        tool_name="ask_gene_specialist",
+        tool_name="ask_gene_validation_specialist",
     )
     assert result == "done"
 
@@ -1185,14 +1185,14 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
         input_text="extract findings",
         specialist_name="Gene Validation Agent",
         max_turns=3,
-        tool_name="ask_gene_specialist",
+        tool_name="ask_gene_validation_specialist",
     )
 
     assert "structured result accepted" in result
     assert "Full validated payload is retained by the specialist runtime" in result
     evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
     assert len(evidence_events) == 1
-    assert evidence_events[0]["tool_name"] == "ask_gene_specialist"
+    assert evidence_events[0]["tool_name"] == "ask_gene_validation_specialist"
     assert evidence_events[0]["evidence_records"] == [crumbs_record, crb_record]
     assert streaming_tools._evidence_reference_ids_from_payload(validator_inputs[0]) == {
         crumbs_record["evidence_record_id"],
@@ -1257,7 +1257,7 @@ async def test_specialist_rejects_structured_evidence_without_live_records(monke
             input_text="extract findings",
             specialist_name="Gene Validation Agent",
             max_turns=3,
-            tool_name="ask_gene_specialist",
+            tool_name="ask_gene_validation_specialist",
         )
 
     specialist_errors = [
@@ -1299,7 +1299,7 @@ def test_specialist_rejects_structured_refs_not_verified_in_live_records(monkeyp
     with pytest.raises(streaming_tools.SpecialistOutputError):
         streaming_tools._emit_specialist_evidence_summary_or_raise(
             specialist_name="Gene Validation Agent",
-            tool_name="ask_gene_specialist",
+            tool_name="ask_gene_validation_specialist",
             expected_output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
             final_output=final_output,
             live_evidence_records=[live_record],
@@ -1378,7 +1378,7 @@ async def test_specialist_rejects_duplicate_structured_alias_without_live_id_ref
             input_text="extract findings",
             specialist_name="Gene Validation Agent",
             max_turns=3,
-            tool_name="ask_gene_specialist",
+            tool_name="ask_gene_validation_specialist",
         )
 
     specialist_error = next(
@@ -1654,7 +1654,7 @@ async def test_specialist_fails_fast_when_structured_extraction_output_is_missin
             input_text="extract findings",
             specialist_name="Gene Validation Agent",
             max_turns=3,
-            tool_name="ask_gene_specialist",
+            tool_name="ask_gene_validation_specialist",
         )
 
     specialist_errors = [event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"]
@@ -1722,7 +1722,7 @@ async def test_specialist_fails_fast_when_live_evidence_exists_but_item_refs_are
             input_text="extract findings",
             specialist_name="Gene Validation Agent",
             max_turns=3,
-            tool_name="ask_gene_specialist",
+            tool_name="ask_gene_validation_specialist",
         )
 
     specialist_errors = [event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"]
@@ -2091,6 +2091,6 @@ async def test_specialist_appends_batching_nudge_at_threshold(monkeypatch):
         input_text="extract findings",
         specialist_name="Gene Validation Agent",
         max_turns=3,
-        tool_name="ask_gene_specialist",
+        tool_name="ask_gene_validation_specialist",
     )
     assert result == "done\nNUDGE"
