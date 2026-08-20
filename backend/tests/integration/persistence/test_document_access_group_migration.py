@@ -139,11 +139,18 @@ def test_upgrade_preserves_restricted_group_ids_as_flat_json_array() -> None:
         command.upgrade(_config(), "head")
 
 
-def test_upgrade_fails_closed_before_renaming_restricted_row_without_groups() -> None:
+@pytest.mark.parametrize(
+    "access_scope",
+    ["restricted", " restricted "],
+    ids=["normalized", "surrounding-whitespace"],
+)
+def test_upgrade_fails_closed_before_renaming_restricted_row_without_groups(
+    access_scope: str,
+) -> None:
     command.upgrade(_config(), "head")
     command.downgrade(_config(), PRIOR_HEAD)
     document_id, auth_sub = _create_document(
-        access_scope="restricted",
+        access_scope=access_scope,
         access_metadata=None,
     )
     try:

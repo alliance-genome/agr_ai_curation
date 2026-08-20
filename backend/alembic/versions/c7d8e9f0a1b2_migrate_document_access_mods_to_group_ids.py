@@ -91,7 +91,7 @@ def _invalid_legacy_document_ids(connection: Any) -> list[str]:
             SELECT id, source_access_scope, source_access_mods
             FROM pdf_documents
             WHERE source_access_mods IS NOT NULL
-               OR lower(coalesce(source_access_scope, '')) = 'restricted'
+               OR lower(trim(coalesce(source_access_scope, ''))) = 'restricted'
             ORDER BY id
             """
         )

@@ -36,6 +36,7 @@ class _Connection:
 
     def execute(self, statement):
         assert "SELECT id, source_access_scope, source_access_mods" in str(statement)
+        assert "lower(trim(coalesce(source_access_scope, '')))" in str(statement)
         return _MappingRows(self.rows)
 
 
