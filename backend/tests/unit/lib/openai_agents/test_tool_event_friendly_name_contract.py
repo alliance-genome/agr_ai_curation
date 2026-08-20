@@ -1241,6 +1241,39 @@ async def test_specialist_rejects_plausible_structured_evidence_without_live_rec
     assert specialist_error["details"]["live_evidence_count"] == 0
 
 
+def test_specialist_emits_structured_evidence_when_evidence_is_not_required(monkeypatch):
+    structured_record = _build_expected_evidence_record(
+        entity="crumbs",
+        chunk_id="chunk-crumbs-1",
+        verified_quote="Crumbs regulates R8 cell fate.",
+        page=3,
+        section="Results",
+    )
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+
+    streaming_tools._emit_specialist_evidence_summary_or_raise(
+        specialist_name="Gene Validation Agent",
+        tool_name="ask_gene_specialist",
+        expected_output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
+        final_output=_FakeStructuredOutput(
+            {
+                "summary": "No retained findings, but supporting evidence was recorded.",
+                "items": [],
+                "evidence_records": [structured_record],
+                "run_summary": {"kept_count": 0},
+            }
+        ),
+        live_evidence_records=[],
+    )
+
+    evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
+    assert len(evidence_events) == 1
+    assert evidence_events[0]["tool_name"] == "ask_gene_specialist"
+    assert evidence_events[0]["evidence_records"] == [structured_record]
+
+
 @pytest.mark.asyncio
 async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(monkeypatch):
     captured_events = []

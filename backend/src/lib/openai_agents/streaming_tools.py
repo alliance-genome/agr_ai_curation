@@ -1149,6 +1149,11 @@ def _emit_specialist_evidence_summary_or_raise(
     )
 
     if not requires_evidence:
+        if structured_evidence_records:
+            _emit_specialist_evidence_summary(
+                tool_name=tool_name,
+                evidence_records=structured_evidence_records,
+            )
         return
 
     structured_payload = coerce_tool_event_dict(final_output) or {}
