@@ -4018,12 +4018,18 @@ def test_envelope_readiness_emits_one_blocker_and_keeps_each_object_blocked():
         status="open",
         code="museum.catalog.provider_unavailable",
         message="Required envelope validation could not be completed.",
-        details={"finding_id": "finding-envelope-provider"},
+        details={"finding_index": 0},
+    )
+    second_finding_blocker = blocker.model_copy(
+        update={
+            "message": "A second required envelope check could not be completed.",
+            "details": {"finding_index": 1},
+        }
     )
     unrelated_blocker = blocker.model_copy(
         update={
             "envelope_id": "museum-envelope-2",
-            "details": {"finding_id": "finding-other-envelope-provider"},
+            "details": {"finding_index": 0},
         }
     )
 
@@ -4032,12 +4038,12 @@ def test_envelope_readiness_emits_one_blocker_and_keeps_each_object_blocked():
             CurationCandidateSubmissionReadiness(
                 candidate_id="candidate-1",
                 ready=False,
-                blockers=[blocker],
+                blockers=[blocker, second_finding_blocker],
             ),
             CurationCandidateSubmissionReadiness(
                 candidate_id="candidate-2",
                 ready=False,
-                blockers=[blocker],
+                blockers=[blocker, second_finding_blocker],
             ),
             CurationCandidateSubmissionReadiness(
                 candidate_id="candidate-3",
@@ -4047,7 +4053,7 @@ def test_envelope_readiness_emits_one_blocker_and_keeps_each_object_blocked():
         ]
     )
 
-    assert readiness[0].blockers == [blocker]
+    assert readiness[0].blockers == [blocker, second_finding_blocker]
     assert readiness[1].blockers == []
     assert readiness[2].blockers == [unrelated_blocker]
     assert readiness[0].ready is False
@@ -4057,6 +4063,7 @@ def test_envelope_readiness_emits_one_blocker_and_keeps_each_object_blocked():
     ]
     assert submission_module._readiness_blocker_payloads(readiness) == [
         blocker.model_dump(mode="json"),
+        second_finding_blocker.model_dump(mode="json"),
         unrelated_blocker.model_dump(mode="json"),
     ]
 

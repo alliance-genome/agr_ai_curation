@@ -1464,7 +1464,7 @@ def _dedupe_envelope_scoped_readiness(
 ) -> list[CurationCandidateSubmissionReadiness]:
     """Keep one structured envelope blocker while every affected object stays blocked."""
 
-    seen: set[tuple[str, str | None, str | None]] = set()
+    seen: set[tuple[str, str | None, tuple[str, str]]] = set()
     normalized: list[CurationCandidateSubmissionReadiness] = []
     for item in readiness:
         blockers: list[CurationSubmissionReadinessBlocker] = []
@@ -1473,11 +1473,18 @@ def _dedupe_envelope_scoped_readiness(
             if blocker.object_id is not None or blocker.field_path is not None:
                 blockers.append(blocker)
                 continue
-            key = (
-                blocker.envelope_id,
-                blocker.code,
-                str(blocker.details.get("finding_id") or "") or None,
-            )
+            finding_id = blocker.details.get("finding_id")
+            finding_index = blocker.details.get("finding_index")
+            if finding_id is not None and str(finding_id):
+                identity = ("finding_id", str(finding_id))
+            elif isinstance(finding_index, int):
+                identity = ("finding_index", str(finding_index))
+            else:
+                identity = (
+                    "blocker",
+                    f"{blocker.status}\0{blocker.severity}\0{blocker.message}",
+                )
+            key = (blocker.envelope_id, blocker.code, identity)
             if key in seen:
                 reason = (
                     f"Envelope-level validation blocks objects from {blocker.envelope_id}."
