@@ -132,14 +132,15 @@ class TestGetRegistryMetadata:
         assert isinstance(result, RegistryMetadataResponse)
         assert "agents" in result.model_dump()
 
-    def test_get_registry_metadata_includes_gene_agent(self):
-        """Response should include gene agent with icon."""
+    def test_get_registry_metadata_includes_gene_validation_agent(self):
+        """Response should include the canonical gene validator with an icon."""
         import asyncio
         from src.api.agent_studio import get_registry_metadata
 
         result = asyncio.run(get_registry_metadata())
-        assert "gene" in result.agents
-        agent = result.agents["gene"]
+        assert "gene_validation" in result.agents
+        assert "gene" not in result.agents
+        agent = result.agents["gene_validation"]
         assert agent.name is not None
         assert agent.icon is not None
         assert agent.category is not None
@@ -155,7 +156,7 @@ class TestGetRegistryMetadata:
         assert gene_extractor.visible is True
         assert gene_extractor.produces_flow_artifacts is True
 
-        gene_validator = result.agents["gene"]
+        gene_validator = result.agents["gene_validation"]
         assert gene_validator.category == "Validation"
         assert gene_validator.output_schema_key
         assert gene_validator.produces_flow_artifacts is True
@@ -174,7 +175,7 @@ class TestGetRegistryMetadata:
         # supervisor-callable chat tool (supervisor_routing.enabled = false); it
         # runs via the extractor's binding-driven validation, so it exposes no
         # supervisor_tool.
-        gene = result.agents.get("gene")
+        gene = result.agents.get("gene_validation")
         assert gene is not None
         assert gene.supervisor_tool is None
 
