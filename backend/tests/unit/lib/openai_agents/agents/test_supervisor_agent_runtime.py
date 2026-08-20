@@ -1374,7 +1374,11 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     created = supervisor_agent.create_supervisor_agent(document_id=None, user_id=None)
 
     assert "CORE-ONLY MODE" in created.instructions
-    assert "No domain specialist tools are currently installed" in created.instructions
+    assert "No optional domain-specialist tools are currently installed" in created.instructions
+    core_only_note = created.instructions.split("CORE-ONLY MODE:", maxsplit=1)[1]
+    assert "optional specialist package" in core_only_note
+    for organization_term in ("Alliance", "AGR", "MGI", "RGD", "MOD"):
+        assert organization_term not in core_only_note
     assert [getattr(tool, "name", "") for tool in created.tools] == [
         "prepare_for_curation",
         "inspect_results",
