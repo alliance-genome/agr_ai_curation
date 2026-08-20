@@ -19,6 +19,7 @@ import {
   Typography,
 } from '@mui/material';
 import { ExpandLess, ExpandMore } from '@mui/icons-material';
+import { PDF_JOB_WINDOW_DAYS } from '@/features/documents/documentIntakeConfig';
 import type { PdfProcessingJob } from '../../services/weaviate';
 
 interface PdfJobsPanelProps {
@@ -209,7 +210,8 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
 
         {!loading && !hasJobs && (
           <Alert severity="info" sx={{ mt: 1 }}>
-            No PDF jobs in the last 7 days.
+            No PDF jobs in the last {PDF_JOB_WINDOW_DAYS}{' '}
+            {PDF_JOB_WINDOW_DAYS === 1 ? 'day' : 'days'}.
           </Alert>
         )}
 

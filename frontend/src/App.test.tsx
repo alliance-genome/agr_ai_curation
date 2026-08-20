@@ -434,6 +434,10 @@ describe('AppContent global notifications', () => {
       await Promise.resolve();
     });
     expect(global.fetch).toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/weaviate/pdf-jobs?window_days=7&limit=50&offset=0',
+      { credentials: 'include' },
+    );
     expect(screen.queryByText('PDF processing completed: seed.pdf')).not.toBeInTheDocument();
 
     await act(async () => {

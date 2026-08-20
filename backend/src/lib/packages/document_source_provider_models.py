@@ -22,6 +22,8 @@ class DocumentSourceProviderPresentation:
 
     display_label: str
     reference_label_priority: tuple[str, ...] = ()
+    identifier_help_label: str = ""
+    identifier_examples: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         display_label = self.display_label.strip()
@@ -36,16 +38,36 @@ class DocumentSourceProviderPresentation:
             raise ValueError(
                 "document-source reference_label_priority entries must be unique"
             )
+        identifier_help_label = self.identifier_help_label.strip()
+        identifier_examples = tuple(item.strip() for item in self.identifier_examples)
+        if any(not item for item in identifier_examples):
+            raise ValueError(
+                "document-source identifier_examples entries must not be empty"
+            )
+        if len(set(identifier_examples)) != len(identifier_examples):
+            raise ValueError(
+                "document-source identifier_examples entries must be unique"
+            )
+        if bool(identifier_help_label) != bool(identifier_examples):
+            raise ValueError(
+                "document-source identifier help label and examples must be configured together"
+            )
         object.__setattr__(self, "display_label", display_label)
         object.__setattr__(self, "reference_label_priority", priorities)
+        object.__setattr__(self, "identifier_help_label", identifier_help_label)
+        object.__setattr__(self, "identifier_examples", identifier_examples)
 
     def as_public_dict(self) -> dict[str, Any]:
         """Return the stable provider metadata shape used by API provenance."""
 
-        return {
+        metadata: dict[str, Any] = {
             "display_label": self.display_label,
             "reference_label_priority": list(self.reference_label_priority),
         }
+        if self.identifier_help_label:
+            metadata["identifier_help_label"] = self.identifier_help_label
+            metadata["identifier_examples"] = list(self.identifier_examples)
+        return metadata
 
 
 @dataclass(frozen=True, slots=True)

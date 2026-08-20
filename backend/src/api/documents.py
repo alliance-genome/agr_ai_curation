@@ -42,6 +42,7 @@ from ..lib.document_sources.identifier_import import (
     IdentifierImportValidationError,
 )
 from ..lib.document_sources.provenance import build_document_source_provenance
+from ..lib.document_sources.registry import get_document_source_provider_metadata
 from ..lib.http_errors import log_exception, raise_sanitized_http_exception
 from ..lib.pdf_jobs import service as pdf_job_service
 from ..lib.pdf_jobs.upload_execution_service import (
@@ -54,6 +55,7 @@ from ..lib.pdf_jobs.upload_intake_service import (
     UploadIntakeValidationError,
     external_document_source_import_enabled,
 )
+from ..lib.openai_agents.config import get_document_source_provider
 from ..lib.pipeline.tracker import PipelineTracker
 from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
@@ -69,6 +71,7 @@ from ..models.api_schemas import (
     DocumentResponse,
     DocumentSourceIdentifierImportRequest,
     DocumentSourceIdentifierImportResponse,
+    DocumentSourceProviderConfiguration,
     DocumentSourceProvenance,
     OperationResult,
     SortBy,
@@ -846,6 +849,31 @@ async def _require_pdf_extraction_worker_ready() -> None:
                 "message": "PDF extraction worker is sleeping or starting. Wake worker before uploading.",
             },
         )
+
+
+@router.get(
+    "/documents/source-provider",
+    response_model=DocumentSourceProviderConfiguration,
+)
+async def get_document_source_provider_configuration(
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """Expose configured non-secret identifier guidance through the provider registry."""
+
+    del user
+    if not external_document_source_import_enabled():
+        return DocumentSourceProviderConfiguration(
+            provider=None,
+            import_enabled=False,
+            presentation=None,
+        )
+
+    provider = get_document_source_provider().strip().lower()
+    return DocumentSourceProviderConfiguration(
+        provider=provider,
+        import_enabled=True,
+        presentation=get_document_source_provider_metadata(provider),
+    )
 
 
 @router.get("/documents/pdf-extraction-health")

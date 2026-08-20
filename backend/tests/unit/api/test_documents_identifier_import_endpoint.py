@@ -36,6 +36,60 @@ def _resolve_request() -> Request:
 
 
 @pytest.mark.asyncio
+async def test_document_source_provider_configuration_exposes_registry_presentation(
+    monkeypatch,
+):
+    monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: True)
+    monkeypatch.setattr(documents, "get_document_source_provider", lambda: "Example_Source")
+    monkeypatch.setattr(
+        documents,
+        "get_document_source_provider_metadata",
+        lambda provider: {
+            "display_label": "Example Source",
+            "identifier_help_label": "Use example identifiers.",
+            "identifier_examples": ["SOURCE:1", "SOURCE:2"],
+        }
+        if provider == "example_source"
+        else None,
+    )
+
+    response = await documents.get_document_source_provider_configuration(
+        user={"sub": "user-1"},
+    )
+
+    assert response.model_dump() == {
+        "provider": "example_source",
+        "import_enabled": True,
+        "presentation": {
+            "display_label": "Example Source",
+            "identifier_help_label": "Use example identifiers.",
+            "identifier_examples": ["SOURCE:1", "SOURCE:2"],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_document_source_provider_configuration_is_generic_when_disabled(
+    monkeypatch,
+):
+    monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: False)
+    monkeypatch.setattr(
+        documents,
+        "get_document_source_provider_metadata",
+        lambda _provider: pytest.fail("disabled configuration must not load presentation"),
+    )
+    response = await documents.get_document_source_provider_configuration(
+        user={"sub": "user-1"},
+    )
+
+    assert response.model_dump() == {
+        "provider": None,
+        "import_enabled": False,
+        "presentation": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_import_documents_by_source_identifiers_delegates_to_service(monkeypatch):
     captured = {}
 

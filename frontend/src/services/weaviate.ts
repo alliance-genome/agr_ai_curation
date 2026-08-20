@@ -82,6 +82,8 @@ interface RawDocumentSourceProvenance {
 interface RawDocumentSourceProviderMetadata {
   display_label?: string | null;
   reference_label_priority?: string[] | null;
+  identifier_help_label?: string | null;
+  identifier_examples?: string[] | null;
 }
 
 interface RawDocumentListItem {
@@ -169,6 +171,14 @@ export interface DocumentSourceProvenance {
 export interface DocumentSourceProviderMetadata {
   displayLabel?: string | null;
   referenceLabelPriority?: string[] | null;
+  identifierHelpLabel?: string | null;
+  identifierExamples?: string[] | null;
+}
+
+export interface DocumentSourceProviderConfiguration {
+  provider: string | null;
+  importEnabled: boolean;
+  presentation: DocumentSourceProviderMetadata | null;
 }
 
 export interface DocumentSummary {
@@ -268,6 +278,65 @@ export interface CancelPdfJobResponse {
   job: PdfProcessingJob;
 }
 
+export type LiteratureImportStatus =
+  | 'resolved'
+  | 'imported'
+  | 'duplicate'
+  | 'invalid'
+  | 'access_denied'
+  | 'conversion_running'
+  | 'conversion_failed'
+  | 'needs_selection'
+  | 'no_source_pdf'
+  | 'no_converted_text'
+  | 'provider_unavailable';
+
+export interface LiteratureImportResult {
+  identifier: string;
+  normalizedIdentifier: string | null;
+  status: LiteratureImportStatus;
+  message: string;
+  documentId?: string;
+  filename?: string;
+  jobId?: string;
+  source?: {
+    provider: string;
+    viewerMode: 'local_pdf';
+    pdfArtifactId: string;
+    convertedArtifactId?: string;
+    sourceMd5: string | null;
+  };
+}
+
+interface IdentifierImportApiResult {
+  identifier: string;
+  normalized_identifier?: string | null;
+  status: string;
+  message: string;
+  document_id?: string | null;
+  job_id?: string | null;
+  filename?: string | null;
+  error_code?: string | null;
+  existing_document_id?: string | null;
+  source_provenance?: Record<string, unknown> | null;
+}
+
+export interface IdentifierImportResponse {
+  results: LiteratureImportResult[];
+  importedCount: number;
+}
+
+interface IdentifierImportApiResponse {
+  results: IdentifierImportApiResult[];
+  imported_count: number;
+}
+
+interface RawDocumentSourceProviderConfiguration {
+  provider?: string | null;
+  import_enabled?: boolean;
+  presentation?: RawDocumentSourceProviderMetadata | null;
+}
+
 const toStringOrNull = (value: unknown): string | null => {
   if (typeof value === 'string') {
     return value;
@@ -336,6 +405,12 @@ const normalizeDocumentSourceProviderMetadata = (
         (entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())
       )
     : null;
+  const rawIdentifierExamples = record.identifier_examples;
+  const identifierExamples = Array.isArray(rawIdentifierExamples)
+    ? rawIdentifierExamples.filter(
+        (entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())
+      )
+    : null;
   const metadata: DocumentSourceProviderMetadata = {
     displayLabel: toStringOrNull(record.display_label),
     referenceLabelPriority:
@@ -343,8 +418,20 @@ const normalizeDocumentSourceProviderMetadata = (
         ? referenceLabelPriority
         : null,
   };
+  const identifierHelpLabel = toStringOrNull(record.identifier_help_label);
+  if (identifierHelpLabel) {
+    metadata.identifierHelpLabel = identifierHelpLabel;
+  }
+  if (identifierExamples && identifierExamples.length > 0) {
+    metadata.identifierExamples = identifierExamples;
+  }
 
-  return metadata.displayLabel || metadata.referenceLabelPriority ? metadata : null;
+  return metadata.displayLabel
+    || metadata.referenceLabelPriority
+    || metadata.identifierHelpLabel
+    || metadata.identifierExamples
+    ? metadata
+    : null;
 };
 
 export const normalizeDocumentSourceProvenance = (
@@ -558,6 +645,124 @@ export const fetchApi = async <T>(
     }
     throw error;
   }
+};
+
+const identifierStatusFromApiResult = (
+  result: IdentifierImportApiResult,
+): LiteratureImportStatus => {
+  if (result.status === 'resolved' || result.status === 'imported' || result.status === 'duplicate') {
+    return result.status;
+  }
+
+  // Backend source-identifier results use the document_source_* namespace;
+  // uncontracted short aliases are intentionally not accepted here.
+  switch (result.error_code) {
+    case 'document_source_access_denied':
+      return 'access_denied';
+    case 'document_source_unavailable':
+    case 'document_source_curator_token_unavailable':
+    case 'document_source_import_unavailable':
+      return 'provider_unavailable';
+    case 'document_source_conversion_running':
+      return 'conversion_running';
+    case 'document_source_conversion_failed':
+      return 'conversion_failed';
+    case 'document_source_ambiguous_match':
+      return 'needs_selection';
+    case 'document_source_no_source_artifact':
+      return 'no_source_pdf';
+    case 'document_source_no_converted_text':
+      return 'no_converted_text';
+    default:
+      return 'invalid';
+  }
+};
+
+const normalizeIdentifierImportResult = (
+  result: IdentifierImportApiResult,
+): LiteratureImportResult => {
+  const provenance = toRecordOrNull(result.source_provenance);
+  const viewerMode = provenance ? toStringOrNull(provenance.viewer_mode) : null;
+  // Provenance is canonicalized around provider-neutral artifact IDs. The
+  // obsolete *_referencefile_id aliases are deliberately not normalized.
+  const pdfArtifactId = provenance ? toStringOrNull(provenance.pdf_artifact_id) : null;
+  const provider = provenance ? toStringOrNull(provenance.provider) : null;
+
+  if (typeof result.message !== 'string') {
+    throw new Error('Document-source result is missing its required message.');
+  }
+  if (viewerMode === 'local_pdf' && pdfArtifactId && !provider) {
+    throw new Error('Local PDF provenance is missing its required provider.');
+  }
+
+  return {
+    identifier: result.identifier,
+    normalizedIdentifier: result.normalized_identifier ?? null,
+    status: identifierStatusFromApiResult(result),
+    message: result.message,
+    documentId: result.document_id ?? result.existing_document_id ?? undefined,
+    filename: result.filename ?? undefined,
+    jobId: result.job_id ?? undefined,
+    source: viewerMode === 'local_pdf' && pdfArtifactId && provider
+      ? {
+          provider,
+          viewerMode: 'local_pdf',
+          pdfArtifactId,
+          convertedArtifactId: toStringOrNull(provenance?.converted_artifact_id) ?? undefined,
+          sourceMd5: toStringOrNull(provenance?.source_md5),
+        }
+      : undefined,
+  };
+};
+
+const postIdentifierBatch = async (
+  action: 'resolve' | 'import',
+  rawIdentifiers: string,
+): Promise<IdentifierImportResponse> => {
+  const response = await fetch(`${API_BASE_URL}/documents/${action}/source-identifiers`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifiers: rawIdentifiers }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = typeof payload === 'object' && payload && 'detail' in payload
+      ? String((payload as { detail?: unknown }).detail ?? '')
+      : '';
+    throw new Error(detail || 'Failed to process source identifiers.');
+  }
+
+  const payload = await response.json();
+  const apiResponse = payload as IdentifierImportApiResponse;
+  if (!Array.isArray(apiResponse.results) || typeof apiResponse.imported_count !== 'number') {
+    throw new Error('Document-source response is missing required batch fields.');
+  }
+  return {
+    results: apiResponse.results.map(normalizeIdentifierImportResult),
+    importedCount: apiResponse.imported_count,
+  };
+};
+
+export const resolveSourceIdentifiers = (
+  rawIdentifiers: string,
+): Promise<IdentifierImportResponse> => postIdentifierBatch('resolve', rawIdentifiers);
+
+export const importSourceIdentifiers = (
+  rawIdentifiers: string,
+): Promise<IdentifierImportResponse> => postIdentifierBatch('import', rawIdentifiers);
+
+export const fetchDocumentSourceProviderConfiguration = async (
+): Promise<DocumentSourceProviderConfiguration> => {
+  const response = await fetchApi<RawDocumentSourceProviderConfiguration>(
+    '/documents/source-provider',
+  );
+  return {
+    provider: toStringOrNull(response.provider),
+    importEnabled: response.import_enabled === true,
+    presentation: normalizeDocumentSourceProviderMetadata(response.presentation),
+  };
 };
 
 export const buildDocumentListSearchParams = (

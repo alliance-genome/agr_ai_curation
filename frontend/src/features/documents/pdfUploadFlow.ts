@@ -1,4 +1,4 @@
-export const MAX_UPLOAD_FILES_PER_SELECTION = 10;
+import { PDF_UPLOAD_MAX_SELECTED_FILES } from './documentIntakeConfig';
 
 const TERMINAL_STAGES = new Set([
   'completed',
@@ -223,7 +223,7 @@ export const validatePdfSelection = (
   files: File[],
   options: { maxFiles?: number; allowMultiple?: boolean } = {},
 ): PdfValidationResult => {
-  const maxFiles = options.maxFiles ?? MAX_UPLOAD_FILES_PER_SELECTION;
+  const maxFiles = options.maxFiles ?? PDF_UPLOAD_MAX_SELECTED_FILES;
   const allowMultiple = options.allowMultiple ?? true;
 
   if (files.length === 0) {

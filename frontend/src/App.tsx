@@ -37,6 +37,10 @@ import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
 import {
+  PDF_JOB_LIMIT,
+  PDF_JOB_WINDOW_DAYS,
+} from './features/documents/documentIntakeConfig'
+import {
   CHAT_RUN_TERMINAL_EVENT,
   type ChatRunTerminalEventDetail,
 } from './hooks/useChatStream'
@@ -502,7 +506,12 @@ export function AppContent() {
 
       if (!onPdfJobsPage) {
         try {
-          const response = await fetch('/api/weaviate/pdf-jobs?window_days=7&limit=50&offset=0', {
+          const jobQuery = new URLSearchParams({
+            window_days: String(PDF_JOB_WINDOW_DAYS),
+            limit: String(PDF_JOB_LIMIT),
+            offset: '0',
+          });
+          const response = await fetch(`/api/weaviate/pdf-jobs?${jobQuery.toString()}`, {
             credentials: 'include',
           });
           if (response.ok) {

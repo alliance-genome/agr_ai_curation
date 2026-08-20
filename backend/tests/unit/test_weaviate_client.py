@@ -127,6 +127,14 @@ async def test_async_list_documents_normalises_results():
         "provider": "abc_literature",
         "provider_metadata": {
             "display_label": "ABC Literature",
+            "identifier_help_label": (
+                "PMID, PubMed ID, AGRKB, or ABC identifiers; comma or newline separated."
+            ),
+            "identifier_examples": [
+                "PMID:23970418",
+                "PubMed ID 23970418",
+                "AGRKB:101000000055784",
+            ],
             "reference_label_priority": [
                 "external_ids.fbrf",
                 "reference_curie",

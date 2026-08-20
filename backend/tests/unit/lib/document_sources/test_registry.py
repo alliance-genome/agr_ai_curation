@@ -62,6 +62,29 @@ def _unused_factory() -> DocumentSourceProvider:
     raise AssertionError("factory must not run")
 
 
+def test_provider_presentation_exposes_paired_identifier_guidance() -> None:
+    presentation = DocumentSourceProviderPresentation(
+        display_label="Example Source",
+        identifier_help_label="Use example identifiers.",
+        identifier_examples=("SOURCE:1", "SOURCE:2"),
+    )
+
+    assert presentation.as_public_dict() == {
+        "display_label": "Example Source",
+        "reference_label_priority": [],
+        "identifier_help_label": "Use example identifiers.",
+        "identifier_examples": ["SOURCE:1", "SOURCE:2"],
+    }
+
+
+def test_provider_presentation_rejects_partial_identifier_guidance() -> None:
+    with pytest.raises(ValueError, match="must be configured together"):
+        DocumentSourceProviderPresentation(
+            display_label="Example Source",
+            identifier_help_label="Use example identifiers.",
+        )
+
+
 def test_unknown_provider_lists_registered_package_export_provenance(
     monkeypatch,
     tmp_path,
