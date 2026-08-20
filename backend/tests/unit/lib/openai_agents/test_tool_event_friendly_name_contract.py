@@ -1179,6 +1179,119 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
 
 
 @pytest.mark.asyncio
+async def test_specialist_rejects_structured_evidence_without_live_records(monkeypatch):
+    captured_events = []
+    structured_record = _build_expected_evidence_record(
+        entity="crumbs",
+        chunk_id="chunk-crumbs-1",
+        verified_quote=(
+            "Changes in molecular organization following abnormal PRC development "
+            "in crumbs mutants."
+        ),
+        page=1,
+        section="Results and Discussion",
+    )
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [],
+            final_output=_FakeStructuredOutput(
+                {
+                    "summary": "Extracted a focal gene with claimed evidence.",
+                    "items": [
+                        {
+                            "label": "crumbs",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0259685",
+                            "source_mentions": ["crumbs"],
+                            "evidence_record_ids": [
+                                structured_record["evidence_record_id"]
+                            ],
+                        }
+                    ],
+                    "evidence_records": [structured_record],
+                    "run_summary": {"kept_count": 1},
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Validation Agent",
+        tools=[],
+        output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract findings",
+            specialist_name="Gene Validation Agent",
+            max_turns=3,
+            tool_name="ask_gene_specialist",
+        )
+
+    specialist_errors = [
+        event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"
+    ]
+    assert len(specialist_errors) == 1
+    assert specialist_errors[0]["details"]["reason"] == "missing_evidence_records"
+    assert not any(event.get("type") == "evidence_summary" for event in captured_events)
+
+
+def test_specialist_rejects_structured_refs_not_verified_in_live_records(monkeypatch):
+    live_record = _build_expected_evidence_record(
+        entity="crumbs",
+        chunk_id="chunk-live",
+        verified_quote="Crumbs was verified from the live document span.",
+        page=1,
+        section="Results",
+    )
+    claimed_record = _build_expected_evidence_record(
+        entity="crumbs",
+        chunk_id="chunk-claimed",
+        verified_quote="This evidence record was supplied only by structured output.",
+        page=2,
+        section="Discussion",
+    )
+    captured_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        streaming_tools._emit_specialist_evidence_summary_or_raise(
+            specialist_name="Gene Validation Agent",
+            tool_name="ask_gene_specialist",
+            expected_output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
+            final_output={
+                "items": [
+                    {
+                        "label": "crumbs",
+                        "evidence_record_ids": [claimed_record["evidence_record_id"]],
+                    }
+                ],
+                "evidence_records": [claimed_record],
+                "run_summary": {"kept_count": 1},
+            },
+            live_evidence_records=[live_record],
+        )
+
+    specialist_error = next(
+        event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"
+    )
+    assert specialist_error["details"]["unverified_evidence_record_ids"] == [
+        claimed_record["evidence_record_id"]
+    ]
+    assert not any(event.get("type") == "evidence_summary" for event in captured_events)
+
+
+@pytest.mark.asyncio
 async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(monkeypatch):
     captured_events = []
     crumbs_record = _build_expected_evidence_record(

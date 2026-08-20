@@ -1148,17 +1148,22 @@ def _emit_specialist_evidence_summary_or_raise(
         else False
     )
 
-    if evidence_records and not missing_record_refs:
-        _emit_specialist_evidence_summary(
-            tool_name=tool_name,
-            evidence_records=evidence_records,
-        )
-        return
-
     if not requires_evidence:
+        if evidence_records:
+            _emit_specialist_evidence_summary(
+                tool_name=tool_name,
+                evidence_records=evidence_records,
+            )
         return
 
-    if live_evidence_records and not missing_record_refs:
+    canonical_payload = canonicalize_structured_result_payload(final_output)
+    referenced_record_ids = _evidence_reference_ids_from_payload(canonical_payload)
+    live_records_by_id = _live_evidence_records_by_id(live_evidence_records)
+    unverified_record_ids = sorted(referenced_record_ids - set(live_records_by_id))
+
+    # Span-backed record_evidence output is canonical. Structured output may only
+    # reference records that were verified during this specialist run.
+    if live_records_by_id and not missing_record_refs and not unverified_record_ids:
         _emit_specialist_evidence_summary(
             tool_name=tool_name,
             evidence_records=live_evidence_records,
@@ -1175,12 +1180,13 @@ def _emit_specialist_evidence_summary_or_raise(
     )
     logger.error(
         "%s requires_evidence=%s missing_record_refs=%s structured_evidence_count=%s "
-        "live_evidence_count=%s evidence_reference_report=%s",
+        "live_evidence_count=%s unverified_record_ids=%s evidence_reference_report=%s",
         error_message,
         requires_evidence,
         missing_record_refs,
         len(evidence_records),
         len(live_evidence_records),
+        unverified_record_ids,
         evidence_reference_report,
     )
     add_specialist_event({
@@ -1195,6 +1201,7 @@ def _emit_specialist_evidence_summary_or_raise(
             "missing_record_refs": missing_record_refs,
             "structured_evidence_count": len(evidence_records),
             "live_evidence_count": len(live_evidence_records),
+            "unverified_evidence_record_ids": unverified_record_ids,
             "evidence_reference_report": evidence_reference_report,
             "severity": "error",
         }
