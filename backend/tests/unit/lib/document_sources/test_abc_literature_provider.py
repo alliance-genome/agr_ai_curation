@@ -10,6 +10,7 @@ from src.lib.document_sources.identifier_import import (
     select_reference_import_candidate,
 )
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
+from src.lib.document_sources.import_selection import source_artifact_is_authorized
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceConfigError,
@@ -999,3 +1000,26 @@ async def test_empty_mod_payload_does_not_infer_global_access() -> None:
     artifacts = await provider.find_artifacts_by_checksum("abc123")
 
     assert artifacts[0].access_policy.scope is SourceAccessScope.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_bare_mod_string_does_not_create_access_entitlement() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.by_md5_payload = [
+        {
+            "referencefile_id": 10,
+            "display_name": "source.pdf",
+            "file_class": "main",
+            "file_extension": "pdf",
+            "referencefile_mods": ["FB"],
+        }
+    ]
+    provider = provider_from_fake(fake_client)
+
+    artifacts = await provider.find_artifacts_by_checksum("abc123")
+
+    assert artifacts[0].access_policy.scope is SourceAccessScope.UNKNOWN
+    assert artifacts[0].access_policy.group_ids == ()
+    assert not source_artifact_is_authorized(
+        artifacts[0], authorized_group_ids=("FB",)
+    )

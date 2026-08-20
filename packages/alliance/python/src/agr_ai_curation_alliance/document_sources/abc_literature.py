@@ -734,10 +734,9 @@ def _extract_access_group_ids(payload: Mapping[str, Any]) -> set[str]:
 
     group_ids: set[str] = set()
     for item in raw_mods:
-        if isinstance(item, Mapping):
-            value = item.get("mod_abbreviation")
-        else:
-            value = item
+        if not isinstance(item, Mapping) or "mod_abbreviation" not in item:
+            continue
+        value = item.get("mod_abbreviation")
         if isinstance(value, str) and value.strip():
             group_ids.add(value.strip())
     return group_ids
