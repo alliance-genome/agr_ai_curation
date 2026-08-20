@@ -229,6 +229,30 @@ def test_pdf_size_limit_is_shared_by_backend_and_frontend_compose_services(
     assert int(image_default.group(1)) == get_pdf_max_file_size_bytes()
 
 
+def test_add_literature_limits_are_frontend_build_contract():
+    expected_defaults = {
+        "VITE_ADD_LITERATURE_MAX_SELECTED_FILES": "10",
+        "VITE_ADD_LITERATURE_PDF_JOB_WINDOW_DAYS": "7",
+        "VITE_ADD_LITERATURE_PDF_JOB_LIMIT": "50",
+        "VITE_ADD_LITERATURE_FALLBACK_POLL_INTERVAL_MS": "5000",
+    }
+    build_args = _load_dev_compose()["services"]["frontend"]["build"]["args"]
+    dockerfile = FRONTEND_DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    for variable, default in expected_defaults.items():
+        assert build_args[variable] == f"${{{variable}:-{default}}}"
+        assert re.search(
+            rf"^ARG {variable}={default}$",
+            dockerfile,
+            re.MULTILINE,
+        )
+        assert re.search(
+            rf"^ENV {variable}=\${variable}$",
+            dockerfile,
+            re.MULTILINE,
+        )
+
+
 def test_dev_compose_uses_package_mount_for_agent_studio_prompt_source():
     compose = _load_dev_compose()
     backend_volumes = compose["services"]["backend"]["volumes"]
