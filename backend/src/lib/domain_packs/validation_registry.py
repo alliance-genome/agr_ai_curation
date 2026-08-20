@@ -127,6 +127,7 @@ class ValidatorBinding:
     required: bool = False
     allow_opt_out: bool = False
     max_tool_calls: int | None = None
+    preflight_policy: str | None = None
     batch_enabled: bool = False
     batch_family: str | None = None
     batch_max_size: int | None = None
@@ -169,6 +170,7 @@ class ValidatorBinding:
             "source_object_type": self.source_object_type,
             "source_field_path": self.source_field_path,
             "applies_to_domain_pack_id": self.applies_to_domain_pack_id,
+            "preflight_policy": self.preflight_policy,
         }
         details.update(
             {key: value for key, value in optional_values.items() if value is not None}
@@ -1035,6 +1037,7 @@ def _collect_validator_bindings(
                     )
                 ),
                 max_tool_calls=_optional_int(raw_item.get("max_tool_calls")),
+                preflight_policy=_optional_string(raw_item.get("preflight_policy")),
                 batch_enabled=active and _optional_bool(batch_config.get("enabled")),
                 batch_family=_optional_string(batch_config.get("family")),
                 batch_max_size=_optional_int(batch_config.get("max_size")),

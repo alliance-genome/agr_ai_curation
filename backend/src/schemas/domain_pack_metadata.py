@@ -387,6 +387,9 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
+    preflight_policy: Optional[
+        Literal["provider_taxon_mapping_required"]
+    ] = None
     required: bool = False
     blocking: bool = False
     allow_opt_out: bool = False
