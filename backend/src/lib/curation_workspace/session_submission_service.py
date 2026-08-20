@@ -839,23 +839,11 @@ def _policy_metadata_blocks_readiness(metadata: Mapping[str, Any]) -> bool:
 
 def _finding_waiver_allowed(finding: ValidationFinding) -> bool:
     details = finding.details or {}
-    for metadata in _finding_policy_metadata_sources(details):
-        if _metadata_allows_curator_override(metadata):
-            return True
-    return False
-
-
-def _finding_policy_metadata_sources(
-    details: Mapping[str, Any],
-) -> tuple[Mapping[str, Any], ...]:
-    metadata_sources: list[Mapping[str, Any]] = [details]
     raw_validation_metadata = details.get("validation_metadata")
-    if isinstance(raw_validation_metadata, Mapping):
-        metadata_sources.append(raw_validation_metadata)
-        raw_field_policy = raw_validation_metadata.get("field_policy")
-        if isinstance(raw_field_policy, Mapping):
-            metadata_sources.append(raw_field_policy)
-    return tuple(metadata_sources)
+    return (
+        isinstance(raw_validation_metadata, Mapping)
+        and _metadata_allows_curator_override(raw_validation_metadata)
+    )
 
 
 def _domain_object_for_id(

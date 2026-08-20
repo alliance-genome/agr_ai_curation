@@ -4736,6 +4736,104 @@ def test_validate_candidate_reruns_after_waiver_advances_envelope_revision(
     ].status is FieldValidationStatus.OVERRIDDEN
 
 
+def test_waive_validation_finding_accepts_projected_id_for_idless_finding(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Envelope requires external catalog verification.",
+                code="museum.catalog.envelope_unverified",
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "required": True,
+                        "blocking": True,
+                        "curator_override": {"allowed": True},
+                    }
+                },
+            )
+        ],
+    )
+    workspace = module.get_session_workspace(db_session, seeded["session_id"]).workspace
+    envelope_summary = next(
+        summary
+        for summary in workspace.validation_summary_projections
+        if summary.object_id is None
+    )
+    projected_finding_id = envelope_summary.findings[0].finding_id
+
+    response = module.waive_validation_finding(
+        db_session,
+        seeded["session_id"],
+        CurationValidationFindingWaiveRequest(
+            session_id=seeded["session_id"],
+            envelope_id=seeded["envelope_id"],
+            expected_revision=1,
+            finding_id=projected_finding_id,
+        ),
+        {"sub": "curator-42"},
+    )
+
+    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
+    stored_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    assert response.finding_id == projected_finding_id
+    assert response.new_status == ValidationFindingStatus.WAIVED.value
+    assert stored_envelope.validation_findings[0].status is ValidationFindingStatus.WAIVED
+
+
+def test_waive_validation_finding_rejects_top_level_override_policy(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+        validation_findings=[
+            ValidationFinding(
+                finding_id="finding-envelope",
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Envelope requires external catalog verification.",
+                code="museum.catalog.envelope_unverified",
+                details={
+                    "curator_override": {"allowed": True},
+                    "validation_metadata": {
+                        "binding_state": "active",
+                        "required": True,
+                        "blocking": True,
+                    },
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.waive_validation_finding(
+            db_session,
+            seeded["session_id"],
+            CurationValidationFindingWaiveRequest(
+                session_id=seeded["session_id"],
+                envelope_id=seeded["envelope_id"],
+                expected_revision=1,
+                finding_id="finding-envelope",
+            ),
+            {"sub": "curator-42"},
+        )
+
+    assert exc.value.status_code == 403
+
+
 def test_waive_validation_finding_rejects_alias_policy(
     db_session,
     tmp_path,
