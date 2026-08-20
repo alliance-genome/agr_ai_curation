@@ -687,6 +687,43 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
+  it('shows a waived envelope blocker when its override policy does not allow waiver', async () => {
+    const workspace = buildEnvelopeWorkspace()
+    const envelopeSummary = (workspace.validation_summary_projections ?? []).find(
+      (summary) => summary.object_id === null,
+    )
+    if (!envelopeSummary) {
+      throw new Error('Expected the envelope validation summary fixture')
+    }
+    envelopeSummary.status = 'waived'
+    envelopeSummary.open_finding_count = 0
+    envelopeSummary.findings[0] = {
+      ...envelopeSummary.findings[0],
+      finding_status: 'waived',
+      summary_status: 'waived',
+      details: {
+        validation_metadata: {
+          blocking: true,
+          required: true,
+        },
+      },
+    }
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
+      buildEnvelopeReviewRows(),
+    ])
+
+    renderPage('/curation/session-1')
+
+    expect(await screen.findByText(
+      /Required envelope validation was unavailable\. All objects from this envelope are affected\./,
+    )).toBeInTheDocument()
+    expect(screen.getByText(
+      'Rerun validation or correct the underlying problem.',
+    )).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Waive finding' })).not.toBeInTheDocument()
+  })
+
   it('creates a manual object from the envelope work pane toolbar', async () => {
     const user = userEvent.setup()
     const workspace = buildEnvelopeWorkspace()

@@ -117,6 +117,16 @@ function findingAllowsCuratorOverride(
   )
 }
 
+function envelopeFindingRequiresAttention(
+  finding: DomainEnvelopeValidationFindingProjection,
+): boolean {
+  return finding.finding_status === 'open'
+    || (
+      finding.finding_status === 'waived'
+      && !findingAllowsCuratorOverride(finding)
+    )
+}
+
 function findCandidate(
   candidates: CurationCandidate[],
   candidateId?: string | null,
@@ -720,7 +730,7 @@ function CurationWorkspacePageContent({
               onValidateAll={() => void handleValidateAll()}
             />
             {activeEnvelopeValidationSummaries
-              .filter((summary) => summary.open_finding_count > 0)
+              .filter((summary) => summary.findings.some(envelopeFindingRequiresAttention))
               .map((summary) => (
                 <Alert
                   key={summary.summary_id}
@@ -731,7 +741,7 @@ function CurationWorkspacePageContent({
                   {summary.messages.join(' ')} All objects from this envelope are affected.
                   <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
                     {summary.findings
-                      .filter((finding) => finding.finding_status === 'open')
+                      .filter(envelopeFindingRequiresAttention)
                       .map((finding) => (
                         findingAllowsCuratorOverride(finding) ? (
                           <Button

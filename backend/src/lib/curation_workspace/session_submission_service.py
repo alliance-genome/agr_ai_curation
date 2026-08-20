@@ -788,7 +788,7 @@ def _validation_finding_blockers(
                     if not envelope_scoped
                     else {
                         "envelope_id": envelope.envelope_id,
-                        "envelope_revision": projection_ref.get("envelope_revision"),
+                        "envelope_revision": projection_ref["envelope_revision"],
                     }
                 ),
                 details={

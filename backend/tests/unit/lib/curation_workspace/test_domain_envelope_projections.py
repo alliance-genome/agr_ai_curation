@@ -594,12 +594,29 @@ def test_workspace_response_includes_domain_envelope_projections():
         envelope = _envelope()
         envelope = envelope.model_copy(
             update={
+                "extracted_objects": [
+                    *envelope.extracted_objects,
+                    CuratableObjectEnvelope(
+                        object_type="GeneAssertion",
+                        object_id="gene-unselected",
+                        payload={"gene": {"symbol": "xyz-2"}},
+                    ),
+                ],
                 "validation_findings": [
                     *envelope.validation_findings,
                     ValidationFinding(
                         severity=ValidationFindingSeverity.BLOCKER,
                         code="fixture.envelope_provider_unavailable",
                         message="Required envelope validation was unavailable.",
+                    ),
+                    ValidationFinding(
+                        severity=ValidationFindingSeverity.WARNING,
+                        code="fixture.unselected_object_warning",
+                        message="An unselected envelope object needs review.",
+                        object_ref=ObjectRef(
+                            object_id="gene-unselected",
+                            object_type="GeneAssertion",
+                        ),
                     ),
                 ],
             }
@@ -696,6 +713,10 @@ def test_workspace_response_includes_domain_envelope_projections():
             summary.object_id == "gene-1"
             for summary in candidate_payload.validation_summary_projections
         )
+        assert {
+            summary.object_id
+            for summary in workspace.validation_summary_projections
+        } == {None, "gene-1"}
         assert {
             summary.status
             for summary in workspace.validation_summary_projections
