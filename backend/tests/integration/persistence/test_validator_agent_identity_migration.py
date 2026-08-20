@@ -170,12 +170,15 @@ def test_upgrade_migrates_all_validator_references_and_is_idempotent(
 
     legacy_gene_prompt_id = uuid4()
     legacy_disease_prompt_id = uuid4()
+    legacy_chemical_prompt_id = uuid4()
     for prompt_id, agent_name, group_id, version, active in (
         (legacy_gene_prompt_id, "gene", None, 1, True),
         (uuid4(), "gene_validation", None, 1, True),
         (uuid4(), "allele", None, 2, True),
         (legacy_disease_prompt_id, "disease", "WB", 1, True),
         (uuid4(), "disease_validation", "WB", 2, True),
+        (legacy_chemical_prompt_id, "chemical", None, 1, True),
+        (uuid4(), "chemical_validation", None, 1, False),
     ):
         migration_connection.execute(
             text(
@@ -264,7 +267,7 @@ def test_upgrade_migrates_all_validator_references_and_is_idempotent(
         migration_connection.execute(
             text("SELECT agent_name FROM prompt_templates WHERE version = 2")
         ).scalars()
-    ) == {"allele_validation", "disease_validation"}
+    ) == {"allele_validation", "chemical_validation", "disease_validation"}
     migrated_disease_prompt = migration_connection.execute(
         text(
             "SELECT agent_name, is_active FROM prompt_templates "
@@ -274,6 +277,16 @@ def test_upgrade_migrates_all_validator_references_and_is_idempotent(
     ).one()
     assert migrated_disease_prompt.agent_name == "disease_validation"
     assert migrated_disease_prompt.is_active is False
+    migrated_chemical_prompt = migration_connection.execute(
+        text(
+            "SELECT agent_name, version, is_active FROM prompt_templates "
+            "WHERE id = :id"
+        ),
+        {"id": legacy_chemical_prompt_id},
+    ).one()
+    assert migrated_chemical_prompt.agent_name == "chemical_validation"
+    assert migrated_chemical_prompt.version == 2
+    assert migrated_chemical_prompt.is_active is True
     assert migration_connection.execute(
         text("SELECT agent_name FROM prompt_execution_log WHERE id = :id"),
         {"id": execution_log_id},

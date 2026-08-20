@@ -107,6 +107,38 @@ def upgrade() -> None:
         )
     )
 
+    # A still-active legacy row may collide with an inactive canonical row at
+    # the same version. Preserve the active content by moving it to the next
+    # version available across both identities before the canonical rename.
+    bind.execute(
+        sa.text(
+            f"""
+            UPDATE prompt_templates AS legacy
+            SET version = (
+                SELECT COALESCE(MAX(candidate.version), 0) + 1
+                FROM prompt_templates AS candidate
+                WHERE candidate.agent_name IN (
+                    legacy.agent_name,
+                    {_CANONICAL_CASE.format(value="legacy.agent_name")}
+                )
+                  AND candidate.prompt_type = legacy.prompt_type
+                  AND candidate.group_id IS NOT DISTINCT FROM legacy.group_id
+            )
+            WHERE legacy.agent_name IN ({_ALIASES})
+              AND legacy.is_active = true
+              AND EXISTS (
+                  SELECT 1
+                  FROM prompt_templates AS canonical
+                  WHERE canonical.agent_name =
+                        {_CANONICAL_CASE.format(value="legacy.agent_name")}
+                    AND canonical.prompt_type = legacy.prompt_type
+                    AND canonical.version = legacy.version
+                    AND canonical.group_id IS NOT DISTINCT FROM legacy.group_id
+              )
+            """
+        )
+    )
+
     # Rename prompt versions when that exact canonical version is absent. If it
     # already exists, retain the legacy row for audit references but deactivate it.
     bind.execute(
