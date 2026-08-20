@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
@@ -21,7 +22,11 @@ from src.lib.config import (
     providers_loader,
     schema_discovery,
 )
-from src.lib.curation_workspace.adapter_registry import build_curation_adapter_registry
+from src.lib.curation_workspace.adapter_registry import (
+    build_curation_adapter_registry,
+    load_curation_adapter_registry,
+    resolve_curation_domain_pack_by_id,
+)
 from src.lib.curation_workspace.export_adapters.registry import ExportAdapterRegistry
 from src.lib.document_sources.registry import (
     get_configured_document_source_dev_mode_static_curator_token,
@@ -63,6 +68,7 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/agent_studio/catalog_service.py"),
     Path("backend/src/lib/agent_studio/flow_tools.py"),
     Path("backend/src/lib/config/agent_loader.py"),
+    Path("backend/src/lib/curation_workspace/adapter_registry.py"),
     Path("backend/src/lib/openai_agents/config.py"),
     Path("backend/src/lib/document_sources/registry.py"),
     Path("backend/src/lib/flows/output_projection.py"),
@@ -81,7 +87,7 @@ GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"alliancegenome"),
     re.compile(r"abc_literature"),
     re.compile(r"ABC Literature"),
-    re.compile(r"agr_ai_curation_alliance\.document_sources"),
+    re.compile(r"agr_ai_curation_alliance"),
     re.compile(
         r"\b(?:crossreference|ontologyterm|biologicalentity|"
         r"referencedcurie|primaryexternalid)\b"
@@ -637,6 +643,35 @@ def test_org_custom_validator_projection_uses_package_descriptor(
     assert rows[0]["object.object_id"] == "DEMO-1"
     assert rows[0]["object.label"] == "First record"
     assert rows[0]["object.payload.source_name"] == "fixture provider"
+
+
+def test_core_only_generic_resolution_does_not_import_alliance(monkeypatch, tmp_path):
+    packages_dir = tmp_path / "runtime-packages"
+    _copy_runtime_package(REPO_ROOT / "packages" / "core", packages_dir, "agr.core")
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("AGR_DOMAIN_PACKS_DIR", str(tmp_path / "domain-packs"))
+    for module_name in tuple(sys.modules):
+        if module_name == "agr_ai_curation_alliance" or module_name.startswith(
+            "agr_ai_curation_alliance."
+        ):
+            monkeypatch.delitem(sys.modules, module_name)
+
+    load_curation_adapter_registry.cache_clear()
+    try:
+        assert resolve_curation_domain_pack_by_id("generic") is None
+        assert not any(
+            module_name == "agr_ai_curation_alliance"
+            or module_name.startswith("agr_ai_curation_alliance.")
+            for module_name in sys.modules
+        )
+    finally:
+        for module_name in tuple(sys.modules):
+            if module_name == "agr_ai_curation_alliance" or module_name.startswith(
+                "agr_ai_curation_alliance."
+            ):
+                sys.modules.pop(module_name)
+        load_curation_adapter_registry.cache_clear()
 
 
 def test_org_custom_domain_pack_walkthrough_registers_runtime_surfaces(monkeypatch, tmp_path):
