@@ -1156,7 +1156,10 @@ def _emit_specialist_evidence_summary_or_raise(
             )
         return
 
-    canonical_payload = canonicalize_structured_result_payload(final_output)
+    canonical_payload = canonicalize_structured_result_payload(
+        final_output,
+        preferred_evidence_records=live_evidence_records,
+    )
     referenced_record_ids = _evidence_reference_ids_from_payload(canonical_payload)
     live_records_by_id = _live_evidence_records_by_id(live_evidence_records)
     unverified_record_ids = sorted(referenced_record_ids - set(live_records_by_id))
