@@ -4300,7 +4300,7 @@ def test_submission_export_blocks_waived_finding_with_only_field_override_policy
     assert readiness.blockers[0].status == "waived"
 
 
-def test_submission_export_blocks_waived_finding_with_alias_validation_metadata(
+def test_submission_export_blocks_waived_finding_with_noncanonical_override_policy(
     db_session,
     tmp_path,
     monkeypatch,
@@ -4335,6 +4335,9 @@ def test_submission_export_blocks_waived_finding_with_alias_validation_metadata(
                         "required": True,
                         "blocking": True,
                         "allow_opt_out": True,
+                        "field_policy": {
+                            "curator_override": {"allowed": True},
+                        },
                     }
                 },
             )
@@ -4355,6 +4358,7 @@ def test_submission_export_blocks_waived_finding_with_alias_validation_metadata(
     assert readiness.ready is False
     assert readiness.blockers[0].code == "museum.catalog.title_unverified"
     assert readiness.blockers[0].status == "waived"
+    assert "curator_override" not in readiness.blockers[0].details
 
 
 def test_submission_export_allows_waived_finding_with_curator_override_policy(
@@ -4817,6 +4821,17 @@ def test_waive_validation_finding_rejects_top_level_override_policy(
             )
         ],
     )
+
+    preview = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+    assert "curator_override" not in preview.submission.readiness[0].blockers[0].details
 
     with pytest.raises(HTTPException) as exc:
         module.waive_validation_finding(

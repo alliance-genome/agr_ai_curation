@@ -307,6 +307,7 @@ def _readiness_blocker(
     provider_refs: Mapping[str, Any] | None = None,
     projection_ref: Mapping[str, Any] | None = None,
     details: Mapping[str, Any] | None = None,
+    canonical_finding_override: bool = False,
 ) -> CurationSubmissionReadinessBlocker:
     return CurationSubmissionReadinessBlocker(
         envelope_id=envelope_id,
@@ -318,15 +319,29 @@ def _readiness_blocker(
         message=message,
         provider_refs=dict(provider_refs or {}),
         projection_ref=dict(projection_ref or {}),
-        details=_readiness_blocker_details(details),
+        details=_readiness_blocker_details(
+            details,
+            canonical_finding_override=canonical_finding_override,
+        ),
     )
 
 
 def _readiness_blocker_details(
     details: Mapping[str, Any] | None,
+    *,
+    canonical_finding_override: bool = False,
 ) -> dict[str, Any]:
     normalized = dict(details or {})
-    metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
+    if canonical_finding_override:
+        normalized.pop("curator_override", None)
+        raw_validation_metadata = normalized.get("validation_metadata")
+        metadata_sources = (
+            (raw_validation_metadata,)
+            if isinstance(raw_validation_metadata, Mapping)
+            else ()
+        )
+    else:
+        metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
     if any(_metadata_allows_curator_override(metadata) for metadata in metadata_sources):
         normalized["curator_override"] = {"allowed": True}
     return normalized
@@ -796,6 +811,7 @@ def _validation_finding_blockers(
                     "finding_index": finding_index,
                     "finding_id": finding.finding_id,
                 },
+                canonical_finding_override=True,
             )
         )
     return blockers
