@@ -9,8 +9,8 @@ from src.lib.document_sources.identifier_import import (
     ReferenceImportDecisionStatus,
     select_reference_import_candidate,
 )
-from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.import_selection import source_artifact_is_authorized
+from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceConfigError,

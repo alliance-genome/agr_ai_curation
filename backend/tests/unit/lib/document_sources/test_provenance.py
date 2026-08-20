@@ -138,6 +138,14 @@ def test_sanitize_document_source_provenance_drops_unknown_nested_raw_values() -
     }
 
 
+def test_sanitize_document_source_provenance_rejects_scalar_access_group() -> None:
+    provenance = sanitize_document_source_provenance(
+        {"provider": "mock_literature", "access_group_ids": "GROUP"}
+    )
+
+    assert provenance == {"provider": "mock_literature"}
+
+
 def test_find_existing_document_by_source_returns_none_without_match_keys() -> None:
     db = MagicMock()
 

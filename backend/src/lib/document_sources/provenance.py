@@ -213,16 +213,12 @@ def _sanitize_external_ids(value: object) -> dict[str, str | list[str]] | None:
 
 
 def _sanitize_access_group_ids(value: object) -> list[str] | None:
-    if isinstance(value, str):
-        raw_values: list[object] = [value]
-    elif isinstance(value, list):
-        raw_values = value
-    else:
+    if not isinstance(value, list):
         return None
 
     group_ids = [
         group_id
-        for group_id in (_string_or_none(raw_value) for raw_value in raw_values)
+        for group_id in (_string_or_none(raw_value) for raw_value in value)
         if group_id is not None
     ]
     return group_ids or None
