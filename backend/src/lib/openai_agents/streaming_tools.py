@@ -1132,6 +1132,7 @@ def _emit_specialist_evidence_summary_or_raise(
     expected_output_type: Any,
     final_output: Any,
     live_evidence_records: List[Dict[str, Any]],
+    authored_evidence_record_ids: Optional[set[str]] = None,
 ):
     """Emit specialist evidence summary from live tool-verified evidence or fail fast."""
     evidence_records = extract_evidence_records_from_structured_result(final_output)
@@ -1160,7 +1161,11 @@ def _emit_specialist_evidence_summary_or_raise(
         final_output,
         preferred_evidence_records=live_evidence_records,
     )
-    authored_record_ids = _evidence_reference_ids_from_payload(final_output)
+    authored_record_ids = (
+        set(authored_evidence_record_ids)
+        if authored_evidence_record_ids is not None
+        else _evidence_reference_ids_from_payload(final_output)
+    )
     canonical_record_ids = _evidence_reference_ids_from_payload(canonical_payload)
     live_records_by_id = _live_evidence_records_by_id(live_evidence_records)
     unverified_record_ids = sorted(
@@ -5751,6 +5756,7 @@ async def run_specialist_with_events(
                         message=error_message,
                     )
 
+    authored_evidence_record_ids = _evidence_reference_ids_from_payload(final_output)
     final_output = _canonicalize_structured_output_text(
         final_output,
         expected_output_type=expected_output_type,
@@ -5856,6 +5862,7 @@ async def run_specialist_with_events(
                 expected_output_type=expected_output_type,
                 final_output=final_output,
                 live_evidence_records=live_evidence_records,
+                authored_evidence_record_ids=authored_evidence_record_ids,
             )
         except SpecialistOutputError:
             builder_workspace.record_validation_failure(

@@ -1084,6 +1084,10 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
         page=1,
         section="Results and Discussion",
     )
+    crumbs_structured_alias = {
+        **crumbs_record,
+        "evidence_record_id": "ev-model-authored-alias",
+    }
     crumbs_span_ids = ["span-crumbs-1"]
     crb_span_ids = ["span-crb-1"]
 
@@ -1147,7 +1151,11 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
                             "evidence_record_ids": [crb_record["evidence_record_id"]],
                         }
                     ],
-                    "evidence_records": [],
+                    "evidence_records": [
+                        crumbs_structured_alias,
+                        crumbs_record,
+                        crb_record,
+                    ],
                     "run_summary": {"kept_count": 1},
                 }
             ),
@@ -1289,44 +1297,6 @@ def test_specialist_rejects_structured_refs_not_verified_in_live_records(monkeyp
         claimed_record["evidence_record_id"]
     ]
     assert not any(event.get("type") == "evidence_summary" for event in captured_events)
-
-
-def test_specialist_prefers_live_id_when_structured_registry_has_duplicate_alias(monkeypatch):
-    live_record = _build_expected_evidence_record(
-        entity="crumbs",
-        chunk_id="chunk-live",
-        verified_quote="Crumbs was verified from the live document span.",
-        page=1,
-        section="Results",
-    )
-    structured_alias = {
-        **live_record,
-        "evidence_record_id": "ev-model-authored-alias",
-    }
-    captured_events = []
-    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
-
-    streaming_tools._emit_specialist_evidence_summary_or_raise(
-        specialist_name="Gene Validation Agent",
-        tool_name="ask_gene_specialist",
-        expected_output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
-        final_output={
-            "items": [
-                {
-                    "label": "crumbs",
-                    "evidence_record_ids": [live_record["evidence_record_id"]],
-                }
-            ],
-            "evidence_records": [structured_alias, live_record],
-            "run_summary": {"kept_count": 1},
-        },
-        live_evidence_records=[live_record],
-    )
-
-    evidence_summary = next(
-        event for event in captured_events if event.get("type") == "evidence_summary"
-    )
-    assert evidence_summary["evidence_records"] == [live_record]
 
 
 def test_specialist_rejects_duplicate_structured_alias_without_live_id_reference(monkeypatch):
