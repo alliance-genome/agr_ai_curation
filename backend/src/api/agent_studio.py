@@ -1172,9 +1172,10 @@ async def test_agent_endpoint(
 # ============================================================================
 # Chat Endpoints (Configured Anthropic Model)
 # ============================================================================
-# Coaching chat and suggestions intentionally share Claude-specific streaming,
-# tool-use, effort, context-management, and error contracts. This does not limit
-# models used by the generic agent runtime; provider-neutral coaching should be
+# Agent Studio coaching intentionally uses coordinated Claude-specific contracts:
+# chat owns streaming, effort, and context management, while suggestions use
+# synchronous tool calls and their own error handling. This does not limit models
+# used by the generic agent runtime; provider-neutral coaching should be
 # reconsidered only through a coordinated product/runtime redesign.
 
 # Public Agent Studio tool definitions exposed from the focused helper module.
