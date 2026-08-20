@@ -20,7 +20,6 @@ from src.lib.document_sources.models import (
     SourceArtifactFormat,
     SourceArtifactRole,
     SourceArtifactStatus,
-    SourceConversionResult,
     SourceConversionStatus,
     SourceReference,
 )
@@ -252,7 +251,7 @@ def test_reference_source_artifact_sort_key_prefers_curator_mod_over_global() ->
         artifact_format=SourceArtifactFormat.PDF,
         access_policy=SourceAccessPolicy(
             scope=SourceAccessScope.RESTRICTED,
-            mods=("FB",),
+            group_ids=("FB",),
         ),
         metadata={
             "file_class": "main",
@@ -571,7 +570,7 @@ async def test_list_artifacts_expands_converted_referencefile_children() -> None
     assert converted_artifact.reference_id == "101"
     assert converted_artifact.reference_curie == "AGRKB:101"
     assert converted_artifact.access_policy.scope is SourceAccessScope.RESTRICTED
-    assert converted_artifact.access_policy.mods == ("FB",)
+    assert converted_artifact.access_policy.group_ids == ("FB",)
     assert converted_artifact.status is SourceArtifactStatus.AVAILABLE
 
 
@@ -662,13 +661,13 @@ async def test_checksum_lookup_maps_source_and_inherited_converted_access() -> N
     assert source_artifact.role is SourceArtifactRole.SOURCE_PDF
     assert source_artifact.artifact_format is SourceArtifactFormat.PDF
     assert source_artifact.access_policy.scope is SourceAccessScope.RESTRICTED
-    assert source_artifact.access_policy.mods == ("FB",)
+    assert source_artifact.access_policy.group_ids == ("FB",)
     assert converted_artifact.parent_artifact_id == "10"
     assert converted_artifact.role is SourceArtifactRole.CONVERTED_TEXT
     assert converted_artifact.artifact_format is SourceArtifactFormat.MARKDOWN
     assert converted_artifact.status is SourceArtifactStatus.AVAILABLE
     assert converted_artifact.access_policy.scope is SourceAccessScope.RESTRICTED
-    assert converted_artifact.access_policy.mods == ("FB",)
+    assert converted_artifact.access_policy.group_ids == ("FB",)
 
 
 @pytest.mark.asyncio
@@ -849,14 +848,18 @@ async def test_request_conversion_delegates_with_safe_defaults() -> None:
     assert result.per_file_progress[0]["converted"]["referencefile_id"] == 88
 
 
-def test_conversion_exposes_main_text_from_per_mod_status() -> None:
-    provider = provider_from_fake(FakeABCLiteratureClient())
-    result = SourceConversionResult(
-        provider="abc_literature",
-        status=SourceConversionStatus.RUNNING,
-        per_mod_status=({"mod": "FB", "main_converted": True},),
-    )
+@pytest.mark.asyncio
+async def test_conversion_maps_private_per_mod_status_to_generic_readiness() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.conversion_payload = {
+        "status": "running",
+        "per_mod_status": [{"mod": "FB", "main_converted": True}],
+    }
+    provider = provider_from_fake(fake_client)
+    result = await provider.request_conversion("AGRKB:101")
 
+    assert result.converted_classes == ("converted_merged_main",)
+    assert not hasattr(result, "per_mod_status")
     assert provider.conversion_exposes_main_text(result) is True
     assert provider.conversion_progress_percentage(result) == 35
     assert provider.conversion_progress_message(result) == (

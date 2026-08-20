@@ -65,7 +65,7 @@ ABC exposes provider conversion state through the `conversion_request` response:
 | ABC signal | AI Curation interpretation |
 | --- | --- |
 | `status=running` without main text | Keep the local durable job running in provider-conversion stage. |
-| `status=running` with `converted_merged_main`, `per_file_progress[].converted.file_class=converted_merged_main`, or `per_mod_status[].main_converted=true` | Re-list reference files and import the canonical main Markdown if available. |
+| `status=running` with a normalized `converted_merged_main` class or `per_file_progress[].converted.file_class=converted_merged_main` | Re-list reference files and import the canonical main Markdown if available. The ABC adapter translates its private per-MOD readiness payload into the normalized class signal. |
 | `status=converted` with canonical main Markdown | Re-list/download/import provider Markdown. |
 | `status=converted` but no canonical main Markdown | Fail locally with a clear missing-main-text message. |
 | `status=failed` | Fail locally with sanitized ABC error/progress details. |
@@ -115,8 +115,9 @@ endpoint names:
 - Provider hooks own conversion readiness, canonical-main identification, and
   main-text ranking. Reusable upload/import code applies only the normalized
   `AVAILABLE` requirement and provider-declared hooks.
-- Provider metadata such as `converted_classes`, `per_file_progress`, and
-  `per_mod_status` may be sanitized into local job metadata for UI/debugging.
+- Provider-neutral metadata such as `converted_classes` and
+  `per_file_progress` may be sanitized into local job metadata for UI/debugging.
+  ABC per-MOD status remains private to the adapter.
 - Providers without conversion support can return ready text, PDF-only/source
   artifacts, or no match according to their own capability.
 

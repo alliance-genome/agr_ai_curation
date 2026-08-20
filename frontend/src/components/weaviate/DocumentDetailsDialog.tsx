@@ -201,14 +201,9 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
       .join(' · ');
   }, [sourceProvenance]);
 
-  const accessModsText = React.useMemo(() => {
-    const accessMods = sourceProvenance?.accessMods;
-    if (!accessMods) {
-      return null;
-    }
-    return Object.entries(accessMods)
-      .map(([key, values]) => `${key}: ${values.join(', ')}`)
-      .join(' · ');
+  const accessGroupIdsText = React.useMemo(() => {
+    const accessGroupIds = sourceProvenance?.accessGroupIds;
+    return accessGroupIds?.length ? accessGroupIds.join(', ') : null;
   }, [sourceProvenance]);
 
   const sourceReferenceText = documentSourceReferenceLabel(sourceProvenance);
@@ -306,8 +301,8 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                           .join(' / ') || null
                       )}
                       {renderInfoItem('Import Status', sourceProvenance?.importStatus ?? sourceProvenance?.artifactStatus)}
-                      {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessModsText)}
-                      {accessModsText && renderInfoItem('Access MODs', accessModsText)}
+                      {renderInfoItem('Access', sourceProvenance?.accessScope ?? accessGroupIdsText)}
+                      {accessGroupIdsText && renderInfoItem('Access groups', accessGroupIdsText)}
                       {renderInfoItem('Viewer Mode', sourceProvenance?.viewerMode)}
                     </Grid>
                   </Grid>

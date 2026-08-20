@@ -87,7 +87,7 @@ async def test_async_list_documents_normalises_results():
         source_import_status="completed",
         source_imported_at=datetime(2024, 1, 2),
         source_access_scope="restricted",
-        source_access_mods={"mods": ["FB"]},
+        source_access_group_ids=["FB"],
         viewer_mode="text_only",
     )
 
@@ -150,7 +150,7 @@ async def test_async_list_documents_normalises_results():
         "import_status": "completed",
         "imported_at": "2024-01-02T00:00:00",
         "access_scope": "restricted",
-        "access_mods": {"mods": ["FB"]},
+        "access_group_ids": ["FB"],
         "viewer_mode": "text_only",
     }
 

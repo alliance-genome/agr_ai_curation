@@ -109,7 +109,7 @@ class _Provider:
                 if isinstance(progress.get("converted"), dict)
             ):
                 return True
-            return any(status.get("main_converted") is True for status in result.per_mod_status)
+            return False
         return result.status in {
             SourceConversionStatus.CONVERTED,
             SourceConversionStatus.RUNNING,
@@ -1299,7 +1299,7 @@ async def test_upload_selection_accepts_per_mod_only_readiness():
         conversion_result=SourceConversionResult(
             provider="abc_literature",
             status=SourceConversionStatus.RUNNING,
-            per_mod_status=({"mod": "FAKE", "main_converted": True},),
+            converted_classes=("converted_merged_main",),
         ),
         curator_token="token",
     )

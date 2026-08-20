@@ -293,10 +293,10 @@ def _require_ingestable_provenance(raw: Mapping[str, Any]) -> dict[str, Any]:
         )
     provenance["access_scope"] = access_scope
     if access_scope == "restricted":
-        mods = (provenance.get("access_mods") or {}).get("mods") or []
-        if not mods:
+        group_ids = provenance.get("access_group_ids") or []
+        if not group_ids:
             raise DocumentSourceIngestionError(
-                "Restricted provider Markdown ingestion requires source access MODs"
+                "Restricted provider Markdown ingestion requires source access group IDs"
             )
     return provenance
 
@@ -388,7 +388,7 @@ async def _persist_ingestion_metadata(
         document.source_import_status = "processing"
         document.source_imported_at = datetime.now(timezone.utc)
         document.source_access_scope = source_provenance.get("access_scope")
-        document.source_access_mods = source_provenance.get("access_mods")
+        document.source_access_group_ids = source_provenance.get("access_group_ids")
         session.commit()
     except Exception:
         session.rollback()
