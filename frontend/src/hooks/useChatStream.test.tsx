@@ -252,6 +252,117 @@ describe('useChatStream shared lifecycle', () => {
     unmount()
   })
 
+  it('fails explicitly when recovery starts after event zero before any event was observed', async () => {
+    vi.mocked(global.fetch)
+      .mockRejectedValueOnce(new TypeError('initial connection reset'))
+      .mockResolvedValueOnce(sseResponse([
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-initial-gap',
+          turn_id: 'turn-initial-gap',
+          content: 'retained suffix',
+        },
+        {
+          type: 'turn_completed',
+          session_id: 'session-initial-gap',
+          turn_id: 'turn-initial-gap',
+        },
+      ], [25, 26]))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-initial-gap', {
+        turnId: 'turn-initial-gap',
+      })
+    })
+
+    expect(result.current.error?.message).toContain('Part of this response was lost')
+    expect(result.current.events).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ content: 'retained suffix' }),
+    ]))
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('preserves the initial transport error when recovery cannot observe a run', async () => {
+    vi.mocked(global.fetch)
+      .mockRejectedValueOnce(new TypeError('network unavailable'))
+      .mockResolvedValue(new Response(JSON.stringify({
+        detail: 'The original executable run is not observable on this worker',
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-network-error', {
+        turnId: 'turn-network-error',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(4)
+    expect(result.current.error?.message).toContain('network unavailable')
+    expect(result.current.error?.message).not.toContain('not observable')
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('renders new cursored events before a recovered live observer closes', async () => {
+    const encoder = new TextEncoder()
+    let recoveredController: ReadableStreamDefaultController<Uint8Array> | null = null
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(sseResponse([{
+        type: 'RUN_STARTED',
+        session_id: 'session-live-recovery',
+        turn_id: 'turn-live-recovery',
+      }], [0]))
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          recoveredController = controller
+        },
+      }), { status: 200 }))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+    let request!: Promise<void>
+    act(() => {
+      request = result.current.sendMessage('question', 'session-live-recovery', {
+        turnId: 'turn-live-recovery',
+      })
+    })
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2))
+    act(() => {
+      recoveredController?.enqueue(encoder.encode(
+        'id: 0\ndata: {"type":"RUN_STARTED","session_id":"session-live-recovery","turn_id":"turn-live-recovery"}\n\n'
+        + 'id: 1\ndata: {"type":"TEXT_MESSAGE_CONTENT","session_id":"session-live-recovery","turn_id":"turn-live-recovery","content":"continued"}\n\n',
+      ))
+    })
+
+    await waitFor(() => {
+      expect(result.current.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ content: 'continued' }),
+      ]))
+    })
+    expect(result.current.isLoading).toBe(true)
+
+    act(() => {
+      recoveredController?.enqueue(encoder.encode(
+        'id: 2\ndata: {"type":"turn_completed","session_id":"session-live-recovery","turn_id":"turn-live-recovery"}\n\n',
+      ))
+      recoveredController?.close()
+    })
+    await act(async () => await request)
+
+    expect(result.current.isLoading).toBe(false)
+    result.current.clearEvents()
+    unmount()
+  })
+
   it('de-duplicates a retained replay suffix after the backend evicts early events', async () => {
     const textEvents = Array.from({ length: 1001 }, (_value, index) => ({
       type: 'TEXT_MESSAGE_CONTENT',
@@ -396,6 +507,7 @@ describe('useChatStream shared lifecycle', () => {
 
     const { result, unmount } = renderHook(() => useChatStream())
     const initialVersion = result.current.eventStreamVersion
+    const initialReconciliationVersion = result.current.durableReconciliationVersion
 
     await act(async () => {
       await result.current.executeFlow(
@@ -418,6 +530,9 @@ describe('useChatStream shared lifecycle', () => {
       status: 'completed',
     })
     expect(result.current.eventStreamVersion).toBe(initialVersion + 3)
+    expect(result.current.durableReconciliationVersion).toBe(
+      initialReconciliationVersion + 2,
+    )
     expect(result.current.isLoading).toBe(false)
     expect(result.current.error).toBeNull()
 

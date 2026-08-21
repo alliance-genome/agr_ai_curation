@@ -64,6 +64,11 @@ export interface UseChatStreamReturn {
   eventStreamVersion: number
 
   /**
+   * Increments only when durable history replaces the current run transcript.
+   */
+  durableReconciliationVersion: number
+
+  /**
    * Number of events the chat renderer has already consumed for this stream version.
    */
   processedEventCount: number
@@ -117,6 +122,7 @@ export interface UseChatStreamReturn {
 interface SharedChatStreamState {
   events: SSEEvent[]
   eventStreamVersion: number
+  durableReconciliationVersion: number
   processedEventCount: number
   isLoading: boolean
   error: Error | null
@@ -139,6 +145,7 @@ const sharedListeners = new Set<() => void>()
 let sharedState: SharedChatStreamState = {
   events: [],
   eventStreamVersion: 0,
+  durableReconciliationVersion: 0,
   processedEventCount: 0,
   isLoading: false,
   error: null,
@@ -165,10 +172,13 @@ function updateSharedEvents(updater: (events: SSEEvent[]) => SSEEvent[]) {
   emitSharedState({ events: updater(sharedState.events) })
 }
 
-function replaceSharedEvents(events: SSEEvent[]) {
+function replaceSharedEvents(events: SSEEvent[], durableReconciliation = false) {
   emitSharedState({
     events,
     eventStreamVersion: sharedState.eventStreamVersion + 1,
+    durableReconciliationVersion: durableReconciliation
+      ? sharedState.durableReconciliationVersion + 1
+      : sharedState.durableReconciliationVersion,
     processedEventCount: 0,
   })
 }
@@ -216,6 +226,8 @@ function getRecoveryDelayMs(): number {
   ))
 }
 
+class ReplayGapError extends Error {}
+
 function reconcileReplay(run: ActiveStreamRun, replay: ObservedSSEEvent[]) {
   if (replay.length === 0) return
 
@@ -223,12 +235,14 @@ function reconcileReplay(run: ActiveStreamRun, replay: ObservedSSEEvent[]) {
   const hasReplayCursor = replay.every(({ eventId }) => eventId !== null)
   const reconcilesDurableTranscript = !hasReplayCursor && run.observedEventCount > 0
 
-  if (hasReplayCursor && lastObservedEventId !== null) {
-    let nextExpectedEventId = lastObservedEventId + 1
+  if (hasReplayCursor) {
+    let nextExpectedEventId = lastObservedEventId === null ? 0 : lastObservedEventId + 1
     for (const { eventId } of replay) {
-      if (eventId === null || eventId <= lastObservedEventId) continue
+      if (eventId === null || (lastObservedEventId !== null && eventId <= lastObservedEventId)) {
+        continue
+      }
       if (eventId !== nextExpectedEventId) {
-        throw new Error(
+        throw new ReplayGapError(
           'Part of this response was lost before observer recovery. Reopen this chat to retry the turn.',
         )
       }
@@ -256,7 +270,7 @@ function reconcileReplay(run: ActiveStreamRun, replay: ObservedSSEEvent[]) {
     run.lastObservedEventId = null
     run.observedEventCount = replay.length
     if (ownsActiveRun(run)) {
-      replaceRunEvents(run, nextEvents)
+      replaceRunEvents(run, nextEvents, true)
     }
   } else {
     run.lastObservedEventId = appendedReplay.at(-1)?.eventId ?? run.lastObservedEventId
@@ -310,11 +324,13 @@ async function observeRun(
 ): Promise<void> {
   let recoveryAttempts = 0
   let recoveryPendingError: Error | null = null
+  let initialTransportError: Error | null = null
 
   while (ownsActiveRun(run)) {
     let terminalSeen = false
     const recovering = recoveryAttempts > 0
     const replay: ObservedSSEEvent[] = []
+    let replayMode: 'pending' | 'cursored' | 'durable' = recovering ? 'pending' : 'cursored'
     let response: Response | null = null
 
     try {
@@ -329,6 +345,11 @@ async function observeRun(
       })
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') throw err
+      if (!recovering && run.observedEventCount === 0) {
+        initialTransportError = err instanceof Error
+          ? err
+          : new Error('The initial response connection failed')
+      }
       debug.log('[useChatStream] Observer detached with error; recovering same turn', err)
     }
 
@@ -375,15 +396,23 @@ async function observeRun(
                 }
 
                 if (recovering) {
-                  replay.push(observedEvent)
+                  if (replayMode === 'pending') {
+                    replayMode = observedEvent.eventId === null ? 'durable' : 'cursored'
+                  }
+                  if (replayMode === 'cursored') {
+                    reconcileReplay(run, [observedEvent])
+                  } else {
+                    replay.push(observedEvent)
+                  }
                   continue
                 }
 
                 run.lastObservedEventId = observedEvent.eventId ?? run.lastObservedEventId
                 run.observedEventCount += 1
-                debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
+                debug.log('[useChatStream] Received SSE event:', parsed.type, parsed)
                 if (ownsActiveRun(run)) updateSharedEvents(prev => [...prev, parsed])
               } catch (parseError) {
+                if (parseError instanceof ReplayGapError) throw parseError
                 console.error('Failed to parse SSE event:', parseError, data)
               }
             }
@@ -391,11 +420,17 @@ async function observeRun(
         }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') throw err
+        if (err instanceof ReplayGapError) throw err
+        if (!recovering && run.observedEventCount === 0) {
+          initialTransportError = err instanceof Error
+            ? err
+            : new Error('The initial response connection failed')
+        }
         debug.log('[useChatStream] Observer detached with error; recovering same turn', err)
       }
     }
 
-    if (recovering) reconcileReplay(run, replay)
+    if (recovering && replayMode === 'durable') reconcileReplay(run, replay)
 
     if (!ownsActiveRun(run)) return
     if (terminalSeen) {
@@ -412,7 +447,7 @@ async function observeRun(
     }
 
     if (recoveryAttempts >= getRecoveryMaxAttempts()) {
-      throw recoveryPendingError ?? new Error(
+      throw initialTransportError ?? recoveryPendingError ?? new Error(
         'The response connection ended before the run completed. Reopen this chat to retry recovery.',
       )
     }
@@ -451,9 +486,10 @@ function startStreamRun(
 function replaceRunEvents(
   run: ActiveStreamRun,
   events: SSEEvent[],
+  durableReconciliation = false,
 ) {
   retainedEventSessionId = run.sessionId
-  replaceSharedEvents(events)
+  replaceSharedEvents(events, durableReconciliation)
 }
 
 function ownsActiveRun(run: ActiveStreamRun): boolean {
@@ -699,6 +735,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
   return {
     events: snapshot.events,
     eventStreamVersion: snapshot.eventStreamVersion,
+    durableReconciliationVersion: snapshot.durableReconciliationVersion,
     processedEventCount: snapshot.processedEventCount,
     isLoading: snapshot.isLoading,
     sendMessage,

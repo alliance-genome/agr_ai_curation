@@ -337,18 +337,21 @@ describe('AuditPanel - Event Display (T018)', () => {
       type: 'DOMAIN_WARNING' as const,
       timestamp: '2026-05-11T18:02:00.000Z',
       session_id: 'session123',
+      turn_id: 'turn-2',
       details: { domain: 'flow', message },
     })
     const runStarted = {
       type: 'RUN_STARTED' as const,
       timestamp: '2026-05-11T18:02:01.000Z',
       session_id: 'session123',
+      turn_id: 'turn-2',
       details: {},
     }
     const flowFinished = {
       type: 'FLOW_FINISHED' as const,
       timestamp: '2026-05-11T18:02:02.000Z',
       session_id: 'session123',
+      turn_id: 'turn-2',
       details: {},
     }
 
@@ -357,6 +360,7 @@ describe('AuditPanel - Event Display (T018)', () => {
         sessionId="session123"
         sseEvents={[warning('Durable warning A'), runStarted, flowFinished]}
         eventStreamVersion={1}
+        durableReconciliationVersion={1}
       />
     )
 
@@ -369,6 +373,7 @@ describe('AuditPanel - Event Display (T018)', () => {
         sessionId="session123"
         sseEvents={[runStarted, warning('Durable warning A')]}
         eventStreamVersion={2}
+        durableReconciliationVersion={2}
       />
     )
 
@@ -381,6 +386,7 @@ describe('AuditPanel - Event Display (T018)', () => {
         sessionId="session123"
         sseEvents={[runStarted, warning('Durable warning B')]}
         eventStreamVersion={3}
+        durableReconciliationVersion={3}
       />
     )
 
@@ -388,6 +394,88 @@ describe('AuditPanel - Event Display (T018)', () => {
       expect(screen.queryByText('[DOMAIN WARNING] Durable warning A')).not.toBeInTheDocument()
       expect(screen.getAllByText('[DOMAIN WARNING] Durable warning B')).toHaveLength(1)
     })
+  })
+
+  it('preserves prior-turn audit history when an ordinary second turn resets the stream', async () => {
+    const firstTurn = {
+      type: 'SUPERVISOR_START' as const,
+      timestamp: '2026-05-11T18:01:00.000Z',
+      session_id: 'session123',
+      turn_id: 'turn-1',
+      details: { message: 'Processing first turn' },
+    }
+    const secondTurn = {
+      type: 'AGENT_GENERATING' as const,
+      timestamp: '2026-05-11T18:02:00.000Z',
+      session_id: 'session123',
+      turn_id: 'turn-2',
+      details: { agentRole: 'System', message: 'Starting second turn' },
+    }
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[firstTurn]}
+        eventStreamVersion={1}
+        durableReconciliationVersion={0}
+      />
+    )
+    await screen.findByText('[SUPERVISOR] Processing first turn')
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[secondTurn]}
+        eventStreamVersion={2}
+        durableReconciliationVersion={0}
+      />
+    )
+
+    expect(screen.getByText('[SUPERVISOR] Processing first turn')).toBeInTheDocument()
+    expect(await screen.findByText('[AGENT] System: Starting second turn')).toBeInTheDocument()
+  })
+
+  it('replaces only the reconciled flow turn in the session audit history', async () => {
+    const warning = (turnId: string, message: string) => ({
+      type: 'DOMAIN_WARNING' as const,
+      timestamp: '2026-05-11T18:02:00.000Z',
+      session_id: 'session123',
+      turn_id: turnId,
+      details: { domain: 'flow', message },
+    })
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('turn-1', 'First turn warning')]}
+        eventStreamVersion={1}
+        durableReconciliationVersion={0}
+      />
+    )
+    await screen.findByText('[DOMAIN WARNING] First turn warning')
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('turn-2', 'Stale second turn warning')]}
+        eventStreamVersion={2}
+        durableReconciliationVersion={0}
+      />
+    )
+    await screen.findByText('[DOMAIN WARNING] Stale second turn warning')
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('turn-2', 'Durable second turn warning')]}
+        eventStreamVersion={3}
+        durableReconciliationVersion={1}
+      />
+    )
+
+    expect(screen.getByText('[DOMAIN WARNING] First turn warning')).toBeInTheDocument()
+    expect(screen.queryByText('[DOMAIN WARNING] Stale second turn warning')).not.toBeInTheDocument()
+    expect(await screen.findByText('[DOMAIN WARNING] Durable second turn warning')).toBeInTheDocument()
   })
 
   it('preserves audit events when durable chat reconciliation has no audit events', async () => {
@@ -435,6 +523,7 @@ describe('AuditPanel - Event Display (T018)', () => {
           },
         ]}
         eventStreamVersion={2}
+        durableReconciliationVersion={1}
       />
     )
 

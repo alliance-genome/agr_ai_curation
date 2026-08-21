@@ -42,10 +42,13 @@ export interface AuditPanelProps {
   sseEvents: SSEEvent[]
 
   /**
-   * Identity of the retained SSE transcript. A change means sseEvents replaced
-   * the prior transcript rather than appending to it.
+   * Identity of the retained SSE event list. Ordinary turns and durable
+   * reconciliation both replace this list.
    */
   eventStreamVersion?: number
+
+  /** Changes only when durable history replaces the current turn transcript. */
+  durableReconciliationVersion?: number
 
   /**
    * Optional initial events for testing purposes.
@@ -178,6 +181,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   sessionId,
   sseEvents,
   eventStreamVersion = 0,
+  durableReconciliationVersion = 0,
   initialEvents = [],
   onClear,
   className,
@@ -203,6 +207,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const processedEventCountRef = useRef(0)
   const processedEventStreamVersionRef = useRef(eventStreamVersion)
+  const processedDurableReconciliationVersionRef = useRef(durableReconciliationVersion)
   const copiedResetTimeoutRef = useRef<number | null>(null)
 
   /**
@@ -295,17 +300,23 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
 
   // T027: Process SSE events and add audit events to state
   useEffect(() => {
-    const transcriptWasReplaced = (
+    const eventStreamWasReplaced = (
       processedEventStreamVersionRef.current !== eventStreamVersion
+    )
+    const transcriptWasDurablyReconciled = (
+      processedDurableReconciliationVersionRef.current !== durableReconciliationVersion
     )
 
     // Process only appended events unless the hook replaced the retained
     // transcript during durable replay reconciliation. A replacement must be
     // parsed from the beginning even when its length is equal to the old one.
-    if (!transcriptWasReplaced && processedEventCountRef.current > sseEvents.length) {
+    if (
+      !transcriptWasDurablyReconciled
+      && (eventStreamWasReplaced || processedEventCountRef.current > sseEvents.length)
+    ) {
       processedEventCountRef.current = 0
     }
-    const newEvents = transcriptWasReplaced
+    const newEvents = transcriptWasDurablyReconciled
       ? sseEvents
       : sseEvents.slice(processedEventCountRef.current)
     const parsedEvents: AuditEvent[] = []
@@ -330,6 +341,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           type: sseEvent.type as AuditEventType,
           timestamp: sseEvent.timestamp,
           session_id: eventSessionId,
+          turn_id: typeof sseEvent.turn_id === 'string' ? sseEvent.turn_id : undefined,
           details: sseEvent.details || {}
         })
 
@@ -342,8 +354,14 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       }
     })
 
-    if (transcriptWasReplaced && parsedEvents.length > 0) {
-      setEvents(parsedEvents)
+    if (transcriptWasDurablyReconciled && parsedEvents.length > 0) {
+      const reconciledTurnIds = new Set(
+        parsedEvents.flatMap(event => event.turnId ? [event.turnId] : []),
+      )
+      setEvents(previous => [
+        ...previous.filter(event => !event.turnId || !reconciledTurnIds.has(event.turnId)),
+        ...parsedEvents,
+      ])
     } else if (parsedEvents.length > 0) {
       setEvents(prev => [...prev, ...parsedEvents])
     }
@@ -351,7 +369,14 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
     // Mark all events as processed
     processedEventCountRef.current = sseEvents.length
     processedEventStreamVersionRef.current = eventStreamVersion
-  }, [sseEvents, eventStreamVersion, sessionId, isAuditEvent])
+    processedDurableReconciliationVersionRef.current = durableReconciliationVersion
+  }, [
+    sseEvents,
+    eventStreamVersion,
+    durableReconciliationVersion,
+    sessionId,
+    isAuditEvent,
+  ])
 
   // Auto-scroll to bottom when new events arrive
   useEffect(() => {

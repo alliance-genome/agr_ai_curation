@@ -63,6 +63,8 @@ interface ExtendedRightPanelProps extends RightPanelProps {
   sseEvents: SSEEvent[]
   /** Identity of the retained SSE transcript for replacement reconciliation. */
   eventStreamVersion?: number
+  /** Durable current-turn transcript replacement identity. */
+  durableReconciliationVersion?: number
   /** Callback to execute a curation flow */
   onExecuteFlow?: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
   /** Current document ID loaded in PDF viewer */
@@ -77,6 +79,7 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
   sessionId,
   sseEvents,
   eventStreamVersion = 0,
+  durableReconciliationVersion = 0,
   className,
   onStop,
   isStreaming,
@@ -180,6 +183,7 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
               sessionId={sessionId}
               sseEvents={sseEvents}
               eventStreamVersion={eventStreamVersion}
+              durableReconciliationVersion={durableReconciliationVersion}
               onStop={onStop}
               isStreaming={isStreaming}
             />
