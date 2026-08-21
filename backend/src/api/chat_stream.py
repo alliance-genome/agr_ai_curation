@@ -2,6 +2,8 @@
 """Chat response, streaming, cancellation, and assistant rescue endpoints."""
 
 from .chat_common import *
+from typing import Annotated
+from fastapi import Header
 from src.lib.executable_runs import (
     ExecutableRunAccessError,
     ExecutableRunConflictError,
@@ -422,6 +424,7 @@ async def chat_stream_endpoint(
     chat_message: ChatMessage,
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
+    observer_recovery: Annotated[bool, Header(alias="X-Observer-Recovery")] = False,
 ):
     """Stream a chat response using Server-Sent Events."""
     session_id = chat_message.session_id or str(uuid.uuid4())
@@ -480,6 +483,26 @@ async def chat_stream_endpoint(
             )
 
         raise HTTPException(status_code=409, detail="Session is already active")
+
+    if observer_recovery:
+        durable_assistant_turn = (
+            repository.get_message_by_turn_id(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                turn_id=chat_message.turn_id,
+                role="assistant",
+            )
+            if chat_message.turn_id
+            else None
+        )
+        if durable_assistant_turn is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The original executable run is not observable on this worker "
+                    "and has not reached durable completion."
+                ),
+            )
 
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
@@ -579,6 +602,16 @@ async def chat_stream_endpoint(
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    if observer_recovery:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The original executable run is not observable on this worker "
+                "and has not reached durable completion."
+            ),
         )
 
     async def generate_stream():

@@ -2,8 +2,10 @@
 """Execute-flow chat streaming endpoint."""
 
 from uuid import UUID
+from typing import Annotated
 
 from .chat_common import *
+from fastapi import Header
 from .chat_common import (
     _EXECUTE_FLOW_RUNTIME_FLOW_RUN_ID_KEY,
     _EXECUTE_FLOW_RUNTIME_STATE_KEY,
@@ -714,6 +716,7 @@ async def execute_flow_endpoint(
     request: ExecuteFlowRequest,
     db: Session = Depends(get_db),
     user: Dict[str, Any] = get_auth_dependency(),
+    observer_recovery: Annotated[bool, Header(alias="X-Observer-Recovery")] = False,
 ):
     """Execute a curation flow with SSE streaming response.
 
@@ -799,6 +802,28 @@ async def execute_flow_endpoint(
 
         raise HTTPException(status_code=409, detail="Session is already active")
 
+    if observer_recovery:
+        durable_replay = (
+            _build_execute_flow_turn_replay(
+                repository.list_messages_for_turn(
+                    session_id=request.session_id,
+                    user_auth_sub=user_id,
+                    chat_kind=ASSISTANT_CHAT_KIND,
+                    turn_id=request.turn_id,
+                )
+            )
+            if request.turn_id
+            else None
+        )
+        if durable_replay is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The original executable run is not observable on this worker "
+                    "and has not reached durable completion."
+                ),
+            )
+
     generated_title_candidate: str | None = None
     stream_lifecycle = await _claim_active_stream_lifecycle(
         session_id=request.session_id,
@@ -868,6 +893,16 @@ async def execute_flow_endpoint(
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    if observer_recovery:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The original executable run is not observable on this worker "
+                "and has not reached durable completion."
+            ),
         )
 
     async def event_generator():

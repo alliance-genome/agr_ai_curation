@@ -221,6 +221,52 @@ function sameReplayEvent(left: SSEEvent, right: SSEEvent): boolean {
   return true
 }
 
+function findReplayOverlap(observed: SSEEvent[], replay: SSEEvent[]): number {
+  const maximum = Math.min(observed.length, replay.length)
+
+  for (let overlap = maximum; overlap > 0; overlap -= 1) {
+    const observedStart = observed.length - overlap
+    let matches = true
+    for (let index = 0; index < overlap; index += 1) {
+      if (!sameReplayEvent(observed[observedStart + index], replay[index])) {
+        matches = false
+        break
+      }
+    }
+    if (matches) return overlap
+  }
+
+  return 0
+}
+
+function reconcileReplay(run: ActiveStreamRun, replay: SSEEvent[]) {
+  if (replay.length === 0) return
+
+  const overlap = findReplayOverlap(run.observedEvents, replay)
+  const reconcilesDurableTranscript = overlap === 0 && run.observedEvents.length > 0
+  let firstTextSeen = false
+  const nextEvents = replay.slice(overlap).map((event) => {
+    if (
+      reconcilesDurableTranscript
+      && !firstTextSeen
+      && event.type === 'TEXT_MESSAGE_CONTENT'
+    ) {
+      firstTextSeen = true
+      return { ...event, observer_reconcile: true }
+    }
+    return event
+  })
+
+  if (reconcilesDurableTranscript) {
+    run.observedEvents.splice(0, run.observedEvents.length, ...replay)
+  } else {
+    run.observedEvents.push(...replay.slice(overlap))
+  }
+  if (ownsActiveRun(run) && nextEvents.length > 0) {
+    updateSharedEvents(previous => [...previous, ...nextEvents])
+  }
+}
+
 function waitForRecovery(signal: AbortSignal): Promise<void> {
   const delayMs = getRecoveryDelayMs()
   if (delayMs === 0) return Promise.resolve()
@@ -248,12 +294,16 @@ async function observeRun(
 
   while (ownsActiveRun(run)) {
     let terminalSeen = false
-    let replayIndex = 0
+    const recovering = recoveryAttempts > 0
+    const replay: SSEEvent[] = []
 
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(recovering ? { 'X-Observer-Recovery': 'true' } : {}),
+        },
         body: JSON.stringify(requestBody),
         signal: run.controller.signal,
       })
@@ -282,21 +332,16 @@ async function observeRun(
 
             try {
               const parsed: SSEEvent = JSON.parse(data)
-              const replayed = run.observedEvents[replayIndex]
-              replayIndex += 1
               terminalSeen ||= isAuthoritativeTerminal(parsed, runKind)
 
-              if (replayed && sameReplayEvent(replayed, parsed)) continue
-
-              const nextEvent = replayed && parsed.type === 'TEXT_MESSAGE_CONTENT'
-                ? { ...parsed, observer_reconcile: true }
-                : parsed
-              if (replayed) {
-                run.observedEvents.splice(replayIndex - 1)
+              if (recovering) {
+                replay.push(parsed)
+                continue
               }
+
               run.observedEvents.push(parsed)
               debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
-              if (ownsActiveRun(run)) updateSharedEvents(prev => [...prev, nextEvent])
+              if (ownsActiveRun(run)) updateSharedEvents(prev => [...prev, parsed])
             } catch (parseError) {
               console.error('Failed to parse SSE event:', parseError, data)
             }
@@ -307,6 +352,8 @@ async function observeRun(
       if (err instanceof Error && err.name === 'AbortError') throw err
       debug.log('[useChatStream] Observer detached with error; recovering same turn', err)
     }
+
+    if (recovering) reconcileReplay(run, replay)
 
     if (!ownsActiveRun(run)) return
     if (terminalSeen) {

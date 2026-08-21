@@ -1257,6 +1257,7 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(
             request=request,
             db=db,
             user={"sub": "auth-sub", "cognito:groups": []},
+            observer_recovery=True,
         )
     )
 
@@ -1365,6 +1366,29 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
         }
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+
+    with pytest.raises(chat.HTTPException) as exc_info:
+        asyncio.run(
+            chat.execute_flow_endpoint(
+                request=request,
+                db=db,
+                user={"sub": "auth-sub", "cognito:groups": []},
+                observer_recovery=True,
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "not observable on this worker" in exc_info.value.detail
+    assert execute_calls == []
+    assert [
+        message.role
+        for message in repository.list_messages_for_turn(
+            session_id="session-flow-retry",
+            user_auth_sub="auth-sub",
+            chat_kind=chat.ASSISTANT_CHAT_KIND,
+            turn_id="turn-flow-retry",
+        )
+    ] == ["user"]
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -2152,6 +2176,7 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
             request=request,
             db=db,
             user={"sub": "auth-sub", "cognito:groups": []},
+            observer_recovery=True,
         )
     )
 

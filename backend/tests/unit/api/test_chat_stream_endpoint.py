@@ -672,6 +672,7 @@ def test_chat_stream_endpoint_reattaches_to_active_same_turn_without_reclaiming(
                 turn_id=turn_id,
             ),
             user={"sub": "auth-sub", "cognito:groups": []},
+            observer_recovery=True,
         )
     )
 
@@ -1769,18 +1770,24 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    durable_assistant = _assistant_record(
+        session_id="session-replay",
+        turn_id="turn-replay",
+        content="stored response",
+        trace_id="trace-replay",
+    )
+    _patch_chat_impl(
+        monkeypatch,
+        "_get_chat_history_repository",
+        lambda _db: SimpleNamespace(get_message_by_turn_id=lambda **_kwargs: durable_assistant),
+    )
     _patch_chat_impl(
         monkeypatch,
         "_prepare_chat_stream_turn",
         lambda **_kwargs: chat.PreparedChatStreamTurn(
             turn_id="turn-replay",
             effective_user_message="hello",
-            replay_assistant_turn=_assistant_record(
-                session_id="session-replay",
-                turn_id="turn-replay",
-                content="stored response",
-                trace_id="trace-replay",
-            ),
+            replay_assistant_turn=durable_assistant,
         ),
     )
 
@@ -1818,6 +1825,7 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
         chat.chat_stream_endpoint(
             chat_message=chat.ChatMessage(message="hello", session_id="session-replay", turn_id="turn-replay"),
             user={"sub": "auth-sub", "cognito:groups": []},
+            observer_recovery=True,
         )
     )
 
@@ -1827,6 +1835,44 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     assert events[0]["content"] == "stored response"
     assert events[1]["turn_id"] == "turn-replay"
     assert events[1]["trace_id"] == "trace-replay"
+
+
+def test_chat_stream_observer_recovery_does_not_start_missing_local_run(monkeypatch):
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(
+        monkeypatch,
+        "_get_chat_history_repository",
+        lambda _db: SimpleNamespace(get_message_by_turn_id=lambda **_kwargs: None),
+    )
+
+    async def _claim_lifecycle(**_kwargs):
+        raise AssertionError("observer recovery must not claim the producer lifecycle")
+
+    async def _unexpected_start(**_kwargs):
+        raise AssertionError("observer recovery must not start a second producer")
+
+    _patch_chat_impl(monkeypatch, "_claim_active_stream_lifecycle", _claim_lifecycle)
+    monkeypatch.setattr(chat.executable_run_manager, "get_or_start_stream", _unexpected_start)
+
+    with pytest.raises(chat.HTTPException) as exc_info:
+        asyncio.run(
+            chat.chat_stream_endpoint(
+                chat_message=chat.ChatMessage(
+                    message="hello",
+                    session_id="session-cross-worker",
+                    turn_id="turn-cross-worker",
+                ),
+                user={"sub": "auth-sub", "cognito:groups": []},
+                observer_recovery=True,
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "not observable on this worker" in exc_info.value.detail
 
 
 def test_chat_stream_endpoint_terminal_replay_releases_lifecycle_before_next_turn(monkeypatch):

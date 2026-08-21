@@ -162,6 +162,12 @@ describe('useChatStream shared lifecycle', () => {
     expect(vi.mocked(global.fetch).mock.calls[0][1]?.body).toBe(
       vi.mocked(global.fetch).mock.calls[1][1]?.body,
     )
+    expect(vi.mocked(global.fetch).mock.calls[0][1]?.headers).not.toHaveProperty(
+      'X-Observer-Recovery',
+    )
+    expect(vi.mocked(global.fetch).mock.calls[1][1]?.headers).toMatchObject({
+      'X-Observer-Recovery': 'true',
+    })
     expect(result.current.events.filter(event => event.type === 'RUN_STARTED')).toHaveLength(1)
     expect(result.current.events.filter(event => event.type === 'TEXT_MESSAGE_CONTENT')).toEqual([
       expect.objectContaining({ content: 'part' }),
@@ -170,6 +176,68 @@ describe('useChatStream shared lifecycle', () => {
     expect(result.current.events.at(-1)?.type).toBe('turn_completed')
     expect(result.current.isLoading).toBe(false)
     expect(result.current.error).toBeNull()
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('de-duplicates a retained replay suffix after the backend evicts early events', async () => {
+    const textEvents = Array.from({ length: 1001 }, (_value, index) => ({
+      type: 'TEXT_MESSAGE_CONTENT',
+      session_id: 'session-window',
+      turn_id: 'turn-window',
+      content: `chunk-${index}`,
+    }))
+    const firstEvents = [
+      { type: 'RUN_STARTED', session_id: 'session-window', turn_id: 'turn-window' },
+      {
+        type: 'TOOL_COMPLETED',
+        session_id: 'session-window',
+        turn_id: 'turn-window',
+        details: { message: 'first audit event' },
+      },
+      ...textEvents,
+    ]
+    const retainedSuffix = [
+      // The default backend replay cap retains only these final 1000 events,
+      // so recovery begins after RUN_STARTED, the first audit event, and chunk-0.
+      ...firstEvents.slice(-1000),
+      {
+        type: 'TOOL_COMPLETED',
+        session_id: 'session-window',
+        turn_id: 'turn-window',
+        details: { message: 'second audit event' },
+      },
+      {
+        type: 'turn_completed',
+        session_id: 'session-window',
+        turn_id: 'turn-window',
+      },
+    ]
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(sseResponse(firstEvents))
+      .mockResolvedValueOnce(sseResponse(retainedSuffix))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-window', {
+        turnId: 'turn-window',
+      })
+    })
+
+    expect(result.current.events.filter(event => event.type === 'RUN_STARTED')).toHaveLength(1)
+    const renderedTextEvents = result.current.events.filter(
+      event => event.type === 'TEXT_MESSAGE_CONTENT',
+    )
+    expect(renderedTextEvents).toHaveLength(1001)
+    expect(renderedTextEvents[0]).toMatchObject({ content: 'chunk-0' })
+    expect(renderedTextEvents.at(-1)).toMatchObject({ content: 'chunk-1000' })
+    expect(result.current.events.filter(event => event.type === 'TOOL_COMPLETED')).toEqual([
+      expect.objectContaining({ details: { message: 'first audit event' } }),
+      expect.objectContaining({ details: { message: 'second audit event' } }),
+    ])
+    expect(result.current.events.at(-1)?.type).toBe('turn_completed')
 
     result.current.clearEvents()
     unmount()
