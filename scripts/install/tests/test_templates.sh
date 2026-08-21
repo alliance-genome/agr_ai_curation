@@ -108,6 +108,7 @@ grep -q '^TRACE_REVIEW_BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-tra
 grep -q '^TRACE_REVIEW_BACKEND_IMAGE_TAG=CHANGE_ME_PINNED_RELEASE_TAG$' "$env_template"
 grep -q '^TRACE_REVIEW_DEV_MODE=false$' "$env_template"
 grep -q '^TRACE_REVIEW_SECURE_COOKIES=true$' "$env_template"
+grep -q '^SENTRY_LOG_EVENT_LEVEL=$' "$env_template"
 grep -q '^SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000$' "$env_template"
 grep -q '^SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50$' "$env_template"
 grep -q '^TRACE_REVIEW_URL=http://trace_review_backend:8001$' "$env_template"
