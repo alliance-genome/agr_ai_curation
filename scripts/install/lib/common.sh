@@ -342,6 +342,11 @@ install_weaviate_data_dir() {
   printf '%s/weaviate\n' "$(install_data_root_dir "$install_home_dir")"
 }
 
+install_weaviate_backup_dir() {
+  local install_home_dir="$1"
+  printf '%s/weaviate_backups\n' "$(install_data_root_dir "$install_home_dir")"
+}
+
 resolve_checkout_image_tag() {
   local checkout_dir="$1"
   local exact_tag=""

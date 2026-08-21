@@ -96,6 +96,8 @@ backend_env = services["backend"]["environment"]
 frontend_env = services["frontend"]["environment"]
 trace_review = services["trace_review_backend"]
 trace_review_env = trace_review["environment"]
+weaviate = services["weaviate"]
+weaviate_env = weaviate["environment"]
 
 assert trace_review["image"].endswith(":latest")
 assert str(trace_review_env["DEV_MODE"]).lower() == "true"
@@ -106,6 +108,12 @@ assert backend_env["ELASTICSEARCH_HOST"] == ""
 assert backend_env["ELASTICSEARCH_SCHEME"] == "https"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
+assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
+assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate/backups"
+assert any(
+    mount.get("target") == "/var/lib/weaviate/backups"
+    for mount in weaviate["volumes"]
+)
 PY
 
 docker compose --env-file "${env_file}" -f "${compose_file}" config --format json >"${rendered_file}"
@@ -121,12 +129,22 @@ config = json.load(open(sys.argv[1], encoding="utf-8"))
 backend_env = config["services"]["backend"]["environment"]
 frontend_env = config["services"]["frontend"]["environment"]
 weaviate_env = config["services"]["weaviate"]["environment"]
+weaviate = config["services"]["weaviate"]
 assert backend_env["SENTRY_LOG_EVENT_LEVEL"] == ""
 assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
 assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert weaviate_env["AUTHORIZATION_ADMINLIST_USERS"] == "curation-backend"
+assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
+assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate/backups"
+backup_mounts = [
+    mount
+    for mount in weaviate["volumes"]
+    if mount.get("target") == "/var/lib/weaviate/backups"
+]
+assert len(backup_mounts) == 1
+assert backup_mounts[0]["type"] == "bind"
 PY
 
 python3 - "${repo_root}" <<'PY'
