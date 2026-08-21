@@ -331,6 +331,64 @@ describe('AuditPanel - Event Display (T018)', () => {
       expect(screen.getByText('[SUPERVISOR] Processing second run')).toBeInTheDocument()
     })
   })
+
+  it('reconciles shorter and equal-length retained stream replacements exactly once', async () => {
+    const warning = (message: string) => ({
+      type: 'DOMAIN_WARNING' as const,
+      timestamp: '2026-05-11T18:02:00.000Z',
+      session_id: 'session123',
+      details: { domain: 'flow', message },
+    })
+    const runStarted = {
+      type: 'RUN_STARTED' as const,
+      timestamp: '2026-05-11T18:02:01.000Z',
+      session_id: 'session123',
+      details: {},
+    }
+    const flowFinished = {
+      type: 'FLOW_FINISHED' as const,
+      timestamp: '2026-05-11T18:02:02.000Z',
+      session_id: 'session123',
+      details: {},
+    }
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('Durable warning A'), runStarted, flowFinished]}
+        eventStreamVersion={1}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('[DOMAIN WARNING] Durable warning A')).toBeInTheDocument()
+    })
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[runStarted, warning('Durable warning A')]}
+        eventStreamVersion={2}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByText('[DOMAIN WARNING] Durable warning A')).toHaveLength(1)
+    })
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[runStarted, warning('Durable warning B')]}
+        eventStreamVersion={3}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText('[DOMAIN WARNING] Durable warning A')).not.toBeInTheDocument()
+      expect(screen.getAllByText('[DOMAIN WARNING] Durable warning B')).toHaveLength(1)
+    })
+  })
 })
 
 // ===================================================================

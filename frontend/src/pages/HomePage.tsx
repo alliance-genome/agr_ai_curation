@@ -908,6 +908,7 @@ function HomePage() {
             <RightPanel
               sessionId={sessionId}
               sseEvents={events}
+              eventStreamVersion={eventStreamVersion}
               onStop={() => sessionId && stopStream(sessionId)}
               isStreaming={isLoading}
               onExecuteFlow={handleExecuteFlow}

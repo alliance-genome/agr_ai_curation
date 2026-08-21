@@ -42,6 +42,12 @@ export interface AuditPanelProps {
   sseEvents: SSEEvent[]
 
   /**
+   * Identity of the retained SSE transcript. A change means sseEvents replaced
+   * the prior transcript rather than appending to it.
+   */
+  eventStreamVersion?: number
+
+  /**
    * Optional initial events for testing purposes.
    * Allows tests to pre-populate the panel with events without going through SSE.
    */
@@ -171,6 +177,7 @@ const clearAuditEventsFromStorage = (
 const AuditPanel: React.FC<AuditPanelProps> = ({
   sessionId,
   sseEvents,
+  eventStreamVersion = 0,
   initialEvents = [],
   onClear,
   className,
@@ -195,6 +202,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   const [prevSessionId, setPrevSessionId] = useState<string | null>(sessionId)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const processedEventCountRef = useRef(0)
+  const processedEventStreamVersionRef = useRef(eventStreamVersion)
   const copiedResetTimeoutRef = useRef<number | null>(null)
 
   /**
@@ -287,12 +295,20 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
 
   // T027: Process SSE events and add audit events to state
   useEffect(() => {
-    // Process only new events. If the shared stream was reset for a fresh
-    // run, the processed counter may point past the new array length.
-    if (processedEventCountRef.current > sseEvents.length) {
+    const transcriptWasReplaced = (
+      processedEventStreamVersionRef.current !== eventStreamVersion
+    )
+
+    // Process only appended events unless the hook replaced the retained
+    // transcript during durable replay reconciliation. A replacement must be
+    // parsed from the beginning even when its length is equal to the old one.
+    if (!transcriptWasReplaced && processedEventCountRef.current > sseEvents.length) {
       processedEventCountRef.current = 0
     }
-    const newEvents = sseEvents.slice(processedEventCountRef.current)
+    const newEvents = transcriptWasReplaced
+      ? sseEvents
+      : sseEvents.slice(processedEventCountRef.current)
+    const parsedEvents: AuditEvent[] = []
 
     newEvents.forEach((sseEvent: SSEEvent) => {
       // Filter for audit event types only
@@ -319,16 +335,23 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
 
         // Only add events matching current session
         if (auditEvent.sessionId === sessionId) {
-          setEvents(prev => [...prev, auditEvent])
+          parsedEvents.push(auditEvent)
         }
       } catch (err) {
         console.error('🔍 [AUDIT] Failed to parse audit event:', err, sseEvent)
       }
     })
 
+    if (transcriptWasReplaced) {
+      setEvents(parsedEvents)
+    } else if (parsedEvents.length > 0) {
+      setEvents(prev => [...prev, ...parsedEvents])
+    }
+
     // Mark all events as processed
     processedEventCountRef.current = sseEvents.length
-  }, [sseEvents, sessionId, isAuditEvent])
+    processedEventStreamVersionRef.current = eventStreamVersion
+  }, [sseEvents, eventStreamVersion, sessionId, isAuditEvent])
 
   // Auto-scroll to bottom when new events arrive
   useEffect(() => {

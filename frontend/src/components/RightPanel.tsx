@@ -61,6 +61,8 @@ import type { SSEEvent } from '../hooks/useChatStream'
  */
 interface ExtendedRightPanelProps extends RightPanelProps {
   sseEvents: SSEEvent[]
+  /** Identity of the retained SSE transcript for replacement reconciliation. */
+  eventStreamVersion?: number
   /** Callback to execute a curation flow */
   onExecuteFlow?: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
   /** Current document ID loaded in PDF viewer */
@@ -74,6 +76,7 @@ interface ExtendedRightPanelProps extends RightPanelProps {
 const RightPanel: React.FC<ExtendedRightPanelProps> = ({
   sessionId,
   sseEvents,
+  eventStreamVersion = 0,
   className,
   onStop,
   isStreaming,
@@ -173,7 +176,13 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
         >
           {/* Render AuditPanel for Audit tab */}
           {tab.id === 'audit' && (
-            <AuditPanel sessionId={sessionId} sseEvents={sseEvents} onStop={onStop} isStreaming={isStreaming} />
+            <AuditPanel
+              sessionId={sessionId}
+              sseEvents={sseEvents}
+              eventStreamVersion={eventStreamVersion}
+              onStop={onStop}
+              isStreaming={isStreaming}
+            />
           )}
 
           {/* Render ToolsPanel for Tools tab */}
