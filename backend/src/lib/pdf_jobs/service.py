@@ -10,8 +10,10 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from src.models.sql.database import SessionLocal
+from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 from src.schemas.pdf_jobs import PdfJobListResponse, PdfJobResponse
+from src.services.processing_status_policy import PDF_JOB_STATUS_TO_PROCESSING_STATUS
 
 
 _TERMINAL_STATUSES = {
@@ -93,7 +95,48 @@ def _last_activity_timestamp(job: PdfProcessingJob) -> datetime:
     return _as_utc(job.created_at)
 
 
-def _reconcile_stale_job(job: PdfProcessingJob, *, stale_after_seconds: int, now: datetime) -> bool:
+def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
+    """Reconcile a document from its deterministic latest failed/cancelled job."""
+    if job.status not in {
+        PdfJobStatus.FAILED.value,
+        PdfJobStatus.CANCELLED.value,
+    }:
+        return False
+
+    latest_job = session.execute(
+        select(PdfProcessingJob)
+        .where(PdfProcessingJob.document_id == job.document_id)
+        .order_by(PdfProcessingJob.created_at.desc(), PdfProcessingJob.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if latest_job is None or latest_job.id != job.id:
+        return False
+
+    document = session.execute(
+        select(PDFDocument).where(PDFDocument.id == job.document_id)
+    ).scalar_one_or_none()
+    if document is None:
+        return False
+
+    mapped_status = PDF_JOB_STATUS_TO_PROCESSING_STATUS[job.status]
+    terminal_at = job.completed_at or datetime.now(timezone.utc)
+    document.status = mapped_status
+    if document.processing_started_at is None:
+        document.processing_started_at = job.started_at or job.created_at or terminal_at
+    document.processing_completed_at = terminal_at
+    document.error_message = (
+        job.error_message or job.message or "PDF processing failed"
+    )[:1000]
+    return True
+
+
+def _reconcile_stale_job(
+    session,
+    job: PdfProcessingJob,
+    *,
+    stale_after_seconds: int,
+    now: datetime,
+) -> bool:
     if job.status not in _ACTIVE_STATUSES:
         return False
 
@@ -125,6 +168,7 @@ def _reconcile_stale_job(job: PdfProcessingJob, *, stale_after_seconds: int, now
         job.error_message = stale_message
         job.message = stale_message
 
+    _reconcile_terminal_document(session, job)
     return True
 
 
@@ -162,10 +206,18 @@ def get_job(*, job_id: UUID | str, user_id: int, reconcile_stale: bool = True) -
         ).scalar_one_or_none()
         if job and reconcile_stale:
             now = datetime.now(timezone.utc)
-            if _reconcile_stale_job(job, stale_after_seconds=_stale_timeout_seconds(), now=now):
+            if _reconcile_stale_job(
+                session,
+                job,
+                stale_after_seconds=_stale_timeout_seconds(),
+                now=now,
+            ):
                 session.commit()
                 session.refresh(job)
         return _to_response(job) if job else None
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -179,10 +231,18 @@ def get_job_by_id(*, job_id: UUID | str, reconcile_stale: bool = True) -> Option
         ).scalar_one_or_none()
         if job and reconcile_stale:
             now = datetime.now(timezone.utc)
-            if _reconcile_stale_job(job, stale_after_seconds=_stale_timeout_seconds(), now=now):
+            if _reconcile_stale_job(
+                session,
+                job,
+                stale_after_seconds=_stale_timeout_seconds(),
+                now=now,
+            ):
                 session.commit()
                 session.refresh(job)
         return _to_response(job) if job else None
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -202,15 +262,23 @@ def get_latest_job_for_document(
                 PdfProcessingJob.document_id == _to_uuid(document_id),
                 PdfProcessingJob.user_id == user_id,
             )
-            .order_by(PdfProcessingJob.created_at.desc())
+            .order_by(PdfProcessingJob.created_at.desc(), PdfProcessingJob.id.desc())
             .limit(1)
         ).scalar_one_or_none()
         if job and reconcile_stale:
             now = datetime.now(timezone.utc)
-            if _reconcile_stale_job(job, stale_after_seconds=_stale_timeout_seconds(), now=now):
+            if _reconcile_stale_job(
+                session,
+                job,
+                stale_after_seconds=_stale_timeout_seconds(),
+                now=now,
+            ):
                 session.commit()
                 session.refresh(job)
         return _to_response(job) if job else None
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -242,7 +310,12 @@ def list_jobs(
             ).scalars().all()
             changed = False
             for row in active_rows:
-                changed = _reconcile_stale_job(row, stale_after_seconds=stale_after_seconds, now=now) or changed
+                changed = _reconcile_stale_job(
+                    session,
+                    row,
+                    stale_after_seconds=stale_after_seconds,
+                    now=now,
+                ) or changed
             if changed:
                 session.commit()
 
@@ -262,7 +335,9 @@ def list_jobs(
 
         total = session.execute(count_stmt).scalar_one()
         rows = session.execute(
-            stmt.order_by(PdfProcessingJob.created_at.desc()).offset(max(0, offset)).limit(max(1, min(limit, 200)))
+            stmt.order_by(PdfProcessingJob.created_at.desc(), PdfProcessingJob.id.desc())
+            .offset(max(0, offset))
+            .limit(max(1, min(limit, 200)))
         ).scalars().all()
 
         return PdfJobListResponse(
@@ -271,6 +346,9 @@ def list_jobs(
             limit=max(1, min(limit, 200)),
             offset=max(0, offset),
         )
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -422,6 +500,9 @@ def mark_failed(*, job_id: UUID | str, message: str, stage: Optional[str] = None
         if not job:
             return None
         if job.status in _TERMINAL_STATUSES:
+            if _reconcile_terminal_document(session, job):
+                session.commit()
+                session.refresh(job)
             return _to_response(job)
 
         now = datetime.now(timezone.utc)
@@ -433,9 +514,13 @@ def mark_failed(*, job_id: UUID | str, message: str, stage: Optional[str] = None
         job.error_message = (message or "Processing failed")[:2000]
         job.message = job.error_message
 
+        _reconcile_terminal_document(session, job)
         session.commit()
         session.refresh(job)
         return _to_response(job)
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -450,6 +535,9 @@ def mark_cancelled(*, job_id: UUID | str, reason: Optional[str] = None) -> Optio
         if not job:
             return None
         if job.status in _TERMINAL_STATUSES:
+            if _reconcile_terminal_document(session, job):
+                session.commit()
+                session.refresh(job)
             return _to_response(job)
 
         now = datetime.now(timezone.utc)
@@ -462,8 +550,12 @@ def mark_cancelled(*, job_id: UUID | str, reason: Optional[str] = None) -> Optio
         job.message = reason or "Cancelled by user"
         job.error_message = None
 
+        _reconcile_terminal_document(session, job)
         session.commit()
         session.refresh(job)
         return _to_response(job)
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
