@@ -627,7 +627,9 @@ async def hybrid_search_chunks(
                         if major > 1 or (major == 1 and minor >= 31):
                             from weaviate.classes.query import BM25Operator
                             # Prefer exact/term precision: at least 2 terms must match
-                            query_params["bm25_operator"] = BM25Operator.or_(minimum_match=2)
+                            query_params["bm25_operator"] = BM25Operator.or_(
+                                minimum_match=min(2, len(norm_query.split()))
+                            )
                             # (or strict: BM25Operator.and_() for all terms to match)
                     except Exception as e:
                         logger.debug("BM25 boost not available (v%s): %s", weaviate_version, e)

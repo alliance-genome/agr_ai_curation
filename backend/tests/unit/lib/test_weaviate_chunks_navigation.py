@@ -205,6 +205,39 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "expected_minimum_match"),
+    (("CG18135", 1), ("CG18135 insertion", 2)),
+)
+async def test_hybrid_search_chunks_clamps_bm25_minimum_match_to_query_terms(
+    monkeypatch,
+    query,
+    expected_minimum_match,
+):
+    _sync_to_thread(monkeypatch)
+    chunk_collection = MagicMock()
+    chunk_collection.query.hybrid.return_value = SimpleNamespace(objects=[])
+    connection = _connection_with_client(MagicMock())
+    monkeypatch.setenv("WEAVIATE_VERSION", "1.31")
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(
+        "src.lib.weaviate_helpers.get_user_collections",
+        return_value=(chunk_collection, MagicMock()),
+    ):
+        await chunks.hybrid_search_chunks(
+            document_id="doc-1",
+            query=query,
+            user_id="user-1",
+            apply_reranking=False,
+            apply_mmr=False,
+            strategy="lexical",
+        )
+
+    operator = chunk_collection.query.hybrid.call_args.kwargs["bm25_operator"]
+    assert operator.minimum_should_match == expected_minimum_match
+
+
+@pytest.mark.asyncio
 async def test_hybrid_search_chunks_guardrails(monkeypatch):
     _sync_to_thread(monkeypatch)
 
