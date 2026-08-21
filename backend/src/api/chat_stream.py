@@ -605,16 +605,6 @@ async def chat_stream_endpoint(
             },
         )
 
-    if observer_recovery:
-        await stream_lifecycle.cleanup()
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "The original executable run is not observable on this worker "
-                "and has not reached durable completion."
-            ),
-        )
-
     async def generate_stream():
         """Generate SSE events from the agent runner."""
         nonlocal generated_title_candidate

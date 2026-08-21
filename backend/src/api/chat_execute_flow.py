@@ -896,16 +896,6 @@ async def execute_flow_endpoint(
             },
         )
 
-    if observer_recovery:
-        await stream_lifecycle.cleanup()
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "The original executable run is not observable on this worker "
-                "and has not reached durable completion."
-            ),
-        )
-
     async def event_generator():
         """Generate SSE events from flow execution with cancellation support."""
         nonlocal generated_title_candidate

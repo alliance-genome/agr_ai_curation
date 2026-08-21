@@ -183,6 +183,75 @@ describe('useChatStream shared lifecycle', () => {
     unmount()
   })
 
+  it('surfaces an authoritative HTTP failure without attempting observer recovery', async () => {
+    vi.mocked(global.fetch).mockResolvedValueOnce(new Response(
+      JSON.stringify({ detail: 'Session is active for a different user' }),
+      {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    ))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-forbidden', {
+        turnId: 'turn-forbidden',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(result.current.error?.message).toContain('HTTP error! status: 403')
+    expect(result.current.isLoading).toBe(false)
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('fails explicitly when the retained replay begins after the next expected event', async () => {
+    const firstEvents = Array.from({ length: 6 }, (_value, index) => ({
+      type: index === 0 ? 'RUN_STARTED' : 'TEXT_MESSAGE_CONTENT',
+      session_id: 'session-gap',
+      turn_id: 'turn-gap',
+      ...(index === 0 ? {} : { content: `chunk-${index}` }),
+    }))
+    const retainedReplay = [
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        session_id: 'session-gap',
+        turn_id: 'turn-gap',
+        content: 'late chunk',
+      },
+      {
+        type: 'turn_completed',
+        session_id: 'session-gap',
+        turn_id: 'turn-gap',
+      },
+    ]
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(sseResponse(firstEvents, [0, 1, 2, 3, 4, 5]))
+      .mockResolvedValueOnce(sseResponse(retainedReplay, [500, 501]))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-gap', {
+        turnId: 'turn-gap',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+    expect(result.current.error?.message).toContain('Part of this response was lost')
+    expect(result.current.events.filter(event => event.type === 'TEXT_MESSAGE_CONTENT')).toHaveLength(5)
+    expect(result.current.events).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ content: 'late chunk' }),
+    ]))
+    expect(result.current.isLoading).toBe(false)
+
+    result.current.clearEvents()
+    unmount()
+  })
+
   it('de-duplicates a retained replay suffix after the backend evicts early events', async () => {
     const textEvents = Array.from({ length: 1001 }, (_value, index) => ({
       type: 'TEXT_MESSAGE_CONTENT',
@@ -413,6 +482,51 @@ describe('useChatStream shared lifecycle', () => {
     expect(global.fetch).toHaveBeenCalledTimes(2)
     expect(result.current.error?.message).toContain('before the run completed')
     expect(result.current.isLoading).toBe(false)
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('surfaces the durable-observation detail when recovery 409s until exhaustion', async () => {
+    vi.stubEnv('VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS', '1')
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(sseResponse([]))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        detail: 'The original executable run is not observable on this worker yet.',
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-pending', {
+        turnId: 'turn-pending',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+    expect(result.current.error?.message).toContain('HTTP error! status: 409')
+    expect(result.current.error?.message).toContain('not observable on this worker yet')
+    expect(result.current.isLoading).toBe(false)
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('uses the documented recovery default when the attempts env value is empty', async () => {
+    vi.stubEnv('VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS', '')
+    vi.mocked(global.fetch).mockResolvedValue(sseResponse([]))
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-default-attempts', {
+        turnId: 'turn-default-attempts',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(4)
+    expect(result.current.error?.message).toContain('before the run completed')
 
     result.current.clearEvents()
     unmount()

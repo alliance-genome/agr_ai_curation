@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useCallback, useSyncExternalStore } from 'react'
-import { debug } from '@/utils/env'
+import { debug, getEnvInt } from '@/utils/env'
 
 export interface SSEEvent {
   type: string
@@ -40,6 +40,8 @@ const CHAT_TERMINAL_EVENT_TYPES = new Set([
   'turn_save_failed',
   'session_gone',
 ])
+const DEFAULT_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS = 3
+const DEFAULT_CHAT_STREAM_RECOVERY_DELAY_MS = 1000
 
 export interface ChatRunTerminalEventDetail {
   sessionId: string
@@ -124,7 +126,8 @@ interface ActiveStreamRun {
   runId: number
   controller: AbortController
   sessionId: string
-  observedEvents: ObservedSSEEvent[]
+  lastObservedEventId: number | null
+  observedEventCount: number
 }
 
 interface ObservedSSEEvent {
@@ -200,21 +203,39 @@ function isAuthoritativeTerminal(event: SSEEvent, runKind: ChatRunKind): boolean
 }
 
 function getRecoveryMaxAttempts(): number {
-  const configured = Number(import.meta.env.VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS ?? 3)
-  return Number.isFinite(configured) ? Math.max(0, Math.floor(configured)) : 3
+  return Math.max(0, getEnvInt(
+    'VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS',
+    DEFAULT_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS,
+  ))
 }
 
 function getRecoveryDelayMs(): number {
-  const configured = Number(import.meta.env.VITE_CHAT_STREAM_RECOVERY_DELAY_MS ?? 1000)
-  return Number.isFinite(configured) ? Math.max(0, configured) : 1000
+  return Math.max(0, getEnvInt(
+    'VITE_CHAT_STREAM_RECOVERY_DELAY_MS',
+    DEFAULT_CHAT_STREAM_RECOVERY_DELAY_MS,
+  ))
 }
 
 function reconcileReplay(run: ActiveStreamRun, replay: ObservedSSEEvent[]) {
   if (replay.length === 0) return
 
-  const lastObservedEventId = run.observedEvents.at(-1)?.eventId
+  const lastObservedEventId = run.lastObservedEventId
   const hasReplayCursor = replay.every(({ eventId }) => eventId !== null)
-  const reconcilesDurableTranscript = !hasReplayCursor && run.observedEvents.length > 0
+  const reconcilesDurableTranscript = !hasReplayCursor && run.observedEventCount > 0
+
+  if (hasReplayCursor && lastObservedEventId !== null) {
+    let nextExpectedEventId = lastObservedEventId + 1
+    for (const { eventId } of replay) {
+      if (eventId === null || eventId <= lastObservedEventId) continue
+      if (eventId !== nextExpectedEventId) {
+        throw new Error(
+          'Part of this response was lost before observer recovery. Reopen this chat to retry the turn.',
+        )
+      }
+      nextExpectedEventId += 1
+    }
+  }
+
   const appendedReplay = hasReplayCursor && lastObservedEventId != null
     ? replay.filter(({ eventId }) => eventId !== null && eventId > lastObservedEventId)
     : replay
@@ -232,16 +253,36 @@ function reconcileReplay(run: ActiveStreamRun, replay: ObservedSSEEvent[]) {
   })
 
   if (reconcilesDurableTranscript) {
-    run.observedEvents.splice(0, run.observedEvents.length, ...replay)
+    run.lastObservedEventId = null
+    run.observedEventCount = replay.length
     if (ownsActiveRun(run)) {
       replaceRunEvents(run, nextEvents)
     }
   } else {
-    run.observedEvents.push(...appendedReplay)
+    run.lastObservedEventId = appendedReplay.at(-1)?.eventId ?? run.lastObservedEventId
+    run.observedEventCount += appendedReplay.length
     if (ownsActiveRun(run) && nextEvents.length > 0) {
       updateSharedEvents(previous => [...previous, ...nextEvents])
     }
   }
+}
+
+async function buildHttpError(response: Response): Promise<Error> {
+  let detail = ''
+  try {
+    const payload: unknown = await response.json()
+    if (
+      typeof payload === 'object'
+      && payload !== null
+      && 'detail' in payload
+      && typeof payload.detail === 'string'
+    ) {
+      detail = `: ${payload.detail}`
+    }
+  } catch {
+    // The HTTP status remains authoritative when an error body is absent or malformed.
+  }
+  return new Error(`HTTP error! status: ${response.status}${detail}`)
 }
 
 function waitForRecovery(signal: AbortSignal): Promise<void> {
@@ -268,14 +309,16 @@ async function observeRun(
   requestBody: object,
 ): Promise<void> {
   let recoveryAttempts = 0
+  let recoveryPendingError: Error | null = null
 
   while (ownsActiveRun(run)) {
     let terminalSeen = false
     const recovering = recoveryAttempts > 0
     const replay: ObservedSSEEvent[] = []
+    let response: Response | null = null
 
     try {
-      const response = await fetch(url, {
+      response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -284,60 +327,72 @@ async function observeRun(
         body: JSON.stringify(requestBody),
         signal: run.controller.signal,
       })
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('Response body is not readable')
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (!ownsActiveRun(run)) return
-
-        buffer += decoder.decode(value, { stream: true })
-        let boundaryIndex: number
-        while ((boundaryIndex = buffer.indexOf('\n\n')) !== -1) {
-          const eventData = buffer.substring(0, boundaryIndex)
-          buffer = buffer.substring(boundaryIndex + 2)
-
-          const lines = eventData.split('\n')
-          const eventIdLine = lines.find(line => line.startsWith('id:'))
-          const parsedEventId = eventIdLine === undefined
-            ? null
-            : Number(eventIdLine.slice(3).trim())
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue
-            const data = line.slice(6)
-            if (data === '[DONE]') continue
-
-            try {
-              const parsed: SSEEvent = JSON.parse(data)
-              terminalSeen ||= isAuthoritativeTerminal(parsed, runKind)
-              const observedEvent = {
-                event: parsed,
-                eventId: Number.isSafeInteger(parsedEventId) ? parsedEventId : null,
-              }
-
-              if (recovering) {
-                replay.push(observedEvent)
-                continue
-              }
-
-              run.observedEvents.push(observedEvent)
-              debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
-              if (ownsActiveRun(run)) updateSharedEvents(prev => [...prev, parsed])
-            } catch (parseError) {
-              console.error('Failed to parse SSE event:', parseError, data)
-            }
-          }
-        }
-      }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') throw err
       debug.log('[useChatStream] Observer detached with error; recovering same turn', err)
+    }
+
+    if (response && !response.ok) {
+      const httpError = await buildHttpError(response)
+      if (!recovering || response.status !== 409) throw httpError
+      recoveryPendingError = httpError
+    } else if (response) {
+      recoveryPendingError = null
+      try {
+        const reader = response.body?.getReader()
+        if (!reader) throw new Error('Response body is not readable')
+
+        const decoder = new TextDecoder()
+        let buffer = ''
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (!ownsActiveRun(run)) return
+
+          buffer += decoder.decode(value, { stream: true })
+          let boundaryIndex: number
+          while ((boundaryIndex = buffer.indexOf('\n\n')) !== -1) {
+            const eventData = buffer.substring(0, boundaryIndex)
+            buffer = buffer.substring(boundaryIndex + 2)
+
+            const lines = eventData.split('\n')
+            const eventIdLine = lines.find(line => line.startsWith('id:'))
+            const parsedEventId = eventIdLine === undefined
+              ? null
+              : Number(eventIdLine.slice(3).trim())
+
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue
+              const data = line.slice(6)
+              if (data === '[DONE]') continue
+
+              try {
+                const parsed: SSEEvent = JSON.parse(data)
+                terminalSeen ||= isAuthoritativeTerminal(parsed, runKind)
+                const observedEvent = {
+                  event: parsed,
+                  eventId: Number.isSafeInteger(parsedEventId) ? parsedEventId : null,
+                }
+
+                if (recovering) {
+                  replay.push(observedEvent)
+                  continue
+                }
+
+                run.lastObservedEventId = observedEvent.eventId ?? run.lastObservedEventId
+                run.observedEventCount += 1
+                debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
+                if (ownsActiveRun(run)) updateSharedEvents(prev => [...prev, parsed])
+              } catch (parseError) {
+                console.error('Failed to parse SSE event:', parseError, data)
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') throw err
+        debug.log('[useChatStream] Observer detached with error; recovering same turn', err)
+      }
     }
 
     if (recovering) reconcileReplay(run, replay)
@@ -357,7 +412,7 @@ async function observeRun(
     }
 
     if (recoveryAttempts >= getRecoveryMaxAttempts()) {
-      throw new Error(
+      throw recoveryPendingError ?? new Error(
         'The response connection ended before the run completed. Reopen this chat to retry recovery.',
       )
     }
@@ -385,7 +440,8 @@ function startStreamRun(
     runId: ++nextRunId,
     controller: new AbortController(),
     sessionId,
-    observedEvents: [],
+    lastObservedEventId: null,
+    observedEventCount: 0,
   }
   activeStreamRun = run
   emitSharedState({ isLoading: true, error: null })

@@ -3742,6 +3742,9 @@ async def chat_with_opus(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return StreamingResponse(
+        # Agent Studio does not expose stable turn identities or a same-turn
+        # observer-recovery request contract. Keep chat/flow keepalive/cursor
+        # transport scoped rather than changing this unrelated client lifecycle.
         executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
         headers={
