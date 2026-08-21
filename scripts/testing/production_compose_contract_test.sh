@@ -121,6 +121,7 @@ config = json.load(open(sys.argv[1], encoding="utf-8"))
 backend_env = config["services"]["backend"]["environment"]
 frontend_env = config["services"]["frontend"]["environment"]
 weaviate_env = config["services"]["weaviate"]["environment"]
+assert backend_env["SENTRY_LOG_EVENT_LEVEL"] == ""
 assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
 assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"

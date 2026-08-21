@@ -21,6 +21,7 @@ SENTRY_ENVIRONMENT=local
 SENTRY_RELEASE=
 SENTRY_ALLOW_INSECURE_DSN=false
 SENTRY_SYNTHETIC_TEST_ENDPOINTS_ENABLED=false
+SENTRY_LOG_EVENT_LEVEL=
 SENTRY_TRACES_SAMPLE_RATE=
 SENTRY_PROFILES_SAMPLE_RATE=
 SENTRY_AI_AGENTS_MONITORING_ENABLED=false
@@ -42,6 +43,27 @@ TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS=500
 Use `SENTRY_RELEASE` for every deployed candidate so events can be tied back to
 the exact commit. Leave tracing and profiling blank unless transport and
 redaction have been explicitly validated for that environment.
+
+`SENTRY_LOG_EVENT_LEVEL` controls whether ordinary backend Python logs create
+Sentry error events. Blank keeps logs as breadcrumbs only. `WARNING`, `ERROR`,
+and `CRITICAL` are supported; start production at `ERROR` after a sanitized dev
+smoke. Promoted events discard the log message and arguments, retain safe
+logger/level/code-location metadata, synthesize a title from those safe fields,
+and group by the originating log statement. This captures otherwise-unreported
+error logs without storing curator or document content. Explicit
+exception-reporting helpers mark their companion log record so the promoted-log
+path does not create a duplicate event.
+
+Expected successful liveness, readiness, PDF-extraction-health, document-status,
+and batch-status polling transactions are dropped after completion. A failed
+transaction on the same route is retained. This keeps operational polling from
+dominating the transaction store without hiding provider, readiness, document,
+or batch failures.
+
+Chat and flow transactions carry stable hashed application identifiers as
+top-level Sentry tags as well as span data. This lets the TraceReview Sentry
+collector find a transaction directly from a raw trace, session, document,
+flow, or flow-run ID without storing the raw identifier in Sentry.
 
 Use separate Sentry projects/DSNs for dev and production. `SENTRY_ENVIRONMENT`
 is still required, but it is a label/filter, not the isolation boundary.
@@ -168,6 +190,63 @@ verify all of the following:
 - TraceReview can load/export/analyze the same Langfuse trace;
 - no dev trial data lands in the production Sentry project.
 
+### Bounded Dev Central-Hub Evaluation
+
+Use the dev-only Sentry project to evaluate whether Sentry can become the
+primary debugging surface for application and agent failures. This bounded
+retest uses the production-recommended log threshold after the initial
+`WARNING+` pass proved too noisy:
+
+```bash
+SENTRY_LOG_EVENT_LEVEL=ERROR
+SENTRY_TRACES_SAMPLE_RATE=1.0
+SENTRY_PROFILES_SAMPLE_RATE=1.0
+SENTRY_AI_AGENTS_MONITORING_ENABLED=true
+SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=false
+SENTRY_OPENAI_INTEGRATION_ENABLED=false
+SENTRY_GEN_AI_STREAM_SPANS_ENABLED=false
+SENTRY_SEND_DEFAULT_PII=false
+SENTRY_OPENAI_INCLUDE_PROMPTS=false
+SENTRY_AI_CONTENT_CAPTURE_TIER=2
+SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
+SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50
+```
+
+Run the evidence pass with the reviewed manual AI Curation spans. Keep the
+optional OpenAI integrations disabled unless the manual spans leave a specific
+evidence gap; the current spans already cover agent, model, tool, validation,
+finalization, token, cost, and timing data. Do not enable standalone streamed
+GenAI spans: the self-hosted trial dropped those items internally.
+
+The error redactor drops one exact third-party cleanup signature observed after
+successful chats: a handled `asyncio` logging `RuntimeError` whose complete
+12-frame stack runs from `httpx._client.aclose` through the HTTPX/httpcore/AnyIO
+cleanup path to `asyncio.base_events._check_closed`, with every frame outside
+the application. Any different mechanism, stack, or event with an application
+frame is retained.
+
+The comparison corpus should include a health request, an ordinary API
+request, simple chat, document-grounded chat, a curation flow, a handled 5xx,
+an unhandled exception, a promoted warning/error log, and a tool or background
+failure. For each case, record whether Sentry provides:
+
+- one correctly named request transaction without duplicate framework events;
+- ordered agent, model, and tool spans with useful timing and status;
+- the release plus safe component, operation, model, tool, and hashed
+  correlation metadata;
+- bounded Tier-2 debugging context without credentials or unbounded curator or
+  document content;
+- a useful error issue linked to the surrounding transaction;
+- an ingest result rather than `too_large:event` or another relay/store drop.
+
+Compare those results with the matching Langfuse/TraceReview evidence. Do not
+retire TraceReview based only on Sentry UI parity: Agent Studio and Prompt
+Explorer currently call TraceReview APIs, and TraceReview provides exact
+payload retrieval, reconstruction, token/cost analysis, and durable diagnostic
+views that Sentry intentionally bounds or redacts. Retirement requires either
+replacement Sentry-backed APIs for those consumers or an explicit decision to
+remove the affected capabilities.
+
 ### Deterministic Curation Prep And Handoff Spans
 
 Not every AI Curation "agent" path is an OpenAI model call. Curation prep and
@@ -210,7 +289,8 @@ called during app startup. The SDK setup:
 - uses `before_send` and `before_send_transaction` to redact event payloads;
 - sets `send_default_pii=False`;
 - drops local stack-frame variables with `include_local_variables=False`;
-- keeps Sentry logging integration as breadcrumbs only;
+- keeps logs as breadcrumbs by default and promotes the configured
+  `SENTRY_LOG_EVENT_LEVEL` threshold to redacted, safely grouped events;
 - disables Starlette/FastAPI handled-status auto-capture so explicit handled
   5xx reports do not duplicate framework events.
 
@@ -369,6 +449,7 @@ instrumentation.
 Sentry is for actionable application error events:
 
 - unhandled backend exceptions;
+- backend exception/error logs promoted through `SENTRY_LOG_EVENT_LEVEL`;
 - explicit handled 5xx failures;
 - caught runtime/background failures that would otherwise disappear in logs;
 - enough bounded context to locate the affected component and release.

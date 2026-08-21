@@ -342,18 +342,18 @@ def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     # Canonical object rows carrying an evidence-record reference pass.
     smoke.require_batch_plumbing_payload(
         {
-            "001_01_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json_json_1_6b19876eca52.json": [
+            "batch_release_smoke_result_json_json_1_6b19876eca52_237f04d60ef132a9ef5eb3c77acab378.json": [
                 {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
             ]
         },
         output_format="json",
     )
 
-    # Collision-unsafe pre-v1.1 names are no longer the runtime export shape.
+    # Obsolete ZIP-renamed prefixes are no longer the runtime export shape.
     with pytest.raises(smoke.SmokeFailure, match="runtime export naming shape"):
         smoke.require_batch_plumbing_payload(
             {
-                "001_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json.json": [
+                "001_01_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json_json_1_6b19876eca52.json": [
                     {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
                 ]
             },
@@ -382,7 +382,7 @@ def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     with pytest.raises(smoke.SmokeFailure, match="evidence-record reference"):
         smoke.require_batch_plumbing_payload(
             {
-                "001_01_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json_json_1_6b19876eca52.json": [
+                "batch_release_smoke_result_json_json_1_6b19876eca52_237f04d60ef132a9ef5eb3c77acab378.json": [
                     {"item": "crb", "evidence_record_ids": []}
                 ]
             },

@@ -802,6 +802,36 @@ def get_flow_supervisor_parallel_tool_calls_enabled() -> bool:
 # for the documented rationale and consequences of each.
 # =============================================================================
 
+# --- Observability ---
+
+
+def get_sentry_log_event_level() -> int | None:
+    """Minimum Python log level promoted to a Sentry event.
+
+    A blank value keeps promotion disabled. Restricting the accepted values
+    prevents accidental high-volume INFO or DEBUG event ingestion.
+    """
+
+    raw = os.getenv("SENTRY_LOG_EVENT_LEVEL", "").strip()
+    if not raw:
+        return None
+
+    levels = {
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    level = levels.get(raw.upper())
+    if level is None:
+        logger.warning(
+            "Invalid log event level for SENTRY_LOG_EVENT_LEVEL: %s; expected "
+            "blank or one of WARNING, ERROR, CRITICAL. Log-event promotion "
+            "remains disabled.",
+            raw,
+        )
+    return level
+
+
 # --- Document sources ---
 
 

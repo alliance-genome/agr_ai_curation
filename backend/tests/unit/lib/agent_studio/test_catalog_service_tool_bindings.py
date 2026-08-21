@@ -627,7 +627,7 @@ def test_import_package_binding_target_adds_runtime_helper_paths(monkeypatch):
         if module_name == "agr_ai_curation_runtime" or module_name.startswith(
             ("agr_ai_curation_runtime.", "agr_ai_curation_alliance.")
         ):
-            sys.modules.pop(module_name, None)
+            monkeypatch.delitem(sys.modules, module_name, raising=False)
 
     imported = catalog_service._import_package_binding_target(binding)
 

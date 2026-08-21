@@ -48,7 +48,12 @@ def log_exception(
 ) -> None:
     """Log an exception with traceback so client responses can stay sanitized."""
 
-    logger.log(level, message, exc_info=(type(exc), exc, exc.__traceback__))
+    logger.log(
+        level,
+        message,
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra={"sentry_skip_event": True},
+    )
 
 
 def raise_sanitized_http_exception(
