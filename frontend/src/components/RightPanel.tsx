@@ -50,6 +50,8 @@ import type { SSEEvent } from '../hooks/useChatStream'
  *     <RightPanel
  *       sessionId={sessionId}
  *       sseEvents={events}
+ *       eventStreamVersion={eventStreamVersion}
+ *       durableReconciliationVersion={durableReconciliationVersion}
  *       className="right-panel-container"
  *     />
  *   )
@@ -62,9 +64,9 @@ import type { SSEEvent } from '../hooks/useChatStream'
 interface ExtendedRightPanelProps extends RightPanelProps {
   sseEvents: SSEEvent[]
   /** Identity of the retained SSE transcript for replacement reconciliation. */
-  eventStreamVersion?: number
+  eventStreamVersion: number
   /** Durable current-turn transcript replacement identity. */
-  durableReconciliationVersion?: number
+  durableReconciliationVersion: number
   /** Callback to execute a curation flow */
   onExecuteFlow?: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
   /** Current document ID loaded in PDF viewer */
@@ -78,8 +80,8 @@ interface ExtendedRightPanelProps extends RightPanelProps {
 const RightPanel: React.FC<ExtendedRightPanelProps> = ({
   sessionId,
   sseEvents,
-  eventStreamVersion = 0,
-  durableReconciliationVersion = 0,
+  eventStreamVersion,
+  durableReconciliationVersion,
   className,
   onStop,
   isStreaming,

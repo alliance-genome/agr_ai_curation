@@ -312,6 +312,37 @@ describe('useChatStream shared lifecycle', () => {
     unmount()
   })
 
+  it('clears the initial transport error after recovery successfully reconnects', async () => {
+    vi.mocked(global.fetch)
+      .mockRejectedValueOnce(new TypeError('stale network unavailable'))
+      .mockResolvedValueOnce(sseResponse([{
+        type: 'RUN_STARTED',
+        session_id: 'session-reconnected',
+        turn_id: 'turn-reconnected',
+      }], [0]))
+      .mockResolvedValue(new Response(JSON.stringify({
+        detail: 'The recovered observer detached again',
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-reconnected', {
+        turnId: 'turn-reconnected',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(4)
+    expect(result.current.error?.message).toContain('HTTP error! status: 409')
+    expect(result.current.error?.message).not.toContain('stale network unavailable')
+
+    result.current.clearEvents()
+    unmount()
+  })
+
   it('renders new cursored events before a recovered live observer closes', async () => {
     const encoder = new TextEncoder()
     let recoveredController: ReadableStreamDefaultController<Uint8Array> | null = null

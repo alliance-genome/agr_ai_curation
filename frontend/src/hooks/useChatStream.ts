@@ -359,6 +359,7 @@ async function observeRun(
       recoveryPendingError = httpError
     } else if (response) {
       recoveryPendingError = null
+      initialTransportError = null
       try {
         const reader = response.body?.getReader()
         if (!reader) throw new Error('Response body is not readable')

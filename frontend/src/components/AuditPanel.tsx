@@ -45,10 +45,10 @@ export interface AuditPanelProps {
    * Identity of the retained SSE event list. Ordinary turns and durable
    * reconciliation both replace this list.
    */
-  eventStreamVersion?: number
+  eventStreamVersion: number
 
   /** Changes only when durable history replaces the current turn transcript. */
-  durableReconciliationVersion?: number
+  durableReconciliationVersion: number
 
   /**
    * Optional initial events for testing purposes.
@@ -180,8 +180,8 @@ const clearAuditEventsFromStorage = (
 const AuditPanel: React.FC<AuditPanelProps> = ({
   sessionId,
   sseEvents,
-  eventStreamVersion = 0,
-  durableReconciliationVersion = 0,
+  eventStreamVersion,
+  durableReconciliationVersion,
   initialEvents = [],
   onClear,
   className,
@@ -354,9 +354,17 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       }
     })
 
-    if (transcriptWasDurablyReconciled && parsedEvents.length > 0) {
+    const malformedDurableEvent = transcriptWasDurablyReconciled
+      ? parsedEvents.find(event => !event.turnId)
+      : undefined
+    if (malformedDurableEvent) {
+      console.error(
+        '[AUDIT] Skipping durable reconciliation with an audit event missing turn_id:',
+        malformedDurableEvent,
+      )
+    } else if (transcriptWasDurablyReconciled && parsedEvents.length > 0) {
       const reconciledTurnIds = new Set(
-        parsedEvents.flatMap(event => event.turnId ? [event.turnId] : []),
+        parsedEvents.map(event => event.turnId as string),
       )
       setEvents(previous => [
         ...previous.filter(event => !event.turnId || !reconciledTurnIds.has(event.turnId)),

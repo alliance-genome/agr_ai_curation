@@ -8,9 +8,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ComponentProps } from 'react'
 import type { AuditEvent } from '../../types/AuditEvent'
-import AuditPanel from '../../components/AuditPanel'
+import AuditPanelComponent from '../../components/AuditPanel'
 import { getChatRenderCacheKeys } from '../../lib/chatCacheKeys'
+
+type AuditPanelTestProps = Omit<
+  ComponentProps<typeof AuditPanelComponent>,
+  'eventStreamVersion' | 'durableReconciliationVersion'
+> & Partial<Pick<
+  ComponentProps<typeof AuditPanelComponent>,
+  'eventStreamVersion' | 'durableReconciliationVersion'
+>>
+
+function AuditPanel({
+  eventStreamVersion = 0,
+  durableReconciliationVersion = 0,
+  ...props
+}: AuditPanelTestProps) {
+  return (
+    <AuditPanelComponent
+      {...props}
+      eventStreamVersion={eventStreamVersion}
+      durableReconciliationVersion={durableReconciliationVersion}
+    />
+  )
+}
 
 const mockUseAuth = vi.hoisted(() => vi.fn())
 
@@ -537,6 +560,47 @@ describe('AuditPanel - Event Display (T018)', () => {
         'Preserve this warning across durable reconciliation'
       )
     })
+  })
+
+  it('rejects durable audit reconciliation without a turn identity', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const auditCacheKey = getChatRenderCacheKeys('user-1', 'session123').auditEvents
+    const warning = (message: string, turnId?: string) => ({
+      type: 'DOMAIN_WARNING' as const,
+      timestamp: '2026-05-11T18:05:00.000Z',
+      session_id: 'session123',
+      ...(turnId ? { turn_id: turnId } : {}),
+      details: { domain: 'flow', message },
+    })
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('Live warning', 'turn-1')]}
+        eventStreamVersion={1}
+        durableReconciliationVersion={0}
+      />
+    )
+    await screen.findByText('[DOMAIN WARNING] Live warning')
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('Malformed durable warning')]}
+        eventStreamVersion={2}
+        durableReconciliationVersion={1}
+      />
+    )
+
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('missing turn_id'),
+        expect.any(Object),
+      )
+    })
+    expect(screen.getAllByText('[DOMAIN WARNING] Live warning')).toHaveLength(1)
+    expect(screen.queryByText('[DOMAIN WARNING] Malformed durable warning')).not.toBeInTheDocument()
+    expect(localStorage.getItem(auditCacheKey)).not.toContain('Malformed durable warning')
   })
 })
 

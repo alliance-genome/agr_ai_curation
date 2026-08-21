@@ -6,11 +6,34 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ComponentProps } from 'react'
 import { MemoryRouter } from 'react-router-dom'
-import RightPanel from '../../components/RightPanel'
+import RightPanelComponent from '../../components/RightPanel'
 import { INITIAL_TABS } from '../../types/ComponentProps'
+
+type RightPanelTestProps = Omit<
+  ComponentProps<typeof RightPanelComponent>,
+  'eventStreamVersion' | 'durableReconciliationVersion'
+> & Partial<Pick<
+  ComponentProps<typeof RightPanelComponent>,
+  'eventStreamVersion' | 'durableReconciliationVersion'
+>>
+
+function RightPanel({
+  eventStreamVersion = 0,
+  durableReconciliationVersion = 0,
+  ...props
+}: RightPanelTestProps) {
+  return (
+    <RightPanelComponent
+      {...props}
+      eventStreamVersion={eventStreamVersion}
+      durableReconciliationVersion={durableReconciliationVersion}
+    />
+  )
+}
 
 const mockUseAuth = vi.hoisted(() => vi.fn())
 
@@ -166,7 +189,6 @@ describe('RightPanel - Tab Switching (T019)', () => {
     renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     const allTabs = screen.getAllByRole('tab')
-    const firstTab = allTabs[0]
     const secondTab = allTabs[1]
 
     // Click second tab
@@ -204,7 +226,7 @@ describe('RightPanel - AuditPanel State Persistence (T019)', () => {
 
     // AuditPanel should be hidden but not unmounted (to preserve state)
     // Check if audit-panel still exists in DOM (might be hidden via CSS or hidden prop)
-    const hiddenAuditPanel = screen.queryByTestId('audit-panel')
+    expect(screen.queryByTestId('audit-panel')).toBeInTheDocument()
 
     // Switch back to Audit tab
     const firstTab = screen.getAllByRole('tab')[0]
