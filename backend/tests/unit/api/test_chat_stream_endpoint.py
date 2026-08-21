@@ -652,6 +652,12 @@ def test_chat_stream_endpoint_reattaches_to_active_same_turn_without_reclaiming(
         "get_supervisor_tool_agent_map",
         lambda: (_ for _ in ()).throw(AssertionError("reattach should not resolve runner config")),
     )
+    keepalive_calls = []
+    _patch_chat_impl(
+        monkeypatch,
+        "get_chat_sse_keepalive_interval_seconds",
+        lambda: keepalive_calls.append(True) or 17.0,
+    )
     _patch_chat_impl(
         monkeypatch,
         "_prepare_chat_stream_turn",
@@ -681,6 +687,7 @@ def test_chat_stream_endpoint_reattaches_to_active_same_turn_without_reclaiming(
     ]
     assert chat._LOCAL_SESSION_OWNERS[session_id] == "auth-sub"
     assert chat._LOCAL_CANCEL_EVENTS[session_id] is existing_event
+    assert keepalive_calls == [True]
 
 
 def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkeypatch):

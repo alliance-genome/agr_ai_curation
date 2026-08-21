@@ -12,6 +12,45 @@ from src.lib.executable_runs import (
 
 
 @pytest.mark.asyncio
+async def test_observer_keepalive_is_transport_only_and_not_replayed(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_event_replay_limit",
+        lambda: 10,
+    )
+    manager = ExecutableRunManager()
+    continue_stream = asyncio.Event()
+
+    async def stream_factory():
+        await continue_stream.wait()
+        yield 'data: {"type":"turn_completed"}\n\n'
+
+    run, _ = await manager.get_or_start_stream(
+        run_id="assistant_chat_turn:session-keepalive:turn-keepalive",
+        kind="assistant_chat_turn",
+        owner_user_id="user-1",
+        session_id="session-keepalive",
+        turn_id="turn-keepalive",
+        stream_factory=stream_factory,
+    )
+
+    observer = manager.observe(run, keepalive_interval_seconds=0.01)
+    keepalive = await asyncio.wait_for(observer.__anext__(), timeout=1)
+
+    assert keepalive == ": keepalive\n\n"
+    assert run.events == []
+
+    continue_stream.set()
+    terminal = await asyncio.wait_for(observer.__anext__(), timeout=1)
+    assert "turn_completed" in terminal
+    assert run.events == [terminal]
+
+    replay = manager.observe(run, keepalive_interval_seconds=0.01)
+    assert await asyncio.wait_for(replay.__anext__(), timeout=1) == terminal
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(replay.__anext__(), timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_observer_detach_does_not_cancel_producer(monkeypatch):
     monkeypatch.setattr(
         "src.lib.executable_runs.get_executable_run_event_replay_limit",

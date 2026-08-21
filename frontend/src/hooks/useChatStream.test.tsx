@@ -33,9 +33,12 @@ function sseResponse(events: readonly object[]): Response {
 describe('useChatStream shared lifecycle', () => {
   beforeEach(() => {
     vi.mocked(global.fetch).mockReset()
+    vi.stubEnv('VITE_CHAT_STREAM_RECOVERY_DELAY_MS', '0')
+    vi.stubEnv('VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS', '3')
   })
 
   afterEach(() => {
+    vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
 
@@ -103,7 +106,12 @@ describe('useChatStream shared lifecycle', () => {
 
     expect(global.fetch).toHaveBeenCalledTimes(1)
 
-    act(() => streamController?.close())
+    act(() => {
+      streamController?.enqueue(encoder.encode(
+        'data: {"type":"turn_completed","session_id":"session-1","turn_id":"turn-1"}\n\n',
+      ))
+      streamController?.close()
+    })
     await act(async () => {
       await firstRun
     })
@@ -111,6 +119,122 @@ describe('useChatStream shared lifecycle', () => {
 
     second.result.current.clearEvents()
     second.unmount()
+  })
+
+  it('re-observes the same chat turn after premature EOF and de-duplicates replay', async () => {
+    const firstEvents = [
+      { type: 'RUN_STARTED', session_id: 'session-recover', turn_id: 'turn-recover' },
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        session_id: 'session-recover',
+        turn_id: 'turn-recover',
+        content: 'part',
+      },
+    ]
+    const replayEvents = [
+      { ...firstEvents[0], timestamp: '2026-08-21T12:00:00Z' },
+      firstEvents[1],
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        session_id: 'session-recover',
+        turn_id: 'turn-recover',
+        content: 'ial',
+      },
+      {
+        type: 'turn_completed',
+        session_id: 'session-recover',
+        turn_id: 'turn-recover',
+      },
+    ]
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(sseResponse(firstEvents))
+      .mockResolvedValueOnce(sseResponse(replayEvents))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-recover', {
+        turnId: 'turn-recover',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(global.fetch).mock.calls[0][1]?.body).toBe(
+      vi.mocked(global.fetch).mock.calls[1][1]?.body,
+    )
+    expect(result.current.events.filter(event => event.type === 'RUN_STARTED')).toHaveLength(1)
+    expect(result.current.events.filter(event => event.type === 'TEXT_MESSAGE_CONTENT')).toEqual([
+      expect.objectContaining({ content: 'part' }),
+      expect.objectContaining({ content: 'ial' }),
+    ])
+    expect(result.current.events.at(-1)?.type).toBe('turn_completed')
+    expect(result.current.isLoading).toBe(false)
+    expect(result.current.error).toBeNull()
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('keeps running state active while a detached observer is recovering', async () => {
+    const recoveredResponse = deferred<Response>()
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(sseResponse([{
+        type: 'RUN_STARTED',
+        session_id: 'session-recovering',
+        turn_id: 'turn-recovering',
+      }]))
+      .mockImplementationOnce(() => recoveredResponse.promise)
+    const { result, unmount } = renderHook(() => useChatStream())
+    let request!: Promise<void>
+
+    act(() => {
+      request = result.current.sendMessage('question', 'session-recovering', {
+        turnId: 'turn-recovering',
+      })
+    })
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2))
+    expect(result.current.isLoading).toBe(true)
+    expect(result.current.error).toBeNull()
+
+    recoveredResponse.resolve(sseResponse([
+      {
+        type: 'RUN_STARTED',
+        session_id: 'session-recovering',
+        turn_id: 'turn-recovering',
+      },
+      {
+        type: 'turn_completed',
+        session_id: 'session-recovering',
+        turn_id: 'turn-recovering',
+      },
+    ]))
+    await act(async () => await request)
+
+    expect(result.current.isLoading).toBe(false)
+    expect(result.current.events.filter(event => event.type === 'RUN_STARTED')).toHaveLength(1)
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('surfaces an explicit error only after same-turn recovery is exhausted', async () => {
+    vi.stubEnv('VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS', '1')
+    vi.mocked(global.fetch).mockResolvedValue(sseResponse([]))
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-exhausted', {
+        turnId: 'turn-exhausted',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+    expect(result.current.error?.message).toContain('before the run completed')
+    expect(result.current.isLoading).toBe(false)
+
+    result.current.clearEvents()
+    unmount()
   })
 
   it('rechecks terminal state when a run stops during remount subscription', async () => {

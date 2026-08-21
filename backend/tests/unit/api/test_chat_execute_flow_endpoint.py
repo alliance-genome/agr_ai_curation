@@ -2131,6 +2131,12 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
+    keepalive_calls = []
+    monkeypatch.setattr(
+        chat,
+        "get_chat_sse_keepalive_interval_seconds",
+        lambda: keepalive_calls.append(True) or 17.0,
+    )
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
@@ -2163,6 +2169,7 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
     assert flow.execution_count == 0
     assert chat._LOCAL_SESSION_OWNERS[session_id] == "auth-sub"
     assert chat._LOCAL_CANCEL_EVENTS[session_id] is existing_event
+    assert keepalive_calls == [True]
 
 
 def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog):

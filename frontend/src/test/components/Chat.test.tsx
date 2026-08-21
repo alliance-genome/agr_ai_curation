@@ -325,6 +325,46 @@ describe('Chat persistence', () => {
     expect(markEventsProcessed).toHaveBeenCalledWith(4, 2)
   })
 
+  it('reconciles a durable full-answer replay without duplicating partial text', async () => {
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-1')
+    localStorage.setItem(
+      chatStorageKeys.messages,
+      JSON.stringify({
+        session_id: 'session-1',
+        messages: [{
+          id: 'assistant-turn-recover',
+          role: 'assistant',
+          content: 'part',
+          timestamp: new Date().toISOString(),
+          turnId: 'turn-recover',
+        }],
+      }),
+    )
+
+    renderChat({
+      sessionId: 'session-1',
+      eventStreamVersion: 5,
+      processedEventCount: 0,
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          turn_id: 'turn-recover',
+          content: 'partial answer',
+          observer_reconcile: true,
+        },
+        {
+          type: 'turn_completed',
+          session_id: 'session-1',
+          turn_id: 'turn-recover',
+        },
+      ],
+    })
+
+    expect(await screen.findByText('partial answer')).toBeInTheDocument()
+    expect(screen.queryByText('partpartial answer')).not.toBeInTheDocument()
+  })
+
   it('advances past stale-only events without rendering them', async () => {
     const markEventsProcessed = vi.fn()
     renderChat({

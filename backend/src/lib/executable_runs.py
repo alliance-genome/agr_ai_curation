@@ -220,7 +220,13 @@ class ExecutableRunManager:
             run.outcome_status = status
             run.updated_at = datetime.now(timezone.utc)
 
-    async def observe(self, run: ExecutableRun) -> AsyncIterator[str]:
+    async def observe(
+        self,
+        run: ExecutableRun,
+        *,
+        keepalive_interval_seconds: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Replay and observe a run, optionally yielding transport-only SSE comments."""
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         async with self._lock:
             replay = list(run.events)
@@ -236,7 +242,19 @@ class ExecutableRunManager:
                 return
 
             while True:
-                event = await queue.get()
+                if keepalive_interval_seconds is None:
+                    event = await queue.get()
+                else:
+                    try:
+                        event = await asyncio.wait_for(
+                            queue.get(),
+                            timeout=keepalive_interval_seconds,
+                        )
+                    except TimeoutError:
+                        # This comment is deliberately not published through
+                        # _publish(), so it is neither retained nor replayed.
+                        yield ": keepalive\n\n"
+                        continue
                 if event is None:
                     return
                 yield event

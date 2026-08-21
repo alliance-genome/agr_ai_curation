@@ -7,6 +7,7 @@ from src.lib.executable_runs import (
     ExecutableRunConflictError,
     executable_run_manager,
 )
+from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
 from src.lib.observability.sentry import (
     gen_ai_workflow_transaction,
     hash_sentry_identifier,
@@ -466,7 +467,10 @@ async def chat_stream_endpoint(
         )
         if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
             return StreamingResponse(
-                executable_run_manager.observe(active_executable_run),
+                executable_run_manager.observe(
+                    active_executable_run,
+                    keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1110,7 +1114,10 @@ async def chat_stream_endpoint(
         await stream_lifecycle.cleanup()
 
     return StreamingResponse(
-        executable_run_manager.observe(executable_run),
+        executable_run_manager.observe(
+            executable_run,
+            keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -26,6 +26,7 @@ from src.lib.executable_runs import (
     ExecutableRunConflictError,
     executable_run_manager,
 )
+from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.observability.sentry import set_sentry_transaction_identifiers
@@ -784,7 +785,10 @@ async def execute_flow_endpoint(
         )
         if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
             return StreamingResponse(
-                executable_run_manager.observe(active_executable_run),
+                executable_run_manager.observe(
+                    active_executable_run,
+                    keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1347,7 +1351,10 @@ async def execute_flow_endpoint(
         await stream_lifecycle.cleanup()
 
     return StreamingResponse(
-        executable_run_manager.observe(executable_run),
+        executable_run_manager.observe(
+            executable_run,
+            keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

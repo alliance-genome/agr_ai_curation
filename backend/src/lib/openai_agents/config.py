@@ -1785,6 +1785,18 @@ def get_executable_run_retention_seconds() -> int:
     return max(1, _get_env_int_with_fallback("EXECUTABLE_RUN_RETENTION_SECONDS", 900))
 
 
+def get_chat_sse_keepalive_interval_seconds() -> float:
+    """Seconds between transport-only chat/flow observer SSE comments.
+
+    The cadence keeps otherwise silent public SSE connections active without
+    adding replayable executable-run events. Default 20 seconds.
+    """
+    return max(
+        0.1,
+        _get_env_float_with_fallback("CHAT_SSE_KEEPALIVE_INTERVAL_SECONDS", 20.0),
+    )
+
+
 def get_runtime_observability_tag_value_max_chars() -> int:
     """Char cap for runtime observability tag values (RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS).
 
