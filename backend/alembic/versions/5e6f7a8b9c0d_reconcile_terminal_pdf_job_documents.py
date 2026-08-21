@@ -36,6 +36,7 @@ def upgrade() -> None:
                     completed_at,
                     ROW_NUMBER() OVER (
                         PARTITION BY document_id
+                        -- updated_at is mutable activity time, not creation chronology.
                         ORDER BY created_at DESC, id DESC
                     ) AS job_rank
                 FROM pdf_processing_jobs

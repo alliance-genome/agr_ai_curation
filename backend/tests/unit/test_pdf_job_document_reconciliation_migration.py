@@ -90,6 +90,7 @@ def _insert_job(
     document_id: str,
     status: str,
     created_at: str,
+    updated_at: str | None = None,
     message: str | None = None,
 ) -> None:
     connection.execute(
@@ -100,7 +101,7 @@ def _insert_job(
                 updated_at, completed_at
             ) VALUES (
                 :id, :document_id, :status, :message, :created_at, :created_at,
-                :created_at, :completed_at
+                :updated_at, :completed_at
             )
             """
         ),
@@ -110,6 +111,7 @@ def _insert_job(
             "status": status,
             "message": message,
             "created_at": created_at,
+            "updated_at": updated_at or created_at,
             "completed_at": created_at if status in {"failed", "cancelled", "completed"} else None,
         },
     )
@@ -197,6 +199,7 @@ def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelle
             document_id="tie-newer-active",
             status="failed",
             created_at="2026-08-20T10:00:00Z",
+            updated_at="2026-08-20T12:00:00Z",
         )
         _insert_job(
             connection,
@@ -204,6 +207,7 @@ def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelle
             document_id="tie-newer-active",
             status="running",
             created_at="2026-08-20T10:00:00Z",
+            updated_at="2026-08-20T11:00:00Z",
         )
 
         setattr(module, "op", ConnectionOp(connection))

@@ -29,6 +29,11 @@ _ACTIVE_STATUSES = {
     PdfJobStatus.RUNNING.value,
     PdfJobStatus.CANCEL_REQUESTED.value,
 }
+# updated_at is mutable activity time, so equal creation times use a stable ID tie-break.
+_JOB_CREATION_ORDERING = (
+    PdfProcessingJob.created_at.desc(),
+    PdfProcessingJob.id.desc(),
+)
 _DEFAULT_STALE_TIMEOUT_SECONDS = 7200
 _MIN_STALE_TIMEOUT_SECONDS = 300
 
@@ -109,7 +114,7 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     latest_job = session.execute(
         select(PdfProcessingJob)
         .where(PdfProcessingJob.document_id == job.document_id)
-        .order_by(PdfProcessingJob.created_at.desc(), PdfProcessingJob.id.desc())
+        .order_by(*_JOB_CREATION_ORDERING)
         .limit(1)
     ).scalar_one_or_none()
     if latest_job is None or latest_job.id != job.id:
@@ -270,7 +275,7 @@ def get_latest_job_for_document(
                 PdfProcessingJob.document_id == _to_uuid(document_id),
                 PdfProcessingJob.user_id == user_id,
             )
-            .order_by(PdfProcessingJob.created_at.desc(), PdfProcessingJob.id.desc())
+            .order_by(*_JOB_CREATION_ORDERING)
             .limit(1)
         ).scalar_one_or_none()
         if job and reconcile_stale:
@@ -343,7 +348,7 @@ def list_jobs(
 
         total = session.execute(count_stmt).scalar_one()
         rows = session.execute(
-            stmt.order_by(PdfProcessingJob.created_at.desc(), PdfProcessingJob.id.desc())
+            stmt.order_by(*_JOB_CREATION_ORDERING)
             .offset(max(0, offset))
             .limit(max(1, min(limit, 200)))
         ).scalars().all()
