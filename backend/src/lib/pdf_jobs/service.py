@@ -13,7 +13,10 @@ from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 from src.schemas.pdf_jobs import PdfJobListResponse, PdfJobResponse
-from src.services.processing_status_policy import PDF_JOB_STATUS_TO_PROCESSING_STATUS
+from src.services.processing_status_policy import (
+    ACTIVE_PROCESSING_STATUSES,
+    PDF_JOB_STATUS_TO_PROCESSING_STATUS,
+)
 
 
 _TERMINAL_STATUSES = {
@@ -117,16 +120,20 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     ).scalar_one_or_none()
     if document is None:
         return False
+    if document.status not in ACTIVE_PROCESSING_STATUSES:
+        return False
+
+    terminal_message = job.error_message or job.message
+    if terminal_message is None:
+        raise ValueError(f"Terminal job {job.id} has no failure message to reconcile")
 
     mapped_status = PDF_JOB_STATUS_TO_PROCESSING_STATUS[job.status]
     terminal_at = job.completed_at or datetime.now(timezone.utc)
     document.status = mapped_status
     if document.processing_started_at is None:
-        document.processing_started_at = job.started_at or job.created_at or terminal_at
+        document.processing_started_at = job.started_at or job.created_at
     document.processing_completed_at = terminal_at
-    document.error_message = (
-        job.error_message or job.message or "PDF processing failed"
-    )[:1000]
+    document.error_message = terminal_message[:1000]
     return True
 
 

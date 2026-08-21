@@ -32,7 +32,6 @@ class _ScalarResult:
 class _FakeSession:
     def __init__(self, responses, *, commit_error: Exception | None = None):
         self.responses = list(responses) if isinstance(responses, list) else [responses]
-        self.last_response = self.responses[-1] if self.responses else None
         self.commit_error = commit_error
         self.commit_calls = 0
         self.refresh_calls = 0
@@ -40,8 +39,9 @@ class _FakeSession:
         self.closed = False
 
     def execute(self, *_args, **_kwargs):
-        response = self.responses.pop(0) if self.responses else self.last_response
-        self.last_response = response
+        if not self.responses:
+            raise AssertionError("unexpected query")
+        response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
         return _ScalarResult(response)
@@ -162,6 +162,27 @@ def test_list_jobs_reconciles_stale_cancel_requested_job(monkeypatch):
     assert session.commit_calls == 1
 
 
+def test_stale_job_reconciliation_leaves_completed_document_unchanged(monkeypatch):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    document = _build_document(job, status="completed")
+    completed_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    document.processing_started_at = completed_at - timedelta(hours=1)
+    document.processing_completed_at = completed_at
+    session = _FakeSession([job, job, document])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    monkeypatch.setattr(service_module, "_stale_timeout_seconds", lambda: 60)
+
+    response = service_module.get_job_by_id(job_id=job.id)
+
+    assert response is not None
+    assert response.status == PdfJobStatus.FAILED.value
+    assert document.status == "completed"
+    assert document.processing_started_at == completed_at - timedelta(hours=1)
+    assert document.processing_completed_at == completed_at
+    assert document.error_message is None
+    assert session.commit_calls == 1
+
+
 @pytest.mark.parametrize(
     ("finalizer", "expected_job_status", "expected_error"),
     [
@@ -194,6 +215,33 @@ def test_explicit_terminal_finalizers_reconcile_document(
     assert session.commit_calls == 1
 
 
+@pytest.mark.parametrize("finalizer", ["failed", "cancelled"])
+def test_explicit_terminal_finalizers_leave_completed_document_unchanged(
+    monkeypatch,
+    finalizer,
+):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    document = _build_document(job, status="completed")
+    completed_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    document.processing_started_at = completed_at - timedelta(hours=1)
+    document.processing_completed_at = completed_at
+    document.error_message = None
+    session = _FakeSession([job, job, document])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    if finalizer == "failed":
+        response = service_module.mark_failed(job_id=job.id, message="Late failure")
+    else:
+        response = service_module.mark_cancelled(job_id=job.id, reason="Late cancellation")
+
+    assert response is not None
+    assert document.status == "completed"
+    assert document.processing_started_at == completed_at - timedelta(hours=1)
+    assert document.processing_completed_at == completed_at
+    assert document.error_message is None
+    assert session.commit_calls == 1
+
+
 def test_repeated_finalizer_reconciles_from_durable_first_terminal_winner(monkeypatch):
     job = _build_job(status=PdfJobStatus.CANCELLED.value)
     job.completed_at = datetime.now(timezone.utc)
@@ -210,6 +258,23 @@ def test_repeated_finalizer_reconciles_from_durable_first_terminal_winner(monkey
     assert document.status == "failed"
     assert document.error_message == "Original cancellation"
     assert session.commit_calls == 1
+
+
+def test_terminal_reconciliation_rejects_missing_failure_message(monkeypatch):
+    job = _build_job(status=PdfJobStatus.FAILED.value)
+    job.completed_at = datetime.now(timezone.utc)
+    job.message = None
+    job.error_message = None
+    document = _build_document(job)
+    session = _FakeSession([job, job, document])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    with pytest.raises(ValueError, match=f"Terminal job {job.id} has no failure message"):
+        service_module.mark_failed(job_id=job.id, message="Late failure")
+
+    assert session.commit_calls == 0
+    assert session.rollback_calls == 1
+    assert document.status == "processing"
 
 
 def test_document_reconciliation_failure_rolls_back_job_transition(monkeypatch):
