@@ -109,12 +109,18 @@ export interface AuditPanelProps {
  *   const [sessionId, setSessionId] = useState<string | null>(null)
  *
  *   // Shared SSE stream (events renamed to sseEvents when passing to AuditPanel)
- *   const { events, isLoading, sendMessage } = useChatStream()
+ *   const {
+ *     events,
+ *     eventStreamVersion,
+ *     durableReconciliationVersion,
+ *   } = useChatStream()
  *
  *   return (
  *     <AuditPanel
  *       sessionId={sessionId}
  *       sseEvents={events}
+ *       eventStreamVersion={eventStreamVersion}
+ *       durableReconciliationVersion={durableReconciliationVersion}
  *       onClear={() => console.log('Panel cleared')}
  *     />
  *   )
@@ -364,7 +370,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       )
     } else if (transcriptWasDurablyReconciled && parsedEvents.length > 0) {
       const reconciledTurnIds = new Set(
-        parsedEvents.map(event => event.turnId as string),
+        parsedEvents.flatMap(event => event.turnId ? [event.turnId] : []),
       )
       setEvents(previous => [
         ...previous.filter(event => !event.turnId || !reconciledTurnIds.has(event.turnId)),
