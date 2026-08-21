@@ -31,9 +31,13 @@ from src.lib.openai_agents.config import (
     get_openai_responses_websocket_ping_timeout_seconds,
     get_pdf_max_file_size_bytes,
     get_pdf_upload_max_page_count,
-    get_sentry_log_event_level,
     get_model_for_agent,
+    get_sentry_log_event_level,
     get_tool_failure_alert_summary_max_chars,
+    get_weaviate_search_hybrid_alpha,
+    get_weaviate_search_initial_limit,
+    get_weaviate_search_mmr_enabled,
+    get_weaviate_search_mmr_lambda,
     is_retryable_groq_tool_call_error,
     resolve_model_provider,
     supports_reasoning,
@@ -55,6 +59,33 @@ def test_sentry_log_event_level_is_bounded_and_environment_configurable(
     with caplog.at_level("WARNING"):
         assert get_sentry_log_event_level() is None
     assert "Log-event promotion remains disabled" in caplog.text
+
+
+def test_weaviate_search_defaults_match_benchmark_winner(monkeypatch):
+    for key in (
+        "WEAVIATE_SEARCH_INITIAL_LIMIT",
+        "WEAVIATE_SEARCH_HYBRID_ALPHA",
+        "WEAVIATE_SEARCH_MMR_ENABLED",
+        "WEAVIATE_SEARCH_MMR_LAMBDA",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assert get_weaviate_search_initial_limit() == 50
+    assert get_weaviate_search_hybrid_alpha() == 0.4
+    assert get_weaviate_search_mmr_enabled() is False
+    assert get_weaviate_search_mmr_lambda() == 0.5
+
+
+def test_weaviate_search_defaults_are_bounded_and_configurable(monkeypatch):
+    monkeypatch.setenv("WEAVIATE_SEARCH_INITIAL_LIMIT", "101")
+    monkeypatch.setenv("WEAVIATE_SEARCH_HYBRID_ALPHA", "0.6")
+    monkeypatch.setenv("WEAVIATE_SEARCH_MMR_ENABLED", "true")
+    monkeypatch.setenv("WEAVIATE_SEARCH_MMR_LAMBDA", "nan")
+
+    assert get_weaviate_search_initial_limit() == 100
+    assert get_weaviate_search_hybrid_alpha() == 0.6
+    assert get_weaviate_search_mmr_enabled() is True
+    assert get_weaviate_search_mmr_lambda() == 0.5
 
 
 @pytest.mark.parametrize(

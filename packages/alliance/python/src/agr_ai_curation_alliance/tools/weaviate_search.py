@@ -54,6 +54,38 @@ def _env_int(key: str, default: int, *, minimum: int = 0) -> int:
         return default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    """Read the backend-shared boolean setting in the package subprocess."""
+
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    logger.warning("Invalid boolean value for %s: %s, using default %s", key, raw, default)
+    return default
+
+
+def _env_unit_float(key: str, default: float) -> float:
+    """Read a finite float in [0, 1] in the package subprocess."""
+
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid float value for %s: %s, using default %s", key, raw, default)
+        return default
+    if value != value or not 0.0 <= value <= 1.0:
+        logger.warning("%s=%s is outside [0, 1]; using default %s", key, value, default)
+        return default
+    return value
+
+
 # Default cap on how many section/subsection chunks one read returns. Section reads
 # previously returned every chunk unbounded (~50 chunks, the full section text twice),
 # which could reach hundreds of thousands of characters in a single tool result. The
@@ -69,6 +101,17 @@ _DEFAULT_SECTION_MAX_CHUNKS = _env_int("SECTION_READ_MAX_CHUNKS", 30, minimum=1)
 # Env-configurable via SECTION_SNIPPET_RADIUS_CHARS (default 200) -- same env var as
 # the backend twin.
 _SECTION_SNIPPET_RADIUS = _env_int("SECTION_SNIPPET_RADIUS_CHARS", 200, minimum=0)
+
+# These package-owned tools execute in an isolated subprocess and cannot import
+# backend config. Read the same env names directly so one deployment setting
+# tunes both backend-owned and package-owned document search tools.
+_SEARCH_INITIAL_LIMIT = min(
+    100,
+    _env_int("WEAVIATE_SEARCH_INITIAL_LIMIT", 50, minimum=1),
+)
+_SEARCH_HYBRID_ALPHA = _env_unit_float("WEAVIATE_SEARCH_HYBRID_ALPHA", 0.4)
+_SEARCH_MMR_ENABLED = _env_bool("WEAVIATE_SEARCH_MMR_ENABLED", False)
+_SEARCH_MMR_LAMBDA = _env_unit_float("WEAVIATE_SEARCH_MMR_LAMBDA", 0.5)
 
 _SEARCH_MODE_TO_STRATEGY: dict[str, str] = {
     "auto": "hybrid",
@@ -230,8 +273,11 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
                 query=query,
                 user_id=user_id,
                 limit=limit,
+                initial_limit=_SEARCH_INITIAL_LIMIT,
+                alpha=_SEARCH_HYBRID_ALPHA,
                 section_keywords=section_keywords,
-                apply_mmr=True,
+                apply_mmr=_SEARCH_MMR_ENABLED,
+                mmr_lambda=_SEARCH_MMR_LAMBDA,
                 strategy=strategy,
             )
 

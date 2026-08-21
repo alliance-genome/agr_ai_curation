@@ -13,6 +13,12 @@ from uuid import uuid4
 from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
 
 from ..bedrock_reranker import get_effective_rerank_provider, rerank_chunks
+from ..openai_agents.config import (
+    get_weaviate_search_hybrid_alpha,
+    get_weaviate_search_initial_limit,
+    get_weaviate_search_mmr_enabled,
+    get_weaviate_search_mmr_lambda,
+)
 from .connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -459,11 +465,11 @@ async def hybrid_search_chunks(
     query: str,
     user_id: str,                   # T038: Required for tenant scoping (FR-011, FR-014)
     limit: int = 10,                # V5: Final results after all processing
-    initial_limit: int = 25,        # V5: Candidates for reranker
-    alpha: float = 0.7,             # V5: 70% vector, 30% keyword
+    initial_limit: Optional[int] = None,
+    alpha: Optional[float] = None,
     apply_reranking: bool = True,
-    apply_mmr: bool = True,
-    mmr_lambda: float = 0.5,
+    apply_mmr: Optional[bool] = None,
+    mmr_lambda: Optional[float] = None,
     use_bm25_boost: bool = False,   # V5: Boost exact matches/acronyms
     section_keywords: Optional[List[str]] = None,  # Section filtering
     strategy: str = "hybrid",       # NEW: hybrid | lexical | hybrid_lexical_first
@@ -496,6 +502,21 @@ async def hybrid_search_chunks(
     # T038: Validate user_id is provided (required for tenant scoping)
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk search (FR-011, FR-014)")
+
+    initial_limit = (
+        get_weaviate_search_initial_limit()
+        if initial_limit is None
+        else initial_limit
+    )
+    alpha = get_weaviate_search_hybrid_alpha() if alpha is None else alpha
+    apply_mmr = (
+        get_weaviate_search_mmr_enabled() if apply_mmr is None else apply_mmr
+    )
+    mmr_lambda = (
+        get_weaviate_search_mmr_lambda()
+        if mmr_lambda is None
+        else mmr_lambda
+    )
 
     # Environment-based configuration
     explain_scores = os.getenv("RETRIEVAL_EXPLAIN", "false").lower() == "true"

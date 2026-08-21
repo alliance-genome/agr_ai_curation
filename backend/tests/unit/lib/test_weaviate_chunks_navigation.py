@@ -103,7 +103,7 @@ async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch, caplog)
             initial_limit=10,
             apply_reranking=False,
             apply_mmr=True,
-            section_keywords="methods",
+            section_keywords=["methods"],
             strategy="lexical",
         )
 
@@ -200,7 +200,9 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
     assert [chunk["id"] for chunk in results] == ["u2", "u1"]
     assert "rerank" not in chunk_collection.query.hybrid.call_args.kwargs
     assert "auto_limit" not in chunk_collection.query.hybrid.call_args.kwargs
-    assert chunk_collection.query.hybrid.call_args.kwargs["limit"] == 25
+    assert chunk_collection.query.hybrid.call_args.kwargs["limit"] == 50
+    assert chunk_collection.query.hybrid.call_args.kwargs["alpha"] == 0.4
+    assert chunk_collection.query.hybrid.call_args.kwargs["include_vector"] is False
     assert "_rerank_text" not in results[0]
 
 

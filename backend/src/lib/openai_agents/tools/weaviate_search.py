@@ -215,7 +215,6 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
                 user_id=user_id,
                 limit=limit,
                 section_keywords=section_keywords,
-                apply_mmr=True,
                 strategy=strategy,
             )
 

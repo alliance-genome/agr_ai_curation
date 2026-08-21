@@ -372,6 +372,11 @@ Use this endpoint to verify embedding coverage or to reconstruct provenance over
 
 Agent document search uses hybrid vector/BM25 retrieval over the `content`
 property, optional provider reranking, and optional MMR diversification. Each
+ordinary hybrid search defaults to alpha `0.4`, a 50-candidate rerank pool, and
+MMR disabled; `WEAVIATE_SEARCH_HYBRID_ALPHA`,
+`WEAVIATE_SEARCH_INITIAL_LIMIT`, `WEAVIATE_SEARCH_MMR_ENABLED`, and
+`WEAVIATE_SEARCH_MMR_LAMBDA` tune those choices for controlled diagnostics.
+Explicit lexical modes still force alpha `0`. Each
 search emits a structured `weaviate_retrieval_ranking_audit` log record. The
 record contains a query fingerprint, effective alpha, stage timings, and
 content-free candidate ranks before reranking, after reranking, and after MMR.
