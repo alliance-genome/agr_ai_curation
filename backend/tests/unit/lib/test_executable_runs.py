@@ -51,6 +51,42 @@ async def test_observer_keepalive_is_transport_only_and_not_replayed(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_observer_event_ids_remain_stable_after_replay_eviction(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_event_replay_limit",
+        lambda: 2,
+    )
+    manager = ExecutableRunManager()
+
+    async def stream_factory():
+        yield 'data: {"type":"TOOL_COMPLETED","details":{"message":"A"}}\n\n'
+        yield 'data: {"type":"TOOL_COMPLETED","details":{"message":"B"}}\n\n'
+        yield 'data: {"type":"TOOL_COMPLETED","details":{"message":"C"}}\n\n'
+
+    run, _ = await manager.get_or_start_stream(
+        run_id="assistant_chat_turn:session-cursor:turn-cursor",
+        kind="assistant_chat_turn",
+        owner_user_id="user-1",
+        session_id="session-cursor",
+        turn_id="turn-cursor",
+        stream_factory=stream_factory,
+    )
+    if run.task is not None:
+        await asyncio.wait_for(run.task, timeout=1)
+
+    replay = [
+        event
+        async for event in manager.observe(run, include_event_ids=True)
+    ]
+
+    assert len(replay) == 2
+    assert replay[0].startswith('id: 1\ndata: {"type":"TOOL_COMPLETED"')
+    assert replay[1].startswith('id: 2\ndata: {"type":"TOOL_COMPLETED"')
+    assert '"message":"B"' in replay[0]
+    assert '"message":"C"' in replay[1]
+
+
+@pytest.mark.asyncio
 async def test_observer_detach_does_not_cancel_producer(monkeypatch):
     monkeypatch.setattr(
         "src.lib.executable_runs.get_executable_run_event_replay_limit",

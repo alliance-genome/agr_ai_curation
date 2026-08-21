@@ -15,13 +15,15 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function sseResponse(events: readonly object[]): Response {
+function sseResponse(events: readonly object[], eventIds?: readonly number[]): Response {
   const encoder = new TextEncoder()
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
-        events.forEach((event) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+        events.forEach((event, index) => {
+          const eventId = eventIds?.[index]
+          const idLine = eventId === undefined ? '' : `id: ${eventId}\n`
+          controller.enqueue(encoder.encode(`${idLine}data: ${JSON.stringify(event)}\n\n`))
         })
         controller.close()
       },
@@ -147,8 +149,8 @@ describe('useChatStream shared lifecycle', () => {
       },
     ]
     vi.mocked(global.fetch)
-      .mockResolvedValueOnce(sseResponse(firstEvents))
-      .mockResolvedValueOnce(sseResponse(replayEvents))
+      .mockResolvedValueOnce(sseResponse(firstEvents, [0, 1]))
+      .mockResolvedValueOnce(sseResponse(replayEvents, [0, 1, 2, 3]))
 
     const { result, unmount } = renderHook(() => useChatStream())
 
@@ -215,8 +217,14 @@ describe('useChatStream shared lifecycle', () => {
       },
     ]
     vi.mocked(global.fetch)
-      .mockResolvedValueOnce(sseResponse(firstEvents))
-      .mockResolvedValueOnce(sseResponse(retainedSuffix))
+      .mockResolvedValueOnce(sseResponse(
+        firstEvents,
+        firstEvents.map((_event, index) => index),
+      ))
+      .mockResolvedValueOnce(sseResponse(
+        retainedSuffix,
+        retainedSuffix.map((_event, index) => index + 3),
+      ))
 
     const { result, unmount } = renderHook(() => useChatStream())
 
@@ -243,6 +251,57 @@ describe('useChatStream shared lifecycle', () => {
     unmount()
   })
 
+  it('uses replay cursors when repeated audit types and text chunks straddle eviction', async () => {
+    const repeatedText = {
+      type: 'TEXT_MESSAGE_CONTENT',
+      session_id: 'session-repeated',
+      turn_id: 'turn-repeated',
+      content: 'same',
+    }
+    const audit = (message: string) => ({
+      type: 'TOOL_COMPLETED',
+      session_id: 'session-repeated',
+      turn_id: 'turn-repeated',
+      details: { message },
+    })
+    const firstEvents = [audit('A'), repeatedText, audit('B'), repeatedText]
+    const retainedReplay = [
+      audit('B'),
+      repeatedText,
+      audit('C'),
+      repeatedText,
+      {
+        type: 'turn_completed',
+        session_id: 'session-repeated',
+        turn_id: 'turn-repeated',
+      },
+    ]
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(sseResponse(firstEvents, [0, 1, 2, 3]))
+      .mockResolvedValueOnce(sseResponse(retainedReplay, [2, 3, 4, 5, 6]))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-repeated', {
+        turnId: 'turn-repeated',
+      })
+    })
+
+    expect(result.current.events.filter(event => event.type === 'TOOL_COMPLETED')).toEqual([
+      expect.objectContaining({ details: { message: 'A' } }),
+      expect.objectContaining({ details: { message: 'B' } }),
+      expect.objectContaining({ details: { message: 'C' } }),
+    ])
+    expect(result.current.events.filter(
+      event => event.type === 'TEXT_MESSAGE_CONTENT',
+    )).toHaveLength(3)
+    expect(result.current.events.at(-1)?.type).toBe('turn_completed')
+
+    result.current.clearEvents()
+    unmount()
+  })
+
   it('keeps running state active while a detached observer is recovering', async () => {
     const recoveredResponse = deferred<Response>()
     vi.mocked(global.fetch)
@@ -250,7 +309,7 @@ describe('useChatStream shared lifecycle', () => {
         type: 'RUN_STARTED',
         session_id: 'session-recovering',
         turn_id: 'turn-recovering',
-      }]))
+      }], [0]))
       .mockImplementationOnce(() => recoveredResponse.promise)
     const { result, unmount } = renderHook(() => useChatStream())
     let request!: Promise<void>
@@ -276,7 +335,7 @@ describe('useChatStream shared lifecycle', () => {
         session_id: 'session-recovering',
         turn_id: 'turn-recovering',
       },
-    ]))
+    ], [0, 1]))
     await act(async () => await request)
 
     expect(result.current.isLoading).toBe(false)

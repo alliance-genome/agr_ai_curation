@@ -473,6 +473,7 @@ async def chat_stream_endpoint(
                 executable_run_manager.observe(
                     active_executable_run,
                     keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+                    include_event_ids=True,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -1150,6 +1151,7 @@ async def chat_stream_endpoint(
         executable_run_manager.observe(
             executable_run,
             keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+            include_event_ids=True,
         ),
         media_type="text/event-stream",
         headers={

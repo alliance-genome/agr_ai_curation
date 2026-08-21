@@ -124,7 +124,12 @@ interface ActiveStreamRun {
   runId: number
   controller: AbortController
   sessionId: string
-  observedEvents: SSEEvent[]
+  observedEvents: ObservedSSEEvent[]
+}
+
+interface ObservedSSEEvent {
+  event: SSEEvent
+  eventId: number | null
 }
 
 const sharedListeners = new Set<() => void>()
@@ -204,48 +209,17 @@ function getRecoveryDelayMs(): number {
   return Number.isFinite(configured) ? Math.max(0, configured) : 1000
 }
 
-function sameReplayEvent(left: SSEEvent, right: SSEEvent): boolean {
-  if (JSON.stringify(left) === JSON.stringify(right)) return true
-  if (left.type !== right.type) return false
-
-  // Durable transcript reconstruction can change transport metadata such as a
-  // timestamp while preserving the semantic audit event at the same prefix
-  // position. Text-bearing events must still compare their actual payload.
-  if (left.type === 'TEXT_MESSAGE_CONTENT') {
-    return (left.content ?? left.delta) === (right.content ?? right.delta)
-  }
-  if (left.type === 'CHAT_OUTPUT_READY') {
-    return (left.details?.output ?? left.details?.output_preview)
-      === (right.details?.output ?? right.details?.output_preview)
-  }
-  return true
-}
-
-function findReplayOverlap(observed: SSEEvent[], replay: SSEEvent[]): number {
-  const maximum = Math.min(observed.length, replay.length)
-
-  for (let overlap = maximum; overlap > 0; overlap -= 1) {
-    const observedStart = observed.length - overlap
-    let matches = true
-    for (let index = 0; index < overlap; index += 1) {
-      if (!sameReplayEvent(observed[observedStart + index], replay[index])) {
-        matches = false
-        break
-      }
-    }
-    if (matches) return overlap
-  }
-
-  return 0
-}
-
-function reconcileReplay(run: ActiveStreamRun, replay: SSEEvent[]) {
+function reconcileReplay(run: ActiveStreamRun, replay: ObservedSSEEvent[]) {
   if (replay.length === 0) return
 
-  const overlap = findReplayOverlap(run.observedEvents, replay)
-  const reconcilesDurableTranscript = overlap === 0 && run.observedEvents.length > 0
+  const lastObservedEventId = run.observedEvents.at(-1)?.eventId
+  const hasReplayCursor = replay.every(({ eventId }) => eventId !== null)
+  const reconcilesDurableTranscript = !hasReplayCursor && run.observedEvents.length > 0
+  const appendedReplay = hasReplayCursor && lastObservedEventId != null
+    ? replay.filter(({ eventId }) => eventId !== null && eventId > lastObservedEventId)
+    : replay
   let firstTextSeen = false
-  const nextEvents = replay.slice(overlap).map((event) => {
+  const nextEvents = appendedReplay.map(({ event }) => {
     if (
       reconcilesDurableTranscript
       && !firstTextSeen
@@ -260,7 +234,7 @@ function reconcileReplay(run: ActiveStreamRun, replay: SSEEvent[]) {
   if (reconcilesDurableTranscript) {
     run.observedEvents.splice(0, run.observedEvents.length, ...replay)
   } else {
-    run.observedEvents.push(...replay.slice(overlap))
+    run.observedEvents.push(...appendedReplay)
   }
   if (ownsActiveRun(run) && nextEvents.length > 0) {
     updateSharedEvents(previous => [...previous, ...nextEvents])
@@ -295,7 +269,7 @@ async function observeRun(
   while (ownsActiveRun(run)) {
     let terminalSeen = false
     const recovering = recoveryAttempts > 0
-    const replay: SSEEvent[] = []
+    const replay: ObservedSSEEvent[] = []
 
     try {
       const response = await fetch(url, {
@@ -325,7 +299,13 @@ async function observeRun(
           const eventData = buffer.substring(0, boundaryIndex)
           buffer = buffer.substring(boundaryIndex + 2)
 
-          for (const line of eventData.split('\n')) {
+          const lines = eventData.split('\n')
+          const eventIdLine = lines.find(line => line.startsWith('id:'))
+          const parsedEventId = eventIdLine === undefined
+            ? null
+            : Number(eventIdLine.slice(3).trim())
+
+          for (const line of lines) {
             if (!line.startsWith('data: ')) continue
             const data = line.slice(6)
             if (data === '[DONE]') continue
@@ -333,13 +313,17 @@ async function observeRun(
             try {
               const parsed: SSEEvent = JSON.parse(data)
               terminalSeen ||= isAuthoritativeTerminal(parsed, runKind)
+              const observedEvent = {
+                event: parsed,
+                eventId: Number.isSafeInteger(parsedEventId) ? parsedEventId : null,
+              }
 
               if (recovering) {
-                replay.push(parsed)
+                replay.push(observedEvent)
                 continue
               }
 
-              run.observedEvents.push(parsed)
+              run.observedEvents.push(observedEvent)
               debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
               if (ownsActiveRun(run)) updateSharedEvents(prev => [...prev, parsed])
             } catch (parseError) {

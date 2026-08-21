@@ -87,7 +87,9 @@ class ExecutableRun:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
     events: list[str] = field(default_factory=list)
-    subscribers: set[asyncio.Queue[str | None]] = field(default_factory=set)
+    retained_event_start_id: int = 0
+    next_event_id: int = 0
+    subscribers: set[asyncio.Queue[tuple[int, str] | None]] = field(default_factory=set)
     task: asyncio.Task[None] | None = None
     terminal_monotonic: float | None = None
     terminal_error_event_factory: Callable[[Exception], str | None] | None = None
@@ -225,18 +227,21 @@ class ExecutableRunManager:
         run: ExecutableRun,
         *,
         keepalive_interval_seconds: float | None = None,
+        include_event_ids: bool = False,
     ) -> AsyncIterator[str]:
-        """Replay and observe a run, optionally yielding transport-only SSE comments."""
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        """Replay and observe a run with optional transport cursors and keepalives."""
+        queue: asyncio.Queue[tuple[int, str] | None] = asyncio.Queue()
         async with self._lock:
-            replay = list(run.events)
+            replay = list(
+                enumerate(run.events, start=run.retained_event_start_id),
+            )
             terminal = run.terminal
             if not terminal:
                 run.subscribers.add(queue)
 
         try:
-            for event in replay:
-                yield event
+            for event_id, event in replay:
+                yield self._format_observer_event(event_id, event, include_event_ids)
 
             if terminal:
                 return
@@ -257,7 +262,8 @@ class ExecutableRunManager:
                         continue
                 if event is None:
                     return
-                yield event
+                event_id, payload = event
+                yield self._format_observer_event(event_id, payload, include_event_ids)
         finally:
             async with self._lock:
                 run.subscribers.discard(queue)
@@ -330,15 +336,24 @@ class ExecutableRunManager:
 
     async def _publish(self, run: ExecutableRun, event: str) -> None:
         async with self._lock:
+            event_id = run.next_event_id
+            run.next_event_id += 1
             run.events.append(event)
             replay_limit = get_executable_run_event_replay_limit()
             if len(run.events) > replay_limit:
                 del run.events[: len(run.events) - replay_limit]
+            run.retained_event_start_id = run.next_event_id - len(run.events)
             run.updated_at = datetime.now(timezone.utc)
             subscribers = list(run.subscribers)
 
         for queue in subscribers:
-            queue.put_nowait(event)
+            queue.put_nowait((event_id, event))
+
+    @staticmethod
+    def _format_observer_event(event_id: int, event: str, include_event_ids: bool) -> str:
+        if not include_event_ids:
+            return event
+        return f"id: {event_id}\n{event}"
 
     async def _finish(self, run: ExecutableRun, status: ExecutableRunStatus) -> None:
         async with self._lock:
