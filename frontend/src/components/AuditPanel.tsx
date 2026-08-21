@@ -342,7 +342,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       }
     })
 
-    if (transcriptWasReplaced) {
+    if (transcriptWasReplaced && parsedEvents.length > 0) {
       setEvents(parsedEvents)
     } else if (parsedEvents.length > 0) {
       setEvents(prev => [...prev, ...parsedEvents])

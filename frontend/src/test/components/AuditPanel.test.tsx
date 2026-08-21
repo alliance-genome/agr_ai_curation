@@ -389,6 +389,66 @@ describe('AuditPanel - Event Display (T018)', () => {
       expect(screen.getAllByText('[DOMAIN WARNING] Durable warning B')).toHaveLength(1)
     })
   })
+
+  it('preserves audit events when durable chat reconciliation has no audit events', async () => {
+    const auditCacheKey = getChatRenderCacheKeys('user-1', 'session123').auditEvents
+    const initialAuditEvent = {
+      type: 'DOMAIN_WARNING' as const,
+      timestamp: '2026-05-11T18:03:00.000Z',
+      session_id: 'session123',
+      details: {
+        domain: 'chat',
+        message: 'Preserve this warning across durable reconciliation',
+      },
+    }
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[initialAuditEvent]}
+        eventStreamVersion={1}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          '[DOMAIN WARNING] Preserve this warning across durable reconciliation'
+        )
+      ).toBeInTheDocument()
+    })
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[
+          {
+            type: 'TEXT_MESSAGE_CONTENT',
+            timestamp: '2026-05-11T18:04:00.000Z',
+            session_id: 'session123',
+            content: 'Persisted final answer',
+          },
+          {
+            type: 'turn_completed',
+            timestamp: '2026-05-11T18:04:01.000Z',
+            session_id: 'session123',
+          },
+        ]}
+        eventStreamVersion={2}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          '[DOMAIN WARNING] Preserve this warning across durable reconciliation'
+        )
+      ).toHaveLength(1)
+      expect(localStorage.getItem(auditCacheKey)).toContain(
+        'Preserve this warning across durable reconciliation'
+      )
+    })
+  })
 })
 
 // ===================================================================
