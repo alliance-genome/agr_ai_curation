@@ -302,6 +302,60 @@ describe('useChatStream shared lifecycle', () => {
     unmount()
   })
 
+  it('replaces repeated durable flow prefixes after recovery EOF', async () => {
+    const runStarted = {
+      type: 'RUN_STARTED',
+      session_id: 'session-durable-flow',
+      turn_id: 'turn-durable-flow',
+    }
+    const toolCompleted = {
+      type: 'TOOL_COMPLETED',
+      session_id: 'session-durable-flow',
+      turn_id: 'turn-durable-flow',
+      details: { message: 'durable audit event' },
+    }
+    const flowFinished = {
+      type: 'FLOW_FINISHED',
+      session_id: 'session-durable-flow',
+      turn_id: 'turn-durable-flow',
+      status: 'completed',
+    }
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(sseResponse([runStarted], [0]))
+      .mockResolvedValueOnce(sseResponse([runStarted, toolCompleted]))
+      .mockResolvedValueOnce(sseResponse([runStarted, toolCompleted, flowFinished]))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+    const initialVersion = result.current.eventStreamVersion
+
+    await act(async () => {
+      await result.current.executeFlow(
+        'flow-1',
+        'session-durable-flow',
+        undefined,
+        undefined,
+        { turnId: 'turn-durable-flow' },
+      )
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(3)
+    expect(result.current.events.filter(event => event.type === 'RUN_STARTED')).toHaveLength(1)
+    expect(result.current.events.filter(event => event.type === 'TOOL_COMPLETED')).toEqual([
+      expect.objectContaining({ details: { message: 'durable audit event' } }),
+    ])
+    expect(result.current.events.filter(event => event.type === 'FLOW_FINISHED')).toHaveLength(1)
+    expect(result.current.events.at(-1)).toMatchObject({
+      type: 'FLOW_FINISHED',
+      status: 'completed',
+    })
+    expect(result.current.eventStreamVersion).toBe(initialVersion + 3)
+    expect(result.current.isLoading).toBe(false)
+    expect(result.current.error).toBeNull()
+
+    result.current.clearEvents()
+    unmount()
+  })
+
   it('keeps running state active while a detached observer is recovering', async () => {
     const recoveredResponse = deferred<Response>()
     vi.mocked(global.fetch)

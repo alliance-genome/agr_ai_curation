@@ -233,11 +233,14 @@ function reconcileReplay(run: ActiveStreamRun, replay: ObservedSSEEvent[]) {
 
   if (reconcilesDurableTranscript) {
     run.observedEvents.splice(0, run.observedEvents.length, ...replay)
+    if (ownsActiveRun(run)) {
+      replaceRunEvents(run, nextEvents)
+    }
   } else {
     run.observedEvents.push(...appendedReplay)
-  }
-  if (ownsActiveRun(run) && nextEvents.length > 0) {
-    updateSharedEvents(previous => [...previous, ...nextEvents])
+    if (ownsActiveRun(run) && nextEvents.length > 0) {
+      updateSharedEvents(previous => [...previous, ...nextEvents])
+    }
   }
 }
 
