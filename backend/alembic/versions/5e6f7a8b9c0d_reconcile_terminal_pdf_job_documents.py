@@ -80,4 +80,3 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """No-op: the prior inconsistent active status cannot be reconstructed."""
-
