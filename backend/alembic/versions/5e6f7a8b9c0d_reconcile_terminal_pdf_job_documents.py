@@ -48,6 +48,7 @@ def upgrade() -> None:
                     latest.started_at,
                     latest.created_at
                 ),
+                -- Historical terminal rows may predate runtime timestamp invariants.
                 processing_completed_at = COALESCE(
                     latest.completed_at,
                     latest.updated_at,
