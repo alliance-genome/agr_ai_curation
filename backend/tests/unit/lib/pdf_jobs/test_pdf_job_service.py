@@ -277,6 +277,24 @@ def test_terminal_reconciliation_rejects_missing_failure_message(monkeypatch):
     assert document.status == "processing"
 
 
+def test_terminal_reconciliation_rejects_missing_completed_at(monkeypatch):
+    job = _build_job(status=PdfJobStatus.CANCELLED.value)
+    job.message = "Original cancellation"
+    document = _build_document(job)
+    session = _FakeSession([job, job, document])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    with pytest.raises(ValueError, match=f"Terminal job {job.id} has no completed_at"):
+        service_module.mark_cancelled(job_id=job.id, reason="Late cancellation")
+
+    assert session.commit_calls == 0
+    assert session.rollback_calls == 1
+    assert document.status == "processing"
+    assert document.processing_started_at is None
+    assert document.processing_completed_at is None
+    assert document.error_message is None
+
+
 def test_document_reconciliation_failure_rolls_back_job_transition(monkeypatch):
     job = _build_job(status=PdfJobStatus.RUNNING.value)
     document = _build_document(job)
@@ -300,7 +318,7 @@ def test_older_terminal_job_does_not_overwrite_document_when_newer_job_exists(mo
     newer_job.document_id = old_job.document_id
     newer_job.created_at = old_job.created_at + timedelta(minutes=1)
     document = _build_document(old_job)
-    session = _FakeSession([old_job, newer_job, document])
+    session = _FakeSession([old_job, newer_job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
 
     response = service_module.mark_cancelled(job_id=old_job.id, reason="Superseded")

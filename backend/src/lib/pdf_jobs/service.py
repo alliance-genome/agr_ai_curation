@@ -126,13 +126,14 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     terminal_message = job.error_message or job.message
     if terminal_message is None:
         raise ValueError(f"Terminal job {job.id} has no failure message to reconcile")
+    if job.completed_at is None:
+        raise ValueError(f"Terminal job {job.id} has no completed_at to reconcile")
 
     mapped_status = PDF_JOB_STATUS_TO_PROCESSING_STATUS[job.status]
-    terminal_at = job.completed_at or datetime.now(timezone.utc)
     document.status = mapped_status
     if document.processing_started_at is None:
         document.processing_started_at = job.started_at or job.created_at
-    document.processing_completed_at = terminal_at
+    document.processing_completed_at = job.completed_at
     document.error_message = terminal_message[:1000]
     return True
 
