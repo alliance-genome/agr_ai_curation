@@ -2,6 +2,7 @@
 
 import asyncio
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -15,6 +16,42 @@ from ..bedrock_reranker import get_effective_rerank_provider, rerank_chunks
 from .connection import get_connection
 
 logger = logging.getLogger(__name__)
+
+
+def _effective_search_alpha(alpha: float, alpha_override: Optional[float]) -> float:
+    """Preserve explicit zero, which selects pure BM25 lexical search."""
+    return alpha if alpha_override is None else alpha_override
+
+
+def _retrieval_ranking_snapshot(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return content-free ranking evidence suitable for structured logs."""
+
+    snapshot: List[Dict[str, Any]] = []
+    for rank, chunk in enumerate(chunks, start=1):
+        metadata = chunk.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        def _score(value: Any) -> float | None:
+            if value is None:
+                return None
+            try:
+                return round(float(value), 8)
+            except (TypeError, ValueError):
+                return None
+
+        snapshot.append(
+            {
+                "rank": rank,
+                "chunk_id": chunk.get("id") or metadata.get("chunk_id"),
+                "chunk_index": metadata.get("chunk_index"),
+                "page_number": metadata.get("page_number"),
+                "score": _score(chunk.get("score")),
+                "retrieval_score": _score(metadata.get("retrieval_score")),
+                "rerank_score": _score(metadata.get("rerank_score")),
+            }
+        )
+    return snapshot
 
 
 def _weaviate_object_uuid(obj: Any) -> str | None:
@@ -483,17 +520,22 @@ async def hybrid_search_chunks(
                 mmr_override: Optional[bool] = None) -> List[Dict[str, Any]]:
         try:
             search_start = time.monotonic()
+            search_id = uuid4().hex
+            query_fingerprint = hashlib.sha256(norm_query.encode("utf-8")).hexdigest()[:16]
+            effective_alpha = _effective_search_alpha(alpha, alpha_override)
+            effective_mmr = mmr_override if mmr_override is not None else apply_mmr
             # V5: Log search parameters
             logger.info(
-                "V5 Hybrid Search Starting - document_id=%s query=%s alpha=%s initial_limit=%s final_limit=%s reranking=%s MMR=%s MMR_lambda=%s",
+                "V5 Hybrid Search Starting - document_id=%s query_fingerprint=%s alpha=%s initial_limit=%s final_limit=%s reranking=%s MMR=%s MMR_lambda=%s",
                 document_id,
-                norm_query[:50],
-                alpha_override or alpha,
+                query_fingerprint,
+                effective_alpha,
                 initial_limit,
                 limit,
                 rerank_override if rerank_override is not None else apply_reranking,
-                mmr_override if mmr_override is not None else apply_mmr,
+                effective_mmr,
                 mmr_lambda,
+                extra={"retrieval_search_id": search_id},
             )
 
             with connection.session() as client:
@@ -543,9 +585,13 @@ async def hybrid_search_chunks(
 
                 query_params = {
                     "query": norm_query,
-                    "alpha": alpha_override or alpha,
+                    "alpha": effective_alpha,
                     "limit": initial_limit,  # Get candidates for reranker
                     "fusion_type": HybridFusion.RELATIVE_SCORE,
+                    # BM25F searches every searchable text property by default.
+                    # Chunk UUIDs, serialized provenance, previews, and hierarchy
+                    # metadata are not retrieval evidence and distort lexical ranks.
+                    "query_properties": ["content"],
                     "return_properties": [
                         "contentPreview",
                         "content",
@@ -562,7 +608,7 @@ async def hybrid_search_chunks(
                         score=True,
                         explain_score=explain_scores  # Gated by env
                     ),
-                    "include_vector": apply_mmr,  # Only if needed for MMR
+                    "include_vector": effective_mmr,  # Only if needed for MMR
                 }
                 logger.info(
                     "V5: AutoCut disabled for evidence recall; requesting initial_limit=%s final_limit=%s",
@@ -609,7 +655,9 @@ async def hybrid_search_chunks(
                 #     )
 
                 # Execute query
+                weaviate_start = time.monotonic()
                 response = collection.query.hybrid(**query_params)
+                weaviate_duration_ms = (time.monotonic() - weaviate_start) * 1000
 
                 # V5: Log retrieval results
                 logger.info(
@@ -676,7 +724,7 @@ async def hybrid_search_chunks(
                     }
 
                     # Include vector only if needed for MMR
-                    if apply_mmr and hasattr(obj, 'vector') and obj.vector:
+                    if effective_mmr and hasattr(obj, 'vector') and obj.vector:
                         chunk["_vector"] = obj.vector  # Prefix with _ for internal use
 
                     # Log score explanation in debug mode
@@ -684,6 +732,9 @@ async def hybrid_search_chunks(
                         logger.debug("Score breakdown: %s", obj.metadata.explain_score)
 
                     chunks.append(chunk)
+
+                retrieval_candidates = _retrieval_ranking_snapshot(chunks)
+                rerank_duration_ms = None
 
                 if should_rerank and effective_rerank_provider not in {"", "none"}:
                     logger.info(
@@ -694,19 +745,23 @@ async def hybrid_search_chunks(
                     rerank_start = time.monotonic()
                     pre_rerank_count = len(chunks)
                     chunks = rerank_chunks(query, chunks, top_n=len(chunks))
+                    rerank_duration_ms = (time.monotonic() - rerank_start) * 1000
                     logger.info(
                         "V5: Rerank stage complete provider=%s candidates=%s returned=%s duration_ms=%.1f",
                         effective_rerank_provider,
                         pre_rerank_count,
                         len(chunks),
-                        (time.monotonic() - rerank_start) * 1000,
+                        rerank_duration_ms,
                     )
                 else:
                     for chunk in chunks:
                         chunk.pop("_rerank_text", None)
 
+                reranked_candidates = _retrieval_ranking_snapshot(chunks)
+                mmr_duration_ms = None
+
                 # Apply MMR if enabled and we have enough results
-                if (mmr_override if mmr_override is not None else apply_mmr) and len(chunks) > limit:
+                if effective_mmr and len(chunks) > limit:
                     logger.info(
                         "V5: Applying MMR diversification (lambda=%s, candidates=%s, target=%s)",
                         mmr_lambda,
@@ -715,12 +770,14 @@ async def hybrid_search_chunks(
                     )
                     from .mmr_diversifier import mmr_diversify
                     pre_mmr_count = len(chunks)
+                    mmr_start = time.monotonic()
                     chunks = mmr_diversify(
                         chunks,
                         lambda_param=mmr_lambda,
                         top_k=limit,
                         vector_field="_vector"  # Tell MMR where vectors are
                     )
+                    mmr_duration_ms = (time.monotonic() - mmr_start) * 1000
                     logger.info(
                         "V5: MMR reduced %s chunks to %s diverse results",
                         pre_mmr_count,
@@ -730,7 +787,7 @@ async def hybrid_search_chunks(
                     for chunk in chunks:
                         chunk.pop("_vector", None)
                 else:
-                    if not (mmr_override if mmr_override is not None else apply_mmr):
+                    if not effective_mmr:
                         logger.info("V5: MMR disabled, returning top %s chunks", limit)
                     else:
                         logger.info("V5: Not enough chunks for MMR (%s <= %s)", len(chunks), limit)
@@ -740,12 +797,56 @@ async def hybrid_search_chunks(
                     chunk.pop("_rerank_text", None)
 
                 search_duration_ms = (time.monotonic() - search_start) * 1000
+                final_results = _retrieval_ranking_snapshot(chunks)
+                logger.info(
+                    "Retrieval ranking audit search_id=%s candidates=%s final_results=%s",
+                    search_id,
+                    len(retrieval_candidates),
+                    len(final_results),
+                    extra={
+                        "operation": "weaviate_retrieval_ranking_audit",
+                        "duration_ms": round(search_duration_ms, 1),
+                        "retrieval_search_id": search_id,
+                        "retrieval_query_fingerprint": query_fingerprint,
+                        "retrieval_strategy": strategy,
+                        "retrieval_alpha": effective_alpha,
+                        "retrieval_query_properties": ["content"],
+                        "retrieval_initial_limit": initial_limit,
+                        "retrieval_final_limit": limit,
+                        "retrieval_rerank_provider": effective_rerank_provider,
+                        "retrieval_rerank_enabled": (
+                            should_rerank
+                            and effective_rerank_provider not in {"", "none"}
+                        ),
+                        "retrieval_rerank_scored_count": sum(
+                            row["rerank_score"] is not None
+                            for row in reranked_candidates
+                        ),
+                        "retrieval_mmr_enabled": effective_mmr,
+                        "retrieval_mmr_applied": mmr_duration_ms is not None,
+                        "retrieval_mmr_lambda": mmr_lambda,
+                        "weaviate_duration_ms": round(weaviate_duration_ms, 1),
+                        "rerank_duration_ms": (
+                            round(rerank_duration_ms, 1)
+                            if rerank_duration_ms is not None
+                            else None
+                        ),
+                        "mmr_duration_ms": (
+                            round(mmr_duration_ms, 1)
+                            if mmr_duration_ms is not None
+                            else None
+                        ),
+                        "retrieval_candidates": retrieval_candidates,
+                        "reranked_candidates": reranked_candidates,
+                        "final_results": final_results,
+                    },
+                )
                 logger.info(
                     "V5 Search Complete: Final %s results (alpha=%s, rerank=%s, mmr=%s)",
                     len(chunks),
-                    alpha,
-                    apply_reranking,
-                    apply_mmr,
+                    effective_alpha,
+                    should_rerank,
+                    effective_mmr,
                     extra={
                         "duration_ms": round(search_duration_ms, 1),
                         "operation": "weaviate_hybrid_search",

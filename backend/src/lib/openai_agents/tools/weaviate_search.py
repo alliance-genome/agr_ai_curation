@@ -7,6 +7,7 @@ This module provides tools for:
 - Section reading (get full section content)
 """
 
+import hashlib
 import json
 import logging
 from typing import Optional, List, TYPE_CHECKING, Any, Literal
@@ -193,11 +194,12 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
             tracker.record_call("search_document")
 
         limit = min(max(1, limit), 10)
+        query_fingerprint = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
 
         logger.info(
-            "Searching document %s... query='%s...', limit=%s, sections=%s, mode=%s",
+            "Searching document %s... query_fingerprint=%s, limit=%s, sections=%s, mode=%s",
             document_id[:8],
-            query[:50],
+            query_fingerprint,
             limit,
             section_keywords,
             search_mode,
@@ -218,7 +220,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
             )
 
             if not chunks:
-                logger.info("No chunks found for query: %s...", query[:50])
+                logger.info("No chunks found for query_fingerprint=%s", query_fingerprint)
                 return ChunkSearchResult(summary="No relevant content found.", hits=[])
 
             hits: List[ChunkHit] = []
