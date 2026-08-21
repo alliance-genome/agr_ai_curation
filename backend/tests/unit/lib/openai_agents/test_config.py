@@ -23,12 +23,29 @@ from src.lib.openai_agents.config import (
     get_openai_responses_websocket_ping_timeout_seconds,
     get_pdf_max_file_size_bytes,
     get_pdf_upload_max_page_count,
+    get_sentry_log_event_level,
     get_model_for_agent,
     is_retryable_groq_tool_call_error,
     resolve_model_provider,
     supports_reasoning,
     supports_temperature,
 )
+
+
+def test_sentry_log_event_level_is_bounded_and_environment_configurable(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.delenv("SENTRY_LOG_EVENT_LEVEL", raising=False)
+    assert get_sentry_log_event_level() is None
+
+    monkeypatch.setenv("SENTRY_LOG_EVENT_LEVEL", "error")
+    assert get_sentry_log_event_level() == 40
+
+    monkeypatch.setenv("SENTRY_LOG_EVENT_LEVEL", "info")
+    with caplog.at_level("WARNING"):
+        assert get_sentry_log_event_level() is None
+    assert "Log-event promotion remains disabled" in caplog.text
 
 
 def test_flow_supervisor_parallel_tool_calls_default_disabled(monkeypatch):

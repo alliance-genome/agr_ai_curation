@@ -14,6 +14,8 @@ import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from src.lib.openai_agents.config import get_sentry_log_event_level
+
 logger = logging.getLogger(__name__)
 
 _INITIALIZED = False
@@ -75,6 +77,40 @@ _TRACE_BOOLEAN_KEYS = {"sampled"}
 _SPAN_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time"}
 _SPAN_TIMESTAMP_KEYS = {"start_timestamp", "timestamp"}
 _SENTRY_TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T[0-9:.+-]+Z?$")
+_SENTRY_SKIP_LOG_EVENT_ATTRIBUTE = "sentry_skip_event"
+_SENTRY_CORRELATION_TAG_KEYS = {
+    "document_id": "ai_curation.document.id_hash",
+    "flow_id": "ai_curation.flow.id_hash",
+    "flow_run_id": "ai_curation.flow.run_id_hash",
+    "run_id": "ai_curation.run.id_hash",
+    "session_id": "ai_curation.chat.session_id_hash",
+    "trace_id": "ai_curation.trace.id_hash",
+}
+_ROUTINE_TRANSACTION_NAMES = {
+    "/api/batches/{batch_id}",
+    "/health",
+    "/health/live",
+    "/health/ready",
+    "/weaviate/health",
+    "/weaviate/readiness",
+    "/weaviate/documents/pdf-extraction-health",
+    "/weaviate/documents/{document_id}/status",
+}
+_SUCCESSFUL_TRANSACTION_STATUSES = {"ok"}
+_KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURE = (
+    ("httpx._client", "aclose"),
+    ("httpx._transports.default", "aclose"),
+    ("httpcore._async.connection_pool", "aclose"),
+    ("httpcore._async.connection_pool", "_close_connections"),
+    ("httpcore._async.connection", "aclose"),
+    ("httpcore._async.http11", "aclose"),
+    ("httpcore._backends.anyio", "aclose"),
+    ("anyio.streams.tls", "aclose"),
+    ("anyio._backends._asyncio", "aclose"),
+    ("asyncio.selector_events", "close"),
+    ("asyncio.base_events", "call_soon"),
+    ("asyncio.base_events", "_check_closed"),
+)
 _RUNTIME_IDENTIFIER_CONTEXT_KEYS = {
     "batch_id",
     "document_id",
@@ -111,6 +147,7 @@ class SentrySettings:
     dsn: str | None
     environment: str
     release: str | None
+    log_event_level: int | None
     traces_sample_rate: float | None
     profiles_sample_rate: float | None
     allow_insecure_dsn: bool
@@ -197,6 +234,7 @@ def get_sentry_settings() -> SentrySettings:
         dsn=dsn,
         environment=environment or "local",
         release=release,
+        log_event_level=get_sentry_log_event_level(),
         traces_sample_rate=_get_env_float("SENTRY_TRACES_SAMPLE_RATE", 0.0)
         if traces_raw
         else None,
@@ -568,6 +606,37 @@ def hash_sentry_identifier(value: Any) -> str | None:
     if hashed in {None, _REDACTED}:
         return None
     return hashed
+
+
+def _set_sentry_identifier_tags(target: Any, identifiers: Mapping[str, Any]) -> None:
+    safe_tags = {
+        tag_key: hashed
+        for identifier_key, value in identifiers.items()
+        if (tag_key := _SENTRY_CORRELATION_TAG_KEYS.get(identifier_key)) is not None
+        and (hashed := hash_sentry_identifier(value)) is not None
+    }
+    if not safe_tags:
+        return
+
+    set_tag = getattr(target, "set_tag", None)
+    if not callable(set_tag):
+        return
+    for key, value in safe_tags.items():
+        set_tag(key, value)
+
+
+def set_sentry_transaction_identifiers(**identifiers: Any) -> None:
+    """Attach searchable stable hashes to the active Sentry transaction."""
+
+    try:
+        sentry_sdk = importlib.import_module("sentry_sdk")
+        get_current_scope = getattr(sentry_sdk, "get_current_scope", None)
+        if not callable(get_current_scope):
+            return
+        transaction = getattr(get_current_scope(), "span", None)
+        _set_sentry_identifier_tags(transaction, identifiers)
+    except Exception as exc:
+        logger.debug("Sentry transaction correlation tags unavailable: %s", exc)
 
 
 def set_sentry_span_status(span: Any, status: str) -> None:
@@ -997,6 +1066,14 @@ def gen_ai_workflow_transaction(
         transaction_handle = (
             transaction if capture_transaction_data else _SentryParentOnlySpan(transaction)
         )
+        _set_sentry_identifier_tags(
+            transaction,
+            {
+                "session_id": conversation_id,
+                "document_id": document_id,
+                "trace_id": trace_id,
+            },
+        )
         set_data = getattr(transaction_handle, "set_data", None)
         if callable(set_data):
             def safe_set(key: str, value: Any) -> None:
@@ -1094,6 +1171,22 @@ def _redact_runtime_exception_context(context: Mapping[str, Any]) -> dict[str, A
     return redacted
 
 
+def _redact_log_event_context(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve code-location metadata without retaining the log message."""
+
+    redacted: dict[str, Any] = {}
+    for child_key, child_value in context.items():
+        key = str(child_key)
+        if key in {"logger_name", "level_name", "module", "function", "source_file"}:
+            safe_text = _safe_trace_text(child_value)
+            if safe_text is not None:
+                redacted[key] = safe_text
+            continue
+        if key == "line_number" and isinstance(child_value, int):
+            redacted[key] = child_value
+    return redacted
+
+
 def _redact_contexts(contexts: dict[str, Any]) -> dict[str, Any]:
     """Redact custom contexts while preserving Sentry trace bookkeeping."""
 
@@ -1106,6 +1199,10 @@ def _redact_contexts(contexts: dict[str, Any]) -> dict[str, Any]:
 
         if normalized_key == "runtime_exception" and isinstance(context_value, Mapping):
             redacted[normalized_key] = _redact_runtime_exception_context(context_value)
+            continue
+
+        if normalized_key == "log_event" and isinstance(context_value, Mapping):
+            redacted[normalized_key] = _redact_log_event_context(context_value)
             continue
 
         redacted[normalized_key] = _redact_untrusted_strings(context_value)
@@ -1248,6 +1345,7 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
 
     raw_contexts = event.get("contexts")
     raw_spans = event.get("spans")
+    raw_tags = event.get("tags")
     scrubbed = _scrub_value(event)
     if not isinstance(scrubbed, dict):
         return {}
@@ -1278,6 +1376,19 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
             retained=len(limited_spans),
             dropped=dropped_spans,
         )
+    if isinstance(raw_tags, Mapping):
+        scrubbed_tags = scrubbed.setdefault("tags", {})
+        if isinstance(scrubbed_tags, dict):
+            for tag_key in _SENTRY_CORRELATION_TAG_KEYS.values():
+                tag_value = raw_tags.get(tag_key)
+                if tag_value is None:
+                    continue
+                scrubbed_tags[tag_key] = (
+                    tag_value
+                    if isinstance(tag_value, str)
+                    and _HASHED_IDENTIFIER_PATTERN.fullmatch(tag_value)
+                    else _REDACTED
+                )
 
     breadcrumbs = scrubbed.get("breadcrumbs")
     if isinstance(breadcrumbs, dict) and isinstance(breadcrumbs.get("values"), list):
@@ -1300,18 +1411,160 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
     return scrubbed
 
 
-def before_send(event: dict[str, Any], hint: dict[str, Any] | None = None) -> dict[str, Any]:
+def _safe_log_record_text(value: Any, *, fallback: str) -> str:
+    safe_text = _safe_trace_text(value)
+    return safe_text if safe_text is not None else fallback
+
+
+def _with_safe_log_record_metadata(
+    event: dict[str, Any],
+    hint: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Attach grouping metadata for promoted log events without using message text."""
+
+    log_record = (hint or {}).get("log_record")
+    if not isinstance(log_record, logging.LogRecord):
+        return event
+    if getattr(log_record, _SENTRY_SKIP_LOG_EVENT_ATTRIBUTE, False):
+        return None
+
+    logger_name = _safe_log_record_text(log_record.name, fallback="unknown")
+    level_name = _safe_log_record_text(log_record.levelname, fallback="UNKNOWN")
+    module = _safe_log_record_text(log_record.module, fallback="unknown")
+    function = _safe_log_record_text(log_record.funcName, fallback="unknown")
+    source_file = _safe_log_record_text(log_record.filename, fallback="unknown")
+    line_number = log_record.lineno if isinstance(log_record.lineno, int) else 0
+
+    enriched = dict(event)
+    tags: dict[str, Any] = {}
+    raw_tags = event.get("tags")
+    if isinstance(raw_tags, Mapping):
+        tags.update((str(key), value) for key, value in raw_tags.items())
+    tags.update(
+        {
+            "log.logger_name": logger_name,
+            "log.level": level_name,
+        }
+    )
+    enriched["tags"] = tags
+
+    contexts: dict[str, Any] = {}
+    raw_contexts = event.get("contexts")
+    if isinstance(raw_contexts, Mapping):
+        contexts.update((str(key), value) for key, value in raw_contexts.items())
+    contexts["log_event"] = {
+        "logger_name": logger_name,
+        "level_name": level_name,
+        "module": module,
+        "function": function,
+        "source_file": source_file,
+        "line_number": line_number,
+    }
+    enriched["contexts"] = contexts
+    enriched["fingerprint"] = [
+        "ai-curation-log-v1",
+        logger_name,
+        module,
+        function,
+        source_file,
+        str(line_number),
+    ]
+    return enriched
+
+
+def _add_safe_log_event_title(event: dict[str, Any]) -> None:
+    contexts = event.get("contexts")
+    if not isinstance(contexts, Mapping):
+        return
+    log_context = contexts.get("log_event")
+    if not isinstance(log_context, Mapping):
+        return
+
+    level_name = _safe_trace_text(log_context.get("level_name")) or "ERROR"
+    logger_name = _safe_trace_text(log_context.get("logger_name")) or "unknown"
+    source_file = _safe_trace_text(log_context.get("source_file")) or "unknown"
+    line_number = log_context.get("line_number")
+    safe_line_number = line_number if isinstance(line_number, int) else 0
+    event["logentry"] = {
+        "message": (
+            f"{level_name} log from {logger_name} at "
+            f"{source_file}:{safe_line_number}"
+        )
+    }
+
+
+def before_send(
+    event: dict[str, Any],
+    hint: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Redact error events before Sentry upload."""
 
-    return _redact_event(event)
+    if _is_known_httpcore_closed_loop_cleanup(event):
+        return None
+    enriched = _with_safe_log_record_metadata(event, hint)
+    if enriched is None:
+        return None
+    scrubbed = _redact_event(enriched)
+    if isinstance((hint or {}).get("log_record"), logging.LogRecord):
+        _add_safe_log_event_title(scrubbed)
+    return scrubbed
+
+
+def _is_known_httpcore_closed_loop_cleanup(event: Mapping[str, Any]) -> bool:
+    """Match the exact harmless HTTPX/httpcore close-after-loop logging event."""
+
+    # ``culprit`` is derived by Sentry during server-side event processing and
+    # is therefore absent when this client-side hook runs.  The exception
+    # mechanism and complete third-party frame signature are the stable inputs
+    # available here.
+    if event.get("logger") != "asyncio":
+        return False
+    values = ((event.get("exception") or {}).get("values") or [])
+    if len(values) != 1 or not isinstance(values[0], Mapping):
+        return False
+    exception = values[0]
+    mechanism = exception.get("mechanism") or {}
+    if (
+        exception.get("type") != "RuntimeError"
+        or not isinstance(mechanism, Mapping)
+        or mechanism.get("type") != "logging"
+        or mechanism.get("handled") is not True
+    ):
+        return False
+    frames = ((exception.get("stacktrace") or {}).get("frames") or [])
+    frame_signatures = tuple(
+        (frame.get("module"), frame.get("function"))
+        for frame in frames
+        if isinstance(frame, Mapping)
+    )
+    return (
+        frame_signatures == _KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURE
+        and not any(
+            frame.get("in_app") is True
+            for frame in frames
+            if isinstance(frame, Mapping)
+        )
+    )
+
+
+def _is_successful_routine_transaction(event: Mapping[str, Any]) -> bool:
+    if event.get("transaction") not in _ROUTINE_TRANSACTION_NAMES:
+        return False
+    trace_context = ((event.get("contexts") or {}).get("trace") or {})
+    if not isinstance(trace_context, Mapping):
+        return False
+    status = str(trace_context.get("status") or "").strip().lower()
+    return status in _SUCCESSFUL_TRANSACTION_STATUSES
 
 
 def before_send_transaction(
     event: dict[str, Any],
     hint: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Redact transaction events before Sentry upload."""
 
+    if _is_successful_routine_transaction(event):
+        return None
     return _redact_event(event)
 
 
@@ -1409,7 +1662,7 @@ def initialize_sentry_if_configured() -> bool:
             ),
             logging_integration.LoggingIntegration(
                 level=logging.INFO,
-                event_level=None,
+                event_level=settings.log_event_level,
             ),
             *_optional_ai_integrations(settings),
         ],

@@ -12,6 +12,7 @@ from src.lib.observability.sentry import (
     hash_sentry_identifier,
     set_redacted_ai_span_data,
     set_sentry_span_status,
+    set_sentry_transaction_identifiers,
 )
 
 _LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
@@ -235,6 +236,7 @@ async def chat_endpoint(
 
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
+                    set_sentry_transaction_identifiers(trace_id=trace_id)
                     trace_id_hash = hash_sentry_identifier(trace_id)
                     if trace_id_hash:
                         set_redacted_ai_span_data(
@@ -640,6 +642,7 @@ async def chat_stream_endpoint(
 
                 if "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
+                    set_sentry_transaction_identifiers(trace_id=trace_id)
                     trace_id_hash = hash_sentry_identifier(trace_id)
                     if trace_id_hash:
                         set_redacted_ai_span_data(

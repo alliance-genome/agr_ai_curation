@@ -21,6 +21,7 @@ def reset_sentry(monkeypatch):
         "SENTRY_DSN",
         "SENTRY_ENVIRONMENT",
         "SENTRY_RELEASE",
+        "SENTRY_LOG_EVENT_LEVEL",
         "SENTRY_TRACES_SAMPLE_RATE",
         "SENTRY_PROFILES_SAMPLE_RATE",
         "SENTRY_ALLOW_INSECURE_DSN",
@@ -49,6 +50,7 @@ def test_get_sentry_settings_defaults_to_disabled():
     assert settings.dsn is None
     assert settings.environment == "local"
     assert settings.release is None
+    assert settings.log_event_level is None
     assert settings.traces_sample_rate is None
     assert settings.profiles_sample_rate is None
     assert settings.allow_insecure_dsn is False
@@ -68,6 +70,7 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     monkeypatch.setenv("SENTRY_DSN", "https://public@example.invalid/1")
     monkeypatch.setenv("SENTRY_ENVIRONMENT", "dev")
     monkeypatch.setenv("SENTRY_RELEASE", "abc123")
+    monkeypatch.setenv("SENTRY_LOG_EVENT_LEVEL", "error")
     monkeypatch.setenv("SENTRY_TRACES_SAMPLE_RATE", "0.25")
     monkeypatch.setenv("SENTRY_PROFILES_SAMPLE_RATE", "0.5")
     monkeypatch.setenv("SENTRY_ALLOW_INSECURE_DSN", "true")
@@ -87,6 +90,7 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     assert settings.dsn == "https://public@example.invalid/1"
     assert settings.environment == "dev"
     assert settings.release == "abc123"
+    assert settings.log_event_level == logging.ERROR
     assert settings.traces_sample_rate == 0.25
     assert settings.profiles_sample_rate == 0.5
     assert settings.allow_insecure_dsn is True
@@ -100,6 +104,16 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     assert settings.ai_content_tier1_preview_max_chars == 1024
     assert settings.ai_content_preview_max_chars == 4096
     assert settings.transaction_retained_spans_max == 512
+
+
+def test_get_sentry_settings_rejects_invalid_log_event_level(monkeypatch, caplog):
+    monkeypatch.setenv("SENTRY_LOG_EVENT_LEVEL", "verbose")
+
+    with caplog.at_level(logging.WARNING):
+        settings = sentry.get_sentry_settings()
+
+    assert settings.log_event_level is None
+    assert "Log-event promotion remains disabled" in caplog.text
 
 
 def test_before_send_redacts_sensitive_and_document_content():
@@ -158,6 +172,152 @@ def test_before_send_redacts_sensitive_and_document_content():
     assert scrubbed["exception"]["values"][0]["value"] == "[Filtered]"
     assert "vars" not in scrubbed["exception"]["values"][0]["stacktrace"]["frames"][0]
     assert "vars" not in scrubbed["threads"]["values"][0]["stacktrace"]["frames"][0]
+
+
+def test_before_send_promoted_log_uses_safe_code_metadata_not_message_content():
+    fake_secret = "sk-" + "abcdefghijklmnopqrstuvwxyz"
+    record = logging.LogRecord(
+        name="src.api.documents",
+        level=logging.ERROR,
+        pathname="/app/src/api/documents.py",
+        lineno=1519,
+        msg=f"curator document failure {fake_secret}",
+        args=(),
+        exc_info=None,
+        func="upload_document_endpoint",
+    )
+
+    scrubbed = sentry.before_send(
+        {"message": record.getMessage(), "level": "error"},
+        {"log_record": record},
+    )
+
+    assert scrubbed is not None
+    assert scrubbed["message"] == "[Filtered]"
+    assert scrubbed["logentry"] == {
+        "message": "ERROR log from src.api.documents at documents.py:1519"
+    }
+    assert scrubbed["tags"] == {
+        "log.logger_name": "src.api.documents",
+        "log.level": "ERROR",
+    }
+    assert scrubbed["contexts"]["log_event"] == {
+        "logger_name": "src.api.documents",
+        "level_name": "ERROR",
+        "module": "documents",
+        "function": "upload_document_endpoint",
+        "source_file": "documents.py",
+        "line_number": 1519,
+    }
+    assert scrubbed["fingerprint"] == [
+        "ai-curation-log-v1",
+        "src.api.documents",
+        "documents",
+        "upload_document_endpoint",
+        "documents.py",
+        "1519",
+    ]
+    assert fake_secret not in repr(scrubbed)
+    assert "curator document failure" not in repr(scrubbed)
+
+
+def test_before_send_drops_log_event_already_reported_explicitly():
+    record = logging.LogRecord(
+        name="src.api.documents",
+        level=logging.ERROR,
+        pathname="/app/src/api/documents.py",
+        lineno=1519,
+        msg="safe log template",
+        args=(),
+        exc_info=None,
+    )
+    record.sentry_skip_event = True
+
+    assert sentry.before_send(
+        {"message": record.getMessage()},
+        {"log_record": record},
+    ) is None
+
+
+def test_before_send_drops_only_exact_httpcore_close_after_loop_cleanup():
+    event = {
+        "logger": "asyncio",
+        "exception": {
+            "values": [
+                {
+                    "type": "RuntimeError",
+                    "mechanism": {"type": "logging", "handled": True},
+                    "stacktrace": {
+                        "frames": [
+                            {"module": "httpx._client", "function": "aclose", "in_app": False},
+                            {
+                                "module": "httpx._transports.default",
+                                "function": "aclose",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "httpcore._async.connection_pool",
+                                "function": "aclose",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "httpcore._async.connection_pool",
+                                "function": "_close_connections",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "httpcore._async.connection",
+                                "function": "aclose",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "httpcore._async.http11",
+                                "function": "aclose",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "httpcore._backends.anyio",
+                                "function": "aclose",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "anyio.streams.tls",
+                                "function": "aclose",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "anyio._backends._asyncio",
+                                "function": "aclose",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "asyncio.selector_events",
+                                "function": "close",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "asyncio.base_events",
+                                "function": "call_soon",
+                                "in_app": False,
+                            },
+                            {
+                                "module": "asyncio.base_events",
+                                "function": "_check_closed",
+                                "in_app": False,
+                            },
+                        ]
+                    },
+                }
+            ]
+        },
+    }
+
+    assert sentry.before_send(event) is None
+
+    event["exception"]["values"][0]["stacktrace"]["frames"].append(
+        {"module": "src.lib.client", "function": "close", "in_app": True}
+    )
+    assert sentry.before_send(event) is not None
 
 
 def test_before_send_preserves_request_url_identifiers_but_strips_query_string():
@@ -382,6 +542,78 @@ def test_before_send_transaction_uses_same_redaction_policy():
         "timestamp": 1.75,
     }
     assert len(scrubbed["spans"]) == 1
+
+
+@pytest.mark.parametrize(
+    "transaction",
+    [
+        "/api/batches/{batch_id}",
+        "/health",
+        "/health/ready",
+        "/weaviate/documents/pdf-extraction-health",
+        "/weaviate/documents/{document_id}/status",
+    ],
+)
+def test_before_send_transaction_drops_successful_routine_traffic(transaction):
+    event = {
+        "transaction": transaction,
+        "contexts": {"trace": {"status": "ok"}},
+    }
+
+    assert sentry.before_send_transaction(event) is None
+
+
+@pytest.mark.parametrize(
+    "transaction",
+    [
+        "/health/ready",
+        "/api/batches/{batch_id}",
+    ],
+)
+def test_before_send_transaction_keeps_failed_routine_and_substantive_traffic(transaction):
+    failed_routine = {
+        "transaction": transaction,
+        "contexts": {"trace": {"status": "unavailable"}},
+    }
+    successful_chat = {
+        "transaction": "/api/chat",
+        "contexts": {"trace": {"status": "ok"}},
+    }
+
+    assert sentry.before_send_transaction(failed_routine) is not None
+    assert sentry.before_send_transaction(successful_chat) is not None
+
+
+@pytest.mark.parametrize(
+    "trace_context",
+    [None, {}, {"status": "unknown"}, {"status": "unset"}],
+)
+def test_before_send_transaction_keeps_routine_traffic_with_ambiguous_status(
+    trace_context,
+):
+    event = {"transaction": "/health/ready"}
+    if trace_context is not None:
+        event["contexts"] = {"trace": trace_context}
+
+    assert sentry.before_send_transaction(event) is not None
+
+
+def test_before_send_transaction_preserves_only_valid_correlation_hash_tags():
+    event = {
+        "transaction": "/api/chat",
+        "tags": {
+            "ai_curation.chat.session_id_hash": "sha256:0123456789abcdef",
+            "ai_curation.document.id_hash": "raw-document-id",
+        },
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+
+    assert scrubbed is not None
+    assert scrubbed["tags"]["ai_curation.chat.session_id_hash"] == (
+        "sha256:0123456789abcdef"
+    )
+    assert scrubbed["tags"]["ai_curation.document.id_hash"] == "[Filtered]"
 
 
 def test_before_send_transaction_limits_spans_while_preserving_gen_ai(monkeypatch):
@@ -1072,6 +1304,9 @@ def test_gen_ai_workflow_transaction_sets_parent_metadata(monkeypatch):
         def set_data(self, key, value):
             calls.append(("data", key, value))
 
+        def set_tag(self, key, value):
+            calls.append(("tag", key, value))
+
         def set_status(self, status):
             calls.append(("status", status))
 
@@ -1110,6 +1345,7 @@ def test_gen_ai_workflow_transaction_sets_parent_metadata(monkeypatch):
         sentry.set_sentry_span_status(transaction, "ok")
 
     data = {call[1]: call[2] for call in calls if call[0] == "data"}
+    tags = {call[1]: call[2] for call in calls if call[0] == "tag"}
 
     assert calls[0] == ("start", {"op": "http.server", "name": "/api/chat/stream"})
     assert data["gen_ai.operation.name"] == "chat"
@@ -1122,6 +1358,11 @@ def test_gen_ai_workflow_transaction_sets_parent_metadata(monkeypatch):
     assert data["ai_curation.document.id_hash"] == sentry._hash_identifier("document-123")
     assert data["ai_curation.document.present"] is True
     assert data["ai_curation.trace.id_hash"] == sentry._hash_identifier("trace-123")
+    assert tags == {
+        "ai_curation.chat.session_id_hash": sentry._hash_identifier("session-123"),
+        "ai_curation.document.id_hash": sentry._hash_identifier("document-123"),
+        "ai_curation.trace.id_hash": sentry._hash_identifier("trace-123"),
+    }
     assert data["ai_curation.agent.input"] == {"message": "What genes? [Filtered]"}
     assert data["ai_curation.validation.status"] == "warning"
     assert ("status", "ok") in calls
@@ -1135,6 +1376,9 @@ def test_gen_ai_workflow_transaction_reuses_active_sentry_span(monkeypatch):
     class FakeActiveSpan:
         def set_data(self, key, value):
             calls.append(("data", key, value))
+
+        def set_tag(self, key, value):
+            calls.append(("tag", key, value))
 
         def set_status(self, status):
             calls.append(("status", status))
@@ -1166,6 +1410,7 @@ def test_gen_ai_workflow_transaction_reuses_active_sentry_span(monkeypatch):
 
     assert transaction is not active_span
     assert [call for call in calls if call[0] == "data"] == []
+    assert ("tag", "ai_curation.chat.session_id_hash", sentry._hash_identifier("session-123")) in calls
     assert ("status", "ok") in calls
 
 
@@ -1314,6 +1559,45 @@ def test_initialize_sentry_omits_tracing_when_unset(monkeypatch):
     assert sentry.initialize_sentry_if_configured() is True
     assert "traces_sample_rate" not in calls["init"]
     assert "profiles_sample_rate" not in calls["init"]
+
+
+def test_initialize_sentry_promotes_configured_error_logs(monkeypatch):
+    calls = {}
+
+    class FakeSentrySdk:
+        def init(self, **kwargs):
+            calls["init"] = kwargs
+
+        def set_tag(self, key, value):
+            pass
+
+    class FakeIntegration:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeLoggingIntegration:
+        def __init__(self, **kwargs):
+            calls["logging_integration"] = kwargs
+
+    fake_modules = {
+        "sentry_sdk": FakeSentrySdk(),
+        "sentry_sdk.integrations.fastapi": SimpleNamespace(FastApiIntegration=FakeIntegration),
+        "sentry_sdk.integrations.logging": SimpleNamespace(
+            LoggingIntegration=FakeLoggingIntegration
+        ),
+        "sentry_sdk.integrations.starlette": SimpleNamespace(
+            StarletteIntegration=FakeIntegration
+        ),
+    }
+    monkeypatch.setattr(sentry.importlib, "import_module", lambda name: fake_modules[name])
+    monkeypatch.setenv("SENTRY_DSN", "https://public@example.invalid/1")
+    monkeypatch.setenv("SENTRY_LOG_EVENT_LEVEL", "ERROR")
+
+    assert sentry.initialize_sentry_if_configured() is True
+    assert calls["logging_integration"] == {
+        "level": logging.INFO,
+        "event_level": logging.ERROR,
+    }
 
 
 def test_initialize_sentry_adds_ai_integrations_when_enabled(monkeypatch):
@@ -1517,6 +1801,7 @@ def test_sanitized_http_exception_emits_one_real_sentry_event_with_framework_int
         from sentry_sdk.integrations.starlette import StarletteIntegration
 
         from src.lib.http_errors import raise_sanitized_http_exception
+        from src.lib.observability import sentry
 
         events = []
 
@@ -1528,10 +1813,11 @@ def test_sanitized_http_exception_emits_one_real_sentry_event_with_framework_int
             transport=transport,
             include_local_variables=False,
             send_default_pii=False,
+            before_send=sentry.before_send,
             integrations=[
                 StarletteIntegration(failed_request_status_codes=set()),
                 FastApiIntegration(failed_request_status_codes=set()),
-                LoggingIntegration(level=logging.INFO, event_level=None),
+                LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
             ],
             default_integrations=True,
         )
@@ -1560,6 +1846,66 @@ def test_sanitized_http_exception_emits_one_real_sentry_event_with_framework_int
         exception_types = [value.get("type") for value in values]
         if exception_types != ["RuntimeError"]:
             raise AssertionError(f"unexpected exception chain {exception_types!r}")
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+
+
+def test_real_sentry_logging_integration_promotes_redacted_error_with_safe_grouping():
+    pytest.importorskip("sentry_sdk")
+    script = textwrap.dedent(
+        """
+        import logging
+
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        from src.lib.observability import sentry
+
+        events = []
+        fake_secret = "sk-" + "abcdefghijklmnopqrstuvwxyz"
+
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=events.append,
+            include_local_variables=False,
+            send_default_pii=False,
+            before_send=sentry.before_send,
+            integrations=[
+                LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+            ],
+            default_integrations=True,
+        )
+
+        logging.getLogger("src.api.synthetic").error(
+            "curator content must not survive %s",
+            fake_secret,
+        )
+        sentry_sdk.flush(timeout=1)
+
+        if len(events) != 1:
+            raise AssertionError(f"expected one promoted log event, got {len(events)}")
+        event = events[0]
+        title = event.get("logentry", {}).get("message", "")
+        if not title.startswith("ERROR log from src.api.synthetic at "):
+            raise AssertionError(f"unexpected logentry {event.get('logentry')!r}")
+        if event.get("tags", {}).get("log.logger_name") != "src.api.synthetic":
+            raise AssertionError(f"missing safe logger tag: {event.get('tags')!r}")
+        context = event.get("contexts", {}).get("log_event", {})
+        if context.get("level_name") != "ERROR":
+            raise AssertionError(f"missing safe log context: {context!r}")
+        if event.get("fingerprint", [None])[0] != "ai-curation-log-v1":
+            raise AssertionError(f"missing safe fingerprint: {event.get('fingerprint')!r}")
+        if fake_secret in repr(event) or "curator content" in repr(event):
+            raise AssertionError("raw promoted log content survived redaction")
         """
     )
 

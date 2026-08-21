@@ -28,6 +28,7 @@ from src.lib.executable_runs import (
 )
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.sentry import set_sentry_transaction_identifiers
 from src.lib.flows.outcome import FlowRunOutcome, FlowRunOutcomeNotDurableError
 
 
@@ -882,6 +883,13 @@ async def execute_flow_endpoint(
         transcript_rows: List[ExecuteFlowTranscriptRow] = []
         run_started_event: Optional[Dict[str, Any]] = None
 
+        set_sentry_transaction_identifiers(
+            session_id=current_session_id,
+            document_id=request.document_id,
+            flow_id=flow.id,
+            flow_run_id=prepared_turn.flow_run_id,
+        )
+
         try:
             async for event in execute_flow(
                 flow=flow,
@@ -931,6 +939,7 @@ async def execute_flow_endpoint(
 
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
+                    set_sentry_transaction_identifiers(trace_id=trace_id)
                     _persist_execute_flow_runtime_state(
                         session_id=current_session_id,
                         user_id=user_id,
