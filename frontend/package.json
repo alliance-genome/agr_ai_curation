@@ -1,6 +1,6 @@
 {
   "name": "ai-curation-frontend",
-  "version": "0.8.19",
+  "version": "0.8.20",
   "private": true,
   "dependencies": {
     "@emotion/react": "^11.11.3",
