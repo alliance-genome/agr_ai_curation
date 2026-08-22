@@ -370,6 +370,35 @@ Response (`ChunkListResponse`):
 
 Use this endpoint to verify embedding coverage or to reconstruct provenance overlays produced by `/api/chat/stream` (the SSE `CHUNK_PROVENANCE` events reuse the same `doc_items` schema).
 
+Agent document search uses hybrid vector/BM25 retrieval over the `content`
+property, optional provider reranking, and optional MMR diversification. Each
+ordinary hybrid search defaults to alpha `0.4`, a 50-candidate rerank pool, and
+MMR disabled; `WEAVIATE_SEARCH_HYBRID_ALPHA`,
+`WEAVIATE_SEARCH_INITIAL_LIMIT`, `WEAVIATE_SEARCH_MMR_ENABLED`, and
+`WEAVIATE_SEARCH_MMR_LAMBDA` tune those choices for controlled diagnostics.
+Explicit lexical modes still force alpha `0`. Each
+search emits a structured `weaviate_retrieval_ranking_audit` log record. The
+record contains a query fingerprint, effective alpha, stage timings, and
+content-free candidate ranks before reranking, after reranking, and after MMR.
+Use `retrieval_search_id` to correlate the stages; the query and chunk text are
+deliberately omitted from this audit record. Search-tool and reranker lifecycle
+logs use the same fingerprint instead of raw query previews, so ordinary logs
+do not become a second store for curator search wording.
+
+The ranking audit is intentionally an operational-log signal: production
+operators inspect it in CloudWatch and development operators inspect it in the
+configured Compose log backend. It is not copied into Langfuse observations or
+surfaced by TraceReview; TraceReview continues to show the search tool input and
+returned hits, while detailed configuration and rank movement remain in the
+restricted operational logs. Use `retrieval_search_id` to correlate records
+within those logs.
+
+At startup, the backend compares an existing `DocumentChunk` collection with
+the intended content-only vectorization profile. A
+`weaviate_schema_drift` warning reports differences without modifying or
+deleting the collection. Correcting that warning requires an explicit,
+backed-up reindex during a maintenance window.
+
 Legacy note:
 `doc_items` bounding boxes are still useful for chunk-provenance diagnostics, but they are not the canonical evidence-quote highlighting strategy anymore.
 The current evidence-navigation design uses the real PDF.js text layer as the viewer-side source of truth; see:

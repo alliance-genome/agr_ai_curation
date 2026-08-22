@@ -60,6 +60,7 @@ async def test_search_tool_clamps_limit_and_handles_no_hits(monkeypatch):
     assert captured["document_id"] == "doc-12345678"
     assert captured["user_id"] == "user-1"
     assert captured["strategy"] == "hybrid"
+    assert "apply_mmr" not in captured
     assert tracker.calls == ["search_document"]
 
 

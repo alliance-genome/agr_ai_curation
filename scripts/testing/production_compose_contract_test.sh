@@ -82,12 +82,20 @@ services = config["services"]
 backend_env = services["backend"]["environment"]
 trace_review = services["trace_review_backend"]
 trace_review_env = trace_review["environment"]
+weaviate = services["weaviate"]
+weaviate_env = weaviate["environment"]
 
 assert trace_review["image"].endswith(":latest")
 assert str(trace_review_env["DEV_MODE"]).lower() == "true"
 assert str(trace_review_env["SECURE_COOKIES"]).lower() == "false"
 assert str(backend_env["HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS"]).lower() == "false"
 assert str(backend_env["HEALTH_CHECK_REQUIRE_LITERATURE_DB"]).lower() == "false"
+assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
+assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"
+assert any(
+    mount.get("target") == "/var/lib/weaviate-backups"
+    for mount in weaviate["volumes"]
+)
 PY
 
 # Exercise the exact render-and-validate preflight invoked by `make prod`.
@@ -100,10 +108,20 @@ import sys
 config = json.load(open(sys.argv[1], encoding="utf-8"))
 backend_env = config["services"]["backend"]["environment"]
 weaviate_env = config["services"]["weaviate"]["environment"]
+weaviate = config["services"]["weaviate"]
 assert backend_env["SENTRY_LOG_EVENT_LEVEL"] == ""
 assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
 assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 assert weaviate_env["AUTHORIZATION_ADMINLIST_USERS"] == "curation-backend"
+assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
+assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"
+backup_mounts = [
+    mount
+    for mount in weaviate["volumes"]
+    if mount.get("target") == "/var/lib/weaviate-backups"
+]
+assert len(backup_mounts) == 1
+assert backup_mounts[0]["type"] == "bind"
 PY
 
 python3 - "${repo_root}" <<'PY'

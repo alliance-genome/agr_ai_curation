@@ -191,6 +191,7 @@ test_core_config_generates_env_and_backups() {
   local pdf_storage_dir="${temp_home}/.agr_ai_curation/data/pdf_storage"
   local file_outputs_dir="${temp_home}/.agr_ai_curation/data/file_outputs"
   local weaviate_data_dir="${temp_home}/.agr_ai_curation/data/weaviate"
+  local weaviate_backup_dir="${temp_home}/.agr_ai_curation/data/weaviate_backups"
   local expected_image_tag
   expected_image_tag="$(resolve_checkout_image_tag "$repo_root")"
 
@@ -234,6 +235,7 @@ test_core_config_generates_env_and_backups() {
   assert_contains "^PDF_STORAGE_HOST_DIR=${pdf_storage_dir}$" "$env_file"
   assert_contains "^FILE_OUTPUT_STORAGE_HOST_DIR=${file_outputs_dir}$" "$env_file"
   assert_contains "^WEAVIATE_DATA_HOST_DIR=${weaviate_data_dir}$" "$env_file"
+  assert_contains "^WEAVIATE_BACKUP_HOST_DIR=${weaviate_backup_dir}$" "$env_file"
 
   [[ -d "$runtime_config_dir" ]] || {
     echo "Expected runtime config dir at ${runtime_config_dir}" >&2
@@ -277,6 +279,14 @@ test_core_config_generates_env_and_backups() {
   }
   [[ "$(stat -c '%a' "$weaviate_data_dir")" == "777" ]] || {
     echo "Expected Weaviate data dir to be writable by published containers" >&2
+    exit 1
+  }
+  [[ -d "$weaviate_backup_dir" ]] || {
+    echo "Expected Weaviate backup dir at ${weaviate_backup_dir}" >&2
+    exit 1
+  }
+  [[ "$(stat -c '%a' "$weaviate_backup_dir")" == "777" ]] || {
+    echo "Expected Weaviate backup dir to be writable by published containers" >&2
     exit 1
   }
   [[ -f "${runtime_config_dir}/connections.yaml" ]] || {

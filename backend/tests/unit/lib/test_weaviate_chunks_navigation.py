@@ -28,8 +28,9 @@ def _sync_to_thread(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch):
+async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch, caplog):
     _sync_to_thread(monkeypatch)
+    caplog.set_level("INFO", logger="src.lib.weaviate_client.chunks")
 
     obj1 = SimpleNamespace(
         uuid="u1",
@@ -89,19 +90,21 @@ async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch):
         lambda rows, lambda_param, top_k, vector_field: rows[:top_k],
     )
 
+    raw_query = "this is a sufficiently long query for reranking"
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(
         "src.lib.weaviate_helpers.get_user_collections",
         return_value=(chunk_collection, MagicMock()),
     ):
         results = await chunks.hybrid_search_chunks(
             document_id="doc-1",
-            query="this is a sufficiently long query for reranking",
+            query=raw_query,
             user_id="user-1",
             limit=2,
             initial_limit=10,
             apply_reranking=False,
             apply_mmr=True,
-            section_keywords="methods",
+            section_keywords=["methods"],
+            strategy="lexical",
         )
 
     assert len(results) == 2
@@ -111,6 +114,22 @@ async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch):
     assert results[1]["metadata"]["chunk_id"] == "u2"
     query_kwargs = chunk_collection.query.hybrid.call_args.kwargs
     assert "auto_limit" not in query_kwargs
+    assert query_kwargs["alpha"] == 0.0
+    assert query_kwargs["query_properties"] == ["content"]
+
+    audit_record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "operation", None) == "weaviate_retrieval_ranking_audit"
+    )
+    assert audit_record.retrieval_alpha == 0.0
+    assert audit_record.retrieval_query_properties == ["content"]
+    assert len(audit_record.retrieval_candidates) == 3
+    assert len(audit_record.reranked_candidates) == 3
+    assert len(audit_record.final_results) == 2
+    assert all("content" not in row for row in audit_record.retrieval_candidates)
+    assert len(audit_record.retrieval_query_fingerprint) == 16
+    assert all(raw_query not in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -181,8 +200,43 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
     assert [chunk["id"] for chunk in results] == ["u2", "u1"]
     assert "rerank" not in chunk_collection.query.hybrid.call_args.kwargs
     assert "auto_limit" not in chunk_collection.query.hybrid.call_args.kwargs
-    assert chunk_collection.query.hybrid.call_args.kwargs["limit"] == 25
+    assert chunk_collection.query.hybrid.call_args.kwargs["limit"] == 50
+    assert chunk_collection.query.hybrid.call_args.kwargs["alpha"] == 0.4
+    assert chunk_collection.query.hybrid.call_args.kwargs["include_vector"] is False
     assert "_rerank_text" not in results[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "expected_minimum_match"),
+    (("CG18135", 1), ("CG18135 insertion", 2)),
+)
+async def test_hybrid_search_chunks_clamps_bm25_minimum_match_to_query_terms(
+    monkeypatch,
+    query,
+    expected_minimum_match,
+):
+    _sync_to_thread(monkeypatch)
+    chunk_collection = MagicMock()
+    chunk_collection.query.hybrid.return_value = SimpleNamespace(objects=[])
+    connection = _connection_with_client(MagicMock())
+    monkeypatch.setenv("WEAVIATE_VERSION", "1.31")
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(
+        "src.lib.weaviate_helpers.get_user_collections",
+        return_value=(chunk_collection, MagicMock()),
+    ):
+        await chunks.hybrid_search_chunks(
+            document_id="doc-1",
+            query=query,
+            user_id="user-1",
+            apply_reranking=False,
+            apply_mmr=False,
+            strategy="lexical",
+        )
+
+    operator = chunk_collection.query.hybrid.call_args.kwargs["bm25_operator"]
+    assert operator.minimum_should_match == expected_minimum_match
 
 
 @pytest.mark.asyncio

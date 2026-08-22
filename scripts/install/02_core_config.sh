@@ -149,7 +149,8 @@ seed_runtime_layout() {
   local pdf_storage_dir="$4"
   local file_outputs_dir="$5"
   local weaviate_data_dir="$6"
-  local config_source_dir="$7"
+  local weaviate_backup_dir="$7"
+  local config_source_dir="$8"
 
   require_directory_exists "$config_source_dir"
 
@@ -159,7 +160,8 @@ seed_runtime_layout() {
     "$runtime_state_dir" \
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
-    "$weaviate_data_dir"
+    "$weaviate_data_dir" \
+    "$weaviate_backup_dir"
 
   local filename=""
   for filename in "${deployment_config_filenames[@]}"; do
@@ -177,7 +179,8 @@ seed_runtime_layout() {
     "$runtime_state_dir" \
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
-    "$weaviate_data_dir"
+    "$weaviate_data_dir" \
+    "$weaviate_backup_dir"
 }
 
 seed_runtime_package_dir() {
@@ -375,6 +378,7 @@ main() {
   local pdf_storage_dir
   local file_outputs_dir
   local weaviate_data_dir
+  local weaviate_backup_dir
   local package_profile
   local package_profile_label
   local default_package_profile
@@ -399,6 +403,7 @@ main() {
   pdf_storage_dir="$(install_pdf_storage_dir "$install_home_dir")"
   file_outputs_dir="$(install_file_outputs_dir "$install_home_dir")"
   weaviate_data_dir="$(install_weaviate_data_dir "$install_home_dir")"
+  weaviate_backup_dir="$(install_weaviate_backup_dir "$install_home_dir")"
   core_package_source_dir="${repo_root}/packages/core"
   alliance_package_source_dir="${repo_root}/packages/alliance"
   config_source_dir="${repo_root}/config"
@@ -422,6 +427,7 @@ main() {
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
     "$weaviate_data_dir" \
+    "$weaviate_backup_dir" \
     "$config_source_dir"
   seed_runtime_packages \
     "$runtime_packages_dir" \
@@ -546,6 +552,7 @@ main() {
   upsert_env_var "$env_output_path" "PDF_STORAGE_HOST_DIR" "$pdf_storage_dir"
   upsert_env_var "$env_output_path" "FILE_OUTPUT_STORAGE_HOST_DIR" "$file_outputs_dir"
   upsert_env_var "$env_output_path" "WEAVIATE_DATA_HOST_DIR" "$weaviate_data_dir"
+  upsert_env_var "$env_output_path" "WEAVIATE_BACKUP_HOST_DIR" "$weaviate_backup_dir"
 
   if [[ -n "$resolved_image_tag" ]]; then
     upsert_env_var "$env_output_path" "BACKEND_IMAGE_TAG" "$resolved_image_tag"

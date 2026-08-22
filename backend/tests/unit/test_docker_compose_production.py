@@ -371,6 +371,7 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
     }
     assert weaviate_bindings == {
         "/var/lib/weaviate": "${WEAVIATE_DATA_HOST_DIR:-./weaviate_data}",
+        "/var/lib/weaviate-backups": "${WEAVIATE_BACKUP_HOST_DIR:-./weaviate_native_backups}",
     }
 
     backend_sources = set(backend_bindings.values())

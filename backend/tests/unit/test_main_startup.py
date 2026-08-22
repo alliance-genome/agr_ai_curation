@@ -51,6 +51,19 @@ class TestInitializeWeaviateCollections:
         created = client.collections.create.call_args_list
         assert len(created) == 1
         assert created[0].kwargs["name"] == "DocumentChunk"
+        content_property = next(
+            prop
+            for prop in created[0].kwargs["properties"]
+            if prop.name == "content"
+        )
+        assert content_property.skip_vectorization is False
+        assert content_property.vectorize_property_name is False
+        non_content_properties = [
+            prop
+            for prop in created[0].kwargs["properties"]
+            if prop.name != "content"
+        ]
+        assert all(prop.skip_vectorization is True for prop in non_content_properties)
 
     @pytest.mark.asyncio
     async def test_skips_existing_collections(self):
@@ -58,6 +71,62 @@ class TestInitializeWeaviateCollections:
 
         await _main_module().initialize_weaviate_collections(connection)
         client.collections.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_warns_when_existing_document_chunk_vectorization_has_drift(self, caplog):
+        connection, client = make_connection(list_all_return=["DocumentChunk", "PDFDocument"])
+        stale_document_config = SimpleNamespace(
+            multi_tenancy_config=SimpleNamespace(enabled=True),
+            vectorizer_config=SimpleNamespace(
+                model={"model": "text-embedding-3-small"}
+            ),
+            properties=[
+                SimpleNamespace(
+                    name="content",
+                    data_type=SimpleNamespace(value="text"),
+                    vectorizer_config=SimpleNamespace(
+                        skip=False,
+                        vectorize_property_name=True,
+                    ),
+                ),
+                SimpleNamespace(
+                    name="metadata",
+                    data_type=SimpleNamespace(value="text"),
+                    vectorizer_config=SimpleNamespace(
+                        skip=False,
+                        vectorize_property_name=True,
+                    ),
+                ),
+                SimpleNamespace(
+                    name="pageNumber",
+                    data_type=SimpleNamespace(value="int"),
+                    vectorizer_config=SimpleNamespace(
+                        skip=False,
+                        vectorize_property_name=True,
+                    ),
+                ),
+            ],
+        )
+        current_pdf_config = SimpleNamespace(
+            multi_tenancy_config=SimpleNamespace(enabled=True),
+            properties=[],
+        )
+        client.collections.get.side_effect = [
+            SimpleNamespace(config=SimpleNamespace(get=MagicMock(return_value=stale_document_config))),
+            SimpleNamespace(config=SimpleNamespace(get=MagicMock(return_value=current_pdf_config))),
+        ]
+        caplog.set_level("WARNING", logger="main")
+
+        await _main_module().initialize_weaviate_collections(connection)
+
+        drift_record = next(
+            record
+            for record in caplog.records
+            if getattr(record, "operation", None) == "weaviate_schema_drift"
+        )
+        assert drift_record.schema_drift["vectorized_properties"] == ["content", "metadata"]
+        assert drift_record.schema_drift["content_vectorizes_property_name"] is True
+        client.collections.delete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_creates_all_when_none_exist(self):
