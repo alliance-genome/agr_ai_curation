@@ -393,7 +393,7 @@ services:
       PERSISTENCE_DATA_PATH: /var/lib/weaviate
       DEFAULT_VECTORIZER_MODULE: text2vec-openai
       ENABLE_MODULES: "text2vec-openai,reranker-transformers,backup-filesystem"
-      BACKUP_FILESYSTEM_PATH: /var/lib/weaviate/backups
+      BACKUP_FILESYSTEM_PATH: /var/lib/weaviate-backups
       OPENAI_APIKEY: "${OPENAI_API_KEY:-}"
       RERANKER_INFERENCE_API: http://reranker-transformers:8080
       RERANKER_WAIT_FOR_STARTUP: "false"
@@ -408,7 +408,7 @@ services:
         target: /var/lib/weaviate
       - type: bind
         source: "${WEAVIATE_BACKUP_HOST_DIR:-./weaviate_native_backups}"
-        target: /var/lib/weaviate/backups
+        target: /var/lib/weaviate-backups
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/v1/.well-known/ready"]
       interval: 30s

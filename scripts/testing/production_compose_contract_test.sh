@@ -109,9 +109,9 @@ assert backend_env["ELASTICSEARCH_SCHEME"] == "https"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
-assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate/backups"
+assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"
 assert any(
-    mount.get("target") == "/var/lib/weaviate/backups"
+    mount.get("target") == "/var/lib/weaviate-backups"
     for mount in weaviate["volumes"]
 )
 PY
@@ -137,11 +137,11 @@ assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert weaviate_env["AUTHORIZATION_ADMINLIST_USERS"] == "curation-backend"
 assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
-assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate/backups"
+assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"
 backup_mounts = [
     mount
     for mount in weaviate["volumes"]
-    if mount.get("target") == "/var/lib/weaviate/backups"
+    if mount.get("target") == "/var/lib/weaviate-backups"
 ]
 assert len(backup_mounts) == 1
 assert backup_mounts[0]["type"] == "bind"

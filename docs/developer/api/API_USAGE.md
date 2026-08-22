@@ -385,6 +385,14 @@ deliberately omitted from this audit record. Search-tool and reranker lifecycle
 logs use the same fingerprint instead of raw query previews, so ordinary logs
 do not become a second store for curator search wording.
 
+The ranking audit is intentionally an operational-log signal: production
+operators inspect it in CloudWatch and development operators inspect it in the
+configured Compose log backend. It is not copied into Langfuse observations or
+surfaced by TraceReview; TraceReview continues to show the search tool input and
+returned hits, while detailed configuration and rank movement remain in the
+restricted operational logs. Use `retrieval_search_id` to correlate records
+within those logs.
+
 At startup, the backend compares an existing `DocumentChunk` collection with
 the intended content-only vectorization profile. A
 `weaviate_schema_drift` warning reports differences without modifying or

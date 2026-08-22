@@ -178,8 +178,9 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         for exact gene symbols, IDs, strains, alleles, probes, reagents, genotype
         handles, and PMIDs/DOIs; use search_mode='hybrid_lexical_first' when broad
         hybrid search should retry with lexical-heavy matching. Results are reranked
-        by a cross-encoder and then diversified via MMR, and short queries (<=3
-        tokens) auto-boost lexical matching to avoid semantic drift. Pass
+        by a cross-encoder. MMR diversification is an optional operator-controlled
+        stage and is disabled by default. Short queries (<=3 tokens) auto-boost
+        lexical matching to avoid semantic drift. Pass
         section_keywords to scope the search to named sections (e.g. Results or
         figure legends) before retrieval runs.
 
