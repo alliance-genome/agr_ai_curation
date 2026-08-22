@@ -630,6 +630,21 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
     assert auto_result.result["hits"][0]["section_title"] == "hybrid"
     assert auto_result.result["hits"][0]["content"] == "strategy=hybrid"
 
+    monkeypatch.setenv("WEAVIATE_SEARCH_INITIAL_LIMIT", "77")
+    monkeypatch.setenv("WEAVIATE_SEARCH_HYBRID_ALPHA", "0.6")
+    monkeypatch.setenv("WEAVIATE_SEARCH_MMR_ENABLED", "true")
+    monkeypatch.setenv("WEAVIATE_SEARCH_MMR_LAMBDA", "0.9")
+    config_result = runner.execute_tool(
+        "search_document",
+        kwargs={"query": "config-check"},
+        context={"document_id": "doc-42", "user_id": "user-9"},
+    )
+
+    assert config_result.ok is True
+    assert config_result.result["hits"][0]["content"] == (
+        "initial=77 alpha=0.6 mmr=True lambda=0.9"
+    )
+
     section_result = runner.execute_tool(
         "read_section",
         kwargs={"section_name": "Methods"},
@@ -1153,9 +1168,14 @@ def _write_fake_weaviate_backend(tmp_path: Path) -> Path:
         (directory / "__init__.py").write_text("", encoding="utf-8")
 
     (package_root / "chunks.py").write_text(
-        """async def hybrid_search_chunks(*, document_id, query, user_id, limit=10, section_keywords=None, apply_mmr=True, strategy=\"hybrid\", **_kwargs):
+        """async def hybrid_search_chunks(*, document_id, query, user_id, limit=10, initial_limit=None, alpha=None, section_keywords=None, apply_mmr=None, mmr_lambda=None, strategy=\"hybrid\", **_kwargs):
     section_title = strategy if query == \"strategy-check\" else \"Results\"
-    text = f\"strategy={strategy}\" if query == \"strategy-check\" else \"Wingless expression expanded in the mutant tissue.\"
+    if query == \"strategy-check\":
+        text = f\"strategy={strategy}\"
+    elif query == \"config-check\":
+        text = f\"initial={initial_limit} alpha={alpha} mmr={apply_mmr} lambda={mmr_lambda}\"
+    else:
+        text = \"Wingless expression expanded in the mutant tissue.\"
     return [
         {
             \"id\": \"chunk-search-1\",

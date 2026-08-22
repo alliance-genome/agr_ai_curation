@@ -352,8 +352,9 @@ def test_log_rerank_no_results_prefers_bedrock_message(caplog):
 
     assert (
         "Bedrock reranking returned no results; preserving original retrieval order for "
-        "query='query'" in caplog.text
+        "query_fingerprint=a8b771920b8319e4" in caplog.text
     )
+    assert "query='query'" not in caplog.text
     assert "rerank no results provider=bedrock_cohere" not in caplog.text
 
 
@@ -570,10 +571,11 @@ def test_rerank_chunks_logs_provider_neutral_local_transformers_lines(
 
     monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
     monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
+    raw_query = "private curator retrieval wording"
 
     with caplog.at_level(logging.INFO):
         bedrock_reranker.rerank_chunks(
-            "query",
+            raw_query,
             [
                 {"id": "chunk-1", "score": 0.12, "_rerank_text": "Chunk A"},
                 {"id": "chunk-2", "score": 0.55, "_rerank_text": "Chunk B"},
@@ -583,6 +585,8 @@ def test_rerank_chunks_logs_provider_neutral_local_transformers_lines(
 
     assert "rerank request provider=local_transformers" in caplog.text
     assert "rerank complete provider=local_transformers" in caplog.text
+    assert "query_fingerprint=" in caplog.text
+    assert raw_query not in caplog.text
 
 
 def test_rerank_chunks_returns_original_chunks_on_local_transformers_missing_scores(

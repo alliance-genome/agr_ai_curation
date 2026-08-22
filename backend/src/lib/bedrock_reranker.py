@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -244,12 +245,13 @@ def _log_rerank_request(
     requested_results: int,
     query: str,
 ) -> None:
+    query_fingerprint = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
     logger.info(
-        "rerank request provider=%s candidates=%s requested_results=%s query_preview=%r",
+        "rerank request provider=%s candidates=%s requested_results=%s query_fingerprint=%s",
         provider,
         candidate_count,
         requested_results,
-        query[:120],
+        query_fingerprint,
     )
 
 
@@ -271,16 +273,17 @@ def _log_rerank_complete(
 
 
 def _log_rerank_no_results(provider: str, query: str) -> None:
+    query_fingerprint = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
     if provider == "bedrock_cohere":
         logger.warning(
-            "Bedrock reranking returned no results; preserving original retrieval order for query=%r",
-            query[:200],
+            "Bedrock reranking returned no results; preserving original retrieval order for query_fingerprint=%s",
+            query_fingerprint,
         )
         return
     logger.warning(
-        "rerank no results provider=%s preserving original retrieval order for query=%r",
+        "rerank no results provider=%s preserving original retrieval order for query_fingerprint=%s",
         provider,
-        query[:200],
+        query_fingerprint,
     )
 
 
@@ -309,8 +312,8 @@ def rerank_chunks(
             ) from exc
         except Exception:
             logger.exception(
-                "Bedrock reranking failed; preserving original retrieval order for query=%r",
-                query[:200],
+                "Bedrock reranking failed; preserving original retrieval order for query_fingerprint=%s",
+                hashlib.sha256(query.encode("utf-8")).hexdigest()[:16],
             )
             return list(chunks)
     elif provider == "local_transformers":
@@ -320,8 +323,8 @@ def rerank_chunks(
             )
         except Exception:
             logger.exception(
-                "Local transformers reranking failed; preserving original retrieval order for query=%r",
-                query[:200],
+                "Local transformers reranking failed; preserving original retrieval order for query_fingerprint=%s",
+                hashlib.sha256(query.encode("utf-8")).hexdigest()[:16],
             )
             return list(chunks)
     else:
@@ -475,12 +478,12 @@ def _rerank_chunks_with_bedrock(
         query,
     )
     logger.info(
-        "Bedrock rerank request: provider=%s model_arn=%s candidates=%s requested_results=%s query_preview=%r",
+        "Bedrock rerank request: provider=%s model_arn=%s candidates=%s requested_results=%s query_fingerprint=%s",
         get_rerank_provider(),
         model_arn,
         len(candidate_chunks),
         requested_results,
-        query[:120],
+        hashlib.sha256(query.encode("utf-8")).hexdigest()[:16],
     )
     client = _bedrock_agent_runtime_client()
 

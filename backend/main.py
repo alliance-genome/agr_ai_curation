@@ -36,6 +36,50 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
+def _document_chunk_vectorization_drift(collection_config, embedding_model: str):
+    """Describe content-vector schema drift without mutating existing data."""
+
+    vectorized_properties = []
+    content_vectorizes_property_name = None
+    for prop in getattr(collection_config, "properties", []) or []:
+        vectorizer_config = getattr(prop, "vectorizer_config", None)
+        if vectorizer_config is None:
+            continue
+        data_type = getattr(prop, "data_type", None)
+        data_type_value = getattr(data_type, "value", data_type)
+        if (
+            data_type_value in {"text", "text[]"}
+            and not getattr(vectorizer_config, "skip", False)
+        ):
+            vectorized_properties.append(prop.name)
+        if prop.name == "content":
+            content_vectorizes_property_name = bool(
+                getattr(vectorizer_config, "vectorize_property_name", False)
+            )
+
+    configured_model = None
+    collection_vectorizer = getattr(collection_config, "vectorizer_config", None)
+    model_config = getattr(collection_vectorizer, "model", None)
+    if isinstance(model_config, dict):
+        configured_model = model_config.get("model")
+
+    expected_properties = ["content"]
+    drift = {
+        "vectorized_properties": sorted(vectorized_properties),
+        "expected_vectorized_properties": expected_properties,
+        "content_vectorizes_property_name": content_vectorizes_property_name,
+        "expected_content_vectorizes_property_name": False,
+        "embedding_model": configured_model,
+        "expected_embedding_model": embedding_model,
+    }
+    has_drift = (
+        sorted(vectorized_properties) != expected_properties
+        or content_vectorizes_property_name is not False
+        or configured_model != embedding_model
+    )
+    return has_drift, drift
+
+
 def _validate_pdf_extraction_timeout():
     """Validate PDF_EXTRACTION_TIMEOUT environment variable.
 
@@ -145,11 +189,11 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
                 "multi_tenancy_config": Configure.multi_tenancy(enabled=True),  # Enable multi-tenancy
                 "properties": [
                     Property(name="documentId", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="chunkIndex", data_type=DataType.INT),
-                    Property(name="content", data_type=DataType.TEXT, vectorize_property_name=True),  # Vectorize content
+                    Property(name="chunkIndex", data_type=DataType.INT, skip_vectorization=True),
+                    Property(name="content", data_type=DataType.TEXT, vectorize_property_name=False),  # Vectorize content only
                     Property(name="contentPreview", data_type=DataType.TEXT, vectorize_property_name=False, skip_vectorization=True),  # Keep preview out of vectorization
                     Property(name="elementType", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="pageNumber", data_type=DataType.INT),
+                    Property(name="pageNumber", data_type=DataType.INT, skip_vectorization=True),
                     Property(name="sectionTitle", data_type=DataType.TEXT, skip_vectorization=True),
                     Property(name="sectionPath", data_type=DataType.TEXT_ARRAY, skip_vectorization=True),
                     Property(name="parentSection", data_type=DataType.TEXT, skip_vectorization=True),
@@ -157,7 +201,7 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
                     Property(name="isTopLevel", data_type=DataType.TEXT, skip_vectorization=True),
                     Property(name="contentType", data_type=DataType.TEXT, skip_vectorization=True),
                     Property(name="metadata", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="embeddingTimestamp", data_type=DataType.DATE),
+                    Property(name="embeddingTimestamp", data_type=DataType.DATE, skip_vectorization=True),
                     Property(name="docItemProvenance", data_type=DataType.TEXT, skip_vectorization=True),  # For chunk highlighting
                 ]
             },
@@ -197,6 +241,20 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
                         "Collection %s already has multi-tenancy enabled - skipping",
                         collection_name,
                     )
+                    if collection_name == "DocumentChunk":
+                        has_drift, drift = _document_chunk_vectorization_drift(
+                            collection_config,
+                            embedding_model,
+                        )
+                        if has_drift:
+                            logger.warning(
+                                "DocumentChunk vectorization schema drift detected; "
+                                "preserving data and requiring an explicit reindex",
+                                extra={
+                                    "operation": "weaviate_schema_drift",
+                                    "schema_drift": drift,
+                                },
+                            )
                 else:
                     # Multi-tenancy not enabled - need to migrate (one-time operation)
                     logger.warning(

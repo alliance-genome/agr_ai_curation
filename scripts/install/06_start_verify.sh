@@ -244,6 +244,7 @@ validate_runtime_layout() {
   require_runtime_var "PDF_STORAGE_HOST_DIR" "${PDF_STORAGE_HOST_DIR:-}" || return 1
   require_runtime_var "FILE_OUTPUT_STORAGE_HOST_DIR" "${FILE_OUTPUT_STORAGE_HOST_DIR:-}" || return 1
   require_runtime_var "WEAVIATE_DATA_HOST_DIR" "${WEAVIATE_DATA_HOST_DIR:-}" || return 1
+  require_runtime_var "WEAVIATE_BACKUP_HOST_DIR" "${WEAVIATE_BACKUP_HOST_DIR:-}" || return 1
 
   require_directory_exists "${AGR_RUNTIME_CONFIG_HOST_DIR}"
   require_directory_exists "${AGR_RUNTIME_PACKAGES_HOST_DIR}"
@@ -251,6 +252,7 @@ validate_runtime_layout() {
   require_directory_exists "${PDF_STORAGE_HOST_DIR}"
   require_directory_exists "${FILE_OUTPUT_STORAGE_HOST_DIR}"
   require_directory_exists "${WEAVIATE_DATA_HOST_DIR}"
+  require_directory_exists "${WEAVIATE_BACKUP_HOST_DIR}"
 
   require_file_exists "${AGR_RUNTIME_PACKAGES_HOST_DIR}/core/package.yaml"
 }
@@ -263,6 +265,7 @@ print_runtime_layout() {
   echo "  PDF storage: ${PDF_STORAGE_HOST_DIR}"
   echo "  File outputs: ${FILE_OUTPUT_STORAGE_HOST_DIR}"
   echo "  Weaviate data: ${WEAVIATE_DATA_HOST_DIR}"
+  echo "  Weaviate backups: ${WEAVIATE_BACKUP_HOST_DIR}"
   echo
 }
 
