@@ -202,6 +202,7 @@ function HomePage() {
   const {
     events,
     eventStreamVersion,
+    durableReconciliationVersion,
     processedEventCount,
     isLoading,
     sendMessage,
@@ -908,6 +909,8 @@ function HomePage() {
             <RightPanel
               sessionId={sessionId}
               sseEvents={events}
+              eventStreamVersion={eventStreamVersion}
+              durableReconciliationVersion={durableReconciliationVersion}
               onStop={() => sessionId && stopStream(sessionId)}
               isStreaming={isLoading}
               onExecuteFlow={handleExecuteFlow}

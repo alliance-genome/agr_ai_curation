@@ -132,6 +132,7 @@ export function parseSSEEvent(sseData: AuditEventSSE): AuditEvent {
     type: sseData.type,
     timestamp: new Date(sseData.timestamp),
     sessionId: sseData.session_id,
+    turnId: sseData.turn_id,
     details: sseData.details as AuditEventDetails
   }
 }

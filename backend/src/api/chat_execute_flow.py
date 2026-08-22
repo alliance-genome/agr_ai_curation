@@ -2,8 +2,10 @@
 """Execute-flow chat streaming endpoint."""
 
 from uuid import UUID
+from typing import Annotated
 
 from .chat_common import *
+from fastapi import Header
 from .chat_common import (
     _EXECUTE_FLOW_RUNTIME_FLOW_RUN_ID_KEY,
     _EXECUTE_FLOW_RUNTIME_STATE_KEY,
@@ -26,6 +28,7 @@ from src.lib.executable_runs import (
     ExecutableRunConflictError,
     executable_run_manager,
 )
+from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.observability.sentry import set_sentry_transaction_identifiers
@@ -713,6 +716,7 @@ async def execute_flow_endpoint(
     request: ExecuteFlowRequest,
     db: Session = Depends(get_db),
     user: Dict[str, Any] = get_auth_dependency(),
+    observer_recovery: Annotated[bool, Header(alias="X-Observer-Recovery")] = False,
 ):
     """Execute a curation flow with SSE streaming response.
 
@@ -784,7 +788,11 @@ async def execute_flow_endpoint(
         )
         if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
             return StreamingResponse(
-                executable_run_manager.observe(active_executable_run),
+                executable_run_manager.observe(
+                    active_executable_run,
+                    keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+                    include_event_ids=True,
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -794,6 +802,28 @@ async def execute_flow_endpoint(
             )
 
         raise HTTPException(status_code=409, detail="Session is already active")
+
+    if observer_recovery:
+        durable_replay = (
+            _build_execute_flow_turn_replay(
+                repository.list_messages_for_turn(
+                    session_id=request.session_id,
+                    user_auth_sub=user_id,
+                    chat_kind=ASSISTANT_CHAT_KIND,
+                    turn_id=request.turn_id,
+                )
+            )
+            if request.turn_id
+            else None
+        )
+        if durable_replay is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The original executable run is not observable on this worker "
+                    "and has not reached durable completion."
+                ),
+            )
 
     generated_title_candidate: str | None = None
     stream_lifecycle = await _claim_active_stream_lifecycle(
@@ -1347,7 +1377,11 @@ async def execute_flow_endpoint(
         await stream_lifecycle.cleanup()
 
     return StreamingResponse(
-        executable_run_manager.observe(executable_run),
+        executable_run_manager.observe(
+            executable_run,
+            keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+            include_event_ids=True,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -813,7 +813,9 @@ export function useChatController({
         if (turnId) {
           activeTurnIdRef.current = turnId
           const previousContent = assistantBuffersRef.current[turnId] ?? getAssistantTurnContent(turnId)
-          const nextContent = `${previousContent}${messageContent}`
+          const nextContent = parsed.observer_reconcile
+            ? String(messageContent)
+            : `${previousContent}${messageContent}`
           assistantBuffersRef.current[turnId] = nextContent
 
           setMessages((prev) => upsertAssistantTurnMessage(prev, {

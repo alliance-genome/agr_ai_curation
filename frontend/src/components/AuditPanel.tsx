@@ -42,6 +42,15 @@ export interface AuditPanelProps {
   sseEvents: SSEEvent[]
 
   /**
+   * Identity of the retained SSE event list. Ordinary turns and durable
+   * reconciliation both replace this list.
+   */
+  eventStreamVersion: number
+
+  /** Changes only when durable history replaces the current turn transcript. */
+  durableReconciliationVersion: number
+
+  /**
    * Optional initial events for testing purposes.
    * Allows tests to pre-populate the panel with events without going through SSE.
    */
@@ -100,12 +109,18 @@ export interface AuditPanelProps {
  *   const [sessionId, setSessionId] = useState<string | null>(null)
  *
  *   // Shared SSE stream (events renamed to sseEvents when passing to AuditPanel)
- *   const { events, isLoading, sendMessage } = useChatStream()
+ *   const {
+ *     events,
+ *     eventStreamVersion,
+ *     durableReconciliationVersion,
+ *   } = useChatStream()
  *
  *   return (
  *     <AuditPanel
  *       sessionId={sessionId}
  *       sseEvents={events}
+ *       eventStreamVersion={eventStreamVersion}
+ *       durableReconciliationVersion={durableReconciliationVersion}
  *       onClear={() => console.log('Panel cleared')}
  *     />
  *   )
@@ -171,6 +186,8 @@ const clearAuditEventsFromStorage = (
 const AuditPanel: React.FC<AuditPanelProps> = ({
   sessionId,
   sseEvents,
+  eventStreamVersion,
+  durableReconciliationVersion,
   initialEvents = [],
   onClear,
   className,
@@ -195,6 +212,8 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   const [prevSessionId, setPrevSessionId] = useState<string | null>(sessionId)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const processedEventCountRef = useRef(0)
+  const processedEventStreamVersionRef = useRef(eventStreamVersion)
+  const processedDurableReconciliationVersionRef = useRef(durableReconciliationVersion)
   const copiedResetTimeoutRef = useRef<number | null>(null)
 
   /**
@@ -287,12 +306,26 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
 
   // T027: Process SSE events and add audit events to state
   useEffect(() => {
-    // Process only new events. If the shared stream was reset for a fresh
-    // run, the processed counter may point past the new array length.
-    if (processedEventCountRef.current > sseEvents.length) {
+    const eventStreamWasReplaced = (
+      processedEventStreamVersionRef.current !== eventStreamVersion
+    )
+    const transcriptWasDurablyReconciled = (
+      processedDurableReconciliationVersionRef.current !== durableReconciliationVersion
+    )
+
+    // Process only appended events unless the hook replaced the retained
+    // transcript during durable replay reconciliation. A replacement must be
+    // parsed from the beginning even when its length is equal to the old one.
+    if (
+      !transcriptWasDurablyReconciled
+      && (eventStreamWasReplaced || processedEventCountRef.current > sseEvents.length)
+    ) {
       processedEventCountRef.current = 0
     }
-    const newEvents = sseEvents.slice(processedEventCountRef.current)
+    const newEvents = transcriptWasDurablyReconciled
+      ? sseEvents
+      : sseEvents.slice(processedEventCountRef.current)
+    const parsedEvents: AuditEvent[] = []
 
     newEvents.forEach((sseEvent: SSEEvent) => {
       // Filter for audit event types only
@@ -314,21 +347,50 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           type: sseEvent.type as AuditEventType,
           timestamp: sseEvent.timestamp,
           session_id: eventSessionId,
+          turn_id: typeof sseEvent.turn_id === 'string' ? sseEvent.turn_id : undefined,
           details: sseEvent.details || {}
         })
 
         // Only add events matching current session
         if (auditEvent.sessionId === sessionId) {
-          setEvents(prev => [...prev, auditEvent])
+          parsedEvents.push(auditEvent)
         }
       } catch (err) {
         console.error('🔍 [AUDIT] Failed to parse audit event:', err, sseEvent)
       }
     })
 
+    const malformedDurableEvent = transcriptWasDurablyReconciled
+      ? parsedEvents.find(event => !event.turnId)
+      : undefined
+    if (malformedDurableEvent) {
+      console.error(
+        '[AUDIT] Skipping durable reconciliation with an audit event missing turn_id:',
+        malformedDurableEvent,
+      )
+    } else if (transcriptWasDurablyReconciled && parsedEvents.length > 0) {
+      const reconciledTurnIds = new Set(
+        parsedEvents.flatMap(event => event.turnId ? [event.turnId] : []),
+      )
+      setEvents(previous => [
+        ...previous.filter(event => !event.turnId || !reconciledTurnIds.has(event.turnId)),
+        ...parsedEvents,
+      ])
+    } else if (parsedEvents.length > 0) {
+      setEvents(prev => [...prev, ...parsedEvents])
+    }
+
     // Mark all events as processed
     processedEventCountRef.current = sseEvents.length
-  }, [sseEvents, sessionId, isAuditEvent])
+    processedEventStreamVersionRef.current = eventStreamVersion
+    processedDurableReconciliationVersionRef.current = durableReconciliationVersion
+  }, [
+    sseEvents,
+    eventStreamVersion,
+    durableReconciliationVersion,
+    sessionId,
+    isAuditEvent,
+  ])
 
   // Auto-scroll to bottom when new events arrive
   useEffect(() => {

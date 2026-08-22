@@ -2,11 +2,14 @@
 """Chat response, streaming, cancellation, and assistant rescue endpoints."""
 
 from .chat_common import *
+from typing import Annotated
+from fastapi import Header
 from src.lib.executable_runs import (
     ExecutableRunAccessError,
     ExecutableRunConflictError,
     executable_run_manager,
 )
+from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
 from src.lib.observability.sentry import (
     gen_ai_workflow_transaction,
     hash_sentry_identifier,
@@ -421,6 +424,7 @@ async def chat_stream_endpoint(
     chat_message: ChatMessage,
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
+    observer_recovery: Annotated[bool, Header(alias="X-Observer-Recovery")] = False,
 ):
     """Stream a chat response using Server-Sent Events."""
     session_id = chat_message.session_id or str(uuid.uuid4())
@@ -466,7 +470,11 @@ async def chat_stream_endpoint(
         )
         if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
             return StreamingResponse(
-                executable_run_manager.observe(active_executable_run),
+                executable_run_manager.observe(
+                    active_executable_run,
+                    keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+                    include_event_ids=True,
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -476,6 +484,26 @@ async def chat_stream_endpoint(
             )
 
         raise HTTPException(status_code=409, detail="Session is already active")
+
+    if observer_recovery:
+        durable_assistant_turn = (
+            repository.get_message_by_turn_id(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                turn_id=chat_message.turn_id,
+                role="assistant",
+            )
+            if chat_message.turn_id
+            else None
+        )
+        if durable_assistant_turn is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The original executable run is not observable on this worker "
+                    "and has not reached durable completion."
+                ),
+            )
 
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
@@ -1110,7 +1138,11 @@ async def chat_stream_endpoint(
         await stream_lifecycle.cleanup()
 
     return StreamingResponse(
-        executable_run_manager.observe(executable_run),
+        executable_run_manager.observe(
+            executable_run,
+            keepalive_interval_seconds=get_chat_sse_keepalive_interval_seconds(),
+            include_event_ids=True,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -1537,6 +1537,8 @@ const BatchPage: React.FC = () => {
               <AuditPanel
                 sessionId={activeBatchId}
                 sseEvents={[]}
+                eventStreamVersion={0}
+                durableReconciliationVersion={0}
                 initialEvents={auditEvents}
                 onClear={() => {
                   setAuditEvents([]);

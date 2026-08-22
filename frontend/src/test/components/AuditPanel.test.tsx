@@ -8,9 +8,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ComponentProps } from 'react'
 import type { AuditEvent } from '../../types/AuditEvent'
-import AuditPanel from '../../components/AuditPanel'
+import AuditPanelComponent from '../../components/AuditPanel'
 import { getChatRenderCacheKeys } from '../../lib/chatCacheKeys'
+
+type AuditPanelTestProps = Omit<
+  ComponentProps<typeof AuditPanelComponent>,
+  'eventStreamVersion' | 'durableReconciliationVersion'
+> & Partial<Pick<
+  ComponentProps<typeof AuditPanelComponent>,
+  'eventStreamVersion' | 'durableReconciliationVersion'
+>>
+
+function AuditPanel({
+  eventStreamVersion = 0,
+  durableReconciliationVersion = 0,
+  ...props
+}: AuditPanelTestProps) {
+  return (
+    <AuditPanelComponent
+      {...props}
+      eventStreamVersion={eventStreamVersion}
+      durableReconciliationVersion={durableReconciliationVersion}
+    />
+  )
+}
 
 const mockUseAuth = vi.hoisted(() => vi.fn())
 
@@ -330,6 +353,254 @@ describe('AuditPanel - Event Display (T018)', () => {
     await waitFor(() => {
       expect(screen.getByText('[SUPERVISOR] Processing second run')).toBeInTheDocument()
     })
+  })
+
+  it('reconciles shorter and equal-length retained stream replacements exactly once', async () => {
+    const warning = (message: string) => ({
+      type: 'DOMAIN_WARNING' as const,
+      timestamp: '2026-05-11T18:02:00.000Z',
+      session_id: 'session123',
+      turn_id: 'turn-2',
+      details: { domain: 'flow', message },
+    })
+    const runStarted = {
+      type: 'RUN_STARTED' as const,
+      timestamp: '2026-05-11T18:02:01.000Z',
+      session_id: 'session123',
+      turn_id: 'turn-2',
+      details: {},
+    }
+    const flowFinished = {
+      type: 'FLOW_FINISHED' as const,
+      timestamp: '2026-05-11T18:02:02.000Z',
+      session_id: 'session123',
+      turn_id: 'turn-2',
+      details: {},
+    }
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('Durable warning A'), runStarted, flowFinished]}
+        eventStreamVersion={1}
+        durableReconciliationVersion={1}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('[DOMAIN WARNING] Durable warning A')).toBeInTheDocument()
+    })
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[runStarted, warning('Durable warning A')]}
+        eventStreamVersion={2}
+        durableReconciliationVersion={2}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByText('[DOMAIN WARNING] Durable warning A')).toHaveLength(1)
+    })
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[runStarted, warning('Durable warning B')]}
+        eventStreamVersion={3}
+        durableReconciliationVersion={3}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText('[DOMAIN WARNING] Durable warning A')).not.toBeInTheDocument()
+      expect(screen.getAllByText('[DOMAIN WARNING] Durable warning B')).toHaveLength(1)
+    })
+  })
+
+  it('preserves prior-turn audit history when an ordinary second turn resets the stream', async () => {
+    const firstTurn = {
+      type: 'SUPERVISOR_START' as const,
+      timestamp: '2026-05-11T18:01:00.000Z',
+      session_id: 'session123',
+      turn_id: 'turn-1',
+      details: { message: 'Processing first turn' },
+    }
+    const secondTurn = {
+      type: 'AGENT_GENERATING' as const,
+      timestamp: '2026-05-11T18:02:00.000Z',
+      session_id: 'session123',
+      turn_id: 'turn-2',
+      details: { agentRole: 'System', message: 'Starting second turn' },
+    }
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[firstTurn]}
+        eventStreamVersion={1}
+        durableReconciliationVersion={0}
+      />
+    )
+    await screen.findByText('[SUPERVISOR] Processing first turn')
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[secondTurn]}
+        eventStreamVersion={2}
+        durableReconciliationVersion={0}
+      />
+    )
+
+    expect(screen.getByText('[SUPERVISOR] Processing first turn')).toBeInTheDocument()
+    expect(await screen.findByText('[AGENT] System: Starting second turn')).toBeInTheDocument()
+  })
+
+  it('replaces only the reconciled flow turn in the session audit history', async () => {
+    const warning = (turnId: string, message: string) => ({
+      type: 'DOMAIN_WARNING' as const,
+      timestamp: '2026-05-11T18:02:00.000Z',
+      session_id: 'session123',
+      turn_id: turnId,
+      details: { domain: 'flow', message },
+    })
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('turn-1', 'First turn warning')]}
+        eventStreamVersion={1}
+        durableReconciliationVersion={0}
+      />
+    )
+    await screen.findByText('[DOMAIN WARNING] First turn warning')
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('turn-2', 'Stale second turn warning')]}
+        eventStreamVersion={2}
+        durableReconciliationVersion={0}
+      />
+    )
+    await screen.findByText('[DOMAIN WARNING] Stale second turn warning')
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('turn-2', 'Durable second turn warning')]}
+        eventStreamVersion={3}
+        durableReconciliationVersion={1}
+      />
+    )
+
+    expect(screen.getByText('[DOMAIN WARNING] First turn warning')).toBeInTheDocument()
+    expect(screen.queryByText('[DOMAIN WARNING] Stale second turn warning')).not.toBeInTheDocument()
+    expect(await screen.findByText('[DOMAIN WARNING] Durable second turn warning')).toBeInTheDocument()
+  })
+
+  it('preserves audit events when durable chat reconciliation has no audit events', async () => {
+    const auditCacheKey = getChatRenderCacheKeys('user-1', 'session123').auditEvents
+    const initialAuditEvent = {
+      type: 'DOMAIN_WARNING' as const,
+      timestamp: '2026-05-11T18:03:00.000Z',
+      session_id: 'session123',
+      details: {
+        domain: 'chat',
+        message: 'Preserve this warning across durable reconciliation',
+      },
+    }
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[initialAuditEvent]}
+        eventStreamVersion={1}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          '[DOMAIN WARNING] Preserve this warning across durable reconciliation'
+        )
+      ).toBeInTheDocument()
+    })
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[
+          {
+            type: 'TEXT_MESSAGE_CONTENT',
+            timestamp: '2026-05-11T18:04:00.000Z',
+            session_id: 'session123',
+            content: 'Persisted final answer',
+          },
+          {
+            type: 'turn_completed',
+            timestamp: '2026-05-11T18:04:01.000Z',
+            session_id: 'session123',
+          },
+        ]}
+        eventStreamVersion={2}
+        durableReconciliationVersion={1}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          '[DOMAIN WARNING] Preserve this warning across durable reconciliation'
+        )
+      ).toHaveLength(1)
+      expect(localStorage.getItem(auditCacheKey)).toContain(
+        'Preserve this warning across durable reconciliation'
+      )
+    })
+  })
+
+  it('rejects durable audit reconciliation without a turn identity', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const auditCacheKey = getChatRenderCacheKeys('user-1', 'session123').auditEvents
+    const warning = (message: string, turnId?: string) => ({
+      type: 'DOMAIN_WARNING' as const,
+      timestamp: '2026-05-11T18:05:00.000Z',
+      session_id: 'session123',
+      ...(turnId ? { turn_id: turnId } : {}),
+      details: { domain: 'flow', message },
+    })
+
+    const { rerender } = render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('Live warning', 'turn-1')]}
+        eventStreamVersion={1}
+        durableReconciliationVersion={0}
+      />
+    )
+    await screen.findByText('[DOMAIN WARNING] Live warning')
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[warning('Malformed durable warning')]}
+        eventStreamVersion={2}
+        durableReconciliationVersion={1}
+      />
+    )
+
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('missing turn_id'),
+        expect.any(Object),
+      )
+    })
+    expect(screen.getAllByText('[DOMAIN WARNING] Live warning')).toHaveLength(1)
+    expect(screen.queryByText('[DOMAIN WARNING] Malformed durable warning')).not.toBeInTheDocument()
+    expect(localStorage.getItem(auditCacheKey)).not.toContain('Malformed durable warning')
   })
 })
 

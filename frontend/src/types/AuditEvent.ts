@@ -60,6 +60,9 @@ export interface AuditEvent {
    */
   sessionId: string
 
+  /** Stable executable-run turn identity when the event came from SSE. */
+  turnId?: string
+
   /**
    * Event-specific details
    */
@@ -311,5 +314,6 @@ export interface AuditEventSSE {
   type: AuditEventType
   timestamp: string // ISO 8601 format
   session_id: string
+  turn_id?: string
   details: Record<string, any>
 }

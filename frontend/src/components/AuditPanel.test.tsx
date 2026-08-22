@@ -15,6 +15,8 @@ function renderAuditPanel(isStreaming: boolean) {
       <AuditPanel
         sessionId="session-1"
         sseEvents={[]}
+        eventStreamVersion={0}
+        durableReconciliationVersion={0}
         isStreaming={isStreaming}
         onStop={vi.fn()}
       />
