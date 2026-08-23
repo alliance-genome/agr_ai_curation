@@ -110,6 +110,13 @@ This paragraph came from a markdown-only extraction fallback.
     assert all("provenance" not in element["metadata"] for element in elements)
 
 
+def test_markdown_to_pipeline_elements_does_not_split_on_form_feed():
+    elements = markdown_to_pipeline_elements("First page\fcontinued paragraph")
+
+    assert len(elements) == 1
+    assert elements[0]["text"] == "First page\fcontinued paragraph"
+
+
 def test_markdown_to_pipeline_elements_strips_inline_formatting_from_text_and_sections():
     markdown = """# **Results** <sup>2+</sup>
 Signal from **B cells** depends on Ca<sup>2+</sup> and *kinase* activity.
