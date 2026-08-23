@@ -464,6 +464,16 @@ Claude review framing:
   exact legacy segmentation and original-byte starts. It also confirmed the
   environment-setting disposition is correct and that ranking snapshot inputs
   satisfy their tightened invariants.
+- 2026-08-23: Claude's bounded re-review used the correct production-hotfix
+  base and approved the candidate with no remaining blocking or material
+  finding. It independently matched legacy CR/LF segmentation and exact byte
+  starts across 200,000 randomized mixed-delimiter/multibyte cases, traced all
+  ranking-snapshot call-site invariants, and accepted the PR #628 configuration
+  disposition. PR #629 is ready for the fresh dev proof.
+- 2026-08-23: Chris explicitly reconfirmed that completing the production
+  release is not the end of this goal. After production proof, create, review,
+  and merge the separate forward-port so then-current `main` contains the
+  production-proven page consumer without replaying its existing PR #628 work.
 
 ## 10. Resume checkpoint
 
@@ -472,6 +482,6 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: commit and push this evidence/correction, ask Claude to
-re-review PR #629 against `origin/hotfix/v0.8.20-sentry-production`, and proceed
-to the fresh dev proof when no supported material review finding remains.
+Current next action: deploy exact reviewed hotfix commit `7294efc3` to a clean
+timestamped dev checkout, perform the fresh multi-page extraction proof, and
+record the resulting document/job/PDFX process and Weaviate page evidence.
