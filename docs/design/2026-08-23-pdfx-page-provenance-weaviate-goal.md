@@ -4,7 +4,9 @@
 
 **Status:** Active
 
-**Planning/forward-port branch:** `fix/pdfx-page-provenance-consumer-20260823`
+**Main forward-port branch:** `forwardport/v0.8.21-page-provenance`
+
+**Superseded planning branch:** `fix/pdfx-page-provenance-consumer-20260823`
 
 **Production hotfix branch:** `hotfix/v0.8.21-weaviate-page-provenance`
 
@@ -650,6 +652,13 @@ Claude review framing:
   complete backend unit suite with 5,136 passed, 3 skipped, and 1 expected
   xfail (86.28% coverage). The next gate is the mandatory independent
   Sol/xhigh `$max-review-skill` review of this final local diff.
+- 2026-08-23: The mandatory forward-port Sol/xhigh `$max-review-skill` review
+  found no code, integration, test, release-metadata, overengineering, or PR
+  #628 replay defect. Its one material documentation finding was valid: the
+  single-source resume checkpoint and branch metadata still described the
+  already-completed planning/porting stage. Only those instructions and this
+  disposition were corrected; the reviewer explicitly found no reason to
+  change code or rerun the passing automated gates.
 
 ## 10. Resume checkpoint
 
@@ -658,7 +667,7 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: create the clean branch from then-current `origin/main`,
-apply only the production-proven page consumer plus release-state delta without
-replaying PR #628, run the bounded gates and required Sol/Claude reviews, then
-merge and verify the separate forward-port.
+Current next action: confirm the documentation-only Sol review correction,
+push `forwardport/v0.8.21-page-provenance`, open the separate forward-port PR,
+obtain bounded Claude review, then merge and verify `main` contains both PR
+#628 and the production-proven page consumer.
