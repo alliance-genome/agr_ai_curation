@@ -258,7 +258,7 @@ Every checkbox is a release gate for this PR.
   parser/chunk/Weaviate tests pass.
 - [x] The repository's backend Docker gate passes on the current reviewed-code
   candidate; rerun if review or release work changes backend behavior.
-- [ ] Frontend tests/type-check/build are run only if the final diff or formal
+- [x] Frontend tests/type-check/build are run only if the final diff or formal
   dev-release gate requires them; any baseline-only TypeScript debt is recorded
   separately.
 - [x] Secret scanning and repository PR gate pass. The hotfix gate used its
@@ -268,20 +268,20 @@ Every checkbox is a release gate for this PR.
 
 ### Fresh dev proof
 
-- [ ] Follow the `ai-curation-release` dev runbook: verify restricted AWS
+- [x] Follow the `ai-curation-release` dev runbook: verify restricted AWS
   access, VPN, dev-mode boundary, and remote checkout hygiene before mutation.
-- [ ] Deploy the exact reviewed candidate to a clean timestamped dev checkout
+- [x] Deploy the exact reviewed candidate to a clean timestamped dev checkout
   only after the required local automated gates pass.
-- [ ] Upload a fresh known multi-page PDF through the local PDFX path, recording
+- [x] Upload a fresh known multi-page PDF through the local PDFX path, recording
   the AI Curation document/job ID and PDFX process ID.
-- [ ] Verify processed elements and Weaviate chunks contain multiple correct
+- [x] Verify processed elements and Weaviate chunks contain multiple correct
   pages, including targeted back-matter headings when the 25- or 27-page Debbie
   canary is used.
-- [ ] Run page-aware document searches and record returned chunk IDs, sections,
+- [x] Run page-aware document searches and record returned chunk IDs, sections,
   and page numbers; no relevant result should be silently page 1.
-- [ ] Confirm the viewer/evidence path uses the page hint honestly without
+- [x] Confirm the viewer/evidence path uses the page hint honestly without
   claiming bbox precision.
-- [ ] Record the exact candidate commit, evidence paths, service health, and
+- [x] Record the exact candidate commit, evidence paths, service health, and
   final dev instance state. Stop rather than terminate dev when finished.
 
 ### Tagged production release
@@ -474,6 +474,82 @@ Claude review framing:
   release is not the end of this goal. After production proof, create, review,
   and merge the separate forward-port so then-current `main` contains the
   production-proven page consumer without replaying its existing PR #628 work.
+- 2026-08-23: The formal frontend release gate passed on candidate `51ac7faf`:
+  135 test files / 1,084 tests passed and the production build succeeded.
+  Changed-scope TypeScript reported `baseline_only` with zero changed
+  TypeScript files and 30 pre-existing errors on the `v0.8.20` production
+  line; no hotfix-local TypeScript error exists.
+- 2026-08-23: Deployed exact candidate `51ac7faf` from a clean timestamped dev
+  checkout with a restored production PostgreSQL snapshot, `DEV_MODE=true`, a
+  dev-only Sentry project, head migration `d6e7f8a9b0c1`, a fresh Weaviate,
+  and all application services healthy. Stale PDF/job/curation-derived rows
+  were transactionally cleared while 6,909 chats and user data were retained.
+- 2026-08-23: Fresh Debbie canary `8394599_J390144.pdf` completed at 100% as
+  document `dc8bbf33-4b3c-4a19-b658-bdb8c5afdadd`, AI Curation job
+  `47ac89c1-ea4d-4a36-80fd-9d2797565127`, and PDFX process
+  `add91bf4-c1e2-4e96-8330-aac27671d26e`. The normal provider checksum gate
+  was unavailable, so the upload used a process-local dev-only
+  `DOCUMENT_SOURCE_IMPORT_ENABLED=false` override; its EXIT guard restored
+  the standard `true` setting and a healthy backend after completion.
+- 2026-08-23: The canary exposed a separate live PDFX proxy wake defect: a
+  stale replay address and BUSY/READY bookkeeping prevented an empty ASG from
+  scaling from zero. Per the PDFX AWS runbook, desired capacity alone was set
+  to 1 and the same ECS task definition received one rolling restart. The
+  durable job replayed and was accepted without resubmission. This operational
+  issue does not change the AI Curation patch scope and is recorded in the
+  dated deployment note for a separate PDFX correction.
+- 2026-08-23: Independent post-ingestion validation downloaded the exact merged
+  Markdown and sidecar again. `parse_merged_page_provenance` accepted the full
+  record; its SHA binds all 61,774 Markdown bytes, 890 ranges form an exact
+  partition, the compact stored receipt matches, expected pages are 25, and
+  record SHA is `b5ea47fef2e7dabf398e757867701ca793ba8255749f44b1c8a17d208c5ab5dc`.
+  No LLM page decision was needed. Processed headings are Figure Legends page
+  5, Availability page 13, Funding page 13, and References page 13.
+- 2026-08-23: Weaviate stored 99 tenant-scoped chunks for the canary with zero
+  missing page values, pages spanning 1 through 21, Figure Legends beginning
+  on page 5, Funding on page 13, and References on pages 13-14. This proves
+  the existing chunk serialization propagates the first-element page rather
+  than collapsing the document to page 1.
+- 2026-08-23: Deployed lexical document search returned the observed back
+  matter with concrete non-page-1 evidence: Figure Legends chunk
+  `300b3e6d-c86f-4def-056e-2e7e4d1e45ca` on page 5, Funding chunk
+  `bba19d95-6e77-39d7-dc8d-ad69725793c2` on page 13, and reference chunk
+  `7e466847-73ee-9dd3-7363-3ad7bb718c86` on page 13. Other relevant results
+  retained their actual pages 4, 12, 14, and 17 rather than silently using 1.
+- 2026-08-23: The protected viewer returned HTTP 200, `application/pdf`, the
+  exact 4,488,172-byte canary, and `%PDF-` magic. The deployed evidence matcher
+  used real extracted PDF text from pages 12-14 plus the page-13 hint to
+  localize “PTEN and the PI3-Kinase Pathway in Cancer” on page 13 with score
+  95.12. Its response reports page and raw text offsets only, with no bbox or
+  pixel-precision claim.
+- 2026-08-23: The final deployed release smoke passed 58 checks against exact
+  candidate `51ac7faf` and wrote
+  `/home/ubuntu/release_evidence/v0.8.21/dev_release_smoke_20260823T163415Z.json`
+  (SHA-256 `16b7f3acc5cb72e8e78f1e8d622b1f1abe71ec0ac3ad82c06068d5f01d6912dd`).
+  It passed health/provider/auth, two fresh PDF extractions and artifacts,
+  non-streaming and streaming chat, workspace prep/bootstrap/replay/hydration,
+  a custom flow over SSE, persisted evidence export, JSON/CSV/TSV ZIP exports,
+  and a real two-document batch extraction. The record is labelled `partial`
+  only because the host Python package-metadata check was skipped after the
+  running backend container independently proved exact locked SDK versions,
+  and the unrelated opt-in rerank-provider smoke was not requested.
+- 2026-08-23: TraceReview remote-source preflight passed with zero hard,
+  health, or configuration failures. Its four warnings concern an older
+  optional diagnostic endpoint, the intentionally unconfigured alternate
+  local source, and optional production SSH hints. A full domain-envelope
+  corpus cannot be a truthful gate on this unchanged production baseline:
+  both `v0.8.20` production and dev lack the Literature Elasticsearch host and
+  scheme, the external ABC checksum service returned 503, and no dedicated
+  curator credential is present on dev. Repairing those unrelated production
+  integrations is outside this page-consumer hotfix. The exact Debbie canary
+  plus the broad deployed smoke remain the scoped behavior evidence.
+- 2026-08-23: After every process-local document-source override, the EXIT
+  guard recreated the normal backend. Final dev state is instance
+  `i-0e667ec9e68fb76eb` running at `172.31.15.218`, exact SHA `51ac7faf`, clean
+  checkout, `DOCUMENT_SOURCE_IMPORT_ENABLED=true`, Docker-healthy backend, and
+  HTTP 200 for backend, frontend, Loki, and TraceReview. Dev stays running for
+  release-metadata/tag verification and will be stopped, never terminated,
+  after production completion.
 
 ## 10. Resume checkpoint
 
@@ -482,6 +558,7 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: deploy exact reviewed hotfix commit `7294efc3` to a clean
-timestamped dev checkout, perform the fresh multi-page extraction proof, and
-record the resulting document/job/PDFX process and Weaviate page evidence.
+Current next action: record the independent release-evidence verdict, then
+prepare and verify `v0.8.21` release metadata on the proven production-baseline
+branch. Production must use only the resulting exact tag; after production
+proof, complete the separate then-current-`main` forward-port.
