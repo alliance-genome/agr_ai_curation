@@ -439,6 +439,31 @@ Claude review framing:
   escape. Post-fix evidence is 56/56 focused tests, 4,892 backend tests passed
   with 2 skips and 1 expected xfail, clean scoped Ruff/Pyright/py_compile/diff
   checks, and a repeated hotfix-base Agent PR gate at 16/16.
+- 2026-08-23: Pushed reviewed commit `fd5404c0` and opened AI Curation PR
+  #629 against `hotfix/v0.8.20-sentry-production`, not `main`. GitGuardian and
+  the publish no-op lane passed. The broad Unit Tests workflow is restricted
+  to PRs targeting `main`/`develop`, so the clean local Docker gate remains the
+  broad-suite evidence for this production-line PR.
+- 2026-08-23: Claude's initial PR review confirmed the sidecar design and
+  found one material provider-path regression: `str.splitlines()` recognized
+  form-feed and other Unicode separators that the prior CR/LF parser retained.
+  Commit `a8ca5302` replaces it with a bounded one-pass CR/LF scanner, corrects
+  the sidecar retry artifact label, and removes unsupported defensive ranking
+  audit fallbacks. Focused tests pass 110/110; the post-change backend gate
+  passes 4,893 tests with 2 skips and 1 expected xfail.
+- 2026-08-23: Claude's request to change PR #628's environment fallback/clamp
+  behavior was not adopted: the code is byte-for-byte aligned with reviewed
+  `main` commit `416c62aa`, follows established `v0.8.20` configuration
+  patterns, and no observed failure supports hotfix-only divergence. The
+  schema-health, constant, empty-query, and log-volume notes were likewise
+  non-blocking and outside this bounded release.
+- 2026-08-23: The mandatory post-material-change Sol/xhigh
+  `$max-review-skill` review accepted `a8ca5302` with no supported Blocker,
+  Material correction, or High-value simplification. Its independent
+  137,257-case CR/LF/multibyte/form-feed/NEL/Unicode-separator comparison found
+  exact legacy segmentation and original-byte starts. It also confirmed the
+  environment-setting disposition is correct and that ranking snapshot inputs
+  satisfy their tightened invariants.
 
 ## 10. Resume checkpoint
 
@@ -447,6 +472,6 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: commit this evidence update, push the exact reviewed
-hotfix branch, open a PR against `hotfix/v0.8.20-sentry-production`, and begin
-the bounded Claude review described above.
+Current next action: commit and push this evidence/correction, ask Claude to
+re-review PR #629 against `origin/hotfix/v0.8.20-sentry-production`, and proceed
+to the fresh dev proof when no supported material review finding remains.
