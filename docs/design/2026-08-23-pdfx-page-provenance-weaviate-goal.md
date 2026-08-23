@@ -645,7 +645,7 @@ Claude review framing:
   cleanup was deliberately omitted. Main's newer `test:stable` package script
   remains intact. Main's stricter Ruff gate exposed and removed one pre-existing
   unused `asyncio` import in the now-touched PDFX utility test.
-- 2026-08-23: Forward-port gates passed: 57/57 focused PDFX/chunk tests;
+- 2026-08-23: Forward-port gates passed: initially 57/57 focused PDFX/chunk tests;
   26/26 focused App/changelog tests; production frontend build; changed-scope
   TypeScript `baseline_only` with one changed TypeScript file, zero changed-
   file errors, and 20 existing baseline errors; Agent PR gate 18/18; and the
@@ -659,6 +659,18 @@ Claude review framing:
   already-completed planning/porting stage. Only those instructions and this
   disposition were corrected; the reviewer explicitly found no reason to
   change code or rerun the passing automated gates.
+- 2026-08-23: Opened forward-port PR #630 against `main`. Claude found no
+  blocking implementation defect and confirmed strict fail-closed behavior,
+  preserved non-merged/provider behavior, no TraceReview coupling, no PR #628
+  replay, and no dependency or runtime-surface expansion. Two bounded warnings
+  were adopted: one async parser-seam regression now proves merged Markdown and
+  validated provenance flow through `parse_pdf_document` into non-page-1
+  elements and the compact stored receipt, and `.env.example` now states that
+  merged mode requires PDFX's matching sidecar endpoint. Focused PDFX/chunk
+  tests pass 58/58 and scoped Ruff/diff checks pass. Claude's suggestions to
+  remove unreachable invariant checks, wrap their unreachable error type, or
+  clean the unchanged progress-payload fallback were not adopted because they
+  do not address a reachable defect in this forward-port.
 
 ## 10. Resume checkpoint
 
@@ -667,7 +679,7 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: confirm the documentation-only Sol review correction,
-push `forwardport/v0.8.21-page-provenance`, open the separate forward-port PR,
-obtain bounded Claude review, then merge and verify `main` contains both PR
+Current next action: run the proportional local review/gates for the two adopted
+Claude warnings, push the resulting PR #630 head, obtain one bounded Claude
+re-review of those corrections, then merge and verify `main` contains both PR
 #628 and the production-proven page consumer.
