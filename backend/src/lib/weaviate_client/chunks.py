@@ -32,24 +32,17 @@ def _effective_search_alpha(alpha: float, alpha_override: Optional[float]) -> fl
 def _retrieval_ranking_snapshot(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Return content-free ranking evidence suitable for structured logs."""
 
+    def _score(value: Any) -> float | None:
+        return None if value is None else round(float(value), 8)
+
     snapshot: List[Dict[str, Any]] = []
     for rank, chunk in enumerate(chunks, start=1):
-        metadata = chunk.get("metadata") or {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-
-        def _score(value: Any) -> float | None:
-            if value is None:
-                return None
-            try:
-                return round(float(value), 8)
-            except (TypeError, ValueError):
-                return None
+        metadata = chunk["metadata"]
 
         snapshot.append(
             {
                 "rank": rank,
-                "chunk_id": chunk.get("id") or metadata.get("chunk_id"),
+                "chunk_id": chunk["id"],
                 "chunk_index": metadata.get("chunk_index"),
                 "page_number": metadata.get("page_number"),
                 "score": _score(chunk.get("score")),

@@ -568,7 +568,7 @@ class PDFXParser:
                 if time.monotonic() < download_deadline:
                     logger.warning(
                         "Transient PDF extraction %s download network error for process_id=%s (attempt %s): %s",
-                        self.download_variant,
+                        variant,
                         process_id,
                         attempt,
                         exc,
@@ -643,23 +643,33 @@ def _build_progress_message(payload: Dict[str, Any]) -> str:
 
 
 def _markdown_lines_with_byte_starts(markdown: str) -> tuple[List[str], List[int]]:
-    """Split Markdown lines while retaining exact UTF-8 byte starts."""
+    """Split CR/LF Markdown lines while retaining exact UTF-8 byte starts."""
 
     lines: List[str] = []
     starts: List[int] = []
-    byte_cursor = 0
-    for segment in markdown.splitlines(keepends=True):
-        if segment.endswith("\r\n"):
-            line = segment[:-2]
-        elif segment.endswith(("\n", "\r")):
-            line = segment[:-1]
-        else:
-            line = segment
-        lines.append(line)
-        starts.append(byte_cursor)
-        byte_cursor += len(segment.encode("utf-8"))
-    if not lines:
-        return [""], [0]
+    line_start = 0
+    line_start_byte = 0
+    cursor = 0
+    while cursor < len(markdown):
+        if markdown[cursor] not in {"\r", "\n"}:
+            cursor += 1
+            continue
+
+        lines.append(markdown[line_start:cursor])
+        starts.append(line_start_byte)
+        newline_end = cursor + 1
+        if (
+            markdown[cursor] == "\r"
+            and newline_end < len(markdown)
+            and markdown[newline_end] == "\n"
+        ):
+            newline_end += 1
+        line_start_byte += len(markdown[line_start:newline_end].encode("utf-8"))
+        line_start = newline_end
+        cursor = newline_end
+
+    lines.append(markdown[line_start:])
+    starts.append(line_start_byte)
     return lines, starts
 
 
