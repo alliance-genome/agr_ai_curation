@@ -1,6 +1,5 @@
 """Additional unit tests for PDFX parser utility and edge branches."""
 
-import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
