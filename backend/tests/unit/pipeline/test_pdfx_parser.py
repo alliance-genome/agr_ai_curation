@@ -28,6 +28,9 @@ class _DummyResponse:
     async def text(self):
         return self._body
 
+    async def read(self):
+        return self._body.encode("utf-8")
+
 
 class _DummySession:
     def __init__(self, response: _DummyResponse):
@@ -186,8 +189,44 @@ async def test_download_markdown_uses_merged_variant_when_merge_enabled(parser_e
 
     markdown = await parser._download_markdown(session=session, process_id="proc-1", headers={})
 
-    assert markdown == "# merged markdown"
+    assert markdown == "# merged markdown\n"
     assert session.last_url.endswith("/api/v1/extract/proc-1/download/merged")
+
+
+@pytest.mark.asyncio
+async def test_download_markdown_preserves_exact_response_bytes(parser_env, monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "true")
+
+    parser = PDFXParser()
+    session = _DummySession(_DummyResponse(200, "# merged markdown\n\n"))
+
+    markdown = await parser._download_markdown(
+        session=session,
+        process_id="proc-exact",
+        headers={},
+    )
+
+    assert markdown.encode("utf-8") == b"# merged markdown\n\n"
+
+
+@pytest.mark.asyncio
+async def test_download_page_provenance_rejects_invalid_contract(parser_env, monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "true")
+
+    parser = PDFXParser()
+    session = _DummySession(_DummyResponse(200, "{}\n"))
+
+    with pytest.raises(PDFParsingError, match="page provenance is invalid"):
+        await parser._download_page_provenance(
+            session=session,
+            process_id="proc-invalid",
+            headers={},
+            merged_markdown=b"# merged markdown\n",
+        )
+
+    assert session.last_url.endswith(
+        "/api/v1/extract/proc-invalid/download/page_provenance"
+    )
 
 
 @pytest.mark.asyncio
@@ -208,7 +247,7 @@ async def test_download_markdown_retries_transient_503(parser_env, monkeypatch):
 
     markdown = await parser._download_markdown(session=session, process_id="proc-1", headers={})
 
-    assert markdown == "# merged markdown"
+    assert markdown == "# merged markdown\n"
     assert session.get_calls == 2
 
 
@@ -222,7 +261,7 @@ async def test_download_markdown_uses_first_method_when_merge_disabled(parser_en
 
     markdown = await parser._download_markdown(session=session, process_id="proc-2", headers={})
 
-    assert markdown == "# grobid markdown"
+    assert markdown == "# grobid markdown\n"
     assert parser.download_variant == "grobid"
     assert session.last_url.endswith("/api/v1/extract/proc-2/download/grobid")
 
