@@ -65,8 +65,8 @@ def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch
     assert "cross-encoder" in search_doc, (
         "search_document must explain cross-encoder reranking"
     )
-    assert "MMR" in search_doc, (
-        "search_document must explain MMR diversification"
+    assert "MMR" in search_doc and "disabled by default" in search_doc, (
+        "search_document must describe MMR as optional and disabled by default"
     )
 
     # read_section / read_subsection must convey FULL/survey coverage of a named

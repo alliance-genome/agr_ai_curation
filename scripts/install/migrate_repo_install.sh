@@ -558,9 +558,11 @@ copy_data_dirs() {
   local pdf_storage_dir="$1"
   local file_outputs_dir="$2"
   local weaviate_data_dir="$3"
+  local weaviate_backup_dir="$4"
   local source_pdf_dir="${source_repo}/pdf_storage"
   local source_outputs_dir="${source_repo}/file_outputs"
   local source_weaviate_dir="${source_repo}/weaviate_data"
+  local source_weaviate_backup_dir="${source_repo}/weaviate_native_backups"
 
   echo
   log_info "Data directory migration"
@@ -591,6 +593,15 @@ copy_data_dirs() {
       mkdir -p "$weaviate_data_dir"
     fi
   fi
+
+  if [[ -d "$source_weaviate_backup_dir" ]]; then
+    copy_tree_exact "$source_weaviate_backup_dir" "$weaviate_backup_dir"
+  else
+    printf '  - skipped missing source dir: %s\n' "$source_weaviate_backup_dir"
+    if [[ "$apply_mode" -eq 1 ]]; then
+      mkdir -p "$weaviate_backup_dir"
+    fi
+  fi
 }
 
 patch_installed_env() {
@@ -600,6 +611,7 @@ patch_installed_env() {
   local pdf_storage_dir="$4"
   local file_outputs_dir="$5"
   local weaviate_data_dir="$6"
+  local weaviate_backup_dir="$7"
   local source_env_path="${source_repo}/.env"
   local target_env_path="${install_home_dir}/.env"
   local copied_source_env=0
@@ -635,6 +647,7 @@ patch_installed_env() {
   upsert_env_var "$target_env_path" "PDF_STORAGE_HOST_DIR" "$pdf_storage_dir"
   upsert_env_var "$target_env_path" "FILE_OUTPUT_STORAGE_HOST_DIR" "$file_outputs_dir"
   upsert_env_var "$target_env_path" "WEAVIATE_DATA_HOST_DIR" "$weaviate_data_dir"
+  upsert_env_var "$target_env_path" "WEAVIATE_BACKUP_HOST_DIR" "$weaviate_backup_dir"
 
   local obsolete_key=""
   for obsolete_key in \
@@ -908,6 +921,7 @@ print_summary() {
   local pdf_storage_dir="$4"
   local file_outputs_dir="$5"
   local weaviate_data_dir="$6"
+  local weaviate_backup_dir="$7"
   local status="ready"
   local next_step="Standalone migration inputs are ready."
 
@@ -927,6 +941,7 @@ print_summary() {
   printf '  - pdf storage: %s\n' "$pdf_storage_dir"
   printf '  - file outputs: %s\n' "$file_outputs_dir"
   printf '  - weaviate data: %s\n' "$weaviate_data_dir"
+  printf '  - weaviate backups: %s\n' "$weaviate_backup_dir"
   printf '  - extra migrated packages: %s\n' "${#extra_package_dirs[@]}"
   printf '  - shipped package baselines unresolved: %s\n' "${#shipped_package_baseline_unresolved_names[@]}"
   printf '  - modified shipped packages preserved: %s\n' "${#modified_shipped_package_names[@]}"
@@ -967,6 +982,7 @@ main() {
   local pdf_storage_dir
   local file_outputs_dir
   local weaviate_data_dir
+  local weaviate_backup_dir
 
   runtime_root_dir="$(install_runtime_root_dir "$install_home_dir")"
   runtime_config_dir="$(install_runtime_config_dir "$install_home_dir")"
@@ -976,6 +992,7 @@ main() {
   pdf_storage_dir="$(install_pdf_storage_dir "$install_home_dir")"
   file_outputs_dir="$(install_file_outputs_dir "$install_home_dir")"
   weaviate_data_dir="$(install_weaviate_data_dir "$install_home_dir")"
+  weaviate_backup_dir="$(install_weaviate_backup_dir "$install_home_dir")"
 
   echo
   log_info "Repo install migration helper"
@@ -992,14 +1009,19 @@ main() {
   copy_runtime_config "$runtime_config_dir"
   copy_runtime_packages "$runtime_packages_dir"
   copy_runtime_state "$runtime_state_dir"
-  copy_data_dirs "$pdf_storage_dir" "$file_outputs_dir" "$weaviate_data_dir"
+  copy_data_dirs \
+    "$pdf_storage_dir" \
+    "$file_outputs_dir" \
+    "$weaviate_data_dir" \
+    "$weaviate_backup_dir"
   patch_installed_env \
     "$runtime_config_dir" \
     "$runtime_packages_dir" \
     "$runtime_state_dir" \
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
-    "$weaviate_data_dir"
+    "$weaviate_data_dir" \
+    "$weaviate_backup_dir"
 
   if has_custom_code; then
     create_legacy_local_scaffold
@@ -1011,7 +1033,8 @@ main() {
     "$runtime_state_dir" \
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
-    "$weaviate_data_dir"
+    "$weaviate_data_dir" \
+    "$weaviate_backup_dir"
 
   if has_custom_code && [[ "$apply_mode" -eq 1 ]]; then
     log_warn "Manual review is required before you can safely complete the standalone upgrade."

@@ -194,11 +194,16 @@ test_standard_repo_install_apply() {
   assert_file_exists "${install_home}/data/pdf_storage/user-1/paper.pdf"
   assert_file_exists "${install_home}/data/file_outputs/export.tsv"
   assert_file_exists "${install_home}/data/weaviate/segments.db"
+  [[ -d "${install_home}/data/weaviate_backups" ]] || {
+    echo "Expected migrated Weaviate backup directory" >&2
+    exit 1
+  }
   assert_file_exists "${install_home}/.env"
   assert_contains "AGR_RUNTIME_CONFIG_HOST_DIR=${install_home}/runtime/config" "${install_home}/.env"
   assert_contains "AGR_REPO_CONFIG_HOST_DIR=${source_repo}/config" "${install_home}/.env"
   assert_contains "AGR_RUNTIME_PACKAGES_HOST_DIR=${install_home}/runtime/packages" "${install_home}/.env"
   assert_contains "WEAVIATE_DATA_HOST_DIR=${install_home}/data/weaviate" "${install_home}/.env"
+  assert_contains "WEAVIATE_BACKUP_HOST_DIR=${install_home}/data/weaviate_backups" "${install_home}/.env"
   assert_not_contains 'AGENTS_CONFIG_PATH=' "${install_home}/.env"
   assert_not_contains 'GROUPS_CONFIG_PATH=' "${install_home}/.env"
   assert_dir_not_exists "${install_home}/migration/legacy_local"

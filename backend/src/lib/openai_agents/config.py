@@ -87,6 +87,28 @@ def _get_env_int_with_fallback(key: str, default: int) -> int:
         return default
 
 
+def _get_bounded_positive_env_int(
+    key: str,
+    default: int,
+    maximum: int,
+) -> int:
+    """Read a positive integer and report when canonical capacity clamps it."""
+
+    configured = _get_env_int_with_fallback(key, default)
+    if configured < 1:
+        logger.warning("%s=%s is below minimum 1; using 1", key, configured)
+        configured = 1
+    if configured > maximum:
+        logger.warning(
+            "%s=%s exceeds canonical maximum %s; using %s",
+            key,
+            configured,
+            maximum,
+            maximum,
+        )
+    return min(configured, maximum)
+
+
 def get_batch_worker_lease_seconds() -> int:
     """Duration of an exclusive batch worker lease before crash recovery."""
     return max(1, _get_env_int_with_fallback("BATCH_WORKER_LEASE_SECONDS", 120))
@@ -853,6 +875,47 @@ def get_document_source_import_timeout_seconds() -> float:
         1.0,
         _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 300.0),
     )
+
+
+# --- Document retrieval ---
+
+
+def get_weaviate_search_initial_limit() -> int:
+    """Candidate pool retrieved before reranking (default 50, provider max 100)."""
+
+    return _get_bounded_positive_env_int(
+        "WEAVIATE_SEARCH_INITIAL_LIMIT",
+        50,
+        100,
+    )
+
+
+def _get_unit_interval_env_float(key: str, default: float) -> float:
+    """Read a finite float in [0, 1], falling back on invalid values."""
+
+    value = _get_env_float_with_fallback(key, default)
+    if value != value or not 0.0 <= value <= 1.0:
+        logger.warning("%s=%s is outside [0, 1]; using default %s", key, value, default)
+        return default
+    return value
+
+
+def get_weaviate_search_hybrid_alpha() -> float:
+    """Default semantic weight for hybrid document retrieval."""
+
+    return _get_unit_interval_env_float("WEAVIATE_SEARCH_HYBRID_ALPHA", 0.4)
+
+
+def get_weaviate_search_mmr_enabled() -> bool:
+    """Whether document retrieval applies MMR after reranking."""
+
+    return _get_env_bool("WEAVIATE_SEARCH_MMR_ENABLED", False)
+
+
+def get_weaviate_search_mmr_lambda() -> float:
+    """MMR relevance/diversity weight used only when MMR is enabled."""
+
+    return _get_unit_interval_env_float("WEAVIATE_SEARCH_MMR_LAMBDA", 0.5)
 
 
 # --- Agent / turn limits ---

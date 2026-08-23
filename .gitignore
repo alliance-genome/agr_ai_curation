@@ -95,6 +95,7 @@ Thumbs.db
 *.swp
 temp/
 tmp/
+weaviate_native_backups/
 
 # Cleanup artifacts
 cleanup_artifacts/
