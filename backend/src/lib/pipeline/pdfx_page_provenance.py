@@ -138,6 +138,7 @@ def parse_merged_page_provenance(
         raise ValueError("merged Markdown is empty")
     if (
         payload["merged_markdown_sha256"] != _sha256(merged_markdown)
+        or type(payload["merged_markdown_size_bytes"]) is not int
         or payload["merged_markdown_size_bytes"] != len(merged_markdown)
     ):
         raise ValueError("page provenance merged Markdown binding is invalid")
@@ -194,12 +195,13 @@ def parse_merged_page_provenance(
             type(page) is not int
             or not 1 <= page <= page_count
             or not isinstance(candidates, list)
-            or candidates != list(dict.fromkeys(candidates))
-            or page not in candidates
             or any(
                 type(candidate) is not int or not 1 <= candidate <= page_count
                 for candidate in candidates
             )
+            or candidates != list(dict.fromkeys(candidates))
+            or page not in candidates
+            or not isinstance(method, str)
             or method not in _METHODS
             or not isinstance(source, str)
             or not source
@@ -226,7 +228,23 @@ def parse_merged_page_provenance(
         "range_counts_by_source": dict(sorted(source_counts.items())),
         "byte_counts_by_source": dict(sorted(source_bytes.items())),
     }
-    if payload["summary"] != expected_summary:
+    summary = payload["summary"]
+    if (
+        not isinstance(summary, dict)
+        or set(summary) != set(expected_summary)
+        or any(
+            not isinstance(counter, dict)
+            or any(
+                not isinstance(key, str)
+                or not key
+                or type(value) is not int
+                or value < 1
+                for key, value in counter.items()
+            )
+            for counter in summary.values()
+        )
+        or summary != expected_summary
+    ):
         raise ValueError("page provenance summary is invalid")
     if not isinstance(payload["llm_receipts"], list):
         raise ValueError("page provenance LLM receipts are invalid")
