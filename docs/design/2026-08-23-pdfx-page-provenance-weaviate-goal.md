@@ -420,12 +420,25 @@ Claude review framing:
 - 2026-08-23: Focused parser/chunk tests pass 42/42; focused Weaviate/config
   tests pass 190/190 after the compatibility helper; py_compile, diff check,
   scoped Ruff, and change-local static diagnostics pass. The complete backend
-  rerun passes 4,888 tests with 2 skips and 1 expected xfail. Installer,
+  initial rerun passed 4,888 tests with 2 skips and 1 expected xfail. Installer,
   repository migration, templates, and production Compose contracts pass.
   Secret hooks pass, and the hotfix-base Agent PR gate passes 16/16 using its
   supported missing-Ruff skip; whole-file lint on PR #628-touched files exposes
   277 unrelated `v0.8.20` baseline findings, while the consumer/parser scope is
   clean.
+- 2026-08-23: The mandatory GPT-5.6 Sol/xhigh `$max-review-skill` pass found
+  one material fail-closed defect: JSON-valid unhashable range values could
+  escape as `TypeError`, while float sizes/counters could compare equal to
+  integers. Commit `b76f25d3` applies the proportional correction by ordering
+  type checks before hashing/membership and requiring exact integer sizes and
+  summary counters. Four focused malformed-shape regressions pass.
+- 2026-08-23: The same Sol/xhigh reviewer re-ran `$max-review-skill` on
+  `b76f25d3` and returned `Accept with follow-ups`, with no supported Blocker,
+  Material correction, or High-value simplification remaining. Its bounded
+  168-case JSON-native malformed-shape sweep produced no non-`ValueError`
+  escape. Post-fix evidence is 56/56 focused tests, 4,892 backend tests passed
+  with 2 skips and 1 expected xfail, clean scoped Ruff/Pyright/py_compile/diff
+  checks, and a repeated hotfix-base Agent PR gate at 16/16.
 
 ## 10. Resume checkpoint
 
@@ -434,6 +447,6 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: commit this evidence update, obtain the mandatory
-GPT-5.6 Sol/xhigh `$max-review-skill` verdict, resolve only supported material
-findings, then push and open the hotfix PR for bounded Claude review.
+Current next action: commit this evidence update, push the exact reviewed
+hotfix branch, open a PR against `hotfix/v0.8.20-sentry-production`, and begin
+the bounded Claude review described above.
