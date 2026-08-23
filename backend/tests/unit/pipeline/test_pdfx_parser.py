@@ -28,6 +28,9 @@ class _DummyResponse:
     async def text(self):
         return self._body
 
+    async def read(self):
+        return self._body.encode("utf-8")
+
 
 class _DummySession:
     def __init__(self, response: _DummyResponse):
@@ -105,6 +108,13 @@ This paragraph came from a markdown-only extraction fallback.
     assert [element["metadata"]["page_number"] for element in elements] == [2, 2]
     assert all("bbox" not in element["metadata"] for element in elements)
     assert all("provenance" not in element["metadata"] for element in elements)
+
+
+def test_markdown_to_pipeline_elements_does_not_split_on_form_feed():
+    elements = markdown_to_pipeline_elements("First page\fcontinued paragraph")
+
+    assert len(elements) == 1
+    assert elements[0]["text"] == "First page\fcontinued paragraph"
 
 
 def test_markdown_to_pipeline_elements_strips_inline_formatting_from_text_and_sections():
@@ -186,8 +196,116 @@ async def test_download_markdown_uses_merged_variant_when_merge_enabled(parser_e
 
     markdown = await parser._download_markdown(session=session, process_id="proc-1", headers={})
 
-    assert markdown == "# merged markdown"
+    assert markdown == "# merged markdown\n"
     assert session.last_url.endswith("/api/v1/extract/proc-1/download/merged")
+
+
+@pytest.mark.asyncio
+async def test_download_markdown_preserves_exact_response_bytes(parser_env, monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "true")
+
+    parser = PDFXParser()
+    session = _DummySession(_DummyResponse(200, "# merged markdown\n\n"))
+
+    markdown = await parser._download_markdown(
+        session=session,
+        process_id="proc-exact",
+        headers={},
+    )
+
+    assert markdown.encode("utf-8") == b"# merged markdown\n\n"
+
+
+@pytest.mark.asyncio
+async def test_download_page_provenance_rejects_invalid_contract(parser_env, monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "true")
+
+    parser = PDFXParser()
+    session = _DummySession(_DummyResponse(200, "{}\n"))
+
+    with pytest.raises(PDFParsingError, match="page provenance is invalid"):
+        await parser._download_page_provenance(
+            session=session,
+            process_id="proc-invalid",
+            headers={},
+            merged_markdown=b"# merged markdown\n",
+        )
+
+    assert session.last_url.endswith(
+        "/api/v1/extract/proc-invalid/download/page_provenance"
+    )
+
+
+@pytest.mark.asyncio
+async def test_parse_threads_merged_page_provenance_into_elements_and_receipt(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "true")
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: tmp_path)
+    markdown = "# Title\n\nBody\n"
+    body_start = markdown.encode("utf-8").index(b"Body")
+    receipt = {
+        "schema": "pdfx-merged-page-provenance",
+        "contract_version": "merged-page-provenance-v1",
+        "record_sha256": "a" * 64,
+        "expected_page_count": 2,
+        "range_count": 2,
+        "summary": {},
+    }
+    observed = {}
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Provenance:
+        def page_for_byte_offset(self, byte_offset):
+            return 2 if byte_offset >= body_start else 1
+
+        def receipt(self):
+            return receipt
+
+    parser = PDFXParser()
+
+    async def _submit_extraction(session, file_path, headers):
+        del session, file_path, headers
+        return {"process_id": "proc-wiring"}
+
+    async def _poll_until_complete(**kwargs):
+        del kwargs
+        return {"status": "complete"}
+
+    async def _download_markdown(session, process_id, headers):
+        del session, process_id, headers
+        return markdown
+
+    async def _download_page_provenance(session, process_id, headers, *, merged_markdown):
+        del session, process_id, headers
+        observed["merged_markdown"] = merged_markdown
+        return _Provenance()
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    monkeypatch.setattr(parser, "_poll_until_complete", _poll_until_complete)
+    monkeypatch.setattr(parser, "_download_markdown", _download_markdown)
+    monkeypatch.setattr(parser, "_download_page_provenance", _download_page_provenance)
+
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+    result = await parser.parse_pdf_document(pdf_path, "doc-wiring", "user-wiring")
+
+    assert observed["merged_markdown"] == markdown.encode("utf-8")
+    assert [item["metadata"]["page_number"] for item in result["elements"]] == [1, 2]
+    raw_payload = json.loads((tmp_path / result["pdfx_json_path"]).read_text())
+    assert raw_payload["page_provenance"] == receipt
 
 
 @pytest.mark.asyncio
@@ -208,7 +326,7 @@ async def test_download_markdown_retries_transient_503(parser_env, monkeypatch):
 
     markdown = await parser._download_markdown(session=session, process_id="proc-1", headers={})
 
-    assert markdown == "# merged markdown"
+    assert markdown == "# merged markdown\n"
     assert session.get_calls == 2
 
 
@@ -222,7 +340,7 @@ async def test_download_markdown_uses_first_method_when_merge_disabled(parser_en
 
     markdown = await parser._download_markdown(session=session, process_id="proc-2", headers={})
 
-    assert markdown == "# grobid markdown"
+    assert markdown == "# grobid markdown\n"
     assert parser.download_variant == "grobid"
     assert session.last_url.endswith("/api/v1/extract/proc-2/download/grobid")
 

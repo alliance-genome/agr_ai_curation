@@ -1,6 +1,5 @@
 """Additional unit tests for PDFX parser utility and edge branches."""
 
-import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +24,9 @@ class _DummyResponse:
 
     async def text(self):
         return self._body
+
+    async def read(self):
+        return self._body.encode("utf-8")
 
 
 @pytest.fixture
@@ -77,6 +79,7 @@ def test_parser_download_variant_selection(parser_env, monkeypatch):
 @pytest.mark.asyncio
 async def test_download_markdown_error_and_empty_branches(parser_env):
     parser = PDFXParser()
+    parser.download_retry_seconds = 0
     session_500 = SimpleNamespace(get=lambda *_args, **_kwargs: _DummyResponse(500, "upstream down"))
     with pytest.raises(PDFParsingError, match="download failed"):
         await parser._download_markdown(session=session_500, process_id="proc-1", headers={})
