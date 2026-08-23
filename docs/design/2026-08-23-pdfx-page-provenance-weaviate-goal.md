@@ -4,10 +4,15 @@
 
 **Status:** Active
 
-**Implementation branch:** `fix/pdfx-page-provenance-consumer-20260823`
+**Planning/forward-port branch:** `fix/pdfx-page-provenance-consumer-20260823`
 
-**Implementation base:** `origin/main` at
-`416c62aa735cf2545db45ec9f8013c421fdd8e98` (AI Curation PR #628)
+**Production hotfix branch:** `hotfix/v0.8.21-weaviate-page-provenance`
+
+**Exact production base:** tag `v0.8.20` at
+`6df184c6fc48616a56cc7a6828e0bcd981cb2894`
+
+**Current main:** `416c62aa735cf2545db45ec9f8013c421fdd8e98`
+(AI Curation PR #628) when this goal began
 
 **Official goal:** Make AI Curation consume PDFX's production-proven,
 digest-bound `page_provenance` sidecar for local merged-PDFX ingestion, carry
@@ -30,6 +35,14 @@ deployment report
 remain evidence only. Their recommendation to deploy PDFX commit `05687ea`
 with inline page comments is superseded by the sidecar contract described
 below.
+
+Production is intentionally behind current `main`. This release must not deploy
+`main` or accidentally include its intervening application work. Build and
+prove a narrow hotfix from exact live tag `v0.8.20`, port the already-reviewed
+Weaviate PR #628 change onto that baseline, add the page-sidecar consumer, and
+release that bounded result. After it is proven, forward-port the page consumer
+and release-state updates to current `main` in a separate PR; do not replay PR
+#628 there because `main` already contains it.
 
 ## 1. Completed upstream foundation
 
@@ -62,6 +75,13 @@ defaults to page 1 even though the separate page map is correct.
 The page number is already carried by the existing element schema, chunk
 model, Weaviate storage code, retrieval tools, and viewer/evidence contracts.
 The missing link is the PDFX merged-Markdown consumer boundary.
+
+The live production checkout was verified read-only on 2026-08-23 as detached
+at exact tag `v0.8.20` / `6df184c6`, frontend version `0.8.20`. It contains the
+expected modified maintenance-message file and historical ignored backup
+artifacts. Do not clean, reset, reuse, or deploy current `main` into that
+checkout. Select a clean timestamped release checkout during the
+maintenance-first deployment.
 
 ## 3. Non-negotiable contracts
 
@@ -152,6 +172,9 @@ it must not duplicate all ranges or publication text.
 
 ### In scope
 
+- The bounded Weaviate retrieval/default and native-backup changes from AI
+  Curation PR #628, ported onto exact production `v0.8.20` without unrelated
+  commits from `main`.
 - Local AI Curation jobs that submit PDFs to PDFX with merge enabled.
 - Exact merged and page-sidecar download and validation.
 - Primary page assignment during the existing Markdown-to-element pass.
@@ -159,6 +182,8 @@ it must not duplicate all ranges or publication text.
 - Focused unit/contract validation and one fresh multi-page dev ingestion.
 - Search/document evidence showing non-page-1 chunks are returned with their
   stored primary pages.
+- A separate forward-port PR that applies the proven page consumer and release
+  state to current `main` after the hotfix succeeds.
 
 ### Out of scope
 
@@ -192,6 +217,8 @@ Every checkbox is a release gate for this PR.
 - [ ] No speculative support for unversioned/future sidecar shapes.
 - [ ] Tests cover contract mutations and observed boundary behavior without an
   exhaustive theoretical matrix.
+- [ ] No intervening `main` feature/fix commits enter the production hotfix.
+- [ ] The `main` forward-port does not duplicate or replay PR #628.
 
 ## 7. Acceptance criteria
 
@@ -224,6 +251,9 @@ Every checkbox is a release gate for this PR.
 
 ### Validation gates
 
+- [ ] Diff the hotfix against `v0.8.20` and account for every production file:
+  it must belong to the bounded PR #628 port, page consumer, tests/docs, or
+  patch-release metadata.
 - [ ] `py_compile`, scoped Ruff if configured, `git diff --check`, and focused
   parser/chunk/Weaviate tests pass.
 - [ ] The repository's backend Docker gate passes on the final candidate.
@@ -281,40 +311,61 @@ Every checkbox is a release gate for this PR.
   code are live without claiming a production ingestion canary.
 - [ ] Save the deployment record and curator-facing Slack release-note draft.
 
+### Main forward-port
+
+- [ ] Create a clean branch from then-current `origin/main` after the hotfix is
+  proven; do not assume `416c62aa` remains the head.
+- [ ] Apply only the page-sidecar consumer, its focused tests/docs, and the
+  release-state/version changes needed to keep `main` current. PR #628 is
+  already present and must not be replayed.
+- [ ] Resolve forward-port conflicts against current ownership rather than
+  copying hotfix-era files wholesale.
+- [ ] Run focused tests plus changed-scope/full PR gates, repeat the mandatory
+  Sol/xhigh `$max-review-skill` review, and obtain bounded Claude PR review.
+- [ ] Merge the forward-port PR and verify `main` contains both PR #628 and the
+  production-proven page consumer.
+
 ## 8. Implementation and review sequence
 
 1. Commit this goal document before production-code changes.
-2. Add focused failing tests for the public sidecar contract, exact response
+2. Create the production hotfix from exact tag `v0.8.20` / `6df184c6`. Port
+   only PR #628's Weaviate change onto that baseline and inspect every conflict
+   and changed file; do not merge or rebase current `main` into the hotfix.
+3. Add focused failing tests for the public sidecar contract, exact response
    bytes, multibyte offsets, primary-page semantics, and fail-closed behavior.
-3. Implement the smallest validator/index and parser integration that makes
+4. Implement the smallest validator/index and parser integration that makes
    those tests pass.
-4. Run focused validation, inspect the diff for unnecessary code, and update
+5. Run focused validation, inspect the diff for unnecessary code, and update
    this document's progress trail.
-5. Run the final automated gates proportionate to the diff.
-6. Spawn a GPT-5.6 Sol sub-agent with xhigh reasoning for the mandatory local
+6. Run the final automated gates proportionate to the diff.
+7. Spawn a GPT-5.6 Sol sub-agent with xhigh reasoning for the mandatory local
    review. Its prompt must explicitly invoke `$max-review-skill`, cite this
    document and the final diff, and enforce Section 6. Resolve every supported
    Blocker, Material correction, and High-value simplification. Repeat only
    after material code changes.
-7. Push and open the PR only after the local verdict is `Accept` or `Accept
+8. Push and open the hotfix PR only after the local verdict is `Accept` or `Accept
    with follow-ups` with no supported material finding outstanding.
-8. Ask Claude to review the PR against this document. Require each requested
+9. Ask Claude to review the PR against this document. Require each requested
    change to identify a reachable defect, violated contract, or concrete data
    integrity risk and propose the smallest complete correction. Iterate only
    for supported material findings; do not turn follow-ups into scope.
-9. After checks and bounded reviews pass, perform the fresh dev proof. No
+10. After checks and bounded reviews pass, perform the fresh dev proof. No
    additional external reviewer approval is required for the PR workflow.
-10. Merge the PR, prepare the normal patch release metadata, verify it on dev,
+11. Merge the hotfix PR, prepare the normal patch release metadata, verify it on dev,
     and create the annotated tag/GitHub release from the exact tested commit.
-11. Perform the production safety inventory and report it for visibility.
+12. Perform the production safety inventory and report it for visibility.
     Chris's 2026-08-23 authorization satisfies the approval gate unless the
     inventory reveals a new material risk outside this document.
-12. Follow maintenance-first deployment, PostgreSQL/Weaviate backup, tagged
+13. Follow maintenance-first deployment, PostgreSQL/Weaviate backup, tagged
     deploy, server-local checks, dual-route cutover, public preflight, and
     post-deploy verification in the release runbooks.
-13. Record final implementation, PR, dev, release, backup, and production
-    evidence here and in the dated deployment record. Stop dev, retain its EBS
-    state, and close the goal only when every applicable checkbox is complete.
+14. After production is proven, create the clean `main` forward-port, apply
+    only the page consumer/release-state delta, run its bounded tests/reviews,
+    merge it, and verify `main` retains its existing PR #628 implementation.
+15. Record final implementation, both PRs, dev, release, backup, production,
+    and forward-port evidence here and in the dated deployment record. Stop
+    dev, retain its EBS state, and close the goal only when every applicable
+    checkbox is complete.
 
 Claude review framing:
 
@@ -344,6 +395,12 @@ Claude review framing:
   metadata and production deployment references and extended the goal through
   the normal tagged-release, maintenance, backup, cutover, and post-deploy
   gates. Production is not a branch-tip emergency deployment.
+- 2026-08-23: Chris clarified that production is intentionally behind `main`
+  and requires a cherry-picked update. Read-only live inspection verified
+  production at `v0.8.20` / `6df184c6`, while `origin/main` is `416c62aa`.
+  Updated the goal to build from the exact production tag, port only PR #628
+  plus the page consumer, and forward-port the proven consumer to then-current
+  `main` through a separate PR. No current-main deployment is allowed.
 
 ## 10. Resume checkpoint
 
