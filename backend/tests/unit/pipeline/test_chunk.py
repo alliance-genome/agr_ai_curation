@@ -109,6 +109,20 @@ async def test_chunk_parsed_document_filters_page_footer_and_chunks():
 
 
 @pytest.mark.asyncio
+async def test_chunk_parsed_document_preserves_first_element_primary_page():
+    strategy = _strategy(ChunkingMethod.BY_PARAGRAPH, max_chars=500, overlap=0)
+    elements = [
+        {"type": "NarrativeText", "text": "Starts on page two.", "metadata": {"page_number": 2}},
+        {"type": "NarrativeText", "text": "Continues on page three.", "metadata": {"page_number": 3}},
+    ]
+
+    chunks = await chunk_parsed_document(elements, strategy, "doc-pages")
+
+    assert len(chunks) == 1
+    assert chunks[0].page_number == 2
+
+
+@pytest.mark.asyncio
 async def test_chunk_parsed_document_raises_when_only_footer_elements():
     strategy = _strategy(ChunkingMethod.BY_PARAGRAPH, max_chars=500, overlap=50)
     elements = [

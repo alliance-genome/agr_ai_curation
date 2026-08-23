@@ -23,6 +23,10 @@ from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture too
     normalize_text,
     normalize_elements,
 )
+from .pdfx_page_provenance import (
+    MergedPageProvenance,
+    parse_merged_page_provenance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -173,12 +177,23 @@ class PDFXParser:
                     cancel_requested_callback=cancel_requested_callback,
                 )
                 merged_markdown = await self._download_markdown(session, process_id, headers)
+                page_provenance = None
+                if self.merge_enabled:
+                    page_provenance = await self._download_page_provenance(
+                        session,
+                        process_id,
+                        headers,
+                        merged_markdown=merged_markdown.encode("utf-8"),
+                    )
         except asyncio.TimeoutError as exc:
             raise PDFParsingError(f"PDF extraction timeout after {self.timeout_seconds} seconds") from exc
         except aiohttp.ClientError as exc:
             raise PDFParsingError(f"Network error calling PDF extraction service: {exc}") from exc
 
-        cleaned_elements = markdown_to_pipeline_elements(merged_markdown)
+        cleaned_elements = markdown_to_pipeline_elements(
+            merged_markdown,
+            page_provenance=page_provenance,
+        )
         if not cleaned_elements:
             raise PDFParsingError("PDF extraction produced no usable elements")
 
@@ -191,6 +206,9 @@ class PDFXParser:
             "methods": self.methods.split(","),
             "merge": self.merge_enabled,
             "content_format": f"{self.download_variant}_markdown",
+            "page_provenance": (
+                page_provenance.receipt() if page_provenance is not None else None
+            ),
         }
 
         pdfx_json_path = await self._save_pdfx_json(raw_payload, document_id, user_id)
@@ -384,7 +402,9 @@ class PDFXParser:
                     raise PDFParsingError("PDF extraction status payload missing 'status'")
                 latest_status = status
 
-                progress = payload.get("progress") if isinstance(payload.get("progress"), dict) else {}
+                progress: Dict[str, Any] = (
+                    payload["progress"] if isinstance(payload.get("progress"), dict) else {}
+                )
                 progress_stage = str(progress.get("stage", "")).strip()
                 progress_percent = progress.get("percent")
                 state = str(payload.get("state", "")).strip()
@@ -464,8 +484,57 @@ class PDFXParser:
         headers: Dict[str, str],
     ) -> str:
         """Download configured markdown output for completed extraction."""
+        raw = await self._download_artifact_bytes(
+            session,
+            process_id,
+            headers,
+            variant=self.download_variant,
+        )
+        try:
+            markdown = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PDFParsingError(
+                f"PDF extraction returned non-UTF-8 markdown for process_id={process_id}"
+            ) from exc
+        if not markdown.strip():
+            raise PDFParsingError(
+                f"PDF extraction returned empty markdown for process_id={process_id}"
+            )
+        return markdown
+
+    async def _download_page_provenance(
+        self,
+        session: aiohttp.ClientSession,
+        process_id: str,
+        headers: Dict[str, str],
+        *,
+        merged_markdown: bytes,
+    ) -> MergedPageProvenance:
+        """Download and validate the sidecar for exact merged Markdown bytes."""
+        raw = await self._download_artifact_bytes(
+            session,
+            process_id,
+            headers,
+            variant="page_provenance",
+        )
+        try:
+            return parse_merged_page_provenance(raw, merged_markdown=merged_markdown)
+        except ValueError as exc:
+            raise PDFParsingError(
+                f"PDF extraction page provenance is invalid for process_id={process_id}: {exc}"
+            ) from exc
+
+    async def _download_artifact_bytes(
+        self,
+        session: aiohttp.ClientSession,
+        process_id: str,
+        headers: Dict[str, str],
+        *,
+        variant: str,
+    ) -> bytes:
+        """Download exact artifact bytes with the existing retry policy."""
         download_endpoint = (
-            f"{self.service_url}/api/v1/extract/{process_id}/download/{self.download_variant}"
+            f"{self.service_url}/api/v1/extract/{process_id}/download/{variant}"
         )
         download_deadline = time.monotonic() + self.download_retry_seconds
         attempt = 0
@@ -474,18 +543,20 @@ class PDFXParser:
             attempt += 1
             try:
                 async with session.get(download_endpoint, headers=headers) as response:
-                    body_text = await response.text()
+                    body = await response.read()
                     if response.status == 200:
-                        break
+                        return body
+
+                    body_text = body.decode("utf-8", errors="replace")
 
                     error_message = (
-                        f"PDF extraction {self.download_variant} download failed. "
+                        f"PDF extraction {variant} download failed. "
                         f"Expected GET {download_endpoint} -> 200, got {response.status}: {body_text}"
                     )
                     if response.status in _TRANSIENT_HTTP_STATUS and time.monotonic() < download_deadline:
                         logger.warning(
                             "Transient PDF extraction %s download error for process_id=%s (attempt %s): %s",
-                            self.download_variant,
+                            variant,
                             process_id,
                             attempt,
                             error_message,
@@ -505,13 +576,6 @@ class PDFXParser:
                     await asyncio.sleep(self.poll_interval_seconds)
                     continue
                 raise PDFParsingError(f"Network error downloading PDF extraction result: {exc}") from exc
-
-        markdown = body_text.strip()
-        if not markdown:
-            raise PDFParsingError(
-                f"PDF extraction returned empty markdown for process_id={process_id}"
-            )
-        return markdown
 
     async def _save_pdfx_json(self, result: Dict[str, Any], document_id: str, user_id: str) -> Path:
         """Save raw extraction response to user-specific directory."""
@@ -578,10 +642,34 @@ def _build_progress_message(payload: Dict[str, Any]) -> str:
     return "PDF extraction in progress..."
 
 
-def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
+def _markdown_lines_with_byte_starts(markdown: str) -> tuple[List[str], List[int]]:
+    """Split Markdown lines while retaining exact UTF-8 byte starts."""
+
+    lines: List[str] = []
+    starts: List[int] = []
+    byte_cursor = 0
+    for segment in markdown.splitlines(keepends=True):
+        if segment.endswith("\r\n"):
+            line = segment[:-2]
+        elif segment.endswith(("\n", "\r")):
+            line = segment[:-1]
+        else:
+            line = segment
+        lines.append(line)
+        starts.append(byte_cursor)
+        byte_cursor += len(segment.encode("utf-8"))
+    if not lines:
+        return [""], [0]
+    return lines, starts
+
+
+def markdown_to_pipeline_elements(
+    markdown: str,
+    *,
+    page_provenance: Optional[MergedPageProvenance] = None,
+) -> List[Dict[str, Any]]:
     """Convert merged markdown output into pipeline element dictionaries."""
-    normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
-    lines = normalized.split("\n")
+    lines, line_byte_starts = _markdown_lines_with_byte_starts(markdown)
     elements: List[Dict[str, Any]] = []
     section_path: List[str] = []
     current_page = 1
@@ -595,7 +683,13 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
         re.compile(r"^\[\s*page\s+(\d+)\s*\]$", re.IGNORECASE),
     ]
 
-    def add_element(element_type: str, text: str, content_type: str, original_type: str) -> None:
+    def add_element(
+        element_type: str,
+        text: str,
+        content_type: str,
+        original_type: str,
+        line_index: int,
+    ) -> None:
         nonlocal index
         clean_text = normalize_text(text.strip())
         if not clean_text:
@@ -607,13 +701,21 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
             "ListItem": "list_item",
             "Table": "table",
         }.get(element_type, "paragraph")
+        page_number = current_page
+        if page_provenance is not None:
+            raw_line = lines[line_index]
+            leading_characters = len(raw_line) - len(raw_line.lstrip())
+            first_content_byte = line_byte_starts[line_index] + len(
+                raw_line[:leading_characters].encode("utf-8")
+            )
+            page_number = page_provenance.page_for_byte_offset(first_content_byte)
         metadata = {
             "element_id": f"md_element_{index}",
             "doc_item_label": doc_item_label,
             "section_title": active_section,
             "section_path": normalized_section_path,
             "hierarchy_level": len(section_path) if section_path else 1,
-            "page_number": current_page,
+            "page_number": page_number,
             "content_type": content_type,
             "original_type": original_type,
         }
@@ -652,20 +754,28 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
             section_path = section_path[: level - 1]
             if title:
                 section_path.append(title)
-                add_element("Title", title, "heading", "markdown_heading")
+                add_element("Title", title, "heading", "markdown_heading", i)
             i += 1
             continue
 
         if stripped.startswith("|"):
+            element_start = i
             table_lines = [stripped]
             i += 1
             while i < len(lines) and lines[i].strip().startswith("|"):
                 table_lines.append(lines[i].strip())
                 i += 1
-            add_element("Table", "\n".join(table_lines), "table", "markdown_table")
+            add_element(
+                "Table",
+                "\n".join(table_lines),
+                "table",
+                "markdown_table",
+                element_start,
+            )
             continue
 
         if stripped.startswith("```"):
+            element_start = i
             code_lines = [stripped]
             i += 1
             while i < len(lines):
@@ -674,15 +784,22 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
                     i += 1
                     break
                 i += 1
-            add_element("NarrativeText", "\n".join(code_lines), "code_block", "markdown_code_block")
+            add_element(
+                "NarrativeText",
+                "\n".join(code_lines),
+                "code_block",
+                "markdown_code_block",
+                element_start,
+            )
             continue
 
         list_match = list_re.match(raw_line)
         if list_match:
-            add_element("ListItem", stripped, "list_item", "markdown_list_item")
+            add_element("ListItem", stripped, "list_item", "markdown_list_item", i)
             i += 1
             continue
 
+        element_start = i
         paragraph_lines = [stripped]
         i += 1
         while i < len(lines):
@@ -694,7 +811,13 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
                 break
             paragraph_lines.append(peek)
             i += 1
-        add_element("NarrativeText", " ".join(paragraph_lines), "paragraph", "markdown_paragraph")
+        add_element(
+            "NarrativeText",
+            " ".join(paragraph_lines),
+            "paragraph",
+            "markdown_paragraph",
+            element_start,
+        )
 
     return elements
 
