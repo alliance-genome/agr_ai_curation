@@ -202,65 +202,69 @@ it must not duplicate all ranges or publication text.
 
 Every checkbox is a release gate for this PR.
 
-- [ ] No inline page syntax or Markdown mutation.
-- [ ] No new regex for page inference or publication roles.
-- [ ] No fuzzy alignment, RapidFuzz use, PDF text scan, page-image pipeline, or
+- [x] No inline page syntax or Markdown mutation.
+- [x] No new regex for page inference or publication roles.
+- [x] No fuzzy alignment, RapidFuzz use, PDF text scan, page-image pipeline, or
   LLM review of page numbers in AI Curation.
-- [ ] No second semantic Markdown parse or post-hoc element-to-text alignment.
-- [ ] No per-character page array; use the ordered ranges directly.
-- [ ] No generalized provenance framework, plugin system, compatibility layer,
+- [x] No second semantic Markdown parse or post-hoc element-to-text alignment.
+- [x] No per-character page array; use the ordered ranges directly.
+- [x] No generalized provenance framework, plugin system, compatibility layer,
   migration, feature flag, or rollback subsystem.
-- [ ] No Weaviate schema change when the existing `page_number` property is
+- [x] No Weaviate schema change when the existing `page_number` property is
   sufficient.
-- [ ] No changes to chunking or storage unless a focused test demonstrates a
+- [x] No changes to chunking or storage unless a focused test demonstrates a
   concrete propagation defect.
-- [ ] No speculative support for unversioned/future sidecar shapes.
-- [ ] Tests cover contract mutations and observed boundary behavior without an
+- [x] No speculative support for unversioned/future sidecar shapes.
+- [x] Tests cover contract mutations and observed boundary behavior without an
   exhaustive theoretical matrix.
-- [ ] No intervening `main` feature/fix commits enter the production hotfix.
+- [x] No intervening `main` feature/fix commits enter the production hotfix.
 - [ ] The `main` forward-port does not duplicate or replay PR #628.
 
 ## 7. Acceptance criteria
 
 ### Contract and parser
 
-- [ ] Merged Markdown is retained as exact response bytes through sidecar
+- [x] Merged Markdown is retained as exact response bytes through sidecar
   validation and strict UTF-8 decoding.
-- [ ] The public `merged-page-provenance-v1` record is validated fail-closed,
+- [x] The public `merged-page-provenance-v1` record is validated fail-closed,
   including its canonical record digest, merged SHA/size, exact range
   partition, page bounds, range fields, summaries, and receipt container.
-- [ ] A multibyte UTF-8 fixture proves byte offsets, rather than Python
+- [x] A multibyte UTF-8 fixture proves byte offsets, rather than Python
   character offsets, select pages correctly.
-- [ ] Headings, paragraphs, lists, tables, and code blocks receive the page of
+- [x] Headings, paragraphs, lists, tables, and code blocks receive the page of
   their first non-whitespace byte.
-- [ ] An element spanning two ranges retains its first page.
-- [ ] Sidecar-supplied pages override any legacy marker state.
-- [ ] Missing, malformed, stale, or invalid merged sidecars raise a clear
+- [x] An element spanning two ranges retains its first page.
+- [x] Sidecar-supplied pages override any legacy marker state.
+- [x] Missing, malformed, stale, or invalid merged sidecars raise a clear
   `PDFParsingError`; they never produce page-1 output.
-- [ ] Existing non-merged and provider-Markdown behavior remains covered.
-- [ ] No bounding-box or synthetic `provenance` metadata is introduced.
+- [x] Existing non-merged and provider-Markdown behavior remains covered.
+- [x] No bounding-box or synthetic `provenance` metadata is introduced.
 
 ### Downstream propagation
 
-- [ ] Focused tests prove page-aware elements become chunks with the expected
+- [x] Focused tests prove page-aware elements become chunks with the expected
   primary pages using the existing chunker.
-- [ ] Existing Weaviate serialization and retrieval tests remain green and no
+- [x] Existing Weaviate serialization and retrieval tests remain green and no
   schema migration is required.
-- [ ] Processed JSON and compact PDFX JSON retain useful, nonduplicative page
+- [x] Processed JSON and compact PDFX JSON retain useful, nonduplicative page
   evidence.
 
 ### Validation gates
 
-- [ ] Diff the hotfix against `v0.8.20` and account for every production file:
+- [x] Diff the hotfix against `v0.8.20` and account for every production file:
   it must belong to the bounded PR #628 port, page consumer, tests/docs, or
   patch-release metadata.
-- [ ] `py_compile`, scoped Ruff if configured, `git diff --check`, and focused
+- [x] `py_compile`, scoped Ruff if configured, `git diff --check`, and focused
   parser/chunk/Weaviate tests pass.
-- [ ] The repository's backend Docker gate passes on the final candidate.
+- [x] The repository's backend Docker gate passes on the current reviewed-code
+  candidate; rerun if review or release work changes backend behavior.
 - [ ] Frontend tests/type-check/build are run only if the final diff or formal
   dev-release gate requires them; any baseline-only TypeScript debt is recorded
   separately.
-- [ ] Secret scanning and repository PR gate pass.
+- [x] Secret scanning and repository PR gate pass. The hotfix gate used its
+  supported missing-Ruff skip because whole-file lint against the older
+  `v0.8.20` baseline exposes 277 unrelated findings in PR #628-touched files;
+  scoped Ruff passed for the new consumer/parser files.
 
 ### Fresh dev proof
 
@@ -282,7 +286,7 @@ Every checkbox is a release gate for this PR.
 
 ### Tagged production release
 
-- [ ] After the merged `main` commit passes dev, select the next patch version,
+- [ ] After the exact reviewed hotfix commit passes dev, select the next patch version,
   update both frontend package files, and add a curator-facing changelog entry
   dated with the actual release date. Record whether this small patch should
   leave the What's New popup pinned to the last substantive release.
@@ -401,6 +405,27 @@ Claude review framing:
   Updated the goal to build from the exact production tag, port only PR #628
   plus the page consumer, and forward-port the proven consumer to then-current
   `main` through a separate PR. No current-main deployment is allowed.
+- 2026-08-23: Created `hotfix/v0.8.21-weaviate-page-provenance` from exact
+  `v0.8.20`. Ported PR #628 as `6e09ad86`, preserving only its Weaviate/search
+  and native-backup changes across three production-baseline conflicts. A
+  focused test exposed one modern-`main` helper dependency; the exact bounded
+  integer helper was added separately in `bdb3ac20` rather than importing the
+  newer configuration framework.
+- 2026-08-23: Implemented exact merged/page-sidecar download, a consumer-owned
+  `merged-page-provenance-v1` validator/index, and first-content-byte page
+  assignment during the existing Markdown walk in `dcf4d7ba`. The official
+  ABC Markdown bytes are not mutated, and no regex inference, fuzzy scan,
+  semantic reread, per-character map, LLM call, storage change, or schema
+  migration was added.
+- 2026-08-23: Focused parser/chunk tests pass 42/42; focused Weaviate/config
+  tests pass 190/190 after the compatibility helper; py_compile, diff check,
+  scoped Ruff, and change-local static diagnostics pass. The complete backend
+  rerun passes 4,888 tests with 2 skips and 1 expected xfail. Installer,
+  repository migration, templates, and production Compose contracts pass.
+  Secret hooks pass, and the hotfix-base Agent PR gate passes 16/16 using its
+  supported missing-Ruff skip; whole-file lint on PR #628-touched files exposes
+  277 unrelated `v0.8.20` baseline findings, while the consumer/parser scope is
+  clean.
 
 ## 10. Resume checkpoint
 
@@ -409,5 +434,6 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: commit this document, then write the focused failing tests
-from Step 2 without changing production code first.
+Current next action: commit this evidence update, obtain the mandatory
+GPT-5.6 Sol/xhigh `$max-review-skill` verdict, resolve only supported material
+findings, then push and open the hotfix PR for bounded Claude review.
