@@ -218,7 +218,7 @@ Every checkbox is a release gate for this PR.
 - [x] Tests cover contract mutations and observed boundary behavior without an
   exhaustive theoretical matrix.
 - [x] No intervening `main` feature/fix commits enter the production hotfix.
-- [ ] The `main` forward-port does not duplicate or replay PR #628.
+- [x] The `main` forward-port does not duplicate or replay PR #628.
 
 ## 7. Acceptance criteria
 
@@ -317,12 +317,12 @@ Every checkbox is a release gate for this PR.
 
 ### Main forward-port
 
-- [ ] Create a clean branch from then-current `origin/main` after the hotfix is
+- [x] Create a clean branch from then-current `origin/main` after the hotfix is
   proven; do not assume `416c62aa` remains the head.
-- [ ] Apply only the page-sidecar consumer, its focused tests/docs, and the
+- [x] Apply only the page-sidecar consumer, its focused tests/docs, and the
   release-state/version changes needed to keep `main` current. PR #628 is
   already present and must not be replayed.
-- [ ] Resolve forward-port conflicts against current ownership rather than
+- [x] Resolve forward-port conflicts against current ownership rather than
   copying hotfix-era files wholesale.
 - [ ] Run focused tests plus changed-scope/full PR gates, repeat the mandatory
   Sol/xhigh `$max-review-skill` review, and obtain bounded Claude PR review.
@@ -632,6 +632,24 @@ Claude review framing:
   claimed because the unchanged ABC source gate remains unavailable; exact
   tagged consumer code is live, and the fresh dev Debbie canary is the scoped
   behavior proof accepted by the criterion's explicit alternate.
+- 2026-08-23: Created clean branch
+  `forwardport/v0.8.21-page-provenance` from the fetched, then-current
+  `origin/main` at `416c62aa`. That commit is PR #628 itself, so none of its
+  Weaviate tuning, search, backup, Compose, installer, or package files were
+  replayed. The forward-port contains only the exact production-proven PDFX
+  sidecar validator/parser and focused tests, v0.8.21 package/changelog state,
+  and this durable goal record. The one mixed review commit was applied only
+  to `pdfx_parser.py` and its focused test; its unrelated ranking-snapshot
+  cleanup was deliberately omitted. Main's newer `test:stable` package script
+  remains intact. Main's stricter Ruff gate exposed and removed one pre-existing
+  unused `asyncio` import in the now-touched PDFX utility test.
+- 2026-08-23: Forward-port gates passed: 57/57 focused PDFX/chunk tests;
+  26/26 focused App/changelog tests; production frontend build; changed-scope
+  TypeScript `baseline_only` with one changed TypeScript file, zero changed-
+  file errors, and 20 existing baseline errors; Agent PR gate 18/18; and the
+  complete backend unit suite with 5,136 passed, 3 skipped, and 1 expected
+  xfail (86.28% coverage). The next gate is the mandatory independent
+  Sol/xhigh `$max-review-skill` review of this final local diff.
 
 ## 10. Resume checkpoint
 
