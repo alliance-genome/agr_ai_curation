@@ -326,7 +326,7 @@ Every checkbox is a release gate for this PR.
   already present and must not be replayed.
 - [x] Resolve forward-port conflicts against current ownership rather than
   copying hotfix-era files wholesale.
-- [ ] Run focused tests plus changed-scope/full PR gates, repeat the mandatory
+- [x] Run focused tests plus changed-scope/full PR gates, repeat the mandatory
   Sol/xhigh `$max-review-skill` review, and obtain bounded Claude PR review.
 - [ ] Merge the forward-port PR and verify `main` contains both PR #628 and the
   production-proven page consumer.
@@ -671,6 +671,18 @@ Claude review framing:
   remove unreachable invariant checks, wrap their unreachable error type, or
   clean the unchanged progress-payload fallback were not adopted because they
   do not address a reachable defect in this forward-port.
+- 2026-08-23: The same GPT-5.6 Sol/xhigh reviewer invoked
+  `$max-review-skill` again on the two adopted corrections and returned
+  `Accept`: the async parser-seam test and operator-facing sidecar note are
+  focused, correct, and proportionate. Claude then reviewed only
+  `c9f9a736..d32dfd3e`, mutation-tested the three wiring regressions the new
+  test guards, and returned `Approve` with both prior warnings resolved, no
+  blocking issues, and no new findings. The final reviewed-code head passed
+  every PR check, including Backend Unit Tests, Agent PR Gate, contract,
+  persistence, frontend tests/build, TraceReview, CodeQL, GitGuardian, and the
+  release/publish regression lanes. The following commit changes only this
+  evidence record; it does not alter reviewed code, tests, configuration, or
+  release metadata and does not warrant another LLM review cycle.
 
 ## 10. Resume checkpoint
 
@@ -679,7 +691,8 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: run the proportional local review/gates for the two adopted
-Claude warnings, push the resulting PR #630 head, obtain one bounded Claude
-re-review of those corrections, then merge and verify `main` contains both PR
-#628 and the production-proven page consumer.
+Current next action: wait for GitHub to re-key the required checks to the final
+evidence-only documentation commit, then merge PR #630 and verify `main`
+contains both PR #628 and the production-proven page consumer. No additional
+LLM review is required unless runtime code, tests, configuration, or release
+metadata changes.
