@@ -286,7 +286,7 @@ Every checkbox is a release gate for this PR.
 
 ### Tagged production release
 
-- [ ] After the exact reviewed hotfix commit passes dev, select the next patch version,
+- [x] After the exact reviewed hotfix commit passes dev, select the next patch version,
   update both frontend package files, and add a curator-facing changelog entry
   dated with the actual release date. Record whether this small patch should
   leave the What's New popup pinned to the last substantive release.
@@ -529,7 +529,8 @@ Claude review framing:
   It passed health/provider/auth, two fresh PDF extractions and artifacts,
   non-streaming and streaming chat, workspace prep/bootstrap/replay/hydration,
   a custom flow over SSE, persisted evidence export, JSON/CSV/TSV ZIP exports,
-  and a real two-document batch extraction. The record is labelled `partial`
+  two-document JSON/CSV/TSV plumbing batches, and a one-document real gene-
+  extraction batch. The record is labelled `partial`
   only because the host Python package-metadata check was skipped after the
   running backend container independently proved exact locked SDK versions,
   and the unrelated opt-in rerank-provider smoke was not requested.
@@ -550,6 +551,23 @@ Claude review framing:
   HTTP 200 for backend, frontend, Loki, and TraceReview. Dev stays running for
   release-metadata/tag verification and will be stopped, never terminated,
   after production completion.
+- 2026-08-23: Prepared release metadata commit `b17aa7ce`: both package files
+  report `0.8.21`, and changelog filename/id/date agree on August 23, 2026.
+  The focused App/changelog suite passed 20/20 and the production frontend
+  build passed. Dev fast-forwarded cleanly to this commit, rebuilt with embedded
+  version `0.8.21` and SHA `b17aa7ce`, served `/` and `/changelog` with HTTP
+  200, and returned to healthy backend/frontend state with the normal document-
+  source import setting. This small patch intentionally leaves the What's New
+  popup pinned to the last substantive release.
+- 2026-08-23: The final GPT-5.6 Sol/xhigh `$max-review-skill` evidence review
+  returned `Accept with follow-ups` and found no release-blocking agent
+  behavior across tool use, evidence quality, trace/export consistency, batch
+  usefulness, biological content, model/provider behavior, or PDFX/source
+  provenance. It corrected only one durable-record overstatement: the format-
+  plumbing batches used two documents, while the real gene-extraction batch
+  used one. No smoke rerun or product change is warranted. Its follow-ups for
+  PDFX scale-from-zero, ABC service/config availability, and a noncanonical
+  textual evidence ID remain explicitly outside this hotfix.
 
 ## 10. Resume checkpoint
 
