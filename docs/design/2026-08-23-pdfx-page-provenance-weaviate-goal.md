@@ -293,7 +293,7 @@ Every checkbox is a release gate for this PR.
 - [ ] Rebuild and verify the release metadata on dev, create an annotated tag
   and GitHub release from the exact dev-tested commit, then redeploy that exact
   tag to dev for the final tag check.
-- [ ] Before production mutation, inspect custom agents, user-created flows,
+- [x] Before production mutation, inspect custom agents, user-created flows,
   user prompt versions, migrations, the production checkout, and both nginx
   route targets. Record the safety summary and Chris's authorization above.
 - [ ] Put the root application into externally verified maintenance mode
@@ -558,7 +558,10 @@ Claude review framing:
   version `0.8.21` and SHA `b17aa7ce`, served `/` and `/changelog` with HTTP
   200, and returned to healthy backend/frontend state with the normal document-
   source import setting. This small patch intentionally leaves the What's New
-  popup pinned to the last substantive release.
+  popup pinned to the last substantive release. A changed-scope TypeScript
+  check against the production hotfix base inspected the one changed `.ts`
+  changelog file and reported `baseline_only`: zero changed-file errors and 30
+  pre-existing production-line errors.
 - 2026-08-23: The final GPT-5.6 Sol/xhigh `$max-review-skill` evidence review
   returned `Accept with follow-ups` and found no release-blocking agent
   behavior across tool use, evidence quality, trace/export consistency, batch
@@ -568,6 +571,26 @@ Claude review framing:
   used one. No smoke rerun or product change is warranted. Its follow-ups for
   PDFX scale-from-zero, ABC service/config availability, and a noncanonical
   textual evidence ID remain explicitly outside this hotfix.
+- 2026-08-23: Completed the read-only production safety inventory before any
+  production mutation. Production retains 25 user-owned `ca_` agents (42 of
+  53 agents active), 101 user flows from 16 owners (46 active), 213 custom-agent
+  versions, and 22 prompt-template versions attributed to `dev@localhost`.
+  The hotfix changes no prompt/agent definitions, persistence schema, or
+  Alembic migration, so these rows and their volumes remain untouched.
+  Production is detached at exact `v0.8.20` commit `6df184c6`; its longstanding
+  modified maintenance banner and enumerated backup files are preserved rather
+  than cleaned. Deployment will use a clean timestamped checkout with the same
+  Compose project/volumes after maintenance is active. Both live nginx root and
+  `/uploads/` routes currently target port 3002 and will be independently
+  verified during maintenance and cutover. Chris's standing production
+  authorization remains sufficient; no new material risk was found.
+- 2026-08-23: Claude's final bounded release-only review returned `Ready` with
+  no blocking or materially correctness-affecting issue. It independently
+  verified the version/date/id, changelog registration, popup-pin choice,
+  focused test count, corrected batch wording, evidence chronology, and
+  checkbox state. Its two non-blocking precision notes were resolved by the
+  one-file changed-scope TypeScript check above and this forward-pointing
+  resume checkpoint. No further review cycle or smoke rerun is proportionate.
 
 ## 10. Resume checkpoint
 
@@ -576,7 +599,7 @@ Point a new Codex session at this document and say:
 **Resume the PDFX page provenance to Weaviate goal from Section 10. Follow the
 unchecked acceptance criteria and Section 8 in order.**
 
-Current next action: record the independent release-evidence verdict, then
-prepare and verify `v0.8.21` release metadata on the proven production-baseline
-branch. Production must use only the resulting exact tag; after production
-proof, complete the separate then-current-`main` forward-port.
+Current next action: merge PR #629, create annotated tag and GitHub release
+`v0.8.21` from the exact approved production-baseline tree, and redeploy that
+tag to dev for the final tag check. Production must use only that exact tag;
+after production proof, complete the separate then-current-`main` forward-port.
