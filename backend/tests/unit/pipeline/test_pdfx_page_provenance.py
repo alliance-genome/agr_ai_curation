@@ -185,6 +185,30 @@ def test_tables_and_code_blocks_use_their_first_content_byte_page():
             ),
             "range",
         ),
+        (
+            lambda payload: payload.update(
+                merged_markdown_size_bytes=float(
+                    payload["merged_markdown_size_bytes"]
+                )
+            ),
+            "merged Markdown binding",
+        ),
+        (
+            lambda payload: payload["ranges"][1].update(candidate_pages=[{}]),
+            "range",
+        ),
+        (
+            lambda payload: payload["ranges"][1].update(method={}),
+            "range",
+        ),
+        (
+            lambda payload: payload["summary"]["range_counts_by_method"].update(
+                direct=float(
+                    payload["summary"]["range_counts_by_method"]["direct"]
+                )
+            ),
+            "summary",
+        ),
     ],
 )
 def test_invalid_sidecar_contract_fails_closed(mutate, message):
