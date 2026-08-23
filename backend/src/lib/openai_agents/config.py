@@ -87,6 +87,28 @@ def _get_env_int_with_fallback(key: str, default: int) -> int:
         return default
 
 
+def _get_bounded_positive_env_int(
+    key: str,
+    default: int,
+    maximum: int,
+) -> int:
+    """Read a positive integer and report when canonical capacity clamps it."""
+
+    configured = _get_env_int_with_fallback(key, default)
+    if configured < 1:
+        logger.warning("%s=%s is below minimum 1; using 1", key, configured)
+        configured = 1
+    if configured > maximum:
+        logger.warning(
+            "%s=%s exceeds canonical maximum %s; using %s",
+            key,
+            configured,
+            maximum,
+            maximum,
+        )
+    return min(configured, maximum)
+
+
 def get_batch_worker_lease_seconds() -> int:
     """Duration of an exclusive batch worker lease before crash recovery."""
     return max(1, _get_env_int_with_fallback("BATCH_WORKER_LEASE_SECONDS", 120))
