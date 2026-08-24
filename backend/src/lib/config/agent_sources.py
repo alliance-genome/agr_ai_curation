@@ -96,6 +96,10 @@ def _resolve_search_paths(
     return get_default_agent_search_paths(), True
 
 
+# The single-path compatibility helper was removed after ALL-787; layered
+# package/config search through _resolve_search_paths is canonical.
+
+
 @dataclass(frozen=True)
 class GroupRuleSource:
     """Package provenance for one contributed or locally owned group rule."""
