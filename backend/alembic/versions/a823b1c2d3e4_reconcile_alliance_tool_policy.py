@@ -1,4 +1,4 @@
-"""Reconcile the Alliance API tool policy with installed package bindings.
+"""Reconcile Alliance-owned tool policies with installed package bindings.
 
 Revision ID: a823b1c2d3e4
 Revises: 5e6f7a8b9c0d
@@ -23,7 +23,18 @@ down_revision: str | Sequence[str] | None = "5e6f7a8b9c0d"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-ALLIANCE_API_TOOL_ID = "alliance_api_call"
+ALLIANCE_OWNED_TOOL_IDS = frozenset(
+    {
+        "alliance_api_call",
+        "chebi_api_call",
+        "go_api_call",
+        "quickgo_api_call",
+        "read_chunk",
+        "read_section",
+        "read_subsection",
+        "search_document",
+    }
+)
 DEFAULT_APP_VERSION = "1.0.0"
 DEFAULT_PACKAGE_API_VERSION = "1.0.0"
 DEFAULT_RUNTIME_ROOT = Path("/runtime")
@@ -147,20 +158,32 @@ def _disabled_package_ids(overrides_path: Path | None = None) -> set[str]:
     return {package_id.strip() for package_id in disabled_packages}
 
 
-def _alliance_api_binding_is_installed(
+def _installed_tool_binding_ids(
     packages_dir: Path | None = None,
     overrides_path: Path | None = None,
-) -> bool:
+) -> set[str]:
     """Inspect installed package binding exports without importing live app code."""
     resolved_packages_dir = packages_dir or _runtime_packages_dir()
-    if not resolved_packages_dir.exists():
-        return False
-    disabled_package_ids = _disabled_package_ids(overrides_path)
+    if not resolved_packages_dir.is_dir():
+        raise FileNotFoundError(
+            f"Runtime packages directory not found: {resolved_packages_dir}"
+        )
 
-    for package_dir in sorted(path for path in resolved_packages_dir.iterdir() if path.is_dir()):
+    package_dirs = [
+        path
+        for path in sorted(resolved_packages_dir.iterdir())
+        if path.is_dir() and (path / "package.yaml").is_file()
+    ]
+    if not package_dirs:
+        raise FileNotFoundError(
+            f"No package manifests discovered under {resolved_packages_dir}"
+        )
+
+    disabled_package_ids = _disabled_package_ids(overrides_path)
+    installed_tool_ids: set[str] = set()
+
+    for package_dir in package_dirs:
         manifest_path = package_dir / "package.yaml"
-        if not manifest_path.exists():
-            continue
         manifest = _load_yaml_mapping(manifest_path)
         if str(manifest.get("package_id", "")).strip() in disabled_package_ids:
             continue
@@ -176,22 +199,25 @@ def _alliance_api_binding_is_installed(
             bindings = _load_yaml_mapping(bindings_path).get("tools", [])
             if not isinstance(bindings, list):
                 raise ValueError(f"Tool bindings at {bindings_path} field 'tools' must be a list")
-            if any(
-                isinstance(binding, dict)
-                and str(binding.get("tool_id", "")).strip() == ALLIANCE_API_TOOL_ID
+            installed_tool_ids.update(
+                str(binding.get("tool_id", "")).strip()
                 for binding in bindings
-            ):
-                return True
-    return False
+                if isinstance(binding, dict)
+                and str(binding.get("tool_id", "")).strip()
+            )
+    return installed_tool_ids
 
 
 def upgrade() -> None:
-    """Remove the stale seed from deployments without its Alliance binding."""
-    if _alliance_api_binding_is_installed():
+    """Remove moved policy seeds that have no installed executable binding."""
+    stale_tool_ids = sorted(
+        ALLIANCE_OWNED_TOOL_IDS - _installed_tool_binding_ids()
+    )
+    if not stale_tool_ids:
         return
     op.execute(
-        sa.text("DELETE FROM tool_policies WHERE tool_key = :tool_key").bindparams(
-            tool_key=ALLIANCE_API_TOOL_ID
+        sa.text("DELETE FROM tool_policies WHERE tool_key IN :tool_keys").bindparams(
+            sa.bindparam("tool_keys", value=stale_tool_ids, expanding=True)
         )
     )
 

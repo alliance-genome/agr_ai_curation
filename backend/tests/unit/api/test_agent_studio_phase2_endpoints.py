@@ -57,7 +57,7 @@ def test_get_models_endpoint_returns_sorted_models(monkeypatch):
     assert response.models[0].default_reasoning == "high"
 
 
-def test_get_tool_library_endpoint_returns_only_bound_attachable_tools(monkeypatch):
+def test_get_tool_library_endpoint_returns_curator_visible_policy_rows(monkeypatch):
     import src.api.agent_studio as api_module
 
     fake_service = SimpleNamespace(
@@ -86,13 +86,6 @@ def test_get_tool_library_endpoint_returns_only_bound_attachable_tools(monkeypat
     )
 
     monkeypatch.setattr(api_module, "get_tool_policy_cache", lambda: fake_service)
-    monkeypatch.setattr(
-        api_module,
-        "filter_tool_policies_for_installed_bindings",
-        lambda policies: [
-            policy for policy in policies if policy.tool_key == "search_document"
-        ],
-    )
 
     response = asyncio.run(
         api_module.get_tool_library_endpoint(
@@ -101,8 +94,10 @@ def test_get_tool_library_endpoint_returns_only_bound_attachable_tools(monkeypat
         )
     )
 
-    assert len(response.tools) == 1
-    assert response.tools[0].tool_key == "search_document"
+    assert [tool.tool_key for tool in response.tools] == [
+        "search_document",
+        "stale_seeded_tool",
+    ]
 
 
 def test_get_agent_templates_endpoint_returns_system_templates():

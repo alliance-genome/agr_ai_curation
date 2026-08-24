@@ -58,6 +58,9 @@ class _FakeDB:
 
 
 def test_validate_requested_tool_ids_paths(monkeypatch):
+    from src.lib.agent_studio import catalog_service
+
+    monkeypatch.setattr(catalog_service, "has_tool_binding", lambda _tool_id: True)
     monkeypatch.setattr(
         service,
         "get_tool_policy_cache",

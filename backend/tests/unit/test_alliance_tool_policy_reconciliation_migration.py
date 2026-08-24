@@ -6,6 +6,8 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = (
@@ -26,16 +28,29 @@ def _load_migration():
     return module
 
 
-def test_binding_discovery_tracks_installed_runtime_packages(monkeypatch, tmp_path):
+def test_binding_discovery_tracks_installed_runtime_packages(monkeypatch):
     module = _load_migration()
     monkeypatch.setenv("APP_VERSION", "1.5.0")
     monkeypatch.setenv("AGR_RUNTIME_PACKAGE_API_VERSION", "1.0.0")
 
-    assert module._alliance_api_binding_is_installed(REPO_PACKAGES_DIR) is True
-    assert module._alliance_api_binding_is_installed(tmp_path) is False
+    installed = module._installed_tool_binding_ids(REPO_PACKAGES_DIR)
+    assert module.ALLIANCE_OWNED_TOOL_IDS <= installed
 
     monkeypatch.setenv("APP_VERSION", "3.0.0")
-    assert module._alliance_api_binding_is_installed(REPO_PACKAGES_DIR) is False
+    assert module._installed_tool_binding_ids(REPO_PACKAGES_DIR) == set()
+
+
+@pytest.mark.parametrize("packages_dir_exists", [False, True])
+def test_binding_discovery_rejects_undiscoverable_packages(
+    monkeypatch, tmp_path, packages_dir_exists
+):
+    module = _load_migration()
+    packages_dir = tmp_path / "packages"
+    if packages_dir_exists:
+        packages_dir.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="Runtime packages directory not found" if not packages_dir_exists else "No package manifests discovered"):
+        module._installed_tool_binding_ids(packages_dir)
 
 
 def test_binding_discovery_excludes_disabled_package(monkeypatch, tmp_path):
@@ -52,26 +67,33 @@ disabled_packages:
     )
     monkeypatch.setenv("AGR_RUNTIME_OVERRIDES_PATH", str(overrides_path))
 
-    assert module._alliance_api_binding_is_installed(REPO_PACKAGES_DIR) is False
+    installed = module._installed_tool_binding_ids(REPO_PACKAGES_DIR)
+    assert module.ALLIANCE_OWNED_TOOL_IDS.isdisjoint(installed)
 
 
-def test_upgrade_deletes_stale_policy_without_binding(monkeypatch):
+def test_upgrade_deletes_all_stale_moved_policies(monkeypatch):
     module = _load_migration()
     executed = []
-    monkeypatch.setattr(module, "_alliance_api_binding_is_installed", lambda: False)
+    monkeypatch.setattr(module, "_installed_tool_binding_ids", lambda: {"search_document"})
     monkeypatch.setattr(module, "op", SimpleNamespace(execute=executed.append))
 
     module.upgrade()
 
     assert len(executed) == 1
     assert "DELETE FROM tool_policies" in str(executed[0])
-    assert executed[0].compile().params == {"tool_key": "alliance_api_call"}
+    assert executed[0].compile().params == {
+        "tool_keys": sorted(module.ALLIANCE_OWNED_TOOL_IDS - {"search_document"})
+    }
 
 
-def test_upgrade_preserves_policy_when_binding_is_installed(monkeypatch):
+def test_upgrade_preserves_policies_when_bindings_are_installed(monkeypatch):
     module = _load_migration()
     executed = []
-    monkeypatch.setattr(module, "_alliance_api_binding_is_installed", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_installed_tool_binding_ids",
+        lambda: set(module.ALLIANCE_OWNED_TOOL_IDS),
+    )
     monkeypatch.setattr(module, "op", SimpleNamespace(execute=executed.append))
 
     module.upgrade()

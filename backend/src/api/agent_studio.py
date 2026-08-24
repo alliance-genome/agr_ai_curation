@@ -102,7 +102,6 @@ from src.lib.agent_studio.custom_agent_service import (
     set_custom_agent_visibility,
 )
 from src.lib.agent_studio.catalog_service import (
-    filter_tool_policies_for_installed_bindings,
     get_agent_by_id,
     get_agent_metadata,
 )
@@ -422,9 +421,7 @@ async def get_tool_library_endpoint(
 ) -> ToolLibraryResponse:
     _ = user
     try:
-        entries = filter_tool_policies_for_installed_bindings(
-            get_tool_policy_cache().list_curator_visible(db)
-        )
+        entries = get_tool_policy_cache().list_curator_visible(db)
         return ToolLibraryResponse(
             tools=[
                 ToolLibraryItem(
