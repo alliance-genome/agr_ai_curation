@@ -138,7 +138,6 @@ describe('usePdfViewerUpload', () => {
 
     await waitFor(() => {
       expect(sessionStorage.getItem('document-loading')).toBe('true')
-      expect(loadStartListener).toHaveBeenCalledTimes(1)
       expect(dispatchChatDocumentChanged).toHaveBeenCalledWith({
         active: true,
         document: {
@@ -154,6 +153,7 @@ describe('usePdfViewerUpload', () => {
         documentId: 'doc-1',
       })
     })
+    expect(loadStartListener).toHaveBeenCalledTimes(1)
 
     window.removeEventListener('document-load-start', loadStartListener)
   })
