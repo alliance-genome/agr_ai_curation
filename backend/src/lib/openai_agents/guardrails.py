@@ -490,27 +490,14 @@ def create_tool_required_output_guardrail(
         An output_guardrail function
 
     Example:
-        from agr_ai_curation_alliance.tools.documents import (
-            create_read_section_tool,
-            create_search_document_tool,
-        )
-
         tracker = ToolCallTracker()
-        context = {
-            "document_id": doc_id,
-            "user_id": user_id,
-            "tool_call_tracker": tracker,
-        }
-
-        # Wrap tools to track calls
-        search_tool = create_search_document_tool(context)
-        read_tool = create_read_section_tool(context)
-
-        # Create guardrail
+        # Agent Studio passes this tracker through ToolExecutionContext while
+        # resolving the configured tools.
+        tools = resolve_tools(requested_tool_ids, execution_context)
         tool_guardrail = create_tool_required_output_guardrail(tracker)
 
         agent = Agent(
-            tools=[search_tool, read_tool],
+            tools=tools,
             output_guardrails=[tool_guardrail],
         )
     """
