@@ -119,7 +119,11 @@ def _manifest_is_runtime_compatible(manifest: dict[str, Any]) -> bool:
 def _installed_tool_binding_ids(
     packages_dir: Path | None = None,
 ) -> set[str]:
-    """Inspect installed package binding exports without importing live app code."""
+    """Inspect installed package binding exports without importing live app code.
+
+    Deliberately ignore ``disabled_packages``: a reversible operator toggle must
+    not authorize an irreversible deletion. Only absence on disk counts as unbound.
+    """
     resolved_packages_dir = packages_dir or _runtime_packages_dir()
     if not resolved_packages_dir.is_dir():
         raise FileNotFoundError(

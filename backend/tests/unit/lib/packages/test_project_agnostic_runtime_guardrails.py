@@ -441,7 +441,12 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     assert all(
         "alliance_api_call" not in str(value)
         for policy in tool_policies.values()
-        for value in (policy.tool_key, policy.display_name, policy.description, policy.config)
+        for value in (
+            policy.tool_key,
+            policy.display_name,
+            policy.description,
+            policy.config,
+        )
     )
     attachable_catalog = [
         policy
