@@ -151,55 +151,6 @@ class DocumentSourceIdentifierImportResponse(BaseModel):
     error_count: int = Field(..., ge=0)
 
 
-class EmbeddingModelBreakdown(BaseModel):
-    """Summary usage information for an embedding model."""
-
-    model: str
-    chunk_count: int = Field(..., ge=0)
-
-
-class EmbeddingSummary(BaseModel):
-    """Aggregate embedding statistics for a document."""
-
-    total_chunks: int = Field(default=0, ge=0)
-    embedded_chunks: int = Field(default=0, ge=0)
-    coverage_percentage: Optional[float] = Field(default=None, ge=0)
-    last_embedded_at: Optional[datetime] = None
-    primary_model: Optional[str] = None
-    models: List[EmbeddingModelBreakdown] = Field(default_factory=list)
-
-
-class ChunkPreview(BaseModel):
-    """Minimal chunk representation for previews."""
-
-    model_config = ConfigDict(extra='allow')
-
-    id: Optional[str] = None
-    document_id: Optional[str] = None
-    chunk_index: Optional[int] = Field(default=None, ge=0)
-    content: Optional[str] = None
-    element_type: Optional[str] = None
-    page_number: Optional[int] = Field(default=None, ge=0)
-    section_title: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-    embedding_model: Optional[str] = None
-    embedding_timestamp: Optional[datetime] = None
-
-
-class DocumentDetailResponse(BaseModel):
-    """Response shape for document detail endpoint."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    document: Dict[str, Any]
-    chunks_preview: List[ChunkPreview] = Field(default_factory=list, description="First 10 chunks for preview")
-    total_chunks: int = Field(default=0, ge=0)
-    embedding_summary: Optional[EmbeddingSummary] = None
-    pipeline_status: Optional[Dict[str, Any]] = None
-    related_documents: List[Dict[str, Any]] = Field(default_factory=list, description="Similar documents by vector similarity")
-    schema_version: str = Field(default="1.0.0")
-
-
 class ChunkListResponse(BaseModel):
     """Response for chunks endpoint."""
 
@@ -289,6 +240,8 @@ class ReembedRequest(BaseModel):
     batch_size: int = Field(default=10, ge=1, le=100)
 
 
+# The legacy rich detail response family was removed after ALL-789; this flat
+# response is the canonical document detail contract.
 class DocumentResponse(BaseModel):
     """Response schema for document operations (upload, get).
 
