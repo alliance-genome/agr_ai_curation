@@ -49,7 +49,12 @@ def test_binding_discovery_rejects_undiscoverable_packages(
     if packages_dir_exists:
         packages_dir.mkdir()
 
-    with pytest.raises(FileNotFoundError, match="Runtime packages directory not found" if not packages_dir_exists else "No package manifests discovered"):
+    expected_message = (
+        "No package manifests discovered"
+        if packages_dir_exists
+        else "Runtime packages directory not found"
+    )
+    with pytest.raises(FileNotFoundError, match=expected_message):
         module._installed_tool_binding_ids(packages_dir)
 
 

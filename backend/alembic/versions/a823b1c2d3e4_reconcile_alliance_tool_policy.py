@@ -1,7 +1,7 @@
 """Reconcile Alliance-owned tool policies with installed package bindings.
 
 Revision ID: a823b1c2d3e4
-Revises: 5e6f7a8b9c0d
+Revises: 6f7a8b9c0d1e
 Create Date: 2026-08-24
 """
 
@@ -19,7 +19,7 @@ from alembic import op  # pyright: ignore[reportAttributeAccessIssue]
 
 
 revision: str = "a823b1c2d3e4"
-down_revision: str | Sequence[str] | None = "5e6f7a8b9c0d"
+down_revision: str | Sequence[str] | None = "6f7a8b9c0d1e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -210,9 +210,7 @@ def _installed_tool_binding_ids(
 
 def upgrade() -> None:
     """Remove moved policy seeds that have no installed executable binding."""
-    stale_tool_ids = sorted(
-        ALLIANCE_OWNED_TOOL_IDS - _installed_tool_binding_ids()
-    )
+    stale_tool_ids = sorted(ALLIANCE_OWNED_TOOL_IDS - _installed_tool_binding_ids())
     if not stale_tool_ids:
         return
     op.execute(
