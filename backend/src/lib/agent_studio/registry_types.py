@@ -312,6 +312,5 @@ def entry_from_dict(agent_id: str, data: Dict[str, Any]) -> AgentRegistryEntry:
     )
 
 
-# Backwards-compatibility aliases (deprecated, use AgentRegistryEntry instead)
-AgentConfig = AgentRegistryEntry
-config_from_dict = entry_from_dict
+# Deprecated AgentConfig/config_from_dict aliases were removed after ALL-786;
+# AgentRegistryEntry/entry_from_dict are canonical.
