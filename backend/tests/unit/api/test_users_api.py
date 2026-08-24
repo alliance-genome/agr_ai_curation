@@ -56,7 +56,7 @@ async def test_get_current_user_info_maps_legacy_claim_with_provider_api(monkeyp
 
     def _map_provider_groups(provider_groups):
         captured["provider_groups"] = provider_groups
-        return ["FB"]
+        return ["curator-group"]
 
     monkeypatch.setattr(
         users,
@@ -70,7 +70,7 @@ async def test_get_current_user_info_maps_legacy_claim_with_provider_api(monkeyp
     )
 
     assert result["provider_groups"] == ["flybase-curators"]
-    assert result["active_groups"] == ["FB"]
+    assert result["active_groups"] == ["curator-group"]
     assert captured["provider_groups"] == ["flybase-curators"]
 
 
