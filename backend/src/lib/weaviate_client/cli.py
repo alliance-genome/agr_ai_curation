@@ -7,10 +7,10 @@ from typing import Optional
 
 import click
 
-from .connection import connect_to_weaviate, close_connection, health_check, get_collection_info
+from .connection import connect_to_weaviate, health_check, get_collection_info
 from .documents import list_documents, get_document, delete_document, re_embed_document
 from .chunks import get_chunks
-from .settings import get_embedding_config, get_collection_settings, get_available_models
+from .settings import get_embedding_config, get_available_models
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -119,20 +119,17 @@ def get_document_cmd(document_id: str, user_id: str, show_chunks: bool, output_f
         else:
             doc = result.get('document', {})
             chunks = result.get('chunks', [])
-            embeddings = result.get('embeddings', {})
 
-            click.echo(f"\nDocument Details:")
+            click.echo("\nDocument Details:")
             click.echo("-" * 50)
             click.echo(f"ID: {document_id}")
             click.echo(f"Filename: {doc.get('filename', 'N/A')}")
             click.echo(f"Size: {doc.get('fileSize', 0):,} bytes")
             click.echo(f"Processing Status: {doc.get('processingStatus', 'N/A')}")
             click.echo(f"Embedding Status: {doc.get('embeddingStatus', 'N/A')}")
+            click.echo(f"Total Chunks: {result['total_chunks']}")
             click.echo(f"Created: {doc.get('creationDate', 'N/A')}")
             click.echo(f"Last Accessed: {doc.get('lastAccessedDate', 'N/A')}")
-            click.echo(f"\nEmbeddings:")
-            click.echo(f"  Total Chunks: {embeddings.get('totalChunks', 0)}")
-            click.echo(f"  Embedded Chunks: {embeddings.get('embeddedChunks', 0)}")
 
             if show_chunks and chunks:
                 click.echo(f"\nChunk Preview (first {len(chunks)} chunks):")

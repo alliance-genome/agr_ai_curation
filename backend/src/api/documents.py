@@ -1120,7 +1120,7 @@ async def get_document_endpoint(
 
     Requirements:
         - FR-014: Verify document ownership, return 403 for cross-user access
-        - T031: Return Document schema (not legacy DocumentDetailResponse)
+        - T031: Return the flat DocumentResponse canonicalized by ALL-789
     """
     # T031: Verify ownership from PostgreSQL FIRST (FR-014)
     # Returns 404 if not found, 403 if not owned by user

@@ -24,16 +24,14 @@ from .pipeline import (
     StageResult,
     ProcessingError
 )
+# ALL-789 made flat DocumentResponse canonical; the retired rich family is gone.
 from .api_schemas import (
     DocumentFilter,
     PaginationParams,
     DocumentListRequest,
     DocumentListResponse,
     PaginationInfo,
-    DocumentDetailResponse,
-    EmbeddingSummary,
-    EmbeddingModelBreakdown,
-    ChunkPreview,
+    DocumentResponse,
     ChunkListResponse,
     OperationResult,
     EmbeddingConfiguration,
@@ -78,10 +76,7 @@ __all__ = [
     'DocumentListRequest',
     'DocumentListResponse',
     'PaginationInfo',
-    'DocumentDetailResponse',
-    'EmbeddingSummary',
-    'EmbeddingModelBreakdown',
-    'ChunkPreview',
+    'DocumentResponse',
     'ChunkListResponse',
     'OperationResult',
     'EmbeddingConfiguration',
