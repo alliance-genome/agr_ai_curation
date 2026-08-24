@@ -548,7 +548,10 @@ def test_resolve_search_paths_ignore_retired_env_override(monkeypatch, tmp_path)
 
     resolved_paths, used_default_search_paths = agent_sources._resolve_search_paths(None)
 
-    assert resolved_paths == (packages_dir, runtime_agents_dir)
+    assert resolved_paths == (
+        packages_dir.resolve(strict=False),
+        runtime_agents_dir.resolve(strict=False),
+    )
     assert used_default_search_paths is True
 
 
