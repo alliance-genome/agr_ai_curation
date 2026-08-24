@@ -20,7 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Fail active documents only when their deterministic latest job failed."""
+    """Fail nonterminal documents when their deterministic latest job failed."""
     op.execute(
         sa.text(
             """
@@ -68,13 +68,7 @@ def upgrade() -> None:
             WHERE latest.document_id = document.id
               AND latest.job_rank = 1
               AND latest.status IN ('failed', 'cancelled')
-              AND document.status IN (
-                  'processing',
-                  'parsing',
-                  'chunking',
-                  'embedding',
-                  'storing'
-              )
+              AND document.status NOT IN ('completed', 'failed')
             """
         )
     )

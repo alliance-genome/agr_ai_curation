@@ -117,7 +117,7 @@ def _insert_job(
     )
 
 
-def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelled_job(
+def test_upgrade_reconciles_only_nonterminal_documents_with_latest_failed_or_cancelled_job(
     monkeypatch,
 ):
     module = _load_migration(monkeypatch)
@@ -126,6 +126,7 @@ def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelle
     with engine.begin() as connection:
         _create_schema(connection)
         cases = {
+            "pending-document": "pending",
             "latest-failed": "processing",
             "latest-cancelled": "embedding",
             "newer-active": "processing",
@@ -142,6 +143,14 @@ def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelle
                 error_message="preserve me" if document_id == "already-terminal" else None,
             )
 
+        _insert_job(
+            connection,
+            job_id="0",
+            document_id="pending-document",
+            status="failed",
+            created_at="2026-08-20T10:00:00Z",
+            message="Queued job never started",
+        )
         _insert_job(
             connection,
             job_id="1",
@@ -227,6 +236,9 @@ def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelle
             )
         }
 
+    assert rows["pending-document"].status == "failed"
+    assert rows["pending-document"].error_message == "Queued job never started"
+    assert rows["pending-document"].processing_completed_at is not None
     assert rows["latest-failed"].status == "failed"
     assert rows["latest-failed"].error_message == "Extraction failed"
     assert rows["latest-failed"].processing_completed_at is not None

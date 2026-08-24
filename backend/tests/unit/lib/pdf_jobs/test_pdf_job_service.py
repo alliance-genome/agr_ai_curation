@@ -110,9 +110,24 @@ def test_get_job_by_id_returns_none_when_missing(monkeypatch):
 
 
 @pytest.mark.parametrize("reader", ["get_job", "get_job_by_id", "get_latest_job_for_document"])
-def test_single_job_readers_reconcile_stale_active_job(monkeypatch, reader):
-    job = _build_job(status=PdfJobStatus.RUNNING.value)
-    document = _build_document(job)
+@pytest.mark.parametrize(
+    ("job_status", "document_status"),
+    [
+        (PdfJobStatus.RUNNING.value, "processing"),
+        (PdfJobStatus.PENDING.value, "pending"),
+    ],
+)
+def test_single_job_readers_reconcile_stale_nonterminal_job(
+    monkeypatch,
+    reader,
+    job_status,
+    document_status,
+):
+    job = _build_job(status=job_status)
+    if job_status == PdfJobStatus.PENDING.value:
+        job.current_stage = "pending"
+        job.started_at = None
+    document = _build_document(job, status=document_status)
     session = _FakeSession([job, job, document])
 
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
@@ -131,7 +146,7 @@ def test_single_job_readers_reconcile_stale_active_job(monkeypatch, reader):
     assert response is not None
     assert response.job_id == str(job.id)
     assert response.status == PdfJobStatus.FAILED.value
-    assert response.current_stage == "parsing"
+    assert response.current_stage == job.current_stage
     assert response.error_message == (
         "Job marked failed automatically after stale inactivity; "
         "likely interrupted before terminal state update"
@@ -162,9 +177,13 @@ def test_list_jobs_reconciles_stale_cancel_requested_job(monkeypatch):
     assert session.commit_calls == 1
 
 
-def test_stale_job_reconciliation_leaves_completed_document_unchanged(monkeypatch):
+@pytest.mark.parametrize("terminal_status", ["completed", "failed"])
+def test_stale_job_reconciliation_leaves_terminal_document_unchanged(
+    monkeypatch,
+    terminal_status,
+):
     job = _build_job(status=PdfJobStatus.RUNNING.value)
-    document = _build_document(job, status="completed")
+    document = _build_document(job, status=terminal_status)
     completed_at = datetime.now(timezone.utc) - timedelta(minutes=5)
     document.processing_started_at = completed_at - timedelta(hours=1)
     document.processing_completed_at = completed_at
@@ -176,7 +195,7 @@ def test_stale_job_reconciliation_leaves_completed_document_unchanged(monkeypatc
 
     assert response is not None
     assert response.status == PdfJobStatus.FAILED.value
-    assert document.status == "completed"
+    assert document.status == terminal_status
     assert document.processing_started_at == completed_at - timedelta(hours=1)
     assert document.processing_completed_at == completed_at
     assert document.error_message is None
