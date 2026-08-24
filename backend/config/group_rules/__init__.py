@@ -5,7 +5,7 @@ This package contains YAML configuration files for group-specific rules
 (MODs, institutions, teams, etc.) that are injected into agents and tools at runtime.
 
 Usage:
-    from config.group_rules import inject_group_rules, get_groups_from_provider_groups
+    from config.group_rules import inject_group_rules
 
 Structure:
     agents/
@@ -22,18 +22,6 @@ Structure:
     group_config.py   # Loader and injection logic
 """
 
-from .group_config import (
-    inject_group_rules,
-    get_groups_from_provider_groups,
-    normalize_group_id,
-    get_available_groups,
-    validate_group_rules,
-)
+from .group_config import inject_group_rules
 
-__all__ = [
-    "inject_group_rules",
-    "get_groups_from_provider_groups",
-    "normalize_group_id",
-    "get_available_groups",
-    "validate_group_rules",
-]
+__all__ = ["inject_group_rules"]

@@ -7,10 +7,7 @@ Python module used for group-rule logic.
 
 from __future__ import annotations
 
-import logging
 from typing import Dict, List
-
-logger = logging.getLogger(__name__)
 
 
 # Canonical group ID normalization.
@@ -50,25 +47,3 @@ def get_groups_from_provider_groups(provider_groups: List[str]) -> List[str]:
     from src.lib.config.groups_loader import get_groups_for_provider_groups
 
     return get_groups_for_provider_groups(provider_groups)
-
-
-def get_available_groups() -> List[str]:
-    """Return the valid group IDs from configured group definitions."""
-    from src.lib.config.groups_loader import get_valid_group_ids
-
-    return get_valid_group_ids()
-
-
-def validate_group_rules(group_id: str, component_type: str, component_name: str) -> bool:
-    """Check manifest-declared package agent bundles and explicit overrides."""
-    del component_type
-
-    from src.lib.prompts.cache import get_prompt_optional, is_initialized
-
-    if not is_initialized():
-        logger.warning("Prompt cache not initialized, cannot validate group rules")
-        return False
-
-    canonical_id = normalize_group_id(group_id)
-    prompt = get_prompt_optional(component_name, "group_rules", group_id=canonical_id)
-    return prompt is not None

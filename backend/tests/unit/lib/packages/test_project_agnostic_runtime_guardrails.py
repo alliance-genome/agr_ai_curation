@@ -901,8 +901,8 @@ def test_generic_domain_pack_resolution_requires_a_registered_package(monkeypatc
 
 def test_active_agent_docs_keep_package_and_explicit_override_contract():
     backend_readme = (REPO_ROOT / "backend/README.md").read_text(encoding="utf-8")
-    group_rules = (
-        REPO_ROOT / "backend/src/lib/group_rules.py"
+    group_rule_injection = (
+        REPO_ROOT / "backend/config/group_rules/group_config.py"
     ).read_text(encoding="utf-8")
     agent_template = (
         REPO_ROOT / "config/agents/_examples/basic_agent/agent.yaml"
@@ -919,8 +919,8 @@ def test_active_agent_docs_keep_package_and_explicit_override_contract():
     assert "Agents are defined entirely in YAML configuration files under" not in backend_readme
     assert "Loads agent definitions from `config/agents" not in backend_readme
 
-    assert "manifest-declared package agent bundles" in group_rules
-    assert "from config/agents/*/group_rules/*.yaml" not in group_rules
+    assert "manifest-declared package agent bundles" in group_rule_injection
+    assert "from config/agents/*/group_rules/*.yaml" not in group_rule_injection
 
     assert "Shipped agents belong to an owning runtime" in agent_template
     assert "Copy this folder to config/agents/" not in agent_template

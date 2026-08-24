@@ -4,11 +4,10 @@ Group-specific rule loading and prompt injection.
 This module handles:
 1. Loading group rules from the prompt cache (pre-rendered from database)
 2. Formatting rules for prompt injection
-3. Mapping identity provider groups to default organization groups
-4. Injecting formatted rules into agent/tool prompts
+3. Injecting formatted rules into agent/tool prompts
 
 Usage:
-    from config.group_rules import inject_group_rules, get_groups_from_provider_groups
+    from config.group_rules import inject_group_rules
 
     # Inject MGI-specific rules into allele agent
     instructions = inject_group_rules(
@@ -17,21 +16,12 @@ Usage:
         component_type="agents",
         component_name="allele"
     )
-
-    # Get user's default groups from identity provider groups
-    groups = get_groups_from_provider_groups(["mgi-curators", "developers"])
-    # Returns: ["MGI"]
 """
 
 import logging
 from typing import List, Optional, TYPE_CHECKING
 
-from src.lib.group_rules import (
-    get_available_groups as get_available_groups,
-    get_groups_from_provider_groups as get_groups_from_provider_groups,
-    normalize_group_id,
-    validate_group_rules as validate_group_rules,
-)
+from src.lib.group_rules import normalize_group_id
 
 if TYPE_CHECKING:
     from src.models.sql.prompts import PromptTemplate
@@ -52,6 +42,7 @@ def inject_group_rules(
 
     This function uses the prompt cache to get pre-rendered group rules.
     Group rules are stored in the database with prompt_type="group_rules".
+    Rules come from manifest-declared package agent bundles and explicit overrides.
 
     The prompt cache MUST be initialized before calling this function.
     There is no fallback - if the cache is not initialized, a RuntimeError is raised.
