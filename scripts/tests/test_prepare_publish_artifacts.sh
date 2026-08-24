@@ -95,6 +95,7 @@ make_sandbox_repo() {
   git -C "${sandbox_repo}" init -q
   git -C "${sandbox_repo}" config user.name "Codex"
   git -C "${sandbox_repo}" config user.email "codex@example.com"
+  git -C "${sandbox_repo}" config gc.auto 0
   git -C "${sandbox_repo}" add -A
   git -C "${sandbox_repo}" commit --allow-empty -q -m "baseline for prepare_publish_artifacts regression"
 }
