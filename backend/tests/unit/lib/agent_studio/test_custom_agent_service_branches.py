@@ -58,6 +58,9 @@ class _FakeDB:
 
 
 def test_validate_requested_tool_ids_paths(monkeypatch):
+    from src.lib.agent_studio import catalog_service
+
+    monkeypatch.setattr(catalog_service, "has_tool_binding", lambda _tool_id: True)
     monkeypatch.setattr(
         service,
         "get_tool_policy_cache",
@@ -79,6 +82,27 @@ def test_validate_requested_tool_ids_paths(monkeypatch):
         service._validate_requested_tool_ids(SimpleNamespace(), ["admin_only"])
 
     assert service._validate_requested_tool_ids(SimpleNamespace(), [" search_document "]) == ["search_document"]
+
+
+def test_validate_requested_tool_ids_rejects_policy_without_installed_binding(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "get_tool_policy_cache",
+        lambda: SimpleNamespace(
+            list_all=lambda _db: [
+                SimpleNamespace(tool_key="stale_seeded_tool", allow_attach=True),
+            ]
+        ),
+    )
+    from src.lib.agent_studio import catalog_service
+
+    monkeypatch.setattr(catalog_service, "has_tool_binding", lambda _tool_id: False)
+
+    with pytest.raises(ValueError, match="no installed binding: stale_seeded_tool"):
+        service._validate_requested_tool_ids(
+            SimpleNamespace(),
+            ["stale_seeded_tool"],
+        )
 
 
 def test_validate_model_id_paths(monkeypatch):

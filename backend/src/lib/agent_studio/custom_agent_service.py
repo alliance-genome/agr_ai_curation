@@ -441,6 +441,16 @@ def _validate_requested_tool_ids(
     if disallowed:
         raise ValueError(f"Tool(s) are not attachable: {', '.join(disallowed)}")
 
+    from src.lib.agent_studio.catalog_service import has_tool_binding
+
+    unbound = sorted({
+        tool_id
+        for tool_id in normalized
+        if tool_id not in inherited_system_managed and not has_tool_binding(tool_id)
+    })
+    if unbound:
+        raise ValueError(f"Tool(s) have no installed binding: {', '.join(unbound)}")
+
     return normalized
 
 
