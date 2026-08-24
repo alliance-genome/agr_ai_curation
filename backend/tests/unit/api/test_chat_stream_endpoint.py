@@ -166,7 +166,7 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -248,7 +248,7 @@ def test_chat_stream_endpoint_keeps_sentry_transaction_open_for_stream(monkeypat
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-sentry", "filename": "paper.pdf"}),
     )
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
     _patch_chat_impl(monkeypatch, "gen_ai_workflow_transaction", _fake_transaction)
 
@@ -337,7 +337,7 @@ def test_chat_stream_endpoint_sanitizes_prepare_turn_validation_error(monkeypatc
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -391,7 +391,7 @@ def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_tit
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
     _patch_chat_impl(
         monkeypatch,
@@ -465,7 +465,7 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -535,7 +535,7 @@ def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypa
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -600,7 +600,7 @@ def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monk
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     with pytest.raises(chat.HTTPException) as exc:
@@ -646,7 +646,7 @@ def test_chat_stream_endpoint_reattaches_to_active_same_turn_without_reclaiming(
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -704,7 +704,7 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -838,7 +838,7 @@ def test_chat_stream_endpoint_persists_internal_extraction_result_without_stream
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -946,7 +946,7 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {"ask_gene_expression_specialist": "gene-expression"})
 
     async def _register_active_stream(
@@ -1059,7 +1059,7 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -1143,7 +1143,7 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {"ask_gene_extractor_specialist": "gene_extractor"})
     _patch_chat_impl(
         monkeypatch,
@@ -1245,7 +1245,7 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -1343,7 +1343,7 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -1461,7 +1461,7 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -1583,7 +1583,7 @@ def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -1647,7 +1647,7 @@ def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, capl
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -1708,7 +1708,7 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -1768,7 +1768,7 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
     durable_assistant = _assistant_record(
         session_id="session-replay",
@@ -1841,7 +1841,7 @@ def test_chat_stream_observer_recovery_does_not_start_missing_local_run(monkeypa
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
     _patch_chat_impl(
         monkeypatch,
@@ -1885,7 +1885,7 @@ def test_chat_stream_endpoint_terminal_replay_releases_lifecycle_before_next_tur
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -1980,7 +1980,7 @@ def test_chat_stream_endpoint_emits_session_gone_when_session_disappears_before_
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -2148,7 +2148,7 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 
     def _raise_tool_map():
         raise RuntimeError("agent registry unavailable")

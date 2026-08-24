@@ -38,7 +38,7 @@ def _configure_stream_mocks(
         "document_state",
         SimpleNamespace(get_document=lambda _uid: document_state_payload),
     )
-    patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_cognito", lambda _groups: [])
+    patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_provider_groups", lambda _groups: [])
     patch_chat_impl(monkeypatch, chat_modules, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map or {}))
 
     async def _register_active_stream(

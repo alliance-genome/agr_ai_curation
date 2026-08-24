@@ -52,14 +52,6 @@ def get_groups_from_provider_groups(provider_groups: List[str]) -> List[str]:
     return get_groups_for_provider_groups(provider_groups)
 
 
-def get_groups_from_cognito(cognito_groups: List[str]) -> List[str]:
-    """Backward-compatible wrapper for legacy call-sites."""
-    logger.warning(
-        "get_groups_from_cognito() is deprecated; use get_groups_from_provider_groups()."
-    )
-    return get_groups_from_provider_groups(cognito_groups)
-
-
 def get_available_groups() -> List[str]:
     """Return the valid group IDs from configured group definitions."""
     from src.lib.config.groups_loader import get_valid_group_ids

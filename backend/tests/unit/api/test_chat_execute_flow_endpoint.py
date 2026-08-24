@@ -434,7 +434,7 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
     _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
 
@@ -725,7 +725,7 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
 
 
 
-def test_execute_flow_endpoint_maps_real_mgi_cognito_groups_to_active_groups(monkeypatch):
+def test_execute_flow_endpoint_maps_real_mgi_provider_groups_to_active_groups(monkeypatch):
     from src.lib.config.groups_loader import (
         get_groups_for_provider_groups,
         load_groups,
@@ -747,7 +747,7 @@ def test_execute_flow_endpoint_maps_real_mgi_cognito_groups_to_active_groups(mon
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
     reset_cache()
     load_groups(CONFIG_PATH / "groups.yaml", force_reload=True)
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", get_groups_for_provider_groups)
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", get_groups_for_provider_groups)
 
     async def _fake_execute_flow(**kwargs):
         captured_execute_kwargs.update(kwargs)
@@ -1997,7 +1997,7 @@ def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypat
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 
     async def _deny_register(
         _session_id: str,
@@ -2046,7 +2046,7 @@ def test_execute_flow_endpoint_rejects_local_session_collision_before_register(m
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 
     async def _register_active_stream(
         _session_id: str,
@@ -2096,7 +2096,7 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(
@@ -2164,7 +2164,7 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
     _patch_chat_impl(
         monkeypatch,
         "_prepare_execute_flow_turn",
@@ -2413,7 +2413,7 @@ def test_execute_flow_endpoint_requires_user_sub(monkeypatch):
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
-    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(

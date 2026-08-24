@@ -77,16 +77,6 @@ class GroupDefinition:
     taxon: Optional[str] = None
     provider_groups: List[str] = field(default_factory=list)
 
-    @property
-    def cognito_groups(self) -> List[str]:
-        """Deprecated alias for backwards compatibility."""
-        return self.provider_groups
-
-    @cognito_groups.setter
-    def cognito_groups(self, value: List[str]) -> None:
-        """Deprecated alias for backwards compatibility."""
-        self.provider_groups = value
-
     @classmethod
     def from_yaml(cls, group_id: str, data: Dict[str, Any]) -> "GroupDefinition":
         """Create a GroupDefinition from parsed YAML data."""
@@ -281,32 +271,6 @@ def get_group_claim_key() -> str:
     if not _group_claim_key:
         raise RuntimeError("Group configuration not initialized with group claim key")
     return _group_claim_key
-
-
-def get_group_for_cognito_group(cognito_group: str) -> Optional[str]:
-    """Deprecated wrapper for backwards compatibility."""
-    logger.warning(
-        "get_group_for_cognito_group() is deprecated; use get_group_for_provider_group()."
-    )
-    return get_group_for_provider_group(cognito_group)
-
-
-def get_groups_for_cognito_groups(cognito_groups: List[str]) -> List[str]:
-    """Deprecated wrapper for backwards compatibility."""
-    logger.warning(
-        "get_groups_for_cognito_groups() is deprecated; use "
-        "get_groups_for_provider_groups()."
-    )
-    return get_groups_for_provider_groups(cognito_groups)
-
-
-def get_cognito_to_group_mapping() -> Dict[str, str]:
-    """Deprecated wrapper for backwards compatibility."""
-    logger.warning(
-        "get_cognito_to_group_mapping() is deprecated; use "
-        "get_provider_to_group_mapping()."
-    )
-    return get_provider_to_group_mapping()
 
 
 def is_initialized() -> bool:

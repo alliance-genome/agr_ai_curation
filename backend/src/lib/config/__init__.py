@@ -51,11 +51,8 @@ from .groups_loader import (
     get_provider_to_group_mapping,
     get_group_claim_key,
     get_identity_provider_type,
-    get_group_for_cognito_group,
-    get_groups_for_cognito_groups,
     list_groups,
     get_valid_group_ids,
-    get_cognito_to_group_mapping,
     is_initialized as is_groups_initialized,
     reset_cache as reset_groups_cache,
 )
@@ -145,11 +142,8 @@ __all__ = [
     "get_provider_to_group_mapping",
     "get_group_claim_key",
     "get_identity_provider_type",
-    "get_group_for_cognito_group",
-    "get_groups_for_cognito_groups",
     "list_groups",
     "get_valid_group_ids",
-    "get_cognito_to_group_mapping",
     "is_groups_initialized",
     "reset_groups_cache",
     # Connections loader

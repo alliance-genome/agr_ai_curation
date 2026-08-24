@@ -62,7 +62,7 @@ def _configure_stream_mocks(
         "document_state",
         SimpleNamespace(get_document=lambda _uid: document_state_payload),
     )
-    patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_cognito", lambda _g: [])
+    patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_provider_groups", lambda _g: [])
     patch_chat_impl(
         monkeypatch,
         chat_modules,
