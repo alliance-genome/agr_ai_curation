@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from src.lib.agent_studio import catalog_service
+from src.lib.config.tool_policy_defaults_loader import load_tool_policy_defaults
 from src.lib.prompts import assembly
 
 
@@ -47,16 +48,6 @@ def _runtime_prompt_content(path: Path) -> str:
     content = data.get("content")
     assert isinstance(content, str), f"{path.relative_to(REPO_ROOT)} has no runtime content field"
     return content
-
-
-def _tool_policy_description(path: Path, tool_id: str) -> str:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert isinstance(data, dict), f"{path.relative_to(REPO_ROOT)} did not parse as YAML mapping"
-    policy = data.get("tool_policies", {}).get(tool_id, {})
-    assert isinstance(policy, dict), f"{path.relative_to(REPO_ROOT)} has no {tool_id} policy"
-    description = policy.get("description")
-    assert isinstance(description, str), f"{path.relative_to(REPO_ROOT)} has no {tool_id} description"
-    return description
 
 
 def _effective_prompt_content(prompt_path: Path) -> str:
@@ -174,29 +165,26 @@ def test_gene_expression_prompt_contract_states_span_workspace_workflow():
 
 def test_record_evidence_tool_policy_surfaces_are_span_only():
     stale_hits: list[str] = []
-    for path in [
-        REPO_ROOT / "config/tool_policy_defaults.yaml",
-        REPO_ROOT / "packages/core/config/tool_policy_defaults.yaml",
+    policies = load_tool_policy_defaults(packages_dir=REPO_ROOT / "packages")
+    for tool_id in [
+        "search_document",
+        "read_chunk",
+        "read_section",
+        "read_subsection",
+        "record_evidence",
+        "list_recorded_evidence",
+        "get_recorded_evidence",
+        "attach_evidence_to_object",
+        "detach_evidence_from_object",
+        "discard_recorded_evidence",
+        "update_recorded_evidence_metadata",
     ]:
-        for tool_id in [
-            "search_document",
-            "read_chunk",
-            "read_section",
-            "read_subsection",
-            "record_evidence",
-            "list_recorded_evidence",
-            "get_recorded_evidence",
-            "attach_evidence_to_object",
-            "detach_evidence_from_object",
-            "discard_recorded_evidence",
-            "update_recorded_evidence_metadata",
-        ]:
-            content = _tool_policy_description(path, tool_id)
-            _assert_no_stale_phrases(
-                f"{path.relative_to(REPO_ROOT)}:{tool_id}",
-                content,
-                stale_hits,
-            )
+        policy = policies[tool_id]
+        _assert_no_stale_phrases(
+            f"{policy.source_label}:{tool_id}",
+            policy.description,
+            stale_hits,
+        )
 
     assert stale_hits == []
 
