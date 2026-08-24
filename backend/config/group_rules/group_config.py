@@ -25,9 +25,7 @@ Usage:
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Set, TYPE_CHECKING
-
-import yaml
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.models.sql.prompts import PromptTemplate
@@ -118,14 +116,6 @@ def get_groups_from_provider_groups(provider_groups: List[str]) -> List[str]:
     return get_groups_for_provider_groups(provider_groups)
 
 
-def get_groups_from_cognito(cognito_groups: List[str]) -> List[str]:
-    """Deprecated wrapper for backwards compatibility."""
-    logger.warning(
-        "get_groups_from_cognito() is deprecated; use get_groups_from_provider_groups()."
-    )
-    return get_groups_from_provider_groups(cognito_groups)
-
-
 def inject_group_rules(
     base_prompt: str,
     group_ids: List[str],
@@ -181,7 +171,7 @@ def inject_group_rules(
     logger.info('Injecting rules for groups: %s', normalized_groups)
 
     # Load from cache (no fallback - cache must be initialized)
-    from src.lib.prompts.cache import get_prompt_optional, is_initialized
+    from src.lib.prompts.cache import is_initialized
 
     if not is_initialized():
         raise RuntimeError(
