@@ -411,6 +411,33 @@ describe('AddLiteraturePage', () => {
     expect(screen.queryByText('late-identifier-result.pdf')).not.toBeInTheDocument();
   });
 
+  it('keeps newer identifier results when an older upload completes later', async () => {
+    const user = userEvent.setup();
+    let resolveUpload: ((documentId: string) => void) | undefined;
+    vi.mocked(uploadPdfDocument).mockImplementationOnce(() => new Promise<string>((resolve) => {
+      resolveUpload = resolve;
+    }));
+    render(<AddLiteraturePage />);
+
+    await user.click(screen.getByRole('tab', { name: /Upload PDFs/i }));
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const pdf = new File(['mock pdf'], 'late-upload.pdf', { type: 'application/pdf' });
+    fireEvent.change(fileInput, { target: { files: [pdf] } });
+
+    await user.click(screen.getByRole('tab', { name: /Identifiers/i }));
+    fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:23970418' } });
+    await user.click(screen.getByRole('button', { name: 'Resolve' }));
+    expect(await screen.findByText('paper-from-api.pdf')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveUpload?.('late-upload-document');
+    });
+
+    expect(screen.getByText('paper-from-api.pdf')).toBeInTheDocument();
+    expect(screen.queryByText('late-upload.pdf')).not.toBeInTheDocument();
+  });
+
   it('imports identifiers through the durable import endpoint', async () => {
     const user = userEvent.setup();
     render(<AddLiteraturePage />);

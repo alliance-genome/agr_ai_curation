@@ -194,7 +194,7 @@ const AddLiteraturePage: React.FC = () => {
     React.useState<DocumentSourceProviderMetadata | null>(null);
   const [providerPresentationError, setProviderPresentationError] =
     React.useState<string | null>(null);
-  const identifierRequestVersionRef = React.useRef(0);
+  const intakeGenerationRef = React.useRef(0);
   const jobsEventSourceRef = React.useRef<EventSource | null>(null);
   const jobsPollingRef = React.useRef<number | null>(null);
   const seenTerminalNotificationsRef = React.useRef<Set<string>>(new Set());
@@ -358,13 +358,13 @@ const AddLiteraturePage: React.FC = () => {
   }, [refreshJobs]);
 
   const handleResolve = React.useCallback(() => {
-    const requestVersion = identifierRequestVersionRef.current + 1;
-    identifierRequestVersionRef.current = requestVersion;
+    const requestVersion = intakeGenerationRef.current + 1;
+    intakeGenerationRef.current = requestVersion;
     setPendingAction('resolve');
     setIdentifierFeedback({ severity: 'info', message: 'Resolving identifiers…' });
     resolveSourceIdentifiers(identifiers)
       .then((payload) => {
-        if (identifierRequestVersionRef.current !== requestVersion) {
+        if (intakeGenerationRef.current !== requestVersion) {
           return;
         }
         const nextResults = payload.results;
@@ -378,7 +378,7 @@ const AddLiteraturePage: React.FC = () => {
         });
       })
       .catch((error) => {
-        if (identifierRequestVersionRef.current !== requestVersion) {
+        if (intakeGenerationRef.current !== requestVersion) {
           return;
         }
         const message = error instanceof Error ? error.message : 'Failed to resolve source identifiers.';
@@ -391,7 +391,7 @@ const AddLiteraturePage: React.FC = () => {
         setIdentifierFeedback({ severity: 'error', message });
       })
       .finally(() => {
-        if (identifierRequestVersionRef.current !== requestVersion) {
+        if (intakeGenerationRef.current !== requestVersion) {
           return;
         }
         setPendingAction(null);
@@ -399,13 +399,13 @@ const AddLiteraturePage: React.FC = () => {
   }, [identifiers]);
 
   const handleResolveAndImport = React.useCallback(() => {
-    const requestVersion = identifierRequestVersionRef.current + 1;
-    identifierRequestVersionRef.current = requestVersion;
+    const requestVersion = intakeGenerationRef.current + 1;
+    intakeGenerationRef.current = requestVersion;
     setPendingAction('import');
     setIdentifierFeedback({ severity: 'info', message: 'Resolving identifiers and starting import jobs…' });
     importSourceIdentifiers(identifiers)
       .then((payload) => {
-        if (identifierRequestVersionRef.current !== requestVersion) {
+        if (intakeGenerationRef.current !== requestVersion) {
           return;
         }
         const nextResults = payload.results;
@@ -422,7 +422,7 @@ const AddLiteraturePage: React.FC = () => {
         }
       })
       .catch((error) => {
-        if (identifierRequestVersionRef.current !== requestVersion) {
+        if (intakeGenerationRef.current !== requestVersion) {
           return;
         }
         const message = error instanceof Error ? error.message : 'Failed to import source identifiers.';
@@ -435,7 +435,7 @@ const AddLiteraturePage: React.FC = () => {
         setIdentifierFeedback({ severity: 'error', message });
       })
       .finally(() => {
-        if (identifierRequestVersionRef.current !== requestVersion) {
+        if (intakeGenerationRef.current !== requestVersion) {
           return;
         }
         setPendingAction(null);
@@ -447,17 +447,19 @@ const AddLiteraturePage: React.FC = () => {
     setResults([]);
     setPendingAction(null);
     setIdentifierFeedback(null);
-    identifierRequestVersionRef.current += 1;
+    intakeGenerationRef.current += 1;
     setUploadStatus('idle');
     setUploadMessage(null);
   }, []);
 
   const handleModeChange = React.useCallback((_event: React.SyntheticEvent, nextMode: ImportMode) => {
     setMode(nextMode);
-    identifierRequestVersionRef.current += 1;
+    intakeGenerationRef.current += 1;
     setPendingAction(null);
     setIdentifierFeedback(null);
     setResults([]);
+    setUploadStatus('idle');
+    setUploadMessage(null);
   }, []);
 
   const handleViewDocument = React.useCallback(
@@ -475,14 +477,15 @@ const AddLiteraturePage: React.FC = () => {
       setIdentifiers(event.target.value);
       setResults([]);
       setIdentifierFeedback(null);
-      identifierRequestVersionRef.current += 1;
+      intakeGenerationRef.current += 1;
       setPendingAction(null);
     },
     [],
   );
 
   const handlePdfFiles = React.useCallback(async (selectedFiles: File[]) => {
-    identifierRequestVersionRef.current += 1;
+    const intakeGeneration = intakeGenerationRef.current + 1;
+    intakeGenerationRef.current = intakeGeneration;
     setPendingAction(null);
     const validation = validatePdfSelection(selectedFiles, { allowMultiple: true });
 
@@ -527,6 +530,10 @@ const AddLiteraturePage: React.FC = () => {
           message,
         });
       }
+    }
+
+    if (intakeGenerationRef.current !== intakeGeneration) {
+      return;
     }
 
     setResults(uploadResults);
