@@ -136,21 +136,23 @@ describe('usePdfViewerUpload', () => {
       })
     })
 
-    expect(sessionStorage.getItem('document-loading')).toBe('true')
-    expect(loadStartListener).toHaveBeenCalledTimes(1)
-    expect(dispatchChatDocumentChanged).toHaveBeenCalledWith({
-      active: true,
-      document: {
-        id: 'doc-1',
-        filename: 'paper.pdf',
-      },
-    })
-    expect(result.current.uploadDialog).toMatchObject({
-      open: true,
-      stage: 'completed',
-      progress: 100,
-      message: 'Upload complete. Document loaded for chat.',
-      documentId: 'doc-1',
+    await waitFor(() => {
+      expect(sessionStorage.getItem('document-loading')).toBe('true')
+      expect(loadStartListener).toHaveBeenCalledTimes(1)
+      expect(dispatchChatDocumentChanged).toHaveBeenCalledWith({
+        active: true,
+        document: {
+          id: 'doc-1',
+          filename: 'paper.pdf',
+        },
+      })
+      expect(result.current.uploadDialog).toMatchObject({
+        open: true,
+        stage: 'completed',
+        progress: 100,
+        message: 'Upload complete. Document loaded for chat.',
+        documentId: 'doc-1',
+      })
     })
 
     window.removeEventListener('document-load-start', loadStartListener)
