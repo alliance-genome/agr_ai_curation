@@ -1089,26 +1089,6 @@ def get_layer2_force_tool_finalization_enabled() -> bool:
 
 # --- Tool list / page / section limits ---
 
-def get_section_read_max_chunks() -> int:
-    """Default max chunks a section-read tool returns (SECTION_READ_MAX_CHUNKS).
-
-    Shared by the backend and the isolated alliance package weaviate_search
-    tools (same env var honors both). Higher = more section content per read at
-    the cost of larger payloads/context. Default 30.
-    """
-    return max(1, _get_env_int_with_fallback("SECTION_READ_MAX_CHUNKS", 30))
-
-
-def get_section_snippet_radius_chars() -> int:
-    """Characters of context shown either side of a section snippet match (SECTION_SNIPPET_RADIUS_CHARS).
-
-    Shared by the backend and the isolated alliance package weaviate_search
-    tools (same env var honors both). Larger = more surrounding context per
-    snippet. Default 200.
-    """
-    return max(0, _get_env_int_with_fallback("SECTION_SNIPPET_RADIUS_CHARS", 200))
-
-
 def get_tool_page_default_limit() -> int:
     """Default page size for bounded-list tool pagination (TOOL_PAGE_DEFAULT_LIMIT).
 

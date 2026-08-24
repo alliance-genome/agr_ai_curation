@@ -60,10 +60,10 @@ async def test_search_tool_clamps_limit_and_handles_no_hits(monkeypatch):
     assert captured["document_id"] == "doc-12345678"
     assert captured["user_id"] == "user-1"
     assert captured["strategy"] == "hybrid"
-    assert captured["initial_limit"] == 50
-    assert captured["alpha"] == 0.4
-    assert captured["apply_mmr"] is False
-    assert captured["mmr_lambda"] == 0.5
+    assert captured["initial_limit"] == weaviate_search._SEARCH_INITIAL_LIMIT
+    assert captured["alpha"] == weaviate_search._SEARCH_HYBRID_ALPHA
+    assert captured["apply_mmr"] is weaviate_search._SEARCH_MMR_ENABLED
+    assert captured["mmr_lambda"] == weaviate_search._SEARCH_MMR_LAMBDA
     assert tracker.calls == ["search_document"]
 
 
