@@ -2,7 +2,7 @@
 
 import pytest
 
-import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search
+import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search  # pyright: ignore[reportMissingImports]
 from src.lib.document_sources.figure_metadata import (
     PROVIDER_FIGURE_METADATA_SECTION,
     PROVIDER_FIGURE_SUBSECTION_PREFIX,
