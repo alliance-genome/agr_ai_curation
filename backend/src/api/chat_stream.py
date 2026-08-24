@@ -44,7 +44,7 @@ async def chat_endpoint(
     document_id = active_doc.get("id") if active_doc else None
     document_name = active_doc.get("filename") if active_doc else None
 
-    # Cognito-backed deployments expose provider groups through this legacy claim.
+    # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
     effective_user_message = chat_message.message
@@ -445,7 +445,7 @@ async def chat_stream_endpoint(
         extra={"session_id": session_id, "user_id": user_id, "document_id": doc_info},
     )
 
-    # Cognito-backed deployments expose provider groups through this legacy claim.
+    # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
     if active_groups:

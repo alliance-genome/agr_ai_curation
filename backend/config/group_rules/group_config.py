@@ -24,96 +24,19 @@ Usage:
 """
 
 import logging
-from pathlib import Path
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
+
+from src.lib.group_rules import (
+    get_available_groups as get_available_groups,
+    get_groups_from_provider_groups as get_groups_from_provider_groups,
+    normalize_group_id,
+    validate_group_rules as validate_group_rules,
+)
 
 if TYPE_CHECKING:
     from src.models.sql.prompts import PromptTemplate
 
 logger = logging.getLogger(__name__)
-
-# Base path for group rules (same directory as this module)
-GROUP_RULES_PATH = Path(__file__).parent
-
-
-# Canonical group ID normalization
-# Handles various ways users might specify group IDs
-GROUP_ID_ALIASES: Dict[str, str] = {
-    # MGI variants
-    "mgi": "MGI",
-    "mouse": "MGI",
-    "mus": "MGI",
-    # FlyBase variants
-    "fb": "FB",
-    "flybase": "FB",
-    "fly": "FB",
-    "drosophila": "FB",
-    # WormBase variants
-    "wb": "WB",
-    "wormbase": "WB",
-    "worm": "WB",
-    "celegans": "WB",
-    # ZFIN variants
-    "zfin": "ZFIN",
-    "zebrafish": "ZFIN",
-    "danio": "ZFIN",
-    # RGD variants
-    "rgd": "RGD",
-    "rat": "RGD",
-    # SGD variants
-    "sgd": "SGD",
-    "yeast": "SGD",
-    "saccharomyces": "SGD",
-    # HGNC variants
-    "hgnc": "HGNC",
-    "human": "HGNC",
-}
-
-
-def normalize_group_id(group_id: str) -> str:
-    """
-    Normalize a group ID to its canonical form.
-
-    Args:
-        group_id: Group identifier (case-insensitive, supports aliases)
-
-    Returns:
-        Canonical group ID (e.g., "MGI", "FB", "WB")
-
-    Examples:
-        >>> normalize_group_id("mgi")
-        "MGI"
-        >>> normalize_group_id("flybase")
-        "FB"
-        >>> normalize_group_id("mouse")
-        "MGI"
-    """
-    normalized = group_id.strip().lower()
-    return GROUP_ID_ALIASES.get(normalized, group_id.upper())
-
-
-def get_groups_from_provider_groups(provider_groups: List[str]) -> List[str]:
-    """
-    Map identity provider group memberships to default organization group(s).
-
-    This function delegates to groups_loader which reads from config/groups.yaml.
-    The YAML file is the source of truth for provider-group mappings.
-
-    Args:
-        provider_groups: List of identity provider group names user belongs to
-
-    Returns:
-        List of canonical group IDs to use as defaults
-
-    Example:
-        >>> get_groups_from_provider_groups(["mgi-curators", "developers"])
-        ["MGI"]
-        >>> get_groups_from_provider_groups(["alliance-admins"])
-        []  # No default, user must choose
-    """
-    from src.lib.config.groups_loader import get_groups_for_provider_groups
-
-    return get_groups_for_provider_groups(provider_groups)
 
 
 def inject_group_rules(
@@ -246,49 +169,3 @@ Apply these rules when searching for and interpreting results.
         # Append to end of prompt
         logger.debug("No injection marker found, appending to end of prompt")
         return base_prompt + "\n" + injection_block
-
-
-def get_available_groups() -> List[str]:
-    """
-    Get list of all valid group IDs.
-
-    This function delegates to groups_loader which reads from config/groups.yaml.
-    The YAML file is the source of truth for available groups.
-
-    Returns:
-        List of group IDs defined in config/groups.yaml
-
-    Example:
-        >>> get_available_groups()
-        ["FB", "HGNC", "MGI", "RGD", "SGD", "WB", "ZFIN"]
-    """
-    from src.lib.config.groups_loader import get_valid_group_ids
-
-    return get_valid_group_ids()
-
-
-def validate_group_rules(group_id: str, component_type: str, component_name: str) -> bool:
-    """
-    Validate that rules exist for a specific group/component combination.
-
-    This function checks the prompt cache for group rules loaded from
-    manifest-declared package agent bundles and explicit runtime overrides.
-
-    Args:
-        group_id: Group identifier
-        component_type: Unused (kept for backwards compatibility)
-        component_name: Name of the agent or tool (maps to agent_name in cache)
-
-    Returns:
-        True if group rules exist in the prompt cache
-    """
-    from src.lib.prompts.cache import get_prompt_optional, is_initialized
-
-    if not is_initialized():
-        logger.warning("Prompt cache not initialized, cannot validate group rules")
-        return False
-
-    canonical_id = normalize_group_id(group_id)
-    prompt = get_prompt_optional(component_name, "group_rules", group_id=canonical_id)
-
-    return prompt is not None

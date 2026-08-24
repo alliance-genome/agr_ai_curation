@@ -60,7 +60,7 @@ def get_available_groups() -> List[str]:
 
 
 def validate_group_rules(group_id: str, component_type: str, component_name: str) -> bool:
-    """Check whether group rules exist in prompt cache for a component."""
+    """Check manifest-declared package agent bundles and explicit overrides."""
     del component_type
 
     from src.lib.prompts.cache import get_prompt_optional, is_initialized
