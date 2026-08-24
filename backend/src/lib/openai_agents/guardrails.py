@@ -491,16 +491,13 @@ def create_tool_required_output_guardrail(
 
     Example:
         tracker = ToolCallTracker()
-
-        # Wrap tools to track calls
-        search_tool = create_search_tool(doc_id, user_id)
-        read_tool = create_read_section_tool(doc_id, user_id)
-
-        # Create guardrail
+        # Agent Studio passes this tracker through ToolExecutionContext while
+        # resolving the configured tools.
+        tools = resolve_tools(requested_tool_ids, execution_context)
         tool_guardrail = create_tool_required_output_guardrail(tracker)
 
         agent = Agent(
-            tools=[search_tool, read_tool],
+            tools=tools,
             output_guardrails=[tool_guardrail],
         )
     """

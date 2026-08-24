@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from src.lib.packages.env_manager import PackageEnvironmentManager
 from . import SHIPPED_TOOLS_PACKAGE_EXPORTS, find_repo_root
@@ -481,6 +482,28 @@ def test_alliance_runtime_requirements_include_public_runtime_deps():
 
     assert "weaviate-client>=4.0" in requirements_text
     assert "grpcio>=1.72.0" in requirements_text
+
+
+def test_alliance_document_bindings_use_canonical_package_factories():
+    bindings_path = REPO_ROOT / "packages" / "alliance" / "tools" / "bindings.yaml"
+    bindings = yaml.safe_load(bindings_path.read_text(encoding="utf-8"))
+    tools_by_id = {tool["tool_id"]: tool for tool in bindings["tools"]}
+
+    expected_factories = {
+        "search_document": "create_search_document_tool",
+        "read_chunk": "create_read_chunk_tool",
+        "read_section": "create_read_section_tool",
+        "read_subsection": "create_read_subsection_tool",
+    }
+    for tool_id, factory_name in expected_factories.items():
+        binding = tools_by_id[tool_id]
+        assert binding["binding_kind"] == "context_factory"
+        assert binding["callable_factory"] == (
+            f"agr_ai_curation_alliance.tools.documents:{factory_name}"
+        )
+        assert binding["source_file"] == (
+            "python/src/agr_ai_curation_alliance/tools/documents.py"
+        )
 
 
 def test_alliance_agr_curation_module_preserves_group_mapping_load_failure(tmp_path):

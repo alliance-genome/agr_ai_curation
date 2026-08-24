@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
+import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search
 import src.lib.openai_agents.tools.evidence_workspace as evidence_workspace
 import src.lib.openai_agents.tools.record_evidence as record_evidence
-import src.lib.openai_agents.tools.weaviate_search as weaviate_search
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings

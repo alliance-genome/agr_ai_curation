@@ -34,6 +34,7 @@ def test_backend_openai_agent_tools_do_not_expose_alliance_curation_surface():
         "agr_curation.py",
         "agr_lookup.py",
         "search_helpers.py",
+        "weaviate_search.py",
     }
 
     present_files = {path.name for path in BACKEND_TOOLS_DIR.glob("*.py")}
@@ -47,6 +48,14 @@ def test_backend_tools_package_does_not_export_or_import_agr_curation_query():
 
     assert "agr_curation_query" not in init_source
     assert ".agr_curation" not in _direct_imports(init_path)
+
+
+def test_backend_tools_package_does_not_export_weaviate_search():
+    init_path = BACKEND_TOOLS_DIR / "__init__.py"
+    init_source = init_path.read_text(encoding="utf-8")
+
+    assert "create_search_tool" not in init_source
+    assert ".weaviate_search" not in _direct_imports(init_path)
 
 
 def test_alliance_curation_query_is_package_owned_through_bindings():
