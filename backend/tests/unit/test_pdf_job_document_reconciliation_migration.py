@@ -1,4 +1,4 @@
-"""Regression coverage for terminal PDF job document reconciliation."""
+"""Regression coverage for historical PDF job document reconciliation."""
 
 from __future__ import annotations
 
@@ -7,15 +7,11 @@ from pathlib import Path
 import sys
 import types
 
+import pytest
 import sqlalchemy as sa
 
 
-MIGRATION_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "alembic"
-    / "versions"
-    / "5e6f7a8b9c0d_reconcile_terminal_pdf_job_documents.py"
-)
+MIGRATION_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 
 
 class ConnectionOp:
@@ -26,11 +22,13 @@ class ConnectionOp:
         return self.connection.execute(statement)
 
 
-def _load_migration(monkeypatch):
+def _load_migration(monkeypatch, migration_filename: str):
     dummy_alembic = types.ModuleType("alembic")
     setattr(dummy_alembic, "op", object())
     monkeypatch.setitem(sys.modules, "alembic", dummy_alembic)
-    spec = spec_from_file_location("pdf_job_document_reconciliation", MIGRATION_PATH)
+    spec = spec_from_file_location(
+        "pdf_job_document_reconciliation", MIGRATION_DIR / migration_filename
+    )
     assert spec is not None
     assert spec.loader is not None
     module = module_from_spec(spec)
@@ -117,15 +115,35 @@ def _insert_job(
     )
 
 
-def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelled_job(
+@pytest.mark.parametrize(
+    ("migration_filename", "down_revision", "expected_pending_status"),
+    [
+        (
+            "5e6f7a8b9c0d_reconcile_terminal_pdf_job_documents.py",
+            "4d5e6f7a8b9c",
+            "pending",
+        ),
+        (
+            "6f7a8b9c0d1e_reconcile_pending_pdf_job_documents.py",
+            "5e6f7a8b9c0d",
+            "failed",
+        ),
+    ],
+)
+def test_upgrade_reconciles_eligible_documents_with_latest_failed_or_cancelled_job(
     monkeypatch,
+    migration_filename,
+    down_revision,
+    expected_pending_status,
 ):
-    module = _load_migration(monkeypatch)
+    module = _load_migration(monkeypatch, migration_filename)
+    assert module.down_revision == down_revision
     engine = sa.create_engine("sqlite://")
 
     with engine.begin() as connection:
         _create_schema(connection)
         cases = {
+            "pending-document": "pending",
             "latest-failed": "processing",
             "latest-cancelled": "embedding",
             "newer-active": "processing",
@@ -142,6 +160,14 @@ def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelle
                 error_message="preserve me" if document_id == "already-terminal" else None,
             )
 
+        _insert_job(
+            connection,
+            job_id="0",
+            document_id="pending-document",
+            status="failed",
+            created_at="2026-08-20T10:00:00Z",
+            message="Queued job never started",
+        )
         _insert_job(
             connection,
             job_id="1",
@@ -227,6 +253,13 @@ def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelle
             )
         }
 
+    assert rows["pending-document"].status == expected_pending_status
+    if expected_pending_status == "failed":
+        assert rows["pending-document"].error_message == "Queued job never started"
+        assert rows["pending-document"].processing_completed_at is not None
+    else:
+        assert rows["pending-document"].error_message is None
+        assert rows["pending-document"].processing_completed_at is None
     assert rows["latest-failed"].status == "failed"
     assert rows["latest-failed"].error_message == "Extraction failed"
     assert rows["latest-failed"].processing_completed_at is not None
@@ -241,5 +274,7 @@ def test_upgrade_reconciles_only_active_documents_with_latest_failed_or_cancelle
 
 
 def test_downgrade_is_noop(monkeypatch):
-    module = _load_migration(monkeypatch)
+    module = _load_migration(
+        monkeypatch, "6f7a8b9c0d1e_reconcile_pending_pdf_job_documents.py"
+    )
     module.downgrade()

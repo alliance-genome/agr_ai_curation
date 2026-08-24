@@ -14,8 +14,8 @@ from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 from src.schemas.pdf_jobs import PdfJobListResponse, PdfJobResponse
 from src.services.processing_status_policy import (
-    ACTIVE_PROCESSING_STATUSES,
     PDF_JOB_STATUS_TO_PROCESSING_STATUS,
+    TERMINAL_PROCESSING_STATUSES,
 )
 
 
@@ -125,7 +125,7 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     ).scalar_one_or_none()
     if document is None:
         return False
-    if document.status not in ACTIVE_PROCESSING_STATUSES:
+    if document.status in TERMINAL_PROCESSING_STATUSES:
         return False
 
     terminal_message = job.error_message or job.message
