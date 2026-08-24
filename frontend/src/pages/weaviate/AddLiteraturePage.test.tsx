@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, screen } from '../../test/test-utils';
 import { render, userEvent } from '../../test/test-utils';
 import { uploadPdfDocument } from '@/features/documents/pdfUploadFlow';
+import { emitGlobalToast } from '@/lib/globalNotifications';
 import AddLiteraturePage from './AddLiteraturePage';
 
 const mockNavigate = vi.fn();
@@ -429,6 +430,9 @@ describe('AddLiteraturePage', () => {
     fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:23970418' } });
     await user.click(screen.getByRole('button', { name: 'Resolve' }));
     expect(await screen.findByText('paper-from-api.pdf')).toBeInTheDocument();
+    const pdfJobsCallsBeforeUploadCompletion = vi.mocked(fetch).mock.calls.filter(
+      ([input]) => String(input).includes('/api/weaviate/pdf-jobs'),
+    ).length;
 
     await act(async () => {
       resolveUpload?.('late-upload-document');
@@ -436,6 +440,38 @@ describe('AddLiteraturePage', () => {
 
     expect(screen.getByText('paper-from-api.pdf')).toBeInTheDocument();
     expect(screen.queryByText('late-upload.pdf')).not.toBeInTheDocument();
+    expect(emitGlobalToast).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Your PDFs are processing in the background. You can safely navigate away.',
+    }));
+    expect(vi.mocked(fetch).mock.calls.filter(
+      ([input]) => String(input).includes('/api/weaviate/pdf-jobs'),
+    )).toHaveLength(pdfJobsCallsBeforeUploadCompletion + 1);
+  });
+
+  it('keeps an in-flight valid upload current after rejecting a newer invalid selection', async () => {
+    const user = userEvent.setup();
+    let resolveUpload: ((documentId: string) => void) | undefined;
+    vi.mocked(uploadPdfDocument).mockImplementationOnce(() => new Promise<string>((resolve) => {
+      resolveUpload = resolve;
+    }));
+    render(<AddLiteraturePage />);
+
+    await user.click(screen.getByRole('tab', { name: /Upload PDFs/i }));
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const pdf = new File(['mock pdf'], 'valid-upload.pdf', { type: 'application/pdf' });
+    fireEvent.change(fileInput, { target: { files: [pdf] } });
+
+    const invalidFile = new File(['plain text'], 'not-a-pdf.txt', { type: 'text/plain' });
+    fireEvent.change(fileInput, { target: { files: [invalidFile] } });
+    expect(await screen.findByText('Please select PDF files only.')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveUpload?.('valid-upload-document');
+    });
+
+    expect(await screen.findByText('Queued 1 PDF for background processing.')).toBeInTheDocument();
+    expect(screen.getAllByText('valid-upload.pdf')).toHaveLength(2);
   });
 
   it('imports identifiers through the durable import endpoint', async () => {

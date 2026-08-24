@@ -484,9 +484,6 @@ const AddLiteraturePage: React.FC = () => {
   );
 
   const handlePdfFiles = React.useCallback(async (selectedFiles: File[]) => {
-    const intakeGeneration = intakeGenerationRef.current + 1;
-    intakeGenerationRef.current = intakeGeneration;
-    setPendingAction(null);
     const validation = validatePdfSelection(selectedFiles, { allowMultiple: true });
 
     if (!validation.ok) {
@@ -495,6 +492,9 @@ const AddLiteraturePage: React.FC = () => {
       return;
     }
 
+    const intakeGeneration = intakeGenerationRef.current + 1;
+    intakeGenerationRef.current = intakeGeneration;
+    setPendingAction(null);
     setUploadStatus('uploading');
     setUploadMessage(`Uploading ${validation.files.length} PDF${validation.files.length === 1 ? '' : 's'}...`);
 
@@ -532,12 +532,6 @@ const AddLiteraturePage: React.FC = () => {
       }
     }
 
-    if (intakeGenerationRef.current !== intakeGeneration) {
-      return;
-    }
-
-    setResults(uploadResults);
-
     if (succeeded > 0) {
       emitGlobalToast({
         message: 'Your PDFs are processing in the background. You can safely navigate away.',
@@ -547,6 +541,12 @@ const AddLiteraturePage: React.FC = () => {
       });
       void refreshJobs(true);
     }
+
+    if (intakeGenerationRef.current !== intakeGeneration) {
+      return;
+    }
+
+    setResults(uploadResults);
 
     if (failures.length > 0) {
       setUploadStatus(succeeded > 0 ? 'complete' : 'error');
