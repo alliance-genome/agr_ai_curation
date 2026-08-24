@@ -35,6 +35,7 @@ def test_get_document_text_uses_lean_document_result(monkeypatch):
     assert result.exit_code == 0
     assert "Document Details:" in result.output
     assert "Filename: paper.pdf" in result.output
+    assert "Total Chunks: 3" in result.output
     assert "Embeddings:" not in result.output
     assert "Embedded Chunks:" not in result.output
     get_document.assert_awaited_once_with("user-1", "document-1")

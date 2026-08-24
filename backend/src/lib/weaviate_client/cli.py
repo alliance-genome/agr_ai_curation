@@ -127,6 +127,7 @@ def get_document_cmd(document_id: str, user_id: str, show_chunks: bool, output_f
             click.echo(f"Size: {doc.get('fileSize', 0):,} bytes")
             click.echo(f"Processing Status: {doc.get('processingStatus', 'N/A')}")
             click.echo(f"Embedding Status: {doc.get('embeddingStatus', 'N/A')}")
+            click.echo(f"Total Chunks: {result['total_chunks']}")
             click.echo(f"Created: {doc.get('creationDate', 'N/A')}")
             click.echo(f"Last Accessed: {doc.get('lastAccessedDate', 'N/A')}")
 
