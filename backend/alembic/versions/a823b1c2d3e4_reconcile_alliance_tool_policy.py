@@ -53,7 +53,12 @@ def _runtime_packages_dir() -> Path:
     if configured:
         return Path(configured).expanduser().resolve(strict=False)
 
-    runtime_root = Path(os.getenv("AGR_RUNTIME_ROOT", "/runtime"))
+    runtime_root_value = os.getenv("AGR_RUNTIME_ROOT")
+    runtime_root = (
+        Path(runtime_root_value)
+        if runtime_root_value and runtime_root_value.strip()
+        else DEFAULT_RUNTIME_ROOT
+    )
     runtime_packages = (runtime_root / "packages").expanduser().resolve(strict=False)
     if runtime_packages.exists():
         return runtime_packages
@@ -181,13 +186,16 @@ def _installed_tool_binding_ids(
 
     disabled_package_ids = _disabled_package_ids(overrides_path)
     installed_tool_ids: set[str] = set()
+    incompatible_package_ids: list[str] = []
 
     for package_dir in package_dirs:
         manifest_path = package_dir / "package.yaml"
         manifest = _load_yaml_mapping(manifest_path)
-        if str(manifest.get("package_id", "")).strip() in disabled_package_ids:
+        package_id = str(manifest.get("package_id", "")).strip()
+        if package_id in disabled_package_ids:
             continue
         if not _manifest_is_runtime_compatible(manifest):
+            incompatible_package_ids.append(package_id or package_dir.name)
             continue
         exports = manifest.get("exports", [])
         if not isinstance(exports, list):
@@ -205,6 +213,15 @@ def _installed_tool_binding_ids(
                 if isinstance(binding, dict)
                 and str(binding.get("tool_id", "")).strip()
             )
+    if incompatible_package_ids:
+        raise RuntimeError(
+            "Refusing to reconcile tool policies because runtime packages were "
+            "rejected as incompatible: "
+            f"{', '.join(sorted(incompatible_package_ids))} "
+            f"(APP_VERSION={os.getenv('APP_VERSION', DEFAULT_APP_VERSION)}, "
+            "AGR_RUNTIME_PACKAGE_API_VERSION="
+            f"{os.getenv('AGR_RUNTIME_PACKAGE_API_VERSION', DEFAULT_PACKAGE_API_VERSION)})"
+        )
     return installed_tool_ids
 
 

@@ -37,12 +37,39 @@ def test_binding_discovery_tracks_installed_runtime_packages(monkeypatch):
     assert module.ALLIANCE_OWNED_TOOL_IDS <= installed
 
     monkeypatch.setenv("APP_VERSION", "3.0.0")
-    assert module._installed_tool_binding_ids(REPO_PACKAGES_DIR) == set()
+    with pytest.raises(RuntimeError, match="rejected as incompatible"):
+        module._installed_tool_binding_ids(REPO_PACKAGES_DIR)
+
+
+def test_binding_discovery_matches_runtime_registry(monkeypatch, tmp_path):
+    from src.lib.packages.tool_registry import load_tool_registry
+
+    module = _load_migration()
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text(
+        "overrides_api_version: 1.0.0\ndisabled_packages: []\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APP_VERSION", "1.5.0")
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGE_API_VERSION", "1.0.0")
+
+    migration_bindings = module._installed_tool_binding_ids(
+        REPO_PACKAGES_DIR,
+        overrides_path,
+    )
+    runtime_bindings = load_tool_registry(
+        REPO_PACKAGES_DIR,
+        overrides_path=overrides_path,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    ).bindings_by_tool_id
+
+    assert migration_bindings == set(runtime_bindings)
 
 
 @pytest.mark.parametrize("packages_dir_exists", [False, True])
 def test_binding_discovery_rejects_undiscoverable_packages(
-    monkeypatch, tmp_path, packages_dir_exists
+    tmp_path, packages_dir_exists
 ):
     module = _load_migration()
     packages_dir = tmp_path / "packages"
@@ -74,6 +101,20 @@ disabled_packages:
 
     installed = module._installed_tool_binding_ids(REPO_PACKAGES_DIR)
     assert module.ALLIANCE_OWNED_TOOL_IDS.isdisjoint(installed)
+
+
+def test_runtime_packages_dir_uses_default_root_for_blank_override(
+    monkeypatch, tmp_path
+):
+    module = _load_migration()
+    runtime_root = tmp_path / "runtime"
+    packages_dir = runtime_root / "packages"
+    packages_dir.mkdir(parents=True)
+    monkeypatch.setattr(module, "DEFAULT_RUNTIME_ROOT", runtime_root)
+    monkeypatch.delenv("AGR_RUNTIME_PACKAGES_DIR", raising=False)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", "  ")
+
+    assert module._runtime_packages_dir() == packages_dir.resolve()
 
 
 def test_upgrade_deletes_all_stale_moved_policies(monkeypatch):

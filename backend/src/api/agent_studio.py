@@ -101,10 +101,7 @@ from src.lib.agent_studio.custom_agent_service import (
     reject_locked_prompt_markers,
     set_custom_agent_visibility,
 )
-from src.lib.agent_studio.catalog_service import (
-    get_agent_by_id,
-    get_agent_metadata,
-)
+from src.lib.agent_studio.catalog_service import get_agent_by_id, get_agent_metadata
 from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.agent_studio.tool_idea_service import (
