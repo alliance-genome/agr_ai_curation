@@ -96,12 +96,8 @@ def _resolve_search_paths(
     return get_default_agent_search_paths(), True
 
 
-def _resolve_search_path(
-    search_path: Path | os.PathLike[str] | None,
-) -> tuple[Path, bool]:
-    """Backward-compatible single-path resolver used by older tests/callers."""
-    resolved_paths, used_default_search_paths = _resolve_search_paths(search_path)
-    return resolved_paths[0], used_default_search_paths
+# The single-path compatibility helper was removed after ALL-787; layered
+# package/config search through _resolve_search_paths is canonical.
 
 
 @dataclass(frozen=True)

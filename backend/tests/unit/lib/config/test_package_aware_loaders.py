@@ -536,17 +536,20 @@ def test_fallback_packages_dir_ignores_env_override(monkeypatch, tmp_path):
     assert agent_sources._get_fallback_packages_dir() == expected_packages_dir
 
 
-def test_resolve_search_path_ignores_retired_env_override(monkeypatch, tmp_path):
+def test_resolve_search_paths_ignore_retired_env_override(monkeypatch, tmp_path):
     packages_dir = tmp_path / "runtime-packages"
+    runtime_config_dir = tmp_path / "runtime-config"
+    runtime_agents_dir = runtime_config_dir / "agents"
     packages_dir.mkdir()
+    runtime_agents_dir.mkdir(parents=True)
     monkeypatch.setenv("AGENTS_CONFIG_PATH", "/tmp/custom-agents")
     monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
-    monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: tmp_path / "runtime-config")
+    monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: runtime_config_dir)
 
-    resolved_path, used_default_search_path = agent_sources._resolve_search_path(None)
+    resolved_paths, used_default_search_paths = agent_sources._resolve_search_paths(None)
 
-    assert resolved_path == packages_dir
-    assert used_default_search_path is True
+    assert resolved_paths == (packages_dir, runtime_agents_dir)
+    assert used_default_search_paths is True
 
 
 def test_discover_agent_schemas_logs_resolved_default_path(monkeypatch, caplog, tmp_path):
