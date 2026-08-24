@@ -20,3 +20,12 @@ tool_policies:
     config:
       validation_attachment_policy:
         reference_lookup_capable: true
+
+  alliance_api_call:
+    display_name: Alliance API
+    description: Query Alliance public API endpoints.
+    category: External API
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}

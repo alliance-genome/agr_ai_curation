@@ -13,17 +13,18 @@ import pytest  # type: ignore[reportMissingImports]
 import yaml
 import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 import src.lib.domain_packs.registry as domain_pack_registry_module
-from src.lib.agent_studio import runtime_validation
-from src.lib.agent_studio import flow_tools
+from src.lib.agent_studio import catalog_service, flow_tools, runtime_validation
 from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import (
     agent_loader,
     agent_sources,
     models_loader,
+    package_default_sources,
     prompt_loader,
     providers_loader,
     schema_discovery,
 )
+from src.lib.config.tool_policy_defaults_loader import load_tool_policy_defaults
 from src.lib.curation_workspace.adapter_registry import build_curation_adapter_registry
 from src.lib.curation_workspace.export_adapters.registry import ExportAdapterRegistry
 from src.lib.document_sources.registry import (
@@ -119,6 +120,8 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Package-aware forward reconciliation for the Alliance-owned tool policy.
+    Path("backend/tests/unit/test_alliance_tool_policy_reconciliation_migration.py"),
     # Bundled Alliance package contracts and prompt/tool policy coverage.
     Path("backend/tests/integration/persistence/test_validator_agent_identity_migration.py"),
     Path("backend/tests/unit/test_config_loaders.py"),
@@ -371,6 +374,12 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
     monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
     monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: tmp_path / "runtime-config")
+    monkeypatch.setattr(package_default_sources, "_find_project_root", lambda: None)
+    monkeypatch.setattr(
+        package_default_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "runtime-config",
+    )
 
     package_registry = load_package_registry(
         packages_dir,
@@ -426,6 +435,26 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     demo_tool_binding = tool_registry.get("demo_search_tool")
     assert demo_tool_binding is not None
     assert demo_tool_binding.source.package_id == "org.custom"
+
+    tool_policies = load_tool_policy_defaults(packages_dir=packages_dir)
+    assert "alliance_api_call" not in tool_policies
+    assert all(
+        "alliance_api_call" not in str(value)
+        for policy in tool_policies.values()
+        for value in (policy.tool_key, policy.display_name, policy.description, policy.config)
+    )
+    catalog_service.clear_package_tool_runtime_caches()
+    attachable_catalog = [
+        policy
+        for policy in catalog_service.filter_tool_policies_for_installed_bindings(
+            list(tool_policies.values())
+        )
+        if policy.allow_attach
+    ]
+    assert {
+        policy.tool_key for policy in attachable_catalog
+    } <= set(tool_registry.bindings_by_tool_id)
+    catalog_service.clear_package_tool_runtime_caches()
 
     document_source_catalog = load_document_source_provider_catalog(packages_dir)
     assert set(document_source_catalog.registrations_by_provider_id) == {

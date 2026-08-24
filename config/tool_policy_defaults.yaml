@@ -134,15 +134,6 @@ tool_policies:
     allow_execute: true
     config: {}
 
-  alliance_api_call:
-    display_name: Alliance API
-    description: Query Alliance public API endpoints.
-    category: External API
-    curator_visible: true
-    allow_attach: true
-    allow_execute: true
-    config: {}
-
   explain_formatter_capabilities:
     display_name: Explain Formatter Capabilities
     description: Explain the bound formatter workflow and available saved row sources.

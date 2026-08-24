@@ -327,6 +327,17 @@ def test_bundled_alliance_owns_agr_curation_tool_policy(monkeypatch):
     assert "package default 'agr.alliance'" in policy.source_label
 
 
+def test_bundled_alliance_owns_alliance_api_tool_policy(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    policies = load_tool_policy_defaults(packages_dir=REPO_PACKAGES_DIR)
+
+    policy = policies["alliance_api_call"]
+    assert policy.display_name == "Alliance API"
+    assert policy.source_label is not None
+    assert "package default 'agr.alliance'" in policy.source_label
+
+
 def test_bundled_core_tool_policy_omits_raw_file_savers_and_registers_formatter_tools(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 

@@ -964,6 +964,20 @@ def get_tool_registry() -> Dict[str, Dict[str, Any]]:
     return TOOL_REGISTRY.copy()
 
 
+def has_tool_binding(tool_id: str) -> bool:
+    """Return whether a tool ID resolves to an installed runtime binding."""
+    return _canonicalize_tool_id(str(tool_id).strip()) in TOOL_BINDINGS
+
+
+def filter_tool_policies_for_installed_bindings(policies: List[Any]) -> List[Any]:
+    """Hide attachable policy rows whose executable binding is not installed."""
+    return [
+        policy
+        for policy in policies
+        if not policy.allow_attach or has_tool_binding(policy.tool_key)
+    ]
+
+
 # =============================================================================
 # Method-Level Tool Entries
 # =============================================================================
