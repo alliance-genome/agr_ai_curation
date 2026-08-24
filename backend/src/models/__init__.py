@@ -24,13 +24,13 @@ from .pipeline import (
     StageResult,
     ProcessingError
 )
+# ALL-789 made flat DocumentResponse canonical; the retired rich family is gone.
 from .api_schemas import (
     DocumentFilter,
     PaginationParams,
     DocumentListRequest,
     DocumentListResponse,
     PaginationInfo,
-    # ALL-789 made the flat DocumentResponse the canonical detail response.
     DocumentResponse,
     ChunkListResponse,
     OperationResult,
@@ -76,7 +76,6 @@ __all__ = [
     'DocumentListRequest',
     'DocumentListResponse',
     'PaginationInfo',
-    # The retired rich detail response family was removed after ALL-789.
     'DocumentResponse',
     'ChunkListResponse',
     'OperationResult',

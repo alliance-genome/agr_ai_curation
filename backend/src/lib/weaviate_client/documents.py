@@ -2,7 +2,6 @@
 
 import logging
 import time
-from collections import Counter
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from uuid import UUID
@@ -507,21 +506,6 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
             )
 
             chunks = []
-            embedding_models = Counter()
-            latest_embedding_ts: Optional[datetime] = None
-
-            def _parse_timestamp(raw_ts: Any) -> Optional[datetime]:
-                if isinstance(raw_ts, datetime):
-                    return raw_ts
-                if isinstance(raw_ts, str) and raw_ts:
-                    try:
-                        if raw_ts.endswith('Z'):
-                            raw_ts = raw_ts[:-1] + '+00:00'
-                        return datetime.fromisoformat(raw_ts)
-                    except ValueError:
-                        return None
-                return None
-
             for chunk_obj in chunks_response.objects:
                 chunk_props = chunk_obj.properties
 
@@ -550,34 +534,9 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
                     "embedding_model": chunk_props.get("embeddingModel"),
                     "embedding_timestamp": chunk_props.get("embeddingTimestamp")
                 }
-                if chunk.get("embedding_model"):
-                    embedding_models.update([chunk["embedding_model"]])
-
-                ts = _parse_timestamp(chunk.get("embedding_timestamp"))
-                if ts and (latest_embedding_ts is None or ts > latest_embedding_ts):
-                    latest_embedding_ts = ts
                 chunks.append(chunk)
 
             total_chunks = document.get("chunk_count", len(chunks)) or 0
-            embedded_chunks = document.get("vector_count", 0) or 0
-            coverage = None
-            if total_chunks:
-                coverage = round((embedded_chunks / total_chunks) * 100, 2)
-
-            embedding_summary = {
-                "total_chunks": total_chunks,
-                "embedded_chunks": embedded_chunks,
-                "coverage_percentage": coverage,
-                "last_embedded_at": latest_embedding_ts.isoformat() if latest_embedding_ts else None,
-                "primary_model": None,
-                "models": [
-                    {"model": model, "chunk_count": count}
-                    for model, count in embedding_models.most_common()
-                ],
-            }
-
-            if embedding_summary["models"]:
-                embedding_summary["primary_model"] = embedding_summary["models"][0]["model"]
 
             schema_version = (
                 document.get("metadata", {}).get("schema_version")
@@ -588,16 +547,7 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
             return {
                 "document": document,
                 "chunks": chunks,
-                "chunks_preview": chunks,
                 "total_chunks": total_chunks,
-                "embedding_summary": embedding_summary,
-                "embeddings": {
-                    "totalChunks": total_chunks,
-                    "embeddedChunks": embedded_chunks,
-                    "lastEmbeddedAt": embedding_summary["last_embedded_at"],
-                    "primaryModel": embedding_summary["primary_model"],
-                    "coveragePercentage": coverage,
-                },
                 "schema_version": schema_version or "1.0.0",
             }
 

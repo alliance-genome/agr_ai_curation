@@ -452,12 +452,12 @@ async def test_get_document_handles_no_chunks_after_uuid_filter_failure():
     assert result["document"]["id"] == doc_uuid
     assert result["chunks"] == []
     assert result["total_chunks"] == 0
-    assert result["embedding_summary"]["coverage_percentage"] is None
     assert result["schema_version"] == "1.2.3"
+    assert set(result) == {"document", "chunks", "total_chunks", "schema_version"}
 
 
 @pytest.mark.asyncio
-async def test_get_document_parses_metadata_and_embedding_summary_fields():
+async def test_get_document_parses_chunk_metadata_without_retired_detail_fields():
     doc_uuid = "00000000-0000-0000-0000-000000000998"
     chunk_uuid_1 = "00000000-0000-0000-0000-000000000111"
     chunk_uuid_2 = "00000000-0000-0000-0000-000000000222"
@@ -533,7 +533,5 @@ async def test_get_document_parses_metadata_and_embedding_summary_fields():
     assert result["chunks"][0]["document_id"] == doc_uuid
     assert result["chunks"][0]["metadata"] == {"section": "intro"}
     assert result["chunks"][1]["metadata"] is None
-    assert result["embedding_summary"]["primary_model"] == "text-embedding-3-large"
-    assert result["embedding_summary"]["last_embedded_at"] == "2026-02-01T00:00:00+00:00"
-    assert result["embedding_summary"]["coverage_percentage"] == 50.0
     assert result["schema_version"] == "2.4.0"
+    assert set(result) == {"document", "chunks", "total_chunks", "schema_version"}
