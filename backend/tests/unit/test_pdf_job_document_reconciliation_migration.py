@@ -14,7 +14,7 @@ MIGRATION_PATH = (
     Path(__file__).resolve().parents[2]
     / "alembic"
     / "versions"
-    / "5e6f7a8b9c0d_reconcile_terminal_pdf_job_documents.py"
+    / "6f7a8b9c0d1e_reconcile_pending_pdf_job_documents.py"
 )
 
 
@@ -121,6 +121,7 @@ def test_upgrade_reconciles_only_nonterminal_documents_with_latest_failed_or_can
     monkeypatch,
 ):
     module = _load_migration(monkeypatch)
+    assert module.down_revision == "5e6f7a8b9c0d"
     engine = sa.create_engine("sqlite://")
 
     with engine.begin() as connection:

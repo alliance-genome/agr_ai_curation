@@ -111,10 +111,10 @@ def test_get_job_by_id_returns_none_when_missing(monkeypatch):
 
 @pytest.mark.parametrize("reader", ["get_job", "get_job_by_id", "get_latest_job_for_document"])
 @pytest.mark.parametrize(
-    ("job_status", "document_status"),
+    ("job_status", "document_status", "expected_stage"),
     [
-        (PdfJobStatus.RUNNING.value, "processing"),
-        (PdfJobStatus.PENDING.value, "pending"),
+        (PdfJobStatus.RUNNING.value, "processing", "parsing"),
+        (PdfJobStatus.PENDING.value, "pending", "pending"),
     ],
 )
 def test_single_job_readers_reconcile_stale_nonterminal_job(
@@ -122,6 +122,7 @@ def test_single_job_readers_reconcile_stale_nonterminal_job(
     reader,
     job_status,
     document_status,
+    expected_stage,
 ):
     job = _build_job(status=job_status)
     if job_status == PdfJobStatus.PENDING.value:
@@ -146,7 +147,7 @@ def test_single_job_readers_reconcile_stale_nonterminal_job(
     assert response is not None
     assert response.job_id == str(job.id)
     assert response.status == PdfJobStatus.FAILED.value
-    assert response.current_stage == job.current_stage
+    assert response.current_stage == expected_stage
     assert response.error_message == (
         "Job marked failed automatically after stale inactivity; "
         "likely interrupted before terminal state update"
