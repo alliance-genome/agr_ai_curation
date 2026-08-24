@@ -85,7 +85,7 @@ from ..schemas.curation_workspace import (
 )
 from ..schemas.flows import ExecuteFlowRequest
 from ..services.user_service import set_global_user_from_cognito
-from ..lib.group_rules import get_groups_from_cognito
+from ..lib.group_rules import get_groups_from_provider_groups
 from ..lib.http_errors import log_exception, raise_sanitized_http_exception
 from ..lib.redis_client import (
     set_cancel_signal,

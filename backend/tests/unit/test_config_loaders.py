@@ -1368,37 +1368,37 @@ class TestGroupsLoader:
         assert "flybase-curators" in fb.provider_groups
         assert "flybase-admins" in fb.provider_groups
 
-    def test_cognito_to_group_mapping(self):
-        """Test mapping Cognito groups to internal group IDs."""
+    def test_provider_to_group_mapping(self):
+        """Test mapping provider groups to internal group IDs."""
         from src.lib.config.groups_loader import (
             load_groups,
-            get_group_for_cognito_group,
+            get_group_for_provider_group,
         )
 
         groups_yaml = CONFIG_PATH / "groups.yaml"
         load_groups(groups_yaml)
 
         # Test known mappings
-        assert get_group_for_cognito_group("flybase-curators") == "FB"
-        assert get_group_for_cognito_group("wormbase-curators") == "WB"
-        assert get_group_for_cognito_group("mgi-curators") == "MGI"
+        assert get_group_for_provider_group("flybase-curators") == "FB"
+        assert get_group_for_provider_group("wormbase-curators") == "WB"
+        assert get_group_for_provider_group("mgi-curators") == "MGI"
 
         # Test unknown mapping
-        assert get_group_for_cognito_group("unknown-group") is None
+        assert get_group_for_provider_group("unknown-group") is None
 
-    def test_get_groups_for_cognito_groups(self):
-        """Test mapping multiple Cognito groups."""
+    def test_get_groups_for_provider_groups(self):
+        """Test mapping multiple provider groups."""
         from src.lib.config.groups_loader import (
             load_groups,
-            get_groups_for_cognito_groups,
+            get_groups_for_provider_groups,
         )
 
         groups_yaml = CONFIG_PATH / "groups.yaml"
         load_groups(groups_yaml)
 
-        # User in multiple Cognito groups
-        cognito_groups = ["flybase-curators", "developers", "wormbase-admins"]
-        group_ids = get_groups_for_cognito_groups(cognito_groups)
+        # User in multiple provider groups
+        provider_groups = ["flybase-curators", "developers", "wormbase-admins"]
+        group_ids = get_groups_for_provider_groups(provider_groups)
 
         assert "FB" in group_ids
         assert "WB" in group_ids

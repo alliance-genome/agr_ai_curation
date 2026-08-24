@@ -44,10 +44,9 @@ async def chat_endpoint(
     document_id = active_doc.get("id") if active_doc else None
     document_name = active_doc.get("filename") if active_doc else None
 
-    # Extract active groups from user's Cognito groups for prompt injection
-    # Note: Cognito uses "cognito:groups" as the claim key
-    cognito_groups = user.get("cognito:groups", [])
-    active_groups = get_groups_from_cognito(cognito_groups)
+    # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
+    provider_groups = user.get("cognito:groups", [])
+    active_groups = get_groups_from_provider_groups(provider_groups)
     effective_user_message = chat_message.message
     turn_claim_key: Optional[str] = None
     turn_claim_token: Optional[str] = None
@@ -66,9 +65,9 @@ async def chat_endpoint(
 
     if active_groups:
         logger.info(
-            "User has active groups: %s (from Cognito groups: %s)",
+            "User has active groups: %s (from provider groups: %s)",
             active_groups,
-            cognito_groups,
+            provider_groups,
             extra={"session_id": session_id, "user_id": user_id},
         )
 
@@ -446,15 +445,14 @@ async def chat_stream_endpoint(
         extra={"session_id": session_id, "user_id": user_id, "document_id": doc_info},
     )
 
-    # Extract active groups from user's Cognito groups for prompt injection
-    # Note: Cognito uses "cognito:groups" as the claim key
-    cognito_groups = user.get("cognito:groups", [])
-    active_groups = get_groups_from_cognito(cognito_groups)
+    # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
+    provider_groups = user.get("cognito:groups", [])
+    active_groups = get_groups_from_provider_groups(provider_groups)
     if active_groups:
         logger.info(
-            "User has active groups: %s (from Cognito groups: %s)",
+            "User has active groups: %s (from provider groups: %s)",
             active_groups,
-            cognito_groups,
+            provider_groups,
             extra={"session_id": session_id, "user_id": user_id},
         )
 

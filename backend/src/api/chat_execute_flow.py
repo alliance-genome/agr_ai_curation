@@ -749,8 +749,8 @@ async def execute_flow_endpoint(
     user_id = _require_user_sub(user)
     history_user_message = (request.user_query or "").strip() or f"Run flow '{flow.name}'"
 
-    cognito_groups = user.get("cognito:groups", [])
-    active_groups = get_groups_from_cognito(cognito_groups)
+    provider_groups = user.get("cognito:groups", [])
+    active_groups = get_groups_from_provider_groups(provider_groups)
     if active_groups:
         logger.info(
             "User has active groups: %s",
