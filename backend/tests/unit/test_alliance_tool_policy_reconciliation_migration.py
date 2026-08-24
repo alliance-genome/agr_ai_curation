@@ -20,7 +20,9 @@ REPO_PACKAGES_DIR = BACKEND_DIR.parent / "packages"
 
 
 def _load_migration():
-    spec = spec_from_file_location("alliance_tool_policy_reconciliation", MIGRATION_PATH)
+    spec = spec_from_file_location(
+        "alliance_tool_policy_reconciliation", MIGRATION_PATH
+    )
     assert spec is not None
     assert spec.loader is not None
     module = module_from_spec(spec)
@@ -41,6 +43,21 @@ def test_binding_discovery_tracks_installed_runtime_packages(monkeypatch):
         module._installed_tool_binding_ids(REPO_PACKAGES_DIR)
 
 
+def test_unrelated_incompatible_package_does_not_block_reconciliation(
+    monkeypatch,
+):
+    module = _load_migration()
+    monkeypatch.setattr(
+        module,
+        "_manifest_is_runtime_compatible",
+        lambda manifest: manifest.get("package_id") != "agr.core",
+    )
+
+    installed = module._installed_tool_binding_ids(REPO_PACKAGES_DIR)
+
+    assert module.ALLIANCE_OWNED_TOOL_IDS <= installed
+
+
 def test_binding_discovery_matches_runtime_registry(monkeypatch, tmp_path):
     from src.lib.packages.tool_registry import load_tool_registry
 
@@ -53,10 +70,7 @@ def test_binding_discovery_matches_runtime_registry(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_VERSION", "1.5.0")
     monkeypatch.setenv("AGR_RUNTIME_PACKAGE_API_VERSION", "1.0.0")
 
-    migration_bindings = module._installed_tool_binding_ids(
-        REPO_PACKAGES_DIR,
-        overrides_path,
-    )
+    migration_bindings = module._installed_tool_binding_ids(REPO_PACKAGES_DIR)
     runtime_bindings = load_tool_registry(
         REPO_PACKAGES_DIR,
         overrides_path=overrides_path,
@@ -85,7 +99,9 @@ def test_binding_discovery_rejects_undiscoverable_packages(
         module._installed_tool_binding_ids(packages_dir)
 
 
-def test_binding_discovery_excludes_disabled_package(monkeypatch, tmp_path):
+def test_binding_discovery_includes_disabled_but_installed_package(
+    monkeypatch, tmp_path
+):
     module = _load_migration()
     monkeypatch.setenv("APP_VERSION", "1.5.0")
     monkeypatch.setenv("AGR_RUNTIME_PACKAGE_API_VERSION", "1.0.0")
@@ -100,7 +116,7 @@ disabled_packages:
     monkeypatch.setenv("AGR_RUNTIME_OVERRIDES_PATH", str(overrides_path))
 
     installed = module._installed_tool_binding_ids(REPO_PACKAGES_DIR)
-    assert module.ALLIANCE_OWNED_TOOL_IDS.isdisjoint(installed)
+    assert module.ALLIANCE_OWNED_TOOL_IDS <= installed
 
 
 def test_runtime_packages_dir_uses_default_root_for_blank_override(
@@ -120,7 +136,11 @@ def test_runtime_packages_dir_uses_default_root_for_blank_override(
 def test_upgrade_deletes_all_stale_moved_policies(monkeypatch):
     module = _load_migration()
     executed = []
-    monkeypatch.setattr(module, "_installed_tool_binding_ids", lambda: {"search_document"})
+    monkeypatch.setattr(
+        module,
+        "_installed_tool_binding_ids",
+        lambda: {"search_document"},
+    )
     monkeypatch.setattr(module, "op", SimpleNamespace(execute=executed.append))
 
     module.upgrade()

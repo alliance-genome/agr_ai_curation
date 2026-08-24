@@ -69,37 +69,6 @@ def _runtime_packages_dir() -> Path:
     return runtime_packages
 
 
-def _resolve_runtime_path(raw_value: str | None, *, parent: Path, default_name: str) -> Path:
-    if raw_value is None or not raw_value.strip():
-        return (parent / default_name).expanduser().resolve(strict=False)
-    candidate = Path(raw_value)
-    if candidate.is_absolute():
-        return candidate.expanduser().resolve(strict=False)
-    if ".." in candidate.parts:
-        raise ValueError(f"Relative runtime path '{raw_value}' must not traverse parents")
-    return (parent / candidate).expanduser().resolve(strict=False)
-
-
-def _runtime_overrides_path() -> Path:
-    runtime_root_value = os.getenv("AGR_RUNTIME_ROOT")
-    runtime_root = (
-        Path(runtime_root_value)
-        if runtime_root_value and runtime_root_value.strip()
-        else DEFAULT_RUNTIME_ROOT
-    )
-    runtime_root = runtime_root.expanduser().resolve(strict=False)
-    config_dir = _resolve_runtime_path(
-        os.getenv("AGR_RUNTIME_CONFIG_DIR"),
-        parent=runtime_root,
-        default_name="config",
-    )
-    return _resolve_runtime_path(
-        os.getenv("AGR_RUNTIME_OVERRIDES_PATH"),
-        parent=config_dir,
-        default_name="overrides.yaml",
-    )
-
-
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle)
@@ -147,25 +116,8 @@ def _manifest_is_runtime_compatible(manifest: dict[str, Any]) -> bool:
     )
 
 
-def _disabled_package_ids(overrides_path: Path | None = None) -> set[str]:
-    resolved_path = overrides_path or _runtime_overrides_path()
-    if not resolved_path.is_file():
-        return set()
-    disabled_packages = _load_yaml_mapping(resolved_path).get("disabled_packages", [])
-    if not isinstance(disabled_packages, list) or not all(
-        isinstance(package_id, str) and package_id.strip()
-        for package_id in disabled_packages
-    ):
-        raise ValueError(
-            f"Runtime overrides at {resolved_path} field 'disabled_packages' "
-            "must be a list of package IDs"
-        )
-    return {package_id.strip() for package_id in disabled_packages}
-
-
 def _installed_tool_binding_ids(
     packages_dir: Path | None = None,
-    overrides_path: Path | None = None,
 ) -> set[str]:
     """Inspect installed package binding exports without importing live app code."""
     resolved_packages_dir = packages_dir or _runtime_packages_dir()
@@ -184,7 +136,6 @@ def _installed_tool_binding_ids(
             f"No package manifests discovered under {resolved_packages_dir}"
         )
 
-    disabled_package_ids = _disabled_package_ids(overrides_path)
     installed_tool_ids: set[str] = set()
     incompatible_package_ids: list[str] = []
 
@@ -192,35 +143,43 @@ def _installed_tool_binding_ids(
         manifest_path = package_dir / "package.yaml"
         manifest = _load_yaml_mapping(manifest_path)
         package_id = str(manifest.get("package_id", "")).strip()
-        if package_id in disabled_package_ids:
-            continue
         if not _manifest_is_runtime_compatible(manifest):
             incompatible_package_ids.append(package_id or package_dir.name)
             continue
         exports = manifest.get("exports", [])
         if not isinstance(exports, list):
-            raise ValueError(f"Package manifest at {manifest_path} field 'exports' must be a list")
+            raise ValueError(
+                f"Package manifest at {manifest_path} field 'exports' must be a list"
+            )
         for raw_export in exports:
-            if not isinstance(raw_export, dict) or raw_export.get("kind") != "tool_binding":
+            if (
+                not isinstance(raw_export, dict)
+                or raw_export.get("kind") != "tool_binding"
+            ):
                 continue
             bindings_path = _binding_export_path(package_dir, raw_export.get("path"))
             bindings = _load_yaml_mapping(bindings_path).get("tools", [])
             if not isinstance(bindings, list):
-                raise ValueError(f"Tool bindings at {bindings_path} field 'tools' must be a list")
+                raise ValueError(
+                    f"Tool bindings at {bindings_path} field 'tools' must be a list"
+                )
             installed_tool_ids.update(
                 str(binding.get("tool_id", "")).strip()
                 for binding in bindings
                 if isinstance(binding, dict)
                 and str(binding.get("tool_id", "")).strip()
             )
-    if incompatible_package_ids:
+    if incompatible_package_ids and not ALLIANCE_OWNED_TOOL_IDS <= installed_tool_ids:
+        package_api_version = os.getenv(
+            "AGR_RUNTIME_PACKAGE_API_VERSION", DEFAULT_PACKAGE_API_VERSION
+        )
         raise RuntimeError(
             "Refusing to reconcile tool policies because runtime packages were "
             "rejected as incompatible: "
             f"{', '.join(sorted(incompatible_package_ids))} "
             f"(APP_VERSION={os.getenv('APP_VERSION', DEFAULT_APP_VERSION)}, "
             "AGR_RUNTIME_PACKAGE_API_VERSION="
-            f"{os.getenv('AGR_RUNTIME_PACKAGE_API_VERSION', DEFAULT_PACKAGE_API_VERSION)})"
+            f"{package_api_version})"
         )
     return installed_tool_ids
 

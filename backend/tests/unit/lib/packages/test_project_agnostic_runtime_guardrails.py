@@ -451,6 +451,7 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     assert {
         policy.tool_key for policy in attachable_catalog
     } <= set(tool_registry.bindings_by_tool_id)
+
     document_source_catalog = load_document_source_provider_catalog(packages_dir)
     assert set(document_source_catalog.registrations_by_provider_id) == {
         "example_literature"
