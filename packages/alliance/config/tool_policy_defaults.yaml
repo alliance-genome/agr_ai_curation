@@ -1,4 +1,40 @@
 tool_policies:
+  search_document:
+    display_name: Search Document
+    description: Discovery search over the active document with auto/hybrid, lexical, or hybrid_lexical_first modes; use read_chunk on returned chunk IDs for final evidence span selection.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  read_chunk:
+    display_name: Read Chunk
+    description: Read one active-document chunk with selectable evidence_spans[].span_id values for record_evidence.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  read_section:
+    display_name: Read Section
+    description: Survey a specific section from the active document; use read_chunk for final evidence span selection.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  read_subsection:
+    display_name: Read Subsection
+    description: Survey a specific subsection from the active document; use read_chunk for final evidence span selection.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
   get_agent_contract:
     display_name: Agent Contract Lookup
     description: Read deterministic runtime contract metadata for generated system agents without reading live envelope state or executing validation.
@@ -24,6 +60,33 @@ tool_policies:
   alliance_api_call:
     display_name: Alliance API
     description: Query Alliance public API endpoints.
+    category: External API
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  chebi_api_call:
+    display_name: ChEBI API
+    description: Query ChEBI ontology term data from external API.
+    category: External API
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  quickgo_api_call:
+    display_name: QuickGO API
+    description: Query Gene Ontology annotation data via QuickGO.
+    category: External API
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  go_api_call:
+    display_name: GO API
+    description: Query Gene Ontology term hierarchy and metadata.
     category: External API
     curator_visible: true
     allow_attach: true

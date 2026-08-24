@@ -13,7 +13,7 @@ import pytest  # type: ignore[reportMissingImports]
 import yaml
 import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 import src.lib.domain_packs.registry as domain_pack_registry_module
-from src.lib.agent_studio import catalog_service, flow_tools, runtime_validation
+from src.lib.agent_studio import flow_tools, runtime_validation
 from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import (
     agent_loader,
@@ -443,19 +443,14 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
         for policy in tool_policies.values()
         for value in (policy.tool_key, policy.display_name, policy.description, policy.config)
     )
-    catalog_service.clear_package_tool_runtime_caches()
     attachable_catalog = [
         policy
-        for policy in catalog_service.filter_tool_policies_for_installed_bindings(
-            list(tool_policies.values())
-        )
+        for policy in tool_policies.values()
         if policy.allow_attach
     ]
     assert {
         policy.tool_key for policy in attachable_catalog
     } <= set(tool_registry.bindings_by_tool_id)
-    catalog_service.clear_package_tool_runtime_caches()
-
     document_source_catalog = load_document_source_provider_catalog(packages_dir)
     assert set(document_source_catalog.registrations_by_provider_id) == {
         "example_literature"

@@ -38,6 +38,23 @@ def test_binding_discovery_tracks_installed_runtime_packages(monkeypatch, tmp_pa
     assert module._alliance_api_binding_is_installed(REPO_PACKAGES_DIR) is False
 
 
+def test_binding_discovery_excludes_disabled_package(monkeypatch, tmp_path):
+    module = _load_migration()
+    monkeypatch.setenv("APP_VERSION", "1.5.0")
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGE_API_VERSION", "1.0.0")
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text(
+        """overrides_api_version: 1.0.0
+disabled_packages:
+  - agr.alliance
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGR_RUNTIME_OVERRIDES_PATH", str(overrides_path))
+
+    assert module._alliance_api_binding_is_installed(REPO_PACKAGES_DIR) is False
+
+
 def test_upgrade_deletes_stale_policy_without_binding(monkeypatch):
     module = _load_migration()
     executed = []

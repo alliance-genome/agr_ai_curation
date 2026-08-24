@@ -26,6 +26,7 @@ depends_on: str | Sequence[str] | None = None
 ALLIANCE_API_TOOL_ID = "alliance_api_call"
 DEFAULT_APP_VERSION = "1.0.0"
 DEFAULT_PACKAGE_API_VERSION = "1.0.0"
+DEFAULT_RUNTIME_ROOT = Path("/runtime")
 
 
 def _find_project_root() -> Path | None:
@@ -50,6 +51,37 @@ def _runtime_packages_dir() -> Path:
     if project_root is not None:
         return (project_root / "packages").resolve(strict=False)
     return runtime_packages
+
+
+def _resolve_runtime_path(raw_value: str | None, *, parent: Path, default_name: str) -> Path:
+    if raw_value is None or not raw_value.strip():
+        return (parent / default_name).expanduser().resolve(strict=False)
+    candidate = Path(raw_value)
+    if candidate.is_absolute():
+        return candidate.expanduser().resolve(strict=False)
+    if ".." in candidate.parts:
+        raise ValueError(f"Relative runtime path '{raw_value}' must not traverse parents")
+    return (parent / candidate).expanduser().resolve(strict=False)
+
+
+def _runtime_overrides_path() -> Path:
+    runtime_root_value = os.getenv("AGR_RUNTIME_ROOT")
+    runtime_root = (
+        Path(runtime_root_value)
+        if runtime_root_value and runtime_root_value.strip()
+        else DEFAULT_RUNTIME_ROOT
+    )
+    runtime_root = runtime_root.expanduser().resolve(strict=False)
+    config_dir = _resolve_runtime_path(
+        os.getenv("AGR_RUNTIME_CONFIG_DIR"),
+        parent=runtime_root,
+        default_name="config",
+    )
+    return _resolve_runtime_path(
+        os.getenv("AGR_RUNTIME_OVERRIDES_PATH"),
+        parent=config_dir,
+        default_name="overrides.yaml",
+    )
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -99,17 +131,39 @@ def _manifest_is_runtime_compatible(manifest: dict[str, Any]) -> bool:
     )
 
 
-def _alliance_api_binding_is_installed(packages_dir: Path | None = None) -> bool:
+def _disabled_package_ids(overrides_path: Path | None = None) -> set[str]:
+    resolved_path = overrides_path or _runtime_overrides_path()
+    if not resolved_path.is_file():
+        return set()
+    disabled_packages = _load_yaml_mapping(resolved_path).get("disabled_packages", [])
+    if not isinstance(disabled_packages, list) or not all(
+        isinstance(package_id, str) and package_id.strip()
+        for package_id in disabled_packages
+    ):
+        raise ValueError(
+            f"Runtime overrides at {resolved_path} field 'disabled_packages' "
+            "must be a list of package IDs"
+        )
+    return {package_id.strip() for package_id in disabled_packages}
+
+
+def _alliance_api_binding_is_installed(
+    packages_dir: Path | None = None,
+    overrides_path: Path | None = None,
+) -> bool:
     """Inspect installed package binding exports without importing live app code."""
     resolved_packages_dir = packages_dir or _runtime_packages_dir()
     if not resolved_packages_dir.exists():
         return False
+    disabled_package_ids = _disabled_package_ids(overrides_path)
 
     for package_dir in sorted(path for path in resolved_packages_dir.iterdir() if path.is_dir()):
         manifest_path = package_dir / "package.yaml"
         if not manifest_path.exists():
             continue
         manifest = _load_yaml_mapping(manifest_path)
+        if str(manifest.get("package_id", "")).strip() in disabled_package_ids:
+            continue
         if not _manifest_is_runtime_compatible(manifest):
             continue
         exports = manifest.get("exports", [])
