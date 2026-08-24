@@ -2,9 +2,10 @@
 
 import inspect
 
+import agr_ai_curation_alliance.tools.documents as document_tools
+import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search
 import src.lib.openai_agents.tools.evidence_workspace as evidence_workspace
 import src.lib.openai_agents.tools.record_evidence as record_evidence
-import src.lib.openai_agents.tools.weaviate_search as weaviate_search
 
 
 STALE_TOOL_DESCRIPTION_PHRASES = [
@@ -35,12 +36,13 @@ def _assert_clean_doc(tool_name: str, doc: str) -> None:
 
 def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch):
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_tool)
+    context = {"document_id": "doc-1", "user_id": "user-1"}
 
     docs = {
-        "search_document": _tool_doc(weaviate_search.create_search_tool("doc-1", "user-1")),
-        "read_chunk": _tool_doc(weaviate_search.create_read_chunk_tool("doc-1", "user-1")),
-        "read_section": _tool_doc(weaviate_search.create_read_section_tool("doc-1", "user-1")),
-        "read_subsection": _tool_doc(weaviate_search.create_read_subsection_tool("doc-1", "user-1")),
+        "search_document": _tool_doc(document_tools.create_search_document_tool(context)),
+        "read_chunk": _tool_doc(document_tools.create_read_chunk_tool(context)),
+        "read_section": _tool_doc(document_tools.create_read_section_tool(context)),
+        "read_subsection": _tool_doc(document_tools.create_read_subsection_tool(context)),
     }
 
     assert "Discovery tool" in docs["search_document"]

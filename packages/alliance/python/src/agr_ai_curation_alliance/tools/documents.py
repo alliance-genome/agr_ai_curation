@@ -16,6 +16,7 @@ from agr_ai_curation_runtime.evidence_workspace import (
     create_update_recorded_evidence_metadata_tool as _create_update_recorded_evidence_metadata_tool,
 )
 
+# ALL-825: Package bindings are authoritative; the legacy backend mirror was removed.
 from .weaviate_search import (
     create_read_chunk_tool as _create_read_chunk_tool,
     create_read_section_tool as _create_read_section_tool,

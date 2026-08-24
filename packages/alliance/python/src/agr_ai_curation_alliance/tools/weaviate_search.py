@@ -91,20 +91,17 @@ def _env_unit_float(key: str, default: float) -> float:
 # which could reach hundreds of thousands of characters in a single tool result. The
 # default is surpassable via max_chunks, and the result reports total_chunk_count plus
 # next_offset so the model can page through the rest.
-# Env-configurable via SECTION_READ_MAX_CHUNKS (default 30) -- the SAME env var the
-# backend weaviate_search tool honors, so one setting tunes both.
+# Env-configurable via SECTION_READ_MAX_CHUNKS (default 30).
 _DEFAULT_SECTION_MAX_CHUNKS = _env_int("SECTION_READ_MAX_CHUNKS", 30, minimum=1)
 
 # How much surrounding text to return around a text_contains match. Bounded so a
 # matched passage gives the model enough context to decide whether to read the full
 # chunk without pulling the entire section back.
-# Env-configurable via SECTION_SNIPPET_RADIUS_CHARS (default 200) -- same env var as
-# the backend twin.
+# Env-configurable via SECTION_SNIPPET_RADIUS_CHARS (default 200).
 _SECTION_SNIPPET_RADIUS = _env_int("SECTION_SNIPPET_RADIUS_CHARS", 200, minimum=0)
 
 # These package-owned tools execute in an isolated subprocess and cannot import
-# backend config. Read the same env names directly so one deployment setting
-# tunes both backend-owned and package-owned document search tools.
+# backend config. Read deployment settings directly from the inherited environment.
 _SEARCH_INITIAL_LIMIT = min(
     100,
     _env_int("WEAVIATE_SEARCH_INITIAL_LIMIT", 50, minimum=1),

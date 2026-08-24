@@ -1,12 +1,12 @@
-"""Unit tests for Weaviate search tools used by OpenAI agents."""
+"""Unit tests for the Alliance package's canonical Weaviate search tools."""
 
 import pytest
 
+import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search
 from src.lib.document_sources.figure_metadata import (
     PROVIDER_FIGURE_METADATA_SECTION,
     PROVIDER_FIGURE_SUBSECTION_PREFIX,
 )
-import src.lib.openai_agents.tools.weaviate_search as weaviate_search
 
 
 class _Tracker:
@@ -60,7 +60,10 @@ async def test_search_tool_clamps_limit_and_handles_no_hits(monkeypatch):
     assert captured["document_id"] == "doc-12345678"
     assert captured["user_id"] == "user-1"
     assert captured["strategy"] == "hybrid"
-    assert "apply_mmr" not in captured
+    assert captured["initial_limit"] == 50
+    assert captured["alpha"] == 0.4
+    assert captured["apply_mmr"] is False
+    assert captured["mmr_lambda"] == 0.5
     assert tracker.calls == ["search_document"]
 
 
