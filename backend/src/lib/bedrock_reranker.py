@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import time
 from contextlib import contextmanager
@@ -114,7 +115,7 @@ def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, 
         "reason": None,
     }
 
-    if provider in {"", "none"}:
+    if provider == "none":
         status["reason"] = "RERANK_PROVIDER disables post-retrieval reranking"
         return status
 
@@ -313,6 +314,19 @@ def _report_rerank_failure(exc: RerankProviderError) -> None:
     )
 
 
+def _parse_rerank_score(provider: str, value: Any) -> float:
+    """Require a finite JSON number for a provider relevance score."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise RerankProviderError(provider, "malformed_response")
+    try:
+        score = float(value)
+    except (OverflowError, TypeError, ValueError):
+        raise RerankProviderError(provider, "malformed_response") from None
+    if not math.isfinite(score):
+        raise RerankProviderError(provider, "malformed_response")
+    return score
+
+
 def rerank_chunks(
     query: str,
     chunks: Sequence[Dict[str, Any]],
@@ -321,7 +335,7 @@ def rerank_chunks(
 ) -> List[Dict[str, Any]]:
     """Rerank chunk candidates with the configured provider."""
     provider = get_rerank_provider()
-    if provider in {"", "none"}:
+    if provider == "none":
         return list(chunks)
     if not chunks:
         return []
@@ -459,12 +473,7 @@ def _rerank_chunks_with_local_transformers(
             or source_index in seen_indexes
         ):
             raise RerankProviderError("local_transformers", "malformed_response")
-        try:
-            rerank_score = float(score_value)
-        except (TypeError, ValueError):
-            raise RerankProviderError(
-                "local_transformers", "malformed_response"
-            ) from None
+        rerank_score = _parse_rerank_score("local_transformers", score_value)
         seen_indexes.add(source_index)
         rerank_scores.append((source_index, rerank_score))
 
@@ -590,12 +599,9 @@ def _rerank_chunks_with_bedrock(
             or "relevanceScore" not in result
         ):
             raise RerankProviderError("bedrock_cohere", "malformed_response")
-        try:
-            rerank_score = float(result["relevanceScore"])
-        except (TypeError, ValueError):
-            raise RerankProviderError(
-                "bedrock_cohere", "malformed_response"
-            ) from None
+        rerank_score = _parse_rerank_score(
+            "bedrock_cohere", result["relevanceScore"]
+        )
         seen_indexes.add(source_index)
         original_chunk = candidate_chunks[source_index]
         ranked_chunk = dict(original_chunk)

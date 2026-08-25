@@ -11,13 +11,36 @@ from botocore.exceptions import NoCredentialsError, ProfileNotFound
 from src.lib import bedrock_reranker
 
 
-@pytest.mark.parametrize("provider", ["", "none"])
-def test_rerank_chunks_returns_input_when_provider_disabled(monkeypatch, provider):
-    monkeypatch.setenv("RERANK_PROVIDER", provider)
+def test_rerank_chunks_returns_input_when_provider_disabled(monkeypatch):
+    monkeypatch.setenv("RERANK_PROVIDER", "none")
 
     chunks = [{"id": "chunk-1", "score": 0.2}]
 
     assert bedrock_reranker.rerank_chunks("query", chunks) == chunks
+
+
+def test_rerank_chunks_reports_and_rejects_blank_provider(monkeypatch):
+    reported = []
+    monkeypatch.setenv("RERANK_PROVIDER", "  ")
+    monkeypatch.setattr(
+        bedrock_reranker,
+        "report_runtime_exception",
+        lambda exc, **kwargs: reported.append((exc, kwargs)) or True,
+    )
+
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", [{"id": "chunk-1", "score": 0.2}])
+
+    assert exc_info.value.provider == ""
+    assert exc_info.value.category == "configuration"
+    assert len(reported) == 1
+    reported_exc, reported_kwargs = reported[0]
+    assert reported_exc.provider == ""
+    assert reported_exc.category == "configuration"
+    assert reported_kwargs["context"] == {
+        "provider": "",
+        "failure_category": "configuration",
+    }
 
 
 def test_rerank_chunks_rejects_unsupported_provider(monkeypatch):
@@ -219,6 +242,15 @@ def test_bedrock_status_reports_blank_region(monkeypatch):
     assert status["reason"] == "AWS_REGION must not be blank for Bedrock reranking"
 
 
+def test_bedrock_status_rejects_blank_provider(monkeypatch):
+    monkeypatch.setenv("RERANK_PROVIDER", "  ")
+
+    status = bedrock_reranker.get_bedrock_reranker_status(check_credentials=False)
+
+    assert status["is_healthy"] is False
+    assert status["reason"] == "Unsupported RERANK_PROVIDER="
+
+
 def test_effective_rerank_provider_preserves_configured_bedrock_provider(monkeypatch):
     monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
 
@@ -394,6 +426,40 @@ def test_rerank_chunks_raises_when_bedrock_returns_incomplete_results(monkeypatc
         )
 
     assert exc_info.value.category == "incomplete_response"
+
+
+@pytest.mark.parametrize(
+    "score_value",
+    [True, "0.8", float("nan"), float("inf"), float("-inf")],
+    ids=[
+        "boolean",
+        "numeric-string",
+        "nan",
+        "positive-infinity",
+        "negative-infinity",
+    ],
+)
+def test_rerank_chunks_raises_when_bedrock_returns_invalid_score(
+    monkeypatch, score_value
+):
+    class _Client:
+        def rerank(self, **kwargs):
+            return {"results": [{"index": 0, "relevanceScore": score_value}]}
+
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            pass
+
+        def client(self, service_name, region_name=None):
+            return _Client()
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", [{"id": "chunk-1"}], top_n=1)
+
+    assert exc_info.value.category == "malformed_response"
 
 
 def test_rerank_chunks_logs_request_and_completion_details(monkeypatch, caplog):
@@ -719,5 +785,42 @@ def test_rerank_chunks_raises_on_local_transformers_invalid_index(
 
     with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
         bedrock_reranker.rerank_chunks("query", chunks, top_n=2)
+
+    assert exc_info.value.category == "malformed_response"
+
+
+@pytest.mark.parametrize(
+    "score_value",
+    [True, "0.8", float("nan"), float("inf"), float("-inf")],
+    ids=[
+        "boolean",
+        "numeric-string",
+        "nan",
+        "positive-infinity",
+        "negative-infinity",
+    ],
+)
+def test_rerank_chunks_raises_on_local_transformers_invalid_score(
+    monkeypatch, score_value
+):
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"scores": [{"score": score_value}]}).encode("utf-8")
+
+    monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
+    monkeypatch.setattr(
+        bedrock_reranker.request,
+        "urlopen",
+        lambda request, timeout: _FakeResponse(),
+    )
+
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", [{"id": "chunk-1"}], top_n=1)
 
     assert exc_info.value.category == "malformed_response"
