@@ -649,10 +649,10 @@ def test_pdf_max_file_size_rejects_invalid_or_unpersistable_values(
         get_pdf_max_file_size_bytes()
 
 
-def test_pdf_upload_max_page_count_defaults_to_100(monkeypatch):
+def test_pdf_upload_max_page_count_defaults_to_300(monkeypatch):
     monkeypatch.delenv("PDF_UPLOAD_MAX_PAGE_COUNT", raising=False)
 
-    assert get_pdf_upload_max_page_count() == 100
+    assert get_pdf_upload_max_page_count() == 300
 
 
 def test_pdf_upload_max_page_count_env_override(monkeypatch):

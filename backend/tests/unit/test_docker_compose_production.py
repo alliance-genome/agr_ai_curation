@@ -10,7 +10,10 @@ from unittest.mock import Mock, patch
 import pytest
 import yaml
 
-from src.lib.openai_agents.config import get_pdf_max_file_size_bytes
+from src.lib.openai_agents.config import (
+    get_pdf_max_file_size_bytes,
+    get_pdf_upload_max_page_count,
+)
 
 
 WORKSPACE_ROOT = Path("/workspace")
@@ -227,6 +230,25 @@ def test_pdf_size_limit_is_shared_by_backend_and_frontend_compose_services(
     assert image_default is not None
     monkeypatch.delenv("PDF_MAX_FILE_SIZE_BYTES", raising=False)
     assert int(image_default.group(1)) == get_pdf_max_file_size_bytes()
+
+
+def test_pdf_page_count_limit_is_shared_by_backend_env_templates(monkeypatch):
+    dev_backend_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_backend_env = _load_compose()["services"]["backend"]["environment"]
+    expected = "${PDF_UPLOAD_MAX_PAGE_COUNT:-300}"
+
+    assert dev_backend_env["PDF_UPLOAD_MAX_PAGE_COUNT"] == expected
+    assert production_backend_env["PDF_UPLOAD_MAX_PAGE_COUNT"] == expected
+    assert "PDF_UPLOAD_MAX_PAGE_COUNT=300" in ENV_TEMPLATE_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert "PDF_UPLOAD_MAX_PAGE_COUNT=300" in ENV_EXAMPLE_PATH.read_text(
+        encoding="utf-8"
+    )
+    monkeypatch.delenv("PDF_UPLOAD_MAX_PAGE_COUNT", raising=False)
+    assert get_pdf_upload_max_page_count() == 300
 
 
 def test_document_intake_vite_limits_reach_standard_frontend_builds():
