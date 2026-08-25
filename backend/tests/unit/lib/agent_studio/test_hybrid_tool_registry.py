@@ -1,4 +1,6 @@
 """Tests for hybrid tool registry (introspection + overrides)."""
+from types import SimpleNamespace
+
 import pytest
 
 from src.lib.agent_studio.catalog_service import get_tool_registry
@@ -26,26 +28,98 @@ def test_get_diagnostic_registry_includes_codebase_tools():
     assert registry.has_tool("read_source_file")
     assert registry.has_tool("get_tool_inventory")
     assert registry.has_tool("get_tool_details")
+    assert registry.has_tool("chebi_api_call")
+    assert registry.has_tool("quickgo_api_call")
+    assert registry.has_tool("go_api_call")
+
+    tool_catalog = get_tool_registry()
+    for tool_id in (
+        "curation_db_sql",
+        "chebi_api_call",
+        "quickgo_api_call",
+        "go_api_call",
+    ):
+        assert tool_catalog[tool_id]["agent_studio"]["diagnostic"]["enabled"] is True
 
 
-def test_get_prompt_diagnostic_documents_current_extractor_and_validator_targets():
-    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry, reset_registry
+def test_get_prompt_diagnostic_derives_targets_from_live_catalog(monkeypatch):
+    from src.lib.agent_studio import catalog_service
+    from src.lib.agent_studio.diagnostic_tools import tool_definitions
+
+    catalog = SimpleNamespace(
+        categories=[
+            SimpleNamespace(
+                agents=[
+                    SimpleNamespace(agent_id="demo_review"),
+                    SimpleNamespace(agent_id="demo_extract"),
+                ]
+            )
+        ],
+        available_groups=["DEMO"],
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "get_prompt_catalog",
+        lambda: SimpleNamespace(catalog=catalog),
+    )
+
+    description, input_schema = tool_definitions._get_prompt_diagnostic_contract()
+
+    assert "demo_extract, demo_review" in description
+    assert "DEMO" in description
+    assert "installed prompt targets" in input_schema["properties"]["agent_id"][
+        "description"
+    ]
+
+
+def test_core_only_diagnostic_registry_excludes_alliance_content(monkeypatch):
+    from src.lib.agent_studio import catalog_service
+    from src.lib.agent_studio.diagnostic_tools import (
+        get_diagnostic_tools_registry,
+        reset_registry,
+    )
+
+    catalog = SimpleNamespace(
+        categories=[
+            SimpleNamespace(agents=[SimpleNamespace(agent_id="demo_review")])
+        ],
+        available_groups=["DEMO"],
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "get_prompt_catalog",
+        lambda: SimpleNamespace(catalog=catalog),
+    )
+    monkeypatch.setattr(catalog_service, "get_tool_registry", lambda: {})
+    monkeypatch.setattr(
+        catalog_service,
+        "_load_package_tool_registry",
+        lambda: SimpleNamespace(bindings=[]),
+    )
 
     reset_registry()
     registry = get_diagnostic_tools_registry()
+    serialized_registry = repr(registry.get_anthropic_tools())
 
-    get_prompt_tool = registry.get_tool("get_prompt")
-    assert get_prompt_tool is not None
-    description = get_prompt_tool.description
+    forbidden_values = (
+        "agr_curation_query",
+        "curation_db_sql",
+        "chebi_api_call",
+        "quickgo_api_call",
+        "go_api_call",
+        "alliancegenome.org",
+        "ebi.ac.uk",
+        "geneontology.org",
+        "WB",
+        "FB",
+        "MGI",
+        "RGD",
+        "SGD",
+        "ZFIN",
+    )
+    assert not any(value in serialized_registry for value in forbidden_values)
 
-    assert "Domain-envelope extractors" in description
-    assert "gene_expression_extraction" in description
-    assert "Validator/resolver agents" in description
-    assert "phenotype_extractor" in description
-    assert "controlled_vocabulary_validation" in description
-    assert "data_provider_validation" in description
-    assert "reference_validation" in description
-    assert "experimental_condition_validation" in description
+    reset_registry()
 
 
 def test_tool_inventory_diagnostic_reports_agent_attached_tools():

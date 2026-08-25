@@ -325,18 +325,10 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.
-  - agent_id: supervisor, curation_prep, pdf_extraction, gene_extractor, allele_extractor, disease_extractor, chemical_extractor, phenotype_extractor, gene_expression, gene_expression_extraction, gene_validation, allele_validation, disease_validation, chemical_validation, ontology_term_validation, controlled_vocabulary_validation, data_provider_validation, subject_entity_validation, reference_validation, experimental_condition_validation, agm_validation, gene_ontology, go_annotations, orthologs, chat_output, csv_formatter, tsv_formatter, json_formatter
-  - Gene-expression prompt and validation-plan inspection accepts both `gene_expression` and `gene_expression_extraction`.
-  - This list is for prompt inspection, not flow-step eligibility. For flow design, call `get_available_agents`; attachment-only validators are inspected here but configured through validation attachments/default validation.
-  - group_id (optional): WB, FB, MGI, RGD, SGD, ZFIN.
+  - Use the installed prompt targets and group-rule identifiers listed in the live `get_prompt` tool definition. For flow design, call `get_available_agents`; prompt inspection availability does not imply flow-step eligibility.
   - Validator-agent inspection workflow: call `get_domain_pack_validation_plan`, read `validator_bindings[].validator_agent.agent_id` or `validation_attachments[].validator_agent_id`, then call `get_prompt(agent_id=<validator agent id>)` to inspect that validator's prompt, tools, and group-specific rules.
   - When a curator has an agent selected in the UI, the full prompt is already included in your context (in `<base_prompt>` tags). Reference it directly instead of calling `get_prompt`. Only call `get_prompt` for a DIFFERENT agent or group variant.
   - Do not announce or explain that you already have the prompt in context. Just use it naturally.
-
-### External API Tools
-- **`chebi_api_call`** - ChEBI chemical ontology
-- **`quickgo_api_call`** - GO terms via QuickGO
-- **`go_api_call`** - GO annotations
 
 ### Feedback Submission
 - **`submit_prompt_suggestion`** - Submit improvement suggestions.

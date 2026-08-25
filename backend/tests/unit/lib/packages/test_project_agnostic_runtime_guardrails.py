@@ -64,6 +64,7 @@ GENERIC_RUNTIME_GUARD_PATHS = {
     Path("backend/tests/unit/lib/config/test_package_aware_loaders.py"),
 }
 GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
+    Path("backend/src/lib/agent_studio/diagnostic_tools/tool_definitions.py"),
     Path("backend/src/lib/agent_studio/catalog_service.py"),
     Path("backend/src/lib/agent_studio/flow_tools.py"),
     Path("backend/src/lib/config/agent_loader.py"),
@@ -78,6 +79,7 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/packages/identifier_prefix_provider_loader.py"),
     Path("backend/src/lib/pdf_jobs/upload_intake_service.py"),
     Path("backend/src/lib/runtime_entrypoint.py"),
+    Path("packages/core/config/agent_studio_system_prompt.md"),
 }
 GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"agr\.alliance"),
