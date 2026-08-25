@@ -43,6 +43,37 @@ def test_rerank_chunks_reports_and_rejects_blank_provider(monkeypatch):
     }
 
 
+@pytest.mark.parametrize(
+    ("configured_provider", "reported_provider"),
+    [("  ", "<blank>"), ("unsupported", "unsupported")],
+)
+def test_rerank_chunks_rejects_invalid_provider_for_empty_candidates(
+    monkeypatch, configured_provider, reported_provider
+):
+    reported = []
+    monkeypatch.setenv("RERANK_PROVIDER", configured_provider)
+    monkeypatch.setattr(
+        bedrock_reranker,
+        "report_runtime_exception",
+        lambda exc, **kwargs: reported.append((exc, kwargs)) or True,
+    )
+
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", [])
+
+    assert exc_info.value.category == "configuration"
+    assert reported[0][1]["context"] == {
+        "provider": reported_provider,
+        "failure_category": "configuration",
+    }
+
+
+def test_rerank_chunks_returns_empty_for_supported_provider(monkeypatch):
+    monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
+
+    assert bedrock_reranker.rerank_chunks("query", []) == []
+
+
 def test_rerank_chunks_rejects_unsupported_provider(monkeypatch):
     chunks = [{"id": "chunk-1", "score": 0.8}]
     monkeypatch.setenv("RERANK_PROVIDER", "unsupported")
@@ -461,6 +492,35 @@ def test_rerank_chunks_drains_bedrock_paginated_results(monkeypatch):
     assert len(calls) == 2
     assert "nextToken" not in calls[0]
     assert calls[1]["nextToken"] == "page-2"
+
+
+def test_rerank_chunks_accepts_complete_bedrock_page_with_trailing_token(monkeypatch):
+    calls = []
+
+    class _Client:
+        def rerank(self, **kwargs):
+            calls.append(kwargs)
+            return {
+                "results": [{"index": 0, "relevanceScore": 0.9}],
+                "nextToken": "unused-page",
+            }
+
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            pass
+
+        def client(self, service_name, region_name=None):
+            return _Client()
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    reranked = bedrock_reranker.rerank_chunks(
+        "query", [{"id": "chunk-1"}], top_n=1
+    )
+
+    assert [chunk["id"] for chunk in reranked] == ["chunk-1"]
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(

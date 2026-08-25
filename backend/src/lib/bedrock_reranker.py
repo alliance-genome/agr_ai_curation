@@ -51,6 +51,7 @@ from src.lib.observability.runtime import report_runtime_exception
 logger = logging.getLogger(__name__)
 
 DEFAULT_RERANK_PROVIDER = "bedrock_cohere"
+SUPPORTED_RERANK_PROVIDERS = {"bedrock_cohere", "local_transformers"}
 DEFAULT_BEDROCK_RERANK_MODEL_ARN = (
     "arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
 )
@@ -337,6 +338,16 @@ def rerank_chunks(
     provider = get_rerank_provider()
     if provider == "none":
         return list(chunks)
+    if provider not in SUPPORTED_RERANK_PROVIDERS:
+        exc = RerankProviderError(
+            provider,
+            "configuration",
+            f"Unsupported RERANK_PROVIDER={provider}",
+        )
+        # ALL-822: validate configured providers even when retrieval returned no
+        # candidates; only RERANK_PROVIDER=none is the canonical opt-out.
+        _report_rerank_failure(exc)
+        raise exc
     if not chunks:
         return []
 
@@ -352,15 +363,9 @@ def rerank_chunks(
                     f"Bedrock reranker configuration is not ready: {reason}",
                 )
             ranked_chunks = _rerank_chunks_with_bedrock(query, chunks, top_n=top_n)
-        elif provider == "local_transformers":
+        else:
             ranked_chunks = _rerank_chunks_with_local_transformers(
                 query, chunks, top_n=top_n
-            )
-        else:
-            raise RerankProviderError(
-                provider,
-                "configuration",
-                f"Unsupported RERANK_PROVIDER={provider}",
             )
         if not ranked_chunks:
             raise RerankProviderError(provider, "empty_response")
@@ -395,9 +400,6 @@ def _rerank_chunks_with_local_transformers(
     *,
     top_n: int | None = None,
 ) -> List[Dict[str, Any]]:
-    if not chunks:
-        return []
-
     candidate_chunks = list(chunks)
     requested_results = min(top_n or len(candidate_chunks), len(candidate_chunks))
 
@@ -433,7 +435,11 @@ def _rerank_chunks_with_local_transformers(
     except error.URLError as exc:
         raise RerankProviderError(
             "local_transformers",
-            "timeout" if isinstance(exc.reason, TimeoutError) else "provider_unavailable",
+            (
+                "timeout"
+                if isinstance(exc.reason, TimeoutError)
+                else "provider_unavailable"
+            ),
         ) from None
 
     try:
@@ -523,9 +529,6 @@ def _rerank_chunks_with_bedrock(
     *,
     top_n: int | None = None,
 ) -> List[Dict[str, Any]]:
-    if not chunks:
-        return []
-
     candidate_chunks = list(chunks)[:MAX_BEDROCK_RERANK_SOURCES]
     if len(candidate_chunks) < len(chunks):
         logger.warning(
@@ -553,7 +556,7 @@ def _rerank_chunks_with_bedrock(
     )
     client = _bedrock_agent_runtime_client()
 
-    request: dict[str, Any] = {
+    request_payload: dict[str, Any] = {
         "queries": [{"type": "TEXT", "textQuery": {"text": query}}],
         "sources": [
             {
@@ -576,7 +579,7 @@ def _rerank_chunks_with_bedrock(
     ranked_results: list[Any] = []
     seen_next_tokens: set[str] = set()
     while True:
-        response = client.rerank(**request)
+        response = client.rerank(**request_payload)
         if not isinstance(response, dict):
             raise RerankProviderError("bedrock_cohere", "malformed_response")
         page_results = response.get("results")
@@ -588,6 +591,8 @@ def _rerank_chunks_with_bedrock(
         ranked_results.extend(page_results)
         if len(ranked_results) > requested_results:
             raise RerankProviderError("bedrock_cohere", "malformed_response")
+        if len(ranked_results) == requested_results:
+            break
 
         next_token = response.get("nextToken")
         if next_token is None:
@@ -596,11 +601,10 @@ def _rerank_chunks_with_bedrock(
             not isinstance(next_token, str)
             or not next_token.strip()
             or next_token in seen_next_tokens
-            or len(ranked_results) == requested_results
         ):
             raise RerankProviderError("bedrock_cohere", "malformed_response")
         seen_next_tokens.add(next_token)
-        request["nextToken"] = next_token
+        request_payload["nextToken"] = next_token
 
     if len(ranked_results) != requested_results:
         raise RerankProviderError("bedrock_cohere", "incomplete_response")
