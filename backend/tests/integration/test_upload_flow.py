@@ -8,15 +8,10 @@ IMPORTANT: These tests are expected to FAIL until the endpoints are implemented 
 
 import pytest
 from fastapi.testclient import TestClient
-import sys
-from pathlib import Path
 import io
 import time
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-
-# Add the backend/src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 
 class TestUploadFlow:

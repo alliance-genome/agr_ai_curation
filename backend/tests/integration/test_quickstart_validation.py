@@ -4,15 +4,8 @@ import pytest
 import time
 import asyncio
 import subprocess
-import json
 from pathlib import Path
 from unittest.mock import patch, Mock, MagicMock
-import sys
-import requests
-from typing import Dict, List, Any
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 # Import required modules
 # Note: CLI functions are mocked in tests, so we don't need actual imports
@@ -368,7 +361,7 @@ class TestCLICommands:
                 mock_delete.return_value = {"success": True, "message": "Document deleted"}
 
                 result = mock_delete("test-user", "doc-123")
-                assert result["success"] == True
+                assert result["success"]
 
         print("✓ CLI: delete-document command verified")
 
@@ -379,7 +372,7 @@ class TestCLICommands:
                 mock_reembed.return_value = {"success": True, "message": "Re-embedding started"}
 
                 result = mock_reembed("doc-123", "test-user")
-                assert result["success"] == True
+                assert result["success"]
 
         print("✓ CLI: reembed-document command verified")
 
@@ -420,7 +413,7 @@ class TestCLICommands:
                 }
 
                 result = mock_health()
-                assert result["healthy"] == True
+                assert result["healthy"]
 
         print("✓ CLI: health-check command verified")
 
@@ -447,7 +440,7 @@ class TestPerformanceMetrics:
                 mock_get.return_value.status_code = 200
                 mock_get.return_value.elapsed.total_seconds.return_value = 0.3  # 300ms
 
-                response = mock_get(f"http://localhost:3000{page}")
+                mock_get(f"http://localhost:3000{page}")
 
             end_times[page] = time.time()
 
@@ -528,7 +521,7 @@ class TestPerformanceMetrics:
             # Simulate database query
             with patch('src.lib.weaviate_client.documents.list_documents') as mock_query:
                 mock_query.return_value = {"documents": [], "executionTime": 0.05}
-                result = mock_query()
+                mock_query()
 
             elapsed_ms = (time.time() - start_time) * 1000
 
