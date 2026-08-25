@@ -9,7 +9,7 @@ escape_javascript_string() {
     awk 'BEGIN { ORS = "" }
         {
             if (NR > 1) printf "\\n"
-            gsub(/\\/, "\\\\")
+            gsub(/\\/, "\\\\\\\\")
             gsub(/\"/, "\\\"")
             gsub(/\r/, "\\r")
             gsub(/\t/, "\\t")
@@ -18,9 +18,10 @@ escape_javascript_string() {
 }
 
 {
+    runtime_config_keys="${FRONTEND_RUNTIME_CONFIG_KEYS:?frontend runtime config allowlist is required}"
     printf 'window.%s = Object.freeze({\n' "${runtime_config_global}"
     first=1
-    for key in ${FRONTEND_RUNTIME_CONFIG_KEYS:-}; do
+    for key in ${runtime_config_keys}; do
         case "${key}" in
             VITE_*) ;;
             *)
@@ -34,7 +35,10 @@ escape_javascript_string() {
                 exit 1
                 ;;
         esac
-        printenv "${key}" >/dev/null || continue
+        if ! printenv "${key}" >/dev/null; then
+            printf 'Missing frontend runtime configuration value: %s\n' "${key}" >&2
+            exit 1
+        fi
         value="$(printenv "${key}")"
         escaped_value="$(printf '%s' "${value}" | escape_javascript_string)"
         [ -n "${first}" ] || printf ',\n'

@@ -49,22 +49,55 @@ assert_nginx_variables_survive_rendering() {
 }
 
 assert_runtime_config_override() {
-  local runtime_config
+  local expected_value='quoted "value" C:\path\'
+  local runtime_config round_trip_value
   runtime_config="$(docker run --rm \
     --env VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7 \
     --env VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500 \
     --env VITE_DEV_MODE=true \
     --env FRONTEND_RUNTIME_CONFIG_KEYS='VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS VITE_REUSABLE_BOUNDARY_CHECK' \
-    --env VITE_REUSABLE_BOUNDARY_CHECK='quoted "value"' \
+    --env "VITE_REUSABLE_BOUNDARY_CHECK=${expected_value}" \
     --entrypoint /bin/sh \
     "${image_tag}" \
     -c '/docker-entrypoint.d/10-generate-runtime-config.sh && cat /usr/share/nginx/html/runtime-config.js')"
   grep -Fq '"VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS": "7"' <<<"${runtime_config}"
   grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "2500"' <<<"${runtime_config}"
-  grep -Fq '"VITE_REUSABLE_BOUNDARY_CHECK": "quoted \"value\""' <<<"${runtime_config}"
   ! grep -Fq 'VITE_DEV_MODE' <<<"${runtime_config}"
   grep -Fq 'window.__APP_RUNTIME_CONFIG__ = Object.freeze({' <<<"${runtime_config}"
   node --check <<<"${runtime_config}"
+  round_trip_value="$(node -e '
+    global.window = {};
+    eval(require("fs").readFileSync(0, "utf8"));
+    process.stdout.write(window.__APP_RUNTIME_CONFIG__.VITE_REUSABLE_BOUNDARY_CHECK);
+  ' <<<"${runtime_config}")"
+  [[ "${round_trip_value}" == "${expected_value}" ]]
+}
+
+assert_baked_runtime_config_allowlist() {
+  local runtime_config
+  runtime_config="$(docker run --rm \
+    --env VITE_DEV_MODE=true \
+    --entrypoint /bin/sh \
+    "${image_tag}" \
+    -c '/docker-entrypoint.d/10-generate-runtime-config.sh && cat /usr/share/nginx/html/runtime-config.js')"
+  grep -Fq '"VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS": "3"' <<<"${runtime_config}"
+  grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "1000"' <<<"${runtime_config}"
+  ! grep -Fq 'VITE_DEV_MODE' <<<"${runtime_config}"
+}
+
+assert_runtime_config_rejected() {
+  local allowlist="$1"
+  local expected_message="$2"
+  local output
+  if output="$(docker run --rm \
+    --env "FRONTEND_RUNTIME_CONFIG_KEYS=${allowlist}" \
+    --entrypoint /bin/sh \
+    "${image_tag}" \
+    -c '/docker-entrypoint.d/10-generate-runtime-config.sh' 2>&1)"; then
+    echo "Expected frontend runtime configuration to be rejected" >&2
+    return 1
+  fi
+  grep -Fq "${expected_message}" <<<"${output}"
 }
 
 assert_runtime_config_no_store() {
@@ -93,6 +126,9 @@ assert_rejected_value 2147483648 "must not exceed the persisted file-size capaci
 assert_rejected_value 999999999999999999999999999999999999 "must not exceed the persisted file-size capacity of 2147483647 bytes"
 assert_nginx_variables_survive_rendering
 assert_runtime_config_override
+assert_baked_runtime_config_allowlist
+assert_runtime_config_rejected '' 'frontend runtime config allowlist is required'
+assert_runtime_config_rejected 'VITE_MISSING' 'Missing frontend runtime configuration value: VITE_MISSING'
 assert_runtime_config_no_store
 
 echo "Frontend Nginx runtime contract tests passed"

@@ -17,9 +17,12 @@ const getViteEnv = (): EnvSource => (typeof import.meta !== 'undefined' ? (impor
 
 const getNodeEnv = (): EnvSource => (typeof process !== 'undefined' ? process.env : undefined);
 
-export const getEnvVar = (keys: string[] | string, fallback?: string): string | undefined => {
+const getEnvVarFromSources = (
+  keys: string[] | string,
+  sources: EnvSource[],
+  fallback?: string,
+): string | undefined => {
   const keyList = Array.isArray(keys) ? keys : [keys];
-  const sources: EnvSource[] = [getRuntimeEnv(), getViteEnv(), getNodeEnv()];
 
   for (const key of keyList) {
     for (const source of sources) {
@@ -31,6 +34,9 @@ export const getEnvVar = (keys: string[] | string, fallback?: string): string | 
 
   return fallback;
 };
+
+export const getEnvVar = (keys: string[] | string, fallback?: string): string | undefined =>
+  getEnvVarFromSources(keys, [getRuntimeEnv(), getViteEnv(), getNodeEnv()], fallback);
 
 /**
  * Debug logging utility - only logs when VITE_DEBUG=true
@@ -60,8 +66,7 @@ export const debug = {
   },
 };
 
-export const getEnvFlag = (keys: string[] | string, fallback = false): boolean => {
-  const value = getEnvVar(keys);
+const parseEnvFlag = (value: string | undefined, fallback: boolean): boolean => {
   if (value === undefined) {
     return fallback;
   }
@@ -81,6 +86,12 @@ export const getEnvFlag = (keys: string[] | string, fallback = false): boolean =
       return fallback;
   }
 };
+
+export const getEnvFlag = (keys: string[] | string, fallback = false): boolean =>
+  parseEnvFlag(getEnvVar(keys), fallback);
+
+export const getBuildEnvFlag = (keys: string[] | string, fallback = false): boolean =>
+  parseEnvFlag(getEnvVarFromSources(keys, [getViteEnv(), getNodeEnv()]), fallback);
 
 export const getEnvInt = (keys: string[] | string, fallback: number): number => {
   const value = getEnvVar(keys);

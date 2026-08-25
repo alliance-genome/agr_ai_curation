@@ -388,6 +388,8 @@ def test_production_frontend_never_publishes_dev_mode_at_runtime():
         key == "VITE_DEV_MODE" or key.startswith("VITE_DEV_USER_")
         for key in runtime_environment
     )
+    assert "VITE_DEV_MODE" not in runtime_environment["FRONTEND_RUNTIME_CONFIG_KEYS"]
+    assert "VITE_DEV_USER_" not in runtime_environment["FRONTEND_RUNTIME_CONFIG_KEYS"]
     assert not frontend.get("env_file")
 
 

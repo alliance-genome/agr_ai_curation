@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { logger } from '../services/logger';
-import { getEnvFlag } from '../utils/env';
+import { getBuildEnvFlag } from '../utils/env';
 import {
   cleanupAiCurationLocalCache,
 } from '../lib/aiCurationLocalCache';
@@ -45,7 +45,7 @@ interface AuthProviderProps {
 /**
  * Check if running in development mode (auth bypass)
  */
-const isDevMode = (): boolean => getEnvFlag(['VITE_DEV_MODE', 'REACT_APP_DEV_MODE', 'DEV_MODE'], false);
+const isDevMode = (): boolean => getBuildEnvFlag(['VITE_DEV_MODE', 'REACT_APP_DEV_MODE', 'DEV_MODE'], false);
 
 const getDevUser = (): AuthUser => {
   const groups = (import.meta.env.VITE_DEV_USER_GROUPS || '')

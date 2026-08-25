@@ -228,6 +228,19 @@ jobs:
           grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "2500"' <<<"${runtime_config}"
           ! grep -Fq 'VITE_DEV_MODE' <<<"${runtime_config}"
           node --check <<<"${runtime_config}"
+          expected_boundary_value='quoted "value" C:\path\'
+          generic_runtime_config="$(docker run --rm --network=none \
+            --env FRONTEND_RUNTIME_CONFIG_KEYS=VITE_REUSABLE_BOUNDARY_CHECK \
+            --env "VITE_REUSABLE_BOUNDARY_CHECK=${expected_boundary_value}" \
+            --entrypoint /bin/sh "${image_ref}" \
+            -c '/docker-entrypoint.d/10-generate-runtime-config.sh && cat /usr/share/nginx/html/runtime-config.js')"
+          node --check <<<"${generic_runtime_config}"
+          round_trip_value="$(node -e '
+            global.window = {};
+            eval(require("fs").readFileSync(0, "utf8"));
+            process.stdout.write(window.__APP_RUNTIME_CONFIG__.VITE_REUSABLE_BOUNDARY_CHECK);
+          ' <<<"${generic_runtime_config}")"
+          [[ "${round_trip_value}" == "${expected_boundary_value}" ]]
           index_html="$(docker run --rm --network=none --entrypoint cat "${image_ref}" \
             /usr/share/nginx/html/index.html)"
           grep -Fq '<script src="/runtime-config.js"></script>' <<<"${index_html}"

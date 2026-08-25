@@ -92,6 +92,9 @@ import sys
 
 config = json.load(open(sys.argv[1], encoding="utf-8"))
 frontend_env = config["services"]["frontend"]["environment"]
+assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
+    "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS"
+)
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "3"
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "1000"
 PY
@@ -152,6 +155,9 @@ assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
 assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
+assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
+    "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS"
+)
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "7"
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "2500"
 assert weaviate_env["AUTHORIZATION_ADMINLIST_USERS"] == "curation-backend"
