@@ -480,7 +480,7 @@ async def test_intake_upload_rejects_pdf_larger_than_configured_limit_before_db_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("page_count", [1, 49, 50, 51, 99, 100])
+@pytest.mark.parametrize("page_count", [1, 100, 137, 299, 300])
 async def test_intake_upload_accepts_page_counts_through_default_limit(
     tmp_path,
     monkeypatch,
@@ -521,7 +521,7 @@ async def test_intake_upload_accepts_page_counts_through_default_limit(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("configured_max", "page_count"),
-    [(100, 101), (120, 121)],
+    [(300, 301), (350, 351)],
 )
 async def test_intake_upload_rejects_page_count_before_durable_side_effects(
     tmp_path,
@@ -569,11 +569,11 @@ async def test_intake_upload_rejects_page_count_before_durable_side_effects(
 
 
 @pytest.mark.asyncio
-async def test_intake_upload_accepts_101_pages_with_120_page_override(
+async def test_intake_upload_accepts_301_pages_with_350_page_override(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("PDF_UPLOAD_MAX_PAGE_COUNT", "120")
+    monkeypatch.setenv("PDF_UPLOAD_MAX_PAGE_COUNT", "350")
     session = _FakeSession()
     dispatch = _DispatchRecorder()
 
@@ -583,7 +583,7 @@ async def test_intake_upload_accepts_101_pages_with_120_page_override(
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(
             storage_path=storage_path,
-            page_count=101,
+            page_count=301,
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
         provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
@@ -600,19 +600,19 @@ async def test_intake_upload_accepts_101_pages_with_120_page_override(
         user={"sub": "user-1"},
     )
 
-    assert session.added[0].page_count == 101
+    assert session.added[0].page_count == 301
     assert session.commit_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_default_upload_handler_rejects_real_101_page_pdf_before_session(
+async def test_default_upload_handler_rejects_real_301_page_pdf_before_session(
     tmp_path,
     monkeypatch,
 ):
     monkeypatch.delenv("PDF_UPLOAD_MAX_PAGE_COUNT", raising=False)
     pdf_buffer = BytesIO()
     writer = PdfWriter()
-    for _ in range(101):
+    for _ in range(301):
         writer.add_blank_page(width=612, height=792)
     writer.write(pdf_buffer)
     pdf_buffer.seek(0)
@@ -632,8 +632,8 @@ async def test_default_upload_handler_rejects_real_101_page_pdf_before_session(
             user={"sub": "user-1"},
         )
 
-    assert exc_info.value.client_detail["actual_page_count"] == 101
-    assert exc_info.value.client_detail["max_page_count"] == 100
+    assert exc_info.value.client_detail["actual_page_count"] == 301
+    assert exc_info.value.client_detail["max_page_count"] == 300
     assert session_factory_calls == []
     assert dispatch.calls == []
     user_dir = tmp_path / "user-1"

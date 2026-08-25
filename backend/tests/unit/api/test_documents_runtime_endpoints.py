@@ -776,9 +776,9 @@ async def test_upload_document_endpoint_reports_oversized_pdf_page_count(monkeyp
     upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
     detail = {
         "error": "pdf_page_count_exceeded",
-        "message": "PDF page count (101) exceeds the configured maximum (100).",
-        "actual_page_count": 101,
-        "max_page_count": 100,
+        "message": "PDF page count (301) exceeds the configured maximum (300).",
+        "actual_page_count": 301,
+        "max_page_count": 300,
     }
 
     async def _raise_validation(**_kwargs):

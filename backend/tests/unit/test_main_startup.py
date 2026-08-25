@@ -41,6 +41,18 @@ def make_connection(list_all_return=None):
     return connection, client
 
 
+class TestPdfExtractionTimeoutValidation:
+    def test_low_timeout_recommends_canonical_default(self, monkeypatch):
+        monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "299")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            _main_module()._validate_pdf_extraction_timeout()
+
+        message = str(exc_info.value)
+        assert "must be at least 300 seconds" in message
+        assert "PDF_EXTRACTION_TIMEOUT=3600" in message
+
+
 class TestInitializeWeaviateCollections:
     @pytest.mark.asyncio
     async def test_creates_missing_collections(self):

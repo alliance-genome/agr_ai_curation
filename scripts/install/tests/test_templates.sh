@@ -54,6 +54,8 @@ required_env_keys=(
   FILE_OUTPUT_STORAGE_HOST_DIR
   WEAVIATE_DATA_HOST_DIR
   WEAVIATE_BACKUP_HOST_DIR
+  PDF_UPLOAD_MAX_PAGE_COUNT
+  PDF_EXTRACTION_TIMEOUT
   BACKEND_IMAGE
   BACKEND_IMAGE_TAG
   FRONTEND_IMAGE
@@ -95,6 +97,8 @@ grep -q '^HEALTH_CHECK_STRICT_MODE=true$' "$env_template"
 grep -q '^HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS=true$' "$env_template"
 grep -q '^HEALTH_CHECK_REQUIRE_LITERATURE_DB=true$' "$env_template"
 grep -q '^SECURE_COOKIES=true$' "$env_template"
+grep -q '^PDF_UPLOAD_MAX_PAGE_COUNT=300$' "$env_template"
+grep -q '^PDF_EXTRACTION_TIMEOUT=3600$' "$env_template"
 grep -q '^WEAVIATE_AUTH_ENABLED=true$' "$env_template"
 grep -q '^WEAVIATE_API_KEY=CHANGE_ME_WEAVIATE_API_KEY$' "$env_template"
 grep -q '^WEAVIATE_API_KEY_USER=curation-backend$' "$env_template"

@@ -98,7 +98,7 @@ def _validate_pdf_extraction_timeout():
                 f"PDF_EXTRACTION_TIMEOUT is set to {timeout_int} seconds, "
                 f"but must be at least {min_timeout} seconds (5 minutes). "
                 f"PDF processing can take several minutes, especially for complex documents. "
-                f"Please update .env file: PDF_EXTRACTION_TIMEOUT=300"
+                f"Please update .env file: PDF_EXTRACTION_TIMEOUT=3600"
             )
             raise RuntimeError(error_msg)
         logger.info("PDF_EXTRACTION_TIMEOUT validated: %s seconds", timeout_int)
