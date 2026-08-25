@@ -298,7 +298,9 @@ def test_rerank_chunks_raises_when_bedrock_credentials_are_missing(
         bedrock_reranker.rerank_chunks("query", chunks, top_n=1)
 
 
-def test_rerank_chunks_preserves_original_order_when_bedrock_errors(monkeypatch):
+def test_rerank_chunks_reports_and_raises_when_bedrock_errors(monkeypatch):
+    reported = []
+
     class _Session:
         def __init__(self, profile_name=None, region_name=None):
             pass
@@ -308,18 +310,41 @@ def test_rerank_chunks_preserves_original_order_when_bedrock_errors(monkeypatch)
 
     monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
     monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+    monkeypatch.setattr(
+        bedrock_reranker,
+        "report_runtime_exception",
+        lambda exc, **kwargs: reported.append((exc, kwargs)) or True,
+    )
 
     chunks = [
         {"id": "chunk-1", "score": 0.8},
         {"id": "chunk-2", "score": 0.3},
     ]
 
-    assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", chunks, top_n=2)
+
+    assert exc_info.value.category == "provider_failure"
+    assert exc_info.value.provider == "bedrock_cohere"
+    assert len(reported) == 1
+    reported_exc, reported_kwargs = reported[0]
+    assert isinstance(reported_exc, bedrock_reranker.RerankProviderError)
+    assert reported_exc.provider == "bedrock_cohere"
+    assert reported_exc.category == "provider_failure"
+    assert reported_exc.__traceback__ is None
+    assert reported_kwargs == {
+        "component": "rerank_provider",
+        "operation": "rerank_chunks",
+        "context": {
+            "provider": "bedrock_cohere",
+            "failure_category": "provider_failure",
+        },
+        "level": "error",
+    }
 
 
-def test_rerank_chunks_preserves_original_order_when_bedrock_returns_no_results(
+def test_rerank_chunks_raises_when_bedrock_returns_no_results(
     monkeypatch,
-    caplog,
 ):
     class _Client:
         def rerank(self, **kwargs):
@@ -340,22 +365,35 @@ def test_rerank_chunks_preserves_original_order_when_bedrock_returns_no_results(
         {"id": "chunk-2", "score": 0.3},
     ]
 
-    with caplog.at_level(logging.WARNING, logger=bedrock_reranker.logger.name):
-        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", chunks, top_n=2)
 
-    assert "rerank no results provider=bedrock_cohere" not in caplog.text
+    assert exc_info.value.category == "empty_response"
 
 
-def test_log_rerank_no_results_prefers_bedrock_message(caplog):
-    with caplog.at_level(logging.WARNING):
-        bedrock_reranker._log_rerank_no_results("bedrock_cohere", "query")
+def test_rerank_chunks_raises_when_bedrock_returns_incomplete_results(monkeypatch):
+    class _Client:
+        def rerank(self, **kwargs):
+            return {"results": [{"index": 0, "relevanceScore": 0.8}]}
 
-    assert (
-        "Bedrock reranking returned no results; preserving original retrieval order for "
-        "query_fingerprint=a8b771920b8319e4" in caplog.text
-    )
-    assert "query='query'" not in caplog.text
-    assert "rerank no results provider=bedrock_cohere" not in caplog.text
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            pass
+
+        def client(self, service_name, region_name=None):
+            return _Client()
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks(
+            "query",
+            [{"id": "chunk-1"}, {"id": "chunk-2"}],
+            top_n=2,
+        )
+
+    assert exc_info.value.category == "incomplete_response"
 
 
 def test_rerank_chunks_logs_request_and_completion_details(monkeypatch, caplog):
@@ -482,9 +520,8 @@ def test_rerank_chunks_calls_local_transformers_and_preserves_top_n(monkeypatch)
     assert observed["payload"]["documents"][1] == "Results section text"
 
 
-def test_rerank_chunks_returns_original_chunks_on_local_transformers_empty_result(
+def test_rerank_chunks_raises_on_local_transformers_empty_result(
     monkeypatch,
-    caplog,
 ):
     class _FakeResponse:
         def __init__(self, body: str):
@@ -507,10 +544,38 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_empty_resul
     monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
     monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
 
-    with caplog.at_level(logging.WARNING, logger=bedrock_reranker.logger.name):
-        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", chunks, top_n=2)
 
-    assert "rerank no results provider=local_transformers" in caplog.text
+    assert exc_info.value.category == "empty_response"
+
+
+def test_rerank_chunks_raises_on_local_transformers_incomplete_result(monkeypatch):
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"scores": [{"score": 0.8}]}).encode("utf-8")
+
+    monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
+    monkeypatch.setattr(
+        bedrock_reranker.request,
+        "urlopen",
+        lambda request, timeout: _FakeResponse(),
+    )
+
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks(
+            "query",
+            [{"id": "chunk-1"}, {"id": "chunk-2"}],
+            top_n=2,
+        )
+
+    assert exc_info.value.category == "incomplete_response"
 
 
 @pytest.mark.parametrize(
@@ -520,10 +585,9 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_empty_resul
         lambda: TimeoutError("timed out"),
     ],
 )
-def test_rerank_chunks_returns_original_chunks_on_local_transformers_errors(
+def test_rerank_chunks_raises_on_local_transformers_errors(
     monkeypatch,
     error_factory,
-    caplog,
 ):
     def _urlopen(request: Any, timeout: int):
         raise error_factory()
@@ -533,10 +597,10 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_errors(
     monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
     monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
 
-    with caplog.at_level(logging.ERROR, logger=bedrock_reranker.logger.name):
-        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", chunks, top_n=2)
 
-    assert "Local transformers reranking failed" in caplog.text
+    assert exc_info.value.category in {"provider_unavailable", "timeout"}
 
 
 def test_rerank_chunks_logs_provider_neutral_local_transformers_lines(
@@ -589,9 +653,8 @@ def test_rerank_chunks_logs_provider_neutral_local_transformers_lines(
     assert raw_query not in caplog.text
 
 
-def test_rerank_chunks_returns_original_chunks_on_local_transformers_missing_scores(
+def test_rerank_chunks_raises_on_local_transformers_missing_scores(
     monkeypatch,
-    caplog,
 ):
     class _FakeResponse:
         def __init__(self, body: str):
@@ -614,15 +677,14 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_missing_sco
     monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
     monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
 
-    with caplog.at_level(logging.ERROR, logger=bedrock_reranker.logger.name):
-        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", chunks, top_n=2)
 
-    assert "Local transformers reranking failed" in caplog.text
+    assert exc_info.value.category == "malformed_response"
 
 
-def test_rerank_chunks_returns_original_chunks_on_local_transformers_invalid_index(
+def test_rerank_chunks_raises_on_local_transformers_invalid_index(
     monkeypatch,
-    caplog,
 ):
     class _FakeResponse:
         def __init__(self, body: str):
@@ -644,6 +706,7 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_invalid_ind
                     "query": "query",
                     "scores": [
                         {"document": "Chunk A", "score": 0.91, "index": "0"},
+                        {"document": "Chunk B", "score": 0.37, "index": 1},
                     ],
                 }
             )
@@ -654,7 +717,7 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_invalid_ind
     monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
     monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
 
-    with caplog.at_level(logging.ERROR, logger=bedrock_reranker.logger.name):
-        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with pytest.raises(bedrock_reranker.RerankProviderError) as exc_info:
+        bedrock_reranker.rerank_chunks("query", chunks, top_n=2)
 
-    assert "Local transformers response index must be an integer when provided" in caplog.text
+    assert exc_info.value.category == "malformed_response"

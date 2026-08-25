@@ -1,6 +1,6 @@
 # Rerank Provider Smoke Test Matrix
 
-Last updated: 2026-04-18
+Last updated: 2026-08-25
 
 ## Purpose
 
@@ -36,6 +36,12 @@ Notes:
 - The local smoke script validates the backend's effective `RERANKER_URL`.
   It resolves that target from an exported `RERANKER_URL`, then the local
   backend env file, then the default `http://reranker-transformers:8080`.
+- Configured providers fail the search request when the provider is unavailable,
+  times out, or returns a malformed, empty, or incomplete response. These
+  incidents are reported to Sentry with the provider and failure category, but
+  without query text, document content, credentials, or response bodies.
+- There is no implicit fallback from a configured provider to retrieval order.
+  Set `RERANK_PROVIDER=none` when post-retrieval reranking should be disabled.
 
 ## Environments
 
@@ -123,6 +129,8 @@ Record each manual test case with:
 | `BEDROCK_COHERE_RERANK_BEHAVIOR` | Bedrock reorders results | Run the automated smoke probe or manually exercise `rerank_chunks(...)` against the backend runtime. | The Bedrock provider moves the most relevant chunk to the top of the ranked output. | Yes |
 | `LOCAL_TRANSFORMERS_RERANK_BEHAVIOR` | Local reranker reorders results | Run the automated smoke probe or manually exercise `rerank_chunks(...)` against the backend runtime. | The local transformers provider moves the most relevant chunk to the top of the ranked output. | Yes |
 | `NONE_RERANK_BEHAVIOR` | No-rerank preserves order | Run the automated smoke probe or manually exercise `rerank_chunks(...)` against the backend runtime. | Output order exactly matches retrieval order. | Yes |
+| `CONFIGURED_PROVIDER_OUTAGE` | Configured provider outage is surfaced | Stop or make the selected configured provider unreachable, then run a search that has rerank candidates. | The search fails with a categorized rerank-provider error and a Sentry incident identifies the provider and failure category. Retrieval order is not returned as a successful rerank result. | Yes (unit) |
+| `CONFIGURED_PROVIDER_INVALID_RESPONSE` | Invalid provider response is surfaced | Return a malformed, empty, or incomplete provider response for a non-empty candidate set. | The search fails with the corresponding response failure category and a Sentry incident is generated. Retrieval order is preserved only after explicitly selecting `none`. | Yes (unit) |
 
 ### C. Manual Operator Checks
 
