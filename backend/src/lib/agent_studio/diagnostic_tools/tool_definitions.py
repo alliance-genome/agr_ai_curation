@@ -157,13 +157,23 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
         if not isinstance(diagnostic, dict) or not bool(diagnostic.get("enabled")):
             continue
         execution_context = _build_tool_execution_context({})
+        unknown_context = [
+            key
+            for key in binding.required_context
+            if not hasattr(execution_context, key)
+        ]
+        if unknown_context:
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' declares unknown "
+                f"execution context: {', '.join(unknown_context)}"
+            )
         missing_context = [
             key
             for key in binding.required_context
             if getattr(execution_context, key, None) in (None, "")
         ]
         if missing_context:
-            logger.debug(
+            logger.warning(
                 "Skipping package diagnostic tool %s; missing context: %s",
                 binding.tool_id,
                 ", ".join(missing_context),
@@ -292,16 +302,23 @@ def _get_prompt_diagnostic_contract() -> tuple[str, Dict[str, Any]]:
     )
     group_ids = sorted(catalog.available_groups)
 
-    installed_targets = ", ".join(agent_ids) or "none currently available"
-    installed_groups = ", ".join(group_ids) or "none currently available"
+    if not agent_ids:
+        raise RuntimeError(
+            "Cannot register get_prompt before the installed prompt catalog is initialized"
+        )
+
+    installed_targets = ", ".join(agent_ids)
     description = f"""Get an installed agent's effective prompt from the shared prompt assembler.
 
 Use this to inspect the flat prompt, structured layers, layer manifest, and
 effective prompt hash for an installed specialist or validator. Use the live
 catalog values below instead of assuming a package-specific agent or group.
 
-Installed prompt targets: {installed_targets}.
-Installed group-rule identifiers: {installed_groups}."""
+Installed prompt targets: {installed_targets}."""
+    if group_ids:
+        description += (
+            "\nInstalled group-rule identifiers: " + ", ".join(group_ids) + "."
+        )
     input_schema = {
         "type": "object",
         "properties": {

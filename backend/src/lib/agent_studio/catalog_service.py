@@ -1413,7 +1413,10 @@ class PromptCatalogService:
 
     def refresh(self) -> PromptCatalog:
         """Force rebuild of the catalog."""
+        from src.lib.agent_studio.diagnostic_tools import reset_registry
+
         self._catalog = _build_catalog()
+        reset_registry()
         logger.info("Refreshed prompt catalog")
         return self._catalog
 
