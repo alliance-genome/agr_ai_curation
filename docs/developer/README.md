@@ -54,7 +54,7 @@ Start here for new developers:
 | [PDF_EVIDENCE_CONSISTENCY_STRATEGY.md](PDF_EVIDENCE_CONSISTENCY_STRATEGY.md) | Deep-dive architecture strategy for replacing split Home/Curation PDF viewers with one persistent route-level PDF.js host |
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
 | [SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md) | Backend Sentry operating model: initialization, redaction, reporting facades, CloudWatch/Langfuse boundaries, and dev smoke testing |
-| [WEAVIATE_BACKUPS.md](guides/WEAVIATE_BACKUPS.md) | Native filesystem backup configuration, create/status workflow, isolated restore requirements, and disaster-recovery limitations |
+| [WEAVIATE_BACKUPS.md](guides/WEAVIATE_BACKUPS.md) | Native filesystem backup configuration, create/status workflow, isolated restore requirements, legacy non-multitenant collection migration, and disaster-recovery limitations |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
 | [BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md) | Durable batch worker leases, startup scan behavior, stale processing policy, and counter invariants |
 | [ABC Literature API Contract Verification](integrations/abc_literature/api_contract_verification.md) | Verified Literature OpenAPI hostnames, endpoint allowlist, forbidden endpoints, and fixture-backed live-check procedure |
