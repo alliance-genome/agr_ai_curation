@@ -313,6 +313,8 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
         status="pending",
         error_message=None,
         upload_timestamp=None,
+        processing_started_at=datetime(2026, 2, 10, 0, 1),
+        processing_completed_at=datetime(2026, 2, 10, 0, 2),
         file_size=5120,
         source_provider=None,
         source_provider_reference_id=None,
@@ -367,6 +369,8 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     assert owned["embedding_status"] == "pending"
     assert owned["vector_count"] is None
     assert owned["upload_timestamp"] == "2026-02-10T00:00:00"
+    assert owned["processing_started_at"] == datetime(2026, 2, 10, 0, 1)
+    assert owned["processing_completed_at"] == datetime(2026, 2, 10, 0, 2)
     assert owned["source_provenance"] is None
 
     fetch_call = pdf_collection.query.fetch_objects.call_args.kwargs
@@ -401,6 +405,8 @@ async def test_async_list_documents_applies_date_filters():
         status="pending",
         error_message=None,
         upload_timestamp=None,
+        processing_started_at=None,
+        processing_completed_at=None,
         file_size=5120,
         source_provider=None,
         source_provider_reference_id=None,
