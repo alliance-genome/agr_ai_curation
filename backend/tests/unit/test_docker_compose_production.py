@@ -251,6 +251,23 @@ def test_pdf_page_count_limit_is_shared_by_backend_env_templates(monkeypatch):
     assert get_pdf_upload_max_page_count() == 300
 
 
+def test_pdf_extraction_timeout_is_shared_by_backend_env_templates():
+    dev_backend_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_backend_env = _load_compose()["services"]["backend"]["environment"]
+    expected = "${PDF_EXTRACTION_TIMEOUT:-3600}"
+
+    assert dev_backend_env["PDF_EXTRACTION_TIMEOUT"] == expected
+    assert production_backend_env["PDF_EXTRACTION_TIMEOUT"] == expected
+    assert "PDF_EXTRACTION_TIMEOUT=3600" in ENV_TEMPLATE_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert "PDF_EXTRACTION_TIMEOUT=3600" in ENV_EXAMPLE_PATH.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_document_intake_vite_limits_reach_standard_frontend_builds():
     frontend_build_args = _load_dev_compose()["services"]["frontend"]["build"]["args"]
     expected = {
