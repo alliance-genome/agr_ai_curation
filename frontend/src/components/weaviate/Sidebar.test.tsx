@@ -90,14 +90,6 @@ describe('Sidebar', () => {
     expect(getNavButton('Add Literature')).toHaveClass('Mui-selected');
   });
 
-  it('highlights add literature for the temporary import mock alias', () => {
-    mockLocation.pathname = '/weaviate/documents/import-mock';
-    renderWithTheme(<Sidebar />);
-
-    expect(getNavButton('Add Literature')).toHaveClass('Mui-selected');
-    expect(getNavButton('Library')).not.toHaveClass('Mui-selected');
-  });
-
   it('collapses and expands the sidebar with labeled controls', async () => {
     renderWithTheme(<Sidebar />);
 

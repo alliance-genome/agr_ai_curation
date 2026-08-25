@@ -306,9 +306,7 @@ export function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const normalizedPathname = location.pathname.replace(/\/+$/, '');
-  const suppressChangelogDialog =
-    normalizedPathname === '/weaviate/add-literature' ||
-    normalizedPathname === '/weaviate/documents/import-mock';
+  const suppressChangelogDialog = normalizedPathname === '/weaviate/add-literature';
   const lastAuthenticatedUserIdRef = React.useRef<string | null>(isAuthenticated ? user?.uid ?? null : null);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [changelogDialogOpen, setChangelogDialogOpen] = useState(false);
@@ -881,8 +879,8 @@ export function AppContent() {
           <Route path="/weaviate/*" element={<WeaviateLayout />}>
             <Route index element={<Navigate to="/weaviate/documents" replace />} />
             <Route path="documents" element={renderLazyRoute(<DocumentsPage />)} />
+            {/* The legacy import-mock alias was removed after /weaviate/add-literature became canonical in ALL-654. */}
             <Route path="add-literature" element={renderLazyRoute(<AddLiteraturePage />)} />
-            <Route path="documents/import-mock" element={renderLazyRoute(<AddLiteraturePage />)} />
             <Route path="documents/:id" element={renderLazyRoute(<DocumentDetail />)} />
             <Route path="dashboard" element={renderLazyRoute(<Dashboard />)} />
             <Route path="settings" element={renderLazyRoute(<Settings />)} />
