@@ -377,26 +377,6 @@ describe('AppContent global notifications', () => {
     expect(screen.queryByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).not.toBeInTheDocument();
   });
 
-  it('keeps the document import mock route as an add literature alias', async () => {
-    localStorage.removeItem(`changelog:last-seen:user-1`);
-
-    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/api/weaviate/pdf-jobs')) {
-        return jsonResponse({ jobs: [] });
-      }
-      if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
-      }
-      return jsonResponse({});
-    });
-
-    renderAppContent('/weaviate/documents/import-mock/');
-
-    expect(await screen.findByText('Add Literature Page')).toBeInTheDocument();
-    expect(screen.queryByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).not.toBeInTheDocument();
-  });
-
   it('uses the v0.8.13 complete saved-flow upgrade notes for the changelog popup', () => {
     expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-07-14-v0.8.13');
     expect(POPUP_CHANGELOG_ENTRY?.version).toBe('0.8.13');

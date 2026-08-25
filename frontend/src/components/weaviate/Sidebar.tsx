@@ -35,7 +35,6 @@ interface NavigationItem {
   label: string;
   icon: React.ReactNode;
   path?: string;
-  aliases?: string[];
 }
 
 const NAVIGATION_ITEMS: NavigationItem[] = [
@@ -50,7 +49,6 @@ const NAVIGATION_ITEMS: NavigationItem[] = [
     label: 'Add Literature',
     icon: <PostAdd />,
     path: '/weaviate/add-literature',
-    aliases: ['/weaviate/documents/import-mock'],
   },
 ];
 
@@ -79,21 +77,15 @@ const Sidebar: React.FC<SidebarProps> = ({
     setCollapsed((isCollapsed) => !isCollapsed);
   };
 
-  const isActiveRoute = (path?: string, aliases: string[] = []): boolean => {
+  const isActiveRoute = (path?: string): boolean => {
     if (!path) return false;
     const normalizedPathname = location.pathname.replace(/\/+$/, '');
-    if (aliases.includes(normalizedPathname)) {
-      return true;
-    }
-    if (path === '/weaviate/documents' && normalizedPathname === '/weaviate/documents/import-mock') {
-      return false;
-    }
     // Exact match or starts with path followed by a slash (for sub-routes)
     return normalizedPathname === path || normalizedPathname.startsWith(`${path}/`);
   };
 
   const renderNavigationItem = (item: NavigationItem): React.ReactNode => {
-    const isActive = isActiveRoute(item.path, item.aliases);
+    const isActive = isActiveRoute(item.path);
 
     return (
       <React.Fragment key={item.id}>
