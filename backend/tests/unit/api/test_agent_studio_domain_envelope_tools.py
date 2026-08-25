@@ -43,11 +43,10 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert "under-development validator metadata" in validation_plan_description
     assert "get_prompt(agent_id=...)" in validation_plan_description
     assert "validator_bindings[].validator_agent.agent_id" in validation_plan_description
-    assert "Validator-agent IDs returned by get_domain_pack_validation_plan" in (
-        get_prompt_description
-    )
-    assert "gene_expression_extraction" in get_prompt_description
-    assert "gene_validation, allele_validation" in get_prompt_description
+    assert "installed specialist or validator" in get_prompt_description
+    assert "package-specific agent or group" in get_prompt_description
+    assert "gene_expression_extraction" not in get_prompt_description
+    assert "gene_validation, allele_validation" not in get_prompt_description
     assert "also available as gene" not in get_prompt_description
     assert "allele_validation (allele)" not in get_prompt_description
     assert "disease_validation (disease)" not in get_prompt_description
@@ -180,6 +179,7 @@ def test_domain_reference_summary_merges_stable_tool_refs_without_prompt_text():
         },
     )
 
+    assert event is not None
     merged = api_module._merge_domain_reference_events([event])
 
     assert merged == {

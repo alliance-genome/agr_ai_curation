@@ -8,6 +8,9 @@ from src.lib.agent_studio.catalog_service import get_tool_registry
 
 def _install_initialized_prompt_catalog(monkeypatch):
     from src.lib.agent_studio import catalog_service
+    from src.lib.prompts import cache as prompt_cache
+
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
 
     monkeypatch.setattr(
         catalog_service,
@@ -86,6 +89,7 @@ def test_get_diagnostic_registry_includes_codebase_tools(monkeypatch):
 def test_get_prompt_diagnostic_derives_targets_from_live_catalog(monkeypatch):
     from src.lib.agent_studio import catalog_service
     from src.lib.agent_studio.diagnostic_tools import tool_definitions
+    from src.lib.prompts import cache as prompt_cache
 
     catalog = SimpleNamespace(
         categories=[
@@ -103,6 +107,7 @@ def test_get_prompt_diagnostic_derives_targets_from_live_catalog(monkeypatch):
         "get_prompt_catalog",
         lambda: SimpleNamespace(catalog=catalog),
     )
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
 
     description, input_schema = tool_definitions._get_prompt_diagnostic_contract()
 
@@ -116,6 +121,7 @@ def test_get_prompt_diagnostic_derives_targets_from_live_catalog(monkeypatch):
 def test_get_prompt_diagnostic_rejects_empty_agent_catalog(monkeypatch):
     from src.lib.agent_studio import catalog_service
     from src.lib.agent_studio.diagnostic_tools import tool_definitions
+    from src.lib.prompts import cache as prompt_cache
 
     monkeypatch.setattr(
         catalog_service,
@@ -124,6 +130,7 @@ def test_get_prompt_diagnostic_rejects_empty_agent_catalog(monkeypatch):
             catalog=SimpleNamespace(categories=[], available_groups=[])
         ),
     )
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
 
     with pytest.raises(RuntimeError, match="prompt catalog is initialized"):
         tool_definitions._get_prompt_diagnostic_contract()
@@ -132,6 +139,7 @@ def test_get_prompt_diagnostic_rejects_empty_agent_catalog(monkeypatch):
 def test_get_prompt_diagnostic_omits_group_line_when_no_groups(monkeypatch):
     from src.lib.agent_studio import catalog_service
     from src.lib.agent_studio.diagnostic_tools import tool_definitions
+    from src.lib.prompts import cache as prompt_cache
 
     monkeypatch.setattr(
         catalog_service,
@@ -147,11 +155,33 @@ def test_get_prompt_diagnostic_omits_group_line_when_no_groups(monkeypatch):
             )
         ),
     )
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
 
     description, _ = tool_definitions._get_prompt_diagnostic_contract()
 
     assert "Installed prompt targets: demo_review." in description
     assert "Installed group-rule identifiers:" not in description
+
+
+def test_get_prompt_diagnostic_is_generic_before_prompt_cache_initialization(
+    monkeypatch,
+):
+    from src.lib.agent_studio import catalog_service
+    from src.lib.agent_studio.diagnostic_tools import tool_definitions
+    from src.lib.prompts import cache as prompt_cache
+
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: False)
+    monkeypatch.setattr(
+        catalog_service,
+        "get_prompt_catalog",
+        lambda: pytest.fail("uninitialized prompt catalog must not be memoized"),
+    )
+
+    description, input_schema = tool_definitions._get_prompt_diagnostic_contract()
+
+    assert "Installed prompt targets:" not in description
+    assert "none currently available" not in description
+    assert input_schema["required"] == ["agent_id"]
 
 
 @pytest.mark.parametrize(

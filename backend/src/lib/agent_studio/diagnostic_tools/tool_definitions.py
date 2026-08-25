@@ -292,33 +292,13 @@ def _create_get_prompt_handler():
 def _get_prompt_diagnostic_contract() -> tuple[str, Dict[str, Any]]:
     """Describe prompt inspection using only targets installed in the live catalog."""
     from src.lib.agent_studio.catalog_service import get_prompt_catalog
+    from src.lib.prompts.cache import is_initialized
 
-    catalog = get_prompt_catalog().catalog
-    agent_ids = sorted(
-        agent.agent_id
-        for category in catalog.categories
-        for agent in category.agents
-        if agent.agent_id != "task_input"
-    )
-    group_ids = sorted(catalog.available_groups)
-
-    if not agent_ids:
-        raise RuntimeError(
-            "Cannot register get_prompt before the installed prompt catalog is initialized"
-        )
-
-    installed_targets = ", ".join(agent_ids)
-    description = f"""Get an installed agent's effective prompt from the shared prompt assembler.
+    description = """Get an installed agent's effective prompt from the shared prompt assembler.
 
 Use this to inspect the flat prompt, structured layers, layer manifest, and
 effective prompt hash for an installed specialist or validator. Use the live
-catalog values below instead of assuming a package-specific agent or group.
-
-Installed prompt targets: {installed_targets}."""
-    if group_ids:
-        description += (
-            "\nInstalled group-rule identifiers: " + ", ".join(group_ids) + "."
-        )
+catalog values below instead of assuming a package-specific agent or group."""
     input_schema = {
         "type": "object",
         "properties": {
@@ -335,6 +315,34 @@ Installed prompt targets: {installed_targets}."""
         },
         "required": ["agent_id"],
     }
+
+    if not is_initialized():
+        logger.warning(
+            "Prompt cache is not initialized; registering get_prompt without "
+            "installed target examples"
+        )
+        return description, input_schema
+
+    catalog = get_prompt_catalog().catalog
+    agent_ids = sorted(
+        agent.agent_id
+        for category in catalog.categories
+        for agent in category.agents
+        if agent.agent_id != "task_input"
+    )
+    group_ids = sorted(catalog.available_groups)
+
+    if not agent_ids:
+        raise RuntimeError(
+            "Cannot register get_prompt before the installed prompt catalog is initialized"
+        )
+
+    installed_targets = ", ".join(agent_ids)
+    description += f"\n\nInstalled prompt targets: {installed_targets}."
+    if group_ids:
+        description += (
+            "\nInstalled group-rule identifiers: " + ", ".join(group_ids) + "."
+        )
     return description, input_schema
 
 
