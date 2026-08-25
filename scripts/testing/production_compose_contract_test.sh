@@ -34,7 +34,9 @@ write_test_env() {
       'AUTH_PROVIDER=oidc' \
       'OIDC_ISSUER_URL=https://issuer.example.org' \
       'OIDC_CLIENT_ID=curation-production' \
-      'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback'
+      'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback' \
+      'VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7' \
+      'VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500'
   } >"${env_file}"
 }
 
@@ -135,6 +137,8 @@ assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
 assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
+assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "7"
+assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "2500"
 assert weaviate_env["AUTHORIZATION_ADMINLIST_USERS"] == "curation-backend"
 assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
 assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"

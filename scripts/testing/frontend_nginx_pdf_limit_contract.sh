@@ -48,6 +48,21 @@ assert_nginx_variables_survive_rendering() {
   grep -Fq 'try_files $uri $uri/ /index.html;' <<<"${rendered}"
 }
 
+assert_runtime_config_override() {
+  local runtime_config
+  runtime_config="$(docker run --rm \
+    --env VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7 \
+    --env VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500 \
+    --env VITE_REUSABLE_BOUNDARY_CHECK='quoted "value"' \
+    --entrypoint /bin/sh \
+    "${image_tag}" \
+    -c '/docker-entrypoint.d/10-generate-runtime-config.sh && cat /usr/share/nginx/html/runtime-config.js')"
+  grep -Fq '"VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS": "7"' <<<"${runtime_config}"
+  grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "2500"' <<<"${runtime_config}"
+  grep -Fq '"VITE_REUSABLE_BOUNDARY_CHECK": "quoted \"value\""' <<<"${runtime_config}"
+  grep -Fq 'window.__AGR_RUNTIME_CONFIG__ = Object.freeze({' <<<"${runtime_config}"
+}
+
 assert_rendered_limit 524288000
 assert_rendered_limit 629145600 --env PDF_MAX_FILE_SIZE_BYTES=629145600
 assert_rendered_limit 2147483647 --env PDF_MAX_FILE_SIZE_BYTES=2147483647
@@ -57,5 +72,6 @@ assert_rejected_value 0 "must be greater than zero"
 assert_rejected_value 2147483648 "must not exceed the persisted file-size capacity of 2147483647 bytes"
 assert_rejected_value 999999999999999999999999999999999999 "must not exceed the persisted file-size capacity of 2147483647 bytes"
 assert_nginx_variables_survive_rendering
+assert_runtime_config_override
 
-echo "Frontend Nginx PDF limit contract tests passed"
+echo "Frontend Nginx runtime contract tests passed"

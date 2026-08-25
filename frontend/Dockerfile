@@ -51,13 +51,18 @@ RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") && \
 FROM public.ecr.aws/nginx/nginx:alpine AS nginx-runtime-base
 
 ENV PDF_MAX_FILE_SIZE_BYTES=524288000
+ENV VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=3
+ENV VITE_CHAT_STREAM_RECOVERY_DELAY_MS=1000
 ENV NGINX_ENVSUBST_FILTER="^PDF_MAX_FILE_SIZE_BYTES$"
 
 # Render the runtime limit through the official Nginx entrypoint after first
 # validating that the value is a positive byte count.
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY docker-entrypoint.d/05-validate-pdf-limit.sh /docker-entrypoint.d/05-validate-pdf-limit.sh
-RUN chmod 755 /docker-entrypoint.d/05-validate-pdf-limit.sh
+COPY docker-entrypoint.d/10-generate-runtime-config.sh /docker-entrypoint.d/10-generate-runtime-config.sh
+RUN chmod 755 \
+    /docker-entrypoint.d/05-validate-pdf-limit.sh \
+    /docker-entrypoint.d/10-generate-runtime-config.sh
 
 # Stage 3: Serve the built application with the configured Nginx runtime.
 FROM nginx-runtime-base

@@ -210,6 +210,25 @@ jobs:
             | jq -e --arg sha "${SHORT_SHA}" \
               '.schema_version == 1 and .vite_dev_mode == false and .git_sha == $sha'
 
+      - name: Verify frontend runtime configuration boundary
+        if: matrix.artifact_id == 'frontend'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REPOSITORY: ${{ matrix.repository }}
+        run: |
+          image_ref="${REPOSITORY}@${DIGEST}"
+          runtime_config="$(docker run --rm --network=none \
+            --env VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7 \
+            --env VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500 \
+            --entrypoint /bin/sh "${image_ref}" \
+            -c '/docker-entrypoint.d/10-generate-runtime-config.sh && cat /usr/share/nginx/html/runtime-config.js')"
+          grep -Fq '"VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS": "7"' <<<"${runtime_config}"
+          grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "2500"' <<<"${runtime_config}"
+          index_html="$(docker run --rm --network=none --entrypoint cat "${image_ref}" \
+            /usr/share/nginx/html/index.html)"
+          grep -Fq '<script src="/runtime-config.js"></script>' <<<"${index_html}"
+
       - name: Write image metadata
         shell: bash
         env:

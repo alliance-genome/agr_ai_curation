@@ -1,5 +1,15 @@
 type EnvSource = Record<string, string | boolean | number | undefined> | undefined;
 
+declare global {
+  interface Window {
+    __AGR_RUNTIME_CONFIG__?: EnvSource;
+  }
+}
+
+const getRuntimeEnv = (): EnvSource => (
+  typeof window !== 'undefined' ? window.__AGR_RUNTIME_CONFIG__ : undefined
+);
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const getViteEnv = (): EnvSource => (typeof import.meta !== 'undefined' ? (import.meta as any).env : undefined);
 
@@ -7,7 +17,7 @@ const getNodeEnv = (): EnvSource => (typeof process !== 'undefined' ? process.en
 
 export const getEnvVar = (keys: string[] | string, fallback?: string): string | undefined => {
   const keyList = Array.isArray(keys) ? keys : [keys];
-  const sources: EnvSource[] = [getViteEnv(), getNodeEnv()];
+  const sources: EnvSource[] = [getRuntimeEnv(), getViteEnv(), getNodeEnv()];
 
   for (const key of keyList) {
     for (const source of sources) {
@@ -25,7 +35,7 @@ export const getEnvVar = (keys: string[] | string, fallback?: string): string | 
  * Usage: import { debug } from '../utils/env'; debug.log('message', data);
  */
 const isDebugMode = (): boolean => {
-  const sources: EnvSource[] = [getViteEnv(), getNodeEnv()];
+  const sources: EnvSource[] = [getRuntimeEnv(), getViteEnv(), getNodeEnv()];
   for (const source of sources) {
     if (source) {
       const val = source['VITE_DEBUG'] || source['DEBUG'];
