@@ -72,6 +72,8 @@ async def test_async_list_documents_normalises_results():
         status="completed",
         error_message=None,
         upload_timestamp=datetime(2024, 1, 1),
+        processing_started_at=None,
+        processing_completed_at=None,
         file_size=2048,
         source_provider="abc_literature",
         source_provider_reference_id="101",
@@ -123,6 +125,8 @@ async def test_async_list_documents_normalises_results():
     assert result["documents"][0]["user_id"] == "test_user_user_id"  # user_id is the auth_sub string, not db id
     assert result["documents"][0]["vector_count"] == 10
     assert result["documents"][0]["weaviate_tenant"] == "test_tenant"
+    assert result["documents"][0]["processing_started_at"] is None
+    assert result["documents"][0]["processing_completed_at"] is None
     assert result["documents"][0]["source_provenance"] == {
         "provider": "abc_literature",
         "provider_metadata": {
