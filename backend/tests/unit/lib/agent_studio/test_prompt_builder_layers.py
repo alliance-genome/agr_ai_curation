@@ -28,7 +28,11 @@ def _layer(
     )
 
 
-def test_selected_agent_context_uses_canonical_group_prompt_layers_in_runtime_order():
+def test_selected_agent_context_uses_canonical_group_prompt_layers_in_runtime_order(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.prompt_builder.build_package_diagnostic_tools_prompt",
+        lambda: "DIAGNOSTIC TOOLS",
+    )
     layers = (
         _layer("gene:core", "core_static", "Core contract", "LOCKED CORE", editable=False, locked=True),
         _layer(
@@ -109,7 +113,11 @@ def test_selected_agent_context_uses_canonical_group_prompt_layers_in_runtime_or
     assert "LEGACY GROUP ONLY" not in prompt
 
 
-def test_flow_context_describes_grouped_output_sources():
+def test_flow_context_describes_grouped_output_sources(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.prompt_builder.build_package_diagnostic_tools_prompt",
+        lambda: "DIAGNOSTIC TOOLS",
+    )
     prompt = build_opus_system_prompt(
         ChatContext.model_validate({"active_tab": "flows"}),
         load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
