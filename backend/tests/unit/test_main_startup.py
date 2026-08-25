@@ -84,7 +84,10 @@ class TestInitializeWeaviateCollections:
 
         with pytest.raises(
             RuntimeError,
-            match="Back up the collection and run the explicit Weaviate migration/reindex procedure",
+            match=(
+                "Back up and export the collection, delete it in an "
+                "operator-controlled maintenance window"
+            ),
         ):
             await _main_module().initialize_weaviate_collections(connection)
 

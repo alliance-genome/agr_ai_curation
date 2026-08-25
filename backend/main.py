@@ -261,8 +261,10 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
                     raise RuntimeError(
                         f"Collection {collection_name} exists without multi-tenancy. "
                         "Automatic migration is disabled to protect existing data. "
-                        "Back up the collection and run the explicit Weaviate "
-                        "migration/reindex procedure before restarting the backend."
+                        "Back up and export the collection, delete it in an "
+                        "operator-controlled maintenance window, restart the backend "
+                        "to recreate it with multi-tenancy, then reimport and re-embed "
+                        "the data with the correct tenant assignments."
                     )
 
 
