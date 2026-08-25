@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -72,6 +73,8 @@ async def test_async_list_documents_normalises_results():
         status="completed",
         error_message=None,
         upload_timestamp=datetime(2024, 1, 1),
+        processing_started_at=None,
+        processing_completed_at=None,
         file_size=2048,
         source_provider="abc_literature",
         source_provider_reference_id="101",
@@ -123,6 +126,8 @@ async def test_async_list_documents_normalises_results():
     assert result["documents"][0]["user_id"] == "test_user_user_id"  # user_id is the auth_sub string, not db id
     assert result["documents"][0]["vector_count"] == 10
     assert result["documents"][0]["weaviate_tenant"] == "test_tenant"
+    assert result["documents"][0]["processing_started_at"] is None
+    assert result["documents"][0]["processing_completed_at"] is None
     assert result["documents"][0]["source_provenance"] == {
         "provider": "abc_literature",
         "provider_metadata": {
@@ -313,6 +318,8 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
         status="pending",
         error_message=None,
         upload_timestamp=None,
+        processing_started_at=datetime(2026, 2, 10, 0, 1),
+        processing_completed_at=datetime(2026, 2, 10, 0, 2),
         file_size=5120,
         source_provider=None,
         source_provider_reference_id=None,
@@ -367,7 +374,10 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     assert owned["embedding_status"] == "pending"
     assert owned["vector_count"] is None
     assert owned["upload_timestamp"] == "2026-02-10T00:00:00"
+    assert owned["processing_started_at"] == "2026-02-10T00:01:00"
+    assert owned["processing_completed_at"] == "2026-02-10T00:02:00"
     assert owned["source_provenance"] is None
+    assert json.loads(json.dumps(result))["documents"][0] == owned
 
     fetch_call = pdf_collection.query.fetch_objects.call_args.kwargs
     assert fetch_call["limit"] == 5
@@ -401,6 +411,8 @@ async def test_async_list_documents_applies_date_filters():
         status="pending",
         error_message=None,
         upload_timestamp=None,
+        processing_started_at=None,
+        processing_completed_at=None,
         file_size=5120,
         source_provider=None,
         source_provider_reference_id=None,

@@ -189,7 +189,15 @@ async def test_list_documents_endpoint_sanitizes_backend_error(monkeypatch, capl
 @pytest.mark.asyncio
 async def test_get_document_endpoint_returns_document_response(monkeypatch):
     upload_time = datetime.now(timezone.utc)
-    pg_doc = SimpleNamespace(filename="paper.pdf", upload_timestamp=upload_time, file_size=123)
+    processing_started_at = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    processing_completed_at = datetime(2026, 8, 25, 12, 5, tzinfo=timezone.utc)
+    pg_doc = SimpleNamespace(
+        filename="paper.pdf",
+        upload_timestamp=upload_time,
+        processing_started_at=processing_started_at,
+        processing_completed_at=processing_completed_at,
+        file_size=123,
+    )
 
     monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: pg_doc)
@@ -208,6 +216,8 @@ async def test_get_document_endpoint_returns_document_response(monkeypatch):
     assert response.user_id == 5
     assert response.status == "PENDING"
     assert response.chunk_count == 7
+    assert response.processing_started_at == processing_started_at
+    assert response.processing_completed_at == processing_completed_at
 
 
 @pytest.mark.asyncio
