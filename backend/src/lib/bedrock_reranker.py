@@ -515,9 +515,7 @@ def _rerank_chunks_with_bedrock(
     *,
     top_n: int | None = None,
 ) -> List[Dict[str, Any]]:
-    is_ready, reason = validate_bedrock_reranker_configuration(
-        check_credentials=False
-    )
+    is_ready, reason = validate_bedrock_reranker_configuration(check_credentials=False)
     if not is_ready:
         raise RerankProviderError(
             "bedrock_cohere",
