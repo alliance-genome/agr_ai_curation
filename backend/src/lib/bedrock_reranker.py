@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import time
 from contextlib import contextmanager
@@ -19,9 +20,11 @@ except ImportError:  # pragma: no cover
 try:  # pragma: no cover - exercised when package-runner env omits AWS deps
     from botocore.exceptions import (
         BotoCoreError,
+        ConnectTimeoutError,
         NoCredentialsError,
         PartialCredentialsError,
         ProfileNotFound,
+        ReadTimeoutError,
     )
 except ImportError:  # pragma: no cover
     class BotoCoreError(Exception):
@@ -36,7 +39,14 @@ except ImportError:  # pragma: no cover
     class ProfileNotFound(Exception):
         pass
 
+    class ConnectTimeoutError(Exception):
+        pass
+
+    class ReadTimeoutError(Exception):
+        pass
+
 from src.lib.aws_env import without_blank_aws_profile_env_vars
+from src.lib.observability.runtime import report_runtime_exception
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +69,17 @@ RERANK_AWS_ENV_OVERRIDES = {
     "RERANK_AWS_SHARED_CREDENTIALS_FILE": "AWS_SHARED_CREDENTIALS_FILE",
     "RERANK_AWS_CONFIG_FILE": "AWS_CONFIG_FILE",
 }
+
+
+class RerankProviderError(RuntimeError):
+    """Sanitized configured-provider failure safe to surface and report."""
+
+    def __init__(self, provider: str, category: str, message: str | None = None):
+        self.provider = provider
+        self.category = category
+        super().__init__(
+            message or f"Configured rerank provider {provider} failed ({category})"
+        )
 
 
 def get_rerank_provider() -> str:
@@ -94,7 +115,7 @@ def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, 
         "reason": None,
     }
 
-    if provider in {"", "none"}:
+    if provider == "none":
         status["reason"] = "RERANK_PROVIDER disables post-retrieval reranking"
         return status
 
@@ -272,19 +293,38 @@ def _log_rerank_complete(
     )
 
 
-def _log_rerank_no_results(provider: str, query: str) -> None:
-    query_fingerprint = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
-    if provider == "bedrock_cohere":
-        logger.warning(
-            "Bedrock reranking returned no results; preserving original retrieval order for query_fingerprint=%s",
-            query_fingerprint,
-        )
-        return
-    logger.warning(
-        "rerank no results provider=%s preserving original retrieval order for query_fingerprint=%s",
-        provider,
-        query_fingerprint,
+def _report_rerank_failure(exc: RerankProviderError) -> None:
+    logger.error(
+        "Configured rerank provider failed provider=%s failure_category=%s",
+        exc.provider,
+        exc.category,
     )
+    # Report a fresh sanitized exception without provider-response traceback
+    # locals; response bodies and request content must never reach Sentry.
+    incident = RerankProviderError(exc.provider, exc.category)
+    report_runtime_exception(
+        incident,
+        component="rerank_provider",
+        operation="rerank_chunks",
+        context={
+            "provider": exc.provider or "<blank>",
+            "failure_category": exc.category,
+        },
+        level="error",
+    )
+
+
+def _parse_rerank_score(provider: str, value: Any) -> float:
+    """Require a finite JSON number for a provider relevance score."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise RerankProviderError(provider, "malformed_response")
+    try:
+        score = float(value)
+    except (OverflowError, TypeError, ValueError):
+        raise RerankProviderError(provider, "malformed_response") from None
+    if not math.isfinite(score):
+        raise RerankProviderError(provider, "malformed_response")
+    return score
 
 
 def rerank_chunks(
@@ -295,44 +335,47 @@ def rerank_chunks(
 ) -> List[Dict[str, Any]]:
     """Rerank chunk candidates with the configured provider."""
     provider = get_rerank_provider()
-    if provider in {"", "none"}:
+    if provider == "none":
         return list(chunks)
-
-    if provider == "bedrock_cohere":
-        is_ready, reason = validate_bedrock_reranker_configuration(
-            check_credentials=False
+    dispatch = _RERANK_DISPATCH.get(provider)
+    if dispatch is None:
+        exc = RerankProviderError(
+            provider,
+            "configuration",
+            f"Unsupported RERANK_PROVIDER={provider}",
         )
-        if not is_ready:
-            raise RuntimeError(f"Bedrock reranker configuration is not ready: {reason}")
-        try:
-            ranked_chunks = _rerank_chunks_with_bedrock(query, chunks, top_n=top_n)
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise RuntimeError(
-                f"AWS credential/profile resolution failed for Bedrock reranking: {exc}"
-            ) from exc
-        except Exception:
-            logger.exception(
-                "Bedrock reranking failed; preserving original retrieval order for query_fingerprint=%s",
-                hashlib.sha256(query.encode("utf-8")).hexdigest()[:16],
-            )
-            return list(chunks)
-    elif provider == "local_transformers":
-        try:
-            ranked_chunks = _rerank_chunks_with_local_transformers(
-                query, chunks, top_n=top_n
-            )
-        except Exception:
-            logger.exception(
-                "Local transformers reranking failed; preserving original retrieval order for query_fingerprint=%s",
-                hashlib.sha256(query.encode("utf-8")).hexdigest()[:16],
-            )
-            return list(chunks)
-    else:
-        raise RuntimeError(f"Unsupported RERANK_PROVIDER={provider}")
+        # ALL-822: validate configured providers even when retrieval returned no
+        # candidates; only RERANK_PROVIDER=none is the canonical opt-out.
+        _report_rerank_failure(exc)
+        raise exc
+    if not chunks:
+        return []
 
-    if not ranked_chunks:
-        _log_rerank_no_results(provider, query)
-        return list(chunks)
+    try:
+        ranked_chunks = dispatch(query, chunks, top_n=top_n)
+        if not ranked_chunks:
+            raise RerankProviderError(provider, "empty_response")
+    except RerankProviderError as exc:
+        # ALL-822: configured providers fail closed. RERANK_PROVIDER=none is the
+        # canonical opt-out and the only mode that preserves retrieval order.
+        _report_rerank_failure(exc)
+        raise
+    except (NoCredentialsError, PartialCredentialsError, ProfileNotFound):
+        exc = RerankProviderError(
+            provider,
+            "credentials",
+            "AWS credential/profile resolution failed for Bedrock reranking",
+        )
+        _report_rerank_failure(exc)
+        raise exc from None
+    except (TimeoutError, ConnectTimeoutError, ReadTimeoutError):
+        exc = RerankProviderError(provider, "timeout")
+        _report_rerank_failure(exc)
+        raise exc from None
+    except Exception:
+        exc = RerankProviderError(provider, "provider_failure")
+        _report_rerank_failure(exc)
+        raise exc from None
 
     return ranked_chunks
 
@@ -343,9 +386,6 @@ def _rerank_chunks_with_local_transformers(
     *,
     top_n: int | None = None,
 ) -> List[Dict[str, Any]]:
-    if not chunks:
-        return []
-
     candidate_chunks = list(chunks)
     requested_results = min(top_n or len(candidate_chunks), len(candidate_chunks))
 
@@ -376,47 +416,63 @@ def _rerank_chunks_with_local_transformers(
             timeout=LOCAL_TRANSFORMERS_TIMEOUT_SECONDS,
         ) as resp:
             raw_payload = resp.read().decode("utf-8")
-    except (error.URLError, TimeoutError) as exc:
-        raise RuntimeError("Local transformers request failed") from exc
+    except TimeoutError:
+        raise
+    except error.URLError as exc:
+        raise RerankProviderError(
+            "local_transformers",
+            (
+                "timeout"
+                if isinstance(exc.reason, TimeoutError)
+                else "provider_unavailable"
+            ),
+        ) from None
 
     try:
         payload_dict = json.loads(raw_payload)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Local transformers response invalid JSON") from exc
+    except json.JSONDecodeError:
+        raise RerankProviderError(
+            "local_transformers", "malformed_response"
+        ) from None
 
     scores = payload_dict.get("scores") if isinstance(payload_dict, dict) else None
     if not isinstance(scores, list):
-        raise RuntimeError("Local transformers response missing scores")
+        raise RerankProviderError("local_transformers", "malformed_response")
 
     if not scores:
-        return []
+        raise RerankProviderError("local_transformers", "empty_response")
+    if len(scores) != len(candidate_chunks):
+        raise RerankProviderError("local_transformers", "incomplete_response")
 
     ranked_chunks: List[Dict[str, Any]] = []
     seen_indexes: set[int] = set()
     rerank_scores: list[tuple[int, float]] = []
     for result_index, item in enumerate(scores):
         if not isinstance(item, dict):
-            continue
+            raise RerankProviderError("local_transformers", "malformed_response")
         score_value = item.get("score")
         if score_value is None:
-            continue
+            raise RerankProviderError("local_transformers", "malformed_response")
 
         # The local reranker sidecar returns scores in request order and omits an
         # explicit index, but we still reject malformed explicit indexes.
         source_index = item.get("index", result_index)
-        if not isinstance(source_index, int):
-            raise RuntimeError(
-                "Local transformers response index must be an integer when provided"
-            )
-        if source_index >= len(candidate_chunks):
-            continue
-        if source_index < 0:
-            continue
-        rerank_scores.append((source_index, float(score_value)))
+        if (
+            not isinstance(source_index, int)
+            or isinstance(source_index, bool)
+            or source_index < 0
+            or source_index >= len(candidate_chunks)
+            or source_index in seen_indexes
+        ):
+            raise RerankProviderError("local_transformers", "malformed_response")
+        rerank_score = _parse_rerank_score("local_transformers", score_value)
+        seen_indexes.add(source_index)
+        rerank_scores.append((source_index, rerank_score))
 
     rerank_scores.sort(key=lambda score_item: score_item[1], reverse=True)
+    selected_indexes: set[int] = set()
     for source_index, rerank_score in rerank_scores[:requested_results]:
-        seen_indexes.add(source_index)
+        selected_indexes.add(source_index)
         original_chunk = candidate_chunks[source_index]
         ranked_chunk = dict(original_chunk)
         ranked_chunk.pop("_rerank_text", None)
@@ -430,8 +486,10 @@ def _rerank_chunks_with_local_transformers(
         ranked_chunks.append(ranked_chunk)
 
     for source_index, original_chunk in enumerate(candidate_chunks):
-        if source_index in seen_indexes:
+        if source_index in selected_indexes:
             continue
+        # The provider scored every candidate above. Preserve only the caller's
+        # intentional top_n boundary, never a missing provider result.
         preserved_chunk = dict(original_chunk)
         preserved_chunk.pop("_rerank_text", None)
         ranked_chunks.append(preserved_chunk)
@@ -457,8 +515,13 @@ def _rerank_chunks_with_bedrock(
     *,
     top_n: int | None = None,
 ) -> List[Dict[str, Any]]:
-    if not chunks:
-        return []
+    is_ready, reason = validate_bedrock_reranker_configuration(check_credentials=False)
+    if not is_ready:
+        raise RerankProviderError(
+            "bedrock_cohere",
+            "configuration",
+            f"Bedrock reranker configuration is not ready: {reason}",
+        )
 
     candidate_chunks = list(chunks)[:MAX_BEDROCK_RERANK_SOURCES]
     if len(candidate_chunks) < len(chunks):
@@ -487,9 +550,9 @@ def _rerank_chunks_with_bedrock(
     )
     client = _bedrock_agent_runtime_client()
 
-    response = client.rerank(
-        queries=[{"type": "TEXT", "textQuery": {"text": query}}],
-        sources=[
+    request_payload: dict[str, Any] = {
+        "queries": [{"type": "TEXT", "textQuery": {"text": query}}],
+        "sources": [
             {
                 "type": "INLINE",
                 "inlineDocumentSource": {
@@ -499,23 +562,66 @@ def _rerank_chunks_with_bedrock(
             }
             for chunk in candidate_chunks
         ],
-        rerankingConfiguration={
+        "rerankingConfiguration": {
             "type": "BEDROCK_RERANKING_MODEL",
             "bedrockRerankingConfiguration": {
                 "modelConfiguration": {"modelArn": model_arn},
                 "numberOfResults": requested_results,
             },
         },
-    )
+    }
+    ranked_results: list[Any] = []
+    seen_next_tokens: set[str] = set()
+    while True:
+        response = client.rerank(**request_payload)
+        if not isinstance(response, dict):
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
+        page_results = response.get("results")
+        if not isinstance(page_results, list):
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
+        if not page_results:
+            category = "empty_response" if not ranked_results else "incomplete_response"
+            raise RerankProviderError("bedrock_cohere", category)
+        ranked_results.extend(page_results)
+        if len(ranked_results) > requested_results:
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
+        if len(ranked_results) == requested_results:
+            break
+
+        next_token = response.get("nextToken")
+        if next_token is None:
+            break
+        if (
+            not isinstance(next_token, str)
+            or not next_token.strip()
+            or next_token in seen_next_tokens
+        ):
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
+        seen_next_tokens.add(next_token)
+        request_payload["nextToken"] = next_token
+
+    if len(ranked_results) != requested_results:
+        raise RerankProviderError("bedrock_cohere", "incomplete_response")
 
     ranked_chunks: List[Dict[str, Any]] = []
     seen_indexes: set[int] = set()
-    for result in response.get("results", []):
+    for result in ranked_results:
+        if not isinstance(result, dict):
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
         source_index = result.get("index")
-        if source_index is None or source_index >= len(candidate_chunks):
-            continue
+        if (
+            not isinstance(source_index, int)
+            or isinstance(source_index, bool)
+            or source_index < 0
+            or source_index >= len(candidate_chunks)
+            or source_index in seen_indexes
+            or "relevanceScore" not in result
+        ):
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
+        rerank_score = _parse_rerank_score(
+            "bedrock_cohere", result["relevanceScore"]
+        )
         seen_indexes.add(source_index)
-        rerank_score = float(result.get("relevanceScore", 0.0))
         original_chunk = candidate_chunks[source_index]
         ranked_chunk = dict(original_chunk)
         ranked_chunk.pop("_rerank_text", None)
@@ -529,6 +635,8 @@ def _rerank_chunks_with_bedrock(
         ranked_chunks.append(ranked_chunk)
 
     if len(ranked_chunks) < len(candidate_chunks):
+        # Response completeness is validated above. Any remaining candidates
+        # are outside an intentional top_n request, not an implicit fallback.
         for source_index, original_chunk in enumerate(candidate_chunks):
             if source_index in seen_indexes:
                 continue
@@ -537,12 +645,13 @@ def _rerank_chunks_with_bedrock(
             ranked_chunks.append(preserved_chunk)
 
     if len(candidate_chunks) < len(chunks):
+        # Candidates beyond the configured Bedrock source limit were never sent
+        # to the provider and therefore remain in retrieval order by design.
         for original_chunk in list(chunks)[len(candidate_chunks):]:
             preserved_chunk = dict(original_chunk)
             preserved_chunk.pop("_rerank_text", None)
             ranked_chunks.append(preserved_chunk)
 
-    ranked_results = response.get("results", [])
     reordered_positions = _count_reordered_positions(
         candidate_chunks,
         ranked_chunks[: len(candidate_chunks)],
@@ -568,6 +677,12 @@ def _rerank_chunks_with_bedrock(
     )
 
     return ranked_chunks
+
+
+_RERANK_DISPATCH = {
+    "bedrock_cohere": _rerank_chunks_with_bedrock,
+    "local_transformers": _rerank_chunks_with_local_transformers,
+}
 
 
 def _text_for_rerank(chunk: Dict[str, Any]) -> str:

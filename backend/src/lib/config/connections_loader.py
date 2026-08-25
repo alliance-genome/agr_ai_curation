@@ -824,7 +824,7 @@ async def _check_bedrock_reranker_health(
 
     status = get_bedrock_reranker_status(check_credentials=True)
     provider = str(status["provider"]).strip().lower()
-    if provider in {"", "none", "local_transformers"}:
+    if provider in {"none", "local_transformers"}:
         return None, None
 
     if status.get("is_healthy") is True:

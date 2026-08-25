@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import src.lib.weaviate_client.chunks as chunks
+from src.lib.bedrock_reranker import RerankProviderError
 
 
 def _connection_with_client(client):
@@ -204,6 +205,63 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
     assert chunk_collection.query.hybrid.call_args.kwargs["alpha"] == 0.4
     assert chunk_collection.query.hybrid.call_args.kwargs["include_vector"] is False
     assert "_rerank_text" not in results[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "failure_category"),
+    [("bedrock_cohere", "provider_failure"), ("", "configuration")],
+    ids=["provider-outage", "blank-provider"],
+)
+async def test_hybrid_search_chunks_surfaces_configured_rerank_failure(
+    monkeypatch, provider, failure_category
+):
+    _sync_to_thread(monkeypatch)
+    obj = SimpleNamespace(
+        uuid="u1",
+        properties={
+            "content": "Chunk one content",
+            "contentPreview": "Preview one",
+            "pageNumber": 1,
+            "chunkIndex": 0,
+            "sectionTitle": "Intro",
+            "elementType": "NarrativeText",
+            "documentId": "doc-1",
+            "metadata": "{}",
+            "docItemProvenance": "[]",
+        },
+        metadata=SimpleNamespace(score=0.9, explain_score="ok"),
+        vector=[0.1, 0.2],
+    )
+    chunk_collection = MagicMock()
+    chunk_collection.query.hybrid.return_value = SimpleNamespace(objects=[obj])
+    connection = _connection_with_client(MagicMock())
+    failure = RerankProviderError(provider, failure_category)
+
+    monkeypatch.setattr(chunks, "get_effective_rerank_provider", lambda: provider)
+    monkeypatch.setattr(
+        chunks,
+        "rerank_chunks",
+        lambda query, rows, *, top_n: (_ for _ in ()).throw(failure),
+    )
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(
+        "src.lib.weaviate_helpers.get_user_collections",
+        return_value=(chunk_collection, MagicMock()),
+    ):
+        with pytest.raises(RerankProviderError) as exc_info:
+            await chunks.hybrid_search_chunks(
+                document_id="doc-1",
+                query="gene expression in developing retina",
+                user_id="user-1",
+                limit=1,
+                apply_reranking=True,
+                apply_mmr=False,
+                strategy="hybrid_lexical_first",
+            )
+
+    assert exc_info.value is failure
+    assert chunk_collection.query.hybrid.call_count == 1
 
 
 @pytest.mark.asyncio
