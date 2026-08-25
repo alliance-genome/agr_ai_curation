@@ -148,6 +148,7 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
 
     tool_catalog = get_tool_registry()
     package_registry = _load_package_tool_registry()
+    execution_context = _build_tool_execution_context({})
     for binding in package_registry.bindings:
         tool_info = tool_catalog.get(binding.tool_id, {})
         agent_studio_metadata = tool_info.get("agent_studio")
@@ -156,7 +157,6 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
         diagnostic = agent_studio_metadata.get("diagnostic")
         if not isinstance(diagnostic, dict) or not bool(diagnostic.get("enabled")):
             continue
-        execution_context = _build_tool_execution_context({})
         unknown_context = [
             key
             for key in binding.required_context
@@ -297,8 +297,7 @@ def _get_prompt_diagnostic_contract() -> tuple[str, Dict[str, Any]]:
     description = """Get an installed agent's effective prompt from the shared prompt assembler.
 
 Use this to inspect the flat prompt, structured layers, layer manifest, and
-effective prompt hash for an installed specialist or validator. Use the live
-catalog values below instead of assuming a package-specific agent or group."""
+effective prompt hash for an installed specialist or validator."""
     input_schema = {
         "type": "object",
         "properties": {
@@ -338,7 +337,10 @@ catalog values below instead of assuming a package-specific agent or group."""
         )
 
     installed_targets = ", ".join(agent_ids)
-    description += f"\n\nInstalled prompt targets: {installed_targets}."
+    description += (
+        "\n\nUse these live catalog values instead of assuming a package-specific "
+        f"agent or group.\nInstalled prompt targets: {installed_targets}."
+    )
     if group_ids:
         description += (
             "\nInstalled group-rule identifiers: " + ", ".join(group_ids) + "."

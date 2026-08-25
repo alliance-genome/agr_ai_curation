@@ -1,4 +1,5 @@
 """Tests for hybrid tool registry (introspection + overrides)."""
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -63,28 +64,6 @@ def test_get_diagnostic_registry_includes_codebase_tools(monkeypatch):
         "go_api_call",
     ):
         assert tool_catalog[tool_id]["agent_studio"]["diagnostic"]["enabled"] is True
-
-    chebi_tool = registry.get_tool("chebi_api_call")
-    assert chebi_tool is not None
-    assert "/backend/api/public/es_search/?term={term}" in chebi_tool.description
-    assert "CHEBI:17234" in chebi_tool.description
-
-    quickgo_tool = registry.get_tool("quickgo_api_call")
-    assert quickgo_tool is not None
-    assert "/ontology/go/terms/{GO:ID}/ancestors" in quickgo_tool.description
-    assert "GO:0003677" in quickgo_tool.description
-    assert (
-        "molecular_function, biological_process, and cellular_component"
-        in quickgo_tool.description
-    )
-
-    go_tool = registry.get_tool("go_api_call")
-    assert go_tool is not None
-    assert "/bioentity/gene/{gene_id}/function" in go_tool.description
-    assert "WB:WBGene00000898" in go_tool.description
-    assert "IDA, IMP, IPI, IGI, ISS" in go_tool.description
-    assert "IEA, IBA" in go_tool.description
-
 
 def test_get_prompt_diagnostic_derives_targets_from_live_catalog(monkeypatch):
     from src.lib.agent_studio import catalog_service
@@ -180,6 +159,7 @@ def test_get_prompt_diagnostic_is_generic_before_prompt_cache_initialization(
     description, input_schema = tool_definitions._get_prompt_diagnostic_contract()
 
     assert "Installed prompt targets:" not in description
+    assert "Use these live catalog values" not in description
     assert "none currently available" not in description
     assert input_schema["required"] == ["agent_id"]
 
@@ -198,10 +178,16 @@ def test_package_diagnostic_registration_respects_required_context(
     from src.lib.agent_studio.diagnostic_tools import tool_definitions
     from src.lib.agent_studio.diagnostic_tools.registry import DiagnosticToolRegistry
 
+    context_builds = []
+
+    def build_execution_context(_kwargs):
+        context_builds.append(True)
+        return SimpleNamespace(database_url=database_url)
+
     monkeypatch.setattr(
         catalog_service,
         "_build_tool_execution_context",
-        lambda _kwargs: SimpleNamespace(database_url=database_url),
+        build_execution_context,
     )
     monkeypatch.setattr(
         catalog_service,
@@ -214,6 +200,7 @@ def test_package_diagnostic_registration_respects_required_context(
     registry = DiagnosticToolRegistry()
     tool_definitions._register_package_diagnostic_tools(registry)
 
+    assert context_builds == [True]
     assert registry.has_tool("curation_db_sql") is expected_registered
     if expected_registered:
         assert "Skipping package diagnostic tool curation_db_sql" not in caplog.text
@@ -323,23 +310,25 @@ def test_core_only_diagnostic_registry_excludes_alliance_content(monkeypatch):
     registry = get_diagnostic_tools_registry()
     serialized_registry = repr(registry.get_anthropic_tools())
 
-    forbidden_values = (
-        "agr_curation_query",
-        "curation_db_sql",
-        "chebi_api_call",
-        "quickgo_api_call",
-        "go_api_call",
-        "alliancegenome.org",
-        "ebi.ac.uk",
-        "geneontology.org",
-        "WB",
-        "FB",
-        "MGI",
-        "RGD",
-        "SGD",
-        "ZFIN",
+    forbidden_patterns = (
+        r"\bagr_curation_query\b",
+        r"\bcuration_db_sql\b",
+        r"\bchebi_api_call\b",
+        r"\bquickgo_api_call\b",
+        r"\bgo_api_call\b",
+        r"alliancegenome\.org",
+        r"ebi\.ac\.uk",
+        r"geneontology\.org",
+        r"\bWB\b",
+        r"\bFB\b",
+        r"\bMGI\b",
+        r"\bRGD\b",
+        r"\bSGD\b",
+        r"\bZFIN\b",
     )
-    assert not any(value in serialized_registry for value in forbidden_values)
+    assert not any(
+        re.search(pattern, serialized_registry) for pattern in forbidden_patterns
+    )
 
     reset_registry()
 

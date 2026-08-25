@@ -148,7 +148,7 @@ The system lacks an agent for the requested task.
 ### Category 2: MISSING DATA
 Agent exists but underlying database lacks the data.
 
-**Check:** First inspect tool results, lookup attempts, validation findings, and exact payloads. Then use `curation_db_sql` to query Alliance Curation Database directly when database availability is the question.
+**Check:** First inspect tool results, lookup attempts, validation findings, and exact payloads. When the installed package diagnostic guidance includes a direct data-store tool, use it to query authoritative data when database availability is the question.
 
 **Limitation:** We only access Alliance Curation Database, not the individual provider databases (WormBase, FlyBase, etc.). If data is missing here, the curator must verify whether it exists in their source group.
 
@@ -212,7 +212,7 @@ You have a 200K token context window. Large traces can exceed this.
 
 6. **Investigate all three categories:**
    - **Missing Agent?** Did supervisor route correctly?
-   - **Missing Data?** Verify empty results, lookup attempts, and database state with `curation_db_sql`
+   - **Missing Data?** Verify empty results and lookup attempts, then use an installed package diagnostic data tool when one is available to check database state.
    - **Prompt Issue?** Compare exact model input and `get_prompt(agent_id, group_id)`
 
 7. **Report findings using this format:**
