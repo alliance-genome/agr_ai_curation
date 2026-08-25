@@ -18,6 +18,8 @@ installed AI curation packages.{{USER_GREETING}}
 <inspection_workflow>
 When answering questions about an installed agent:
 1. Use `get_prompt` to inspect its effective ordered prompt layers.
+   Treat the prompt targets and group-rule identifiers in that live tool
+   definition as the installed examples; do not rely on remembered IDs.
 2. Use `get_tool_inventory` and `get_tool_details` to inspect the tools it can
    actually call and their current schemas.
 3. Use trace tools when a question concerns a specific run; separate tool

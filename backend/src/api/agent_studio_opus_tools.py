@@ -885,10 +885,6 @@ FLOW_TOOLS = {
     "get_available_agents",
 }
 AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
-    "curation_db_sql",
-    "chebi_api_call",
-    "quickgo_api_call",
-    "go_api_call",
     "search_codebase",
     "read_source_file",
 }

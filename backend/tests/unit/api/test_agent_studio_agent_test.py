@@ -616,8 +616,8 @@ class TestAgentWorkshopSystemPrompt:
         assert "artifact_lookup" in system_prompt
         assert "{{PACKAGE_DIAGNOSTIC_TOOLS}}" not in system_prompt
 
-    def test_package_diagnostic_prompt_uses_metadata_owned_hints(self, monkeypatch):
-        from src.lib.agent_studio import catalog_service, prompt_builder
+    def test_package_diagnostic_prompt_uses_registered_metadata_owned_hints(self, monkeypatch):
+        from src.lib.agent_studio import catalog_service, diagnostic_tools, prompt_builder
 
         monkeypatch.setattr(
             catalog_service,
@@ -644,15 +644,46 @@ class TestAgentWorkshopSystemPrompt:
                 },
             },
         )
+        monkeypatch.setattr(
+            diagnostic_tools,
+            "get_diagnostic_tools_registry",
+            lambda: SimpleNamespace(has_tool=lambda tool_id: tool_id == "span_catalog"),
+        )
 
         prompt = prompt_builder.build_package_diagnostic_tools_prompt()
 
-        assert "Lookup artifacts in the museum catalog." in prompt
+        assert "Lookup artifacts in the museum catalog." not in prompt
         assert "Inspect runtime span evidence tools." in prompt
         assert "For PDF evidence and document-tool advice" in prompt
 
+    def test_package_diagnostic_prompt_validates_unregistered_metadata(self, monkeypatch):
+        from src.lib.agent_studio import catalog_service, diagnostic_tools, prompt_builder
+
+        monkeypatch.setattr(
+            catalog_service,
+            "get_tool_registry",
+            lambda: {
+                "artifact_lookup": {
+                    "agent_studio": {
+                        "diagnostic": {"enabled": True},
+                    },
+                },
+            },
+        )
+        monkeypatch.setattr(
+            diagnostic_tools,
+            "get_diagnostic_tools_registry",
+            lambda: SimpleNamespace(has_tool=lambda _tool_id: False),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="artifact_lookup.*agent_studio.prompt_description",
+        ):
+            prompt_builder.build_package_diagnostic_tools_prompt()
+
     def test_package_diagnostic_prompt_stays_generic_without_metadata_hints(self, monkeypatch):
-        from src.lib.agent_studio import catalog_service, prompt_builder
+        from src.lib.agent_studio import catalog_service, diagnostic_tools, prompt_builder
 
         monkeypatch.setattr(
             catalog_service,
@@ -665,6 +696,11 @@ class TestAgentWorkshopSystemPrompt:
                     },
                 },
             },
+        )
+        monkeypatch.setattr(
+            diagnostic_tools,
+            "get_diagnostic_tools_registry",
+            lambda: SimpleNamespace(has_tool=lambda tool_id: tool_id == "artifact_lookup"),
         )
 
         prompt = prompt_builder.build_package_diagnostic_tools_prompt()

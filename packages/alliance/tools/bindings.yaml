@@ -2442,6 +2442,20 @@ tools:
           type: string
           required: true
           description: The database query to run against the curation database.
+      agent_studio:
+        prompt_description: Execute read-only SQL queries against the Alliance Curation Database for schema and record diagnostics.
+        diagnostic:
+          enabled: true
+          description: Execute read-only SQL SELECT queries against the Alliance Curation Database to inspect its schema and records.
+          category: database
+          tags: [sql, curation, diagnostic, alliance]
+          input_schema:
+            type: object
+            properties:
+              query:
+                type: string
+                description: SQL SELECT query to execute.
+            required: [query]
   - tool_id: chebi_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:chebi_api_call
@@ -2470,6 +2484,42 @@ tools:
           type: string
           required: false
           description: Optional JSON string for request body.
+      agent_studio:
+        prompt_description: Query the ChEBI REST API for chemical compound identifiers and ontology relationships.
+        diagnostic:
+          enabled: true
+          description: |-
+            Query the ChEBI (Chemical Entities of Biological Interest) REST API.
+
+            Base URL: https://www.ebi.ac.uk/chebi
+
+            Key endpoints:
+            - Search: GET /backend/api/public/es_search/?term={term}
+            - Compound details: GET /backend/api/public/compound/{chebi_id}/
+            - Parent terms: GET /backend/api/public/ontology/parents/{chebi_id}/
+            - Child terms: GET /backend/api/public/ontology/children/{chebi_id}/
+
+            ChEBI IDs are numeric (for example, 17234 for D-glucose). Cite as CHEBI:17234.
+          category: api
+          tags: [chemical, ontology, chebi, rest]
+          input_schema:
+            type: object
+            properties:
+              url:
+                type: string
+                description: Full URL to query on the allowed EBI domains.
+              method:
+                type: string
+                description: HTTP method.
+                enum: [GET, POST, PUT, PATCH, DELETE]
+                default: GET
+              headers_json:
+                type: string
+                description: Optional JSON string for request headers.
+              body_json:
+                type: string
+                description: Optional JSON string for the request body.
+            required: [url]
   - tool_id: quickgo_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:quickgo_api_call
@@ -2498,6 +2548,44 @@ tools:
           type: string
           required: false
           description: Optional JSON string for request body.
+      agent_studio:
+        prompt_description: Query QuickGO for Gene Ontology term names, definitions, and relationships.
+        diagnostic:
+          enabled: true
+          description: |-
+            Query the QuickGO REST API for Gene Ontology term information.
+
+            Base URL: https://www.ebi.ac.uk/QuickGO/services
+
+            Key endpoints:
+            - Search terms: GET /ontology/go/search?query={term}
+            - Term info: GET /ontology/go/terms/{GO:ID}
+            - Complete info: GET /ontology/go/terms/{GO:ID}/complete
+            - Children: GET /ontology/go/terms/{GO:ID}/children
+            - Ancestors: GET /ontology/go/terms/{GO:ID}/ancestors
+            - Descendants: GET /ontology/go/terms/{GO:ID}/descendants
+
+            GO IDs use format GO:0003677. The three aspects are molecular_function, biological_process, and cellular_component.
+          category: api
+          tags: [go, ontology, quickgo, rest]
+          input_schema:
+            type: object
+            properties:
+              url:
+                type: string
+                description: Full URL to query on the allowed EBI domains.
+              method:
+                type: string
+                description: HTTP method.
+                enum: [GET, POST, PUT, PATCH, DELETE]
+                default: GET
+              headers_json:
+                type: string
+                description: Optional JSON string for request headers.
+              body_json:
+                type: string
+                description: Optional JSON string for the request body.
+            required: [url]
   - tool_id: go_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:go_api_call
@@ -2526,6 +2614,45 @@ tools:
           type: string
           required: false
           description: Optional JSON string for request body.
+      agent_studio:
+        prompt_description: Query the Gene Ontology API for gene annotations and supporting evidence codes.
+        diagnostic:
+          enabled: true
+          description: |-
+            Query the Gene Ontology Consortium API for gene annotations.
+
+            Base URL: https://api.geneontology.org/api
+
+            Key endpoint:
+            - Gene annotations: GET /bioentity/gene/{gene_id}/function
+
+            Gene IDs use Alliance CURIEs such as WB:WBGene00000898, HGNC:11998, or MGI:123456.
+
+            Results include GO annotations with evidence codes:
+            - Manual (high quality): IDA, IMP, IPI, IGI, ISS
+            - Automatic (lower confidence): IEA, IBA
+
+            Each annotation includes the GO term, evidence code, and assigned_by curation source.
+          category: api
+          tags: [go, annotations, gene, rest]
+          input_schema:
+            type: object
+            properties:
+              url:
+                type: string
+                description: Full URL to query on the allowed Gene Ontology domains.
+              method:
+                type: string
+                description: HTTP method.
+                enum: [GET, POST, PUT, PATCH, DELETE]
+                default: GET
+              headers_json:
+                type: string
+                description: Optional JSON string for request headers.
+              body_json:
+                type: string
+                description: Optional JSON string for the request body.
+            required: [url]
   - tool_id: alliance_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:alliance_api_call

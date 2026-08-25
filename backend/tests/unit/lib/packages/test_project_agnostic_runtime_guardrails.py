@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import builtins
 import re
 import shutil
@@ -49,6 +50,7 @@ REPO_ROOT = find_repo_root(Path(__file__))
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ORG_CUSTOM_FIXTURE = FIXTURES_DIR / "org_custom_runtime"
 GUARDRAIL_TEST_PATH = Path("backend/tests/unit/lib/packages/test_project_agnostic_runtime_guardrails.py")
+AGENT_STUDIO_OPUS_TOOLS_PATH = Path("backend/src/api/agent_studio_opus_tools.py")
 
 ALLIANCE_LITERAL_PATTERNS = (
     re.compile(r"agr\.alliance"),
@@ -64,6 +66,7 @@ GENERIC_RUNTIME_GUARD_PATHS = {
     Path("backend/tests/unit/lib/config/test_package_aware_loaders.py"),
 }
 GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
+    Path("backend/src/lib/agent_studio/diagnostic_tools/tool_definitions.py"),
     Path("backend/src/lib/agent_studio/catalog_service.py"),
     Path("backend/src/lib/agent_studio/flow_tools.py"),
     Path("backend/src/lib/config/agent_loader.py"),
@@ -78,6 +81,7 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/packages/identifier_prefix_provider_loader.py"),
     Path("backend/src/lib/pdf_jobs/upload_intake_service.py"),
     Path("backend/src/lib/runtime_entrypoint.py"),
+    Path("packages/core/config/agent_studio_system_prompt.md"),
 }
 GENERIC_RUNTIME_SOURCE_PATTERNS = (
     re.compile(r"agr\.alliance"),
@@ -146,6 +150,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/config/test_runtime_config_defaults.py"),
     Path("backend/tests/unit/lib/packages/__init__.py"),
     Path("backend/tests/unit/lib/packages/test_agent_studio_prompt_loader.py"),
+    Path("backend/tests/unit/lib/packages/alliance/test_agent_studio_diagnostics.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_agent_package.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_literature_reference_tool.py"),
     Path("backend/tests/unit/lib/packages/test_core_package_contract.py"),
@@ -904,6 +909,26 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
                 violations.append(f"{relative_path}: {pattern.pattern}")
 
     assert violations == []
+
+
+def test_core_agent_studio_policy_does_not_own_package_diagnostic_ids():
+    text = (REPO_ROOT / AGENT_STUDIO_OPUS_TOOLS_PATH).read_text(encoding="utf-8")
+    module = ast.parse(text)
+    agents_only_assignment = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "AGENTS_ONLY_DIAGNOSTIC_TOOLS"
+            for target in node.targets
+        )
+    )
+
+    assert ast.literal_eval(agents_only_assignment.value) == {
+        "search_codebase",
+        "read_source_file",
+    }
 
 
 def test_generic_domain_pack_resolution_requires_a_registered_package(monkeypatch):

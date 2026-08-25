@@ -1116,6 +1116,52 @@
   },
   "chebi_api_call": {
     "agent_methods": null,
+    "agent_studio": {
+      "diagnostic": {
+        "category": "api",
+        "description": "Query the ChEBI (Chemical Entities of Biological Interest) REST API.\n\nBase URL: https://www.ebi.ac.uk/chebi\n\nKey endpoints:\n- Search: GET /backend/api/public/es_search/?term={term}\n- Compound details: GET /backend/api/public/compound/{chebi_id}/\n- Parent terms: GET /backend/api/public/ontology/parents/{chebi_id}/\n- Child terms: GET /backend/api/public/ontology/children/{chebi_id}/\n\nChEBI IDs are numeric (for example, 17234 for D-glucose). Cite as CHEBI:17234.",
+        "enabled": true,
+        "input_schema": {
+          "properties": {
+            "body_json": {
+              "description": "Optional JSON string for the request body.",
+              "type": "string"
+            },
+            "headers_json": {
+              "description": "Optional JSON string for request headers.",
+              "type": "string"
+            },
+            "method": {
+              "default": "GET",
+              "description": "HTTP method.",
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "description": "Full URL to query on the allowed EBI domains.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "type": "object"
+        },
+        "tags": [
+          "chemical",
+          "ontology",
+          "chebi",
+          "rest"
+        ]
+      },
+      "prompt_description": "Query the ChEBI REST API for chemical compound identifiers and ontology relationships."
+    },
     "binding_kind": "static",
     "category": "API",
     "description": "Look up a chemical compound in ChEBI (Chemical Entities of Biological Interest, a standard chemical database).",
@@ -1160,6 +1206,32 @@
   },
   "curation_db_sql": {
     "agent_methods": null,
+    "agent_studio": {
+      "diagnostic": {
+        "category": "database",
+        "description": "Execute read-only SQL SELECT queries against the Alliance Curation Database to inspect its schema and records.",
+        "enabled": true,
+        "input_schema": {
+          "properties": {
+            "query": {
+              "description": "SQL SELECT query to execute.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        },
+        "tags": [
+          "sql",
+          "curation",
+          "diagnostic",
+          "alliance"
+        ]
+      },
+      "prompt_description": "Execute read-only SQL queries against the Alliance Curation Database for schema and record diagnostics."
+    },
     "binding_kind": "context_factory",
     "category": "Database",
     "description": "Run a direct query against the Alliance Curation Database to look up Disease Ontology terms and how they relate to one another.",
@@ -2629,6 +2701,52 @@
   },
   "go_api_call": {
     "agent_methods": null,
+    "agent_studio": {
+      "diagnostic": {
+        "category": "api",
+        "description": "Query the Gene Ontology Consortium API for gene annotations.\n\nBase URL: https://api.geneontology.org/api\n\nKey endpoint:\n- Gene annotations: GET /bioentity/gene/{gene_id}/function\n\nGene IDs use Alliance CURIEs such as WB:WBGene00000898, HGNC:11998, or MGI:123456.\n\nResults include GO annotations with evidence codes:\n- Manual (high quality): IDA, IMP, IPI, IGI, ISS\n- Automatic (lower confidence): IEA, IBA\n\nEach annotation includes the GO term, evidence code, and assigned_by curation source.",
+        "enabled": true,
+        "input_schema": {
+          "properties": {
+            "body_json": {
+              "description": "Optional JSON string for the request body.",
+              "type": "string"
+            },
+            "headers_json": {
+              "description": "Optional JSON string for request headers.",
+              "type": "string"
+            },
+            "method": {
+              "default": "GET",
+              "description": "HTTP method.",
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "description": "Full URL to query on the allowed Gene Ontology domains.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "type": "object"
+        },
+        "tags": [
+          "go",
+          "annotations",
+          "gene",
+          "rest"
+        ]
+      },
+      "prompt_description": "Query the Gene Ontology API for gene annotations and supporting evidence codes."
+    },
     "binding_kind": "static",
     "category": "API",
     "description": "Look up Gene Ontology annotations for genes.",
@@ -3616,6 +3734,52 @@
   },
   "quickgo_api_call": {
     "agent_methods": null,
+    "agent_studio": {
+      "diagnostic": {
+        "category": "api",
+        "description": "Query the QuickGO REST API for Gene Ontology term information.\n\nBase URL: https://www.ebi.ac.uk/QuickGO/services\n\nKey endpoints:\n- Search terms: GET /ontology/go/search?query={term}\n- Term info: GET /ontology/go/terms/{GO:ID}\n- Complete info: GET /ontology/go/terms/{GO:ID}/complete\n- Children: GET /ontology/go/terms/{GO:ID}/children\n- Ancestors: GET /ontology/go/terms/{GO:ID}/ancestors\n- Descendants: GET /ontology/go/terms/{GO:ID}/descendants\n\nGO IDs use format GO:0003677. The three aspects are molecular_function, biological_process, and cellular_component.",
+        "enabled": true,
+        "input_schema": {
+          "properties": {
+            "body_json": {
+              "description": "Optional JSON string for the request body.",
+              "type": "string"
+            },
+            "headers_json": {
+              "description": "Optional JSON string for request headers.",
+              "type": "string"
+            },
+            "method": {
+              "default": "GET",
+              "description": "HTTP method.",
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "description": "Full URL to query on the allowed EBI domains.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "type": "object"
+        },
+        "tags": [
+          "go",
+          "ontology",
+          "quickgo",
+          "rest"
+        ]
+      },
+      "prompt_description": "Query QuickGO for Gene Ontology term names, definitions, and relationships."
+    },
     "binding_kind": "static",
     "category": "API",
     "description": "Look up a Gene Ontology term in QuickGO.",

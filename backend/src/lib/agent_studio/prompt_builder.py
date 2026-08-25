@@ -121,8 +121,10 @@ def resolve_prompt_explorer_model(
 def build_package_diagnostic_tools_prompt() -> str:
     """Build Agent Studio tool guidance from package-owned tool metadata."""
     from src.lib.agent_studio.catalog_service import get_tool_registry
+    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 
     tool_registry = get_tool_registry()
+    diagnostic_registry = get_diagnostic_tools_registry()
     lines: List[str] = []
     for tool_id, tool_info in sorted(tool_registry.items()):
         agent_studio_metadata = tool_info.get("agent_studio")
@@ -131,13 +133,14 @@ def build_package_diagnostic_tools_prompt() -> str:
         diagnostic_metadata = agent_studio_metadata.get("diagnostic")
         if not isinstance(diagnostic_metadata, dict) or not bool(diagnostic_metadata.get("enabled", False)):
             continue
-
         description = str(agent_studio_metadata.get("prompt_description") or "").strip()
         if not description:
             raise ValueError(
                 f"Package diagnostic tool '{tool_id}' must declare "
                 "agent_studio.prompt_description for Agent Studio prompt guidance."
             )
+        if not diagnostic_registry.has_tool(tool_id):
+            continue
 
         line = f"- **`{tool_id}`** - {description}"
         methods = tool_info.get("methods")

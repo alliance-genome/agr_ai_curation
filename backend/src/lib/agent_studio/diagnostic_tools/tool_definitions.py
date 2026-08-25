@@ -2,11 +2,11 @@
 Tool Definitions for Prompt Explorer Diagnostic Tools.
 
 This module registers all diagnostic tools available to Opus.
-Tools are direct copies of those used by specialist agents,
-giving Opus the same capabilities for trace troubleshooting.
+Package-owned tools opt in through their installed binding metadata, giving the
+diagnostic assistant the same capabilities for trace troubleshooting.
 
 Tool Categories:
-- database: SQL query tools (curation_db_sql)
+- database: package-registered data inspection tools
 - api: REST API and package-registered lookup tools
 - prompt: Prompt inspection tools (get_prompt)
 - codebase: Read-only runtime repository inspection tools
@@ -140,6 +140,7 @@ def _callable_handler_from_tool(tool: Any) -> Callable[..., Dict[str, Any]]:
 def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None:
     """Register package-owned tools that opt into Agent Studio diagnostics."""
     from src.lib.agent_studio.catalog_service import (
+        _build_tool_execution_context,
         _instantiate_package_tool,
         _load_package_tool_registry,
         get_tool_registry,
@@ -147,6 +148,7 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
 
     tool_catalog = get_tool_registry()
     package_registry = _load_package_tool_registry()
+    execution_context = _build_tool_execution_context({})
     for binding in package_registry.bindings:
         tool_info = tool_catalog.get(binding.tool_id, {})
         agent_studio_metadata = tool_info.get("agent_studio")
@@ -155,11 +157,33 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
         diagnostic = agent_studio_metadata.get("diagnostic")
         if not isinstance(diagnostic, dict) or not bool(diagnostic.get("enabled")):
             continue
-        if binding.required_context:
-            logger.debug("Skipping context-bound package diagnostic tool %s", binding.tool_id)
+        unknown_context = [
+            key
+            for key in binding.required_context
+            if not hasattr(execution_context, key)
+        ]
+        if unknown_context:
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' declares unknown "
+                f"execution context: {', '.join(unknown_context)}"
+            )
+        missing_context = [
+            key
+            for key in binding.required_context
+            if getattr(execution_context, key, None) in (None, "")
+        ]
+        if missing_context:
+            logger.warning(
+                "Skipping package diagnostic tool %s; missing context: %s",
+                binding.tool_id,
+                ", ".join(missing_context),
+            )
             continue
 
-        tool = _instantiate_package_tool(binding)
+        tool = _instantiate_package_tool(
+            binding,
+            execution_context=execution_context,
+        )
         input_schema = diagnostic.get("input_schema")
         if not isinstance(input_schema, dict):
             raise ValueError(
@@ -200,56 +224,6 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
         logger.debug("Registered package diagnostic tool: %s", binding.tool_id)
 
 
-def _create_sql_query_handler(database_url: str, tool_name: str):
-    """
-    Create handler for SQL query tools.
-
-    Uses the existing sql_query tool factory from OpenAI Agents.
-    """
-    from src.lib.openai_agents.tools.sql_query import create_sql_query_tool
-
-    # Create the bound tool and unwrap it
-    sql_tool_wrapped = create_sql_query_tool(database_url, tool_name)
-    sql_tool = _unwrap_function_tool(sql_tool_wrapped)
-
-    def handler(query: str) -> Dict[str, Any]:
-        """Execute SQL query and return result as dict."""
-        result = sql_tool(query=query)
-        return result.model_dump()
-
-    return handler
-
-
-def _create_rest_api_handler(allowed_domains: List[str], tool_name: str):
-    """
-    Create handler for REST API tools.
-
-    Uses the existing rest_api tool factory from OpenAI Agents.
-    """
-    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
-
-    # Create the bound tool and unwrap it
-    rest_tool_wrapped = create_rest_api_tool(allowed_domains, tool_name)
-    rest_tool = _unwrap_function_tool(rest_tool_wrapped)
-
-    def handler(
-        url: str,
-        method: str = "GET",
-        headers_json: Optional[str] = None,
-        body_json: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Execute REST API call and return result as dict."""
-        result = rest_tool(
-            url=url,
-            method=method,
-            headers_json=headers_json,
-            body_json=body_json
-        )
-        return result.model_dump()
-
-    return handler
-
-
 def _create_get_prompt_handler():
     """
     Create handler for prompt inspection tool.
@@ -266,8 +240,8 @@ def _create_get_prompt_handler():
         Get an agent's prompt from the catalog.
 
         Args:
-            agent_id: Agent identifier (e.g., "supervisor", "gene_validation", "pdf_extraction")
-            group_id: Optional group identifier for group-specific rules (e.g., "WB", "FB")
+            agent_id: Installed agent identifier
+            group_id: Optional installed group-rule identifier
 
         Returns:
             Dict with prompt content and metadata
@@ -313,6 +287,65 @@ def _create_get_prompt_handler():
         }
 
     return handler
+
+
+def _get_prompt_diagnostic_contract() -> tuple[str, Dict[str, Any]]:
+    """Describe prompt inspection using only targets installed in the live catalog."""
+    from src.lib.agent_studio.catalog_service import get_prompt_catalog
+    from src.lib.prompts.cache import is_initialized
+
+    description = """Get an installed agent's effective prompt from the shared prompt assembler.
+
+Use this to inspect the flat prompt, structured layers, layer manifest, and
+effective prompt hash for an installed specialist or validator."""
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "agent_id": {
+                "type": "string",
+                "description": "Agent identifier from the installed prompt targets.",
+            },
+            "group_id": {
+                "type": "string",
+                "description": (
+                    "Optional group-rule identifier from the installed prompt catalog."
+                ),
+            },
+        },
+        "required": ["agent_id"],
+    }
+
+    if not is_initialized():
+        logger.warning(
+            "Prompt cache is not initialized; registering get_prompt without "
+            "installed target examples"
+        )
+        return description, input_schema
+
+    catalog = get_prompt_catalog().catalog
+    agent_ids = sorted(
+        agent.agent_id
+        for category in catalog.categories
+        for agent in category.agents
+        if agent.agent_id != "task_input"
+    )
+    group_ids = sorted(catalog.available_groups)
+
+    if not agent_ids:
+        raise RuntimeError(
+            "Cannot register get_prompt before the installed prompt catalog is initialized"
+        )
+
+    installed_targets = ", ".join(agent_ids)
+    description += (
+        "\n\nUse these live catalog values instead of assuming a package-specific "
+        f"agent or group.\nInstalled prompt targets: {installed_targets}."
+    )
+    if group_ids:
+        description += (
+            "\nInstalled group-rule identifiers: " + ", ".join(group_ids) + "."
+        )
+    return description, input_schema
 
 
 def _create_search_codebase_handler():
@@ -600,252 +633,11 @@ def register_all_tools(registry: DiagnosticToolRegistry) -> None:
 
     _register_package_diagnostic_tools(registry)
 
-    # -------------------------------------------------------------------------
-    # 1. Curation Database SQL Tool
-    # -------------------------------------------------------------------------
-    from src.lib.database.curation_resolver import get_curation_resolver
-    curation_db_url = get_curation_resolver().get_connection_url()
-    if curation_db_url:
-        registry.register(
-            name="curation_db_sql",
-            description="""Execute read-only SQL queries against the Alliance Curation Database.
-
-This gives you direct access to the curation database schema. Use this to:
-- Explore database schema (SELECT * FROM information_schema.tables/columns)
-- Run diagnostic queries to understand data patterns
-- Verify query results from other tools
-- Deep dive into specific records
-
-ONLY SELECT queries are allowed. The database contains gene, allele, annotation, and ontology data.""",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "SQL SELECT query to execute"
-                    }
-                },
-                "required": ["query"]
-            },
-            handler=_create_sql_query_handler(curation_db_url, "curation_db_sql"),
-            category="database",
-            tags=["sql", "curation", "diagnostic"]
-        )
-        logger.debug("Registered: curation_db_sql")
-    else:
-        logger.warning("CURATION_DB_URL not set - curation_db_sql tool not available")
-
-    # -------------------------------------------------------------------------
-    # 3. ChEBI API Tool
-    # -------------------------------------------------------------------------
-    registry.register(
-        name="chebi_api_call",
-        description="""Query the ChEBI (Chemical Entities of Biological Interest) REST API.
-
-Base URL: https://www.ebi.ac.uk/chebi
-
-Key endpoints:
-- Search: GET /backend/api/public/es_search/?term={term}
-- Compound details: GET /backend/api/public/compound/{chebi_id}/
-- Parent terms: GET /backend/api/public/ontology/parents/{chebi_id}/
-- Child terms: GET /backend/api/public/ontology/children/{chebi_id}/
-
-ChEBI IDs are numeric (e.g., 17234 for D-glucose). Cite as CHEBI:17234.""",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "Full URL to query (must be on ebi.ac.uk domain)"
-                },
-                "method": {
-                    "type": "string",
-                    "description": "HTTP method (default: GET)",
-                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
-                    "default": "GET"
-                },
-                "headers_json": {
-                    "type": "string",
-                    "description": "Optional JSON string for request headers"
-                },
-                "body_json": {
-                    "type": "string",
-                    "description": "Optional JSON string for request body"
-                }
-            },
-            "required": ["url"]
-        },
-        handler=_create_rest_api_handler(
-            ["ebi.ac.uk", "www.ebi.ac.uk"],
-            "chebi_api_call"
-        ),
-        category="api",
-        tags=["chemical", "ontology", "chebi", "rest"]
-    )
-    logger.debug("Registered: chebi_api_call")
-
-    # -------------------------------------------------------------------------
-    # 4. QuickGO API Tool (GO Terms)
-    # -------------------------------------------------------------------------
-    registry.register(
-        name="quickgo_api_call",
-        description="""Query the QuickGO REST API for Gene Ontology term information.
-
-Base URL: https://www.ebi.ac.uk/QuickGO/services
-
-Key endpoints:
-- Search terms: GET /ontology/go/search?query={term}
-- Term info: GET /ontology/go/terms/{GO:ID}
-- Complete info: GET /ontology/go/terms/{GO:ID}/complete
-- Children: GET /ontology/go/terms/{GO:ID}/children
-- Ancestors: GET /ontology/go/terms/{GO:ID}/ancestors
-- Descendants: GET /ontology/go/terms/{GO:ID}/descendants
-
-GO IDs use format GO:0003677. Three aspects: molecular_function, biological_process, cellular_component.""",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "Full URL to query (must be on ebi.ac.uk domain)"
-                },
-                "method": {
-                    "type": "string",
-                    "description": "HTTP method (default: GET)",
-                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
-                    "default": "GET"
-                },
-                "headers_json": {
-                    "type": "string",
-                    "description": "Optional JSON string for request headers"
-                },
-                "body_json": {
-                    "type": "string",
-                    "description": "Optional JSON string for request body"
-                }
-            },
-            "required": ["url"]
-        },
-        handler=_create_rest_api_handler(
-            ["ebi.ac.uk", "www.ebi.ac.uk"],
-            "quickgo_api_call"
-        ),
-        category="api",
-        tags=["go", "ontology", "quickgo", "rest"]
-    )
-    logger.debug("Registered: quickgo_api_call")
-
-    # -------------------------------------------------------------------------
-    # 5. GO Annotations API Tool
-    # -------------------------------------------------------------------------
-    registry.register(
-        name="go_api_call",
-        description="""Query the Gene Ontology Consortium API for gene annotations.
-
-Base URL: https://api.geneontology.org/api
-
-Key endpoint:
-- Gene annotations: GET /bioentity/gene/{gene_id}/function
-
-Gene IDs use Alliance format: WB:WBGene00000898, HGNC:11998, MGI:123456
-
-Returns GO annotations with evidence codes:
-- Manual (high quality): IDA, IMP, IPI, IGI, ISS
-- Automatic (lower confidence): IEA, IBA
-
-Each annotation includes: GO term, evidence code, assigned_by (curation source).""",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "Full URL to query (must be on geneontology.org domain)"
-                },
-                "method": {
-                    "type": "string",
-                    "description": "HTTP method (default: GET)",
-                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
-                    "default": "GET"
-                },
-                "headers_json": {
-                    "type": "string",
-                    "description": "Optional JSON string for request headers"
-                },
-                "body_json": {
-                    "type": "string",
-                    "description": "Optional JSON string for request body"
-                }
-            },
-            "required": ["url"]
-        },
-        handler=_create_rest_api_handler(
-            ["geneontology.org", "api.geneontology.org"],
-            "go_api_call"
-        ),
-        category="api",
-        tags=["go", "annotations", "gene", "rest"]
-    )
-    logger.debug("Registered: go_api_call")
-
-    # -------------------------------------------------------------------------
-    # 6. Get Prompt Tool
-    # -------------------------------------------------------------------------
+    get_prompt_description, get_prompt_input_schema = _get_prompt_diagnostic_contract()
     registry.register(
         name="get_prompt",
-        description="""Get an agent's effective prompt from the shared prompt assembler.
-
-Use this to inspect the flat prompt, structured layers, layer manifest, and
-effective prompt hash any specialist or validator agent receives.
-Useful for understanding agent behavior, troubleshooting routing issues, and
-answering validator-agent inspection questions from domain-pack validation plans.
-
-**Common prompt targets:**
-- Routing/display/export: supervisor, curation_prep, chat_output, csv_formatter,
-  tsv_formatter, json_formatter.
-- Document/general extraction: pdf_extraction.
-- Domain-envelope extractors: gene_extractor, allele_extractor,
-  disease_extractor, phenotype_extractor, gene_expression
-  (flow/prompt alias for the packaged gene_expression_extraction agent).
-- Validator/resolver agents: gene_validation, allele_validation,
-  disease_validation, chemical_validation, ontology_term_validation,
-  controlled_vocabulary_validation, data_provider_validation,
-  subject_entity_validation, reference_validation,
-  experimental_condition_validation, agm_validation.
-- Other lookup specialists: gene_ontology, go_annotations, orthologs.
-- Validator-agent IDs returned by get_domain_pack_validation_plan are valid prompt
-  inspection targets. Prefer those exact IDs when explaining active bindings.
-
-**Group-specific rules (pass group_id to see combined prompt):**
-Some agents have organism-specific rules. Use these group aliases:
-- WB = WormBase (C. elegans / worm) - "worm prompt", "WormBase rules"
-- FB = FlyBase (Drosophila / fly) - "fly prompt", "FlyBase rules"
-- MGI = Mouse Genome Informatics (mouse) - "mouse prompt"
-- RGD = Rat Genome Database (rat) - "rat prompt"
-- SGD = Saccharomyces Genome Database (yeast) - "yeast prompt"
-- ZFIN = Zebrafish Information Network (zebrafish) - "zebrafish prompt"
-
-**Example usage:**
-- "Show me the worm gene expression prompt" → get_prompt(agent_id="gene_expression", group_id="WB")
-- "Show me the packaged gene expression extractor prompt" → get_prompt(agent_id="gene_expression_extraction")
-- "What are the fly-specific rules for the gene extractor?" → get_prompt(agent_id="gene_extractor", group_id="FB")
-- "Show the phenotype extractor prompt" → get_prompt(agent_id="phenotype_extractor", group_id="ZFIN")
-- "Inspect controlled vocabulary validation" → get_prompt(agent_id="controlled_vocabulary_validation")
-- "How does this validator work?" → read validator_bindings[].validator_agent.agent_id or validation_attachments[].validator_agent_id from get_domain_pack_validation_plan, then call get_prompt(agent_id="gene_validation")
-- "Show the supervisor base prompt" → get_prompt(agent_id="supervisor")""",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "agent_id": {
-                    "type": "string",
-                    "description": "Agent identifier or validator-agent ID from a validation plan (e.g., 'supervisor', 'gene_extractor', 'gene_expression', 'gene_expression_extraction', 'phenotype_extractor', 'gene_validation')"
-                },
-                "group_id": {
-                    "type": "string",
-                    "description": "Group identifier for organism-specific rules: WB (worm), FB (fly), MGI (mouse), RGD (rat), SGD (yeast), ZFIN (zebrafish)"
-                }
-            },
-            "required": ["agent_id"]
-        },
+        description=get_prompt_description,
+        input_schema=get_prompt_input_schema,
         handler=_create_get_prompt_handler(),
         category="prompt",
         tags=["prompt", "agent", "debugging", "group"]
@@ -859,8 +651,8 @@ Some agents have organism-specific rules. Use these group aliases:
         name="get_tool_inventory",
         description="""Inspect the runtime tool catalog in read-only mode.
 
-Use this when a curator asks what an agent can do, what tools are attached to a
-specialist or validator, or which package tools/method-level helpers exist.
+Use this when a curator asks what an agent can do, what tools are attached to an
+installed agent, or which package tools/method-level helpers exist.
 Pass agent_id to see one agent's raw and expanded tool IDs; omit it to list the
 global catalog. Pass query to search tools by id, name, or description, and use
 limit/cursor to page through large catalogs. Use get_tool_details for full
@@ -870,7 +662,7 @@ schemas and method metadata.""",
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "description": "Optional agent or validator-agent ID, for example gene_extractor, gene_validation, disease_validation, or ontology_term_validation.",
+                    "description": "Optional agent ID from the installed runtime catalog.",
                 },
                 "category": {
                     "type": "string",
@@ -918,11 +710,11 @@ tools.""",
             "properties": {
                 "tool_id": {
                     "type": "string",
-                    "description": "Runtime tool ID or method-level helper ID, for example agr_curation_query, search_genes, record_evidence, or chebi_api_call.",
+                    "description": "Runtime tool ID or method-level helper ID from the installed catalog.",
                 },
                 "agent_id": {
                     "type": "string",
-                    "description": "Optional agent or validator-agent ID used to include agent-specific method context.",
+                    "description": "Optional installed agent ID used to include agent-specific method context.",
                 },
             },
             "required": ["tool_id"],
