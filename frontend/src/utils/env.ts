@@ -1,13 +1,15 @@
 type EnvSource = Record<string, string | boolean | number | undefined> | undefined;
 
+export const RUNTIME_CONFIG_GLOBAL = '__APP_RUNTIME_CONFIG__' as const;
+
 declare global {
   interface Window {
-    __AGR_RUNTIME_CONFIG__?: EnvSource;
+    [RUNTIME_CONFIG_GLOBAL]?: EnvSource;
   }
 }
 
 const getRuntimeEnv = (): EnvSource => (
-  typeof window !== 'undefined' ? window.__AGR_RUNTIME_CONFIG__ : undefined
+  typeof window !== 'undefined' ? window[RUNTIME_CONFIG_GLOBAL] : undefined
 );
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

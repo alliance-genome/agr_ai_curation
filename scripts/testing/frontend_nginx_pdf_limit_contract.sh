@@ -60,7 +60,15 @@ assert_runtime_config_override() {
   grep -Fq '"VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS": "7"' <<<"${runtime_config}"
   grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "2500"' <<<"${runtime_config}"
   grep -Fq '"VITE_REUSABLE_BOUNDARY_CHECK": "quoted \"value\""' <<<"${runtime_config}"
-  grep -Fq 'window.__AGR_RUNTIME_CONFIG__ = Object.freeze({' <<<"${runtime_config}"
+  grep -Fq 'window.__APP_RUNTIME_CONFIG__ = Object.freeze({' <<<"${runtime_config}"
+  node --check <<<"${runtime_config}"
+}
+
+assert_runtime_config_no_store() {
+  local rendered
+  rendered="$(docker run --rm "${image_tag}" nginx -T 2>&1)"
+  grep -Fq 'location = /runtime-config.js {' <<<"${rendered}"
+  grep -Fq 'add_header Cache-Control "no-store" always;' <<<"${rendered}"
 }
 
 assert_rendered_limit 524288000
@@ -73,5 +81,6 @@ assert_rejected_value 2147483648 "must not exceed the persisted file-size capaci
 assert_rejected_value 999999999999999999999999999999999999 "must not exceed the persisted file-size capacity of 2147483647 bytes"
 assert_nginx_variables_survive_rendering
 assert_runtime_config_override
+assert_runtime_config_no_store
 
 echo "Frontend Nginx runtime contract tests passed"

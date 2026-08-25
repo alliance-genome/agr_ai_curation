@@ -1,1 +1,1 @@
-window.__AGR_RUNTIME_CONFIG__ = Object.freeze({});
+window.__APP_RUNTIME_CONFIG__ = Object.freeze({});

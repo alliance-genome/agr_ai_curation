@@ -3,6 +3,7 @@ set -eu
 
 runtime_config_path=/usr/share/nginx/html/runtime-config.js
 runtime_config_temp_path="${runtime_config_path}.tmp"
+runtime_config_global=__APP_RUNTIME_CONFIG__
 
 escape_javascript_string() {
     awk 'BEGIN { ORS = "" }
@@ -17,13 +18,14 @@ escape_javascript_string() {
 }
 
 {
-    printf '%s\n' 'window.__AGR_RUNTIME_CONFIG__ = Object.freeze({'
-    separator=''
+    printf 'window.%s = Object.freeze({\n' "${runtime_config_global}"
+    first=1
     env | sed -n 's/^\(VITE_[A-Z0-9_]*\)=.*/\1/p' | sort -u | while IFS= read -r key; do
         value="$(printenv "${key}")"
         escaped_value="$(printf '%s' "${value}" | escape_javascript_string)"
-        printf '%s  "%s": "%s"' "${separator}" "${key}" "${escaped_value}"
-        separator=',\n'
+        [ -n "${first}" ] || printf ',\n'
+        first=''
+        printf '  "%s": "%s"' "${key}" "${escaped_value}"
     done
     printf '\n%s\n' '});'
 } >"${runtime_config_temp_path}"
