@@ -307,7 +307,7 @@ def _report_rerank_failure(exc: RerankProviderError) -> None:
         component="rerank_provider",
         operation="rerank_chunks",
         context={
-            "provider": exc.provider,
+            "provider": exc.provider or "<blank>",
             "failure_category": exc.category,
         },
         level="error",
@@ -553,9 +553,9 @@ def _rerank_chunks_with_bedrock(
     )
     client = _bedrock_agent_runtime_client()
 
-    response = client.rerank(
-        queries=[{"type": "TEXT", "textQuery": {"text": query}}],
-        sources=[
+    request: dict[str, Any] = {
+        "queries": [{"type": "TEXT", "textQuery": {"text": query}}],
+        "sources": [
             {
                 "type": "INLINE",
                 "inlineDocumentSource": {
@@ -565,22 +565,43 @@ def _rerank_chunks_with_bedrock(
             }
             for chunk in candidate_chunks
         ],
-        rerankingConfiguration={
+        "rerankingConfiguration": {
             "type": "BEDROCK_RERANKING_MODEL",
             "bedrockRerankingConfiguration": {
                 "modelConfiguration": {"modelArn": model_arn},
                 "numberOfResults": requested_results,
             },
         },
-    )
+    }
+    ranked_results: list[Any] = []
+    seen_next_tokens: set[str] = set()
+    while True:
+        response = client.rerank(**request)
+        if not isinstance(response, dict):
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
+        page_results = response.get("results")
+        if not isinstance(page_results, list):
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
+        if not page_results:
+            category = "empty_response" if not ranked_results else "incomplete_response"
+            raise RerankProviderError("bedrock_cohere", category)
+        ranked_results.extend(page_results)
+        if len(ranked_results) > requested_results:
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
 
-    if not isinstance(response, dict):
-        raise RerankProviderError("bedrock_cohere", "malformed_response")
-    ranked_results = response.get("results")
-    if not isinstance(ranked_results, list):
-        raise RerankProviderError("bedrock_cohere", "malformed_response")
-    if not ranked_results:
-        raise RerankProviderError("bedrock_cohere", "empty_response")
+        next_token = response.get("nextToken")
+        if next_token is None:
+            break
+        if (
+            not isinstance(next_token, str)
+            or not next_token.strip()
+            or next_token in seen_next_tokens
+            or len(ranked_results) == requested_results
+        ):
+            raise RerankProviderError("bedrock_cohere", "malformed_response")
+        seen_next_tokens.add(next_token)
+        request["nextToken"] = next_token
+
     if len(ranked_results) != requested_results:
         raise RerankProviderError("bedrock_cohere", "incomplete_response")
 

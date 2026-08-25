@@ -221,6 +221,9 @@ The relevant env keys are:
 
 Current modes:
 
+`RERANK_PROVIDER` must be set to one of the modes below. Blank values are
+invalid and cause reranked searches plus the reranker health check to fail.
+
 - `RERANK_PROVIDER=bedrock_cohere`
   This remains the standalone default because `env.standalone` already sets it.
   Existing Bedrock-backed installs do not need to re-opt in.

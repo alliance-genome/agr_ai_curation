@@ -38,7 +38,7 @@ def test_rerank_chunks_reports_and_rejects_blank_provider(monkeypatch):
     assert reported_exc.provider == ""
     assert reported_exc.category == "configuration"
     assert reported_kwargs["context"] == {
-        "provider": "",
+        "provider": "<blank>",
         "failure_category": "configuration",
     }
 
@@ -426,6 +426,41 @@ def test_rerank_chunks_raises_when_bedrock_returns_incomplete_results(monkeypatc
         )
 
     assert exc_info.value.category == "incomplete_response"
+
+
+def test_rerank_chunks_drains_bedrock_paginated_results(monkeypatch):
+    calls = []
+
+    class _Client:
+        def rerank(self, **kwargs):
+            calls.append(kwargs)
+            if "nextToken" not in kwargs:
+                return {
+                    "results": [{"index": 1, "relevanceScore": 0.9}],
+                    "nextToken": "page-2",
+                }
+            return {"results": [{"index": 0, "relevanceScore": 0.4}]}
+
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            pass
+
+        def client(self, service_name, region_name=None):
+            return _Client()
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    reranked = bedrock_reranker.rerank_chunks(
+        "query",
+        [{"id": "chunk-1"}, {"id": "chunk-2"}],
+        top_n=2,
+    )
+
+    assert [chunk["id"] for chunk in reranked] == ["chunk-2", "chunk-1"]
+    assert len(calls) == 2
+    assert "nextToken" not in calls[0]
+    assert calls[1]["nextToken"] == "page-2"
 
 
 @pytest.mark.parametrize(

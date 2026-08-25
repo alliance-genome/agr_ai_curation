@@ -208,7 +208,14 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_chunks_surfaces_configured_rerank_failure(monkeypatch):
+@pytest.mark.parametrize(
+    ("provider", "failure_category"),
+    [("bedrock_cohere", "provider_failure"), ("", "configuration")],
+    ids=["provider-outage", "blank-provider"],
+)
+async def test_hybrid_search_chunks_surfaces_configured_rerank_failure(
+    monkeypatch, provider, failure_category
+):
     _sync_to_thread(monkeypatch)
     obj = SimpleNamespace(
         uuid="u1",
@@ -229,9 +236,9 @@ async def test_hybrid_search_chunks_surfaces_configured_rerank_failure(monkeypat
     chunk_collection = MagicMock()
     chunk_collection.query.hybrid.return_value = SimpleNamespace(objects=[obj])
     connection = _connection_with_client(MagicMock())
-    failure = RerankProviderError("bedrock_cohere", "provider_failure")
+    failure = RerankProviderError(provider, failure_category)
 
-    monkeypatch.setattr(chunks, "get_effective_rerank_provider", lambda: "bedrock_cohere")
+    monkeypatch.setattr(chunks, "get_effective_rerank_provider", lambda: provider)
     monkeypatch.setattr(
         chunks,
         "rerank_chunks",

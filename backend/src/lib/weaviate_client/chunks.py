@@ -660,7 +660,7 @@ async def hybrid_search_chunks(
                     rerank_override if rerank_override is not None else apply_reranking
                 )
                 effective_rerank_provider = get_effective_rerank_provider()
-                if should_rerank and effective_rerank_provider not in {"", "none"}:
+                if should_rerank and effective_rerank_provider != "none":
                     logger.info(
                         "V5: Post-search reranking enabled via provider=%s",
                         effective_rerank_provider,
@@ -759,7 +759,7 @@ async def hybrid_search_chunks(
                 retrieval_candidates = _retrieval_ranking_snapshot(chunks)
                 rerank_duration_ms = None
 
-                if should_rerank and effective_rerank_provider not in {"", "none"}:
+                if should_rerank and effective_rerank_provider != "none":
                     logger.info(
                         "V5: Applying post-search reranking via provider=%s to %s chunks",
                         effective_rerank_provider,
@@ -839,7 +839,7 @@ async def hybrid_search_chunks(
                         "retrieval_rerank_provider": effective_rerank_provider,
                         "retrieval_rerank_enabled": (
                             should_rerank
-                            and effective_rerank_provider not in {"", "none"}
+                            and effective_rerank_provider != "none"
                         ),
                         "retrieval_rerank_scored_count": sum(
                             row["rerank_score"] is not None

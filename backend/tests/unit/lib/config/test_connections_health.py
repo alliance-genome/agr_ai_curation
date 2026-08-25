@@ -485,6 +485,19 @@ class TestCheckBedrockRerankerHealth:
         assert error is None
 
     @pytest.mark.asyncio
+    async def test_returns_false_when_rerank_provider_is_blank(
+        self,
+        bedrock_connection,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("RERANK_PROVIDER", " ")
+
+        is_healthy, error = await _check_bedrock_reranker_health(bedrock_connection)
+
+        assert is_healthy is False
+        assert error == "Unsupported RERANK_PROVIDER="
+
+    @pytest.mark.asyncio
     async def test_returns_true_when_bedrock_configuration_is_ready(
         self,
         bedrock_connection,
