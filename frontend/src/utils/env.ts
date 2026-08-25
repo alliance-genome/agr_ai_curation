@@ -90,6 +90,8 @@ const parseEnvFlag = (value: string | undefined, fallback: boolean): boolean => 
 export const getEnvFlag = (keys: string[] | string, fallback = false): boolean =>
   parseEnvFlag(getEnvVar(keys), fallback);
 
+// Security-sensitive flags such as the authentication dev-mode bypass must be
+// sealed at build time; diagnostic flags intentionally continue using getEnvFlag.
 export const getBuildEnvFlag = (keys: string[] | string, fallback = false): boolean =>
   parseEnvFlag(getEnvVarFromSources(keys, [getViteEnv(), getNodeEnv()]), fallback);
 
