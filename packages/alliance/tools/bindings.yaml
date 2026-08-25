@@ -2488,7 +2488,18 @@ tools:
         prompt_description: Query the ChEBI REST API for chemical compound identifiers and ontology relationships.
         diagnostic:
           enabled: true
-          description: Query ChEBI at https://www.ebi.ac.uk/chebi for chemical compound identifiers and ontology relationships.
+          description: |-
+            Query the ChEBI (Chemical Entities of Biological Interest) REST API.
+
+            Base URL: https://www.ebi.ac.uk/chebi
+
+            Key endpoints:
+            - Search: GET /backend/api/public/es_search/?term={term}
+            - Compound details: GET /backend/api/public/compound/{chebi_id}/
+            - Parent terms: GET /backend/api/public/ontology/parents/{chebi_id}/
+            - Child terms: GET /backend/api/public/ontology/children/{chebi_id}/
+
+            ChEBI IDs are numeric (for example, 17234 for D-glucose). Cite as CHEBI:17234.
           category: api
           tags: [chemical, ontology, chebi, rest]
           input_schema:
@@ -2541,7 +2552,20 @@ tools:
         prompt_description: Query QuickGO for Gene Ontology term names, definitions, and relationships.
         diagnostic:
           enabled: true
-          description: Query QuickGO at https://www.ebi.ac.uk/QuickGO/services for Gene Ontology terms and relationships.
+          description: |-
+            Query the QuickGO REST API for Gene Ontology term information.
+
+            Base URL: https://www.ebi.ac.uk/QuickGO/services
+
+            Key endpoints:
+            - Search terms: GET /ontology/go/search?query={term}
+            - Term info: GET /ontology/go/terms/{GO:ID}
+            - Complete info: GET /ontology/go/terms/{GO:ID}/complete
+            - Children: GET /ontology/go/terms/{GO:ID}/children
+            - Ancestors: GET /ontology/go/terms/{GO:ID}/ancestors
+            - Descendants: GET /ontology/go/terms/{GO:ID}/descendants
+
+            GO IDs use format GO:0003677. The three aspects are molecular_function, biological_process, and cellular_component.
           category: api
           tags: [go, ontology, quickgo, rest]
           input_schema:
@@ -2594,7 +2618,21 @@ tools:
         prompt_description: Query the Gene Ontology API for gene annotations and supporting evidence codes.
         diagnostic:
           enabled: true
-          description: Query https://api.geneontology.org/api for Gene Ontology annotations and supporting evidence codes.
+          description: |-
+            Query the Gene Ontology Consortium API for gene annotations.
+
+            Base URL: https://api.geneontology.org/api
+
+            Key endpoint:
+            - Gene annotations: GET /bioentity/gene/{gene_id}/function
+
+            Gene IDs use Alliance CURIEs such as WB:WBGene00000898, HGNC:11998, or MGI:123456.
+
+            Results include GO annotations with evidence codes:
+            - Manual (high quality): IDA, IMP, IPI, IGI, ISS
+            - Automatic (lower confidence): IEA, IBA
+
+            Each annotation includes the GO term, evidence code, and assigned_by curation source.
           category: api
           tags: [go, annotations, gene, rest]
           input_schema:

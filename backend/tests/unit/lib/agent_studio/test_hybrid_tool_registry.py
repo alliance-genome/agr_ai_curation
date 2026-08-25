@@ -41,6 +41,27 @@ def test_get_diagnostic_registry_includes_codebase_tools():
     ):
         assert tool_catalog[tool_id]["agent_studio"]["diagnostic"]["enabled"] is True
 
+    chebi_tool = registry.get_tool("chebi_api_call")
+    assert chebi_tool is not None
+    assert "/backend/api/public/es_search/?term={term}" in chebi_tool.description
+    assert "CHEBI:17234" in chebi_tool.description
+
+    quickgo_tool = registry.get_tool("quickgo_api_call")
+    assert quickgo_tool is not None
+    assert "/ontology/go/terms/{GO:ID}/ancestors" in quickgo_tool.description
+    assert "GO:0003677" in quickgo_tool.description
+    assert (
+        "molecular_function, biological_process, and cellular_component"
+        in quickgo_tool.description
+    )
+
+    go_tool = registry.get_tool("go_api_call")
+    assert go_tool is not None
+    assert "/bioentity/gene/{gene_id}/function" in go_tool.description
+    assert "WB:WBGene00000898" in go_tool.description
+    assert "IDA, IMP, IPI, IGI, ISS" in go_tool.description
+    assert "IEA, IBA" in go_tool.description
+
 
 def test_get_prompt_diagnostic_derives_targets_from_live_catalog(monkeypatch):
     from src.lib.agent_studio import catalog_service

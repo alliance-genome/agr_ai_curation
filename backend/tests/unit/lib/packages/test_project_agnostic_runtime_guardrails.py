@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import builtins
 import re
 import shutil
@@ -49,6 +50,7 @@ REPO_ROOT = find_repo_root(Path(__file__))
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ORG_CUSTOM_FIXTURE = FIXTURES_DIR / "org_custom_runtime"
 GUARDRAIL_TEST_PATH = Path("backend/tests/unit/lib/packages/test_project_agnostic_runtime_guardrails.py")
+AGENT_STUDIO_OPUS_TOOLS_PATH = Path("backend/src/api/agent_studio_opus_tools.py")
 
 ALLIANCE_LITERAL_PATTERNS = (
     re.compile(r"agr\.alliance"),
@@ -906,6 +908,26 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
                 violations.append(f"{relative_path}: {pattern.pattern}")
 
     assert violations == []
+
+
+def test_core_agent_studio_policy_does_not_own_package_diagnostic_ids():
+    text = (REPO_ROOT / AGENT_STUDIO_OPUS_TOOLS_PATH).read_text(encoding="utf-8")
+    module = ast.parse(text)
+    agents_only_assignment = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "AGENTS_ONLY_DIAGNOSTIC_TOOLS"
+            for target in node.targets
+        )
+    )
+
+    assert ast.literal_eval(agents_only_assignment.value) == {
+        "search_codebase",
+        "read_source_file",
+    }
 
 
 def test_generic_domain_pack_resolution_requires_a_registered_package(monkeypatch):
