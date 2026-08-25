@@ -161,7 +161,7 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
 
     Idempotent initialization:
     - If collections don't exist: Create with multi-tenancy enabled
-    - If collections exist without multi-tenancy: Drop and recreate (one-time migration)
+    - If collections exist without multi-tenancy: Fail and require explicit migration
     - If collections exist with multi-tenancy: Skip (preserve tenant data)
     """
     from weaviate.classes.config import Configure, Property, DataType
@@ -256,15 +256,18 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
                                 },
                             )
                 else:
-                    # Multi-tenancy not enabled - need to migrate (one-time operation)
-                    logger.warning(
-                        "Collection %s exists without multi-tenancy - performing one-time migration",
-                        collection_name,
+                    # ALL-819 removed the legacy startup drop/recreate migration;
+                    # collection upgrades must run as an explicit backed-up migration.
+                    raise RuntimeError(
+                        f"Collection {collection_name} exists without multi-tenancy. "
+                        "Automatic migration is disabled to protect existing data. "
+                        "Back up and export the collection, delete it in an "
+                        "operator-controlled maintenance window, restart the backend "
+                        "to recreate it with multi-tenancy, then reimport and re-embed "
+                        "the data with the correct tenant assignments. Follow "
+                        "docs/developer/guides/WEAVIATE_BACKUPS.md#legacy-"
+                        "non-multitenant-collection-migration."
                     )
-                    logger.warning("This will DELETE all existing data in %s", collection_name)
-                    client.collections.delete(collection_name)
-                    client.collections.create(name=collection_name, **config)
-                    logger.info("Collection %s recreated with multi-tenancy enabled", collection_name)
 
 
 @asynccontextmanager

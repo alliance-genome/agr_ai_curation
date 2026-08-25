@@ -73,6 +73,29 @@ class TestInitializeWeaviateCollections:
         client.collections.create.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_fails_without_mutating_existing_non_multitenant_collection(self):
+        connection, client = make_connection(list_all_return=["DocumentChunk"])
+        legacy_config = SimpleNamespace(
+            multi_tenancy_config=SimpleNamespace(enabled=False),
+        )
+        client.collections.get.return_value = SimpleNamespace(
+            config=SimpleNamespace(get=MagicMock(return_value=legacy_config)),
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                "Back up and export the collection, delete it in an "
+                "operator-controlled maintenance window.*"
+                "WEAVIATE_BACKUPS.md#legacy-non-multitenant-collection-migration"
+            ),
+        ):
+            await _main_module().initialize_weaviate_collections(connection)
+
+        client.collections.delete.assert_not_called()
+        client.collections.create.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_warns_when_existing_document_chunk_vectorization_has_drift(self, caplog):
         connection, client = make_connection(list_all_return=["DocumentChunk", "PDFDocument"])
         stale_document_config = SimpleNamespace(
