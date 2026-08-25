@@ -74,6 +74,18 @@ def test_rerank_chunks_returns_empty_for_supported_provider(monkeypatch):
     assert bedrock_reranker.rerank_chunks("query", []) == []
 
 
+def test_supported_rerank_providers_are_derived_from_dispatch():
+    assert bedrock_reranker._RERANK_DISPATCH == {
+        "bedrock_cohere": bedrock_reranker._rerank_chunks_with_bedrock,
+        "local_transformers": (
+            bedrock_reranker._rerank_chunks_with_local_transformers
+        ),
+    }
+    assert bedrock_reranker.SUPPORTED_RERANK_PROVIDERS == frozenset(
+        bedrock_reranker._RERANK_DISPATCH
+    )
+
+
 def test_rerank_chunks_rejects_unsupported_provider(monkeypatch):
     chunks = [{"id": "chunk-1", "score": 0.8}]
     monkeypatch.setenv("RERANK_PROVIDER", "unsupported")

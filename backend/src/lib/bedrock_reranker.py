@@ -51,7 +51,6 @@ from src.lib.observability.runtime import report_runtime_exception
 logger = logging.getLogger(__name__)
 
 DEFAULT_RERANK_PROVIDER = "bedrock_cohere"
-SUPPORTED_RERANK_PROVIDERS = {"bedrock_cohere", "local_transformers"}
 DEFAULT_BEDROCK_RERANK_MODEL_ARN = (
     "arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
 )
@@ -338,7 +337,8 @@ def rerank_chunks(
     provider = get_rerank_provider()
     if provider == "none":
         return list(chunks)
-    if provider not in SUPPORTED_RERANK_PROVIDERS:
+    dispatch = _RERANK_DISPATCH.get(provider)
+    if dispatch is None:
         exc = RerankProviderError(
             provider,
             "configuration",
@@ -362,11 +362,7 @@ def rerank_chunks(
                     "configuration",
                     f"Bedrock reranker configuration is not ready: {reason}",
                 )
-            ranked_chunks = _rerank_chunks_with_bedrock(query, chunks, top_n=top_n)
-        else:
-            ranked_chunks = _rerank_chunks_with_local_transformers(
-                query, chunks, top_n=top_n
-            )
+        ranked_chunks = dispatch(query, chunks, top_n=top_n)
         if not ranked_chunks:
             raise RerankProviderError(provider, "empty_response")
     except RerankProviderError as exc:
@@ -683,6 +679,13 @@ def _rerank_chunks_with_bedrock(
     )
 
     return ranked_chunks
+
+
+_RERANK_DISPATCH = {
+    "bedrock_cohere": _rerank_chunks_with_bedrock,
+    "local_transformers": _rerank_chunks_with_local_transformers,
+}
+SUPPORTED_RERANK_PROVIDERS = frozenset(_RERANK_DISPATCH)
 
 
 def _text_for_rerank(chunk: Dict[str, Any]) -> str:
