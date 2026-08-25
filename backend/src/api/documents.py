@@ -1169,8 +1169,8 @@ async def get_document_endpoint(
                 job=latest_job,
             ).upper(),
             upload_timestamp=pg_doc.upload_timestamp,
-            processing_started_at=None,  # TODO: track in PostgreSQL
-            processing_completed_at=None,  # TODO: track in PostgreSQL
+            processing_started_at=pg_doc.processing_started_at,
+            processing_completed_at=pg_doc.processing_completed_at,
             file_size_bytes=pg_doc.file_size,
             weaviate_tenant=tenant_name,
             chunk_count=doc_data.get("chunk_count"),
