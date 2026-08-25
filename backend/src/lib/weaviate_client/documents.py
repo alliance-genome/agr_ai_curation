@@ -257,8 +257,8 @@ async def async_list_documents(
                     "title": pg_doc.title,
                     "status": processing_status.upper(),  # Contract requires uppercase enum
                     "upload_timestamp": pg_doc.upload_timestamp.isoformat() if pg_doc.upload_timestamp else doc_props.get("creationDate"),
-                    "processing_started_at": pg_doc.processing_started_at,
-                    "processing_completed_at": pg_doc.processing_completed_at,
+                    "processing_started_at": pg_doc.processing_started_at.isoformat() if pg_doc.processing_started_at else None,
+                    "processing_completed_at": pg_doc.processing_completed_at.isoformat() if pg_doc.processing_completed_at else None,
                     "file_size_bytes": pg_doc.file_size,  # Contract field name from PostgreSQL
                     "weaviate_tenant": tenant_name,  # Required by contract
                     "chunk_count": doc_props.get("chunkCount"),

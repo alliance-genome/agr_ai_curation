@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -373,9 +374,10 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     assert owned["embedding_status"] == "pending"
     assert owned["vector_count"] is None
     assert owned["upload_timestamp"] == "2026-02-10T00:00:00"
-    assert owned["processing_started_at"] == datetime(2026, 2, 10, 0, 1)
-    assert owned["processing_completed_at"] == datetime(2026, 2, 10, 0, 2)
+    assert owned["processing_started_at"] == "2026-02-10T00:01:00"
+    assert owned["processing_completed_at"] == "2026-02-10T00:02:00"
     assert owned["source_provenance"] is None
+    assert json.loads(json.dumps(result))["documents"][0] == owned
 
     fetch_call = pdf_collection.query.fetch_objects.call_args.kwargs
     assert fetch_call["limit"] == 5
