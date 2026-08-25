@@ -10,7 +10,9 @@ temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
 
 env_file="${temp_dir}/production.env"
+default_env_file="${temp_dir}/production-defaults.env"
 rendered_file="${temp_dir}/rendered.json"
+default_rendered_file="${temp_dir}/rendered-defaults.json"
 development_env_file="${temp_dir}/development.env"
 development_rendered_file="${temp_dir}/development-rendered.json"
 frontend_build_metadata_file="${temp_dir}/frontend-build-metadata.json"
@@ -71,6 +73,7 @@ assert_rejected_with() {
 }
 
 write_test_env
+grep -v '^VITE_CHAT_STREAM_RECOVERY_' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -80,6 +83,18 @@ publish_workflow="${repo_root}/.github/workflows/publish-images.yml"
 grep -Fq 'Verify frontend compiled mode artifact' "${publish_workflow}"
 grep -Fq '/usr/share/nginx/html/build-metadata.json' "${publish_workflow}"
 grep -Fq '.vite_dev_mode == false' "${publish_workflow}"
+
+docker compose --env-file "${default_env_file}" -f "${compose_file}" \
+  config --format json >"${default_rendered_file}"
+python3 - "${default_rendered_file}" <<'PY'
+import json
+import sys
+
+config = json.load(open(sys.argv[1], encoding="utf-8"))
+frontend_env = config["services"]["frontend"]["environment"]
+assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "3"
+assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "1000"
+PY
 
 # Exercise the environment created by a fresh `make setup` and the effective
 # development Compose interpolation, without starting containers.

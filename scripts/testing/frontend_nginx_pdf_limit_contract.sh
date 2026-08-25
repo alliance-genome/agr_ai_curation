@@ -53,6 +53,8 @@ assert_runtime_config_override() {
   runtime_config="$(docker run --rm \
     --env VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7 \
     --env VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500 \
+    --env VITE_DEV_MODE=true \
+    --env FRONTEND_RUNTIME_CONFIG_KEYS='VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS VITE_REUSABLE_BOUNDARY_CHECK' \
     --env VITE_REUSABLE_BOUNDARY_CHECK='quoted "value"' \
     --entrypoint /bin/sh \
     "${image_tag}" \
@@ -60,15 +62,25 @@ assert_runtime_config_override() {
   grep -Fq '"VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS": "7"' <<<"${runtime_config}"
   grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "2500"' <<<"${runtime_config}"
   grep -Fq '"VITE_REUSABLE_BOUNDARY_CHECK": "quoted \"value\""' <<<"${runtime_config}"
+  ! grep -Fq 'VITE_DEV_MODE' <<<"${runtime_config}"
   grep -Fq 'window.__APP_RUNTIME_CONFIG__ = Object.freeze({' <<<"${runtime_config}"
   node --check <<<"${runtime_config}"
 }
 
 assert_runtime_config_no_store() {
-  local rendered
+  local rendered runtime_location
   rendered="$(docker run --rm "${image_tag}" nginx -T 2>&1)"
-  grep -Fq 'location = /runtime-config.js {' <<<"${rendered}"
-  grep -Fq 'add_header Cache-Control "no-store" always;' <<<"${rendered}"
+  runtime_location="$(awk '
+    /location = \/runtime-config\.js \{/ { found = 1 }
+    found { print }
+    found && /^    }$/ { exit }
+  ' <<<"${rendered}")"
+  grep -Fq 'location = /runtime-config.js {' <<<"${runtime_location}"
+  grep -Fq 'add_header Cache-Control "no-store" always;' <<<"${runtime_location}"
+  grep -Fq 'add_header X-Frame-Options "SAMEORIGIN" always;' <<<"${runtime_location}"
+  grep -Fq 'add_header X-XSS-Protection "1; mode=block" always;' <<<"${runtime_location}"
+  grep -Fq 'add_header X-Content-Type-Options "nosniff" always;' <<<"${runtime_location}"
+  grep -Fq 'add_header Referrer-Policy "no-referrer-when-downgrade" always;' <<<"${runtime_location}"
 }
 
 assert_rendered_limit 524288000

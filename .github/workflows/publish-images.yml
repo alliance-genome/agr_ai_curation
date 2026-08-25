@@ -221,10 +221,12 @@ jobs:
           runtime_config="$(docker run --rm --network=none \
             --env VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7 \
             --env VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500 \
+            --env VITE_DEV_MODE=true \
             --entrypoint /bin/sh "${image_ref}" \
             -c '/docker-entrypoint.d/10-generate-runtime-config.sh && cat /usr/share/nginx/html/runtime-config.js')"
           grep -Fq '"VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS": "7"' <<<"${runtime_config}"
           grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "2500"' <<<"${runtime_config}"
+          ! grep -Fq 'VITE_DEV_MODE' <<<"${runtime_config}"
           node --check <<<"${runtime_config}"
           index_html="$(docker run --rm --network=none --entrypoint cat "${image_ref}" \
             /usr/share/nginx/html/index.html)"

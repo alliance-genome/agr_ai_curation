@@ -20,7 +20,21 @@ escape_javascript_string() {
 {
     printf 'window.%s = Object.freeze({\n' "${runtime_config_global}"
     first=1
-    env | sed -n 's/^\(VITE_[A-Z0-9_]*\)=.*/\1/p' | sort -u | while IFS= read -r key; do
+    for key in ${FRONTEND_RUNTIME_CONFIG_KEYS:-}; do
+        case "${key}" in
+            VITE_*) ;;
+            *)
+                printf 'Invalid frontend runtime configuration key: %s\n' "${key}" >&2
+                exit 1
+                ;;
+        esac
+        case "${key#VITE_}" in
+            ''|*[!A-Z0-9_]*)
+                printf 'Invalid frontend runtime configuration key: %s\n' "${key}" >&2
+                exit 1
+                ;;
+        esac
+        printenv "${key}" >/dev/null || continue
         value="$(printenv "${key}")"
         escaped_value="$(printf '%s' "${value}" | escape_javascript_string)"
         [ -n "${first}" ] || printf ',\n'
