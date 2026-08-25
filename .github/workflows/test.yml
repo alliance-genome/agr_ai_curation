@@ -72,7 +72,7 @@ jobs:
         run: |
           bash scripts/testing/production_compose_contract_test.sh
 
-      - name: Validate rendered frontend Nginx PDF limit
+      - name: Validate frontend image runtime configuration
         run: |
           bash scripts/testing/frontend_nginx_pdf_limit_contract.sh
 

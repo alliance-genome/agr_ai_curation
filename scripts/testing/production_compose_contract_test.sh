@@ -10,7 +10,9 @@ temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
 
 env_file="${temp_dir}/production.env"
+default_env_file="${temp_dir}/production-defaults.env"
 rendered_file="${temp_dir}/rendered.json"
+default_rendered_file="${temp_dir}/rendered-defaults.json"
 development_env_file="${temp_dir}/development.env"
 development_rendered_file="${temp_dir}/development-rendered.json"
 frontend_build_metadata_file="${temp_dir}/frontend-build-metadata.json"
@@ -34,7 +36,9 @@ write_test_env() {
       'AUTH_PROVIDER=oidc' \
       'OIDC_ISSUER_URL=https://issuer.example.org' \
       'OIDC_CLIENT_ID=curation-production' \
-      'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback'
+      'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback' \
+      'VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7' \
+      'VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500'
   } >"${env_file}"
 }
 
@@ -69,6 +73,7 @@ assert_rejected_with() {
 }
 
 write_test_env
+grep -v '^VITE_CHAT_STREAM_RECOVERY_' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -78,6 +83,21 @@ publish_workflow="${repo_root}/.github/workflows/publish-images.yml"
 grep -Fq 'Verify frontend compiled mode artifact' "${publish_workflow}"
 grep -Fq '/usr/share/nginx/html/build-metadata.json' "${publish_workflow}"
 grep -Fq '.vite_dev_mode == false' "${publish_workflow}"
+
+docker compose --env-file "${default_env_file}" -f "${compose_file}" \
+  config --format json >"${default_rendered_file}"
+python3 - "${default_rendered_file}" <<'PY'
+import json
+import sys
+
+config = json.load(open(sys.argv[1], encoding="utf-8"))
+frontend_env = config["services"]["frontend"]["environment"]
+assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
+    "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS"
+)
+assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "3"
+assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "1000"
+PY
 
 # Exercise the environment created by a fresh `make setup` and the effective
 # development Compose interpolation, without starting containers.
@@ -135,6 +155,11 @@ assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
 assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
+assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
+    "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS"
+)
+assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "7"
+assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "2500"
 assert weaviate_env["AUTHORIZATION_ADMINLIST_USERS"] == "curation-backend"
 assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
 assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"

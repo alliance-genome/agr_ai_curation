@@ -1,13 +1,28 @@
 type EnvSource = Record<string, string | boolean | number | undefined> | undefined;
 
+export const RUNTIME_CONFIG_GLOBAL = '__APP_RUNTIME_CONFIG__' as const;
+
+declare global {
+  interface Window {
+    [RUNTIME_CONFIG_GLOBAL]?: EnvSource;
+  }
+}
+
+const getRuntimeEnv = (): EnvSource => (
+  typeof window !== 'undefined' ? window[RUNTIME_CONFIG_GLOBAL] : undefined
+);
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const getViteEnv = (): EnvSource => (typeof import.meta !== 'undefined' ? (import.meta as any).env : undefined);
 
 const getNodeEnv = (): EnvSource => (typeof process !== 'undefined' ? process.env : undefined);
 
-export const getEnvVar = (keys: string[] | string, fallback?: string): string | undefined => {
+const getEnvVarFromSources = (
+  keys: string[] | string,
+  sources: EnvSource[],
+  fallback?: string,
+): string | undefined => {
   const keyList = Array.isArray(keys) ? keys : [keys];
-  const sources: EnvSource[] = [getViteEnv(), getNodeEnv()];
 
   for (const key of keyList) {
     for (const source of sources) {
@@ -20,12 +35,15 @@ export const getEnvVar = (keys: string[] | string, fallback?: string): string | 
   return fallback;
 };
 
+export const getEnvVar = (keys: string[] | string, fallback?: string): string | undefined =>
+  getEnvVarFromSources(keys, [getRuntimeEnv(), getViteEnv(), getNodeEnv()], fallback);
+
 /**
  * Debug logging utility - only logs when VITE_DEBUG=true
  * Usage: import { debug } from '../utils/env'; debug.log('message', data);
  */
 const isDebugMode = (): boolean => {
-  const sources: EnvSource[] = [getViteEnv(), getNodeEnv()];
+  const sources: EnvSource[] = [getRuntimeEnv(), getViteEnv(), getNodeEnv()];
   for (const source of sources) {
     if (source) {
       const val = source['VITE_DEBUG'] || source['DEBUG'];
@@ -48,8 +66,7 @@ export const debug = {
   },
 };
 
-export const getEnvFlag = (keys: string[] | string, fallback = false): boolean => {
-  const value = getEnvVar(keys);
+const parseEnvFlag = (value: string | undefined, fallback: boolean): boolean => {
   if (value === undefined) {
     return fallback;
   }
@@ -69,6 +86,14 @@ export const getEnvFlag = (keys: string[] | string, fallback = false): boolean =
       return fallback;
   }
 };
+
+export const getEnvFlag = (keys: string[] | string, fallback = false): boolean =>
+  parseEnvFlag(getEnvVar(keys), fallback);
+
+// Security-sensitive flags such as the authentication dev-mode bypass must be
+// sealed at build time; diagnostic flags intentionally continue using getEnvFlag.
+export const getBuildEnvFlag = (keys: string[] | string, fallback = false): boolean =>
+  parseEnvFlag(getEnvVarFromSources(keys, [getViteEnv(), getNodeEnv()]), fallback);
 
 export const getEnvInt = (keys: string[] | string, fallback: number): number => {
   const value = getEnvVar(keys);

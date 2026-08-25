@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import { RUNTIME_CONFIG_GLOBAL } from '@/utils/env'
 import { AuthProvider, useAuth } from './AuthContext'
 
 const legacyChatStorageKeys = {
@@ -36,12 +37,14 @@ describe('AuthProvider dev-mode bootstrap', () => {
   beforeEach(() => {
     localStorage.clear()
     sessionStorage.clear()
+    delete window[RUNTIME_CONFIG_GLOBAL]
     vi.mocked(global.fetch).mockReset()
   })
 
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllEnvs()
+    delete window[RUNTIME_CONFIG_GLOBAL]
   })
 
   it('clears legacy chat storage during dev-mode bootstrap without touching namespaced state', async () => {
@@ -117,5 +120,22 @@ describe('AuthProvider dev-mode bootstrap', () => {
     expect(vi.mocked(global.fetch)).not.toHaveBeenCalled()
 
     removeItemSpy.mockRestore()
+  })
+
+  it('does not allow runtime configuration to enable the auth bypass', async () => {
+    vi.stubEnv('VITE_DEV_MODE', 'false')
+    window[RUNTIME_CONFIG_GLOBAL] = { VITE_DEV_MODE: 'true' }
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 401 }))
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    )
+
+    expect(screen.getByTestId('auth-status')).toHaveTextContent('anonymous')
+    await waitFor(() => {
+      expect(vi.mocked(global.fetch)).toHaveBeenCalledWith('/api/users/me', expect.any(Object))
+    })
   })
 })

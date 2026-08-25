@@ -3,6 +3,7 @@ import { act, render, renderHook, screen, waitFor } from '@testing-library/react
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CHAT_RUN_TERMINAL_EVENT, useChatStream } from './useChatStream'
+import { RUNTIME_CONFIG_GLOBAL } from '../utils/env'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -40,6 +41,7 @@ describe('useChatStream shared lifecycle', () => {
   })
 
   afterEach(() => {
+    delete window[RUNTIME_CONFIG_GLOBAL]
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
@@ -628,6 +630,29 @@ describe('useChatStream shared lifecycle', () => {
     expect(global.fetch).toHaveBeenCalledTimes(2)
     expect(result.current.error?.message).toContain('before the run completed')
     expect(result.current.isLoading).toBe(false)
+
+    result.current.clearEvents()
+    unmount()
+  })
+
+  it('uses boot-time runtime recovery settings ahead of compiled Vite settings', async () => {
+    window[RUNTIME_CONFIG_GLOBAL] = {
+      VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS: '1',
+      VITE_CHAT_STREAM_RECOVERY_DELAY_MS: '0',
+    }
+    vi.stubEnv('VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS', '3')
+    vi.stubEnv('VITE_CHAT_STREAM_RECOVERY_DELAY_MS', '1000')
+    vi.mocked(global.fetch).mockResolvedValue(sseResponse([]))
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('question', 'session-runtime-override', {
+        turnId: 'turn-runtime-override',
+      })
+    })
+
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+    expect(result.current.error?.message).toContain('before the run completed')
 
     result.current.clearEvents()
     unmount()

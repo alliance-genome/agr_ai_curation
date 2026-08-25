@@ -380,10 +380,17 @@ def test_effective_production_contract_accepts_secure_rendered_config():
     assert production_preflight.validate_config(_safe_rendered_config()) == []
 
 
-def test_production_frontend_has_no_ineffective_runtime_vite_mode():
+def test_production_frontend_never_publishes_dev_mode_at_runtime():
     frontend = _load_compose()["services"]["frontend"]
+    runtime_environment = frontend.get("environment", {})
 
-    assert "VITE_DEV_MODE" not in frontend.get("environment", {})
+    assert not any(
+        key == "VITE_DEV_MODE" or key.startswith("VITE_DEV_USER_")
+        for key in runtime_environment
+    )
+    assert "VITE_DEV_MODE" not in runtime_environment["FRONTEND_RUNTIME_CONFIG_KEYS"]
+    assert "VITE_DEV_USER_" not in runtime_environment["FRONTEND_RUNTIME_CONFIG_KEYS"]
+    assert not frontend.get("env_file")
 
 
 def test_frontend_build_metadata_requires_production_mode_and_source_revision():
