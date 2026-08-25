@@ -8,18 +8,12 @@ IMPORTANT: These tests are expected to FAIL until database and tables are set up
 """
 
 import os
-import sys
-from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import sessionmaker
-
-# Add the backend/src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-
 
 class TestAgentQueries:
     """Integration tests for agent SQL query patterns."""

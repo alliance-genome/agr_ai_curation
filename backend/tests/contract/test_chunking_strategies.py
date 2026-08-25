@@ -8,13 +8,8 @@ import pytest
 from typing import Dict, Any, List
 from fastapi.testclient import TestClient
 from unittest.mock import Mock
-import sys
-from pathlib import Path
 
-# Add the backend/src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-
-from models.strategy import ChunkingStrategy, ChunkingMethod
+from src.models.strategy import ChunkingStrategy, ChunkingMethod
 
 
 class TestGetChunkingStrategiesEndpoint:

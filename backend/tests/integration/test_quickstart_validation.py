@@ -11,9 +11,6 @@ import sys
 import requests
 from typing import Dict, List, Any
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-
 # Import required modules
 # Note: CLI functions are mocked in tests, so we don't need actual imports
 # from src.lib.weaviate_client.cli import cli as weaviate_cli
