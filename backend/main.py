@@ -264,7 +264,9 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
                         "Back up and export the collection, delete it in an "
                         "operator-controlled maintenance window, restart the backend "
                         "to recreate it with multi-tenancy, then reimport and re-embed "
-                        "the data with the correct tenant assignments."
+                        "the data with the correct tenant assignments. Follow "
+                        "docs/developer/guides/WEAVIATE_BACKUPS.md#legacy-"
+                        "non-multitenant-collection-migration."
                     )
 
 

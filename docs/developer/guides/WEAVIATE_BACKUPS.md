@@ -77,6 +77,37 @@ The API creates a consistent online snapshot, including collection schemas,
 tenant metadata, objects, and vector indexes. Record the backup ID, status,
 timestamps, Weaviate version, collection list, and host-side size.
 
+## Legacy non-multitenant collection migration
+
+Backend startup deliberately stops when `DocumentChunk` or `PDFDocument`
+exists without multi-tenancy. Startup never deletes or recreates that legacy
+collection. Treat the conversion as a planned data migration:
+
+1. Stop application writers and record the affected collection's schema,
+   object count, and the user-to-tenant assignment for every document.
+2. Create a native backup using the appropriate procedure above, wait for
+   `SUCCESS`, and validate a restore in an isolated environment. A native
+   restore is rollback protection; it preserves the legacy schema and does not
+   perform the multi-tenancy conversion.
+3. Export the source objects and enough document/chunk metadata to validate
+   counts, object IDs, document-to-chunk relationships, and tenant assignments.
+   Keep this export with the migration record.
+4. Rehearse the remaining steps against an isolated copy. Only after the
+   backup, export, tenant mapping, and rehearsal have been verified, schedule
+   an operator-controlled maintenance window and delete the affected legacy
+   collection.
+5. Restart the backend so ordinary initialization creates the empty collection
+   with multi-tenancy enabled. Reimport each object into its intended tenant
+   and re-embed the chunk content using the configured embedding profile.
+6. Before restoring application traffic, compare the migrated per-tenant
+   document and chunk counts with the export, verify object relationships and
+   tenant isolation, and run representative retrieval checks.
+
+Do not restore the native backup over the new collection: doing so restores the
+old non-multitenant schema. If validation fails, stop the migration and use the
+verified backup in an isolated rollback procedure before deciding how to
+recover production.
+
 ## Restore validation requirements
 
 Never test a restore against the live data directory. Use a separate Weaviate

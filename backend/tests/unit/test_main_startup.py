@@ -86,7 +86,8 @@ class TestInitializeWeaviateCollections:
             RuntimeError,
             match=(
                 "Back up and export the collection, delete it in an "
-                "operator-controlled maintenance window"
+                "operator-controlled maintenance window.*"
+                "WEAVIATE_BACKUPS.md#legacy-non-multitenant-collection-migration"
             ),
         ):
             await _main_module().initialize_weaviate_collections(connection)
