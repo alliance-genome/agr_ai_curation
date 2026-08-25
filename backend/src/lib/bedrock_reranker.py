@@ -352,16 +352,6 @@ def rerank_chunks(
         return []
 
     try:
-        if provider == "bedrock_cohere":
-            is_ready, reason = validate_bedrock_reranker_configuration(
-                check_credentials=False
-            )
-            if not is_ready:
-                raise RerankProviderError(
-                    provider,
-                    "configuration",
-                    f"Bedrock reranker configuration is not ready: {reason}",
-                )
         ranked_chunks = dispatch(query, chunks, top_n=top_n)
         if not ranked_chunks:
             raise RerankProviderError(provider, "empty_response")
@@ -525,6 +515,16 @@ def _rerank_chunks_with_bedrock(
     *,
     top_n: int | None = None,
 ) -> List[Dict[str, Any]]:
+    is_ready, reason = validate_bedrock_reranker_configuration(
+        check_credentials=False
+    )
+    if not is_ready:
+        raise RerankProviderError(
+            "bedrock_cohere",
+            "configuration",
+            f"Bedrock reranker configuration is not ready: {reason}",
+        )
+
     candidate_chunks = list(chunks)[:MAX_BEDROCK_RERANK_SOURCES]
     if len(candidate_chunks) < len(chunks):
         logger.warning(
@@ -685,7 +685,6 @@ _RERANK_DISPATCH = {
     "bedrock_cohere": _rerank_chunks_with_bedrock,
     "local_transformers": _rerank_chunks_with_local_transformers,
 }
-SUPPORTED_RERANK_PROVIDERS = frozenset(_RERANK_DISPATCH)
 
 
 def _text_for_rerank(chunk: Dict[str, Any]) -> str:
