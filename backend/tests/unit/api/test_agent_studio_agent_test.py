@@ -656,6 +656,32 @@ class TestAgentWorkshopSystemPrompt:
         assert "Inspect runtime span evidence tools." in prompt
         assert "For PDF evidence and document-tool advice" in prompt
 
+    def test_package_diagnostic_prompt_validates_unregistered_metadata(self, monkeypatch):
+        from src.lib.agent_studio import catalog_service, diagnostic_tools, prompt_builder
+
+        monkeypatch.setattr(
+            catalog_service,
+            "get_tool_registry",
+            lambda: {
+                "artifact_lookup": {
+                    "agent_studio": {
+                        "diagnostic": {"enabled": True},
+                    },
+                },
+            },
+        )
+        monkeypatch.setattr(
+            diagnostic_tools,
+            "get_diagnostic_tools_registry",
+            lambda: SimpleNamespace(has_tool=lambda _tool_id: False),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="artifact_lookup.*agent_studio.prompt_description",
+        ):
+            prompt_builder.build_package_diagnostic_tools_prompt()
+
     def test_package_diagnostic_prompt_stays_generic_without_metadata_hints(self, monkeypatch):
         from src.lib.agent_studio import catalog_service, diagnostic_tools, prompt_builder
 

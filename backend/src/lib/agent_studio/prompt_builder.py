@@ -133,15 +133,14 @@ def build_package_diagnostic_tools_prompt() -> str:
         diagnostic_metadata = agent_studio_metadata.get("diagnostic")
         if not isinstance(diagnostic_metadata, dict) or not bool(diagnostic_metadata.get("enabled", False)):
             continue
-        if not diagnostic_registry.has_tool(tool_id):
-            continue
-
         description = str(agent_studio_metadata.get("prompt_description") or "").strip()
         if not description:
             raise ValueError(
                 f"Package diagnostic tool '{tool_id}' must declare "
                 "agent_studio.prompt_description for Agent Studio prompt guidance."
             )
+        if not diagnostic_registry.has_tool(tool_id):
+            continue
 
         line = f"- **`{tool_id}`** - {description}"
         methods = tool_info.get("methods")

@@ -7,6 +7,15 @@ import pytest
 from src.lib.agent_studio.catalog_service import get_tool_registry
 
 
+@pytest.fixture(autouse=True)
+def _reset_diagnostic_registry():
+    from src.lib.agent_studio.diagnostic_tools import reset_registry
+
+    reset_registry()
+    yield
+    reset_registry()
+
+
 def _install_initialized_prompt_catalog(monkeypatch):
     from src.lib.agent_studio import catalog_service
     from src.lib.prompts import cache as prompt_cache
@@ -42,28 +51,16 @@ def test_get_tool_registry_includes_agr_curation():
 
 
 def test_get_diagnostic_registry_includes_codebase_tools(monkeypatch):
-    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry, reset_registry
+    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 
     _install_initialized_prompt_catalog(monkeypatch)
-    reset_registry()
     registry = get_diagnostic_tools_registry()
 
     assert registry.has_tool("search_codebase")
     assert registry.has_tool("read_source_file")
     assert registry.has_tool("get_tool_inventory")
     assert registry.has_tool("get_tool_details")
-    assert registry.has_tool("chebi_api_call")
-    assert registry.has_tool("quickgo_api_call")
-    assert registry.has_tool("go_api_call")
 
-    tool_catalog = get_tool_registry()
-    for tool_id in (
-        "curation_db_sql",
-        "chebi_api_call",
-        "quickgo_api_call",
-        "go_api_call",
-    ):
-        assert tool_catalog[tool_id]["agent_studio"]["diagnostic"]["enabled"] is True
 
 def test_get_prompt_diagnostic_derives_targets_from_live_catalog(monkeypatch):
     from src.lib.agent_studio import catalog_service
@@ -283,10 +280,7 @@ def test_prompt_catalog_refresh_resets_diagnostic_registry(monkeypatch):
 
 def test_core_only_diagnostic_registry_excludes_alliance_content(monkeypatch):
     from src.lib.agent_studio import catalog_service
-    from src.lib.agent_studio.diagnostic_tools import (
-        get_diagnostic_tools_registry,
-        reset_registry,
-    )
+    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 
     catalog = SimpleNamespace(
         categories=[
@@ -306,7 +300,6 @@ def test_core_only_diagnostic_registry_excludes_alliance_content(monkeypatch):
         lambda: SimpleNamespace(bindings=[]),
     )
 
-    reset_registry()
     registry = get_diagnostic_tools_registry()
     serialized_registry = repr(registry.get_anthropic_tools())
 
@@ -329,8 +322,6 @@ def test_core_only_diagnostic_registry_excludes_alliance_content(monkeypatch):
     assert not any(
         re.search(pattern, serialized_registry) for pattern in forbidden_patterns
     )
-
-    reset_registry()
 
 
 def test_tool_inventory_diagnostic_reports_agent_attached_tools(monkeypatch):

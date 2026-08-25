@@ -2,13 +2,21 @@
 
 from types import SimpleNamespace
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_diagnostic_registry():
+    from src.lib.agent_studio.diagnostic_tools import reset_registry
+
+    reset_registry()
+    yield
+    reset_registry()
+
 
 def test_alliance_diagnostic_descriptions_preserve_service_call_guidance(monkeypatch):
     from src.lib.agent_studio import catalog_service
-    from src.lib.agent_studio.diagnostic_tools import (
-        get_diagnostic_tools_registry,
-        reset_registry,
-    )
+    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
     from src.lib.prompts import cache as prompt_cache
 
     monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
@@ -27,8 +35,20 @@ def test_alliance_diagnostic_descriptions_preserve_service_call_guidance(monkeyp
         ),
     )
 
-    reset_registry()
     registry = get_diagnostic_tools_registry()
+
+    assert registry.has_tool("chebi_api_call")
+    assert registry.has_tool("quickgo_api_call")
+    assert registry.has_tool("go_api_call")
+
+    tool_catalog = catalog_service.get_tool_registry()
+    for tool_id in (
+        "curation_db_sql",
+        "chebi_api_call",
+        "quickgo_api_call",
+        "go_api_call",
+    ):
+        assert tool_catalog[tool_id]["agent_studio"]["diagnostic"]["enabled"] is True
 
     chebi_tool = registry.get_tool("chebi_api_call")
     assert chebi_tool is not None
@@ -50,5 +70,3 @@ def test_alliance_diagnostic_descriptions_preserve_service_call_guidance(monkeyp
     assert "WB:WBGene00000898" in go_tool.description
     assert "IDA, IMP, IPI, IGI, ISS" in go_tool.description
     assert "IEA, IBA" in go_tool.description
-
-    reset_registry()
