@@ -20,6 +20,7 @@ def _custom_agent_payload() -> dict:
         "description": "Desc",
         "custom_prompt": "Prompt",
         "group_prompt_overrides": {},
+        "allowed_group_ids": ["RGD"],
         "icon": "🔧",
         "include_group_rules": True,
         "model_id": "gpt-4o",
@@ -62,7 +63,9 @@ def test_clone_agent_endpoint_clones_visible_agent(monkeypatch):
     response = asyncio.run(
         api_module.clone_agent_endpoint(
             agent_id="ca_source",
-            request=api_module.CloneAgentRequest(name="Gene Copy"),
+            request=api_module.CloneAgentRequest(
+                name="Gene Copy", allowed_group_ids=["RGD"]
+            ),
             user={"sub": "auth-sub"},
             db=db,
         )
@@ -71,6 +74,7 @@ def test_clone_agent_endpoint_clones_visible_agent(monkeypatch):
     assert observed["user_id"] == 1
     assert observed["source_agent_key"] == "ca_source"
     assert observed["name"] == "Gene Copy"
+    assert observed["allowed_group_ids"] == ["RGD"]
     assert response["agent_id"] == "ca_11111111-1111-1111-1111-111111111111"
 
 

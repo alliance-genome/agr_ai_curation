@@ -99,6 +99,7 @@ class AgentMetadata(BaseModel):
     output_schema_key: Optional[str] = None
     is_active: bool = True
     visible: bool = True
+    allowed_group_ids: List[str] = Field(default_factory=list)
     produces_flow_artifacts: bool = False
     validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)
     domain_envelope: Optional[Dict[str, Any]] = None
@@ -163,6 +164,7 @@ class AgentTemplateItem(BaseModel):
     category: Optional[str] = None
     model_id: str
     tool_ids: List[str]
+    allowed_group_ids: List[str] = Field(default_factory=list)
     output_schema_key: Optional[str] = None
 
 
@@ -176,6 +178,7 @@ class CloneAgentRequest(BaseModel):
     """Optional clone parameters."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=100)
+    allowed_group_ids: Optional[List[str]] = None
 
 
 class ShareAgentRequest(BaseModel):

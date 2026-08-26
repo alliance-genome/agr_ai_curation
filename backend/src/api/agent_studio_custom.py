@@ -112,6 +112,7 @@ def _custom_agent_log_context(
         "group_override_keys": sorted(
             (getattr(request, "group_prompt_overrides", None) or {}).keys()
         ),
+        "allowed_group_ids": getattr(request, "allowed_group_ids", None),
     }
 
 
@@ -135,6 +136,7 @@ class CreateCustomAgentRequest(BaseModel):
     tool_ids: Optional[List[str]] = None
     output_schema_key: Optional[str] = Field(None, max_length=100)
     category: Optional[str] = Field(None, max_length=100)
+    allowed_group_ids: Optional[List[str]] = None
 
 
 class UpdateCustomAgentRequest(BaseModel):
@@ -155,6 +157,7 @@ class UpdateCustomAgentRequest(BaseModel):
     output_schema_key: Optional[str] = Field(None, max_length=100)
     allow_empty_tool_ids: bool = False
     notes: Optional[str] = None
+    allowed_group_ids: Optional[List[str]] = None
 
 
 class TestCustomAgentRequest(BaseModel):
@@ -182,6 +185,7 @@ class CustomAgentResponse(BaseModel):
     custom_prompt_removed_layer_kinds: List[str] = Field(default_factory=list)
     custom_prompt_warning: Optional[str] = None
     group_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
+    allowed_group_ids: List[str] = Field(default_factory=list)
     icon: str
     include_group_rules: bool
     model_id: str
@@ -211,6 +215,7 @@ class CustomAgentVersionResponse(BaseModel):
     version: int
     custom_prompt: str
     group_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
+    allowed_group_ids: List[str] = Field(default_factory=list)
     notes: Optional[str] = None
     created_at: datetime
 
@@ -232,6 +237,7 @@ def _as_version_payload(version_obj) -> CustomAgentVersionResponse:
         version=version_obj.version,
         custom_prompt=version_obj.custom_prompt,
         group_prompt_overrides=version_obj.group_prompt_overrides or {},
+        allowed_group_ids=version_obj.allowed_group_ids,
         notes=version_obj.notes,
         created_at=version_obj.created_at,
     )
@@ -267,6 +273,7 @@ async def create_custom_agent_endpoint(
             tool_ids=request.tool_ids,
             output_schema_key=request.output_schema_key,
             category=request.category,
+            allowed_group_ids=request.allowed_group_ids,
         )
         db.commit()
         db.refresh(custom_agent)
@@ -389,6 +396,7 @@ async def update_custom_agent_endpoint(
             output_schema_key=request.output_schema_key,
             allow_empty_tool_ids=request.allow_empty_tool_ids,
             notes=request.notes,
+            allowed_group_ids=request.allowed_group_ids,
         )
         db.commit()
         db.refresh(custom_agent)

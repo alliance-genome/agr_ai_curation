@@ -861,6 +861,7 @@ def test_flow_templates_renumber_sources_after_optional_formatter_is_removed(
                             {
                                 "name": "Optional Mid-flow Output",
                                 "description": "Exercise canonical source remapping",
+                                "access": {"allowed_group_ids": ["RGD"]},
                                 "steps": [
                                     {"agent_id": "pdf_extraction"},
                                     {"agent_id": "record_extractor"},
@@ -884,6 +885,7 @@ def test_flow_templates_renumber_sources_after_optional_formatter_is_removed(
 
     templates = flow_tools._filter_flow_templates(available_agent_ids, catalog)
 
+    assert templates[0]["allowed_group_ids"] == ["RGD"]
     assert templates[0]["steps"] == [
         {"agent_id": "pdf_extraction"},
         {"agent_id": "record_extractor"},

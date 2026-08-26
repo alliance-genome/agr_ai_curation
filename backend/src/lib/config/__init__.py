@@ -16,6 +16,7 @@ from .agent_loader import (
     SupervisorRouting,
     ModelConfig,
     FrontendConfig,
+    AgentAccessConfig,
     canonical_system_agent_key,
     build_package_scoped_agent_resolver,
     load_agent_definitions,
@@ -28,6 +29,10 @@ from .agent_loader import (
     list_agents,
     is_initialized as is_agents_initialized,
     reset_cache as reset_agent_cache,
+)
+from src.lib.agent_access import (
+    normalize_allowed_group_ids,
+    require_allowed_group_ids_narrowing,
 )
 
 from .schema_discovery import (
@@ -111,6 +116,9 @@ __all__ = [
     "SupervisorRouting",
     "ModelConfig",
     "FrontendConfig",
+    "AgentAccessConfig",
+    "normalize_allowed_group_ids",
+    "require_allowed_group_ids_narrowing",
     "canonical_system_agent_key",
     "build_package_scoped_agent_resolver",
     "load_agent_definitions",

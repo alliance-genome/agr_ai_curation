@@ -29,6 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, get_args, get_origin
 import yaml
 from pydantic import BaseModel
 
+from src.lib.agent_access import normalize_allowed_group_ids
 from src.schemas.domain_validator import (
     DomainValidatorResultBase,
     ValidatorOutputProjection,
@@ -123,6 +124,13 @@ class CurationConfig:
 
 
 @dataclass
+class AgentAccessConfig:
+    """Provider-neutral availability restrictions for an agent."""
+
+    allowed_group_ids: List[str] = field(default_factory=list)
+
+
+@dataclass
 class AgentDefinition:
     """
     Complete agent definition loaded from agent.yaml.
@@ -169,6 +177,7 @@ class AgentDefinition:
     group_rules_enabled: bool = False
     frontend: FrontendConfig = field(default_factory=FrontendConfig)
     curation: CurationConfig = field(default_factory=CurationConfig)
+    access: AgentAccessConfig = field(default_factory=AgentAccessConfig)
     documentation: Optional[Dict[str, Any]] = None
     structured_finalization: Optional[Dict[str, Any]] = None
     output_projection: ValidatorOutputProjection | None = None
@@ -262,6 +271,21 @@ class AgentDefinition:
             domain_pack_id=str(curation_data.get("domain_pack_id") or "").strip() or None,
             launchable=bool(curation_data.get("launchable", False)),
         )
+        access_data = data.get("access", {})
+        if not isinstance(access_data, dict):
+            raise ValueError(f"Agent '{folder_name}' access must be a mapping.")
+        unknown_access_fields = sorted(set(access_data) - {"allowed_group_ids"})
+        if unknown_access_fields:
+            raise ValueError(
+                f"Agent '{folder_name}' access contains unknown fields: "
+                + ", ".join(unknown_access_fields)
+            )
+        access = AgentAccessConfig(
+            allowed_group_ids=normalize_allowed_group_ids(
+                access_data.get("allowed_group_ids", []),
+                field_name=f"Agent '{folder_name}' access.allowed_group_ids",
+            )
+        )
         structured_finalization_data = data.get("structured_finalization")
         structured_finalization = (
             dict(structured_finalization_data)
@@ -304,6 +328,7 @@ class AgentDefinition:
             group_rules_enabled=data.get("group_rules_enabled", False),
             frontend=frontend,
             curation=curation,
+            access=access,
             documentation=data.get("documentation"),
             structured_finalization=structured_finalization,
             output_projection=(

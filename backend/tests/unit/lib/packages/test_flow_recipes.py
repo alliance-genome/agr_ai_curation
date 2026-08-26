@@ -133,6 +133,63 @@ recipes:
     assert "recipes.0.steps.0.unexpected" in message
 
 
+def test_flow_recipe_access_defaults_unrestricted_and_exposes_rgd_restriction(tmp_path):
+    packages_dir = tmp_path / "packages"
+    _write_package(
+        packages_dir,
+        "org.access",
+        """\
+flow_recipes_api_version: 1.0.0
+recipes:
+  - name: Unrestricted Recipe
+    description: Available to every visible curator
+    steps:
+      - agent_id: demo_agent
+  - name: RGD Recipe
+    description: Available only to RGD curators
+    access:
+      allowed_group_ids: [RGD]
+    steps:
+      - agent_id: demo_agent
+""",
+    )
+
+    catalog = build_flow_recipe_catalog(load_package_registry(packages_dir))
+
+    assert [recipe.access.allowed_group_ids for recipe in catalog.recipes] == [[], ["RGD"]]
+
+
+@pytest.mark.parametrize(
+    "allowed_group_ids, expected",
+    [
+        ("[NOT_A_GROUP]", "Unknown group ID"),
+        ("RGD", "Input should be a valid list"),
+        ("[rgd]", "Unknown group ID"),
+    ],
+)
+def test_flow_recipe_access_rejects_invalid_group_ids(
+    tmp_path, allowed_group_ids, expected
+):
+    packages_dir = tmp_path / "packages"
+    _write_package(
+        packages_dir,
+        "org.invalid_access",
+        f"""\
+flow_recipes_api_version: 1.0.0
+recipes:
+  - name: Restricted Recipe
+    description: Invalid availability contract
+    access:
+      allowed_group_ids: {allowed_group_ids}
+    steps:
+      - agent_id: demo_agent
+""",
+    )
+
+    with pytest.raises(FlowRecipeLoadError, match=expected):
+        build_flow_recipe_catalog(load_package_registry(packages_dir))
+
+
 def test_recipe_and_equivalence_collisions_report_both_package_sources(tmp_path):
     packages_dir = tmp_path / "packages"
     contract = """\

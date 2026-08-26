@@ -476,6 +476,7 @@ async def get_agent_templates_endpoint(
                     category=agent.category,
                     model_id=agent.model_id,
                     tool_ids=list(agent.tool_ids or []),
+                    allowed_group_ids=list(agent.allowed_group_ids),
                     output_schema_key=agent.output_schema_key,
                 )
                 for agent in rows
@@ -568,6 +569,7 @@ async def clone_agent_endpoint(
             user_id=db_user.id,
             source_agent_key=agent_id,
             name=request.name,
+            allowed_group_ids=request.allowed_group_ids,
         )
         db.commit()
         db.refresh(custom_agent)
@@ -700,6 +702,7 @@ async def get_registry_metadata(
             output_schema_key=entry.get("output_schema_key"),
             is_active=entry.get("is_active", True) is not False,
             visible=entry.get("visible", True) is not False,
+            allowed_group_ids=list(entry.get("allowed_group_ids") or []),
             produces_flow_artifacts=_produces_flow_artifacts(entry),
             validation_attachments=validation_attachments_by_agent.get(agent_id, []),
             domain_envelope=domain_envelope_metadata_by_agent.get(agent_id),
@@ -728,6 +731,7 @@ async def get_registry_metadata(
                 output_schema_key=getattr(custom, "output_schema_key", None),
                 is_active=bool(getattr(custom, "is_active", True)),
                 visible=True,
+                allowed_group_ids=list(custom.allowed_group_ids),
                 produces_flow_artifacts=_produces_flow_artifacts(
                     {
                         "category": category,

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.lib.config.agent_loader import (
+    AgentAccessConfig,
     AgentDefinition,
     FrontendConfig,
     ModelConfig,
@@ -48,6 +49,7 @@ def _agent_definition(
     tools: list[str] | None = None,
     output_schema: str | None = None,
     requires_document: bool = False,
+    allowed_group_ids: list[str] | None = None,
 ) -> AgentDefinition:
     return AgentDefinition(
         folder_name=folder_name,
@@ -73,6 +75,7 @@ def _agent_definition(
         requires_document=requires_document,
         group_rules_enabled=(folder_name == "gene"),
         frontend=FrontendConfig(icon="G", show_in_palette=True),
+        access=AgentAccessConfig(allowed_group_ids=list(allowed_group_ids or [])),
     )
 
 
@@ -93,6 +96,8 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
         group_rules_enabled=False,
         group_rules_component=None,
         group_prompt_overrides={"x": "y"},
+        allowed_group_ids=["FB"],
+        inherited_allowed_group_ids=[],
         icon="O",
         category="Old",
         visibility="system",
@@ -126,7 +131,9 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
         "load_agent_definitions",
         lambda _agents_path=None, force_reload=False: {
             "disease_validation": _agent_definition("disease", "disease_validation"),
-            "gene_validation": _agent_definition("gene", "gene_validation"),
+            "gene_validation": _agent_definition(
+                "gene", "gene_validation", allowed_group_ids=["RGD"]
+            ),
         },
     )
     monkeypatch.setattr(
@@ -157,6 +164,8 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
     assert inactive_gene.group_rules_enabled is True
     assert inactive_gene.group_rules_component == "gene"
     assert inactive_gene.instructions == "prompt:gene"
+    assert inactive_gene.allowed_group_ids == ["RGD"]
+    assert inactive_gene.inherited_allowed_group_ids == []
 
     assert stale_agent.is_active is False
     assert stale_agent.supervisor_enabled is False
@@ -401,6 +410,8 @@ def test_sync_reactivates_discovered_disabled_agent(monkeypatch):
         group_rules_enabled=True,
         group_rules_component="gene",
         group_prompt_overrides={},
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
         icon="G",
         category="Validation",
         visibility="system",

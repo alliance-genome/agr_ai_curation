@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.models.sql.agent import Agent
+
 from src.lib.agent_studio.custom_agent_service import (
     CUSTOM_AGENT_PREFIX,
     create_custom_agent,
@@ -272,6 +274,7 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
             tool_ids=["agr_curation_query"],
             output_schema_key=None,
             category="Validation",
+            allowed_group_ids=[],
         ),
     )
     monkeypatch.setattr(
@@ -456,6 +459,7 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
             ],
             output_schema_key="AlleleVariantExtractionEnvelope",
             category="Extraction",
+            allowed_group_ids=[],
         ),
     )
     monkeypatch.setattr(
@@ -516,6 +520,7 @@ def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
             tool_ids=["search_document", "record_evidence"],
             output_schema_key="AlleleVariantExtractionEnvelope",
             category="Extraction",
+            allowed_group_ids=[],
         ),
     )
     monkeypatch.setattr(
@@ -584,6 +589,7 @@ def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
             ],
             output_schema_key="AlleleVariantExtractionEnvelope",
             category="Extraction",
+            allowed_group_ids=[],
         ),
     )
     monkeypatch.setattr(
@@ -639,6 +645,7 @@ def test_create_custom_agent_rejects_unknown_inherited_non_runtime_tool_ids(monk
             tool_ids=["search_document", "recrod_evidence"],
             output_schema_key="DemoEnvelope",
             category="Extraction",
+            allowed_group_ids=[],
         ),
     )
     monkeypatch.setattr(
@@ -691,6 +698,8 @@ def test_update_custom_agent_rejects_unknown_tool_ids(monkeypatch):
         model_reasoning=None,
         tool_ids=[],
         output_schema_key=None,
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
     )
 
     monkeypatch.setattr(
@@ -727,6 +736,8 @@ def test_update_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
         tool_ids=["search_document"],
         output_schema_key="AlleleVariantExtractionEnvelope",
         template_source=None,
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
     )
 
     monkeypatch.setattr(
@@ -758,6 +769,8 @@ def test_update_custom_agent_rejects_locked_group_prompt_override():
         model_reasoning=None,
         tool_ids=[],
         output_schema_key=None,
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
     )
 
     with pytest.raises(ValueError, match="Locked core/generated prompt contracts"):
@@ -792,6 +805,8 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         ],
         output_schema_key="AlleleVariantExtractionEnvelope",
         template_source="allele_extractor",
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
     )
 
     monkeypatch.setattr(
@@ -849,6 +864,8 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
         ],
         output_schema_key="AlleleVariantExtractionEnvelope",
         template_source="allele_extractor",
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
     )
 
     monkeypatch.setattr(
@@ -903,6 +920,8 @@ def test_update_custom_agent_rejects_clearing_existing_tool_ids_without_override
         model_reasoning=None,
         tool_ids=["agr_curation_query"],
         output_schema_key=None,
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
     )
 
     with pytest.raises(ValueError, match="Refusing to clear all tool_ids"):
@@ -974,6 +993,8 @@ def test_update_custom_agent_rejects_unknown_model_id(monkeypatch):
         model_reasoning=None,
         tool_ids=[],
         output_schema_key=None,
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
     )
     monkeypatch.setattr(service, "get_model", lambda _model_id: None)
 
@@ -1065,6 +1086,7 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
         category="Validation",
         model_temperature=0.1,
         model_reasoning="medium",
+        allowed_group_ids=["RGD"],
     )
     observed = {}
 
@@ -1099,3 +1121,188 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
     assert observed["name"] == "Shared Agent (Copy)"
     assert observed["template_source"] == "gene_validation"
     assert observed["custom_prompt"] == "prompt"
+    assert observed["allowed_group_ids"] == ["RGD"]
+    assert observed["inherited_allowed_group_ids"] == ["RGD"]
+
+
+def test_clone_visible_agent_rejects_widening_source_restriction(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    source = SimpleNamespace(
+        agent_key="restricted",
+        visibility="system",
+        name="Restricted",
+        template_source=None,
+        allowed_group_ids=["RGD"],
+    )
+    monkeypatch.setattr(service, "get_agent_by_key", lambda *_args, **_kwargs: source)
+    monkeypatch.setattr(service, "_has_active_custom_name", lambda *_args: False)
+
+    with pytest.raises(ValueError, match="cannot widen"):
+        service.clone_visible_agent_for_user(
+            db=SimpleNamespace(),
+            user_id=7,
+            source_agent_key="restricted",
+            name="Widened",
+            allowed_group_ids=[],
+        )
+
+
+def test_inherited_access_floor_blocks_later_widening():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        template_source="system_template",
+        inherited_allowed_group_ids=["RGD"],
+    )
+
+    assert service._validate_inherited_access_floor(
+        custom_agent, ["RGD"]  # type: ignore[arg-type]
+    ) == ["RGD"]
+    with pytest.raises(ValueError, match="cannot widen"):
+        service._validate_inherited_access_floor(
+            custom_agent, []  # type: ignore[arg-type]
+        )
+
+
+def _restricted_custom_agent(**overrides):
+    values = {
+        "id": uuid.uuid4(),
+        "user_id": 7,
+        "name": "Restricted clone",
+        "instructions": "Current prompt",
+        "group_prompt_overrides": {},
+        "template_source": "system_template",
+        "model_id": "gpt-5.5",
+        "model_temperature": 0.1,
+        "model_reasoning": None,
+        "tool_ids": [],
+        "output_schema_key": None,
+        "allowed_group_ids": ["WB", "RGD"],
+        "inherited_allowed_group_ids": ["WB", "RGD"],
+        "version": 4,
+    }
+    values.update(overrides)
+    return Agent(**values)
+
+
+class _AccessFloorDB:
+    def __init__(self, target=None):
+        self.target = target
+        self.added = []
+
+    def query(self, *_args, **_kwargs):
+        return self
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self.target
+
+    def add(self, value):
+        self.added.append(value)
+
+
+@pytest.mark.parametrize("requested", [[], ["WB", "RGD", "MGI"]])
+def test_update_restricted_clone_rejects_access_widening(requested):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = _restricted_custom_agent()
+
+    with pytest.raises(ValueError, match="cannot widen"):
+        service.update_custom_agent(
+            db=_AccessFloorDB(),
+            custom_agent=custom_agent,
+            allowed_group_ids=requested,
+        )
+
+    assert custom_agent.allowed_group_ids == ["WB", "RGD"]
+    assert custom_agent.version == 4
+
+
+def test_update_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = _restricted_custom_agent()
+    db = _AccessFloorDB()
+    monkeypatch.setattr(service, "_get_next_version", lambda *_args: 5)
+
+    updated = service.update_custom_agent(
+        db=db,
+        custom_agent=custom_agent,
+        allowed_group_ids=["RGD"],
+    )
+
+    assert updated.allowed_group_ids == ["RGD"]
+    assert updated.version == 5
+    assert len(db.added) == 1
+    assert db.added[0].allowed_group_ids == ["WB", "RGD"]
+
+
+def test_update_restricted_clone_missing_floor_fails_closed():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = _restricted_custom_agent()
+    custom_agent.inherited_allowed_group_ids = None
+
+    with pytest.raises(TypeError, match="NoneType.*iterable"):
+        service.update_custom_agent(
+            db=_AccessFloorDB(),
+            custom_agent=custom_agent,
+            allowed_group_ids=[],
+        )
+
+    assert custom_agent.allowed_group_ids == ["WB", "RGD"]
+
+
+@pytest.mark.parametrize("target_groups", [[], ["WB", "RGD", "MGI"]])
+def test_revert_restricted_clone_rejects_access_widening(target_groups, monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = _restricted_custom_agent()
+    target = SimpleNamespace(
+        custom_prompt="Historical prompt",
+        group_prompt_overrides={},
+        allowed_group_ids=target_groups,
+    )
+    db = _AccessFloorDB(target)
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
+    )
+
+    with pytest.raises(ValueError, match="cannot widen"):
+        service.revert_custom_agent_to_version(db, custom_agent, version=2)
+
+    assert custom_agent.instructions == "Current prompt"
+    assert custom_agent.allowed_group_ids == ["WB", "RGD"]
+    assert db.added == []
+
+
+def test_revert_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = _restricted_custom_agent()
+    target = SimpleNamespace(
+        custom_prompt="Historical prompt",
+        group_prompt_overrides={},
+        allowed_group_ids=["RGD"],
+    )
+    db = _AccessFloorDB(target)
+    monkeypatch.setattr(service, "_get_next_version", lambda *_args: 5)
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
+    )
+
+    updated = service.revert_custom_agent_to_version(db, custom_agent, version=2)
+
+    assert updated.instructions == "Historical prompt"
+    assert updated.allowed_group_ids == ["RGD"]
+    assert updated.version == 5
+    assert len(db.added) == 1
+    assert db.added[0].allowed_group_ids == ["WB", "RGD"]

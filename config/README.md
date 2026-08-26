@@ -273,6 +273,20 @@ only from `runtime/packages/*/agents`; an operator may add overrides under
 Each agent bundle is a self-contained folder with:
 
 - `agent.yaml` - Agent metadata, tools, and model configuration
+
+Agent bundles may restrict availability to canonical IDs from `groups.yaml`:
+
+```yaml
+access:
+  allowed_group_ids: [RGD]
+```
+
+The key is strict: unknown IDs, non-list values, duplicates, and non-canonical
+case fail package loading. An omitted or empty list is unrestricted by group.
+This contract persists and exposes provider-neutral availability metadata for
+runtime and UI consumers. Runtime authorization and catalog filtering are not
+enforced by this configuration layer.
+
 - `prompt.yaml` - The agent's system prompt
 - `schema.py` - Pydantic output schema
 - `group_rules/` - Optional group-specific behavior rules

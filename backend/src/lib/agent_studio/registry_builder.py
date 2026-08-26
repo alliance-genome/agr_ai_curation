@@ -107,6 +107,7 @@ def _agent_definition_to_registry_entry(
         "package_id": agent_def.package_id,
         "has_group_rules": agent_def.group_rules_enabled,
         "tools": agent_def.tools,
+        "allowed_group_ids": list(agent_def.access.allowed_group_ids),
         "factory": None,
         "requires_document": agent_def.requires_document,
         "required_params": agent_def.required_params,

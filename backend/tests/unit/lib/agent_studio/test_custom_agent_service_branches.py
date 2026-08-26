@@ -323,6 +323,8 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
         instructions="current prompt",
         group_prompt_overrides={" wb ": "keep"},
         template_source="gene",
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
         version=4,
     )
 
@@ -333,7 +335,11 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
             version=9,
         )
 
-    target = SimpleNamespace(custom_prompt="old prompt", group_prompt_overrides={"mgi": "m rules"})
+    target = SimpleNamespace(
+        custom_prompt="old prompt",
+        group_prompt_overrides={"mgi": "m rules"},
+        allowed_group_ids=[],
+    )
     db = _FakeDB([_FakeQuery(first_value=target)])
     monkeypatch.setattr(service, "_get_next_version", lambda _db, _id: 10)
     monkeypatch.setattr(
@@ -359,11 +365,14 @@ def test_revert_custom_agent_to_version_strips_exact_locked_parent_layers(monkey
         instructions="current prompt",
         group_prompt_overrides={"WB": "current rules"},
         template_source="gene",
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
         version=4,
     )
     target = SimpleNamespace(
         custom_prompt="LOCKED CORE\n\nPARENT BASE\n\nKeep historical curator guidance.",
         group_prompt_overrides={"mgi": "historical rules"},
+        allowed_group_ids=[],
     )
     db = _FakeDB([_FakeQuery(first_value=target)])
     monkeypatch.setattr(service, "_get_next_version", lambda _db, _id: 10)
@@ -396,11 +405,14 @@ def test_revert_custom_agent_to_version_rejects_ambiguous_locked_prompt(monkeypa
         instructions="current prompt",
         group_prompt_overrides={"WB": "current rules"},
         template_source="gene",
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
         version=4,
     )
     target = SimpleNamespace(
         custom_prompt="Edited Platform Runtime Contract with historical curator changes.",
         group_prompt_overrides={"mgi": "historical rules"},
+        allowed_group_ids=[],
     )
     db = _FakeDB([_FakeQuery(first_value=target)])
     monkeypatch.setattr(
@@ -442,6 +454,8 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
         model_temperature=0.2,
         model_reasoning="medium",
         output_schema_key=None,
+        allowed_group_ids=[],
+        inherited_allowed_group_ids=[],
         project_id=None,
         created_at="c",
         updated_at="u",

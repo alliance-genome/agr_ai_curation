@@ -137,6 +137,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/test_gene_expression_prompt_policy.py"),
     Path("backend/tests/unit/test_phenotype_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_allele_extractor_mgi_prompt_policy.py"),
+    Path("backend/tests/unit/lib/config/test_agent_access.py"),
     Path("backend/tests/unit/lib/config/test_bundled_alliance_package_aware_loaders.py"),
     Path("backend/tests/unit/lib/config/test_controlled_vocabulary_validation_agent.py"),
     Path("backend/tests/unit/lib/config/test_data_provider_validation_agent.py"),
@@ -155,6 +156,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/packages/test_alliance_agent_package.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_literature_reference_tool.py"),
     Path("backend/tests/unit/lib/packages/test_core_package_contract.py"),
+    Path("backend/tests/unit/lib/packages/test_flow_recipes.py"),
     Path("backend/tests/unit/lib/packages/test_manifest_loader.py"),
     Path("backend/tests/unit/lib/packages/test_package_runner.py"),
     Path("backend/tests/unit/lib/packages/test_registry.py"),
@@ -196,6 +198,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/agent_studio/test_custom_agent_service.py"),
     Path("backend/tests/unit/lib/agent_studio/test_custom_agent_service_branches.py"),
     Path("backend/tests/unit/lib/agent_studio/test_domain_envelope_tools.py"),
+    Path("backend/tests/unit/lib/agent_studio/test_flow_tools.py"),
     Path("backend/tests/unit/lib/agent_studio/test_hybrid_tool_registry.py"),
     Path("backend/tests/unit/lib/agent_studio/test_registry_builder.py"),
     Path("backend/tests/unit/lib/agent_studio/test_suggestion_service.py"),
@@ -531,6 +534,7 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
         {
             "name": "Demo Record Review",
             "description": "Review a demo record with the installed custom specialist",
+            "allowed_group_ids": [],
             "steps": [
                 {
                     "agent_id": "demo_agent",
