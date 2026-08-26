@@ -81,7 +81,7 @@ services:
       log_tier: observability
       log_component: langfuse-worker
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider 'http://$${HOSTNAME}:3030/api/health?failIfEventPropagationStuck=true' || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://$${HOSTNAME}:3030/api/health?failIfEventPropagationStuck=true || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
