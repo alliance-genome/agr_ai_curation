@@ -5550,6 +5550,7 @@ class TestExecuteFlowTermination:
         assert events[0]["type"] == "FLOW_STARTED"
         assert captured["context_messages"] == [{"role": "user", "content": "run flow"}]
         assert captured["trace_context"] is None
+        assert captured["propagate_runtime_exceptions"] is True
 
     @pytest.mark.asyncio
     async def test_marks_flow_failed_when_supervisor_stops_before_all_steps(

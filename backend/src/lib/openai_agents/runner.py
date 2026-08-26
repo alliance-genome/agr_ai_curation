@@ -2038,6 +2038,7 @@ async def run_agent_streamed(
     trace_context: Optional[Dict[str, str]] = None,
     sentry_workflow: Optional[str] = None,
     sentry_span_data: Optional[Dict[str, Any]] = None,
+    propagate_runtime_exceptions: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Run an agent with streaming output.
@@ -2079,6 +2080,11 @@ async def run_agent_streamed(
         sentry_workflow: Optional Sentry workflow label for this run.
         sentry_span_data: Optional additional `ai_curation.*`/`gen_ai.*` Sentry
                           span data for the manual AI span.
+        propagate_runtime_exceptions: Re-raise traced runtime failures so a
+                                      caller such as the flow executor can
+                                      classify them using its own lifecycle
+                                      state. Other callers retain RUN_ERROR
+                                      conversion and failure notification.
 
     Yields:
         SSE-compatible event dictionaries with types:
@@ -2473,7 +2479,7 @@ async def run_agent_streamed(
                     yield run_error_event
 
                 except Exception as e:
-                    if provided_runtime_agent:
+                    if propagate_runtime_exceptions:
                         traced_runtime_exception = e
                         root_span.update(
                             output={"error": str(e), "error_type": type(e).__name__},

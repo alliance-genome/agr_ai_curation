@@ -4255,6 +4255,7 @@ async def execute_flow(
             "ai_curation.flow.run_id": flow_run_id,
             "ai_curation.flow.total_steps": total_steps,
         },
+        propagate_runtime_exceptions=True,
     )
     try:
         while True:
