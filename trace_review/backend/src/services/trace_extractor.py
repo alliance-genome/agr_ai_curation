@@ -7,8 +7,6 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Mapping, Optional, cast
 from langfuse import Langfuse
-import requests
-from requests.auth import HTTPBasicAuth
 from ..analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from ..config import (
     get_langfuse_observation_page_limit,
@@ -19,8 +17,8 @@ from .langfuse_run_reconstruction import usage_cost_summary
 
 logger = logging.getLogger(__name__)
 OBSERVATION_FIELDS = "core,basic,time,io,metadata,model,usage,trace_context"
+SESSION_OBSERVATION_FIELDS = "core,basic,time,trace_context"
 SESSION_TRACE_LIST_LIMIT = 100
-SESSION_TRACE_LIST_TIMEOUT_SECONDS = 30
 
 
 class TraceExtractor:
@@ -296,51 +294,66 @@ class TraceExtractor:
         }
 
     def list_session_traces(self, session_id: str, limit: int = SESSION_TRACE_LIST_LIMIT) -> Dict[str, Any]:
-        """List Langfuse traces for a session without exposing credentials."""
-        traces: List[Dict[str, Any]] = []
-        page = 1
-        meta: Dict[str, Any] = {}
-        endpoint = f"{self.host.rstrip('/')}/api/public/traces"
-        auth = HTTPBasicAuth(self.public_key, self.secret_key)
+        """List a session's traces from cursor-paginated v2 observations."""
+        observations_by_trace: Dict[str, List[Dict[str, Any]]] = {}
+        cursor: Optional[str] = None
+        seen_cursors = set()
+        page_count = 0
+        page_limit = min(get_langfuse_observation_page_limit(), max(1, limit))
+        filter_json = json.dumps([{
+            "type": "string",
+            "column": "sessionId",
+            "operator": "=",
+            "value": session_id,
+        }])
+        request_options = {
+            "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
+        }
 
         while True:
-            params = {
-                "sessionId": session_id,
-                "limit": limit,
-                "page": page,
-                "orderBy": "timestamp.asc",
-            }
-
             try:
-                response = requests.get(
-                    endpoint,
-                    params=params,
-                    auth=auth,
-                    timeout=SESSION_TRACE_LIST_TIMEOUT_SECONDS,
+                response = self.client.api.observations.get_many(
+                    fields=SESSION_OBSERVATION_FIELDS,
+                    filter=filter_json,
+                    limit=page_limit,
+                    cursor=cursor,
+                    request_options=request_options,
                 )
-                response.raise_for_status()
-                payload = response.json()
-            except requests.RequestException as exc:
+            except Exception as exc:
                 raise RuntimeError(
                     f"Unable to list Langfuse traces for session {session_id} "
                     f"from {self.source}: {exc.__class__.__name__}"
                 ) from exc
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"Langfuse returned invalid JSON while listing session {session_id} "
-                    f"from {self.source}"
-                ) from exc
 
-            page_traces = payload.get("data") or []
-            traces.extend(self._normalize_item(trace) for trace in page_traces)
-            meta = payload.get("meta") or {}
+            page_count += 1
+            for item in getattr(response, "data", None) or []:
+                observation = self._normalize_v2_observation(item)
+                trace_id = observation.get("traceId") or observation.get("trace_id")
+                if trace_id:
+                    observations_by_trace.setdefault(str(trace_id), []).append(observation)
 
-            total_pages = meta.get("totalPages")
-            if total_pages is None:
-                total_pages = page
-            if page >= total_pages:
+            response_meta = getattr(response, "meta", None)
+            cursor = getattr(response_meta, "cursor", None) if response_meta is not None else None
+            if not cursor:
                 break
-            page += 1
+            if cursor in seen_cursors:
+                raise RuntimeError(
+                    f"Langfuse repeated session observation cursor for session {session_id}"
+                )
+            seen_cursors.add(cursor)
+
+        traces: List[Dict[str, Any]] = []
+        for trace_id, observations in observations_by_trace.items():
+            trace = self.get_trace_details(trace_id, observations)
+            traces.append(trace)
+        traces.sort(key=lambda trace: (str(trace.get("timestamp") or ""), str(trace.get("id") or "")))
+
+        meta = {
+            "page": page_count,
+            "limit": page_limit,
+            "totalItems": len(traces),
+            "totalPages": page_count,
+        }
 
         return {
             "session_id": session_id,

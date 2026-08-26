@@ -312,7 +312,7 @@ curl "http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/export?s
 
 **GET** `/api/traces/sessions/{session_id}/export?source=remote`
 
-Export a compact JSON bundle for every trace Langfuse associates with a session. The endpoint lists trace IDs through the configured TraceReview Langfuse source, analyzes each trace with the same analyzer stack used by single-trace export, and keeps per-trace failures in the response instead of failing the whole session.
+Export a compact JSON bundle for every trace Langfuse associates with a session. The endpoint lists and deduplicates trace IDs through cursor-paginated v2 observations filtered by `sessionId`, analyzes each trace with the same analyzer stack used by single-trace export, and keeps per-trace failures in the response instead of failing the whole session.
 
 #### Request
 
@@ -1103,7 +1103,7 @@ jq -r '
 
 - Langfuse credentials are stored in the TraceReview runtime environment and are never returned by the session bundle endpoint.
 - Use `source=remote` for EC2 Langfuse and `source=local` for the local Docker Langfuse instance.
-- The session bundle endpoint calls Langfuse's public trace list API with `sessionId`, then reuses TraceReview single-trace analysis for each listed trace.
+- The session bundle endpoint filters Langfuse v2 observations by `sessionId`, groups them by trace ID, and then reuses TraceReview single-trace analysis for each listed trace. It does not depend on the legacy session/trace list endpoints that are disabled in `events_only` mode.
 - Partial trace failures are non-fatal and are represented in each trace item plus the top-level `errors` array.
 
 ---
