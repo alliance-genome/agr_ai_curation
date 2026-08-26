@@ -283,9 +283,10 @@ access:
 
 The key is strict: unknown IDs, non-list values, duplicates, and non-canonical
 case fail package loading. An omitted or empty list is unrestricted by group.
-Visibility and group availability are independent policies; effective access
-requires both visibility and (for a non-empty list) at least one active group
-match.
+This contract persists and exposes provider-neutral availability metadata for
+runtime and UI consumers. Runtime authorization and catalog filtering are not
+enforced by this configuration layer.
+
 - `prompt.yaml` - The agent's system prompt
 - `schema.py` - Pydantic output schema
 - `group_rules/` - Optional group-specific behavior rules

@@ -31,7 +31,6 @@ from .agent_loader import (
     reset_cache as reset_agent_cache,
 )
 from src.lib.agent_access import (
-    is_group_access_allowed,
     normalize_allowed_group_ids,
     require_allowed_group_ids_narrowing,
 )
@@ -118,7 +117,6 @@ __all__ = [
     "ModelConfig",
     "FrontendConfig",
     "AgentAccessConfig",
-    "is_group_access_allowed",
     "normalize_allowed_group_ids",
     "require_allowed_group_ids_narrowing",
     "canonical_system_agent_key",

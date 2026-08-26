@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any
 
 
@@ -46,16 +45,6 @@ def normalize_allowed_group_ids(
 
     requested = set(normalized)
     return [group_id for group_id in valid_group_ids if group_id in requested]
-
-
-def is_group_access_allowed(
-    allowed_group_ids: Iterable[str],
-    active_group_ids: Iterable[str],
-) -> bool:
-    """Return the effective group match; an empty allow-list is unrestricted."""
-
-    allowed = set(allowed_group_ids)
-    return not allowed or bool(allowed.intersection(active_group_ids))
 
 
 def require_allowed_group_ids_narrowing(

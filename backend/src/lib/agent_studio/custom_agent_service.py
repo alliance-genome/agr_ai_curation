@@ -522,7 +522,6 @@ def _resolve_system_template_agent(db: Session, template_source: str) -> CustomA
 
 
 def _validate_inherited_access_floor(
-    db: Session,
     custom_agent: CustomAgent,
     requested_allowed_group_ids: list[str],
 ) -> list[str]:
@@ -993,7 +992,6 @@ def update_custom_agent(
     next_allowed_group_ids: Optional[list[str]] = None
     if allowed_group_ids is not None:
         next_allowed_group_ids = _validate_inherited_access_floor(
-            db,
             custom_agent,
             allowed_group_ids,
         )
@@ -1131,7 +1129,6 @@ def revert_custom_agent_to_version(
         _read_group_prompt_overrides(target)
     )
     target_allowed_group_ids = _validate_inherited_access_floor(
-        db,
         custom_agent,
         _read_allowed_group_ids(target),
     )

@@ -3,7 +3,6 @@
 import pytest
 
 from src.lib.agent_access import (
-    is_group_access_allowed,
     normalize_allowed_group_ids,
     require_allowed_group_ids_narrowing,
 )
@@ -18,12 +17,6 @@ def test_normalize_allowed_group_ids_uses_registry_order_and_canonical_case():
 def test_normalize_allowed_group_ids_fails_closed(value):
     with pytest.raises(ValueError, match="group ID|duplicate|whitespace"):
         normalize_allowed_group_ids(value)
-
-
-def test_effective_group_access_treats_empty_as_unrestricted_and_matches_any_active_group():
-    assert is_group_access_allowed([], [])
-    assert is_group_access_allowed(["RGD"], ["FB", "RGD"])
-    assert not is_group_access_allowed(["RGD"], ["FB"])
 
 
 def test_inherited_access_can_only_narrow():

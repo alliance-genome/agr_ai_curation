@@ -287,8 +287,11 @@ recipes:
 
 `allowed_group_ids: []` (and an omitted `access` block) is unrestricted by
 group. Values are case-sensitive IDs owned by `config/groups.yaml`; arbitrary
-labels fail package loading. Custom-agent clones inherit a restricted source
-as a floor and may select a non-empty subset, but cannot clear or broaden it.
+labels fail package loading. The field is persisted and exposed as
+provider-neutral metadata for downstream runtime and UI consumers; these
+package loading and persistence surfaces do not enforce runtime authorization
+or catalog filtering. Custom-agent clones inherit a restricted source as a
+floor and may select a non-empty subset, but cannot clear or broaden it.
 
 ### Agent Studio system prompt
 

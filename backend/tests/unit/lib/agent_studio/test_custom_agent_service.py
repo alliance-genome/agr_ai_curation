@@ -1158,11 +1158,11 @@ def test_inherited_access_floor_blocks_later_widening():
     )
 
     assert service._validate_inherited_access_floor(
-        SimpleNamespace(), custom_agent, ["RGD"]  # type: ignore[arg-type]
+        custom_agent, ["RGD"]  # type: ignore[arg-type]
     ) == ["RGD"]
     with pytest.raises(ValueError, match="cannot widen"):
         service._validate_inherited_access_floor(
-            SimpleNamespace(), custom_agent, []  # type: ignore[arg-type]
+            custom_agent, []  # type: ignore[arg-type]
         )
 
 
