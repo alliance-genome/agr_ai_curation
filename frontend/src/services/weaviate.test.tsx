@@ -17,6 +17,7 @@ import {
   useWeaviateHealth,
   normalizeDocumentListResponse,
   normalizeDocumentDetailResponse,
+  type OperationResult,
 } from './weaviate';
 import { logger } from './logger';
 import { createMockDocument } from '../test/test-utils';
@@ -474,9 +475,16 @@ describe('weaviate service', () => {
 
   describe('useDeleteDocument', () => {
     it('deletes a document and invalidates queries', async () => {
+      const operationResult: OperationResult = {
+        success: true,
+        message: 'Document deleted successfully',
+        document_id: 'doc-1',
+        operation: 'delete_document',
+        error: null,
+      };
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({}),
+        json: async () => operationResult,
       });
 
       const { result } = renderHook(
@@ -484,7 +492,7 @@ describe('weaviate service', () => {
         { wrapper: createWrapper() }
       );
 
-      await result.current.mutateAsync('doc-1');
+      await expect(result.current.mutateAsync('doc-1')).resolves.toEqual(operationResult);
 
       expect(mockFetch).toHaveBeenCalledWith(
         '/api/weaviate/documents/doc-1',
@@ -495,7 +503,7 @@ describe('weaviate service', () => {
     it('handles delete errors', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
-        json: async () => ({ message: 'Cannot delete' }),
+        json: async () => ({ detail: 'Cannot delete' }),
       });
 
       const { result } = renderHook(
@@ -508,12 +516,18 @@ describe('weaviate service', () => {
   });
 
   describe('useReembedDocument', () => {
-    it('re-embeds a document', async () => {
-      const mockDocument = createMockDocument();
+    it('returns the backend operation result when re-embedding a document', async () => {
+      const operationResult: OperationResult = {
+        success: true,
+        message: 'Re-embedding initiated for 4 chunks',
+        document_id: 'doc-1',
+        operation: 'reembed_document',
+        error: null,
+      };
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => mockDocument,
+        json: async () => operationResult,
       });
 
       const { result } = renderHook(
@@ -523,7 +537,7 @@ describe('weaviate service', () => {
 
       const response = await result.current.mutateAsync('doc-1');
 
-      expect(response).toEqual(mockDocument);
+      expect(response).toEqual(operationResult);
       expect(mockFetch).toHaveBeenCalledWith(
         '/api/weaviate/documents/doc-1/reembed',
         expect.objectContaining({ method: 'POST' })
