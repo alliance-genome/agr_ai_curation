@@ -574,7 +574,7 @@ def test_create_dynamic_specialist_tools_skips_document_required_tools_without_d
     assert calls == []
 
 
-def test_create_dynamic_specialist_tools_passes_document_and_group_context(monkeypatch):
+def test_create_dynamic_specialist_tools_passes_groups_without_prompt_rules(monkeypatch):
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
@@ -585,7 +585,7 @@ def test_create_dynamic_specialist_tools_passes_document_and_group_context(monke
                 "name": "Gene Expression Agent",
                 "description": "Extract expression assertions",
                 "requires_document": True,
-                "group_rules_enabled": True,
+                "group_rules_enabled": False,
             }
         ],
     )

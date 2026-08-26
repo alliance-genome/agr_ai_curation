@@ -80,6 +80,7 @@ from src.lib.observability.background_tasks import (
     add_observed_background_task,
     report_background_task_exception,
 )
+from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.flow_edge_roles import agent_can_source_output_attachment
 from src.lib.config.schema_discovery import resolve_output_schema
@@ -1073,6 +1074,9 @@ async def test_agent_endpoint(
 
     session_id = request.session_id or f"agent-test-{uuid.uuid4()}"
     active_groups = [request.group_id] if request.group_id else []
+    authenticated_groups = get_groups_from_provider_groups(
+        user.get("cognito:groups", [])
+    )
 
     set_current_session_id(session_id)
     set_current_user_id(str(user_sub))
@@ -1084,6 +1088,7 @@ async def test_agent_endpoint(
             document_id=request.document_id,
             user_id=str(user_sub),
             active_groups=active_groups,
+            authenticated_groups=authenticated_groups,
         )
     except Exception as exc:
         raise_sanitized_http_exception(

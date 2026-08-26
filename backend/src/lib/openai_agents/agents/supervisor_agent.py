@@ -1397,7 +1397,6 @@ def _create_dynamic_specialist_tools(
         agent_key = tool_meta["agent_key"]
         description = tool_meta["description"]
         requires_document = tool_meta.get("requires_document", False)
-        group_rules_enabled = tool_meta.get("group_rules_enabled", False)
         formatter_output_format = _FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY.get(str(agent_key))
         specialist_user_request = (
             authoritative_user_request
@@ -1440,8 +1439,9 @@ def _create_dynamic_specialist_tools(
                 "hierarchy": hierarchy,
                 "abstract": abstract,
             })
-        # Group-aware agents (MODs, institutions, teams, etc.)
-        if group_rules_enabled and active_groups:
+        # Authenticated groups control both prompt overlays and package-owned
+        # tool exposure; tool policy does not depend on prompt-rule enablement.
+        if active_groups:
             agent_kwargs["active_groups"] = active_groups
         if specialist_model_override:
             agent_kwargs["model_id_override"] = specialist_model_override

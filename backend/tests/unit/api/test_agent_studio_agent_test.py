@@ -88,7 +88,17 @@ class TestAgentTestEndpoint:
             "get_agent_metadata",
             lambda _agent_id, **_kwargs: {"requires_document": False},
         )
-        monkeypatch.setattr(api_module, "get_agent_by_id", lambda _aid, **_kwargs: object())
+        agent_kwargs = {}
+        monkeypatch.setattr(
+            api_module,
+            "get_agent_by_id",
+            lambda _aid, **kwargs: agent_kwargs.update(kwargs) or object(),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_groups_from_provider_groups",
+            lambda provider_groups: ["RGD"] if provider_groups == ["provider-rgd"] else [],
+        )
 
         run_kwargs = {}
 
@@ -111,7 +121,7 @@ class TestAgentTestEndpoint:
                     group_id="WB",
                     session_id="session-1",
                 ),
-                user={"sub": "auth-sub"},
+                user={"sub": "auth-sub", "cognito:groups": ["provider-rgd"]},
                 db=SimpleNamespace(),
             )
         )
@@ -135,6 +145,8 @@ class TestAgentTestEndpoint:
         assert '"trace_id": "trace-123"' in stream_text
         assert '"session_id": "session-1"' in stream_text
         assert run_kwargs["active_groups"] == ["WB"]
+        assert agent_kwargs["active_groups"] == ["WB"]
+        assert agent_kwargs["authenticated_groups"] == ["RGD"]
         assert run_kwargs["session_id"] == "session-1"
         assert run_kwargs["context_messages"] == [{"role": "user", "content": "test query"}]
 

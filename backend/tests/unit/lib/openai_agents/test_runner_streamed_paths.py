@@ -900,6 +900,12 @@ async def test_run_agent_with_tracing_starts_sentry_span_for_explicit_workflow(m
                 tools=[],
                 model="gpt-5.5",
                 output_type=None,
+                group_tool_exposure={
+                    "active_group_ids": ["ZFIN"],
+                    "base_tool_ids": ["search_document"],
+                    "added_tool_ids": ["zfin_helper"],
+                    "denied_tool_ids": [],
+                },
             ),
             input_items=[{"role": "user", "content": "run flow"}],
             user_id="user-1",
@@ -916,6 +922,12 @@ async def test_run_agent_with_tracing_starts_sentry_span_for_explicit_workflow(m
     assert calls[0][0] == "span"
     assert calls[0][1]["workflow"] == "execute_flow"
     assert calls[0][1]["span_data"]["ai_curation.flow.total_steps"] == 2
+    assert calls[0][1]["span_data"]["ai_curation.agent.group_tool_exposure"] == {
+        "active_group_ids": ["ZFIN"],
+        "base_tool_ids": ["search_document"],
+        "added_tool_ids": ["zfin_helper"],
+        "denied_tool_ids": [],
+    }
     assert ("data", "ai_curation.tool_call.count", 0) in calls
     post_stream_span = next(
         call

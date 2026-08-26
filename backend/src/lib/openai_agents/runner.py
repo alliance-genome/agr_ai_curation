@@ -1052,6 +1052,11 @@ async def _run_agent_with_tracing(
     effective_sentry_workflow = sentry_workflow or ("assistant_chat" if chat_session_id else None)
     manual_sentry_span_data = {
         "ai_curation.agent.output_type": structured_finalization_state.output_type_name,
+        "ai_curation.agent.group_tool_exposure": getattr(
+            agent,
+            "group_tool_exposure",
+            None,
+        ),
     }
     if sentry_span_data:
         manual_sentry_span_data.update(sentry_span_data)

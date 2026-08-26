@@ -376,6 +376,7 @@ def _process_single_document(
                 cognito_sub=cognito_sub,
                 batch_id=str(batch.id),
                 db_user_id=batch.user_id,
+                active_groups=batch.active_group_ids,
             )
         )
 
@@ -458,6 +459,7 @@ async def _execute_flow_for_document(
     document_id: str,
     cognito_sub: str,
     batch_id: str,
+    active_groups: list[str],
     db_user_id: Optional[int] = None,
     document_name: Optional[str] = None,
 ) -> tuple[list[dict[str, Any]], list[str], str, list[dict[str, Any]]]:
@@ -471,6 +473,7 @@ async def _execute_flow_for_document(
         document_id: Weaviate document UUID
         cognito_sub: Cognito subject (auth_sub) for Weaviate tenant and file output
         batch_id: Batch UUID for session tracking
+        active_groups: Authenticated internal-group snapshot from batch creation
 
     Returns:
         Generated result-file manifests and any review session ids.
@@ -515,7 +518,7 @@ async def _execute_flow_for_document(
             document_id=document_id,
             document_name=document_name,
             user_query=None,  # Use task_instructions from flow
-            active_groups=None,  # Default groups
+            active_groups=active_groups,
             flow_run_id=batch_id,
         ):
             event_type = event.get("type", "")

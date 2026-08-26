@@ -124,6 +124,9 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Group-tool policy contract covers Alliance package/provider examples.
+    Path("backend/tests/contract/alliance/agents/test_group_tool_policy_contract.py"),
+    Path("backend/tests/unit/lib/agent_studio/test_group_tool_policy.py"),
     # Package-aware forward reconciliation for the Alliance-owned tool policy.
     Path("backend/tests/unit/test_alliance_tool_policy_reconciliation_migration.py"),
     # Bundled Alliance package contracts and prompt/tool policy coverage.

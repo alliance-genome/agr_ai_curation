@@ -287,6 +287,25 @@ This contract persists and exposes provider-neutral availability metadata for
 runtime and UI consumers. Runtime authorization and catalog filtering are not
 enforced by this configuration layer.
 
+Package agents may separately scope individual tools to authenticated groups:
+
+```yaml
+group_tool_policy:
+  rules:
+    - tool_id: zfin_genotype_context_helper
+      allowed_group_ids: [ZFIN]
+      field_paths:
+        - expression_experiment.specimen_genomic_model
+```
+
+Each rule is both additive and restrictive. A ruled tool omitted from the base
+`tools` list is added only for an allowed active group; a ruled tool already in
+the base list is removed unless an allowed group is active. `field_paths` is
+required so extractor-facing capabilities remain narrow and package-owned.
+Unknown groups, duplicate tool rules, empty group lists, and empty field paths
+fail package loading. Runtime exposure uses only authenticated `active_groups`,
+never extracted provider values.
+
 - `prompt.yaml` - The agent's system prompt
 - `schema.py` - Pydantic output schema
 - `group_rules/` - Optional group-specific behavior rules

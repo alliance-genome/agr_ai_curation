@@ -172,6 +172,12 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
         output_type=None,
         instructions="",
         model="gpt-4o",
+        group_tool_exposure={
+            "active_group_ids": [],
+            "base_tool_ids": ["base_helper"],
+            "added_tool_ids": [],
+            "denied_tool_ids": ["zfin_helper"],
+        },
     )
 
     result = await streaming_tools.run_specialist_with_events(
@@ -188,6 +194,17 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
     assert captured["run_config"].trace_include_sensitive_data is True
     assert captured["run_config"].workflow_name == "parent workflow"
     assert captured["run_config"].group_id == "session-1"
+    initial_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "specialist_tool"
+    )
+    assert initial_span[1]["span_data"]["ai_curation.agent.group_tool_exposure"] == {
+        "active_group_ids": [],
+        "base_tool_ids": ["base_helper"],
+        "added_tool_ids": [],
+        "denied_tool_ids": ["zfin_helper"],
+    }
     post_stream_span = next(
         call
         for call in sentry_calls

@@ -28,6 +28,7 @@ from ..lib.batch.processor import process_batch_task
 from ..lib.batch.events import get_batch_broadcaster
 from ..models.sql import get_db, CurationFlow, PDFDocument
 from ..lib.observability.background_tasks import add_observed_background_task
+from ..lib.group_rules import get_groups_from_provider_groups
 from ..models.sql.batch import BatchStatus, BatchDocumentStatus
 from ..models.sql.database import SessionLocal
 from ..schemas.batch import (
@@ -190,6 +191,9 @@ async def create_batch(
         user_id=db_user.id,
         flow_id=request.flow_id,
         document_ids=request.document_ids,
+        active_group_ids=get_groups_from_provider_groups(
+            user.get("cognito:groups", [])
+        ),
     )
 
     # Start background processing

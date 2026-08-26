@@ -37,6 +37,7 @@ from src.lib.agent_studio.custom_agent_service import (
     update_custom_agent,
 )
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
+from src.lib.group_rules import get_groups_from_provider_groups
 
 logger = logging.getLogger(__name__)
 
@@ -559,6 +560,9 @@ async def test_custom_agent_endpoint(
 
     session_id = request.session_id or f"custom-test-{uuid.uuid4()}"
     active_groups = [request.group_id] if request.group_id else []
+    authenticated_groups = get_groups_from_provider_groups(
+        user.get("cognito:groups", [])
+    )
 
     set_current_session_id(session_id)
     set_current_user_id(str(user_sub))
@@ -570,6 +574,7 @@ async def test_custom_agent_endpoint(
             document_id=request.document_id,
             user_id=str(user_sub),
             active_groups=active_groups,
+            authenticated_groups=authenticated_groups,
         )
     except Exception as exc:
         raise_sanitized_http_exception(

@@ -94,6 +94,7 @@ class BatchService:
         user_id: int,
         flow_id: UUID,
         document_ids: List[UUID],
+        active_group_ids: List[str],
     ) -> Batch:
         """Create a new batch with document records.
 
@@ -101,6 +102,7 @@ class BatchService:
             user_id: Owner user ID
             flow_id: Flow to execute
             document_ids: List of document UUIDs to process
+            active_group_ids: Authenticated internal-group snapshot for delayed execution
 
         Returns:
             Created batch with documents
@@ -118,6 +120,7 @@ class BatchService:
             total_documents=len(document_ids),
             completed_documents=0,
             failed_documents=0,
+            active_group_ids=list(active_group_ids),
         )
         self.db.add(batch)
         self.db.flush()  # Get batch.id for foreign key
