@@ -166,6 +166,61 @@ def _create_user(db_session, *, auth_sub: str) -> User:
     return user
 
 
+def test_append_message_persists_sanitized_nested_payload_in_postgres(db_session):
+    repository = ChatHistoryRepository(db_session)
+    session_id = f"{SESSION_PREFIX}nul-payload"
+    _create_session(
+        repository,
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        created_at=_ts(8, 0),
+    )
+
+    _append_message(
+        repository,
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        role="flow",
+        content="Flow evidence A\x00B",
+        message_type="flow_step_evidence",
+        turn_id="turn-nul-payload",
+        payload_json={
+            "type": "FLOW_STEP_EVIDENCE",
+            "details": {
+                "evidence_records": [
+                    {
+                        "quote": "A\x00B",
+                        "nested": {"unsafe\x00key": "C\x00D"},
+                        "sequence": ["E\x00F", {"value": "G\x00H"}],
+                    }
+                ]
+            },
+        },
+        created_at=_ts(8, 1),
+    )
+    db_session.commit()
+
+    messages = _list_messages(
+        repository,
+        session_id=session_id,
+        user_auth_sub=USER_A,
+    ).items
+    assert len(messages) == 1
+    assert messages[0].content == "Flow evidence AB"
+    assert messages[0].payload_json == {
+        "type": "FLOW_STEP_EVIDENCE",
+        "details": {
+            "evidence_records": [
+                {
+                    "quote": "AB",
+                    "nested": {"unsafekey": "CD"},
+                    "sequence": ["EF", {"value": "GH"}],
+                }
+            ]
+        },
+    }
+
+
 def _create_document(db_session, *, document_id, suffix: str, user_id: int) -> None:
     db_session.add(
         PDFDocument(

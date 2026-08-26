@@ -21,6 +21,10 @@ from src.lib.openai_agents.config import (
     get_chat_recent_message_scan_size_max,
     get_chat_session_page_size_max,
 )
+from src.lib.persistence_sanitization import (
+    sanitize_persisted_json_value,
+    sanitize_persisted_text,
+)
 
 
 ASSISTANT_CHAT_KIND = "assistant_chat"
@@ -704,6 +708,10 @@ class ChatHistoryRepository:
             user_auth_sub=user_auth_sub,
             chat_kind=chat_kind,
         )
+        persisted_content = sanitize_persisted_text(content)
+        if not persisted_content.strip():
+            raise ValueError("content is required")
+
         message = ChatMessageModel(
             session_id=session.session_id,
             chat_kind=session.chat_kind,
@@ -713,12 +721,10 @@ class ChatHistoryRepository:
                 message_type,
                 field_name="message_type",
             ),
-            content=content,
-            payload_json=payload_json,
+            content=persisted_content,
+            payload_json=sanitize_persisted_json_value(payload_json),
             trace_id=_normalize_optional_text(trace_id, field_name="trace_id"),
         )
-        if not content.strip():
-            raise ValueError("content is required")
         if created_at is not None:
             message.created_at = created_at
 
@@ -942,7 +948,7 @@ class ChatHistoryRepository:
             raise LookupError("Chat message not found")
 
         if payload_json is not _UNSET:
-            message.payload_json = payload_json
+            message.payload_json = sanitize_persisted_json_value(payload_json)
         if trace_id is not _UNSET:
             normalized_trace_id = None
             if trace_id is not None:

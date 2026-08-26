@@ -19,6 +19,10 @@ from pydantic import ValidationError
 from src.lib.openai_agents.evidence_summary import (
     extract_evidence_records_from_structured_result,
 )
+from src.lib.persistence_sanitization import (
+    sanitize_persisted_json_value,
+    sanitize_persisted_text,
+)
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as CurationExtractionResultRecordModel,
 )
@@ -41,7 +45,6 @@ _ENVELOPE_EXTRACTION_KEYS = frozenset(
 _DOMAIN_ENVELOPE_KEYS = frozenset(
     {"envelope_id", "domain_pack_id", "extracted_objects"}
 )
-_NUL_CHARACTER = "\x00"
 
 
 @dataclass(frozen=True)
@@ -76,7 +79,7 @@ def canonical_extraction_payload_hash(payload: Any) -> str:
     """Return a deterministic hash for one JSON-compatible extraction payload."""
 
     serialized = json.dumps(
-        _sanitize_persisted_json_value(payload),
+        sanitize_persisted_json_value(payload),
         ensure_ascii=True,
         sort_keys=True,
         separators=(",", ":"),
@@ -711,7 +714,7 @@ def _validated_inline_domain_envelope_payload(
             f"{exc}"
         ) from exc
 
-    return _sanitize_persisted_json_value(envelope.model_dump(mode="json"))
+    return sanitize_persisted_json_value(envelope.model_dump(mode="json"))
 
 
 def _canonical_payload_hash(payload: Mapping[str, Any]) -> str:
@@ -927,42 +930,12 @@ def _build_extraction_result_record(
         flow_run_id=request.flow_run_id,
         user_id=request.user_id,
         candidate_count=request.candidate_count,
-        conversation_summary=_sanitize_persisted_text(request.conversation_summary),
-        payload_json=_sanitize_persisted_json_value(request.payload_json),
-        idempotency_key=_sanitize_persisted_text(request.idempotency_key),
-        payload_hash=_sanitize_persisted_text(request.payload_hash),
-        extraction_metadata=_sanitize_persisted_json_value(dict(request.metadata)),
+        conversation_summary=sanitize_persisted_text(request.conversation_summary),
+        payload_json=sanitize_persisted_json_value(request.payload_json),
+        idempotency_key=sanitize_persisted_text(request.idempotency_key),
+        payload_hash=sanitize_persisted_text(request.payload_hash),
+        extraction_metadata=sanitize_persisted_json_value(dict(request.metadata)),
     )
-
-
-def _sanitize_persisted_text(value: str | None) -> str | None:
-    """Remove characters Postgres cannot store in text-backed JSON payloads."""
-
-    if value is None:
-        return None
-    return value.replace(_NUL_CHARACTER, "")
-
-
-def _sanitize_persisted_json_value(value: Any) -> Any:
-    """Recursively sanitize JSON-like payloads before persisting them."""
-
-    if isinstance(value, str):
-        return _sanitize_persisted_text(value)
-
-    if isinstance(value, Mapping):
-        return {
-            _sanitize_persisted_text(key) if isinstance(key, str) else key:
-            _sanitize_persisted_json_value(nested_value)
-            for key, nested_value in value.items()
-        }
-
-    if isinstance(value, list):
-        return [_sanitize_persisted_json_value(item) for item in value]
-
-    if isinstance(value, tuple):
-        return tuple(_sanitize_persisted_json_value(item) for item in value)
-
-    return value
 
 
 __all__ = [

@@ -12,6 +12,8 @@ from src.lib.chat_history_repository import (
     ChatHistoryRepository,
     ChatMessagePage,
 )
+from src.lib.persistence_sanitization import sanitize_persisted_json_value
+from src.models.sql.chat_message import ChatMessage
 from src.models.sql.chat_session import ChatSession
 
 
@@ -118,3 +120,104 @@ def test_list_messages_passes_after_created_at_to_message_query(monkeypatch):
 
     assert page.items == []
     assert captured_kwargs["after_created_at"] == after_created_at
+
+
+def test_append_message_sanitizes_nested_postgres_incompatible_text(monkeypatch):
+    db = MagicMock()
+    repository = ChatHistoryRepository(db)
+    session = _session_model()
+    session.chat_kind = ASSISTANT_CHAT_KIND
+    monkeypatch.setattr(
+        repository,
+        "_require_active_session_for_kind",
+        lambda **_kwargs: session,
+    )
+
+    repository.append_message(
+        session_id="session-1",
+        user_auth_sub="auth-sub-1",
+        chat_kind=ASSISTANT_CHAT_KIND,
+        role="flow",
+        content="Evidence A\x00B",
+        message_type="flow_step_evidence",
+        payload_json={
+            "type": "FLOW_STEP_EVIDENCE",
+            "details": {
+                "evidence_records": [
+                    {
+                        "quote": "A\x00B",
+                        "nested": {"unsafe\x00key": "C\x00D"},
+                        "sequence": ("E\x00F", {"value": "G\x00H"}),
+                    }
+                ]
+            },
+            "evidence_count": 1,
+            "supported_unicode": "café Δ",
+            "unchanged_values": [7, True, None],
+        },
+    )
+
+    persisted = db.add.call_args.args[0]
+    assert isinstance(persisted, ChatMessage)
+    assert persisted.content == "Evidence AB"
+    assert persisted.payload_json == {
+        "type": "FLOW_STEP_EVIDENCE",
+        "details": {
+            "evidence_records": [
+                {
+                    "quote": "AB",
+                    "nested": {"unsafekey": "CD"},
+                    "sequence": ("EF", {"value": "GH"}),
+                }
+            ]
+        },
+        "evidence_count": 1,
+        "supported_unicode": "café Δ",
+        "unchanged_values": [7, True, None],
+    }
+    assert db.flush.call_count == 1
+
+
+def test_persistence_sanitizer_leaves_ordinary_payload_unchanged_and_is_idempotent():
+    ordinary_payload = {
+        "text": "ordinary café Δ",
+        "sequence": [1, True, None, ("nested", {"key": "value"})],
+    }
+    unsafe_payload = {
+        "unsafe\x00key": ["A\x00B", ("C\x00D", {"value": "E\x00F"})]
+    }
+
+    assert sanitize_persisted_json_value(ordinary_payload) == ordinary_payload
+    sanitized_once = sanitize_persisted_json_value(unsafe_payload)
+    assert sanitize_persisted_json_value(sanitized_once) == sanitized_once
+    assert sanitized_once == {"unsafekey": ["AB", ("CD", {"value": "EF"})]}
+
+
+def test_update_message_sanitizes_payload_before_flush(monkeypatch):
+    db = MagicMock()
+    repository = ChatHistoryRepository(db)
+    session = _session_model()
+    session.chat_kind = ASSISTANT_CHAT_KIND
+    message = ChatMessage(
+        session_id="session-1",
+        chat_kind=ASSISTANT_CHAT_KIND,
+        turn_id="turn-1",
+        role="user",
+        message_type="text",
+        content="Run flow",
+        payload_json={"state": "prepared"},
+    )
+    message.created_at = datetime(2026, 4, 22, 12, 1, tzinfo=timezone.utc)
+    db.scalar.return_value = message
+    monkeypatch.setattr(repository, "_require_active_session", lambda **_kwargs: session)
+
+    repository.update_message_by_turn_id(
+        session_id="session-1",
+        user_auth_sub="auth-sub-1",
+        turn_id="turn-1",
+        role="user",
+        payload_json={"unsafe\x00key": {"value": "A\x00B"}},
+    )
+
+    assert message.payload_json == {"unsafekey": {"value": "AB"}}
+    assert db.flush.call_count == 1
