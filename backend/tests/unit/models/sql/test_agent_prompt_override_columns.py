@@ -32,6 +32,25 @@ def test_agent_rejects_removed_mod_prompt_overrides_alias():
         )
 
 
+@pytest.mark.parametrize(
+    ("retired_field", "value"),
+    [
+        ("parent_agent_key", "gene"),
+        ("custom_prompt", "Prompt"),
+        ("parent_prompt_hash", "hash"),
+    ],
+)
+def test_agent_rejects_removed_custom_agent_compatibility_fields(retired_field, value):
+    with pytest.raises(TypeError, match="invalid keyword argument"):
+        Agent(
+            agent_key="legacy_agent",
+            name="Legacy Agent",
+            instructions="Follow the instructions.",
+            model_id="gpt-5",
+            **{retired_field: value},
+        )
+
+
 def test_custom_agent_version_uses_group_prompt_overrides_as_canonical_column():
     version = CustomAgentVersion(
         version=1,

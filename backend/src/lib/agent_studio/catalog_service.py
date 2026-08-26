@@ -1612,11 +1612,7 @@ def _build_curator_overlay(db_agent: Any, active_groups: List[str]) -> str:
         normalize_editable_group_prompt_overrides,
     )
 
-    parent_agent_key = str(
-        getattr(db_agent, "template_source", None)
-        or getattr(db_agent, "group_rules_component", None)
-        or ""
-    ).strip()
+    parent_agent_key = str(getattr(db_agent, "template_source", None) or "").strip()
     overlay = normalize_custom_overlay_for_parent(
         parent_agent_key,
         getattr(db_agent, "instructions", "") or "",

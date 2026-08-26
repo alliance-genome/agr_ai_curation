@@ -242,8 +242,6 @@ class AgentWorkshopContext(BaseModel):
     custom_agent_updated_at: Optional[str] = None
     group_prompt_override_count: Optional[int] = None
     has_group_prompt_overrides: Optional[bool] = None
-    template_prompt_stale: Optional[bool] = None
-    template_exists: Optional[bool] = None
     draft_tool_ids: Optional[List[str]] = None
     draft_model_id: Optional[str] = None
     draft_model_reasoning: Optional[str] = None

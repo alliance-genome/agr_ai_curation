@@ -57,9 +57,7 @@ class TestCustomAgentTestEndpoint:
             api_module,
             "get_custom_agent_runtime_info",
             lambda _aid, db=None: SimpleNamespace(
-                parent_exists=True,
                 requires_document=True,
-                parent_agent_key="pdf_extraction",
             ),
         )
 
@@ -96,9 +94,7 @@ class TestCustomAgentTestEndpoint:
             api_module,
             "get_custom_agent_runtime_info",
             lambda _aid, db=None: SimpleNamespace(
-                parent_exists=True,
                 requires_document=False,
-                parent_agent_key="gene",
             ),
         )
         monkeypatch.setattr(api_module, "get_agent_by_id", lambda _aid, **_kwargs: object())
@@ -168,10 +164,6 @@ def _custom_agent_payload(template_source: str = "gene") -> dict:
         "output_schema_key": None,
         "visibility": "private",
         "project_id": None,
-        "parent_prompt_hash": None,
-        "current_parent_prompt_hash": None,
-        "parent_prompt_stale": False,
-        "parent_exists": True,
         "is_active": True,
         "created_at": datetime(2026, 2, 23, tzinfo=UTC),
         "updated_at": datetime(2026, 2, 23, tzinfo=UTC),
@@ -222,6 +214,12 @@ class TestCustomAgentCrudContract:
         assert "parent_agent_id" not in observed_kwargs
         assert response.template_source == "gene"
         assert "parent_agent_key" not in response.model_dump()
+        assert {
+            "parent_prompt_hash",
+            "current_parent_prompt_hash",
+            "parent_prompt_stale",
+            "parent_exists",
+        }.isdisjoint(response.model_dump())
 
     def test_create_request_rejects_unknown_legacy_fields(self):
         import src.api.agent_studio_custom as api_module
@@ -329,52 +327,6 @@ class TestCustomAgentCrudContract:
         assert response.total == 1
         assert response.custom_agents[0].template_source == "gene"
         assert "parent_agent_key" not in response.custom_agents[0].model_dump()
-
-    def test_test_endpoint_does_not_block_when_parent_missing(self, monkeypatch):
-        import src.api.agent_studio_custom as api_module
-
-        custom_agent_id = uuid.uuid4()
-
-        monkeypatch.setattr(
-            api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
-        )
-        monkeypatch.setattr(
-            api_module,
-            "get_custom_agent_for_user",
-            lambda _db, _uuid, _uid: SimpleNamespace(id=custom_agent_id),
-        )
-        monkeypatch.setattr(
-            api_module,
-            "get_custom_agent_runtime_info",
-            lambda _aid, db=None: SimpleNamespace(
-                parent_exists=False,
-                requires_document=False,
-                parent_agent_key="missing_template",
-            ),
-        )
-        monkeypatch.setattr(api_module, "get_agent_by_id", lambda _aid, **_kwargs: object())
-
-        async def _fake_run_agent_streamed(**_kwargs):
-            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-parentless"}}
-            yield {
-                "type": "RUN_FINISHED",
-                "data": {"response": "ok", "trace_id": "trace-parentless"},
-            }
-
-        monkeypatch.setattr(api_module, "run_agent_streamed", _fake_run_agent_streamed)
-
-        response = asyncio.run(
-            api_module.test_custom_agent_endpoint(
-                custom_agent_id=custom_agent_id,
-                request=api_module.TestCustomAgentRequest(input="test query"),
-                user={"sub": "auth-sub"},
-                db=SimpleNamespace(),
-            )
-        )
-
-        assert isinstance(response, StreamingResponse)
 
 
 def _db_mock():
@@ -923,9 +875,7 @@ class TestCustomAgentCrudErrorsAndBranches:
             api_module,
             "get_custom_agent_runtime_info",
             lambda *_args, **_kwargs: SimpleNamespace(
-                parent_exists=True,
                 requires_document=False,
-                parent_agent_key="gene",
             ),
         )
         monkeypatch.setattr(

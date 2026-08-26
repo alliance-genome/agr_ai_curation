@@ -912,7 +912,7 @@ def update_custom_agent(
 
     prompt_changed = (
         next_custom_prompt is not None
-        and next_custom_prompt != custom_agent.custom_prompt
+        and next_custom_prompt != custom_agent.instructions
     )
     group_overrides_changed = (
         next_group_overrides is not None
@@ -966,14 +966,14 @@ def update_custom_agent(
             CustomAgentVersion(
                 custom_agent_id=custom_agent.id,
                 version=next_version,
-                custom_prompt=custom_agent.custom_prompt,
+                custom_prompt=custom_agent.instructions,
                 group_prompt_overrides=current_group_overrides,
                 notes=notes or "Auto-snapshot before prompt update",
             )
         )
 
     if prompt_changed:
-        custom_agent.custom_prompt = str(next_custom_prompt)
+        custom_agent.instructions = str(next_custom_prompt)
     if group_overrides_changed and next_group_overrides is not None:
         _write_group_prompt_overrides(custom_agent, next_group_overrides)
 
@@ -1049,13 +1049,13 @@ def revert_custom_agent_to_version(
         CustomAgentVersion(
             custom_agent_id=custom_agent.id,
             version=snapshot_version,
-            custom_prompt=custom_agent.custom_prompt,
+            custom_prompt=custom_agent.instructions,
             group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
             notes=notes or f"Snapshot before revert to v{version}",
         )
     )
 
-    custom_agent.custom_prompt = target_custom_prompt
+    custom_agent.instructions = target_custom_prompt
     _write_group_prompt_overrides(custom_agent, target_group_overrides)
     custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
@@ -1068,11 +1068,10 @@ class CustomAgentRuntimeInfo:
     custom_agent_uuid: uuid.UUID
     custom_agent_id: str
     display_name: str
-    custom_prompt: str
+    instructions: str
     group_prompt_overrides: Dict[str, str]
     include_group_rules: bool
     requires_document: bool
-    parent_exists: bool
 
 
 def get_custom_agent_runtime_info(
@@ -1099,15 +1098,12 @@ def get_custom_agent_runtime_info(
         if not custom_agent:
             return None
 
-        # Legacy compatibility field: custom agents are first-class and executable
-        # regardless of whether they originated from a template.
-        parent_exists = True
         tool_ids = list(custom_agent.tool_ids or [])
         requires_document = bool(set(tool_ids) & _DOCUMENT_TOOL_IDS)
         try:
             main_prompt = custom_main_prompt_for_parent(
                 custom_agent.template_source,
-                custom_agent.custom_prompt,
+                custom_agent.instructions,
             )
         except ValueError:
             main_prompt = ""
@@ -1116,11 +1112,10 @@ def get_custom_agent_runtime_info(
             custom_agent_uuid=custom_agent.id,
             custom_agent_id=make_custom_agent_id(custom_agent.id),
             display_name=custom_agent.name,
-            custom_prompt=main_prompt,
+            instructions=main_prompt,
             group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
             include_group_rules=bool(custom_agent.group_rules_enabled),
             requires_document=requires_document,
-            parent_exists=parent_exists,
         )
     finally:
         if own_session and db is not None:
@@ -1129,21 +1124,17 @@ def get_custom_agent_runtime_info(
 
 def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
     """Serialize SQL model to API-friendly dict."""
-    # Legacy compatibility field: custom agents are first-class and executable
-    # regardless of whether they originated from a template.
-    parent_exists = True
-
     group_prompt_overrides = _read_group_prompt_overrides(custom_agent)
     include_group_rules = bool(custom_agent.group_rules_enabled)
 
     overlay_normalization = normalize_custom_overlay_for_parent(
         custom_agent.template_source,
-        custom_agent.custom_prompt,
+        custom_agent.instructions,
     )
     try:
         main_prompt = custom_main_prompt_for_parent(
             custom_agent.template_source,
-            custom_agent.custom_prompt,
+            custom_agent.instructions,
         )
     except ValueError:
         main_prompt = ""
@@ -1169,7 +1160,6 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "output_schema_key": custom_agent.output_schema_key,
         "visibility": custom_agent.visibility,
         "project_id": str(custom_agent.project_id) if custom_agent.project_id else None,
-        "parent_exists": parent_exists,
         "is_active": custom_agent.is_active,
         "created_at": custom_agent.created_at,
         "updated_at": custom_agent.updated_at,

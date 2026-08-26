@@ -287,10 +287,10 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
         name="My Agent",
     )
 
-    assert custom.parent_agent_key == "gene_validation"
+    assert custom.template_source == "gene_validation"
     assert custom.user_id == 7
     assert custom.agent_key.startswith("ca_")
-    assert custom.custom_prompt == ""
+    assert custom.instructions == ""
 
 
 @pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])

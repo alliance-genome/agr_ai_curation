@@ -268,7 +268,7 @@ def _merge_custom_agents_into_catalog(
         effective_group_rules: Dict[str, GroupRuleInfo] = {}
         overlay_normalization = normalize_custom_overlay_for_parent(
             template_source,
-            getattr(custom, "custom_prompt", ""),
+            getattr(custom, "instructions", ""),
         )
         main_prompt = ""
         main_prompt_error: Optional[str] = None
@@ -276,7 +276,7 @@ def _merge_custom_agents_into_catalog(
             try:
                 main_prompt = custom_main_prompt_for_parent(
                     template_source,
-                    getattr(custom, "custom_prompt", ""),
+                    getattr(custom, "instructions", ""),
                 )
             except ValueError as exc:
                 main_prompt_error = str(exc)
@@ -802,7 +802,7 @@ def _build_custom_agent_effective_prompt_bundle(
                 "that needs coordinator review before preview."
             ),
         ) from exc
-    parent_agent_key = str(custom_agent.parent_agent_key or "").strip()
+    parent_agent_key = str(custom_agent.template_source or "").strip()
     if not parent_agent_key:
         raise HTTPException(
             status_code=400,
@@ -813,7 +813,7 @@ def _build_custom_agent_effective_prompt_bundle(
     try:
         main_prompt = custom_main_prompt_for_parent(
             parent_agent_key,
-            getattr(custom_agent, "custom_prompt", ""),
+            custom_agent.instructions,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1848,10 +1848,10 @@ def _build_workshop_prompt_context_summary(
     saved_main: Dict[str, Any] | None = None
     saved_group: Dict[str, Any] | None = None
     if saved_custom_agent is not None:
-        saved_main = _prompt_digest_summary(saved_custom_agent.custom_prompt or "")
+        saved_main = _prompt_digest_summary(saved_custom_agent.instructions or "")
         if selected_group_id:
             saved_group_prompt = get_custom_agent_group_prompt(
-                parent_agent_key=saved_custom_agent.parent_agent_key,
+                parent_agent_key=saved_custom_agent.template_source or "",
                 group_id=selected_group_id,
                 group_prompt_overrides=saved_custom_agent.group_prompt_overrides,
             )
@@ -1950,8 +1950,6 @@ def _build_agent_studio_user_debug_payload(
             "draft_is_dirty": workshop.draft_is_dirty,
             "group_prompt_override_count": workshop.group_prompt_override_count,
             "has_group_prompt_overrides": workshop.has_group_prompt_overrides,
-            "template_prompt_stale": workshop.template_prompt_stale,
-            "template_exists": workshop.template_exists,
             "draft_tool_count": (
                 len(workshop.draft_tool_ids)
                 if isinstance(workshop.draft_tool_ids, list)
@@ -2056,28 +2054,18 @@ def _build_refresh_workshop_prompt_result(
                         "success": False,
                         "error": "No Agent Workshop group is selected for a group prompt refresh.",
                     }
-                saved_parent_agent_key = str(
-                    getattr(saved_custom_agent, "parent_agent_key", None)
-                    or getattr(saved_custom_agent, "template_source", None)
-                    or getattr(saved_custom_agent, "group_rules_component", None)
-                    or ""
-                ).strip()
+                saved_parent_agent_key = str(saved_custom_agent.template_source or "").strip()
                 saved_prompt = get_custom_agent_group_prompt(
                     parent_agent_key=saved_parent_agent_key,
                     group_id=target_group_id,
                     group_prompt_overrides=saved_custom_agent.group_prompt_overrides,
                 )
             else:
-                saved_parent_agent_key = str(
-                    getattr(saved_custom_agent, "parent_agent_key", None)
-                    or getattr(saved_custom_agent, "template_source", None)
-                    or getattr(saved_custom_agent, "group_rules_component", None)
-                    or ""
-                ).strip()
+                saved_parent_agent_key = str(saved_custom_agent.template_source or "").strip()
                 try:
                     saved_prompt = custom_main_prompt_for_parent(
                         saved_parent_agent_key,
-                        saved_custom_agent.custom_prompt,
+                        saved_custom_agent.instructions,
                     )
                 except ValueError as exc:
                     return {

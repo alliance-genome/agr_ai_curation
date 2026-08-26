@@ -320,7 +320,7 @@ def test_soft_delete_and_versions_listing():
 def test_revert_custom_agent_to_version_paths(monkeypatch):
     custom_agent = SimpleNamespace(
         id=uuid.uuid4(),
-        custom_prompt="current prompt",
+        instructions="current prompt",
         group_prompt_overrides={" wb ": "keep"},
         template_source="gene",
         version=4,
@@ -342,7 +342,7 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
         lambda *_args, **_kwargs: SimpleNamespace(layers=()),
     )
     updated = service.revert_custom_agent_to_version(db, custom_agent=custom_agent, version=3, notes=None)
-    assert updated.custom_prompt == "old prompt"
+    assert updated.instructions == "old prompt"
     assert updated.group_prompt_overrides == {"MGI": "m rules"}
     assert updated.version == 5
     assert len(db.added) == 1
@@ -356,7 +356,7 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
 def test_revert_custom_agent_to_version_strips_exact_locked_parent_layers(monkeypatch):
     custom_agent = SimpleNamespace(
         id=uuid.uuid4(),
-        custom_prompt="current prompt",
+        instructions="current prompt",
         group_prompt_overrides={"WB": "current rules"},
         template_source="gene",
         version=4,
@@ -384,7 +384,7 @@ def test_revert_custom_agent_to_version_strips_exact_locked_parent_layers(monkey
         version=3,
     )
 
-    assert updated.custom_prompt == "Keep historical curator guidance."
+    assert updated.instructions == "Keep historical curator guidance."
     assert updated.group_prompt_overrides == {"MGI": "historical rules"}
     assert db.added[0].custom_prompt == "current prompt"
     assert db.added[0].group_prompt_overrides == {"WB": "current rules"}
@@ -393,7 +393,7 @@ def test_revert_custom_agent_to_version_strips_exact_locked_parent_layers(monkey
 def test_revert_custom_agent_to_version_rejects_ambiguous_locked_prompt(monkeypatch):
     custom_agent = SimpleNamespace(
         id=uuid.uuid4(),
-        custom_prompt="current prompt",
+        instructions="current prompt",
         group_prompt_overrides={"WB": "current rules"},
         template_source="gene",
         version=4,
@@ -416,7 +416,7 @@ def test_revert_custom_agent_to_version_rejects_ambiguous_locked_prompt(monkeypa
             version=3,
         )
 
-    assert custom_agent.custom_prompt == "current prompt"
+    assert custom_agent.instructions == "current prompt"
     assert custom_agent.group_prompt_overrides == {"WB": "current rules"}
     assert custom_agent.version == 4
     assert db.added == []
@@ -430,7 +430,7 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
         visibility="private",
         agent_key=service.make_custom_agent_id(custom_uuid),
         name="Runtime Agent",
-        custom_prompt="prompt",
+        instructions="prompt",
         group_prompt_overrides={" wb ": "rules"},
         group_rules_enabled=True,
         tool_ids=["search_document"],
@@ -461,7 +461,7 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
     as_dict = service.custom_agent_to_dict(runtime_agent)
     assert as_dict["agent_id"].startswith("ca_")
     assert as_dict["group_prompt_overrides"] == {"WB": "rules"}
-    assert as_dict["parent_exists"] is True
+    assert as_dict["custom_prompt"] == "prompt"
 
 
 def test_get_custom_agent_group_prompt_additional_paths(monkeypatch):
