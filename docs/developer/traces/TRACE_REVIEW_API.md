@@ -47,6 +47,36 @@ The Trace Review tool is a separate Docker-based service for comprehensive Langf
 | **Deployment** | Standalone docker-compose in `trace_review/` |
 | **Cache** | In-memory with configurable TTL |
 
+### Langfuse v4 reconstruction and accounting
+
+Normal trace reconstruction reads the cursor-paginated Langfuse v2
+Observations API with the `core,basic,time,io,metadata,model,usage,trace_context`
+field groups. TraceReview derives the trace root, parent/child hierarchy, payloads,
+and trace context from those observations; it does not fall back to the legacy
+single-trace response. Scores remain a separate public API read. The observation
+page size and per-request timeout are configurable with
+`TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT` (default `1000`) and
+`TRACE_REVIEW_LANGFUSE_REQUEST_TIMEOUT_SECONDS` (default `30`).
+
+Token accounting preserves these meanings:
+
+- `input_tokens` is the provider/Langfuse input total.
+- `uncached_input_tokens` is input minus cache-read and cache-write subsets.
+- `cache_read_tokens`, `cache_write_tokens`, and `reasoning_tokens` are reported
+  separately and are never added to the provider total a second time.
+- `output_tokens` and `total_tokens` use the provider/Langfuse aggregates when
+  present; otherwise total is input plus output.
+- `total_cost` is Langfuse's calculated value. `cost_source` is
+  `langfuse_calculated` when Langfuse supplied cost fields and `unavailable`
+  otherwise. TraceReview does not maintain a shadow price table or silently
+  estimate historical cost.
+
+Langfuse 4.21's managed model catalog contains the deployed GPT-5.4, GPT-5.5,
+and GPT-5.6 pricing variants, including applicable cache and service-tier rates.
+Historical zero-cost observations remain explicitly unavailable until an
+operator runs a supported Langfuse recalculation/backfill; TraceReview never
+mutates vendor tables.
+
 ---
 
 ## Quick Start

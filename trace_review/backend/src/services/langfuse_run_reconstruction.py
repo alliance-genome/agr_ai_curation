@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -100,6 +101,8 @@ def _model_name(observation: Mapping[str, Any]) -> Optional[str]:
             "model",
             "modelName",
             "model_name",
+            "internal_model_id",
+            "model_id",
         ),
     )
     return str(value) if value is not None else None
@@ -166,37 +169,118 @@ def _dict_value(mapping: Mapping[str, Any], keys: Iterable[str]) -> float:
     return 0.0
 
 
+def _normalized_usage_key(value: Any) -> str:
+    key = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(value))
+    return re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+
+
+def _flatten_numeric_details(
+    mapping: Mapping[str, Any],
+    *,
+    prefix: str = "",
+) -> Dict[str, float]:
+    flattened: Dict[str, float] = {}
+    for raw_key, value in mapping.items():
+        key = _normalized_usage_key(raw_key)
+        full_key = f"{prefix}_{key}" if prefix else key
+        if isinstance(value, Mapping):
+            flattened.update(_flatten_numeric_details(value, prefix=full_key))
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            flattened[full_key] = float(value)
+    return flattened
+
+
+def _usage_bucket(
+    details: Mapping[str, float],
+    aliases: Iterable[str],
+    *,
+    allow_suffix: bool = True,
+) -> float:
+    normalized_aliases = tuple(_normalized_usage_key(alias) for alias in aliases)
+    for alias in normalized_aliases:
+        if alias in details:
+            return details[alias]
+    if allow_suffix:
+        for key, value in details.items():
+            if any(key.endswith(f"_{alias}") for alias in normalized_aliases):
+                return value
+    return 0.0
+
+
 def usage_cost_summary(observation: Mapping[str, Any]) -> Dict[str, Any]:
-    """Extract normalized token/cost details while preserving raw Langfuse data."""
+    """Normalize mutually exclusive token buckets without summing detail subsets."""
     usage = _mapping_or_empty(observation.get("usage"))
-    usage_details = _mapping_or_empty(observation.get("usageDetails"))
-    cost_details = _mapping_or_empty(observation.get("costDetails"))
+    usage_details = _mapping_or_empty(
+        observation.get("usageDetails") or observation.get("usage_details")
+    )
+    cost_details = _mapping_or_empty(
+        observation.get("costDetails") or observation.get("cost_details")
+    )
+    usage_flat = _flatten_numeric_details(usage)
+    detail_flat = _flatten_numeric_details(usage_details)
+    combined = {**usage_flat, **detail_flat}
 
-    input_tokens = _dict_value(
-        usage,
-        ("input", "prompt", "inputTokens", "promptTokens", "input_tokens", "prompt_tokens"),
-    ) or _dict_value(usage_details, ("input", "prompt", "input_tokens", "prompt_tokens"))
-    output_tokens = _dict_value(
-        usage,
-        ("output", "completion", "outputTokens", "completionTokens", "output_tokens", "completion_tokens"),
-    ) or _dict_value(usage_details, ("output", "completion", "output_tokens", "completion_tokens"))
-    cached_tokens = _dict_value(
-        usage,
-        ("cached", "cachedTokens", "cached_tokens", "input_cached_tokens"),
-    ) or _dict_value(usage_details, ("cached", "cached_tokens", "input_cached_tokens"))
-    reasoning_tokens = _dict_value(
-        usage,
-        ("reasoning", "reasoningTokens", "reasoning_tokens"),
-    ) or _dict_value(usage_details, ("reasoning", "reasoning_tokens"))
+    input_tokens = _usage_bucket(
+        combined,
+        ("input", "prompt", "input_tokens", "prompt_tokens", "input_token_count"),
+        allow_suffix=False,
+    )
+    output_tokens = _usage_bucket(
+        combined,
+        ("output", "completion", "output_tokens", "completion_tokens", "output_token_count"),
+        allow_suffix=False,
+    )
+    cache_read_tokens = _usage_bucket(
+        combined,
+        (
+            "cache_read",
+            "cache_read_tokens",
+            "cache_read_input_tokens",
+            "input_cache_read",
+            "input_cached_tokens",
+            "cached_input_tokens",
+            "input_tokens_cache_read",
+            "input_token_details_cached_tokens",
+            "cached_tokens",
+        ),
+    )
+    cache_write_tokens = _usage_bucket(
+        combined,
+        (
+            "cache_write",
+            "cache_write_tokens",
+            "cache_write_input_tokens",
+            "input_cache_write",
+            "input_cache_creation",
+            "input_cache_creation_tokens",
+            "cache_creation_input_tokens",
+            "input_tokens_cache_write",
+        ),
+    )
+    reasoning_tokens = _usage_bucket(
+        combined,
+        (
+            "reasoning",
+            "reasoning_tokens",
+            "output_reasoning",
+            "output_reasoning_tokens",
+            "output_tokens_reasoning",
+        ),
+    )
 
-    total_tokens = _dict_value(usage, ("total", "totalTokens", "total_tokens"))
+    if not input_tokens and (cache_read_tokens or cache_write_tokens):
+        input_tokens = cache_read_tokens + cache_write_tokens
+    uncached_input_tokens = max(
+        input_tokens - cache_read_tokens - cache_write_tokens,
+        0,
+    )
+    total_tokens = _usage_bucket(
+        combined,
+        ("total", "total_tokens", "total_token_count"),
+        allow_suffix=False,
+    )
     if not total_tokens:
-        token_values = [
-            _numeric(value)
-            for key, value in {**usage, **usage_details}.items()
-            if "token" in str(key).lower() and isinstance(value, (int, float))
-        ]
-        total_tokens = sum(token_values) or input_tokens + output_tokens
+        total_tokens = input_tokens + output_tokens
 
     total_cost = _numeric(
         _first_present(
@@ -210,15 +294,34 @@ def usage_cost_summary(observation: Mapping[str, Any]) -> Dict[str, Any]:
         )
     )
     if not total_cost:
-        total_cost = _dict_value(cost_details, ("total", "total_cost"))
+        total_cost = _usage_bucket(
+            _flatten_numeric_details(cost_details),
+            ("total", "total_cost"),
+            allow_suffix=False,
+        )
+
+    has_cost_details = bool(cost_details) or any(
+        key in observation
+        for key in (
+            "calculatedTotalCost",
+            "calculated_total_cost",
+            "totalCost",
+            "total_cost",
+        )
+    )
 
     return {
         "input_tokens": int(input_tokens),
+        "uncached_input_tokens": int(uncached_input_tokens),
         "output_tokens": int(output_tokens),
-        "cached_tokens": int(cached_tokens),
+        "cached_tokens": int(cache_read_tokens),
+        "cache_read_tokens": int(cache_read_tokens),
+        "cache_write_tokens": int(cache_write_tokens),
         "reasoning_tokens": int(reasoning_tokens),
         "total_tokens": int(total_tokens),
         "total_cost": total_cost,
+        "cost_source": "langfuse_calculated" if has_cost_details else "unavailable",
+        "estimated_total_cost": None,
         "usage": dict(usage),
         "usage_details": dict(usage_details),
         "cost_details": dict(cost_details),
@@ -468,8 +571,11 @@ def build_ordered_reconstruction(
 
 def _add_totals(target: Dict[str, Any], usage_cost: Mapping[str, Any]) -> None:
     target["input_tokens"] += int(usage_cost.get("input_tokens") or 0)
+    target["uncached_input_tokens"] += int(usage_cost.get("uncached_input_tokens") or 0)
     target["output_tokens"] += int(usage_cost.get("output_tokens") or 0)
     target["cached_tokens"] += int(usage_cost.get("cached_tokens") or 0)
+    target["cache_read_tokens"] += int(usage_cost.get("cache_read_tokens") or 0)
+    target["cache_write_tokens"] += int(usage_cost.get("cache_write_tokens") or 0)
     target["reasoning_tokens"] += int(usage_cost.get("reasoning_tokens") or 0)
     target["total_tokens"] += int(usage_cost.get("total_tokens") or 0)
     target["total_cost"] += float(usage_cost.get("total_cost") or 0)
@@ -478,12 +584,16 @@ def _add_totals(target: Dict[str, Any], usage_cost: Mapping[str, Any]) -> None:
 def _empty_totals() -> Dict[str, Any]:
     return {
         "input_tokens": 0,
+        "uncached_input_tokens": 0,
         "output_tokens": 0,
         "cached_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
         "reasoning_tokens": 0,
         "total_tokens": 0,
         "total_cost": 0.0,
         "observation_count": 0,
+        "provider_call_count": 0,
     }
 
 
@@ -511,6 +621,13 @@ def build_cost_summary(trace_data: Mapping[str, Any]) -> Dict[str, Any]:
         if model_name != "unknown" or kind == "model":
             _add_totals(by_model[model_name], usage_cost)
             by_model[model_name]["observation_count"] += 1
+
+        if kind == "model" and (
+            usage_cost["total_tokens"] > 0 or usage_cost["total_cost"] > 0
+        ):
+            for bucket in (trace_totals, by_agent[agent_name], by_kind[kind]):
+                bucket["provider_call_count"] += 1
+            by_model[model_name]["provider_call_count"] += 1
 
         observations.append({
             "observation_id": obs_id,

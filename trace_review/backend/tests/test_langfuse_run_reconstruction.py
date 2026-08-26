@@ -6,6 +6,7 @@ from src.services.langfuse_run_reconstruction import (
     build_trace_tree,
     find_payload,
     paginate_payloads,
+    usage_cost_summary,
 )
 
 
@@ -146,3 +147,84 @@ def test_cost_summary_rolls_up_tokens_and_costs():
     assert summary["totals"]["total_cost"] == 0.03
     assert summary["by_model"]["gpt-5-mini"]["total_tokens"] == 15
     assert summary["by_kind"]["model"]["observation_count"] == 1
+
+
+def test_v2_usage_details_keep_primary_and_subset_buckets_distinct():
+    accounting = usage_cost_summary({
+        "usage_details": {
+            "input": 1000,
+            "output": 200,
+            "total": 1200,
+            "input_tokens.cache_read": 300,
+            "input_tokens.cache_write": 100,
+            "output_tokens.reasoning": 50,
+        },
+        "cost_details": {"total": 0.0042},
+    })
+
+    assert accounting["input_tokens"] == 1000
+    assert accounting["uncached_input_tokens"] == 600
+    assert accounting["cache_read_tokens"] == 300
+    assert accounting["cache_write_tokens"] == 100
+    assert accounting["output_tokens"] == 200
+    assert accounting["reasoning_tokens"] == 50
+    assert accounting["total_tokens"] == 1200
+    assert accounting["total_cost"] == 0.0042
+    assert accounting["cost_source"] == "langfuse_calculated"
+    assert accounting["estimated_total_cost"] is None
+
+
+def test_camel_and_nested_usage_aliases_normalize_without_detail_double_counting():
+    accounting = usage_cost_summary({
+        "usage": {"promptTokens": 90, "completionTokens": 10},
+        "usageDetails": {
+            "inputTokenDetails": {"cachedTokens": 40},
+            "inputCacheCreationTokens": 10,
+            "outputReasoningTokens": 8,
+        },
+    })
+
+    assert accounting["input_tokens"] == 90
+    assert accounting["uncached_input_tokens"] == 40
+    assert accounting["cache_read_tokens"] == 40
+    assert accounting["cache_write_tokens"] == 10
+    assert accounting["output_tokens"] == 10
+    assert accounting["reasoning_tokens"] == 8
+    assert accounting["total_tokens"] == 100
+    assert accounting["cost_source"] == "unavailable"
+
+
+def test_detail_only_input_uses_mutually_exclusive_cache_buckets():
+    accounting = usage_cost_summary({
+        "usage_details": {
+            "cache_read_input_tokens": 30,
+            "cache_creation_input_tokens": 20,
+            "output": 5,
+        },
+        "calculated_total_cost": 0,
+    })
+
+    assert accounting["input_tokens"] == 50
+    assert accounting["uncached_input_tokens"] == 0
+    assert accounting["total_tokens"] == 55
+    assert accounting["cost_source"] == "langfuse_calculated"
+
+
+def test_zero_usage_generation_wrapper_is_not_a_provider_call():
+    trace_data = _trace_data()
+    trace_data["observations"].append({
+        "id": "wrapper-1",
+        "type": "GENERATION",
+        "name": "provider wrapper",
+        "provided_model_name": "gpt-5-mini",
+        "usage_details": {},
+        "cost_details": {},
+    })
+
+    summary = build_cost_summary(trace_data)
+
+    assert summary["totals"]["provider_call_count"] == 1
+    assert summary["totals"]["observation_count"] == 4
+    assert summary["by_model"]["gpt-5-mini"]["provider_call_count"] == 1
+    assert summary["totals"]["total_tokens"] == 15
+    assert summary["totals"]["total_cost"] == 0.03

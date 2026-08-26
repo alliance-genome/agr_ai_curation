@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from src.services.trace_extractor import TraceExtractor, OBSERVATION_FIELDS, TRACE_FIELDS
+from src.services.trace_extractor import OBSERVATION_FIELDS, TraceExtractor
 
 
 class TraceExtractorTests(unittest.TestCase):
@@ -28,35 +28,34 @@ class TraceExtractorTests(unittest.TestCase):
         response.json.return_value = payload
         return response
 
-    def test_extract_complete_trace_prefers_embedded_observations_and_scores(self):
+    def test_extract_complete_trace_reconstructs_context_and_accounting_from_v2(self):
         extractor = self._make_extractor()
-        trace = {
-            "id": "trace-12345678",
-            "name": "trace name",
+        observations = [{
+            "id": "root-1",
+            "trace_id": "trace-12345678",
+            "type": "GENERATION",
+            "name": "OpenAI response",
+            "trace_name": "trace name",
+            "session_id": "session-1",
+            "user_id": "user-1",
+            "is_root_observation": True,
+            "start_time": "2026-03-25T23:00:00Z",
             "latency": 1.25,
-            "timestamp": "2026-03-25T23:00:00Z",
-            "observations": [
-                {
-                    "id": "obs-1",
-                    "usage": {"total": 12},
-                    "calculatedTotalCost": 0.75,
-                }
-            ],
-            "scores": [{"id": "score-1", "name": "quality"}],
-        }
-
-        extractor.get_trace_details = Mock(return_value=trace)
-        extractor.client.api.observations.get_many.side_effect = AssertionError(
-            "embedded observations should avoid get_many"
-        )
-        extractor.client.api.scores.get_many.side_effect = AssertionError(
-            "embedded scores should avoid get_many"
-        )
+            "input": {"question": "test"},
+            "output": {"answer": "done"},
+            "usage_details": {"input": 10, "output": 2, "total": 12},
+            "cost_details": {"total": 0.75},
+        }]
+        scores = [{"id": "score-1", "name": "quality"}]
+        extractor.get_observations = Mock(return_value=observations)
+        extractor.get_scores = Mock(return_value=scores)
 
         data = extractor.extract_complete_trace("trace-12345678")
 
-        self.assertEqual(data["observations"], trace["observations"])
-        self.assertEqual(data["scores"], trace["scores"])
+        self.assertEqual(data["raw_trace"]["name"], "trace name")
+        self.assertEqual(data["raw_trace"]["sessionId"], "session-1")
+        self.assertEqual(data["observations"], observations)
+        self.assertEqual(data["scores"], scores)
         self.assertEqual(data["metadata"]["total_tokens"], 12)
         self.assertEqual(data["metadata"]["total_cost"], 0.75)
         self.assertEqual(data["metadata"]["observation_count"], 1)
@@ -64,11 +63,11 @@ class TraceExtractorTests(unittest.TestCase):
 
     def test_extract_complete_trace_metadata_includes_domain_envelope_signals(self):
         extractor = self._make_extractor()
-        trace = {
-            "id": "trace-domain",
-            "name": "domain trace",
-            "latency": 1.25,
-            "timestamp": "2026-03-25T23:00:00Z",
+        observations = [{
+            "id": "root-domain",
+            "trace_name": "domain trace",
+            "is_root_observation": True,
+            "start_time": "2026-03-25T23:00:00Z",
             "output": {
                 "envelope_id": "env-domain-1",
                 "domain_pack_id": "agr.test.gene",
@@ -80,10 +79,9 @@ class TraceExtractorTests(unittest.TestCase):
                     }
                 ],
             },
-            "observations": [],
-            "scores": [],
-        }
-        extractor.get_trace_details = Mock(return_value=trace)
+        }]
+        extractor.get_observations = Mock(return_value=observations)
+        extractor.get_scores = Mock(return_value=[])
 
         data = extractor.extract_complete_trace("trace-domain")
 
@@ -93,58 +91,60 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertEqual(domain["object_ids"], ["gene-expression-object-1"])
         self.assertEqual(domain["summary"]["object_count"], 1)
 
-    def test_get_observations_falls_back_to_get_many(self):
+    @patch("src.services.trace_extractor.get_langfuse_request_timeout_seconds", return_value=9)
+    @patch("src.services.trace_extractor.get_langfuse_observation_page_limit", return_value=2)
+    def test_get_observations_uses_v2_fields_paginates_and_deduplicates(
+        self,
+        _page_limit: Mock,
+        _timeout: Mock,
+    ):
         extractor = self._make_extractor()
-        extractor.client.api.observations.get_many.return_value = SimpleNamespace(
-            data=[
-                SimpleNamespace(dict=lambda: {"id": "obs-1", "name": "first"}),
-                {"id": "obs-2", "name": "second"},
-            ]
-        )
-
-        observations = extractor.get_observations("trace-1", trace={"id": "trace-1"})
-
-        extractor.client.api.observations.get_many.assert_called_once_with(
-            trace_id="trace-1",
-            fields=OBSERVATION_FIELDS,
-            limit=1000,
-            cursor=None,
-        )
-        self.assertEqual(
-            observations,
-            [
-                {"id": "obs-1", "name": "first"},
-                {"id": "obs-2", "name": "second"},
-            ],
-        )
-
-    def test_get_trace_details_requests_full_trace_fields(self):
-        extractor = self._make_extractor()
-        extractor.client.api.trace.get.return_value = SimpleNamespace(
-            dict=lambda: {"id": "trace-1", "input": {"q": "question"}},
-        )
-
-        trace = extractor.get_trace_details("trace-1")
-
-        extractor.client.api.trace.get.assert_called_once_with("trace-1", fields=TRACE_FIELDS)
-        self.assertEqual(trace["id"], "trace-1")
-
-    def test_get_trace_details_retries_without_fields_for_older_sdk(self):
-        extractor = self._make_extractor()
-        extractor.client.api.trace.get.side_effect = [
-            TypeError("TraceClient.get() got an unexpected keyword argument 'fields'"),
-            SimpleNamespace(dict=lambda: {"id": "trace-1"}),
+        extractor.client.api.observations.get_many.side_effect = [
+            SimpleNamespace(
+                data=[SimpleNamespace(model_dump=lambda: {
+                    "id": "obs-1",
+                    "trace_id": "trace-1",
+                    "parent_observation_id": None,
+                    "start_time": "2026-08-26T12:00:00Z",
+                    "internal_model_id": "managed-model-1",
+                    "usage_details": {"input": 10, "output": 2, "total": 12},
+                    "cost_details": {"total": 0.03},
+                })],
+                meta=SimpleNamespace(cursor="next-cursor"),
+            ),
+            SimpleNamespace(
+                data=[{"id": "obs-1"}, {"id": "obs-2", "name": "second"}],
+                meta=SimpleNamespace(cursor=None),
+            ),
         ]
 
-        trace = extractor.get_trace_details("trace-1")
+        observations = extractor.get_observations("trace-1")
 
-        self.assertEqual(extractor.client.api.trace.get.call_count, 2)
-        self.assertEqual(
-            extractor.client.api.trace.get.call_args_list[0].kwargs,
-            {"fields": TRACE_FIELDS},
+        self.assertEqual(extractor.client.api.observations.get_many.call_count, 2)
+        extractor.client.api.observations.get_many.assert_any_call(
+            trace_id="trace-1",
+            fields=OBSERVATION_FIELDS,
+            limit=2,
+            cursor=None,
+            request_options={"timeout_in_seconds": 9},
         )
-        self.assertEqual(extractor.client.api.trace.get.call_args_list[1].args, ("trace-1",))
-        self.assertEqual(trace["id"], "trace-1")
+        extractor.client.api.observations.get_many.assert_any_call(
+            trace_id="trace-1",
+            fields=OBSERVATION_FIELDS,
+            limit=2,
+            cursor="next-cursor",
+            request_options={"timeout_in_seconds": 9},
+        )
+        self.assertEqual([item["id"] for item in observations], ["obs-1", "obs-2"])
+        self.assertEqual(observations[0]["traceId"], "trace-1")
+        self.assertEqual(observations[0]["startTime"], "2026-08-26T12:00:00Z")
+        self.assertEqual(observations[0]["usage"], {"input": 10, "output": 2, "total": 12})
+        self.assertEqual(observations[0]["calculatedTotalCost"], 0.03)
+        self.assertEqual(observations[0]["model"], "managed-model-1")
+
+    def test_get_trace_details_requires_v2_observations(self):
+        with self.assertRaisesRegex(RuntimeError, "no v2 observations"):
+            TraceExtractor.get_trace_details("trace-1", [])
 
     def test_list_traces_uses_metadata_filters(self):
         extractor = self._make_extractor()
@@ -170,53 +170,35 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertIn('"value": "doc-1"', call.kwargs["filter"])
         self.assertIn('"key": "run_id"', call.kwargs["filter"])
 
-    def test_get_observations_paginates_cursor_results(self):
+    def test_get_observations_rejects_repeated_cursor(self):
         extractor = self._make_extractor()
         extractor.client.api.observations.get_many.side_effect = [
             SimpleNamespace(
-                data=[SimpleNamespace(dict=lambda: {"id": "obs-1"})],
+                data=[{"id": "obs-1"}],
                 meta=SimpleNamespace(cursor="next-cursor"),
             ),
             SimpleNamespace(
-                data=[SimpleNamespace(dict=lambda: {"id": "obs-2"})],
-                meta=SimpleNamespace(cursor=None),
+                data=[{"id": "obs-1"}],
+                meta=SimpleNamespace(cursor="next-cursor"),
             ),
         ]
 
-        observations = extractor.get_observations("trace-1", trace={"id": "trace-1"})
+        with self.assertRaisesRegex(RuntimeError, "repeated observation cursor"):
+            extractor.get_observations("trace-1")
 
-        self.assertEqual(observations, [{"id": "obs-1"}, {"id": "obs-2"}])
-        self.assertEqual(extractor.client.api.observations.get_many.call_count, 2)
-        first_call = extractor.client.api.observations.get_many.call_args_list[0]
-        second_call = extractor.client.api.observations.get_many.call_args_list[1]
-        self.assertEqual(first_call.kwargs["cursor"], None)
-        self.assertEqual(second_call.kwargs["cursor"], "next-cursor")
-
-    def test_get_observations_retries_without_fields_for_older_sdk(self):
-        extractor = self._make_extractor()
-        extractor.client.api.observations.get_many.side_effect = [
-            TypeError("ObservationsClient.get_many() got an unexpected keyword argument 'fields'"),
-            SimpleNamespace(data=[SimpleNamespace(dict=lambda: {"id": "obs-1"})]),
-        ]
-
-        observations = extractor.get_observations("trace-1", trace={"id": "trace-1"})
-
-        self.assertEqual(extractor.client.api.observations.get_many.call_count, 2)
-        first_call = extractor.client.api.observations.get_many.call_args_list[0]
-        second_call = extractor.client.api.observations.get_many.call_args_list[1]
-        self.assertEqual(first_call.kwargs["fields"], OBSERVATION_FIELDS)
-        self.assertNotIn("fields", second_call.kwargs)
-        self.assertEqual(observations, [{"id": "obs-1"}])
-
-    def test_get_scores_falls_back_to_scores_client(self):
+    @patch("src.services.trace_extractor.get_langfuse_request_timeout_seconds", return_value=7)
+    def test_get_scores_uses_configured_timeout(self, _timeout: Mock):
         extractor = self._make_extractor()
         extractor.client.api.scores.get_many.return_value = SimpleNamespace(
             data=[SimpleNamespace(dict=lambda: {"id": "score-1", "name": "quality"})]
         )
 
-        scores = extractor.get_scores("trace-1", trace={"id": "trace-1"})
+        scores = extractor.get_scores("trace-1")
 
-        extractor.client.api.scores.get_many.assert_called_once_with(trace_id="trace-1")
+        extractor.client.api.scores.get_many.assert_called_once_with(
+            trace_id="trace-1",
+            request_options={"timeout_in_seconds": 7},
+        )
         self.assertEqual(scores, [{"id": "score-1", "name": "quality"}])
 
     @patch("src.services.trace_extractor.requests.get")
