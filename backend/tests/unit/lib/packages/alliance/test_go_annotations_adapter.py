@@ -179,3 +179,18 @@ def test_invalid_upstream_contract_is_not_silently_degraded():
 
     assert result.status == "upstream_error"
     assert result.annotations == []
+
+
+def test_malformed_optional_subject_label_returns_upstream_error():
+    payload = json.loads(RGD_FIXTURE.read_text(encoding="utf-8"))
+    payload["associations"] = [payload["associations"][0]]
+    payload["associations"][0]["subject"]["label"] = {"unexpected": "object"}
+
+    result = lookup_existing_go_annotations(
+        "RGD:620474",
+        requester=lambda *_args, **_kwargs: _Response(200, payload),
+    )
+
+    assert result.status == "upstream_error"
+    assert result.annotations == []
+    assert "subject.label" in (result.message or "")

@@ -30,18 +30,18 @@ class GOAnnotationResult(DomainValidatorBaseModel):
 
     gene_product_id: StrictStr
     go_id: StrictStr
-    go_name: Optional[StrictStr] = None
-    aspect: Optional[Literal["MF", "BP", "CC"]] = None
-    evidence_code: Optional[StrictStr] = None
-    eco_id: Optional[StrictStr] = None
-    evidence_label: Optional[StrictStr] = None
-    references: list[StrictStr] = Field(default_factory=list)
-    relation: Optional[GOAnnotationRelation] = None
-    with_from: list[StrictStr] = Field(default_factory=list)
-    qualifiers: list[StrictStr] = Field(default_factory=list)
-    negated: StrictBool = False
-    providers: list[StrictStr] = Field(default_factory=list)
-    product_type: Optional[StrictStr] = None
+    go_name: Optional[StrictStr]
+    aspect: Optional[Literal["MF", "BP", "CC"]]
+    evidence_code: Optional[StrictStr]
+    eco_id: Optional[StrictStr]
+    evidence_label: Optional[StrictStr]
+    references: list[StrictStr]
+    relation: Optional[GOAnnotationRelation]
+    with_from: list[StrictStr]
+    qualifiers: list[StrictStr]
+    negated: StrictBool
+    providers: list[StrictStr]
+    product_type: Optional[StrictStr]
     provenance: GOAnnotationProvenance
 
 

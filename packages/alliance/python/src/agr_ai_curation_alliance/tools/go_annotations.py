@@ -165,6 +165,9 @@ def _normalize_association(
     term = association.get("object")
     if not isinstance(subject, dict) or not isinstance(subject.get("id"), str):
         raise ValueError("association.subject.id is required")
+    subject_label = subject.get("label")
+    if subject_label is not None and not isinstance(subject_label, str):
+        raise ValueError("association.subject.label must be a string")
     if not isinstance(term, dict) or not isinstance(term.get("id"), str):
         raise ValueError("association.object.id is required")
     record_id = association.get("id")
@@ -212,7 +215,7 @@ def _normalize_association(
             source_record_id=record_id,
         ),
     )
-    return annotation, subject.get("label")
+    return annotation, subject_label
 
 
 def lookup_existing_go_annotations(
@@ -263,26 +266,25 @@ def lookup_existing_go_annotations(
         normalized = [
             _normalize_association(item, source_url=source_url) for item in associations
         ]
-    except (ValueError, ValidationError) as exc:
+        if not normalized:
+            return ExistingGOAnnotationsResult(
+                status="not_found", gene_id=validated, source_url=source_url
+            )
+        gene_symbols = {item[1] for item in normalized if item[1]}
+        return ExistingGOAnnotationsResult(
+            status="ok",
+            gene_id=validated,
+            gene_symbol=next(iter(gene_symbols)) if len(gene_symbols) == 1 else None,
+            annotations=[item[0] for item in normalized],
+            source_url=source_url,
+        )
+    except (TypeError, ValueError, ValidationError) as exc:
         return ExistingGOAnnotationsResult(
             status="upstream_error",
             gene_id=validated,
             source_url=source_url,
             message=f"GO Consortium API returned an invalid annotation contract: {exc}",
         )
-
-    if not normalized:
-        return ExistingGOAnnotationsResult(
-            status="not_found", gene_id=validated, source_url=source_url
-        )
-    gene_symbols = {item[1] for item in normalized if item[1]}
-    return ExistingGOAnnotationsResult(
-        status="ok",
-        gene_id=validated,
-        gene_symbol=next(iter(gene_symbols)) if len(gene_symbols) == 1 else None,
-        annotations=[item[0] for item in normalized],
-        source_url=source_url,
-    )
 
 
 @function_tool(

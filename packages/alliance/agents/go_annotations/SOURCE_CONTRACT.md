@@ -23,6 +23,11 @@ the exact source URL and source association ID. The RGD contract is recorded in
 current `RGD:620474` response, including `GO_REF:0000121`, RGD provider identity,
 protein product type, and With/From identifiers.
 
+The specialist result requires every annotation comparison field to be present,
+including nullable and empty values. Structured finalization rejects any
+annotation collection that omits, adds, or changes a field from the typed tool
+output.
+
 QuickGO is not an alternate annotation path. A direct QuickGO annotation request
 for the same current RGD CURIE rejects `RGD:620474` as an invalid Gene Product ID,
 so there is no validated lossless RGD mapping that would justify switching or

@@ -64,6 +64,8 @@ structured_finalization:
       - "annotations[].go_id"
       - "annotations[].object_id"
       - "annotations[].id"
+    fact_fidelity_paths:
+      - "annotations[]"
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

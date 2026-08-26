@@ -15,6 +15,7 @@ immediately, allowing real-time visibility into specialist agent activity.
 
 import copy
 import asyncio
+import hashlib
 import importlib
 import json
 import logging
@@ -295,6 +296,9 @@ def _tool_output_payload_for_finalization(
     if data is not None:
         compact["data"] = _compact_lookup_tool_data(data)
         compact["scalar_tokens"] = sorted(_lookup_scalar_tokens(data))
+        fidelity = _lookup_fact_fidelity_signatures(data, config=lookup_config)
+        if fidelity:
+            compact["fact_fidelity"] = fidelity
 
     return compact
 
@@ -1854,6 +1858,84 @@ def _lookup_configured_grounded_fact_values(
     return values
 
 
+def _lookup_fact_fidelity_signatures(
+    payload: Dict[str, Any],
+    *,
+    config: Mapping[str, Any],
+) -> Dict[str, List[str]]:
+    """Hash complete configured facts without retaining duplicate tool payloads."""
+
+    paths = config.get("fact_fidelity_paths")
+    if not isinstance(paths, list):
+        return {}
+
+    signatures: Dict[str, List[str]] = {}
+    for path in paths:
+        path_text = str(path or "").strip()
+        if not path_text:
+            continue
+        values = _lookup_values_at_path(payload, path_text)
+        signatures[path_text] = sorted(
+            hashlib.sha256(
+                json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            for value in values
+        )
+    return signatures
+
+
+def _lookup_fact_fidelity_errors(
+    payload: Dict[str, Any],
+    *,
+    config: Mapping[str, Any],
+    successful_calls: List["SpecialistToolCall"],
+) -> List[Dict[str, Any]]:
+    actual = _lookup_fact_fidelity_signatures(payload, config=config)
+    if not actual or not successful_calls:
+        return []
+
+    expected: Dict[str, List[str]] = {path: [] for path in actual}
+    for call in successful_calls:
+        output_payload = call.output_payload or {}
+        recorded = output_payload.get("fact_fidelity")
+        if not isinstance(recorded, dict):
+            data = output_payload.get("data")
+            source_payload = data if isinstance(data, dict) else output_payload
+            recorded = _lookup_fact_fidelity_signatures(
+                source_payload,
+                config=config,
+            )
+        for path in expected:
+            path_signatures = recorded.get(path) if isinstance(recorded, dict) else None
+            if isinstance(path_signatures, list):
+                expected[path].extend(
+                    signature
+                    for signature in path_signatures
+                    if isinstance(signature, str)
+                )
+
+    errors: List[Dict[str, Any]] = []
+    for path, actual_signatures in actual.items():
+        expected_signatures = sorted(expected.get(path, []))
+        if actual_signatures == expected_signatures:
+            continue
+        errors.append({
+            "field": path,
+            "message": (
+                "Finalized lookup facts must exactly preserve every field from "
+                "the typed API tool output."
+            ),
+            "finalized_count": len(actual_signatures),
+            "tool_output_count": len(expected_signatures),
+        })
+    return errors
+
+
 def _lookup_path_has_value(payload: Dict[str, Any], path: str) -> bool:
     for value in _lookup_values_at_path(payload, path):
         if isinstance(value, (list, dict)) and value:
@@ -2099,6 +2181,11 @@ def _lookup_provenance_finalization_errors(
             config=config,
             successful_calls=successful_calls,
         ))
+    errors.extend(_lookup_fact_fidelity_errors(
+        payload,
+        config=config,
+        successful_calls=successful_calls,
+    ))
 
     for index, attempt in enumerate(matching_attempts):
         if not isinstance(attempt.get("query"), dict) or not attempt.get("query"):

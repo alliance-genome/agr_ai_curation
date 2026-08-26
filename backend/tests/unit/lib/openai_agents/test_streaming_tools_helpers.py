@@ -1202,6 +1202,15 @@ def test_go_annotations_finalization_rejects_invented_annotation(
                 "go_name": "Invented annotation",
                 "aspect": "MF",
                 "evidence_code": "IDA",
+                "eco_id": None,
+                "evidence_label": None,
+                "references": [],
+                "relation": None,
+                "with_from": [],
+                "qualifiers": [],
+                "negated": False,
+                "providers": [],
+                "product_type": None,
                 "provenance": {
                     "source": "Gene Ontology Consortium API",
                     "source_url": url,
@@ -1239,6 +1248,145 @@ def test_go_annotations_finalization_rejects_invented_annotation(
         error.get("field") == "annotations[].go_id"
         for error in feedback.field_errors
     ), (feedback.field_errors, feedback.message, feedback.warnings)
+
+
+def _complete_go_annotation(url: str) -> dict:
+    return {
+        "gene_product_id": "RGD:620474",
+        "go_id": "GO:0000122",
+        "go_name": "negative regulation of transcription by RNA polymerase II",
+        "aspect": "BP",
+        "evidence_code": "ISO",
+        "eco_id": "ECO:0000266",
+        "evidence_label": "sequence orthology evidence",
+        "references": ["GO_REF:0000121"],
+        "relation": {"id": "RO:0002331", "label": "involved_in"},
+        "with_from": ["UniProtKB:P48436"],
+        "qualifiers": ["contributes_to"],
+        "negated": False,
+        "providers": ["RGD"],
+        "product_type": "protein",
+        "provenance": {
+            "source": "Gene Ontology Consortium API",
+            "source_url": url,
+            "source_record_id": "RGD:620474|GO:0000122|ISO",
+        },
+    }
+
+
+def _go_annotations_fidelity_feedback(
+    *,
+    final_annotation: dict,
+    tool_annotation: dict,
+):
+    gene_id = "RGD:620474"
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    payload = _validator_result_payload(
+        agent_id="go_annotations_lookup",
+        target_inputs={"gene_id": gene_id},
+        expected_fields=["annotations"],
+        lookup_attempts=[
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": gene_id},
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        gene_id=gene_id,
+        source="Gene Ontology Consortium API",
+        source_url=url,
+        annotations=[final_annotation],
+    )
+    tool_output_payload = streaming_tools._tool_output_payload_for_finalization(
+        "go_api_call",
+        {
+            "status": "ok",
+            "gene_id": gene_id,
+            "annotations": [tool_annotation],
+            "source": "Gene Ontology Consortium API",
+            "source_url": url,
+        },
+    )
+    assert tool_output_payload is not None
+    assert tool_output_payload.get("fact_fidelity", {}).get("annotations[]")
+    return streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOAnnotationsResult"),
+        finalization_config=_finalization_config("ask_go_annotations_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="go_api_call",
+                tool_args={"gene_id": gene_id},
+                output_payload=tool_output_payload,
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+
+def test_go_annotations_finalization_accepts_complete_exact_annotation(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    annotation = _complete_go_annotation(url)
+
+    feedback = _go_annotations_fidelity_feedback(
+        final_annotation=annotation,
+        tool_annotation=annotation,
+    )
+
+    assert feedback.accepted_payload is not None, feedback.field_errors
+
+
+def test_go_annotations_finalization_rejects_substituted_provenance(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    tool_annotation = _complete_go_annotation(url)
+    final_annotation = json.loads(json.dumps(tool_annotation))
+    final_annotation["references"] = ["PMID:INVENTED"]
+    final_annotation["with_from"] = ["RGD:INVENTED"]
+    final_annotation["providers"] = ["INVENTED"]
+    final_annotation["product_type"] = "invented type"
+    final_annotation["provenance"]["source_record_id"] = "invented-record"
+
+    feedback = _go_annotations_fidelity_feedback(
+        final_annotation=final_annotation,
+        tool_annotation=tool_annotation,
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "annotations[]"
+        for error in feedback.field_errors
+    ), feedback.field_errors
+
+
+def test_go_annotations_finalization_rejects_omitted_comparison_fields(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    tool_annotation = _complete_go_annotation(url)
+    final_annotation = json.loads(json.dumps(tool_annotation))
+    for field in (
+        "references",
+        "relation",
+        "with_from",
+        "qualifiers",
+        "providers",
+        "product_type",
+    ):
+        final_annotation.pop(field)
+
+    feedback = _go_annotations_fidelity_feedback(
+        final_annotation=final_annotation,
+        tool_annotation=tool_annotation,
+    )
+
+    assert feedback.accepted_payload is None
+    assert "incompatible schema" in feedback.message
 
 
 def test_ortholog_finalization_rejects_invented_ortholog(
