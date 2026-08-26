@@ -2,9 +2,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import requests
-
-from src.services.trace_extractor import OBSERVATION_FIELDS, TraceExtractor
+from src.services.trace_extractor import (
+    OBSERVATION_FIELDS,
+    SESSION_OBSERVATION_FIELDS,
+    TraceExtractor,
+)
 
 
 class TraceExtractorTests(unittest.TestCase):
@@ -21,12 +23,6 @@ class TraceExtractorTests(unittest.TestCase):
         extractor.client.api.observations = Mock()
         extractor.client.api.scores = Mock()
         return extractor
-
-    def _make_trace_list_response(self, payload):
-        response = Mock()
-        response.raise_for_status.return_value = None
-        response.json.return_value = payload
-        return response
 
     def test_extract_complete_trace_reconstructs_context_and_accounting_from_v2(self):
         extractor = self._make_extractor()
@@ -201,18 +197,44 @@ class TraceExtractorTests(unittest.TestCase):
         )
         self.assertEqual(scores, [{"id": "score-1", "name": "quality"}])
 
-    @patch("src.services.trace_extractor.requests.get")
-    def test_list_session_traces_queries_public_api_with_pagination(self, get: Mock):
+    @patch("src.services.trace_extractor.get_langfuse_request_timeout_seconds", return_value=8)
+    @patch("src.services.trace_extractor.get_langfuse_observation_page_limit", return_value=50)
+    def test_list_session_traces_uses_v2_filter_pagination_and_stable_roots(
+        self,
+        _page_limit: Mock,
+        _timeout: Mock,
+    ):
         extractor = self._make_extractor()
-        get.side_effect = [
-            self._make_trace_list_response({
-                "data": [{"id": "trace-1", "name": "first"}],
-                "meta": {"page": 1, "limit": 1, "totalItems": 2, "totalPages": 2},
-            }),
-            self._make_trace_list_response({
-                "data": [{"id": "trace-2", "name": "second"}],
-                "meta": {"page": 2, "limit": 1, "totalItems": 2, "totalPages": 2},
-            }),
+        extractor.client.api.observations.get_many.side_effect = [
+            SimpleNamespace(
+                data=[{
+                    "id": "child-1",
+                    "trace_id": "trace-1",
+                    "parent_observation_id": "root-1",
+                    "start_time": "2026-08-26T12:00:02Z",
+                    "session_id": "session-1",
+                }],
+                meta=SimpleNamespace(cursor="next-cursor"),
+            ),
+            SimpleNamespace(
+                data=[
+                    {
+                        "id": "root-2",
+                        "trace_id": "trace-2",
+                        "start_time": "2026-08-26T12:00:03Z",
+                        "trace_name": "second",
+                        "session_id": "session-1",
+                    },
+                    {
+                        "id": "root-1",
+                        "trace_id": "trace-1",
+                        "start_time": "2026-08-26T12:00:01Z",
+                        "trace_name": "first",
+                        "session_id": "session-1",
+                    },
+                ],
+                meta=SimpleNamespace(cursor=None),
+            ),
         ]
 
         result = extractor.list_session_traces("session-1", limit=1)
@@ -220,41 +242,50 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertEqual(result["session_id"], "session-1")
         self.assertEqual(result["source"], "remote")
         self.assertEqual([trace["id"] for trace in result["traces"]], ["trace-1", "trace-2"])
-        self.assertEqual(get.call_count, 2)
-
-        first_call = get.call_args_list[0]
-        second_call = get.call_args_list[1]
-        self.assertEqual(first_call.args[0], "https://langfuse.example/api/public/traces")
-        self.assertEqual(first_call.kwargs["params"], {
-            "sessionId": "session-1",
+        self.assertEqual(result["traces"][0]["name"], "first")
+        self.assertEqual(result["meta"], {
+            "page": 2,
             "limit": 1,
-            "page": 1,
-            "orderBy": "timestamp.asc",
+            "totalItems": 2,
+            "totalPages": 2,
         })
-        self.assertEqual(second_call.kwargs["params"]["page"], 2)
-        self.assertEqual(first_call.kwargs["auth"].username, "pk-test")
-        self.assertEqual(first_call.kwargs["auth"].password, extractor.secret_key)
+        calls = extractor.client.api.observations.get_many.call_args_list
+        self.assertEqual(calls[0].kwargs["fields"], SESSION_OBSERVATION_FIELDS)
+        self.assertEqual(calls[0].kwargs["cursor"], None)
+        self.assertEqual(calls[1].kwargs["cursor"], "next-cursor")
+        self.assertEqual(calls[0].kwargs["limit"], 1)
+        self.assertEqual(calls[0].kwargs["request_options"], {"timeout_in_seconds": 8})
+        self.assertIn('"column": "sessionId"', calls[0].kwargs["filter"])
+        self.assertIn('"value": "session-1"', calls[0].kwargs["filter"])
 
-    @patch("src.services.trace_extractor.requests.get")
-    def test_list_session_traces_preserves_zero_total_pages(self, get: Mock):
+    def test_list_session_traces_preserves_empty_result(self):
         extractor = self._make_extractor()
-        get.return_value = self._make_trace_list_response({
-            "data": [],
-            "meta": {"page": 1, "limit": 100, "totalItems": 0, "totalPages": 0},
-        })
+        extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+            data=[],
+            meta=SimpleNamespace(cursor=None),
+        )
 
         result = extractor.list_session_traces("session-empty")
 
         self.assertEqual(result["traces"], [])
-        self.assertEqual(result["meta"]["totalPages"], 0)
-        self.assertEqual(get.call_count, 1)
+        self.assertEqual(result["meta"]["totalItems"], 0)
+        self.assertEqual(result["meta"]["totalPages"], 1)
 
-    @patch("src.services.trace_extractor.requests.get")
-    def test_list_session_traces_error_message_omits_credentials(self, get: Mock):
+    def test_list_session_traces_rejects_repeated_cursor(self):
         extractor = self._make_extractor()
-        response = Mock()
-        response.raise_for_status.side_effect = requests.HTTPError("403 Forbidden")
-        get.return_value = response
+        extractor.client.api.observations.get_many.side_effect = [
+            SimpleNamespace(data=[], meta=SimpleNamespace(cursor="same-cursor")),
+            SimpleNamespace(data=[], meta=SimpleNamespace(cursor="same-cursor")),
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "repeated session observation cursor"):
+            extractor.list_session_traces("session-1")
+
+    def test_list_session_traces_error_message_omits_credentials(self):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.side_effect = ValueError(
+            f"bad credentials {extractor.public_key} {extractor.secret_key}"
+        )
 
         with self.assertRaises(RuntimeError) as error:
             extractor.list_session_traces("session-1")
