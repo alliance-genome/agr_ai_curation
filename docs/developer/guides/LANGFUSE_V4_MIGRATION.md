@@ -26,6 +26,22 @@ The one-time latest-v3 staging override is
 `scripts/migrations/langfuse-v4-latest-v3.override.yml`. Do not include it
 after the v4 start.
 
+The read-only status helper is `scripts/migrations/langfuse-v4-status.sh`.
+Run it only after the v4 worker has started, passing the exact Compose project
+and files for the deployment, for example:
+
+```bash
+sudo scripts/migrations/langfuse-v4-status.sh agr_ai_curation \
+  -f docker-compose.yml \
+  -f /path/to/deployment-runtime-overrides.yml
+```
+
+It prints the six persisted v4 settings, propagation-aware worker health,
+compact status for the five v4 background migrations, Compose service state,
+and host filesystem headroom. It does not detect versions, edit `.env`, start
+migrations, restart services, or drop tables. Save its output after the first
+v4 start, while monitoring backfill, and after the final restart.
+
 ## Before the first v4 start
 
 1. Inventory the exact checkout, Compose project, containers, volumes, disk
@@ -95,13 +111,15 @@ docker compose -p "$COMPOSE_PROJECT" up -d --no-deps --force-recreate \
 
 Require health to report `4.21.0`, the worker health endpoint to pass, and an
 existing legacy trace to remain readable. Stay in this mode while diagnosing
-server-upgrade problems.
+server-upgrade problems. Run the read-only status helper and require no failed
+v4 background migration before continuing.
 
 ## 4. Move to dual write
 
 AI Curation already pins Langfuse Python SDK 4.7.1, which meets the v4 direct
-ingestion threshold. TraceReview still uses legacy read surfaces until ALL-766
-is complete, so do not jump directly to `events_only`.
+ingestion threshold. Do not jump directly to `events_only` until the deployed
+TraceReview build includes ALL-766's v2 reconstruction and the dual checks
+below pass.
 
 Persist and recreate web/worker with:
 
@@ -138,6 +156,10 @@ observation, token, and cost evidence. Leave step 5 and
 `LANGFUSE_BACKGROUND_MIGRATION_V4_DROP_PID_TID_SORTING_TABLES=false`; cleanup
 is irreversible and is not part of this migration.
 
+Use the status helper to monitor the persisted migration rows. Finished steps
+1–4 must have no `failed_at` value. Step 5 must remain pending. Do not infer
+completion from worker log timing alone.
+
 The final values are:
 
 ```dotenv
@@ -150,7 +172,26 @@ LANGFUSE_EVENT_PROPAGATION_STUCK_THRESHOLD_MINUTES=15
 ```
 
 Recreate web/worker, restart them once more, and rerun the trace, TraceReview,
-and cost checks. Legacy trace APIs return 404 after this cutover by design.
+and cost checks. Restart TraceReview too so the final checks do not reuse its
+in-memory cache. Legacy trace APIs return 404 after this cutover by design.
+
+The final check must include both of these TraceReview paths:
+
+1. Export one known historic trace and one new SDK 4.7.1 trace. Reconcile the
+   observation hierarchy, input/output/total tokens, model, cost, and cost
+   source with Langfuse v2.
+2. Export a real session through
+   `/api/traces/sessions/<session-id>/export?source=local`. Require HTTP 200,
+   the expected trace count, and no unexpected per-trace errors. A normal
+   single-trace export alone is insufficient because `events_only` also
+   disables the legacy session/trace listing endpoints.
+
+After the cold relevant-service restart, run the status helper again. Require
+all selected Compose services to be running, worker propagation health to show
+`stuck=false`, steps 1–4 to remain finished, step 5 to remain pending, and the
+deployment checkout to remain clean at the recorded commit. Record the exact
+image digests, backup manifest locations, migration completion timestamps,
+trace IDs, and reconciled accounting totals for the later production operation.
 
 ## Stop conditions
 
