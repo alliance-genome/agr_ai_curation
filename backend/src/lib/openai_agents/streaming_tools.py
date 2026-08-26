@@ -335,6 +335,7 @@ def _compact_lookup_tool_data(value: Any) -> Any:
         preferred_keys = (
             "results",
             "associations",
+            "annotations",
             "numberOfHits",
             "total",
             "total_count",
@@ -1603,7 +1604,7 @@ def _lookup_tool_call_succeeded(call: "SpecialistToolCall") -> bool:
     payload = call.output_payload or {}
     status = str(payload.get("status") or "").strip().lower()
     status_code = payload.get("status_code")
-    if status in {"ok", "success"}:
+    if status in {"ok", "success", "not_found"}:
         return True
     if isinstance(status_code, int) and 200 <= status_code < 300:
         return True
@@ -1614,7 +1615,10 @@ def _lookup_tool_call_failed(call: "SpecialistToolCall") -> bool:
     payload = call.output_payload or {}
     status = str(payload.get("status") or "").strip().lower()
     status_code = payload.get("status_code")
-    if status == "error":
+    if status in {
+        "error",
+        "upstream_error",
+    }:
         return True
     if isinstance(status_code, int) and status_code >= 400:
         return True
@@ -1700,7 +1704,7 @@ def _lookup_tool_data_result_count(payload: Optional[Dict[str, Any]]) -> Optiona
     full_count = data.get("__full_count")
     if isinstance(full_count, int):
         return full_count
-    for key in ("results", "associations", "data"):
+    for key in ("results", "associations", "annotations", "data"):
         value = data.get(key)
         if isinstance(value, list):
             return len(value)

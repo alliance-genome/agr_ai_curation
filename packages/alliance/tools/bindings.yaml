@@ -2588,71 +2588,48 @@ tools:
             required: [url]
   - tool_id: go_api_call
     binding_kind: static
-    callable: agr_ai_curation_alliance.tools.rest:go_api_call
+    callable: agr_ai_curation_alliance.tools.go_annotations:go_api_call
     required_context: []
-    description: Look up Gene Ontology annotations for genes.
-    source_file: python/src/agr_ai_curation_alliance/tools/rest.py
+    description: Fetch typed existing GO annotations for one validated gene CURIE.
+    source_file: python/src/agr_ai_curation_alliance/tools/go_annotations.py
     metadata:
-      name: GO Annotations API
+      name: GO Consortium Existing Annotations
       category: API
       documentation:
-        summary: Retrieves Gene Ontology (GO) annotations for genes, including the evidence behind each one, from the QuickGO service.
+        summary: Retrieves typed existing GO annotations from the Gene Ontology Consortium API, preserving curator-comparison fields and source-record provenance without source fallback.
         parameters:
-        - name: url
+        - name: gene_id
           type: string
           required: true
-          description: Full URL to query (must be on ebi.ac.uk domain).
-        - name: method
-          type: string
-          required: false
-          description: 'HTTP method (default: GET).'
-        - name: headers_json
-          type: string
-          required: false
-          description: Optional JSON string for request headers.
-        - name: body_json
-          type: string
-          required: false
-          description: Optional JSON string for request body.
+          description: Supported Alliance gene CURIE, such as RGD:620474 or WB:WBGene00000898.
       agent_studio:
-        prompt_description: Query the Gene Ontology API for gene annotations and supporting evidence codes.
+        prompt_description: Fetch typed existing GO annotations and complete source provenance for one validated Alliance gene CURIE.
         diagnostic:
           enabled: true
           description: |-
-            Query the Gene Ontology Consortium API for gene annotations.
+            Fetch typed existing annotations from the Gene Ontology Consortium API.
 
             Base URL: https://api.geneontology.org/api
 
-            Key endpoint:
-            - Gene annotations: GET /bioentity/gene/{gene_id}/function
+            The adapter accepts a gene_id rather than a URL, validates the CURIE
+            before network dispatch, and makes one request to:
+            - GET /bioentity/gene/{gene_id}/function
 
-            Gene IDs use Alliance CURIEs such as WB:WBGene00000898, HGNC:11998, or MGI:123456.
+            Supported namespaces: FB, HGNC, MGI, RGD, SGD, WB, and ZFIN.
 
-            Results include GO annotations with evidence codes:
-            - Manual (high quality): IDA, IMP, IPI, IGI, ISS
-            - Automatic (lower confidence): IEA, IBA
-
-            Each annotation includes the GO term, evidence code, and assigned_by curation source.
+            Status is one of: ok, not_found, invalid_input,
+            unsupported_identifier, or upstream_error. Typed annotations preserve
+            term/aspect, evidence and ECO, reference, relation, With/From,
+            qualifier, negation, provider, product type, and source provenance.
           category: api
-          tags: [go, annotations, gene, rest]
+          tags: [go, annotations, gene, provenance, typed]
           input_schema:
             type: object
             properties:
-              url:
+              gene_id:
                 type: string
-                description: Full URL to query on the allowed Gene Ontology domains.
-              method:
-                type: string
-                description: HTTP method.
-                enum: [GET, POST, PUT, PATCH, DELETE]
-                default: GET
-              headers_json:
-                type: string
-                description: Optional JSON string for request headers.
-              body_json:
-                type: string
-                description: Optional JSON string for the request body.
-            required: [url]
+                description: Supported Alliance gene CURIE.
+            required: [gene_id]
   - tool_id: alliance_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:alliance_api_call

@@ -17,15 +17,6 @@ quickgo_api_call = create_rest_api_tool(
     ),
 )
 
-go_api_call = create_rest_api_tool(
-    allowed_domains=["geneontology.org", "api.geneontology.org"],
-    tool_name="go_api_call",
-    tool_description=(
-        "Query Gene Ontology API for gene annotations with evidence codes "
-        "(geneontology.org only)"
-    ),
-)
-
 alliance_api_call = create_rest_api_tool(
     allowed_domains=["alliancegenome.org", "www.alliancegenome.org"],
     tool_name="alliance_api_call",
@@ -38,6 +29,5 @@ alliance_api_call = create_rest_api_tool(
 __all__ = [
     "alliance_api_call",
     "chebi_api_call",
-    "go_api_call",
     "quickgo_api_call",
 ]

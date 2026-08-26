@@ -78,7 +78,7 @@ tool_policies:
 
   quickgo_api_call:
     display_name: QuickGO API
-    description: Query Gene Ontology annotation data via QuickGO.
+    description: Query Gene Ontology term metadata and hierarchy via QuickGO.
     category: External API
     curator_visible: true
     allow_attach: true
@@ -86,8 +86,8 @@ tool_policies:
     config: {}
 
   go_api_call:
-    display_name: GO API
-    description: Query Gene Ontology term hierarchy and metadata.
+    display_name: GO Consortium Existing Annotations
+    description: Fetch typed existing GO annotations with source provenance for a validated gene CURIE.
     category: External API
     curator_visible: true
     allow_attach: true

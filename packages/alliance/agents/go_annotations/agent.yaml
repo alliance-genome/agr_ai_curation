@@ -13,8 +13,8 @@ agent_id: go_annotations_lookup
 name: "Gene GO Annotations Agent"
 
 description: >
-  Retrieves existing GO annotations for specific genes from QuickGO.
-  Returns annotations with evidence codes and references.
+  Retrieves typed existing GO annotations from the Gene Ontology Consortium API.
+  Returns curator-comparison fields with source-record provenance.
 
 category: "Validation"
 subcategory: "Data Validation"
@@ -27,7 +27,7 @@ supervisor_routing:
   enabled: true
   description: >
     Use for retrieving existing GO annotations for specific genes, finding
-    evidence codes, or looking up annotation references.
+    evidence, references, With/From, qualifiers, or source provenance.
   batchable: true
   batching_instructions: >
     When getting annotations for multiple genes, combine them into a single request.
@@ -55,7 +55,7 @@ structured_finalization:
     - lookup_provenance
   lookup:
     tool_name: go_api_call
-    provider_terms: [go_api_call, geneontology, go annotations]
+    provider_terms: [go_api_call, geneontology, go consortium, go annotations]
     request_keys: [gene_id, gene_ids]
     result_collections: [gene_id, annotations]
     resolved_fact_paths:

@@ -996,18 +996,19 @@ def test_go_annotations_finalization_accepts_unresolved_tool_error(
         expected_fields=["annotations"],
         missing_expected_fields=["annotations"],
         lookup_attempts=[
-            _lookup_attempt(
-                provider="go_api_call",
-                url=url,
-                outcome="error",
-                result_count=0,
-            )
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": "WB:WBGene00000898"},
+                "result_count": 0,
+                "outcome": "error",
+            }
         ],
         gene_id="WB:WBGene00000898",
         gene_symbol=None,
         annotations=[],
-        manual_count=0,
-        automatic_count=0,
+        source="Gene Ontology Consortium API",
+        source_url=url,
     )
 
     feedback = streaming_tools._structured_specialist_finalization_feedback(
@@ -1015,12 +1016,15 @@ def test_go_annotations_finalization_accepts_unresolved_tool_error(
         expected_output_type=_package_schema("GOAnnotationsResult"),
         finalization_config=_finalization_config("ask_go_annotations_specialist"),
         tool_calls=[
-            _lookup_tool_call(
+            streaming_tools.SpecialistToolCall(
                 tool_name="go_api_call",
-                url=url,
-                status="error",
-                status_code=503,
-                data={},
+                tool_args={"gene_id": "WB:WBGene00000898"},
+                output_payload={
+                    "status": "upstream_error",
+                    "gene_id": "WB:WBGene00000898",
+                    "source_url": url,
+                    "message": "GO Consortium API returned HTTP 503",
+                },
             )
         ],
         live_evidence_records=[],
@@ -1028,6 +1032,78 @@ def test_go_annotations_finalization_accepts_unresolved_tool_error(
 
     assert feedback.accepted_payload is not None
     assert feedback.summary["failed_lookup_tool_call_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("tool_status", "succeeded", "failed"),
+    [
+        ("ok", True, False),
+        ("not_found", True, False),
+        ("invalid_input", False, False),
+        ("unsupported_identifier", False, False),
+        ("upstream_error", False, True),
+    ],
+)
+def test_typed_go_annotation_tool_status_classification(
+    tool_status: str,
+    succeeded: bool,
+    failed: bool,
+):
+    call = streaming_tools.SpecialistToolCall(
+        tool_name="go_api_call",
+        output_payload={"status": tool_status},
+    )
+
+    assert streaming_tools._lookup_tool_call_succeeded(call) is succeeded
+    assert streaming_tools._lookup_tool_call_failed(call) is failed
+
+
+def test_go_annotations_finalization_accepts_blocked_invalid_input(
+    _repo_package_curation_registry,
+):
+    gene_id = "RGD:not-a-number"
+    payload = _validator_result_payload(
+        status="unresolved",
+        agent_id="go_annotations_lookup",
+        target_inputs={"gene_id": gene_id},
+        expected_fields=["annotations"],
+        missing_expected_fields=["annotations"],
+        lookup_attempts=[
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": gene_id},
+                "result_count": 0,
+                "outcome": "blocked",
+            }
+        ],
+        gene_id=gene_id,
+        gene_symbol=None,
+        annotations=[],
+        source="Gene Ontology Consortium API",
+        source_url=None,
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOAnnotationsResult"),
+        finalization_config=_finalization_config("ask_go_annotations_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="go_api_call",
+                tool_args={"gene_id": gene_id},
+                output_payload={
+                    "status": "invalid_input",
+                    "gene_id": gene_id,
+                    "annotations": [],
+                    "message": "gene_id is not a valid RGD gene CURIE",
+                },
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is not None, feedback.field_errors
 
 
 def test_go_term_finalization_does_not_count_finalizer_as_lookup_provenance(
@@ -1108,24 +1184,31 @@ def test_go_annotations_finalization_rejects_invented_annotation(
         target_inputs={"gene_id": "WB:WBGene00000898"},
         expected_fields=["annotations"],
         lookup_attempts=[
-            _lookup_attempt(
-                provider="go_api_call",
-                url=url,
-                outcome="success",
-                result_count=1,
-            )
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": "WB:WBGene00000898"},
+                "result_count": 1,
+                "outcome": "success",
+            }
         ],
         gene_id="WB:WBGene00000898",
+        source="Gene Ontology Consortium API",
+        source_url=url,
         annotations=[
             {
+                "gene_product_id": "WB:WBGene00000898",
                 "go_id": "GO:FAKE0000",
                 "go_name": "Invented annotation",
                 "aspect": "MF",
                 "evidence_code": "IDA",
+                "provenance": {
+                    "source": "Gene Ontology Consortium API",
+                    "source_url": url,
+                    "source_record_id": "invented-record",
+                },
             }
         ],
-        manual_count=1,
-        automatic_count=0,
     )
 
     feedback = streaming_tools._structured_specialist_finalization_feedback(
@@ -1133,10 +1216,19 @@ def test_go_annotations_finalization_rejects_invented_annotation(
         expected_output_type=_package_schema("GOAnnotationsResult"),
         finalization_config=_finalization_config("ask_go_annotations_specialist"),
         tool_calls=[
-            _lookup_tool_call(
+            streaming_tools.SpecialistToolCall(
                 tool_name="go_api_call",
-                url=url,
-                data={"associations": [{"object": {"id": "GO:0003677"}}]},
+                tool_args={"gene_id": "WB:WBGene00000898"},
+                output_payload={
+                    "status": "ok",
+                    "gene_id": "WB:WBGene00000898",
+                    "annotations": [
+                        {
+                            "gene_product_id": "WB:WBGene00000898",
+                            "go_id": "GO:0003677",
+                        }
+                    ],
+                },
             )
         ],
         live_evidence_records=[],
@@ -1146,7 +1238,7 @@ def test_go_annotations_finalization_rejects_invented_annotation(
     assert any(
         error.get("field") == "annotations[].go_id"
         for error in feedback.field_errors
-    )
+    ), (feedback.field_errors, feedback.message, feedback.warnings)
 
 
 def test_ortholog_finalization_rejects_invented_ortholog(
@@ -1298,16 +1390,13 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
     _repo_package_curation_registry,
 ):
     url = "https://api.geneontology.org/api/bioentity/gene/WB:WBGene00000898/function"
-    associations = [
-        {"object": {"id": f"GO:{index:07d}"}}
-        for index in range(60)
-    ]
+    annotations = [{"go_id": f"GO:{index:07d}"} for index in range(60)]
     output_payload = streaming_tools._tool_output_payload_for_finalization(
         "go_api_call",
         {
             "status": "ok",
-            "status_code": 200,
-            "data": {"associations": associations},
+            "gene_id": "WB:WBGene00000898",
+            "annotations": annotations,
         },
     )
     assert output_payload is not None
@@ -1316,24 +1405,31 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
         target_inputs={"gene_id": "WB:WBGene00000898"},
         expected_fields=["annotations"],
         lookup_attempts=[
-            _lookup_attempt(
-                provider="go_api_call",
-                url=url,
-                outcome="success",
-                result_count=60,
-            )
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": "WB:WBGene00000898"},
+                "result_count": 60,
+                "outcome": "success",
+            }
         ],
         gene_id="WB:WBGene00000898",
+        source="Gene Ontology Consortium API",
+        source_url=url,
         annotations=[
             {
+                "gene_product_id": "WB:WBGene00000898",
                 "go_id": "GO:0000059",
                 "go_name": "Annotation beyond compact preview",
                 "aspect": "MF",
                 "evidence_code": "IDA",
+                "provenance": {
+                    "source": "Gene Ontology Consortium API",
+                    "source_url": url,
+                    "source_record_id": "record-59",
+                },
             }
         ],
-        manual_count=60,
-        automatic_count=0,
     )
 
     feedback = streaming_tools._structured_specialist_finalization_feedback(
@@ -1343,7 +1439,7 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
         tool_calls=[
             streaming_tools.SpecialistToolCall(
                 tool_name="go_api_call",
-                tool_args={"url": url, "method": "GET"},
+                tool_args={"gene_id": "WB:WBGene00000898"},
                 output_payload=output_payload,
             )
         ],
@@ -1351,7 +1447,7 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
     )
 
     assert feedback.accepted_payload is not None
-    assert output_payload["data"]["associations"]["__full_count"] == 60
+    assert output_payload["data"]["annotations"]["__full_count"] == 60
 
 
 def test_chemical_finalization_rejects_invented_resolved_identity(
