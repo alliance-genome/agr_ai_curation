@@ -252,7 +252,8 @@ async def test_refresh_workshop_prompt_prefers_newer_saved_custom_agent(monkeypa
     saved_updated_at = datetime(2026, 5, 6, 14, 15, 20, tzinfo=timezone.utc)
     saved_agent = SimpleNamespace(
         id=custom_agent_uuid,
-        custom_prompt="Current prompt with the typo removed.",
+        template_source="demo_agent",
+        instructions="Current prompt with the typo removed.",
         version=3,
         updated_at=saved_updated_at,
     )
@@ -322,7 +323,8 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
         "get_custom_agent_visible_to_user",
         lambda *_args: SimpleNamespace(
             id=custom_agent_uuid,
-            custom_prompt="Current saved prompt with no typo.",
+            template_source="demo_agent",
+            instructions="Current saved prompt with no typo.",
             version=4,
             updated_at=datetime(2026, 5, 6, 14, 15, 20, tzinfo=timezone.utc),
         ),

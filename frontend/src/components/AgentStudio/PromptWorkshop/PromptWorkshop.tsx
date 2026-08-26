@@ -936,8 +936,6 @@ function PromptWorkshop({
       custom_agent_updated_at: selectedCustomAgent?.updated_at,
       group_prompt_override_count: Object.keys(debouncedGroupPromptOverrides).length,
       has_group_prompt_overrides: Object.keys(debouncedGroupPromptOverrides).length > 0,
-      template_prompt_stale: selectedCustomAgent?.parent_prompt_stale,
-      template_exists: selectedCustomAgent?.parent_exists,
       draft_tool_ids: selectedToolIds,
       draft_model_id: selectedModelId || undefined,
       draft_model_reasoning: selectedModelReasoning || undefined,
@@ -959,8 +957,6 @@ function PromptWorkshop({
     selectedCustomAgent?.output_schema_key,
     selectedCustomAgent?.updated_at,
     selectedCustomAgent?.template_source,
-    selectedCustomAgent?.parent_prompt_stale,
-    selectedCustomAgent?.parent_exists,
     includeGroupRules,
     selectedGroupId,
     customPrompt,
@@ -1561,12 +1557,6 @@ function PromptWorkshop({
         <Stack spacing={3}>
           {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
           {status && <Alert severity="success" sx={{ borderRadius: 2 }}>{status}</Alert>}
-
-          {selectedCustomAgent && !selectedCustomAgent.parent_exists && (
-            <Alert severity="error" sx={{ borderRadius: 2 }}>
-              Template source is unavailable, so this custom agent cannot be executed.
-            </Alert>
-          )}
 
           {/* ── Section 1 (setup): Identity & Configuration ── */}
           {workshopSection === 'setup' && (

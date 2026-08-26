@@ -15,8 +15,8 @@ def test_user_debug_payload_summarizes_workshop_prompts_without_raw_text(monkeyp
     saved_updated_at = datetime(2026, 5, 7, 10, 30, tzinfo=timezone.utc)
     saved_agent = SimpleNamespace(
         id=custom_agent_uuid,
-        custom_prompt="Saved main prompt",
-        parent_agent_key="gene",
+        instructions="Saved main prompt",
+        template_source="gene",
         group_prompt_overrides={"WB": "Saved WB prompt"},
         version=3,
         updated_at=saved_updated_at,

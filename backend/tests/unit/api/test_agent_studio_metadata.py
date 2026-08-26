@@ -282,7 +282,7 @@ class TestGetRegistryMetadata:
         fake_custom = SimpleNamespace(
             id="11111111-2222-3333-4444-555555555555",
             user_id=123,
-            parent_agent_key="gene",
+            template_source="gene",
             category="Validation",
             name="Doug's Gene Agent",
             icon="🔧",
@@ -405,13 +405,12 @@ class TestGetRegistryMetadata:
         fake_custom = SimpleNamespace(
             id="11111111-2222-3333-4444-555555555555",
             user_id=123,
-            parent_agent_key="gene",
             template_source="gene",
             category="Validation",
             tool_ids=["agr_curation_query"],
             name="Doug's Gene Agent",
             description="Custom prompt variant",
-            custom_prompt="Custom prompt text",
+            instructions="Custom prompt text",
             group_prompt_overrides={"WB": "Custom WB Rules"},
             created_at=None,
         )
@@ -482,7 +481,7 @@ class TestGetRegistryMetadata:
             tool_ids=[],
             name="Shared Gene Agent",
             description="Shared",
-            custom_prompt="Custom prompt text",
+            instructions="Custom prompt text",
             group_prompt_overrides={},
             created_at=None,
         )
@@ -543,7 +542,7 @@ class TestGetRegistryMetadata:
             tool_ids=[],
             name="Flagged Gene Agent",
             description="Custom prompt variant",
-            custom_prompt=flagged_overlay,
+            instructions=flagged_overlay,
             group_prompt_overrides={},
             created_at=None,
         )
@@ -660,7 +659,7 @@ class TestGetRegistryMetadata:
             tool_ids=[],
             name="Layer Error Agent",
             description="Custom prompt variant",
-            custom_prompt="Curator note",
+            instructions="Curator note",
             group_prompt_overrides={},
             created_at=None,
         )
@@ -768,8 +767,8 @@ class TestGetRegistryMetadata:
         from src.api import agent_studio as api_module
 
         fake_custom = SimpleNamespace(
-            parent_agent_key="gene",
-            custom_prompt="CUSTOM BASE PROMPT",
+            template_source="gene",
+            instructions="CUSTOM BASE PROMPT",
             group_prompt_overrides={},
             group_rules_enabled=True,
         )
@@ -826,8 +825,8 @@ class TestGetRegistryMetadata:
         from src.api import agent_studio as api_module
 
         fake_custom = SimpleNamespace(
-            parent_agent_key="gene",
-            custom_prompt="CUSTOM BASE PROMPT",
+            template_source="gene",
+            instructions="CUSTOM BASE PROMPT",
             group_prompt_overrides={"WB": "CUSTOM WB OVERRIDE"},
             group_rules_enabled=True,
         )
@@ -883,8 +882,8 @@ class TestGetRegistryMetadata:
         from src.api import agent_studio as api_module
 
         fake_custom = SimpleNamespace(
-            parent_agent_key="gene",
-            custom_prompt="CUSTOM BASE PROMPT",
+            template_source="gene",
+            instructions="CUSTOM BASE PROMPT",
             group_prompt_overrides={
                 "WB": "Platform Runtime Contract\nCurator tried to copy this.",
             },

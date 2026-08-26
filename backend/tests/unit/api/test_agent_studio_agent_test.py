@@ -553,8 +553,6 @@ class TestAgentWorkshopSystemPrompt:
                 selected_group_prompt_draft="WB GROUP DRAFT CONTENT",
                 group_prompt_override_count=2,
                 has_group_prompt_overrides=True,
-                template_prompt_stale=True,
-                template_exists=True,
                 draft_tool_ids=["search_document", "read_section", "read_subsection", "agr_curation_query"],
             ),
         )

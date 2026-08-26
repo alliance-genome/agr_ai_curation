@@ -580,8 +580,6 @@ The curator is actively iterating an agent draft in Agent Workshop.
 - Selected group: {workshop.selected_group_id or "None"}
 - Has group prompt overrides: {"Yes" if workshop.has_group_prompt_overrides else "No"}
 - Group override count: {workshop.group_prompt_override_count or 0}
-- Template prompt stale: {"Yes" if workshop.template_prompt_stale else "No"}
-- Template exists: {"Yes" if workshop.template_exists is not False else "No"}
 - Draft attached tools: {", ".join(workshop_draft_tools) if workshop_draft_tools else "None"}
 - Draft model: {workshop.draft_model_id or "Not set"}
 - Draft reasoning: {workshop.draft_model_reasoning or "Not set"}

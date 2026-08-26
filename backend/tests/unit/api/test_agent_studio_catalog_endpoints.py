@@ -154,8 +154,8 @@ class TestAgentStudioCatalogEndpoints:
         import src.api.agent_studio as api_module
 
         fake_custom = SimpleNamespace(
-            parent_agent_key="gene",
-            custom_prompt="Curator overlay",
+            template_source="gene",
+            instructions="Curator overlay",
             group_prompt_overrides={"WB": "Custom WB overlay"},
             group_rules_enabled=True,
         )

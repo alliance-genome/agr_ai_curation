@@ -191,10 +191,6 @@ class CustomAgentResponse(BaseModel):
     output_schema_key: Optional[str] = None
     visibility: str
     project_id: Optional[str] = None
-    parent_prompt_hash: Optional[str] = None
-    current_parent_prompt_hash: Optional[str] = None
-    parent_prompt_stale: bool = False
-    parent_exists: bool
     is_active: bool
     created_at: datetime
     updated_at: datetime

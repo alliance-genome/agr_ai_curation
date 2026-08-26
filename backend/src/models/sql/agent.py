@@ -112,6 +112,8 @@ class Agent(Base):
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
+    # Unified Agent records are first-class after ALL-796; legacy custom-agent
+    # prompt aliases were removed in favor of canonical instructions.
     instructions = Column(Text, nullable=False)
     model_id = Column(String(100), nullable=False)
     model_temperature = Column(
@@ -164,6 +166,8 @@ class Agent(Base):
         index=True,
     )
     shared_at = Column(DateTime(timezone=True), nullable=True)
+    # Legacy custom-agent template freshness compatibility was removed after
+    # ALL-796; template_source is the canonical template provenance field.
     template_source = Column(String(100), nullable=True)
 
     supervisor_enabled = Column(
@@ -227,35 +231,3 @@ class Agent(Base):
             f"<Agent id={self.id} key='{self.agent_key}' "
             f"visibility='{self.visibility}' active={self.is_active}>"
         )
-
-    # ------------------------------------------------------------------
-    # Legacy custom-agent compatibility aliases
-    # ------------------------------------------------------------------
-    @property
-    def parent_agent_key(self) -> str:
-        """Legacy alias for template source parent."""
-        return self.template_source or self.group_rules_component or ""
-
-    @parent_agent_key.setter
-    def parent_agent_key(self, value: str) -> None:
-        self.template_source = value
-        self.group_rules_component = value
-
-    @property
-    def custom_prompt(self) -> str:
-        """Legacy alias for instructions."""
-        return self.instructions
-
-    @custom_prompt.setter
-    def custom_prompt(self, value: str) -> None:
-        self.instructions = value
-
-    @property
-    def parent_prompt_hash(self) -> str | None:
-        """Legacy field retained for API compatibility."""
-        return getattr(self, "_legacy_parent_prompt_hash", None)
-
-    @parent_prompt_hash.setter
-    def parent_prompt_hash(self, value: str | None) -> None:
-        # Not persisted in unified schema, but preserved in-memory for callers.
-        self._legacy_parent_prompt_hash = value

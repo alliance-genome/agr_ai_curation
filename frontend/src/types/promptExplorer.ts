@@ -217,10 +217,6 @@ export interface CustomAgent {
   output_schema_key?: string
   visibility: string
   project_id?: string
-  parent_prompt_hash?: string
-  current_parent_prompt_hash?: string
-  parent_prompt_stale: boolean
-  parent_exists: boolean
   is_active: boolean
   created_at: string
   updated_at: string
@@ -306,8 +302,6 @@ export interface AgentWorkshopContext {
   custom_agent_updated_at?: string
   group_prompt_override_count?: number
   has_group_prompt_overrides?: boolean
-  template_prompt_stale?: boolean
-  template_exists?: boolean
   draft_tool_ids?: string[]
   draft_model_id?: string
   draft_model_reasoning?: string
