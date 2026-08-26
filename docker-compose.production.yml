@@ -73,7 +73,7 @@ x-langfuse-worker-env: &langfuse-worker-env
 services:
   langfuse-worker:
     # Langfuse 4.21.0 (multi-architecture manifest digest).
-    image: ${LANGFUSE_WORKER_IMAGE:-docker.io/langfuse/langfuse-worker@sha256:98dd41e7a7f0112e63f1006086155488d968ca5e637908b4558bf347be7440d4}
+    image: docker.io/langfuse/langfuse-worker@sha256:98dd41e7a7f0112e63f1006086155488d968ca5e637908b4558bf347be7440d4
     restart: always
     depends_on: *langfuse-depends-on
     labels:
@@ -81,7 +81,7 @@ services:
       log_tier: observability
       log_component: langfuse-worker
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider 'http://127.0.0.1:3030/api/health?failIfEventPropagationStuck=true' || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider 'http://$${HOSTNAME}:3030/api/health?failIfEventPropagationStuck=true' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -90,7 +90,7 @@ services:
 
   langfuse:
     # Langfuse 4.21.0 (multi-architecture manifest digest).
-    image: ${LANGFUSE_IMAGE:-docker.io/langfuse/langfuse@sha256:e5b04db8e261cc6f8d137f3a84b496efee75d6c4eb1653bd3c7709d1500c763c}
+    image: docker.io/langfuse/langfuse@sha256:e5b04db8e261cc6f8d137f3a84b496efee75d6c4eb1653bd3c7709d1500c763c
     restart: always
     depends_on: *langfuse-depends-on
     labels:
@@ -467,7 +467,7 @@ services:
 
   clickhouse:
     # ClickHouse 25.12 is the Langfuse v4 minimum and upstream Compose pin.
-    image: ${CLICKHOUSE_IMAGE:-docker.io/clickhouse/clickhouse-server@sha256:8a790dd3468db22b1d4e7b18a176f378ff5ff6053b9c48dd4ea1fa71a24c5ba6}
+    image: docker.io/clickhouse/clickhouse-server@sha256:8a790dd3468db22b1d4e7b18a176f378ff5ff6053b9c48dd4ea1fa71a24c5ba6
     restart: always
     labels:
       log_env: "${LOG_ENV:-production}"

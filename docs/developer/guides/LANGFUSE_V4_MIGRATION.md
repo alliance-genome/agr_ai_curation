@@ -22,9 +22,9 @@ The Compose files default to:
 | PostgreSQL | 16 |
 | Redis | 7 with `noeviction` and a durable `/data` volume |
 
-The image variables `LANGFUSE_IMAGE`, `LANGFUSE_WORKER_IMAGE`, and
-`CLICKHOUSE_IMAGE` exist only so an operator can run the latest-v3 staging
-step without editing Compose. Normal deployments leave them unset.
+The one-time latest-v3 staging override is
+`scripts/migrations/langfuse-v4-latest-v3.override.yml`. Do not include it
+after the v4 start.
 
 ## Before the first v4 start
 
@@ -55,17 +55,23 @@ Use the repository's pinned ClickHouse default while temporarily overriding
 only the Langfuse images:
 
 ```bash
-COMPOSE_PROJECT=agr_ai_curation  # use agrmainsandbox in the Symphony rehearsal
-LANGFUSE_IMAGE='docker.io/langfuse/langfuse@sha256:a921990b3cf6f62e9452eaf8ab9bea045852375a6883abd1fdbe63afa08defa0' \
-LANGFUSE_WORKER_IMAGE='docker.io/langfuse/langfuse-worker@sha256:7d0f28214bd2d1bb03056439f810442b147f0143c7ebf9bdf0f39dc4e47df6cd' \
-docker compose -p "$COMPOSE_PROJECT" up -d --no-deps --force-recreate \
-  clickhouse langfuse-worker langfuse
+COMPOSE_PROJECT=agr_ai_curation  # use an isolated project in the Symphony rehearsal
+COMPOSE_FILE=docker-compose.yml
+docker compose -p "$COMPOSE_PROJECT" \
+  -f "$COMPOSE_FILE" \
+  -f scripts/migrations/langfuse-v4-latest-v3.override.yml \
+  up -d --force-recreate \
+  postgres redis clickhouse minio langfuse-worker langfuse
 ```
 
-Require Langfuse health to report `3.225.5`, confirm existing traces remain
-readable, and inspect PostgreSQL background migrations. Every non-v4 job must
-be finished and unfailed. The five `20260701_v4_step_*` jobs are expected to
-remain dormant on v3 while historic backfill is false.
+The later standalone production operation must use the production deployment
+runbook and its render-backed preflight before running the analogous command.
+
+Require Langfuse health to report `3.225.5` and the worker health check to pass,
+confirm existing traces remain readable, and inspect PostgreSQL background
+migrations. Every non-v4 job must be finished and unfailed. The five
+`20260701_v4_step_*` jobs are expected to remain dormant on v3 while historic
+backfill is false.
 
 ## 2. Take the recovery backup
 
