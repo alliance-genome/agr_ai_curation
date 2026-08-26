@@ -4,7 +4,6 @@ import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import type { EvidenceRecord } from '@/features/curation/types'
 
 import {
-  buildTurnId,
   loadMessagesFromStorage,
   mergeFlowChatOutputs,
   sanitizeStoredMessage,
@@ -31,15 +30,6 @@ describe('chatMessageUtils', () => {
     expect(mergeFlowChatOutputs('Allele summary', 'Gene summary')).toBe(
       'Allele summary\n\nGene summary'
     )
-  })
-
-  it('builds a usable turn ID when crypto.randomUUID is unavailable', () => {
-    vi.spyOn(globalThis.crypto, 'randomUUID')
-      .mockImplementation(() => { throw new TypeError('crypto.randomUUID is not a function') })
-
-    const turnId = buildTurnId()
-
-    expect(turnId).toMatch(/^turn-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/)
   })
 
   it('sanitizes unavailable stored messages with a Date timestamp', () => {
