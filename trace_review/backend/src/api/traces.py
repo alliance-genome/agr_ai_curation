@@ -232,7 +232,7 @@ def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
         "trace_id": trace.get("id"),
         "trace_id_short": _trace_id_short(trace.get("id")),
         "trace_name": trace.get("name"),
-        "timestamp": trace.get("timestamp"),
+        "timestamp": _timestamp_string(trace.get("timestamp")),
         "session_id": trace.get("sessionId"),
         "user_id": trace.get("userId"),
         "environment": trace.get("environment"),
@@ -288,14 +288,26 @@ def _trace_error(source: TraceSource, listed_trace: Dict[str, Any], message: str
         "trace_id": trace_id,
         "trace_id_short": _trace_id_short(trace_id),
         "trace_name": listed_trace.get("name"),
-        "timestamp": listed_trace.get("timestamp"),
+        "timestamp": _timestamp_string(listed_trace.get("timestamp")),
         "source": source,
         "message": message,
     }
 
 
+def _timestamp_string(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
 def _session_timestamp_bounds(traces: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
-    timestamps = sorted(str(trace["timestamp"]) for trace in traces if trace.get("timestamp"))
+    timestamps = sorted(
+        timestamp
+        for trace in traces
+        if (timestamp := _timestamp_string(trace.get("timestamp")))
+    )
     if not timestamps:
         return None, None
     return timestamps[0], timestamps[-1]

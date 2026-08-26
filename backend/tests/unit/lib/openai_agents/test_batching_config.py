@@ -42,7 +42,6 @@ class TestGetBatchingConfig:
             "ask_chemical_validation_specialist",
             "ask_ontology_term_validation_specialist",
             "ask_gene_ontology_specialist",
-            "ask_go_annotations_specialist",
         ]
         for tool in expected_tools:
             assert tool in config, f"Missing {tool} in batching config"

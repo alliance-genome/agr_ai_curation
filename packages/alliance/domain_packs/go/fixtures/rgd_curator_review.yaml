@@ -1,0 +1,165 @@
+fixture_pack_id: rgd_curator_review
+domain_pack_id: agr.alliance.go
+fixtures_api_version: 1.0.0
+display_name: RGD GO curator-review fixtures
+description: Review-only GO candidates covering a resolved protein and ambiguous mature miRNA.
+fixtures:
+  - name: rgd_lta_protein_go_candidate
+    description: RGD protein identity resolved to a durable CURIE and ready for GO curator review.
+    envelope:
+      envelope_id: go-rgd-lta-protein-1
+      domain_pack_id: agr.alliance.go
+      domain_pack_version: 0.1.0
+      status: validated
+      extracted_objects:
+        - object_type: GOCuratableObject
+          object_role: curatable_unit
+          object_id: go-candidate-rgd-lta-1
+          model_ref: GOCuratableObjectPayload
+          status: validated
+          definition_state: in_development
+          payload:
+            gene_product:
+              mention: Lta protein
+              label: Lta
+              curie: RGD:3020
+              entity_type: protein
+              taxon_curie: NCBITaxon:10116
+            go_term:
+              curie: GO:0005615
+              label: extracellular space
+              aspect: cellular_component
+            evidence_code: IDA
+            evidence_eco_curie: ECO:0000314
+            reference_curie: AGRKB:101000000400377
+            with_from: []
+            qualifiers: []
+            annotation_extensions: []
+            negated: false
+            rationale: Direct experimental evidence localizes the Lta protein to the extracellular space.
+            provider_context:
+              provider_key: RGD
+              taxon_curie: NCBITaxon:10116
+              review_lane: rgd_go_curator_review
+            resolution_state: resolved
+            blocking_reasons: []
+          evidence_record_ids:
+            - go-evidence-rgd-lta-1
+          metadata_refs:
+            - metadata_path: evidence_records[0]
+              role: verified_evidence
+          metadata:
+            object_role: curatable_unit
+            reviewer_projection: rgd
+      validation_findings: []
+      metadata:
+        source_document_id: rgd-go-fixture-paper-1
+        evidence_records:
+          - evidence_record_id: go-evidence-rgd-lta-1
+            object_id: go-candidate-rgd-lta-1
+            field_paths:
+              - gene_product
+              - go_term
+              - evidence_code
+            anchor:
+              anchor_kind: sentence
+              locator_quality: exact_quote
+              supports_decision: supports
+              sentence_text: Lta protein was detected in the extracellular fraction.
+              viewer_search_text: Lta protein was detected in the extracellular fraction.
+              viewer_highlightable: true
+              page_number: 6
+              section_title: Results
+              subsection_title: Protein localization
+              figure_reference: Figure 2
+              chunk_ids:
+                - chunk-go-rgd-lta-1
+  - name: rgd_ambiguous_mature_mirna_go_candidate
+    description: Mature-miRNA wording remains unresolved because it cannot be safely mapped to a durable RGD gene product.
+    envelope:
+      envelope_id: go-rgd-mature-mirna-1
+      domain_pack_id: agr.alliance.go
+      domain_pack_version: 0.1.0
+      status: validating
+      extracted_objects:
+        - object_type: GOCuratableObject
+          object_role: curatable_unit
+          object_id: go-candidate-rgd-mature-mirna-1
+          model_ref: GOCuratableObjectPayload
+          status: needs_review
+          definition_state: in_development
+          payload:
+            gene_product:
+              mention: rno-miR-21-5p
+              label: rno-miR-21-5p
+              entity_type: mature_miRNA
+              taxon_curie: NCBITaxon:10116
+            go_term:
+              curie: GO:0005634
+              label: nucleus
+              aspect: cellular_component
+            evidence_code: IDA
+            evidence_eco_curie: ECO:0000314
+            reference_curie: AGRKB:101000000400377
+            with_from: []
+            qualifiers: []
+            annotation_extensions: []
+            negated: false
+            rationale: The paper names a mature miRNA product, but the reviewed entity must not be guessed from the precursor gene.
+            provider_context:
+              provider_key: RGD
+              taxon_curie: NCBITaxon:10116
+              review_lane: rgd_go_curator_review
+              identity_hint: rno-miR-21-5p
+            resolution_state: unresolved
+            blocking_reasons:
+              - Durable RGD gene-product identity is unresolved for the mature miRNA mention.
+              - Curator review must distinguish the mature product from its precursor gene before acceptance.
+          evidence_record_ids:
+            - go-evidence-rgd-mirna-1
+          metadata_refs:
+            - metadata_path: evidence_records[0]
+              role: verified_evidence
+          metadata:
+            object_role: curatable_unit
+            reviewer_projection: rgd
+      validation_findings:
+        - finding_id: go-rgd-mirna-identity-blocker-1
+          severity: blocker
+          status: open
+          code: agr.alliance.go.gene_product_identity_unresolved
+          message: Mature-miRNA identity is unresolved; no RGD CURIE may be materialized until curator review resolves the product.
+          object_ref:
+            object_id: go-candidate-rgd-mature-mirna-1
+            object_type: GOCuratableObject
+          field_ref:
+            object_ref:
+              object_id: go-candidate-rgd-mature-mirna-1
+              object_type: GOCuratableObject
+            field_path: gene_product.mention
+          details:
+            blocking: true
+            provider_key: RGD
+            resolution_state: unresolved
+      metadata:
+        source_document_id: rgd-go-fixture-paper-2
+        evidence_records:
+          - evidence_record_id: go-evidence-rgd-mirna-1
+            object_id: go-candidate-rgd-mature-mirna-1
+            field_paths:
+              - gene_product.mention
+              - go_term
+              - rationale
+            anchor:
+              anchor_kind: sentence
+              locator_quality: exact_quote
+              supports_decision: supports
+              sentence_text: Nuclear rno-miR-21-5p was detected after fractionation.
+              viewer_search_text: Nuclear rno-miR-21-5p was detected after fractionation.
+              viewer_highlightable: true
+              page_number: 8
+              section_title: Results
+              subsection_title: Small RNA localization
+              table_reference: Table 3
+              chunk_ids:
+                - chunk-go-rgd-mirna-1

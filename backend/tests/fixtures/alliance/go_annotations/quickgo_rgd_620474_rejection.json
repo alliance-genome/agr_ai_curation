@@ -1,0 +1,14 @@
+{
+  "fixture_metadata": {
+    "source": "https://www.ebi.ac.uk/QuickGO/services/annotation/search?geneProductId=RGD:620474&limit=2",
+    "recorded_at": "2026-08-26",
+    "http_status": 400,
+    "note": "Current QuickGO contract evidence for retaining the GO Consortium API as the sole RGD annotation path."
+  },
+  "response": {
+    "url": "http://www.ebi.ac.uk/QuickGO/services/annotation/search",
+    "messages": [
+      "The 'Gene Product ID' parameter contains invalid values: RGD:620474"
+    ]
+  }
+}

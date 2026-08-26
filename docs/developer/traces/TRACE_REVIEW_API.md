@@ -47,6 +47,36 @@ The Trace Review tool is a separate Docker-based service for comprehensive Langf
 | **Deployment** | Standalone docker-compose in `trace_review/` |
 | **Cache** | In-memory with configurable TTL |
 
+### Langfuse v4 reconstruction and accounting
+
+Normal trace reconstruction reads the cursor-paginated Langfuse v2
+Observations API with the `core,basic,time,io,metadata,model,usage,trace_context`
+field groups. TraceReview derives the trace root, parent/child hierarchy, payloads,
+and trace context from those observations; it does not fall back to the legacy
+single-trace response. Scores remain a separate public API read. The observation
+page size and per-request timeout are configurable with
+`TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT` (default `1000`) and
+`TRACE_REVIEW_LANGFUSE_REQUEST_TIMEOUT_SECONDS` (default `30`).
+
+Token accounting preserves these meanings:
+
+- `input_tokens` is the provider/Langfuse input total.
+- `uncached_input_tokens` is input minus cache-read and cache-write subsets.
+- `cache_read_tokens`, `cache_write_tokens`, and `reasoning_tokens` are reported
+  separately and are never added to the provider total a second time.
+- `output_tokens` and `total_tokens` use the provider/Langfuse aggregates when
+  present; otherwise total is input plus output.
+- `total_cost` is Langfuse's calculated value. `cost_source` is
+  `langfuse_calculated` when Langfuse supplied cost fields and `unavailable`
+  otherwise. TraceReview does not maintain a shadow price table or silently
+  estimate historical cost.
+
+Langfuse 4.21's managed model catalog contains the deployed GPT-5.4, GPT-5.5,
+and GPT-5.6 pricing variants, including applicable cache and service-tier rates.
+Historical zero-cost observations remain explicitly unavailable until an
+operator runs a supported Langfuse recalculation/backfill; TraceReview never
+mutates vendor tables.
+
 ---
 
 ## Quick Start
@@ -282,7 +312,7 @@ curl "http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/export?s
 
 **GET** `/api/traces/sessions/{session_id}/export?source=remote`
 
-Export a compact JSON bundle for every trace Langfuse associates with a session. The endpoint lists trace IDs through the configured TraceReview Langfuse source, analyzes each trace with the same analyzer stack used by single-trace export, and keeps per-trace failures in the response instead of failing the whole session.
+Export a compact JSON bundle for every trace Langfuse associates with a session. The endpoint lists and deduplicates trace IDs through cursor-paginated v2 observations filtered by `sessionId`, analyzes each trace with the same analyzer stack used by single-trace export, and keeps per-trace failures in the response instead of failing the whole session.
 
 #### Request
 
@@ -1073,7 +1103,7 @@ jq -r '
 
 - Langfuse credentials are stored in the TraceReview runtime environment and are never returned by the session bundle endpoint.
 - Use `source=remote` for EC2 Langfuse and `source=local` for the local Docker Langfuse instance.
-- The session bundle endpoint calls Langfuse's public trace list API with `sessionId`, then reuses TraceReview single-trace analysis for each listed trace.
+- The session bundle endpoint filters Langfuse v2 observations by `sessionId`, groups them by trace ID, and then reuses TraceReview single-trace analysis for each listed trace. It does not depend on the legacy session/trace list endpoints that are disabled in `events_only` mode.
 - Partial trace failures are non-fatal and are represented in each trace item plus the top-level `errors` array.
 
 ---
