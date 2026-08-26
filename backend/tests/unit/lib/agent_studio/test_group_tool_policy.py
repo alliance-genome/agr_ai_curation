@@ -187,6 +187,12 @@ def test_create_custom_db_agent_enforces_inherited_group_tool_policy(
     monkeypatch.setattr(catalog_service, "bind_prompt_run", lambda *_args: None)
     monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
+    logged_config = {}
+    monkeypatch.setattr(
+        "src.lib.openai_agents.langfuse_client.log_agent_config",
+        lambda **kwargs: logged_config.update(kwargs),
+    )
+
     from src.lib.openai_agents import config as agent_config
 
     monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model: "openai")
@@ -195,7 +201,7 @@ def test_create_custom_db_agent_enforces_inherited_group_tool_policy(
 
     built = catalog_service._create_db_agent(
         row,
-        active_groups=["WB"],
+        active_groups=["ZFIN"],
         authenticated_groups=authenticated_groups,
     )
 
@@ -206,3 +212,5 @@ def test_create_custom_db_agent_enforces_inherited_group_tool_policy(
     assert built.group_tool_exposure["denied_tool_ids"] == (
         [] if authenticated_groups else ["restricted_base_helper"]
     )
+    assert logged_config["tools"] == expected_tool_ids
+    assert logged_config["metadata"]["group_tool_exposure"] == built.group_tool_exposure

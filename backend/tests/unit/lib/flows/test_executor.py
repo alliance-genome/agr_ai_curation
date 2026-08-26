@@ -1570,6 +1570,7 @@ class TestActiveGroupPropagation:
         assert created_names == {"ask_allele_extractor_specialist"}
         assert mock_get_agent.call_args.args == ("allele_extractor",)
         assert mock_get_agent.call_args.kwargs["active_groups"] == ["MGI"]
+        assert mock_get_agent.call_args.kwargs["authenticated_groups"] == ["MGI"]
 
 
 class TestGetAllAgentToolsCustomInstructions:

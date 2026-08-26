@@ -1776,7 +1776,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     group_tool_resolution = resolve_group_tool_policy(
         base_tool_ids,
         raw_group_tool_policy,
-        runtime_kwargs.get("authenticated_groups", runtime_kwargs.get("active_groups")),
+        runtime_kwargs.get("authenticated_groups"),
     )
     requested_tool_ids = group_tool_resolution.tool_ids
     group_tool_audit = group_tool_resolution.audit_metadata()
@@ -1950,6 +1950,24 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         layer_manifest=prompt_bundle.to_manifest(),
     )
     bind_prompt_run(runtime_agent, prompt_run_id)
+
+    from src.lib.openai_agents.langfuse_client import log_agent_config
+
+    log_agent_config(
+        agent_name=str(db_agent.name),
+        instructions=instructions,
+        model=str(effective_model_id),
+        tools=canonical_tool_ids,
+        model_settings={
+            "temperature": effective_temperature,
+            "reasoning": reasoning_effort,
+        },
+        metadata={
+            "agent_key": str(db_agent.agent_key),
+            "effective_prompt_hash": prompt_bundle.hash,
+            "group_tool_exposure": group_tool_audit,
+        },
+    )
     return runtime_agent
 
 

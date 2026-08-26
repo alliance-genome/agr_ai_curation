@@ -2535,6 +2535,7 @@ def get_all_agent_tools(
         context["document_id"] = document_id
         context["user_id"] = user_id
     context["active_groups"] = active_groups or []
+    context["authenticated_groups"] = active_groups or []
     if db_user_id is not None:
         context["db_user_id"] = db_user_id
 
