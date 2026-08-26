@@ -43,6 +43,7 @@ _STRUCTURED_ADAPTER_DOMAIN_PACKS = {
     "gene": "gene",
     "generic": GENERIC_DOMAIN_PACK_ID,
     "gene_expression": "agr.alliance.gene_expression",
+    "go": "agr.alliance.go",
     "phenotype": "agr.alliance.phenotype",
 }
 _DOMAIN_EXPORT_ADAPTERS = {
@@ -102,6 +103,8 @@ def _domain_pack_for(adapter_key: str, domain_pack_id: str):
 
 
 def _export_adapter_for(adapter_key: str):
+    if adapter_key == "go":
+        return None
     export_adapter_factory = _DOMAIN_EXPORT_ADAPTERS[adapter_key]
     if adapter_key == "gene_expression":
         return export_adapter_factory()
