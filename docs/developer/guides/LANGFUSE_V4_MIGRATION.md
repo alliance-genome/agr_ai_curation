@@ -114,7 +114,16 @@ LANGFUSE_BACKGROUND_MIGRATION_V4_ENABLE_HISTORIC_BACKFILL=false
 
 Create a real AI Curation trace. Verify immediate Observations API v2
 visibility, legacy TraceReview access, parent/child reconstruction, token
-usage, cached-token details, and model cost.
+usage, cached-token details, and model cost. Request the `core`, `basic`, and
+`usage` field groups when validating v2, for example:
+
+```text
+GET /api/public/v2/observations?traceId=<trace-id>&fields=core,basic,usage
+```
+
+Older SDK/legacy ingestion reaches the v2 tables through the propagation job
+with an expected delay of roughly 15 minutes; SDK 4.7.1 traces should appear
+immediately.
 
 ## 5. Backfill and cut over
 
