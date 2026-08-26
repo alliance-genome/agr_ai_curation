@@ -163,6 +163,19 @@ def get_langfuse_local_secret_key() -> Optional[str]:
     return os.getenv("LANGFUSE_LOCAL_SECRET_KEY")
 
 
+def get_langfuse_observation_page_limit() -> int:
+    """Return the v2 observation page size used for trace reconstruction."""
+    return max(1, int(os.getenv("TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT", "1000")))
+
+
+def get_langfuse_request_timeout_seconds() -> float:
+    """Return the timeout for each TraceReview-to-Langfuse API request."""
+    return max(
+        0.1,
+        float(os.getenv("TRACE_REVIEW_LANGFUSE_REQUEST_TIMEOUT_SECONDS", "30")),
+    )
+
+
 def sanitize_url_for_diagnostics(url: Optional[str]) -> str:
     """Return a URL that is safe to include in health responses."""
     if not url:

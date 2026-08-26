@@ -835,6 +835,14 @@ def get_sentry_log_event_level() -> int | None:
 # --- Document sources ---
 
 
+def get_go_annotations_request_timeout_seconds() -> float:
+    """HTTP timeout for typed existing-GO annotation lookups."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("GO_ANNOTATIONS_REQUEST_TIMEOUT_SECONDS", 30.0),
+    )
+
+
 def get_document_source_import_enabled() -> bool:
     """Feature flag for external document-source import."""
     return _get_env_bool("DOCUMENT_SOURCE_IMPORT_ENABLED", False)

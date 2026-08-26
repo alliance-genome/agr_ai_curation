@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -383,6 +384,38 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["traces"][1]["error"]["trace_id"], "trace-missing")
         self.assertIn("trace not found", response["traces"][1]["error"]["message"])
         self.assertEqual(response["errors"][0]["trace_id"], "trace-missing")
+
+    @patch("src.api.traces.TraceExtractor")
+    async def test_export_session_bundle_serializes_v2_datetime_on_partial_failure(
+        self,
+        extractor_cls: Mock,
+    ):
+        request = self._make_request()
+        listed_at = datetime.fromisoformat("2026-03-26T00:01:00+00:00")
+        extractor = extractor_cls.return_value
+        extractor.list_session_traces.return_value = {
+            "session_id": "session-123",
+            "source": "local",
+            "traces": [
+                {
+                    "id": "trace-missing",
+                    "name": "pdf_specialist_config",
+                    "timestamp": listed_at,
+                    "sessionId": "session-123",
+                },
+            ],
+            "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
+        }
+        extractor.extract_complete_trace.side_effect = RuntimeError("trace not found")
+
+        response = await traces.export_session("session-123", request, source="local")
+
+        expected = "2026-03-26T00:01:00+00:00"
+        self.assertEqual(response["traces"][0]["listed_trace"]["timestamp"], expected)
+        self.assertEqual(response["traces"][0]["error"]["timestamp"], expected)
+        self.assertEqual(response["errors"][0]["timestamp"], expected)
+        self.assertEqual(response["session"]["first_timestamp"], expected)
+        self.assertEqual(response["session"]["last_timestamp"], expected)
 
     @patch("src.api.traces.TraceExtractor")
     async def test_export_session_bundle_invalidates_stale_compact_bundle_cache(

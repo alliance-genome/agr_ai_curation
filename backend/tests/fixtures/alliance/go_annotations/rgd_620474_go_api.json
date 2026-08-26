@@ -1,0 +1,93 @@
+{
+  "fixture_metadata": {
+    "source": "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?rows=-1",
+    "recorded_at": "2026-08-26",
+    "note": "Bounded excerpt of the complete current RGD Sox9 response; three source associations retain reference, With/From, and current molecular_activity aspect values."
+  },
+  "associations": [
+    {
+      "id": "5247440936323034373409536f78390909474f3a3030303031323209474f5f5245463a303030303132310949534f09556e6950726f744b423a5034383433360950095352592d626f78207472616e736372697074696f6e20666163746f722039090970726f7465696e097461786f6e3a31303131360932303234303632300952474409095247443a36323034373409",
+      "subject": {
+        "id": "RGD:620474",
+        "label": "Sox9"
+      },
+      "object": {
+        "id": "GO:0000122",
+        "label": "negative regulation of transcription by RNA polymerase II",
+        "category": ["biological_process"]
+      },
+      "negated": false,
+      "relation": null,
+      "qualifiers": [],
+      "evidence_types": [
+        {
+          "id": "ECO:0000266",
+          "label": "sequence orthology evidence used in manual assertion"
+        }
+      ],
+      "provided_by": ["RGD"],
+      "reference": ["GO_REF:0000121"],
+      "type": "protein",
+      "evidence": "ECO:0000266",
+      "evidence_label": "sequence orthology evidence used in manual assertion",
+      "evidence_type": "ISO",
+      "evidence_with": ["UniProtKB:P48436"]
+    },
+    {
+      "id": "5247440936323034373409536f78390909474f3a3030303135303209474f5f5245463a303030303132310949534f094d47493a4d47493a39383337310950095352592d626f78207472616e736372697074696f6e20666163746f722039090970726f7465696e097461786f6e3a31303131360932303032313231360952474409095247443a36323034373409",
+      "subject": {
+        "id": "RGD:620474",
+        "label": "Sox9"
+      },
+      "object": {
+        "id": "GO:0001502",
+        "label": "cartilage condensation",
+        "category": ["biological_process"]
+      },
+      "negated": false,
+      "relation": null,
+      "qualifiers": [],
+      "evidence_types": [
+        {
+          "id": "ECO:0000266",
+          "label": "sequence orthology evidence used in manual assertion"
+        }
+      ],
+      "provided_by": ["RGD"],
+      "reference": ["GO_REF:0000121"],
+      "type": "protein",
+      "evidence": "ECO:0000266",
+      "evidence_label": "sequence orthology evidence used in manual assertion",
+      "evidence_type": "ISO",
+      "evidence_with": ["MGI:MGI:98371"]
+    },
+    {
+      "id": "5247440936323034373409536f78390909474f3a3030303039373609474f5f5245463a303030303130370949454109556e6950726f744b423a5130343838377c656e73656d626c3a454e534d55535030303030303030303537390946095352592d626f78207472616e736372697074696f6e20666163746f722039090970726f7465696e097461786f6e3a313031313609323032363037323409456e73656d626c09095247443a36323034373409",
+      "subject": {
+        "id": "RGD:620474",
+        "label": "Sox9"
+      },
+      "object": {
+        "id": "GO:0000976",
+        "label": "transcription cis-regulatory region binding",
+        "category": ["molecular_activity"]
+      },
+      "negated": false,
+      "relation": null,
+      "qualifiers": null,
+      "evidence_types": [
+        {
+          "id": "ECO:0000501",
+          "label": "evidence used in automatic assertion"
+        }
+      ],
+      "provided_by": ["Ensembl"],
+      "reference": ["GO_REF:0000107"],
+      "type": "protein",
+      "evidence": "ECO:0000501",
+      "evidence_label": "evidence used in automatic assertion",
+      "evidence_type": "IEA",
+      "evidence_with": ["UniProtKB:Q04887", "ensembl:ENSMUSP00000000579"]
+    }
+  ]
+}

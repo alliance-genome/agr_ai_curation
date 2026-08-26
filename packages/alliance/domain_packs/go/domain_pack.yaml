@@ -1,0 +1,221 @@
+pack_id: agr.alliance.go
+display_name: Alliance Gene Ontology Curation Domain Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+description: Provider-neutral proposed GO annotations with package-owned RGD curator-review projection metadata.
+status: in_development
+model_definitions:
+  - model_id: GOCuratableObjectPayload
+    display_name: GO curatable-object payload
+    description: Evidence-backed proposed GO annotation retained inside a DomainEnvelope for curator review.
+    definition_state: in_development
+    definition_notes:
+      - This local payload is not a submission or export DTO and does not change Alliance LinkML.
+enum_definitions:
+  - enum_id: GOAspect
+    display_name: GO aspect
+    values:
+      - value: molecular_function
+        label: Molecular function
+      - value: biological_process
+        label: Biological process
+      - value: cellular_component
+        label: Cellular component
+  - enum_id: GOIdentityResolutionState
+    display_name: Gene-product identity resolution state
+    values:
+      - value: resolved
+        label: Resolved
+      - value: unresolved
+        label: Unresolved
+object_definitions:
+  - object_type: GOCuratableObject
+    display_name: Proposed GO annotation
+    description: One provider-neutral, evidence-backed GO annotation candidate.
+    model_ref: GOCuratableObjectPayload
+    definition_state: in_development
+    definition_notes:
+      - Review only; submission and export are deliberately unsupported.
+    metadata:
+      object_role: curatable_unit
+      confidence_policy:
+        status: omitted
+        reason: Extraction confidence is not part of this contract; validation state and identity resolution are represented independently.
+      workspace_display:
+        projection_type: go_curator_review
+        primary_label_fields:
+          - gene_product.label
+          - gene_product.mention
+        secondary_label_field: go_term.label
+        groups:
+          - id: identity
+            label: Gene product
+            fields:
+              - gene_product.mention
+              - gene_product.label
+              - gene_product.curie
+              - gene_product.entity_type
+              - gene_product.taxon_curie
+              - resolution_state
+              - blocking_reasons
+          - id: annotation
+            label: GO annotation
+            fields:
+              - go_term.curie
+              - go_term.label
+              - go_term.aspect
+              - evidence_code
+              - evidence_eco_curie
+              - reference_curie
+              - with_from
+              - qualifiers
+              - annotation_extensions
+              - negated
+          - id: evidence
+            label: Evidence and rationale
+            fields:
+              - rationale
+          - id: provider
+            label: Provider context
+            fields:
+              - provider_context
+      curator_review_projection:
+        audience: rgd_go_curator
+        provider_restriction: RGD
+        specialist_scope: rgd_go_curation
+        flow_scope: rgd_go_curator_review
+        projection_only: true
+        submission_supported: false
+        export_supported: false
+      export_behavior:
+        status: unsupported
+        reason: This domain pack defines review projection only; no GO export adapter is registered.
+      submission_behavior:
+        status: unsupported
+        reason: Curator acceptance must not submit or write GO annotations in this contract.
+    fields:
+      - field_path: gene_product
+        field_type: object
+        display_name: Gene product
+        required: true
+      - field_path: gene_product.mention
+        field_type: string
+        display_name: Paper mention
+        required: true
+      - field_path: gene_product.label
+        field_type: string
+        display_name: Gene-product label
+        required: true
+      - field_path: gene_product.curie
+        field_type: string
+        display_name: Gene-product CURIE
+        required: false
+        metadata:
+          render_as: curie-chip
+          curator_action_note: Must remain absent while identity is unresolved; never synthesize an RGD CURIE from a mature-RNA label.
+      - field_path: gene_product.entity_type
+        field_type: string
+        display_name: Gene-product type
+        required: true
+      - field_path: gene_product.taxon_curie
+        field_type: string
+        display_name: Taxon CURIE
+        required: true
+        metadata:
+          render_as: curie-chip
+      - field_path: go_term
+        field_type: object
+        display_name: GO term
+        required: true
+      - field_path: go_term.curie
+        field_type: string
+        display_name: GO term CURIE
+        required: true
+        metadata:
+          render_as: curie-chip
+      - field_path: go_term.label
+        field_type: string
+        display_name: GO term
+        required: true
+      - field_path: go_term.aspect
+        field_type: enum
+        display_name: GO aspect
+        required: true
+        enum_ref: GOAspect
+      - field_path: evidence_code
+        field_type: string
+        display_name: Evidence code
+        required: true
+      - field_path: evidence_eco_curie
+        field_type: string
+        display_name: ECO CURIE
+        required: true
+        metadata:
+          render_as: curie-chip
+      - field_path: reference_curie
+        field_type: string
+        display_name: Reference CURIE
+        required: true
+        metadata:
+          render_as: curie-chip
+      - field_path: with_from
+        field_type: array
+        display_name: With/From
+        required: true
+      - field_path: qualifiers
+        field_type: array
+        display_name: Qualifiers
+        required: true
+      - field_path: annotation_extensions
+        field_type: array
+        display_name: Annotation extensions
+        required: true
+      - field_path: negated
+        field_type: boolean
+        display_name: Negated
+        required: true
+      - field_path: rationale
+        field_type: string
+        display_name: Rationale
+        required: true
+      - field_path: provider_context
+        field_type: object
+        display_name: Provider context
+        required: true
+        metadata:
+          read_only: true
+      - field_path: resolution_state
+        field_type: enum
+        display_name: Identity resolution
+        required: true
+        enum_ref: GOIdentityResolutionState
+        metadata:
+          read_only: true
+      - field_path: blocking_reasons
+        field_type: array
+        display_name: Blocking reasons
+        required: true
+        metadata:
+          read_only: true
+fixture_packs:
+  - fixture_pack_id: rgd_curator_review
+    display_name: RGD GO curator-review fixtures
+    path: fixtures/rgd_curator_review.yaml
+    description: Resolved protein and unresolved mature-miRNA projections for the RGD review lane.
+    object_types:
+      - GOCuratableObject
+    definition_state: in_development
+metadata:
+  semantic_source: domain_envelope.extracted_objects
+  object_role_key: object_role
+  supported_object_roles:
+    - curatable_unit
+  provider_neutral_payload: true
+  reviewer_projections:
+    rgd:
+      provider_key: RGD
+      audience: rgd_go_curator
+      specialist_scope: rgd_go_curation
+      flow_scope: rgd_go_curator_review
+      submission_supported: false
+      export_supported: false

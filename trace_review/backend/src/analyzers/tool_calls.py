@@ -733,13 +733,14 @@ class ToolCallAnalyzer:
                 # Extract key information
                 input_data = obs.get("input", {})
                 output_data = obs.get("output", {})
+                input_mapping = input_data if isinstance(input_data, dict) else {}
                 
                 # Get timestamps (try camelCase then snake_case)
                 start_time = obs.get("startTime") or obs.get("start_time")
                 end_time = obs.get("endTime") or obs.get("end_time")
 
                 # Parse URL and method from calling string
-                calling = input_data.get("calling", "")
+                calling = input_mapping.get("calling", input_data if isinstance(input_data, str) else "")
                 url = "N/A"
                 method = "GET"
 
@@ -787,7 +788,7 @@ class ToolCallAnalyzer:
 
                 # 2. Fallback: Extract reasoning from tool_string in input (CrewAI specific)
                 if thought == "N/A":
-                    tool_string = input_data.get("tool_string", "")
+                    tool_string = input_mapping.get("tool_string", "")
                     if tool_string:
                         # Parse out the Thought line
                         lines = tool_string.split('\n')
