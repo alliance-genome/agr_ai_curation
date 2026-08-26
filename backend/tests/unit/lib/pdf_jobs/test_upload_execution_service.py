@@ -42,6 +42,7 @@ from src.models.sql.pdf_processing_job import PdfJobStatus
 class _Tracker:
     def __init__(self):
         self.calls = []
+        self.failure_calls = []
 
     async def track_pipeline_progress(self, document_id, stage, progress_percentage=None, message=None):
         self.calls.append(
@@ -53,12 +54,42 @@ class _Tracker:
             }
         )
 
+    async def handle_pipeline_failure(self, document_id, error, stage=None):
+        self.failure_calls.append(
+            {
+                "document_id": document_id,
+                "error": error,
+                "stage": stage,
+            }
+        )
+
 
 class _Orchestrator:
     def __init__(self, result: ProcessingResult):
         self.result = result
 
     async def process_pdf_document(self, **_kwargs) -> ProcessingResult:
+        return self.result
+
+
+class _TerminalSignallingOrchestrator(_Orchestrator):
+    def __init__(self, tracker, result: ProcessingResult):
+        super().__init__(result)
+        self.tracker = tracker
+
+    async def process_pdf_document(self, *, document_id, **_kwargs) -> ProcessingResult:
+        stage = ProcessingStage.COMPLETED if self.result.success else ProcessingStage.FAILED
+        if not self.result.success:
+            await self.tracker.handle_pipeline_failure(
+                document_id,
+                RuntimeError(self.result.error or "Processing failed"),
+                stage=stage,
+            )
+        await self.tracker.track_pipeline_progress(
+            document_id,
+            stage,
+            message=self.result.error or "Processing completed",
+        )
         return self.result
 
 
@@ -275,7 +306,8 @@ async def test_execute_upload_marks_completed_for_success(monkeypatch):
     tracker = _Tracker()
     service = UploadExecutionService(
         pipeline_tracker=tracker,
-        orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
+        orchestrator_factory=lambda _connection, job_tracker: _TerminalSignallingOrchestrator(
+            job_tracker,
             _pipeline_result(
                 success=True,
                 document_id="doc-1",
@@ -355,8 +387,23 @@ async def test_execute_upload_marks_failed_for_failure_result(monkeypatch):
     tracker = _Tracker()
     service = UploadExecutionService(
         pipeline_tracker=tracker,
-        orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
-            _pipeline_result(success=False, document_id="doc-2", error="boom")
+        orchestrator_factory=lambda _connection, job_tracker: _TerminalSignallingOrchestrator(
+            job_tracker,
+            _pipeline_result(
+                success=False,
+                document_id="doc-2",
+                error="boom",
+                observability_receipt={
+                    "schema_version": 1,
+                    "outcome": "failed",
+                    "stages": {
+                        "external_request": {
+                            "status": "failed",
+                            "duration_ms": 456.7,
+                        }
+                    },
+                },
+            ),
         ),
     )
 
@@ -387,9 +434,29 @@ async def test_execute_upload_marks_failed_for_failure_result(monkeypatch):
         )
     )
 
-    assert events["failed"] == [{"job_id": job_id, "message": "boom", "stage": ProcessingStage.FAILED.value}]
+    assert events["failed"] == [
+        {
+            "job_id": job_id,
+            "message": "boom",
+            "stage": ProcessingStage.FAILED.value,
+            "metadata": {
+                "pdf_processing_receipt": {
+                    "schema_version": 1,
+                    "outcome": "failed",
+                    "stages": {
+                        "external_request": {
+                            "status": "failed",
+                            "duration_ms": 456.7,
+                        }
+                    },
+                }
+            },
+        }
+    ]
     assert not events["completed"]
     assert not events["cancelled"]
+    assert len(tracker.failure_calls) == 1
+    assert str(tracker.failure_calls[0]["error"]) == "boom"
     assert tracker.calls[-1]["stage"] == ProcessingStage.FAILED
 
 
@@ -500,7 +567,7 @@ async def test_job_aware_tracker_preserves_cancel_requested_on_failed_terminal_r
 
 
 @pytest.mark.asyncio
-async def test_job_aware_tracker_allows_completed_terminal_race_after_cancel(monkeypatch):
+async def test_job_aware_tracker_leaves_completed_terminal_write_to_executor(monkeypatch):
     tracker = _Tracker()
     job_tracker = JobAwarePipelineTracker(base_tracker=tracker, job_id="job-terminal-complete")
     completed_events = []
@@ -526,12 +593,7 @@ async def test_job_aware_tracker_allows_completed_terminal_race_after_cancel(mon
     )
 
     assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
-    assert completed_events == [
-        {
-            "job_id": "job-terminal-complete",
-            "message": "Completed before cancellation landed",
-        }
-    ]
+    assert completed_events == []
     assert progress_updates == []
 
 

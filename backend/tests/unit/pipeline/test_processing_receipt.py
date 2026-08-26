@@ -82,4 +82,3 @@ def test_minimal_cancelled_receipt_uses_observed_job_timestamps():
     assert stored["outcome"] == "cancelled"
     assert stored["stages"]["external_request"] == {"status": "not_started"}
     assert stored["stages"]["total"]["duration_ms"] == 4250.0
-

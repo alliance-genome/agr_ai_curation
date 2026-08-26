@@ -264,6 +264,36 @@ def test_mark_completed_atomically_preserves_detailed_receipt_in_api_metadata(mo
     assert session.commit_calls == 1
 
 
+def test_mark_failed_atomically_preserves_detailed_receipt_in_api_metadata(monkeypatch):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    document = _build_document(job)
+    session = _FakeSession([job, job, document])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    detailed_receipt = {
+        "schema_version": 1,
+        "outcome": "failed",
+        "selection": {"extraction_method": "pdf_service"},
+        "stages": {
+            "external_request": {
+                "status": "failed",
+                "duration_ms": 456.7,
+            }
+        },
+    }
+
+    response = service_module.mark_failed(
+        job_id=job.id,
+        message="extractor failed",
+        metadata={PDF_PROCESSING_RECEIPT_KEY: detailed_receipt},
+    )
+
+    assert response is not None
+    assert response.metadata == {PDF_PROCESSING_RECEIPT_KEY: detailed_receipt}
+    assert job.metadata_json == response.metadata
+    assert document.status == "failed"
+    assert session.commit_calls == 1
+
+
 def test_terminal_reconciliation_honors_configured_document_error_limit(monkeypatch):
     job = _build_job(status=PdfJobStatus.RUNNING.value)
     document = _build_document(job)
