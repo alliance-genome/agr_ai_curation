@@ -10,11 +10,15 @@ from langfuse import Langfuse
 import requests
 from requests.auth import HTTPBasicAuth
 from ..analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
-from ..config import get_trace_source_runtime_config
+from ..config import (
+    get_langfuse_observation_page_limit,
+    get_langfuse_request_timeout_seconds,
+    get_trace_source_runtime_config,
+)
+from .langfuse_run_reconstruction import usage_cost_summary
 
 logger = logging.getLogger(__name__)
-TRACE_FIELDS = "core,io,scores,observations,metrics"
-OBSERVATION_FIELDS = "core,basic,time,io,metadata,model,usage,prompt,metrics"
+OBSERVATION_FIELDS = "core,basic,time,io,metadata,model,usage,trace_context"
 SESSION_TRACE_LIST_LIMIT = 100
 SESSION_TRACE_LIST_TIMEOUT_SECONDS = 30
 
@@ -62,25 +66,157 @@ class TraceExtractor:
             return item.dict()
         return item
 
-    def _embedded_collection(self, trace: Optional[Dict], key: str) -> Optional[List[Dict]]:
-        """Return embedded trace collections when the trace payload already includes them."""
-        if not trace or key not in trace:
-            return None
-        return [self._normalize_item(item) for item in (trace.get(key) or [])]
+    @staticmethod
+    def _first_present(mapping: Mapping[str, Any], *keys: str) -> Any:
+        for key in keys:
+            if mapping.get(key) is not None:
+                return mapping[key]
+        return None
 
-    def get_trace_details(self, trace_id: str) -> Dict:
-        """Get detailed trace information with all fields"""
-        try:
-            trace = self.client.api.trace.get(trace_id, fields=TRACE_FIELDS)
-        except TypeError as exc:
-            if "fields" not in str(exc):
-                raise
-            logger.debug(
-                "Langfuse trace.get() does not support fields; retrying without fields",
-                exc_info=True,
-            )
-            trace = self.client.api.trace.get(trace_id)
-        return self._normalize_item(trace)
+    @classmethod
+    def _normalize_v2_observation(cls, item: Any) -> Dict[str, Any]:
+        """Preserve v2 fields and add the compatibility aliases used by analyzers."""
+        observation = cls._normalize_item(item)
+        usage_details = observation.get("usage_details") or observation.get("usageDetails") or {}
+        cost_details = observation.get("cost_details") or observation.get("costDetails") or {}
+        input_tokens = cls._first_present(
+            observation,
+            "inputUsage",
+            "input_usage",
+        )
+        output_tokens = cls._first_present(
+            observation,
+            "outputUsage",
+            "output_usage",
+        )
+        total_tokens = cls._first_present(
+            observation,
+            "totalUsage",
+            "total_usage",
+        )
+        if input_tokens is None:
+            input_tokens = usage_details.get("input") or usage_details.get("input_tokens") or 0
+        if output_tokens is None:
+            output_tokens = usage_details.get("output") or usage_details.get("output_tokens") or 0
+        if total_tokens is None:
+            total_tokens = usage_details.get("total") or usage_details.get("total_tokens")
+        if total_tokens is None:
+            total_tokens = (input_tokens or 0) + (output_tokens or 0)
+
+        calculated_total_cost = cls._first_present(
+            observation,
+            "calculatedTotalCost",
+            "calculated_total_cost",
+            "totalCost",
+            "total_cost",
+        )
+        if calculated_total_cost is None:
+            calculated_total_cost = cls._first_present(cost_details, "total", "total_cost")
+
+        model_name = cls._first_present(
+            observation,
+            "providedModelName",
+            "provided_model_name",
+            "model",
+            "modelName",
+            "model_name",
+            "internal_model_id",
+            "model_id",
+        )
+
+        observation.update({
+            "traceId": cls._first_present(observation, "traceId", "trace_id"),
+            "parentObservationId": cls._first_present(
+                observation,
+                "parentObservationId",
+                "parent_observation_id",
+            ),
+            "startTime": cls._first_present(observation, "startTime", "start_time"),
+            "endTime": cls._first_present(observation, "endTime", "end_time"),
+            "completionStartTime": cls._first_present(
+                observation,
+                "completionStartTime",
+                "completion_start_time",
+            ),
+            "timeToFirstToken": cls._first_present(
+                observation,
+                "timeToFirstToken",
+                "time_to_first_token",
+            ),
+            "statusMessage": cls._first_present(
+                observation,
+                "statusMessage",
+                "status_message",
+            ),
+            "modelParameters": cls._first_present(
+                observation,
+                "modelParameters",
+                "model_parameters",
+            ) or {},
+            "providedModelName": model_name,
+            "model": model_name,
+            "usageDetails": dict(usage_details),
+            "costDetails": dict(cost_details),
+            "usage": {
+                "input": input_tokens or 0,
+                "output": output_tokens or 0,
+                "total": total_tokens or 0,
+            },
+            "promptTokens": input_tokens or 0,
+            "completionTokens": output_tokens or 0,
+            "totalTokens": total_tokens or 0,
+            "calculatedTotalCost": calculated_total_cost,
+        })
+        return observation
+
+    @classmethod
+    def get_trace_details(
+        cls,
+        trace_id: str,
+        observations: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Build trace context from the v2 root observation without a legacy read."""
+        if not observations:
+            raise RuntimeError(f"Langfuse returned no v2 observations for trace {trace_id}")
+
+        ordered = sorted(
+            observations,
+            key=lambda item: (
+                str(item.get("startTime") or item.get("start_time") or ""),
+                str(item.get("id") or ""),
+            ),
+        )
+        roots = [
+            item for item in ordered
+            if item.get("isRootObservation") is True
+            or item.get("is_root_observation") is True
+            or not (item.get("parentObservationId") or item.get("parent_observation_id"))
+        ]
+        root = roots[0] if roots else ordered[0]
+        context = next(
+            (
+                item for item in ordered
+                if item.get("trace_name")
+                or item.get("session_id")
+                or item.get("user_id")
+            ),
+            root,
+        )
+
+        return {
+            "id": trace_id,
+            "rootObservationId": root.get("id"),
+            "name": context.get("trace_name") or root.get("trace_name") or root.get("name"),
+            "timestamp": root.get("startTime") or root.get("start_time"),
+            "sessionId": context.get("session_id") or root.get("session_id"),
+            "userId": context.get("user_id") or root.get("user_id"),
+            "metadata": root.get("metadata") or {},
+            "tags": context.get("tags") or root.get("tags") or [],
+            "environment": context.get("environment") or root.get("environment"),
+            "input": root.get("input"),
+            "output": root.get("output"),
+            "latency": root.get("latency") or 0,
+        }
 
     def list_traces(
         self,
@@ -213,55 +349,57 @@ class TraceExtractor:
             "meta": meta,
         }
 
-    def get_observations(self, trace_id: str, trace: Optional[Dict] = None) -> List[Dict]:
-        """Get all observations for a trace."""
-        embedded = self._embedded_collection(trace, "observations")
-        if embedded is not None:
-            return embedded
-
+    def get_observations(self, trace_id: str) -> List[Dict]:
+        """Get every observation through the cursor-paginated v2 API."""
         observations: List[Dict] = []
         cursor: Optional[str] = None
+        seen_cursors = set()
+        seen_observation_ids = set()
+        page_limit = get_langfuse_observation_page_limit()
+        request_options = {
+            "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
+        }
 
         while True:
-            try:
-                response = self.client.api.observations.get_many(
-                    trace_id=trace_id,
-                    fields=OBSERVATION_FIELDS,
-                    limit=1000,
-                    cursor=cursor,
-                )
-            except TypeError as exc:
-                if "fields" not in str(exc):
-                    raise
-                logger.debug(
-                    "Langfuse observations.get_many() does not support fields; "
-                    "retrying without fields",
-                    exc_info=True,
-                )
-                response = self.client.api.observations.get_many(
-                    trace_id=trace_id,
-                    limit=1000,
-                    cursor=cursor,
-                )
+            response = self.client.api.observations.get_many(
+                trace_id=trace_id,
+                fields=OBSERVATION_FIELDS,
+                limit=page_limit,
+                cursor=cursor,
+                request_options=request_options,
+            )
             response_data = getattr(response, "data", None)
             if response_data:
-                observations.extend(self._normalize_item(obs) for obs in response_data)
+                for item in response_data:
+                    observation = self._normalize_v2_observation(item)
+                    observation_id = observation.get("id")
+                    if observation_id and observation_id in seen_observation_ids:
+                        continue
+                    if observation_id:
+                        seen_observation_ids.add(observation_id)
+                    observations.append(observation)
 
             meta = getattr(response, "meta", None)
             cursor = getattr(meta, "cursor", None) if meta is not None else None
             if not cursor:
                 break
+            if cursor in seen_cursors:
+                raise RuntimeError(
+                    f"Langfuse repeated observation cursor for trace {trace_id}"
+                )
+            seen_cursors.add(cursor)
 
         return observations
 
-    def get_scores(self, trace_id: str, trace: Optional[Dict] = None) -> List[Dict]:
+    def get_scores(self, trace_id: str) -> List[Dict]:
         """Get all scores for a trace."""
-        embedded = self._embedded_collection(trace, "scores")
-        if embedded is not None:
-            return embedded
-
         try:
-            response = self.client.api.scores.get_many(trace_id=trace_id)
+            response = self.client.api.scores.get_many(
+                trace_id=trace_id,
+                request_options={
+                    "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
+                },
+            )
             if hasattr(response, 'data'):
                 return [self._normalize_item(score) for score in response.data]
             if hasattr(response, 'items'):
@@ -276,12 +414,17 @@ class TraceExtractor:
         Returns structured data for caching
         """
         # Fetch all data
-        trace = self.get_trace_details(trace_id)
-        observations = self.get_observations(trace_id, trace=trace)
-        scores = self.get_scores(trace_id, trace=trace)
+        observations = self.get_observations(trace_id)
+        trace = self.get_trace_details(trace_id, observations)
+        scores = self.get_scores(trace_id)
+        domain_observations = [
+            observation
+            for observation in observations
+            if observation.get("id") != trace.get("rootObservationId")
+        ]
         domain_envelope = DomainEnvelopeTraceAnalyzer.analyze(
             trace,
-            cast(List[Mapping[str, Any]], observations),
+            cast(List[Mapping[str, Any]], domain_observations),
             scores=cast(List[Mapping[str, Any]], scores),
         )
 
@@ -293,21 +436,13 @@ class TraceExtractor:
         total_cost = 0
         for obs in observations:
             # Sum tokens from observation usage
-            obs_usage = obs.get("usage") or {}
-            if isinstance(obs_usage, dict):
-                total_tokens += obs_usage.get("total", 0)
+            accounting = usage_cost_summary(obs)
+            total_tokens += accounting["total_tokens"]
+            total_cost += accounting["total_cost"]
 
-            # Sum costs from observation
-            obs_cost = obs.get("calculatedTotalCost") or 0
-            total_cost += obs_cost
-
-        # Fallback to trace-level data if observations don't have the data
-        if total_cost == 0:
-            total_cost = trace.get("calculatedTotalCost") or 0
-
-        if total_tokens == 0:
-            usage = trace.get("usage") or {}
-            total_tokens = usage.get("total", 0) if isinstance(usage, dict) else 0
+        trace["usage"] = {"total": total_tokens}
+        trace["totalCost"] = total_cost
+        trace["calculatedTotalCost"] = total_cost
 
         # Get duration in seconds (trace.latency is already in seconds)
         duration_seconds = float(trace.get("latency") or 0)
