@@ -14,6 +14,7 @@
 
 import { useEffect, useCallback, useSyncExternalStore } from 'react'
 import { debug, getEnvInt } from '@/utils/env'
+import { buildTurnId } from '@/lib/turnId'
 
 export interface SSEEvent {
   type: string
@@ -181,10 +182,6 @@ function replaceSharedEvents(events: SSEEvent[], durableReconciliation = false) 
       : sharedState.durableReconciliationVersion,
     processedEventCount: 0,
   })
-}
-
-function buildClientTurnId(): string {
-  return globalThis.crypto.randomUUID()
 }
 
 function getRunTerminalStatus(
@@ -622,7 +619,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
       return
     }
 
-    const turnId = options?.turnId ?? buildClientTurnId()
+    const turnId = options?.turnId ?? buildTurnId()
     const run = startStreamRun(sessionId)
     if (!run) {
       console.warn('Cannot start a new chat message while another stream is active')
@@ -686,7 +683,7 @@ export function useChatStream(activeSessionId?: string | null): UseChatStreamRet
       return
     }
 
-    const turnId = options?.turnId ?? buildClientTurnId()
+    const turnId = options?.turnId ?? buildTurnId()
     const run = startStreamRun(sessionId)
     if (!run) {
       console.warn('Cannot start a new flow execution while another stream is active')

@@ -39,6 +39,7 @@ import {
 } from '@/lib/browserStorage'
 import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
 import { getStreamEventSessionId } from '@/lib/streamEventSession'
+import { buildTurnId } from '@/lib/turnId'
 import {
   clearChatRenderCacheForSession,
   getChatLocalStorageKeys,
@@ -57,7 +58,6 @@ import {
 } from './chatProgress'
 import {
   buildEvidenceReviewAndCurateTarget,
-  buildTurnId,
   buildUserTurnMessageId,
   extractEventTimestamp,
   extractEvidenceRecords,

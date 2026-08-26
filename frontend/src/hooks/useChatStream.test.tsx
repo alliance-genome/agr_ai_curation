@@ -862,6 +862,39 @@ describe('useChatStream shared lifecycle', () => {
     randomUUIDSpy.mockRestore()
   })
 
+  it('sends a fallback turn id for flow execution when crypto.randomUUID throws', async () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID')
+      .mockImplementation(() => { throw new TypeError('crypto.randomUUID is not a function') })
+    vi.mocked(global.fetch).mockResolvedValue(new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close()
+        },
+      }),
+      { status: 200 },
+    ))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.executeFlow('flow-1', 'session-1', 'document-1')
+    })
+
+    const [requestUrl, requestInit] = vi.mocked(global.fetch).mock.calls[0]
+    const requestBody = JSON.parse(String(requestInit?.body)) as Record<string, unknown>
+
+    expect(requestUrl).toBe('/api/chat/execute-flow')
+    expect(requestInit).toEqual(expect.objectContaining({ method: 'POST' }))
+    expect(requestBody).toEqual(expect.objectContaining({
+      flow_id: 'flow-1',
+      session_id: 'session-1',
+      turn_id: expect.stringMatching(/^turn-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/),
+    }))
+
+    result.current.clearEvents()
+    unmount()
+  })
+
   it('emits one terminal browser event when a chat stream completes', async () => {
     const terminalEvents: CustomEvent[] = []
     const listener = (event: Event) => terminalEvents.push(event as CustomEvent)
