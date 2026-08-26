@@ -74,25 +74,30 @@ def list_documents_cmd(ctx, user_id: str, page: int, page_size: int, search: Opt
         else:
             # Table format
             docs = result.get('documents', [])
-            pagination = result.get('pagination', {})
 
             if not docs:
                 click.echo("No documents found")
                 return
 
-            click.echo(f"\nDocuments (Page {pagination['currentPage']}/{pagination['totalPages']}):")
+            total = result['total']
+            limit = result['limit']
+            offset = result['offset']
+            current_page = offset // limit + 1
+            total_pages = (total + limit - 1) // limit
+
+            click.echo(f"\nDocuments (Page {current_page}/{total_pages}):")
             click.echo("-" * 80)
 
             for doc in docs:
-                click.echo(f"ID: {doc.get('id', 'N/A')}")
+                click.echo(f"ID: {doc.get('document_id', 'N/A')}")
                 click.echo(f"  Filename: {doc.get('filename', 'N/A')}")
-                click.echo(f"  Size: {doc.get('file_size', 0):,} bytes")
+                click.echo(f"  Size: {doc.get('file_size_bytes', 0):,} bytes")
                 click.echo(f"  Status: {doc.get('embedding_status', 'N/A')}")
                 click.echo(f"  Chunks: {doc.get('chunk_count', 0)}")
                 click.echo(f"  Vectors: {doc.get('vector_count', 0)}")
                 click.echo("-" * 80)
 
-            click.echo(f"\nTotal: {pagination['totalItems']} documents")
+            click.echo(f"\nTotal: {total} documents")
 
     except Exception as e:
         click.echo(f"Error listing documents: {e}", err=True)
