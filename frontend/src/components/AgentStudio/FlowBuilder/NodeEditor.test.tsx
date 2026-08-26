@@ -141,9 +141,9 @@ describe('NodeEditor', () => {
 
   it('separates read-only validation metadata from actionable validator checkboxes', () => {
     const actionable = buildValidationAttachmentSelection({
-      attachment_id: 'disease:pending-envelope',
-      label: 'Pending disease envelope validator',
-      validator_binding_id: 'disease_pending_envelope_validator',
+      attachment_id: 'disease:relation-lookup',
+      label: 'Disease relation lookup',
+      validator_binding_id: 'disease_relation_cv_lookup',
       enabled: true,
       default_enabled: true,
       allow_opt_out: true,
@@ -193,7 +193,7 @@ describe('NodeEditor', () => {
     )
 
     expect(screen.getAllByRole('checkbox')).toHaveLength(1)
-    expect(screen.getByText('Pending disease envelope validator')).toBeInTheDocument()
+    expect(screen.getByText('Disease relation lookup')).toBeInTheDocument()
     expect(screen.getByText('Condition relation type lookup')).toBeInTheDocument()
     expect(screen.getByText('Disease annotation Condition relation type')).toBeInTheDocument()
     expect(screen.getByText('Condition relation dispatch is being wired in the domain pack.')).toBeInTheDocument()

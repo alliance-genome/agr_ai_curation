@@ -192,8 +192,6 @@ From `domain_pack.yaml` `metadata.validator_bindings`:
   `allow_opt_out: true`, `curator_override.allowed: false`.
 
 **Under development (bindings declared but not active):**
-- `phenotype_pending_envelope_validator` — package-scoped pending-envelope data check (waits on a
-  package phenotype validation agent).
 - `phenotype_subject_entity_validator` — agent `agr.alliance/subject_entity_validation`; applies to
   `PhenotypeSubject` (`subject_identifier`, `subject_type`). Routes subject_type → gene/allele/AGM.
 - `phenotype_reference_validator` — agent `agr.alliance/reference_validation`; applies to `Reference`
@@ -206,8 +204,9 @@ From `domain_pack.yaml` `metadata.validator_bindings`:
 (blocked_by ALL-425), `phenotype.extractor_output_migration` (blocked_by ALL-412 — **this is the
 slot this builder migration fills**).
 
-> Reuse all bindings as-is. The migration must keep these binding IDs and `validator_binding_id`
-> field metadata intact (invariant §5.5: builder output DOES run validators).
+> Reuse these concrete bindings as-is. The migration must keep their binding IDs and
+> `validator_binding_id` field metadata intact (invariant §5.5: builder output DOES run validators).
+> Domain-envelope structure is reviewed deterministically and does not need a placeholder binding.
 
 ---
 

@@ -50,7 +50,6 @@ from agr_ai_curation_alliance.domain_packs.disease import (  # noqa: E402
     DISEASE_LINKML_SCHEMA_ID,
     DISEASE_MODEL_ID,
     DISEASE_OBJECT_TYPE,
-    DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
     DISEASE_VALIDATOR_STATES,
     get_disease_domain_pack_metadata_path,
     tool_verified_disease_output_to_pending_envelope,
@@ -182,7 +181,6 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     binding_ids = {binding["binding_id"] for binding in binding_items}
     assert len(binding_items) == len(binding_ids)
     assert {
-        "disease_pending_envelope_validator",
         "disease_ontology_term_lookup",
         "disease_relation_cv_lookup",
         "experimental_condition_validation",
@@ -197,25 +195,6 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_qualifier_cv_lookup",
         "disease_with_gene_validation",
     } == binding_ids
-
-    pending_validator = {
-        binding["binding_id"]: binding
-        for binding in validator_bindings["under_development"]
-    }[DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID]
-    assert (
-        pending_validator["binding_id"] == DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID
-    )
-    assert pending_validator["display_name"] == "Data check"
-    assert pending_validator["validator_agent"] == {
-        "package_id": "agr.alliance",
-        "agent_id": "disease_validation",
-    }
-    assert "must not dispatch" in pending_validator["state_explanation"]
-    assert pending_validator["input_fields"] == {}
-    assert pending_validator["expected_result_fields"] == {}
-    assert pending_validator["applies_to"]["domain_pack_id"] == DISEASE_DOMAIN_PACK_ID
-    assert pending_validator["applies_to"]["object_types"] == [DISEASE_OBJECT_TYPE]
-    assert pending_validator["definition_state"] == "in_development"
 
     active_binding_ids = {
         binding["binding_id"] for binding in validator_bindings["active"]
@@ -232,7 +211,6 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     # Experimental conditions activated (composite validation at the condition grain).
     # D4 (reference) stays under_development (blocked: no durable reference identity at extraction).
     assert {
-        "disease_pending_envelope_validator",
         "disease_reference_materialization",
     } == {binding["binding_id"] for binding in validator_bindings["under_development"]}
     assert {

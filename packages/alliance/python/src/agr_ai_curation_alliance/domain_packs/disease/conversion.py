@@ -45,7 +45,6 @@ from .constants import (
     DISEASE_LINKML_SCHEMA_URI,
     DISEASE_MODEL_ID,
     DISEASE_OBJECT_TYPE,
-    DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
     FORBIDDEN_LEGACY_COLLECTIONS,
     REQUIRED_DISEASE_PAYLOAD_FIELDS,
 )
@@ -315,10 +314,6 @@ def _object_metadata(source_metadata: Mapping[str, Any] | None = None) -> dict[s
     metadata = dict(source_metadata or {})
     metadata.setdefault(OBJECT_ROLE_METADATA_KEY, _DISEASE_OBJECT_ROLE)
     metadata.setdefault("assertion_kind", _DISEASE_ASSERTION_KIND)
-    metadata.setdefault(
-        "validator_binding_id",
-        DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
-    )
     metadata.setdefault(
         "write_behavior",
         {
@@ -779,7 +774,6 @@ def _validation_finding(pending_ref_id: str) -> ValidationFinding:
             field_path="disease_annotation_object.curie",
         ),
         details={
-            "validator_binding_id": DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
             "source_tool": "record_evidence",
             "blocking": False,
             "grounded_slots": {
@@ -903,7 +897,6 @@ def tool_verified_disease_output_to_pending_envelope(
                 object_ref=object_ref,
                 details={
                     "evidence_record_ids": list(assertion.evidence_record_ids),
-                    "validator_binding_id": DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
                     "write_behavior": "blocked",
                 },
             )
@@ -972,7 +965,6 @@ def disease_extraction_output_to_pending_envelope(
                 object_ref=object_ref,
                 details={
                     "semantic_source": "curatable_objects[]",
-                    "validator_binding_id": DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
                 },
             )
         )

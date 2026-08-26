@@ -167,7 +167,6 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         binding.binding_id
         for binding in validation_registries["agr.alliance.allele"].bindings
     } == {
-        "allele_pending_envelope_validator",
         "allele_mention_reference_validation",
         "source_reference_validation",
     }
@@ -212,6 +211,29 @@ def test_alliance_active_validator_bindings_have_dispatch_contracts():
             empty_active_bindings.append(f"{pack_id}:{binding.binding_id}")
 
     assert empty_active_bindings == []
+
+
+def test_alliance_under_development_bindings_have_dispatch_contracts():
+    alliance_registry = load_alliance_domain_pack_registry()
+    pack_ids = {
+        "agr.alliance.allele",
+        "agr.alliance.disease",
+        "agr.alliance.phenotype",
+    }
+
+    incomplete_bindings: list[str] = []
+    for pack_id in sorted(pack_ids):
+        registry = DomainPackValidationRegistry.from_domain_pack(
+            alliance_registry.get_pack(pack_id)
+        )
+        for binding in registry.bindings:
+            if binding.state is not ValidationBindingState.UNDER_DEVELOPMENT:
+                continue
+            if binding.input_fields and binding.expected_result_fields:
+                continue
+            incomplete_bindings.append(f"{pack_id}:{binding.binding_id}")
+
+    assert incomplete_bindings == []
 
 
 def test_active_bindings_have_active_capability_metadata():

@@ -183,13 +183,13 @@ EXTRACTION mechanism, not the curation target):
   - `expected_result_fields`: `curie → allele.primary_external_id`, `symbol → allele.allele_symbol`,
     `taxon → allele.taxon`. (These materialize onto the `Allele` validated-reference object.)
 
-Two **under_development** bindings (declared, NOT dispatched — keep dormant):
-- `allele_pending_envelope_validator` (data-check placeholder; no inputs/expected fields yet).
+One **under_development** binding is declared but not dispatched:
 - `source_reference_validation` (validator agent `agr.alliance/reference_validation`; metadata-only
   until reference materialization + export flows are activated).
 
 The builder migration must keep `allele_mention_reference_validation` firing on the
-builder-materialized `AlleleMention` object exactly as the envelope path does. No new bindings.
+builder-materialized `AlleleMention` object exactly as the envelope path does. The dormant
+reference binding remains unchanged; no whole-envelope placeholder or new binding is needed.
 
 ## 5. Evidence model
 
