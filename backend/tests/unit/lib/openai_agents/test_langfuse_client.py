@@ -243,9 +243,9 @@ def test_flush_agent_configs_partial_failure_counts_success(monkeypatch):
     monkeypatch.setattr(lc, "_langfuse_client", client)
 
     exposure = {
-        "active_group_ids": ["ZFIN"],
+        "active_group_ids": ["GROUP_ALPHA"],
         "base_tool_ids": ["search_document"],
-        "added_tool_ids": ["zfin_helper"],
+        "added_tool_ids": ["group_alpha_helper"],
         "denied_tool_ids": [],
     }
     lc.log_agent_config(
