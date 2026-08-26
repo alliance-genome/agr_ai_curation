@@ -191,10 +191,6 @@ The Workshop shows which groups have custom overrides and a total override count
 
 Every save creates a new version. You can add optional save notes to describe your changes. Revert to any previous version if an edit doesn't work out.
 
-**Template Availability**
-
-If a template source is unavailable for an older custom agent, Agent Workshop will show a warning that the custom agent cannot be executed until a valid template is selected.
-
 **Tool Library**
 
 Attach tools to your custom agent from the available tool library:
