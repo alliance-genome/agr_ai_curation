@@ -292,6 +292,26 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertTrue(data["duplicates"]["has_duplicates"])
         self.assertEqual(data["duplicates"]["total_duplicate_groups"], 1)
 
+    def test_tool_call_accepts_string_input_from_historic_observation(self):
+        observations = [
+            {
+                "id": "tool-legacy",
+                "type": "TOOL",
+                "name": "fetch_url",
+                "startTime": "2026-03-26T00:00:01Z",
+                "endTime": "2026-03-26T00:00:02Z",
+                "input": "calling={'url': 'https://example.org', 'method': 'POST'}",
+                "output": "completed",
+            }
+        ]
+
+        data = ToolCallAnalyzer.extract_tool_calls(observations)
+
+        self.assertEqual(data["total_count"], 1)
+        self.assertEqual(data["tool_calls"][0]["url"], "https://example.org")
+        self.assertEqual(data["tool_calls"][0]["method"], "POST")
+        self.assertEqual(data["tool_calls"][0]["input"], observations[0]["input"])
+
     def test_conversation_prefers_trace_response_text(self):
         conversation = ConversationAnalyzer.extract_conversation(
             self._make_trace({"response": "Final grounded answer", "response_length": 22}),
