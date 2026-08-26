@@ -28,10 +28,7 @@ supervisor_routing:
   description: >
     Use for retrieving existing GO annotations for specific genes, finding
     evidence, references, With/From, qualifiers, or source provenance.
-  batchable: true
-  batching_instructions: >
-    When getting annotations for multiple genes, combine them into a single request.
-    Example: "Get GO annotations for: WB:WBGene00000912, WB:WBGene00001234, etc."
+  batchable: false
 
 # -----------------------------------------------------------------------------
 # TOOLS

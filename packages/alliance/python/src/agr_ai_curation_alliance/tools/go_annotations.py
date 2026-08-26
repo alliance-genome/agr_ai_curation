@@ -25,7 +25,8 @@ _SUPPORTED_IDENTIFIERS: dict[str, re.Pattern[str]] = {
     "ZFIN": re.compile(r"ZDB-GENE-\d{6}-\d+"),
 }
 _CURIE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._:-]*")
-_ASPECTS = {
+_ASPECTS: dict[str, Literal["MF", "BP", "CC"]] = {
+    "molecular_activity": "MF",
     "molecular_function": "MF",
     "biological_process": "BP",
     "cellular_component": "CC",
@@ -229,7 +230,10 @@ def lookup_existing_go_annotations(
     if isinstance(validated, ExistingGOAnnotationsResult):
         return validated
 
-    source_url = f"{_GO_API_BASE}/bioentity/gene/{quote(validated, safe=':')}/function"
+    source_url = (
+        f"{_GO_API_BASE}/bioentity/gene/{quote(validated, safe=':')}/function"
+        "?rows=-1"
+    )
     try:
         response = requester(
             source_url,

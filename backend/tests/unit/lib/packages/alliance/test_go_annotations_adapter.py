@@ -54,7 +54,7 @@ def test_recorded_rgd_contract_preserves_with_from_and_provenance(monkeypatch):
     assert result.gene_symbol == "Sox9"
     assert calls == [
         (
-            "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function",
+            "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?rows=-1",
             {"headers": {"Accept": "application/json"}, "timeout": 30.0},
         )
     ]
@@ -71,6 +71,8 @@ def test_recorded_rgd_contract_preserves_with_from_and_provenance(monkeypatch):
     assert first.provenance.source == "Gene Ontology Consortium API"
     assert first.provenance.source_url == calls[0][0]
     assert first.provenance.source_record_id == payload["associations"][0]["id"]
+    assert result.annotations[2].go_id == "GO:0000976"
+    assert result.annotations[2].aspect == "MF"
 
 
 def test_relation_qualifier_and_negation_are_retained_without_source_parsing():

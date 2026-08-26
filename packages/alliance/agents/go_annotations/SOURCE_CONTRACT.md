@@ -2,10 +2,10 @@
 
 The GO annotations specialist uses one authoritative path: the Gene Ontology
 Consortium API endpoint
-`GET https://api.geneontology.org/api/bioentity/gene/{gene_id}/function`.
+`GET https://api.geneontology.org/api/bioentity/gene/{gene_id}/function?rows=-1`.
 The package adapter accepts a gene CURIE, not a URL. It validates the namespace
-and namespace-specific local identifier before dispatch, makes one request, and
-does not fall back to another source.
+and namespace-specific local identifier before dispatch, requests the complete
+annotation collection in one call, and does not fall back to another source.
 
 The adapter returns exactly one of these statuses:
 

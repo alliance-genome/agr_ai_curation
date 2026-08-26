@@ -2613,7 +2613,7 @@ tools:
 
             The adapter accepts a gene_id rather than a URL, validates the CURIE
             before network dispatch, and makes one request to:
-            - GET /bioentity/gene/{gene_id}/function
+            - GET /bioentity/gene/{gene_id}/function?rows=-1
 
             Supported namespaces: FB, HGNC, MGI, RGD, SGD, WB, and ZFIN.
 

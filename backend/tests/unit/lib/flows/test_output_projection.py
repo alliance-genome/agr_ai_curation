@@ -2067,7 +2067,18 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
                         "go_name": "insulin receptor signaling pathway",
                         "aspect": "BP",
                         "evidence_code": "IMP",
+                        "eco_id": "ECO:0000315",
+                        "evidence_label": "mutant phenotype evidence",
+                        "references": ["PMID:12345678"],
+                        "relation": {
+                            "id": "RO:0002331",
+                            "label": "involved in",
+                        },
+                        "with_from": [],
                         "qualifiers": ["not"],
+                        "negated": True,
+                        "providers": ["WB"],
+                        "product_type": "gene",
                         "provenance": {
                             "source": "Gene Ontology Consortium API",
                             "source_url": "https://api.geneontology.org/api/bioentity/gene/WB:WBGene00000898/function",

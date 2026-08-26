@@ -1538,7 +1538,14 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
     _repo_package_curation_registry,
 ):
     url = "https://api.geneontology.org/api/bioentity/gene/WB:WBGene00000898/function"
-    annotations = [{"go_id": f"GO:{index:07d}"} for index in range(60)]
+    annotations = []
+    for index in range(60):
+        annotation = _complete_go_annotation(url)
+        annotation["gene_product_id"] = "WB:WBGene00000898"
+        annotation["go_id"] = f"GO:{index:07d}"
+        annotation["providers"] = ["WB"]
+        annotation["provenance"]["source_record_id"] = f"record-{index}"
+        annotations.append(annotation)
     output_payload = streaming_tools._tool_output_payload_for_finalization(
         "go_api_call",
         {
@@ -1564,20 +1571,7 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
         gene_id="WB:WBGene00000898",
         source="Gene Ontology Consortium API",
         source_url=url,
-        annotations=[
-            {
-                "gene_product_id": "WB:WBGene00000898",
-                "go_id": "GO:0000059",
-                "go_name": "Annotation beyond compact preview",
-                "aspect": "MF",
-                "evidence_code": "IDA",
-                "provenance": {
-                    "source": "Gene Ontology Consortium API",
-                    "source_url": url,
-                    "source_record_id": "record-59",
-                },
-            }
-        ],
+        annotations=annotations,
     )
 
     feedback = streaming_tools._structured_specialist_finalization_feedback(

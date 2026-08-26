@@ -2704,7 +2704,7 @@
     "agent_studio": {
       "diagnostic": {
         "category": "api",
-        "description": "Fetch typed existing annotations from the Gene Ontology Consortium API.\n\nBase URL: https://api.geneontology.org/api\n\nThe adapter accepts a gene_id rather than a URL, validates the CURIE\nbefore network dispatch, and makes one request to:\n- GET /bioentity/gene/{gene_id}/function\n\nSupported namespaces: FB, HGNC, MGI, RGD, SGD, WB, and ZFIN.\n\nStatus is one of: ok, not_found, invalid_input,\nunsupported_identifier, or upstream_error. Typed annotations preserve\nterm/aspect, evidence and ECO, reference, relation, With/From,\nqualifier, negation, provider, product type, and source provenance.",
+        "description": "Fetch typed existing annotations from the Gene Ontology Consortium API.\n\nBase URL: https://api.geneontology.org/api\n\nThe adapter accepts a gene_id rather than a URL, validates the CURIE\nbefore network dispatch, and makes one request to:\n- GET /bioentity/gene/{gene_id}/function?rows=-1\n\nSupported namespaces: FB, HGNC, MGI, RGD, SGD, WB, and ZFIN.\n\nStatus is one of: ok, not_found, invalid_input,\nunsupported_identifier, or upstream_error. Typed annotations preserve\nterm/aspect, evidence and ECO, reference, relation, With/From,\nqualifier, negation, provider, product type, and source provenance.",
         "enabled": true,
         "input_schema": {
           "properties": {
