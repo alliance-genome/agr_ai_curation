@@ -1899,21 +1899,14 @@ def _lookup_fact_fidelity_errors(
     if not actual or not successful_calls:
         return []
 
+    output_payload = successful_calls[-1].output_payload or {}
+    recorded = output_payload.get("fact_fidelity")
     expected: Dict[str, List[str]] = {path: [] for path in actual}
-    for call in successful_calls:
-        output_payload = call.output_payload or {}
-        recorded = output_payload.get("fact_fidelity")
-        if not isinstance(recorded, dict):
-            data = output_payload.get("data")
-            source_payload = data if isinstance(data, dict) else output_payload
-            recorded = _lookup_fact_fidelity_signatures(
-                source_payload,
-                config=config,
-            )
+    if isinstance(recorded, dict):
         for path in expected:
-            path_signatures = recorded.get(path) if isinstance(recorded, dict) else None
+            path_signatures = recorded.get(path)
             if isinstance(path_signatures, list):
-                expected[path].extend(
+                expected[path] = sorted(
                     signature
                     for signature in path_signatures
                     if isinstance(signature, str)
@@ -1921,7 +1914,7 @@ def _lookup_fact_fidelity_errors(
 
     errors: List[Dict[str, Any]] = []
     for path, actual_signatures in actual.items():
-        expected_signatures = sorted(expected.get(path, []))
+        expected_signatures = expected.get(path, [])
         if actual_signatures == expected_signatures:
             continue
         errors.append({

@@ -1228,16 +1228,19 @@ def test_go_annotations_finalization_rejects_invented_annotation(
             streaming_tools.SpecialistToolCall(
                 tool_name="go_api_call",
                 tool_args={"gene_id": "WB:WBGene00000898"},
-                output_payload={
-                    "status": "ok",
-                    "gene_id": "WB:WBGene00000898",
-                    "annotations": [
-                        {
-                            "gene_product_id": "WB:WBGene00000898",
-                            "go_id": "GO:0003677",
-                        }
-                    ],
-                },
+                output_payload=streaming_tools._tool_output_payload_for_finalization(
+                    "go_api_call",
+                    {
+                        "status": "ok",
+                        "gene_id": "WB:WBGene00000898",
+                        "annotations": [
+                            {
+                                "gene_product_id": "WB:WBGene00000898",
+                                "go_id": "GO:0003677",
+                            }
+                        ],
+                    },
+                ),
             )
         ],
         live_evidence_records=[],
@@ -1278,6 +1281,7 @@ def _go_annotations_fidelity_feedback(
     *,
     final_annotation: dict,
     tool_annotation: dict,
+    tool_call_count: int = 1,
 ):
     gene_id = "RGD:620474"
     url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
@@ -1293,6 +1297,7 @@ def _go_annotations_fidelity_feedback(
                 "result_count": 1,
                 "outcome": "success",
             }
+            for _ in range(tool_call_count)
         ],
         gene_id=gene_id,
         source="Gene Ontology Consortium API",
@@ -1321,6 +1326,7 @@ def _go_annotations_fidelity_feedback(
                 tool_args={"gene_id": gene_id},
                 output_payload=tool_output_payload,
             )
+            for _ in range(tool_call_count)
         ],
         live_evidence_records=[],
     )
@@ -1335,6 +1341,21 @@ def test_go_annotations_finalization_accepts_complete_exact_annotation(
     feedback = _go_annotations_fidelity_feedback(
         final_annotation=annotation,
         tool_annotation=annotation,
+    )
+
+    assert feedback.accepted_payload is not None, feedback.field_errors
+
+
+def test_go_annotations_finalization_accepts_repeated_identical_lookup(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    annotation = _complete_go_annotation(url)
+
+    feedback = _go_annotations_fidelity_feedback(
+        final_annotation=annotation,
+        tool_annotation=annotation,
+        tool_call_count=2,
     )
 
     assert feedback.accepted_payload is not None, feedback.field_errors
