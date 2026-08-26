@@ -153,6 +153,10 @@ def test_single_job_readers_reconcile_stale_nonterminal_job(
         "Job marked failed automatically after stale inactivity; "
         "likely interrupted before terminal state update"
     )
+    assert response.metadata is not None
+    receipt = response.metadata[PDF_PROCESSING_RECEIPT_KEY]
+    assert receipt["outcome"] == "failed"
+    assert receipt["stages"]["total"]["status"] == "failed"
     assert session.commit_calls == 1
     assert session.refresh_calls == 1
     assert document.status == "failed"
@@ -173,6 +177,9 @@ def test_list_jobs_reconciles_stale_cancel_requested_job(monkeypatch):
 
     assert response.total == 1
     assert response.jobs[0].status == PdfJobStatus.CANCELLED.value
+    assert response.jobs[0].metadata is not None
+    receipt = response.jobs[0].metadata[PDF_PROCESSING_RECEIPT_KEY]
+    assert receipt["outcome"] == "cancelled"
     assert document.status == "failed"
     assert document.processing_completed_at == job.completed_at
     assert document.error_message == "Cancellation finalized automatically after stale inactivity"
