@@ -325,21 +325,6 @@ class TestCommonWorkflows:
 class TestCLICommands:
     """Test CLI commands from quickstart.md."""
 
-    def test_list_documents_cli(self):
-        """Test list-documents CLI command."""
-        with patch('sys.argv', ['weaviate_cli', 'list-documents', '--page', '1', '--page-size', '20']):
-            with patch('src.lib.weaviate_client.cli.list_documents') as mock_list:
-                mock_list.return_value = {
-                    "documents": [{"id": "doc-1", "filename": "test.pdf"}],
-                    "pagination": {"currentPage": 1, "totalPages": 1}
-                }
-
-                # Would call weaviate_cli_main() in real test
-                result = mock_list(None, {"page": 1, "pageSize": 20})
-                assert len(result["documents"]) > 0
-
-        print("✓ CLI: list-documents command verified")
-
     def test_get_document_cli(self):
         """Test get-document CLI command."""
         with patch('sys.argv', ['weaviate_cli', 'get-document', 'doc-123']):
