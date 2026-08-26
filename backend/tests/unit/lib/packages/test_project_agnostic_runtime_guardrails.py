@@ -151,6 +151,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/packages/__init__.py"),
     Path("backend/tests/unit/lib/packages/test_agent_studio_prompt_loader.py"),
     Path("backend/tests/unit/lib/packages/alliance/test_agent_studio_diagnostics.py"),
+    Path("backend/tests/unit/lib/packages/alliance/test_go_annotations_adapter.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_agent_package.py"),
     Path("backend/tests/unit/lib/packages/test_alliance_literature_reference_tool.py"),
     Path("backend/tests/unit/lib/packages/test_core_package_contract.py"),

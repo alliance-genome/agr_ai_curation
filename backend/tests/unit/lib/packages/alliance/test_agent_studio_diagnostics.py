@@ -67,6 +67,7 @@ def test_alliance_diagnostic_descriptions_preserve_service_call_guidance(monkeyp
     go_tool = registry.get_tool("go_api_call")
     assert go_tool is not None
     assert "/bioentity/gene/{gene_id}/function" in go_tool.description
-    assert "WB:WBGene00000898" in go_tool.description
-    assert "IDA, IMP, IPI, IGI, ISS" in go_tool.description
-    assert "IEA, IBA" in go_tool.description
+    assert "accepts a gene_id rather than a URL" in go_tool.description
+    assert "RGD" in go_tool.description
+    assert "unsupported_identifier" in go_tool.description
+    assert "With/From" in go_tool.description

@@ -996,18 +996,19 @@ def test_go_annotations_finalization_accepts_unresolved_tool_error(
         expected_fields=["annotations"],
         missing_expected_fields=["annotations"],
         lookup_attempts=[
-            _lookup_attempt(
-                provider="go_api_call",
-                url=url,
-                outcome="error",
-                result_count=0,
-            )
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": "WB:WBGene00000898"},
+                "result_count": 0,
+                "outcome": "error",
+            }
         ],
         gene_id="WB:WBGene00000898",
         gene_symbol=None,
         annotations=[],
-        manual_count=0,
-        automatic_count=0,
+        source="Gene Ontology Consortium API",
+        source_url=url,
     )
 
     feedback = streaming_tools._structured_specialist_finalization_feedback(
@@ -1015,12 +1016,15 @@ def test_go_annotations_finalization_accepts_unresolved_tool_error(
         expected_output_type=_package_schema("GOAnnotationsResult"),
         finalization_config=_finalization_config("ask_go_annotations_specialist"),
         tool_calls=[
-            _lookup_tool_call(
+            streaming_tools.SpecialistToolCall(
                 tool_name="go_api_call",
-                url=url,
-                status="error",
-                status_code=503,
-                data={},
+                tool_args={"gene_id": "WB:WBGene00000898"},
+                output_payload={
+                    "status": "upstream_error",
+                    "gene_id": "WB:WBGene00000898",
+                    "source_url": url,
+                    "message": "GO Consortium API returned HTTP 503",
+                },
             )
         ],
         live_evidence_records=[],
@@ -1028,6 +1032,78 @@ def test_go_annotations_finalization_accepts_unresolved_tool_error(
 
     assert feedback.accepted_payload is not None
     assert feedback.summary["failed_lookup_tool_call_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("tool_status", "succeeded", "failed"),
+    [
+        ("ok", True, False),
+        ("not_found", True, False),
+        ("invalid_input", False, False),
+        ("unsupported_identifier", False, False),
+        ("upstream_error", False, True),
+    ],
+)
+def test_typed_go_annotation_tool_status_classification(
+    tool_status: str,
+    succeeded: bool,
+    failed: bool,
+):
+    call = streaming_tools.SpecialistToolCall(
+        tool_name="go_api_call",
+        output_payload={"status": tool_status},
+    )
+
+    assert streaming_tools._lookup_tool_call_succeeded(call) is succeeded
+    assert streaming_tools._lookup_tool_call_failed(call) is failed
+
+
+def test_go_annotations_finalization_accepts_blocked_invalid_input(
+    _repo_package_curation_registry,
+):
+    gene_id = "RGD:not-a-number"
+    payload = _validator_result_payload(
+        status="unresolved",
+        agent_id="go_annotations_lookup",
+        target_inputs={"gene_id": gene_id},
+        expected_fields=["annotations"],
+        missing_expected_fields=["annotations"],
+        lookup_attempts=[
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": gene_id},
+                "result_count": 0,
+                "outcome": "blocked",
+            }
+        ],
+        gene_id=gene_id,
+        gene_symbol=None,
+        annotations=[],
+        source="Gene Ontology Consortium API",
+        source_url=None,
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOAnnotationsResult"),
+        finalization_config=_finalization_config("ask_go_annotations_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="go_api_call",
+                tool_args={"gene_id": gene_id},
+                output_payload={
+                    "status": "invalid_input",
+                    "gene_id": gene_id,
+                    "annotations": [],
+                    "message": "gene_id is not a valid RGD gene CURIE",
+                },
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is not None, feedback.field_errors
 
 
 def test_go_term_finalization_does_not_count_finalizer_as_lookup_provenance(
@@ -1108,24 +1184,40 @@ def test_go_annotations_finalization_rejects_invented_annotation(
         target_inputs={"gene_id": "WB:WBGene00000898"},
         expected_fields=["annotations"],
         lookup_attempts=[
-            _lookup_attempt(
-                provider="go_api_call",
-                url=url,
-                outcome="success",
-                result_count=1,
-            )
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": "WB:WBGene00000898"},
+                "result_count": 1,
+                "outcome": "success",
+            }
         ],
         gene_id="WB:WBGene00000898",
+        source="Gene Ontology Consortium API",
+        source_url=url,
         annotations=[
             {
+                "gene_product_id": "WB:WBGene00000898",
                 "go_id": "GO:FAKE0000",
                 "go_name": "Invented annotation",
                 "aspect": "MF",
                 "evidence_code": "IDA",
+                "eco_id": None,
+                "evidence_label": None,
+                "references": [],
+                "relation": None,
+                "with_from": [],
+                "qualifiers": [],
+                "negated": False,
+                "providers": [],
+                "product_type": None,
+                "provenance": {
+                    "source": "Gene Ontology Consortium API",
+                    "source_url": url,
+                    "source_record_id": "invented-record",
+                },
             }
         ],
-        manual_count=1,
-        automatic_count=0,
     )
 
     feedback = streaming_tools._structured_specialist_finalization_feedback(
@@ -1133,10 +1225,22 @@ def test_go_annotations_finalization_rejects_invented_annotation(
         expected_output_type=_package_schema("GOAnnotationsResult"),
         finalization_config=_finalization_config("ask_go_annotations_specialist"),
         tool_calls=[
-            _lookup_tool_call(
+            streaming_tools.SpecialistToolCall(
                 tool_name="go_api_call",
-                url=url,
-                data={"associations": [{"object": {"id": "GO:0003677"}}]},
+                tool_args={"gene_id": "WB:WBGene00000898"},
+                output_payload=streaming_tools._tool_output_payload_for_finalization(
+                    "go_api_call",
+                    {
+                        "status": "ok",
+                        "gene_id": "WB:WBGene00000898",
+                        "annotations": [
+                            {
+                                "gene_product_id": "WB:WBGene00000898",
+                                "go_id": "GO:0003677",
+                            }
+                        ],
+                    },
+                ),
             )
         ],
         live_evidence_records=[],
@@ -1146,7 +1250,164 @@ def test_go_annotations_finalization_rejects_invented_annotation(
     assert any(
         error.get("field") == "annotations[].go_id"
         for error in feedback.field_errors
+    ), (feedback.field_errors, feedback.message, feedback.warnings)
+
+
+def _complete_go_annotation(url: str) -> dict:
+    return {
+        "gene_product_id": "RGD:620474",
+        "go_id": "GO:0000122",
+        "go_name": "negative regulation of transcription by RNA polymerase II",
+        "aspect": "BP",
+        "evidence_code": "ISO",
+        "eco_id": "ECO:0000266",
+        "evidence_label": "sequence orthology evidence",
+        "references": ["GO_REF:0000121"],
+        "relation": {"id": "RO:0002331", "label": "involved_in"},
+        "with_from": ["UniProtKB:P48436"],
+        "qualifiers": ["contributes_to"],
+        "negated": False,
+        "providers": ["RGD"],
+        "product_type": "protein",
+        "provenance": {
+            "source": "Gene Ontology Consortium API",
+            "source_url": url,
+            "source_record_id": "RGD:620474|GO:0000122|ISO",
+        },
+    }
+
+
+def _go_annotations_fidelity_feedback(
+    *,
+    final_annotation: dict,
+    tool_annotation: dict,
+    tool_call_count: int = 1,
+):
+    gene_id = "RGD:620474"
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    payload = _validator_result_payload(
+        agent_id="go_annotations_lookup",
+        target_inputs={"gene_id": gene_id},
+        expected_fields=["annotations"],
+        lookup_attempts=[
+            {
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": gene_id},
+                "result_count": 1,
+                "outcome": "success",
+            }
+            for _ in range(tool_call_count)
+        ],
+        gene_id=gene_id,
+        source="Gene Ontology Consortium API",
+        source_url=url,
+        annotations=[final_annotation],
     )
+    tool_output_payload = streaming_tools._tool_output_payload_for_finalization(
+        "go_api_call",
+        {
+            "status": "ok",
+            "gene_id": gene_id,
+            "annotations": [tool_annotation],
+            "source": "Gene Ontology Consortium API",
+            "source_url": url,
+        },
+    )
+    assert tool_output_payload is not None
+    assert tool_output_payload.get("fact_fidelity", {}).get("annotations[]")
+    return streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOAnnotationsResult"),
+        finalization_config=_finalization_config("ask_go_annotations_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="go_api_call",
+                tool_args={"gene_id": gene_id},
+                output_payload=tool_output_payload,
+            )
+            for _ in range(tool_call_count)
+        ],
+        live_evidence_records=[],
+    )
+
+
+def test_go_annotations_finalization_accepts_complete_exact_annotation(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    annotation = _complete_go_annotation(url)
+
+    feedback = _go_annotations_fidelity_feedback(
+        final_annotation=annotation,
+        tool_annotation=annotation,
+    )
+
+    assert feedback.accepted_payload is not None, feedback.field_errors
+
+
+def test_go_annotations_finalization_accepts_repeated_identical_lookup(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    annotation = _complete_go_annotation(url)
+
+    feedback = _go_annotations_fidelity_feedback(
+        final_annotation=annotation,
+        tool_annotation=annotation,
+        tool_call_count=2,
+    )
+
+    assert feedback.accepted_payload is not None, feedback.field_errors
+
+
+def test_go_annotations_finalization_rejects_substituted_provenance(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    tool_annotation = _complete_go_annotation(url)
+    final_annotation = json.loads(json.dumps(tool_annotation))
+    final_annotation["references"] = ["PMID:INVENTED"]
+    final_annotation["with_from"] = ["RGD:INVENTED"]
+    final_annotation["providers"] = ["INVENTED"]
+    final_annotation["product_type"] = "invented type"
+    final_annotation["provenance"]["source_record_id"] = "invented-record"
+
+    feedback = _go_annotations_fidelity_feedback(
+        final_annotation=final_annotation,
+        tool_annotation=tool_annotation,
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "annotations[]"
+        for error in feedback.field_errors
+    ), feedback.field_errors
+
+
+def test_go_annotations_finalization_rejects_omitted_comparison_fields(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    tool_annotation = _complete_go_annotation(url)
+    final_annotation = json.loads(json.dumps(tool_annotation))
+    for field in (
+        "references",
+        "relation",
+        "with_from",
+        "qualifiers",
+        "providers",
+        "product_type",
+    ):
+        final_annotation.pop(field)
+
+    feedback = _go_annotations_fidelity_feedback(
+        final_annotation=final_annotation,
+        tool_annotation=tool_annotation,
+    )
+
+    assert feedback.accepted_payload is None
+    assert "incompatible schema" in feedback.message
 
 
 def test_ortholog_finalization_rejects_invented_ortholog(
@@ -1298,16 +1559,20 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
     _repo_package_curation_registry,
 ):
     url = "https://api.geneontology.org/api/bioentity/gene/WB:WBGene00000898/function"
-    associations = [
-        {"object": {"id": f"GO:{index:07d}"}}
-        for index in range(60)
-    ]
+    annotations = []
+    for index in range(60):
+        annotation = _complete_go_annotation(url)
+        annotation["gene_product_id"] = "WB:WBGene00000898"
+        annotation["go_id"] = f"GO:{index:07d}"
+        annotation["providers"] = ["WB"]
+        annotation["provenance"]["source_record_id"] = f"record-{index}"
+        annotations.append(annotation)
     output_payload = streaming_tools._tool_output_payload_for_finalization(
         "go_api_call",
         {
             "status": "ok",
-            "status_code": 200,
-            "data": {"associations": associations},
+            "gene_id": "WB:WBGene00000898",
+            "annotations": annotations,
         },
     )
     assert output_payload is not None
@@ -1316,24 +1581,18 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
         target_inputs={"gene_id": "WB:WBGene00000898"},
         expected_fields=["annotations"],
         lookup_attempts=[
-            _lookup_attempt(
-                provider="go_api_call",
-                url=url,
-                outcome="success",
-                result_count=60,
-            )
-        ],
-        gene_id="WB:WBGene00000898",
-        annotations=[
             {
-                "go_id": "GO:0000059",
-                "go_name": "Annotation beyond compact preview",
-                "aspect": "MF",
-                "evidence_code": "IDA",
+                "provider": "go_api_call",
+                "method": "typed_gene_lookup",
+                "query": {"gene_id": "WB:WBGene00000898"},
+                "result_count": 60,
+                "outcome": "success",
             }
         ],
-        manual_count=60,
-        automatic_count=0,
+        gene_id="WB:WBGene00000898",
+        source="Gene Ontology Consortium API",
+        source_url=url,
+        annotations=annotations,
     )
 
     feedback = streaming_tools._structured_specialist_finalization_feedback(
@@ -1343,7 +1602,7 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
         tool_calls=[
             streaming_tools.SpecialistToolCall(
                 tool_name="go_api_call",
-                tool_args={"url": url, "method": "GET"},
+                tool_args={"gene_id": "WB:WBGene00000898"},
                 output_payload=output_payload,
             )
         ],
@@ -1351,7 +1610,7 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
     )
 
     assert feedback.accepted_payload is not None
-    assert output_payload["data"]["associations"]["__full_count"] == 60
+    assert output_payload["data"]["annotations"]["__full_count"] == 60
 
 
 def test_chemical_finalization_rejects_invented_resolved_identity(
