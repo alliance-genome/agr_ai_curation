@@ -17,6 +17,7 @@ from src.lib.agent_access import (
     require_allowed_group_ids_narrowing,
 )
 from src.lib.config.models_loader import get_model
+from src.lib.group_tool_policy import parse_group_tool_policy
 from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.models.sql.agent import Agent as CustomAgent, ProjectMember
 from src.models.sql.custom_agent import CustomAgentVersion
@@ -588,6 +589,7 @@ def create_custom_agent(
     model_reasoning: Optional[str] = None,
     allowed_group_ids: Optional[List[str]] = None,
     inherited_allowed_group_ids: Optional[List[str]] = None,
+    inherited_group_tool_policy: Optional[Dict[str, Any]] = None,
 ) -> CustomAgent:
     """Create a new custom agent and seed version snapshot."""
     selected_template_key = str(template_source or "").strip()
@@ -605,6 +607,10 @@ def create_custom_agent(
             "output_schema_key": parent_template.output_schema_key,
             "category": parent_template.category,
             "allowed_group_ids": _read_allowed_group_ids(parent_template),
+            "group_tool_policy": parse_group_tool_policy(
+                getattr(parent_template, "group_tool_policy", {}) or {},
+                field_name=f"Template '{parent_agent_key}' group_tool_policy",
+            ).to_dict(),
         }
     else:
         if not str(model_id or "").strip():
@@ -617,6 +623,7 @@ def create_custom_agent(
             "output_schema_key": None,
             "category": "Custom",
             "allowed_group_ids": [],
+            "group_tool_policy": {},
         }
 
     agent_prompt = _normalize_editable_custom_prompt(
@@ -648,6 +655,12 @@ def create_custom_agent(
         normalized_allowed_group_ids,
         source_name="clone/template source",
     )
+    normalized_group_tool_policy = parse_group_tool_policy(
+        inherited_group_tool_policy
+        if inherited_group_tool_policy is not None
+        else parent_defaults["group_tool_policy"],
+        field_name="inherited_group_tool_policy",
+    ).to_dict()
     custom_uuid = uuid.uuid4()
 
     effective_model_id = _validate_model_id(model_id or parent_defaults["model_id"] or "")
@@ -696,6 +709,7 @@ def create_custom_agent(
             else parent_defaults["model_reasoning"]
         ),
         tool_ids=list(effective_tool_ids),
+        group_tool_policy=normalized_group_tool_policy,
         output_schema_key=effective_output_schema_key,
         group_rules_enabled=include_group_rules,
         group_rules_component=parent_agent_key,
@@ -933,6 +947,9 @@ def clone_visible_agent_for_user(
         model_reasoning=source_agent.model_reasoning,
         allowed_group_ids=clone_allowed_group_ids,
         inherited_allowed_group_ids=source_allowed_group_ids,
+        inherited_group_tool_policy=dict(
+            getattr(source_agent, "group_tool_policy", {}) or {}
+        ),
     )
 
 

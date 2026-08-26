@@ -138,12 +138,29 @@ def test_resolution_rejects_noncanonical_authenticated_group_context():
         )
 
 
-def test_create_db_agent_resolves_group_tools_and_attaches_audit(monkeypatch):
+@pytest.mark.parametrize(
+    ("authenticated_groups", "expected_tool_ids"),
+    [([], ["base_helper"]), (["ZFIN"], ["base_helper", "restricted_base_helper"])],
+)
+def test_create_custom_db_agent_enforces_inherited_group_tool_policy(
+    monkeypatch,
+    authenticated_groups,
+    expected_tool_ids,
+):
     row = SimpleNamespace(
-        agent_key="gene_expression",
-        visibility="system",
+        agent_key="ca_gene_expression",
+        visibility="private",
+        template_source="gene_expression",
         tool_ids=["base_helper", "restricted_base_helper"],
-        group_tool_policy=POLICY,
+        group_tool_policy={
+            "rules": [
+                {
+                    "tool_id": "restricted_base_helper",
+                    "allowed_group_ids": ["ZFIN"],
+                    "field_paths": ["expression_experiment.specimen_genomic_model"],
+                }
+            ]
+        },
         output_schema_key=None,
         model_id="test-model",
         model_temperature=0.1,
@@ -179,14 +196,13 @@ def test_create_db_agent_resolves_group_tools_and_attaches_audit(monkeypatch):
     built = catalog_service._create_db_agent(
         row,
         active_groups=["WB"],
-        authenticated_groups=["ZFIN"],
+        authenticated_groups=authenticated_groups,
     )
 
     assert built is not None
-    assert captured["tool_ids"] == ["base_helper", "zfin_genotype_context_helper"]
-    assert built.group_tool_exposure == {
-        "active_group_ids": ["ZFIN"],
-        "base_tool_ids": ["base_helper"],
-        "added_tool_ids": ["zfin_genotype_context_helper"],
-        "denied_tool_ids": ["restricted_base_helper"],
-    }
+    assert captured["tool_ids"] == expected_tool_ids
+    assert built.group_tool_exposure["active_group_ids"] == authenticated_groups
+    assert built.group_tool_exposure["added_tool_ids"] == []
+    assert built.group_tool_exposure["denied_tool_ids"] == (
+        [] if authenticated_groups else ["restricted_base_helper"]
+    )

@@ -265,6 +265,7 @@ def _create_batch(db, user, flow, document):
         user_id=user.id,
         flow_id=flow.id,
         document_ids=[document.id],
+        active_group_ids=[],
     )
     db.refresh(batch)
     return batch
