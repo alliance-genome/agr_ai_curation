@@ -5708,6 +5708,7 @@ class TestExecuteFlowTermination:
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["failure_reason"] is None
+        assert flow_finished["data"]["output_status"] == "complete"
 
     @pytest.mark.asyncio
     async def test_non_fatal_specialist_error_does_not_fail_flow(self, monkeypatch):

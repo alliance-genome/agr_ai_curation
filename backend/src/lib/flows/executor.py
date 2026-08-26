@@ -4688,6 +4688,11 @@ async def execute_flow(
     missing_output_branches = [
         branch for branch in output_branches if branch["status"] != "completed"
     ]
+    status_output_events = (
+        produced_attachment_output_events
+        if expected_output_attachments
+        else produced_output_events
+    )
     if expected_output_attachments and not produced_attachment_output_events:
         output_status = "none"
         if flow_status != "failed":
@@ -4718,7 +4723,7 @@ async def execute_flow(
                 },
             }
     elif missing_output_branches or flow_status == "failed":
-        output_status = "partial" if produced_attachment_output_events else "none"
+        output_status = "partial" if status_output_events else "none"
         if missing_output_branches and produced_attachment_output_events:
             yield {
                 "type": "DOMAIN_WARNING",
@@ -4737,7 +4742,7 @@ async def execute_flow(
                 },
             }
     else:
-        output_status = "complete" if produced_attachment_output_events else "none"
+        output_status = "complete" if status_output_events else "none"
 
     # Preserve current main's raw-response fallback for flows without explicit
     # output attachments. Typed formatter branches are authoritative whenever
