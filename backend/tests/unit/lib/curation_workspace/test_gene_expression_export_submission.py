@@ -13,6 +13,7 @@ from src.lib.curation_workspace.export_adapters import (
     build_default_export_adapter_registry,
 )
 from src.lib.curation_workspace.submission_adapters import (
+    ReadOnlyHandoffSubmissionAdapter,
     build_default_submission_adapter_registry,
 )
 from src.lib.domain_packs.loader import load_domain_fixture_pack
@@ -610,6 +611,10 @@ def test_gene_expression_submission_adapter_records_target_state():
         f"alliance:gene_expression:{GENE_EXPRESSION_TARGET_KEY}:1"
     )
     assert result.submission_state["target_status"] == "manual_review_required"
+    assert result.submission_state["write_mode"] == "read_only_handoff"
+    assert result.submission_state["target_transport"] == (
+        "alliance_gene_expression_submission"
+    )
     assert result.submission_state["annotation_count"] == 1
     assert result.submission_state["envelope_revisions"] == [
         {
@@ -625,6 +630,7 @@ def test_gene_expression_submission_adapter_records_target_state():
             "write_mode": "read_only_handoff",
         },
     )
+    assert "no curation database rows were mutated" in result.warnings[0]
 
 
 def test_default_registries_expose_gene_expression_export_and_submission_adapters():
@@ -642,5 +648,6 @@ def test_default_registries_expose_gene_expression_export_and_submission_adapter
     assert export_adapter.adapter_key == GENE_EXPRESSION_ADAPTER_KEY
     assert export_adapter.supported_target_keys == (GENE_EXPRESSION_TARGET_KEY,)
     assert submission_adapter.__class__.__name__ == "GeneExpressionSubmissionAdapter"
+    assert isinstance(submission_adapter, ReadOnlyHandoffSubmissionAdapter)
     assert submission_adapter.transport_key == "alliance_gene_expression_submission"
     assert submission_adapter.supported_target_keys == (GENE_EXPRESSION_TARGET_KEY,)
