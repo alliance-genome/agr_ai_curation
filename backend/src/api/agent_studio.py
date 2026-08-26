@@ -137,6 +137,7 @@ from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.runtime_payload_budget import provider_context_preflight
 from src.lib.openai_agents import run_agent_streamed
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import SessionLocal, get_db
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
@@ -1081,6 +1082,7 @@ async def test_agent_endpoint(
     set_current_session_id(session_id)
     set_current_user_id(str(user_sub))
 
+    clear_pending_configs()
     try:
         test_agent = get_agent_by_id(
             resolved_agent_id,

@@ -89,10 +89,20 @@ class TestAgentTestEndpoint:
             lambda _agent_id, **_kwargs: {"requires_document": False},
         )
         agent_kwargs = {}
+        construction_order = []
+        monkeypatch.setattr(
+            api_module,
+            "clear_pending_configs",
+            lambda: construction_order.append("clear"),
+        )
         monkeypatch.setattr(
             api_module,
             "get_agent_by_id",
-            lambda _aid, **kwargs: agent_kwargs.update(kwargs) or object(),
+            lambda _aid, **kwargs: (
+                construction_order.append("build"),
+                agent_kwargs.update(kwargs),
+                object(),
+            )[-1],
         )
         monkeypatch.setattr(
             api_module,
@@ -147,6 +157,7 @@ class TestAgentTestEndpoint:
         assert run_kwargs["active_groups"] == ["WB"]
         assert agent_kwargs["active_groups"] == ["WB"]
         assert agent_kwargs["authenticated_groups"] == ["RGD"]
+        assert construction_order == ["clear", "build"]
         assert run_kwargs["session_id"] == "session-1"
         assert run_kwargs["context_messages"] == [{"role": "user", "content": "test query"}]
 

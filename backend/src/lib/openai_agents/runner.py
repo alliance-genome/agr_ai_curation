@@ -2112,7 +2112,8 @@ async def run_agent_streamed(
     # Clear any leftover data from previous runs
     clear_collected_events()
     clear_current_turn_curation_context()
-    clear_pending_configs()  # Clear agent configs from previous requests
+    if agent is None:
+        clear_pending_configs()  # Clear before this runner constructs runtime agents
     reset_consecutive_call_tracker()  # Reset batching nudge tracker for new query
 
     # Use pre-fetched document context if provided, otherwise fetch

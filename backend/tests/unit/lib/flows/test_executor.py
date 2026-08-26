@@ -5526,10 +5526,19 @@ class TestExecuteFlowTermination:
             _agent_node("n1", "gene", step_goal="Extract genes"),
         ])
         captured = {}
+        construction_order = []
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.clear_pending_configs",
+            lambda: construction_order.append("clear"),
+        )
 
         monkeypatch.setattr(
             "src.lib.flows.executor.create_flow_supervisor",
-            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+            lambda **_kwargs: (
+                construction_order.append("build"),
+                MagicMock(name="Flow Supervisor"),
+            )[-1],
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",
@@ -5552,6 +5561,7 @@ class TestExecuteFlowTermination:
         assert captured["context_messages"] == [{"role": "user", "content": "run flow"}]
         assert captured["trace_context"] is None
         assert captured["propagate_runtime_exceptions"] is True
+        assert construction_order == ["clear", "build"]
 
     @pytest.mark.asyncio
     async def test_marks_flow_failed_when_supervisor_stops_before_all_steps(
