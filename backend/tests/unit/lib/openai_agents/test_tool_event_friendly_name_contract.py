@@ -12,6 +12,8 @@ from src.lib.openai_agents.models import AlleleExtractionResultEnvelope
 
 
 class _FakeRunResult:
+    run_loop_task = None
+
     def __init__(self, events, final_output: Any = "ok"):
         self._events = events
         self.final_output = final_output

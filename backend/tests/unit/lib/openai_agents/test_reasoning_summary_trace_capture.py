@@ -31,6 +31,8 @@ def _model(provider: str, *, supports_reasoning: bool):
 
 
 class _FakeRunResult:
+    run_loop_task = None
+
     def __init__(self, events=None, final_output="done"):
         self._events = events or []
         self.final_output = final_output

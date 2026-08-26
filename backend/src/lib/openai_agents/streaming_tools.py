@@ -91,6 +91,7 @@ from .resolver_call_ledger import (
     reset_active_resolver_call_ledger,
     set_active_resolver_call_ledger,
 )
+from .stream_lifecycle import await_streamed_run_completion
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -5175,6 +5176,10 @@ async def run_specialist_with_events(
                                 # Not JSON or not FileInfo - this is normal for most tools
                                 logger.debug("FileInfo detection skipped: %s", type(e).__name__)
 
+        # Settle and retrieve the SDK start_streaming task before the caller closes
+        # this flow step's isolated Responses WebSocket provider.
+        await await_streamed_run_completion(result)
+
         # Log comprehensive event summary for debugging
         logger.info(
             "%s stream completed normally. Total events: %s, Event types: %s",
@@ -5642,6 +5647,8 @@ async def run_specialist_with_events(
                         # Log every event type for debugging
                         event_type = getattr(retry_event, 'type', str(type(retry_event).__name__))
                         logger.debug("%s retry event %s: %s", specialist_name, retry_event_count, event_type)
+
+                    await await_streamed_run_completion(retry_result)
 
                     retry_duration_ms = (datetime.now(timezone.utc) - retry_start_time).total_seconds() * 1000
                     logger.info(

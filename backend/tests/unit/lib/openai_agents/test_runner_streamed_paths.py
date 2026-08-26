@@ -24,6 +24,8 @@ async def _collect_events(async_gen):
 
 
 class _FakeRunResult:
+    run_loop_task = None
+
     def __init__(self, events, final_output: object = "ok"):
         self._events = events
         self.final_output = final_output
@@ -35,6 +37,7 @@ class _FakeRunResult:
 
 class _FakeFailingRunResult:
     final_output = None
+    run_loop_task = None
 
     async def stream_events(self):
         if False:
