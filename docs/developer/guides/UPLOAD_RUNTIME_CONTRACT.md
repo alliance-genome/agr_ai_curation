@@ -1,7 +1,7 @@
 # Upload Runtime Contract
 
-Last updated: 2026-03-06
-Related issues: ALL-24 (this contract), ALL-23 (implementation refactor)
+Last updated: 2026-08-26
+Related issues: ALL-24 (this contract), ALL-23 (implementation refactor), ALL-865 (PDF processing receipts)
 
 ## Goal
 
@@ -57,6 +57,20 @@ When serving `/weaviate/documents/{id}/status` and related status views:
 | Stage/progress update arrives after terminal | Ignore update; do not mutate terminal status. |
 | `mark_completed` vs `mark_cancelled` race | First persisted terminal transition wins; later write is no-op. |
 | Stale reconciliation runs while job still heartbeating | Reconciliation must not override active jobs that have fresh activity. |
+
+### 1.5 PDF processing observability receipt
+
+Every terminal PDF processing job stores one canonical
+`metadata.pdf_processing_receipt` object. It contains only application-observed
+timestamps and outcomes for `external_request`, `hierarchy`, `chunking`,
+`figure_locator`, `embedding_storage`, and `total`. The selection section may
+include configured extraction methods, merge/download choice, chunking method,
+and an explicit provider cache signal when one is available.
+
+The receipt never claims extractor-internal stage timing and never contains
+document text. The PDF jobs API and document processing-status API expose the
+same non-secret object through their existing `metadata` fields. Sentry spans
+use the same stage and outcome vocabulary with hashed document identifiers.
 
 ## 2) Cancellation semantics
 

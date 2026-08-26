@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from src.lib.pdf_jobs import service as service_module
+from src.lib.pipeline.processing_receipt import PDF_PROCESSING_RECEIPT_KEY
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 
@@ -232,6 +233,34 @@ def test_explicit_terminal_finalizers_reconcile_document(
     assert document.processing_started_at == job.started_at
     assert document.processing_completed_at == job.completed_at
     assert document.error_message == expected_error
+    assert response.metadata is not None
+    receipt = response.metadata[PDF_PROCESSING_RECEIPT_KEY]
+    assert receipt["outcome"] == (
+        "cancelled" if finalizer == "cancelled" else "failed"
+    )
+    assert receipt["stages"]["total"]["status"] == receipt["outcome"]
+    assert session.commit_calls == 1
+
+
+def test_mark_completed_atomically_preserves_detailed_receipt_in_api_metadata(monkeypatch):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    session = _FakeSession(job)
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    detailed_receipt = {
+        "schema_version": 1,
+        "outcome": "completed",
+        "selection": {"cache_hit": True},
+        "stages": {"external_request": {"status": "completed", "duration_ms": 12.3}},
+    }
+
+    response = service_module.mark_completed(
+        job_id=job.id,
+        metadata={PDF_PROCESSING_RECEIPT_KEY: detailed_receipt},
+    )
+
+    assert response is not None
+    assert response.metadata == {PDF_PROCESSING_RECEIPT_KEY: detailed_receipt}
+    assert job.metadata_json == response.metadata
     assert session.commit_calls == 1
 
 

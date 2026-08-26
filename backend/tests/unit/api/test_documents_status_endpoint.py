@@ -125,6 +125,12 @@ async def test_status_endpoint_does_not_let_completed_job_hide_active_reprocess(
         completed_at=now,
         document_id=document_id,
         job_id="job-333",
+        metadata={
+            "pdf_processing_receipt": {
+                "schema_version": 1,
+                "outcome": "completed",
+            }
+        },
     )
 
     monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
@@ -142,6 +148,7 @@ async def test_status_endpoint_does_not_let_completed_job_hide_active_reprocess(
 
     assert result["processing_status"] == "processing"
     assert result["pipeline_status"]["current_stage"] == "completed"
+    assert result["pipeline_status"]["metadata"] == terminal_job.metadata
     assert result["job_status"] == "completed"
 
 

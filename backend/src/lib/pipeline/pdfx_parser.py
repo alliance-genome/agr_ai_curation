@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -16,6 +17,11 @@ import aiohttp
 from ..pdf_limits import MAX_PDF_FILE_SIZE_BYTES, pdf_file_size_limit_message
 from ..storage_permissions import ensure_writable_directory
 from ..exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
+from ..observability.sentry import (
+    pdf_processing_stage_span,
+    set_redacted_ai_span_data,
+    set_pdf_processing_span_outcome,
+)
 from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture tooling
     PDFXResponse,
     build_pipeline_elements,
@@ -33,9 +39,25 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[str], Awaitable[None]]
 ProcessIdCallback = Callable[[str], Awaitable[None]]
 CancelRequestedCallback = Callable[[], Awaitable[bool]]
+ObservabilityCallback = Callable[[Dict[str, Any]], None]
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _TRANSIENT_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+
+def _cache_hit_from_payloads(*payloads: Any) -> bool | None:
+    """Normalize an explicit provider cache signal without guessing from status text."""
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for key in ("cache_hit", "cached"):
+            value = payload.get(key)
+            if isinstance(value, bool):
+                return value
+        cache = payload.get("cache")
+        if isinstance(cache, dict) and isinstance(cache.get("hit"), bool):
+            return cache["hit"]
+    return None
 
 
 class PDFXParser:
@@ -132,6 +154,7 @@ class PDFXParser:
         progress_callback: Optional[ProgressCallback] = None,
         process_id_callback: Optional[ProcessIdCallback] = None,
         cancel_requested_callback: Optional[CancelRequestedCallback] = None,
+        observability_callback: Optional[ObservabilityCallback] = None,
     ) -> Dict[str, Any]:
         """Parse PDF through PDF extraction service and return pipeline elements."""
         del extraction_strategy
@@ -152,43 +175,98 @@ class PDFXParser:
         logger.info("Submitting %s for extraction as document %s", file_path.name, document_id)
 
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
+        external_started_at = datetime.now(timezone.utc)
+        external_started_monotonic = time.monotonic()
+        external_status = "failed"
+        submit_payload: Dict[str, Any] = {}
+        status_payload: Dict[str, Any] = {}
+        external_span_context = pdf_processing_stage_span(
+            stage="external_request",
+            document_id=document_id,
+            selection={
+                "extraction_methods": list(self._method_list),
+                "merge_enabled": self.merge_enabled,
+                "download_variant": self.download_variant,
+            },
+        )
+        external_span = external_span_context.__enter__()
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                headers = await self._build_auth_headers(session)
-                submit_payload = await self._submit_extraction(session, file_path, headers)
-                process_id = str(submit_payload.get("process_id", "")).strip()
-                if not process_id:
-                    raise PDFParsingError("Extraction service returned no process_id")
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    headers = await self._build_auth_headers(session)
+                    submit_payload = await self._submit_extraction(session, file_path, headers)
+                    process_id = str(submit_payload.get("process_id", "")).strip()
+                    if not process_id:
+                        raise PDFParsingError("Extraction service returned no process_id")
 
-                if process_id_callback:
-                    await process_id_callback(process_id)
+                    if process_id_callback:
+                        await process_id_callback(process_id)
 
-                if cancel_requested_callback and await cancel_requested_callback():
-                    await self._request_cancel(session, process_id, headers)
-                    raise PDFCancellationError(
-                        "PDF extraction cancelled by user request before polling started"
+                    if cancel_requested_callback and await cancel_requested_callback():
+                        await self._request_cancel(session, process_id, headers)
+                        raise PDFCancellationError(
+                            "PDF extraction cancelled by user request before polling started"
+                        )
+
+                    status_payload = await self._poll_until_complete(
+                        session=session,
+                        process_id=process_id,
+                        headers=headers,
+                        progress_callback=progress_callback,
+                        cancel_requested_callback=cancel_requested_callback,
                     )
-
-                status_payload = await self._poll_until_complete(
-                    session=session,
-                    process_id=process_id,
-                    headers=headers,
-                    progress_callback=progress_callback,
-                    cancel_requested_callback=cancel_requested_callback,
+                    merged_markdown = await self._download_markdown(session, process_id, headers)
+                    page_provenance = None
+                    if self.merge_enabled:
+                        page_provenance = await self._download_page_provenance(
+                            session,
+                            process_id,
+                            headers,
+                            merged_markdown=merged_markdown.encode("utf-8"),
+                        )
+                external_status = "completed"
+            except PDFCancellationError:
+                external_status = "cancelled"
+                raise
+            except asyncio.TimeoutError as exc:
+                raise PDFParsingError(f"PDF extraction timeout after {self.timeout_seconds} seconds") from exc
+            except aiohttp.ClientError as exc:
+                raise PDFParsingError(f"Network error calling PDF extraction service: {exc}") from exc
+        finally:
+            external_completed_at = datetime.now(timezone.utc)
+            external_duration_ms = (time.monotonic() - external_started_monotonic) * 1000
+            cache_hit = _cache_hit_from_payloads(status_payload, submit_payload)
+            if cache_hit is not None:
+                set_redacted_ai_span_data(
+                    external_span,
+                    "ai_curation.pdf.cache_hit",
+                    cache_hit,
                 )
-                merged_markdown = await self._download_markdown(session, process_id, headers)
-                page_provenance = None
-                if self.merge_enabled:
-                    page_provenance = await self._download_page_provenance(
-                        session,
-                        process_id,
-                        headers,
-                        merged_markdown=merged_markdown.encode("utf-8"),
+            set_pdf_processing_span_outcome(
+                external_span,
+                outcome=external_status,
+                duration_ms=external_duration_ms,
+            )
+            external_span_context.__exit__(None, None, None)
+            if observability_callback is not None:
+                try:
+                    observability_callback(
+                        {
+                            "status": external_status,
+                            "started_at": external_started_at,
+                            "completed_at": external_completed_at,
+                            "duration_ms": external_duration_ms,
+                            "extraction_methods": list(self._method_list),
+                            "merge_enabled": self.merge_enabled,
+                            "download_variant": self.download_variant,
+                            "cache_hit": cache_hit,
+                        }
                     )
-        except asyncio.TimeoutError as exc:
-            raise PDFParsingError(f"PDF extraction timeout after {self.timeout_seconds} seconds") from exc
-        except aiohttp.ClientError as exc:
-            raise PDFParsingError(f"Network error calling PDF extraction service: {exc}") from exc
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to record PDF extraction boundary observability: %s",
+                        type(exc).__name__,
+                    )
 
         cleaned_elements = markdown_to_pipeline_elements(
             merged_markdown,
@@ -841,6 +919,7 @@ async def parse_pdf_document(
     progress_callback: Optional[ProgressCallback] = None,
     process_id_callback: Optional[ProcessIdCallback] = None,
     cancel_requested_callback: Optional[CancelRequestedCallback] = None,
+    observability_callback: Optional[ObservabilityCallback] = None,
 ) -> Dict[str, Any]:
     """Parse PDF document using AGR PDF extraction service."""
     parser = PDFXParser()
@@ -853,6 +932,7 @@ async def parse_pdf_document(
         progress_callback=progress_callback,
         process_id_callback=process_id_callback,
         cancel_requested_callback=cancel_requested_callback,
+        observability_callback=observability_callback,
     )
 
 

@@ -6,10 +6,11 @@ from pathlib import Path
 import pytest
 
 from src.lib.exceptions import ConfigurationError
-from src.lib.exceptions import PDFParsingError
+from src.lib.exceptions import PDFCancellationError, PDFParsingError
 from src.lib.pipeline.pdfx_parser import (
     PDFXParser,
     _build_progress_message,
+    _cache_hit_from_payloads,
     markdown_to_pipeline_elements,
 )
 
@@ -167,6 +168,19 @@ def test_build_progress_message_uses_ready_queue_fallback():
     assert message == "PDF extraction queued; waiting for PDFX worker..."
 
 
+@pytest.mark.parametrize(
+    ("payloads", "expected"),
+    [
+        (({"cache_hit": True},), True),
+        (({"cached": False},), False),
+        (({"cache": {"hit": True}},), True),
+        (({"status": "cached"},), None),
+    ],
+)
+def test_cache_hit_normalization_requires_explicit_boolean(payloads, expected):
+    assert _cache_hit_from_payloads(*payloads) is expected
+
+
 @pytest.mark.asyncio
 async def test_build_auth_headers_static_bearer(parser_env, monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_AUTH_MODE", "static_bearer")
@@ -255,6 +269,7 @@ async def test_parse_threads_merged_page_provenance_into_elements_and_receipt(
         "summary": {},
     }
     observed = {}
+    observations = []
 
     class _SessionContext:
         async def __aenter__(self):
@@ -278,7 +293,7 @@ async def test_parse_threads_merged_page_provenance_into_elements_and_receipt(
 
     async def _poll_until_complete(**kwargs):
         del kwargs
-        return {"status": "complete"}
+        return {"status": "complete", "cache_hit": True}
 
     async def _download_markdown(session, process_id, headers):
         del session, process_id, headers
@@ -300,12 +315,72 @@ async def test_parse_threads_merged_page_provenance_into_elements_and_receipt(
 
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%test")
-    result = await parser.parse_pdf_document(pdf_path, "doc-wiring", "user-wiring")
+    result = await parser.parse_pdf_document(
+        pdf_path,
+        "doc-wiring",
+        "user-wiring",
+        observability_callback=observations.append,
+    )
 
     assert observed["merged_markdown"] == markdown.encode("utf-8")
     assert [item["metadata"]["page_number"] for item in result["elements"]] == [1, 2]
     raw_payload = json.loads((tmp_path / result["pdfx_json_path"]).read_text())
     assert raw_payload["page_provenance"] == receipt
+    assert len(observations) == 1
+    assert observations[0]["status"] == "completed"
+    assert observations[0]["cache_hit"] is True
+    assert observations[0]["extraction_methods"] == ["grobid", "marker"]
+    assert observations[0]["merge_enabled"] is True
+    assert observations[0]["duration_ms"] >= 0
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [
+        (PDFParsingError("provider failed"), "failed"),
+        (PDFCancellationError("cancelled"), "cancelled"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_parse_reports_external_failure_outcome(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+    failure,
+    expected_status,
+):
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    parser = PDFXParser()
+    observations = []
+
+    async def _submit_extraction(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    with pytest.raises(type(failure)):
+        await parser.parse_pdf_document(
+            pdf_path,
+            "doc-failed",
+            "user-failed",
+            observability_callback=observations.append,
+        )
+
+    assert len(observations) == 1
+    assert observations[0]["status"] == expected_status
+    assert observations[0]["cache_hit"] is None
 
 
 @pytest.mark.asyncio

@@ -1124,6 +1124,72 @@ def test_gen_ai_invoke_agent_span_sets_minimal_metadata(monkeypatch):
     assert calls[-1] == ("exit", None, None)
 
 
+def test_pdf_processing_span_is_bounded_and_content_redacted(monkeypatch):
+    calls = []
+    document_text = "The curator PDF says a sensitive sentence"
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+        def set_tag(self, key, value):
+            calls.append(("tag", key, value))
+
+        def set_status(self, value):
+            calls.append(("status", value))
+
+    class FakeSpanContext:
+        def __enter__(self):
+            return FakeSpan()
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("exit", exc_type))
+
+    fake_sentry_sdk = SimpleNamespace(
+        start_span=lambda **kwargs: calls.append(("start", kwargs)) or FakeSpanContext()
+    )
+    monkeypatch.setattr(
+        sentry.importlib,
+        "import_module",
+        lambda name: fake_sentry_sdk if name == "sentry_sdk" else None,
+    )
+
+    with sentry.pdf_processing_stage_span(
+        stage="external_request",
+        document_id="document-123",
+        selection={
+            "extraction_methods": ["grobid", "marker"],
+            "chunking_method": "by_title",
+            "merge_enabled": True,
+            "download_variant": "merged",
+            "cache_hit": False,
+            "document_text": document_text,
+        },
+    ) as span:
+        sentry.set_pdf_processing_span_outcome(
+            span,
+            outcome="completed",
+            duration_ms=123.45,
+        )
+
+    assert ("data", "ai_curation.pdf.stage", "external_request") in calls
+    assert ("tag", "ai_curation.pdf.stage", "external_request") in calls
+    assert ("data", "ai_curation.pdf.extraction_methods", "grobid marker") in calls
+    assert ("data", "ai_curation.pdf.chunking_method", "by_title") in calls
+    assert ("data", "ai_curation.pdf.merge_enabled", True) in calls
+    assert ("data", "ai_curation.pdf.cache_hit", False) in calls
+    assert ("data", "ai_curation.pdf.stage_outcome", "completed") in calls
+    assert ("tag", "ai_curation.pdf.stage_outcome", "completed") in calls
+    assert ("data", "ai_curation.pdf.stage_duration_ms", 123.5) in calls
+    assert (
+        "tag",
+        "ai_curation.document.id_hash",
+        sentry._hash_identifier("document-123"),
+    ) in calls
+    assert ("status", "ok") in calls
+    assert document_text not in str(calls)
+
+
 def test_gen_ai_invoke_agent_span_sets_ai_curation_metadata(monkeypatch):
     calls = []
 

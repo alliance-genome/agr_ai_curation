@@ -37,6 +37,7 @@ from src.lib.openai_agents.config import (
     get_document_source_poll_interval_seconds,
 )
 from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator, ProcessingResult
+from src.lib.pipeline.processing_receipt import PDF_PROCESSING_RECEIPT_KEY
 from src.lib.pipeline.tracker import PipelineTracker
 from src.lib.weaviate_client.documents import update_document_status
 from src.lib.weaviate_helpers import get_connection
@@ -336,6 +337,7 @@ class UploadExecutionService:
                 success=result.success,
                 cancelled=result.cancelled,
                 error_message=result.error,
+                observability_receipt=result.observability_receipt,
             )
         except Exception as exc:
             logger.exception("Error processing document %s", request.document_id)
@@ -950,11 +952,17 @@ class UploadExecutionService:
         | ProviderConversionExecutionRequest,
         *,
         message: str,
+        observability_receipt: dict[str, Any] | None = None,
     ) -> None:
-        stored_job = pdf_job_service.mark_completed(
-            job_id=request.job_id,
-            message=message,
-        )
+        terminal_kwargs: dict[str, Any] = {
+            "job_id": request.job_id,
+            "message": message,
+        }
+        if observability_receipt:
+            terminal_kwargs["metadata"] = {
+                PDF_PROCESSING_RECEIPT_KEY: observability_receipt,
+            }
+        stored_job = pdf_job_service.mark_completed(**terminal_kwargs)
         await self._sync_tracker_from_terminal_job(
             request,
             stored_job=stored_job,
@@ -968,12 +976,18 @@ class UploadExecutionService:
         *,
         message: str,
         stage: str,
+        observability_receipt: dict[str, Any] | None = None,
     ) -> None:
-        stored_job = pdf_job_service.mark_failed(
-            job_id=request.job_id,
-            message=message,
-            stage=stage,
-        )
+        terminal_kwargs: dict[str, Any] = {
+            "job_id": request.job_id,
+            "message": message,
+            "stage": stage,
+        }
+        if observability_receipt:
+            terminal_kwargs["metadata"] = {
+                PDF_PROCESSING_RECEIPT_KEY: observability_receipt,
+            }
+        stored_job = pdf_job_service.mark_failed(**terminal_kwargs)
         await self._sync_tracker_from_terminal_job(
             request,
             stored_job=stored_job,
@@ -986,11 +1000,17 @@ class UploadExecutionService:
         | ProviderConversionExecutionRequest,
         *,
         reason: str,
+        observability_receipt: dict[str, Any] | None = None,
     ) -> None:
-        stored_job = pdf_job_service.mark_cancelled(
-            job_id=request.job_id,
-            reason=reason,
-        )
+        terminal_kwargs: dict[str, Any] = {
+            "job_id": request.job_id,
+            "reason": reason,
+        }
+        if observability_receipt:
+            terminal_kwargs["metadata"] = {
+                PDF_PROCESSING_RECEIPT_KEY: observability_receipt,
+            }
+        stored_job = pdf_job_service.mark_cancelled(**terminal_kwargs)
         await self._sync_tracker_from_terminal_job(
             request,
             stored_job=stored_job,
@@ -1195,11 +1215,13 @@ class UploadExecutionService:
         success: bool,
         cancelled: bool,
         error_message: str | None,
+        observability_receipt: dict[str, Any],
     ) -> None:
         if cancelled:
             await self._mark_cancelled_and_sync_tracker(
                 request,
                 reason=error_message or "Cancelled by user",
+                observability_receipt=observability_receipt,
             )
             return
 
@@ -1207,6 +1229,7 @@ class UploadExecutionService:
             await self._mark_completed_and_sync_tracker(
                 request,
                 message="Processing completed",
+                observability_receipt=observability_receipt,
             )
             return
 
@@ -1214,6 +1237,7 @@ class UploadExecutionService:
             request,
             message=error_message or "Processing failed",
             stage=ProcessingStage.FAILED.value,
+            observability_receipt=observability_receipt,
         )
 
 

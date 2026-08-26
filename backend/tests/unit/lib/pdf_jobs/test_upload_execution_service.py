@@ -222,6 +222,7 @@ def _pipeline_result(
     document_id: str,
     error: str | None = None,
     cancelled: bool = False,
+    observability_receipt: dict | None = None,
 ) -> ProcessingResult:
     return ProcessingResult(
         success=success,
@@ -229,6 +230,7 @@ def _pipeline_result(
         stages_completed=[],
         error=error,
         cancelled=cancelled,
+        observability_receipt=observability_receipt or {},
     )
 
 
@@ -274,7 +276,15 @@ async def test_execute_upload_marks_completed_for_success(monkeypatch):
     service = UploadExecutionService(
         pipeline_tracker=tracker,
         orchestrator_factory=lambda _connection, _tracker: _Orchestrator(
-            _pipeline_result(success=True, document_id="doc-1")
+            _pipeline_result(
+                success=True,
+                document_id="doc-1",
+                observability_receipt={
+                    "schema_version": 1,
+                    "outcome": "completed",
+                    "stages": {"total": {"status": "completed"}},
+                },
+            )
         ),
     )
 
@@ -321,7 +331,19 @@ async def test_execute_upload_marks_completed_for_success(monkeypatch):
         )
     )
 
-    assert events["completed"] == [{"job_id": job_id, "message": "Processing completed"}]
+    assert events["completed"] == [
+        {
+            "job_id": job_id,
+            "message": "Processing completed",
+            "metadata": {
+                "pdf_processing_receipt": {
+                    "schema_version": 1,
+                    "outcome": "completed",
+                    "stages": {"total": {"status": "completed"}},
+                }
+            },
+        }
+    ]
     assert not events["failed"]
     assert not events["cancelled"]
     assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
