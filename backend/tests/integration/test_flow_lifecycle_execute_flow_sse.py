@@ -133,6 +133,41 @@ def _sample_pdf_projection_flow_definition() -> dict:
     }
 
 
+def _mixed_text_file_flow_definition() -> dict:
+    definition = _sample_pdf_projection_flow_definition()
+    definition["nodes"][1]["data"].update(
+        {
+            "agent_id": "pdf_extraction",
+            "agent_display_name": "PDF Extraction",
+            "step_goal": "Read the paper for downstream specialists.",
+        }
+    )
+    definition["nodes"].insert(
+        2,
+        {
+            "id": "priority",
+            "type": "agent",
+            "position": {"x": 520, "y": -120},
+            "data": {
+                "agent_id": "orthologs",
+                "agent_display_name": "Paper Priority",
+                "step_goal": "Summarize the paper priority for the curator.",
+                "output_key": "paper_priority",
+            },
+        },
+    )
+    definition["edges"].insert(
+        1,
+        {
+            "id": "priority_control",
+            "source": "agent_1",
+            "target": "priority",
+            "role": "control_flow",
+        },
+    )
+    return definition
+
+
 def _sse_events(response) -> list[dict]:
     events: list[dict] = []
     for line in response.iter_lines():
@@ -427,6 +462,177 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
 
     fetched = client.get(f"/api/flows/{flow_id}").json()
     assert fetched["execution_count"] == 1
+
+
+def test_execute_flow_persists_and_replays_terminal_specialist_text_with_file(
+    client: TestClient,
+    test_db,
+    monkeypatch,
+):
+    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.user import User
+
+    sample_pdf_path = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "sample_fly_publication.pdf"
+    )
+    document_id = uuid4()
+    owner = User(auth_sub="test_valid_user_00u1abc2def4", is_active=True)
+    test_db.add(owner)
+    test_db.flush()
+    test_db.add(
+        PDFDocument(
+            id=document_id,
+            user_id=owner.id,
+            filename="test_mixed_output.pdf",
+            file_path=str(sample_pdf_path),
+            file_hash="e" * 64,
+            file_size=sample_pdf_path.stat().st_size,
+            page_count=1,
+        )
+    )
+    test_db.commit()
+    def _fake_document_context(document_id_arg, user_id_arg, *_args, **_kwargs):
+        return SimpleNamespace(
+            section_count=lambda: 1,
+            abstract=None,
+            to_agent_kwargs=lambda: {
+                "document_id": document_id_arg,
+                "user_id": user_id_arg,
+            },
+        )
+
+    monkeypatch.setattr(
+        "src.lib.flows.executor.DocumentContext.fetch",
+        _fake_document_context,
+    )
+
+    flow_name = f"it-flow-mixed-output-{uuid4().hex[:12]}"
+    create_resp = client.post(
+        "/api/flows",
+        json={
+            "name": flow_name,
+            "description": "integration mixed terminal output test",
+            "flow_definition": _mixed_text_file_flow_definition(),
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    flow_id = create_resp.json()["id"]
+    session_id = f"session-{uuid4().hex[:10]}"
+    turn_id = f"turn-{uuid4().hex[:10]}"
+    runner_calls = 0
+
+    async def _fake_run_agent_streamed(**kwargs):
+        nonlocal runner_calls
+        runner_calls += 1
+        execution_state = kwargs["agent"]._flow_execution_state
+        assert execution_state["ordered_tool_names"] == [
+            "ask_pdf_extraction_specialist",
+            "ask_orthologs_specialist",
+            "ask_json_formatter_specialist",
+        ]
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-it-mixed"}}
+        steps = [
+            {
+                "step": 1,
+                "node_id": "agent_1",
+                "agent_id": "pdf_extraction",
+                "agent_name": "PDF Extraction",
+                "tool_name": "ask_pdf_extraction_specialist",
+                "output": "Read the paper.",
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+            {
+                "step": 2,
+                "node_id": "priority",
+                "agent_id": "orthologs",
+                "agent_name": "Paper Priority",
+                "tool_name": "ask_orthologs_specialist",
+                "output": "Priority: High — relevant findings were found.",
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+            {
+                "step": 3,
+                "node_id": "agent_2",
+                "agent_id": "json_formatter",
+                "agent_name": "JSON File Formatter",
+                "tool_name": "ask_json_formatter_specialist",
+                "output": '{"file_id": "mixed-file"}',
+                "candidate": None,
+                "evidence_records": [],
+                "evidence_count": 0,
+            },
+        ]
+        for step in steps[:2]:
+            execution_state["completed_steps"].append(step)
+            execution_state["next_tool_index"] = step["step"]
+            yield {"type": "TOOL_COMPLETE", "details": {"toolName": step["tool_name"]}}
+        yield {
+            "type": "FILE_READY",
+            "details": {
+                "file_id": "mixed-file",
+                "filename": "findings.json",
+                "format": "json",
+                "formatter_node_id": "agent_2",
+                "source_node_id": "agent_1",
+                "source_node_ids": ["agent_1"],
+            },
+        }
+        execution_state["completed_steps"].append(steps[2])
+        execution_state["next_tool_index"] = 3
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "ask_json_formatter_specialist"},
+        }
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    execute_payload = {
+        "flow_id": flow_id,
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "document_id": str(document_id),
+        "user_query": "Run the mixed output flow.",
+    }
+    with _patched_flow_runner(_fake_run_agent_streamed):
+        with client.stream("POST", "/api/chat/execute-flow", json=execute_payload) as response:
+            events = _sse_events(response)
+            assert response.status_code == 200
+
+    assert runner_calls == 1
+    assert [event["type"] for event in events if event["type"] in {
+        "CHAT_OUTPUT_READY", "FILE_READY"
+    }] == ["CHAT_OUTPUT_READY", "FILE_READY"]
+    assert sum(event["type"] == "FILE_READY" for event in events) == 1
+    history = client.get(f"/api/chat/history/{session_id}").json()["messages"]
+    summary = next(message for message in history if message["message_type"] == "flow_summary")
+    assert summary["content"] == "Priority: High — relevant findings were found."
+
+    async def _unexpected_runner(**_kwargs):
+        raise AssertionError("completed mixed output turn must replay without execution")
+        yield  # pragma: no cover
+
+    with _patched_flow_runner(_unexpected_runner):
+        with client.stream("POST", "/api/chat/execute-flow", json=execute_payload) as response:
+            replay_events = _sse_events(response)
+            assert response.status_code == 200
+
+    replay_terminal_outputs = [
+        event
+        for event in replay_events
+        if event["type"] in {"CHAT_OUTPUT_READY", "FILE_READY", "FLOW_FINISHED"}
+    ]
+    assert [event["type"] for event in replay_terminal_outputs] == [
+        "CHAT_OUTPUT_READY",
+        "FILE_READY",
+        "FLOW_FINISHED",
+    ]
+    assert replay_terminal_outputs[0]["details"]["output"] == summary["content"]
+    assert sum(event["type"] == "FILE_READY" for event in replay_events) == 1
 
 
 def test_create_flow_rejects_unresolvable_agent(client: TestClient):

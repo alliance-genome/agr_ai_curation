@@ -4214,6 +4214,11 @@ async def execute_flow(
         attachment["output_node_id"]: attachment
         for attachment in expected_output_attachments
     }
+    output_attachment_source_node_ids = {
+        source_node_id
+        for attachment in expected_output_attachments
+        for source_node_id in attachment["source_node_ids"]
+    }
 
     def _queue_output_event(output_event: dict[str, Any]) -> None:
         details = output_event.get("details") or {}
@@ -4586,24 +4591,71 @@ async def execute_flow(
                     persisted_records,
                 )
 
-    produced_output_events: list[dict[str, Any]] = []
-    if output_prerequisites_valid:
-        produced_output_events = pending_output_events
-        for output_event in produced_output_events:
-            yield output_event
-
-    output_events_by_formatter_node_id = {
-        str((output_event.get("details") or {}).get("formatter_node_id") or ""):
-        output_event
-        for output_event in produced_output_events
-        if str((output_event.get("details") or {}).get("formatter_node_id") or "")
-    }
     completed_steps_by_node_id = {
         str(step.get("node_id") or ""): step
         for step in completed_steps
         if str(step.get("node_id") or "")
     }
+    independent_terminal_text_events: list[dict[str, Any]] = []
+    if (
+        flow_status == "completed"
+        and output_prerequisites_valid
+        and expected_output_attachments
+    ):
+        for terminal_node_id in flow_projection.exit_node_ids:
+            completed_step = completed_steps_by_node_id.get(terminal_node_id)
+            if (
+                completed_step is None
+                or terminal_node_id in output_attachment_source_node_ids
+                or str(completed_step.get("agent_id") or "")
+                == CURATION_HANDOFF_AGENT_ID
+            ):
+                continue
+            output = str(completed_step.get("output") or "").strip()
+            if not output:
+                continue
+            independent_terminal_text_events.append(
+                {
+                    "type": "CHAT_OUTPUT_READY",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "output": output,
+                        "output_preview": _truncate_tool_output(output),
+                        "output_length": len(output),
+                        "specialist_node_id": terminal_node_id,
+                        "specialist_label": str(
+                            completed_step.get("agent_name")
+                            or completed_step.get("agent_id")
+                            or terminal_node_id
+                        ),
+                    },
+                }
+            )
 
+    produced_output_events: list[dict[str, Any]] = []
+    if output_prerequisites_valid:
+        # The graph's terminal order is the control-path exit followed by typed
+        # output attachments. Preserve that order for chat, persistence, and replay.
+        produced_output_events = [
+            *independent_terminal_text_events,
+            *pending_output_events,
+        ]
+        for output_event in produced_output_events:
+            yield output_event
+
+    output_attachment_node_ids = set(output_attachment_by_node_id)
+    produced_attachment_output_events = [
+        output_event
+        for output_event in produced_output_events
+        if str((output_event.get("details") or {}).get("formatter_node_id") or "")
+        in output_attachment_node_ids
+    ]
+    output_events_by_formatter_node_id = {
+        str((output_event.get("details") or {}).get("formatter_node_id") or ""):
+        output_event
+        for output_event in produced_attachment_output_events
+        if str((output_event.get("details") or {}).get("formatter_node_id") or "")
+    }
     def _build_output_branch_outcome(attachment: dict[str, Any]) -> dict[str, Any]:
         output_node_id = attachment["output_node_id"]
         output_event = output_events_by_formatter_node_id.get(output_node_id)
@@ -4636,7 +4688,7 @@ async def execute_flow(
     missing_output_branches = [
         branch for branch in output_branches if branch["status"] != "completed"
     ]
-    if expected_output_attachments and not produced_output_events:
+    if expected_output_attachments and not produced_attachment_output_events:
         output_status = "none"
         if flow_status != "failed":
             flow_status = "failed"
@@ -4666,15 +4718,16 @@ async def execute_flow(
                 },
             }
     elif missing_output_branches or flow_status == "failed":
-        output_status = "partial" if produced_output_events else "none"
-        if missing_output_branches and produced_output_events:
+        output_status = "partial" if produced_attachment_output_events else "none"
+        if missing_output_branches and produced_attachment_output_events:
             yield {
                 "type": "DOMAIN_WARNING",
                 "timestamp": _now_iso(),
                 "details": {
                     "reason": "partial_formatter_outputs",
                     "message": (
-                        f"Flow '{flow.name}' produced {len(produced_output_events)} "
+                        f"Flow '{flow.name}' produced "
+                        f"{len(produced_attachment_output_events)} formatter "
                         "output(s), but one or more formatter branches produced no output."
                     ),
                     "missing_output_node_ids": [
@@ -4684,7 +4737,7 @@ async def execute_flow(
                 },
             }
     else:
-        output_status = "complete" if produced_output_events else "none"
+        output_status = "complete" if produced_attachment_output_events else "none"
 
     # Preserve current main's raw-response fallback for flows without explicit
     # output attachments. Typed formatter branches are authoritative whenever

@@ -5898,6 +5898,124 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["status"] == "completed"
 
     @pytest.mark.asyncio
+    async def test_surfaces_independent_terminal_specialist_text_with_file_output(
+        self, monkeypatch
+    ):
+        flow = _make_output_attachment_flow(
+            [
+                _task_input_node(),
+                _agent_node("extract", "pdf_extraction", step_goal="Extract rows"),
+                _agent_node("priority", "paper_priority", step_goal="Prioritize paper"),
+                _agent_node("csv", "csv_formatter", step_goal="Save CSV"),
+            ],
+            source_node_id="extract",
+            output_node_id="csv",
+        )
+        extraction_step = {
+            "step": 1,
+            "node_id": "extract",
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "Extracted one row.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        priority_step = {
+            "step": 2,
+            "node_id": "priority",
+            "agent_id": "paper_priority",
+            "agent_name": "Paper Priority",
+            "tool_name": "ask_paper_priority_specialist",
+            "output": "Priority: High — relevant tumor terms were found.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        formatter_step = {
+            "step": 3,
+            "node_id": "csv",
+            "agent_id": "csv_formatter",
+            "agent_name": "CSV Formatter",
+            "tool_name": "ask_csv_formatter_specialist",
+            "output": '{"file_id": "file-csv"}',
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            extraction_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_paper_priority_specialist",
+                "ask_csv_formatter_specialist",
+            ],
+        )
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-mixed"}}
+            supervisor._flow_execution_state["completed_steps"].append(priority_step)
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_paper_priority_specialist"},
+            }
+            yield {
+                "type": "FILE_READY",
+                "details": {
+                    "file_id": "file-csv",
+                    "filename": "tumor_terms.csv",
+                    "formatter_node_id": "csv",
+                    "source_node_id": "extract",
+                    "source_node_ids": ["extract"],
+                },
+            }
+            supervisor._flow_execution_state["completed_steps"].append(formatter_step)
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_csv_formatter_specialist"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        terminal_outputs = [
+            event
+            for event in events
+            if event.get("type") in {"CHAT_OUTPUT_READY", "FILE_READY"}
+        ]
+
+        assert [event["type"] for event in terminal_outputs] == [
+            "CHAT_OUTPUT_READY",
+            "FILE_READY",
+        ]
+        assert terminal_outputs[0]["details"]["output"] == priority_step["output"]
+        assert terminal_outputs[0]["details"]["specialist_node_id"] == "priority"
+        assert terminal_outputs[1]["details"]["file_id"] == "file-csv"
+        flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["output_status"] == "complete"
+        assert flow_finished["data"]["output_count"] == 2
+        assert [branch["status"] for branch in flow_finished["data"]["output_branches"]] == [
+            "completed"
+        ]
+
+    @pytest.mark.asyncio
     async def test_preserves_multiple_file_outputs_and_reports_manifest(
         self, monkeypatch
     ):
