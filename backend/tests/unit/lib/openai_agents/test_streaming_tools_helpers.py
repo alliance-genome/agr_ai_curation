@@ -38,8 +38,6 @@ class _Envelope(BaseModel):
 
 
 class _FakeRunResult:
-    run_loop_task = None
-
     def __init__(self, events=None, final_output=None, new_items=None):
         self._events = events or []
         self.final_output = final_output
@@ -56,7 +54,6 @@ class _FakeRunResult:
 class _FakeFailingRunResult:
     final_output = None
     new_items = []
-    run_loop_task = None
 
     async def stream_events(self):
         if False:

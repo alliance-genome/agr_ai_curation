@@ -305,8 +305,6 @@ def _domain_envelope_from_builder_payload(
 
 
 class _FakeRunResult:
-    run_loop_task = None
-
     def __init__(self, *, final_output):
         self.final_output = final_output
 
@@ -320,7 +318,6 @@ class _FakeRunResult:
 
 class _PlainTextRunResult:
     final_output = "plain specialist answer"
-    run_loop_task = None
 
     async def stream_events(self):
         if False:
@@ -332,7 +329,6 @@ class _PlainTextRunResult:
 
 class _BuilderFinalizingRunResult:
     final_output = json.dumps({"model_authored": "must not be staged"})
-    run_loop_task = None
 
     async def stream_events(self):
         workspace = builder.get_active_extraction_builder_workspace()
@@ -357,8 +353,6 @@ class _BuilderFinalizingRunResult:
 
 
 class _BuilderFinalizingPayloadRunResult:
-    run_loop_task = None
-
     def __init__(
         self,
         payload: dict,
@@ -396,8 +390,6 @@ class _BuilderFinalizingPayloadRunResult:
 
 
 class _AckOnlyNoFinalizationRunResult:
-    run_loop_task = None
-
     def __init__(self, final_output: dict):
         self.final_output = json.dumps(final_output)
 
@@ -453,8 +445,6 @@ def _tool_output_stream_event(output: str, *, call_id: str):
 
 
 class _BuilderFinalizingRunResultWithRecordedEvidence:
-    run_loop_task = None
-
     final_output = json.dumps({"model_authored": "must not be staged"})
 
     def __init__(self, evidence_record: dict):
@@ -493,8 +483,6 @@ class _BuilderFinalizingRunResultWithRecordedEvidence:
 
 
 class _FinalizedWorkspaceMissingFinalizationRunResult:
-    run_loop_task = None
-
     final_output = json.dumps(
         {
             "status": "complete",

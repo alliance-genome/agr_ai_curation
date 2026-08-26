@@ -6249,6 +6249,7 @@ class TestExecuteFlowTermination:
                 call_id="handoff-call",
             ),
         ]
+        lifecycle_order = []
 
         class _FakeSdkRunResult:
             final_output = "should not leak"
@@ -6256,10 +6257,11 @@ class TestExecuteFlowTermination:
             async def stream_events(self):
                 for sdk_event in sdk_events:
                     yield sdk_event
+                lifecycle_order.append("sdk_stream_drained")
 
         class _FakeProvider:
             async def aclose(self):
-                return None
+                lifecycle_order.append("provider_closed")
 
         def _fake_sdk_run_streamed(*_args, **_kwargs):
             # The SDK may finish both calls before execute_flow consumes either
@@ -6331,6 +6333,7 @@ class TestExecuteFlowTermination:
             "FLOW_FINISHED"
         )
         assert "RUN_FINISHED" not in event_types
+        assert lifecycle_order == ["sdk_stream_drained", "provider_closed"]
         chat_ready = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
         assert chat_ready["details"]["output"] == "Found one supported gene."
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")

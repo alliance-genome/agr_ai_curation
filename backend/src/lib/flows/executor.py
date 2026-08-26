@@ -4238,7 +4238,7 @@ async def execute_flow(
                 return
         pending_output_events.append(output_event)
 
-    async for event in run_agent_streamed(
+    runner_stream = run_agent_streamed(
         context_messages=[{"role": "user", "content": prompt}],
         user_id=str(user_id),
         session_id=session_id,
@@ -4255,7 +4255,8 @@ async def execute_flow(
             "ai_curation.flow.run_id": flow_run_id,
             "ai_curation.flow.total_steps": total_steps,
         },
-    ):
+    )
+    async for event in runner_stream:
         event_type = event.get("type")
         event_data = event.get("data", {}) or {}
 
@@ -4312,7 +4313,7 @@ async def execute_flow(
                 event_type,
                 flow.name,
             )
-            break
+            continue
 
         flow_step_evidence_event: Optional[dict[str, Any]] = None
         flow_validator_audit_events: list[dict[str, Any]] = []
@@ -4385,7 +4386,7 @@ async def execute_flow(
                     yield flow_step_evidence_event
                 flow_validator_audit_events = []
                 flow_step_evidence_event = None
-                break
+                continue
         if event_type == "SPECIALIST_ERROR":
             yield event
             details = event.get("details", {}) or {}
@@ -4465,11 +4466,21 @@ async def execute_flow(
                 flow.name,
             )
             break
+        if pending_output_events and not _missing_consumed_tool_completions():
+            # The business output is ready, but the runner must continue consuming
+            # internally until RUN_FINISHED so the SDK and provider can tear down in
+            # lifecycle order. Do not expose the supervisor's trailing drain events.
+            continue
         yield event
         for flow_validator_audit_event in flow_validator_audit_events:
             yield flow_validator_audit_event
         if flow_step_evidence_event is not None:
             yield flow_step_evidence_event
+
+    # Flow output events intentionally end the business loop before RUN_FINISHED.
+    # Close the runner explicitly so its normal-close path can drain the SDK producer
+    # and provider before post-loop persistence emits FLOW_FINISHED.
+    await runner_stream.aclose()
 
     if flow_status != "failed":
         missing_steps = _missing_required_flow_steps(flow_execution_state)

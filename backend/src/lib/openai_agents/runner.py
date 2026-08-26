@@ -116,7 +116,6 @@ from .streaming_tools import (
     _tool_output_payload_for_finalization,
     _output_type_name,
 )
-from .stream_lifecycle import await_streamed_run_completion
 from .curation_context_registry import clear_current_turn_curation_context
 
 # Prompt context tracking for execution logging
@@ -1180,7 +1179,6 @@ async def _run_agent_with_tracing(
             try:
                 async for event in result.stream_events():
                     await sdk_queue.put(("sdk", event))
-                await await_streamed_run_completion(result)
             except Exception as e:
                 sdk_error = e
                 logger.error(
