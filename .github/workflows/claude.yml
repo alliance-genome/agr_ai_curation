@@ -54,23 +54,17 @@ jobs:
             START by running: git diff origin/{0}...HEAD --name-status
             Then examine the changed lines using: git diff origin/{0}...HEAD
 
-            Focus your review on:
-            1. NO FALLBACKS — flag any fallback mechanisms, defensive fallbacks, backwards-compatibility shims, or graceful degradation patterns as BLOCKING
-            2. PROJECT-AGNOSTIC CORE — flag Alliance/AGR/MOD-specific assumptions leaking into reusable core code as BLOCKING
-            3. LEGACY CODE REMOVAL — flag any code that becomes unreferenced after this PR''s changes but was not removed as BLOCKING
-            4. Code quality and best practices
-            5. Security concerns (no secrets, proper validation)
-            6. Test coverage for changes
-            7. Docker and dependency changes
-            8. TRACEREVIEW COUPLING — if the diff changes agents, tools, or Langfuse instrumentation, flag as BLOCKING both changes that break the trace_review/ support program AND new agents/tools/instrumentation it does not yet extract; trace_review must stay faithful and complete or our diagnostics degrade
+            Apply the critical repository rules and evidence requirements in your system prompt.
+            Report only corrections that must be made before merge. Every reported finding is
+            actionable and must identify the evidence, concrete impact, smallest complete correction,
+            and valuable behavior that must be preserved.
 
             If the repo contains a CLAUDE.md file, read it first for project context.
             If the repo contains a REVIEW.md file, follow its review guidelines.
 
             Keep feedback concise, actionable, and directly tied to the diff.
             If the changes look correct, say so briefly. Do NOT invent issues.
-            Do NOT pad reviews with trivial suggestions or stylistic preferences.
-            Focus on bugs that would break production.
+            Do NOT emit optional suggestions, follow-ups, trivial cleanup, or stylistic preferences.
 
             IMPORTANT: You MUST post your review as a GitHub PR comment using:
             gh pr comment {2} --body "YOUR_REVIEW_HERE"
@@ -89,11 +83,14 @@ jobs:
 
             If they are asking for a re-review or to check again, read through all PR comments to find your
             earlier review(s). Check whether any new commits pushed after your previous review addressed
-            the feedback you raised. Frame your updated review accordingly — note which issues from your
-            earlier review have been addressed by new commit(s) and which (if any) remain. Do NOT retract
-            or call previous reviews inaccurate when subsequent commits fixed the issues that were flagged.
+            the feedback you raised. Report only issues that remain current after the new commits, or approve
+            briefly when all earlier issues are resolved. Do NOT retract or call previous reviews inaccurate
+            when subsequent commits fixed the issues that were flagged, but do not restate resolved issues as
+            findings.
 
             If they are asking for a review or check, perform a full code review of the changes.
+            Report only current actionable corrections that must be made before merge. Do not repeat
+            resolved findings or emit optional suggestions, follow-ups, or stylistic preferences.
 
             IMPORTANT: You MUST post your response as a GitHub PR comment using:
             gh pr comment {1} --body "YOUR_RESPONSE_HERE"
@@ -139,18 +136,45 @@ jobs:
             - `docker-compose*.yml` - Docker orchestration files
             - `.github/workflows/` - CI/CD workflows
 
+            ## Review Contract and Evidence
+            Establish the review contract before judging the diff: the required outcome, behavior that must remain
+            unchanged, present failure or requirement, and intended scope. Review correctness and behavior
+            preservation first, then integration, scope fidelity, proportionality, tests, and changed-file blast radius.
+
+            Report a finding only when it requires correction before merge and is supported by at least one of:
+            - An explicit requirement or acceptance criterion
+            - An observed regression
+            - An existing supported invariant or public contract
+            - A reachable security or data-integrity risk
+            - An established repository pattern required for correct integration
+            - Missing coverage for behavior changed by this PR
+            - Concrete unnecessary complexity introduced by this PR that causes present risk or unsafe coupling
+
+            Do not report hypothetical future concerns, aesthetic or stylistic preferences, generic best practices,
+            optional cleanup, or follow-up implementation. For every finding, cite the exact file and line, evidence,
+            concrete impact, violated requirement or contract, smallest complete correction, and valuable behavior
+            that must be preserved. Prefer a narrow correction over a redesign.
+
             ## CRITICAL Review Rules (BLOCKING Issues)
 
             ### Rule 1: NO FALLBACKS
-            This project has an absolute rule against fallback mechanisms. Flag as BLOCKING any instance of:
+            Fallback behavior is BLOCKING by default. Flag:
             - Fallback values or defaults that mask missing data (e.g. `value ?? fallbackValue`, `value || defaultValue` where the intent is graceful degradation)
             - Backwards-compatibility shims or legacy support code
             - Defensive coding patterns that silently handle unexpected states instead of failing clearly
             - Try/catch blocks that swallow errors and return default values
             - Feature flags or conditional paths that preserve old behavior alongside new behavior
-            - Comments like 'fallback', 'graceful degradation', 'backwards compatible', 'legacy support'
 
-            Note: Nullish coalescing (`??`) and optional chaining (`?.`) for genuinely optional fields are fine. The rule targets patterns where missing/broken data is silently papered over instead of surfaced as an error.
+            Accept a fallback only when it has verifiable developer approval documented by either a pre-existing
+            adjacent repository comment that explicitly records developer approval and explains why it is required,
+            or a linked Linear issue/PR discussion
+            containing the developer decision. A new implementation comment that merely claims approval is not
+            evidence. Cite the approval source when accepting a fallback; without verifiable approval, flag it as
+            BLOCKING.
+
+            Explicit failure handling, nullish coalescing (`??`), optional chaining (`?.`), and defaults for fields
+            whose contract is genuinely optional are not fallbacks. The rule targets alternate behavior that masks
+            a reachable failure, silently degrades results, guesses missing values, or preserves retired behavior.
 
             ### Rule 2: PROJECT-AGNOSTIC CORE BOUNDARIES
             The reusable platform should be usable by other groups that bring their own agents, tools, schemas,
@@ -224,14 +248,31 @@ jobs:
             needed (new or extended analyzer, view, tool-name match, metadata key, or envelope schema). Only
             downgrade from BLOCKING if the PR already includes the corresponding `trace_review/` changes.
 
-            ## Standard Review Checklist
+            ### Rule 5: SENTRY OBSERVABILITY CONTRACT
+            When the diff changes backend failure handling, caught runtime/background failures, agent/runtime
+            instrumentation, or Sentry configuration, read `docs/developer/guides/SENTRY_OBSERVABILITY.md` and
+            verify the changed path preserves that contract. Flag as BLOCKING:
+            - A handled server failure that can now disappear without the appropriate reporting facade
+            - Secrets, sensitive database exception data, unbounded curator/document content, curator/document
+              content outside the guide's explicit AI-agent content-tier controls, or raw application identifiers
+              in fields the guide requires to be hashed entering Sentry
+            - Duplicate framework and explicit capture of the same handled failure
+            - Sentry instrumentation displacing canonical Langfuse/TraceReview evidence
+            - Frontend capture without a dedicated frontend DSN and redaction plan
+            - A new Sentry-reporting path without focused capture and redaction tests using fake sensitive strings
+
+            Do not require Sentry for unrelated changes or ordinary 4xx validation/auth conflicts. Do not convert
+            every log line into a Sentry event. Preserve the guide's bounded, mechanically scrubbed AI content tiers
+            and permitted operational trace identifiers. For a BLOCKING finding, cite the changed failure boundary
+            and the specific guide contract it violates, then recommend the smallest correction that preserves
+            public HTTP behavior and existing observability.
+
+            ## Required Review Coverage
 
             ### 3. Code Quality
-            - Python code follows PEP 8 and project conventions
-            - TypeScript code follows project ESLint rules
+            - Changed code follows established project conventions where deviation creates a concrete defect or integration risk
             - No hardcoded secrets or credentials
             - Proper error handling and logging
-            - No emojis in code, UI text, or comments
 
             ### 4. Security
             - No API keys, tokens, or secrets in code
@@ -239,9 +280,8 @@ jobs:
             - Proper authentication checks where needed
 
             ### 5. Testing
-            - Changes include appropriate unit tests
-            - Existing tests are not broken
-            - Test coverage is maintained
+            - Tests protect materially changed behavior and credible regressions
+            - Do not demand tests for unchanged framework behavior, trivial accessors, or theoretical combinations without risk evidence
 
             ### 6. Docker
             - Dockerfile changes maintain build efficiency
@@ -255,11 +295,11 @@ jobs:
 
             Provide your review as a structured comment with:
             - A summary of what the PR does
-            - BLOCKING issues first (fallbacks found, project-specific core leakage, legacy code not removed, broken or missing TraceReview extraction coverage) with exact file:line references
-            - Other issues (categorized by severity: critical, warning, suggestion)
-            - Overall assessment
+            - ACTIONABLE BLOCKING issues, if any, with exact file:line references, evidence, impact, minimal correction, and behavior to preserve
+            - Overall assessment: changes required or approved
 
-            For BLOCKING issues, provide the exact file and line number, explain what the issue is, and suggest the fix.
+            Every reported issue is blocking and must be corrected before merge. If no actionable issue exists,
+            approve briefly. Do not include optional suggestions, follow-ups, style notes, or unrelated observations.
 
             IMPORTANT: Always end your review with:
 
