@@ -148,7 +148,7 @@ def test_catalog_preview_diagnostic_and_runtime_share_prompt_bundle(
     assert runtime_bundle.to_manifest() == catalog_bundle.to_manifest()
 
 
-def test_custom_agent_preview_treats_custom_prompt_as_base_override(
+def test_custom_agent_preview_treats_instructions_as_base_override(
     monkeypatch,
     prompt_parity_service,
 ):
@@ -161,8 +161,8 @@ def test_custom_agent_preview_treats_custom_prompt_as_base_override(
         api_module,
         "get_custom_agent_for_user",
         lambda _db, _uuid, _user_id: SimpleNamespace(
-            custom_prompt="Curator overlay instructions",
-            parent_agent_key="demo_agent",
+            instructions="Curator overlay instructions",
+            template_source="demo_agent",
             group_rules_enabled=True,
             group_prompt_overrides={"WB": "Curator WB overlay"},
         ),
