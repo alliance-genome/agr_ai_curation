@@ -50,7 +50,6 @@ from agr_ai_curation_alliance.domain_packs.phenotype import (  # noqa: E402
     PHENOTYPE_DOMAIN_PACK_ID,
     PHENOTYPE_FIXTURE_PACK_ID,
     PHENOTYPE_OBJECT_TYPE,
-    PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
     PHENOTYPE_SUBJECT_OBJECT_TYPE,
     PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID,
     PHENOTYPE_TERM_OBJECT_TYPE,
@@ -304,15 +303,11 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     under_development_bindings = validator_bindings["under_development"]
     binding_ids = [binding["binding_id"] for binding in under_development_bindings]
     assert binding_ids == [
-        PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
         PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID,
         "phenotype_reference_validator",
     ]
 
-    pending_binding = under_development_bindings[0]
-    assert pending_binding["state_explanation"]
-
-    subject_binding = under_development_bindings[1]
+    subject_binding = under_development_bindings[0]
     assert subject_binding["validator_agent"] == {
         "package_id": "agr.alliance",
         "agent_id": "subject_entity_validation",
@@ -346,7 +341,7 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         "taxon": "taxon",
     }
 
-    reference_binding = under_development_bindings[2]
+    reference_binding = under_development_bindings[1]
     assert reference_binding["binding_id"] == "phenotype_reference_validator"
 
 

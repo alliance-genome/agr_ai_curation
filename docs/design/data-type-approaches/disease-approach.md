@@ -225,13 +225,10 @@ unchanged; the builder envelope runs the active ones inline (invariant §5.5).
 All active bindings: `required: true`, `blocking: false`, `allow_opt_out: true`,
 `curator_override.allowed: false`.
 
-**Under-development bindings** (declared, not dispatching — kept blocked):
-`disease_pending_envelope_validator` (the object-level `validator_binding_id`),
-`experimental_condition_validation`, `disease_subject_materialization`
-(subject_entity_validation, ALL-410), `disease_reference_materialization`
-(reference_validation, ALL-425), `disease_evidence_code_lookup` (ECO via
-ontology_term_validation, ALL-425). These stay as-is; the builder does not
-activate them.
+**Under-development binding** (declared, not dispatching — kept blocked):
+`disease_reference_materialization` (reference_validation, ALL-425). Disease envelope structure
+is checked deterministically, so generated objects, findings, and history are not attributed to a
+whole-envelope validator binding.
 
 ---
 

@@ -92,7 +92,6 @@ fixtures:
           metadata:
             object_role: curatable_unit
             assertion_kind: pending_disease_assertion
-            validator_binding_id: disease_pending_envelope_validator
             write_behavior:
               status: blocked
               reason: Subject, reference, evidence-code, and concrete disease annotation write targets are not yet materialized from disease extractor output.
@@ -116,7 +115,6 @@ fixtures:
               object_type: DiseaseAnnotation
             field_path: disease_annotation_object.curie
           details:
-            validator_binding_id: disease_pending_envelope_validator
             source_tool: record_evidence
             blocking: false
             grounded_slots:
@@ -151,7 +149,6 @@ fixtures:
             evidence_record_ids:
               - ats-model-evidence-1
               - ats-cohort-evidence-1
-            validator_binding_id: disease_pending_envelope_validator
             write_behavior: blocked
       metadata:
         source_document_id: ZFIN-paper-disease-0001
