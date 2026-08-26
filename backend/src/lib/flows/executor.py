@@ -4238,7 +4238,7 @@ async def execute_flow(
                 return
         pending_output_events.append(output_event)
 
-    async for event in run_agent_streamed(
+    runner_stream = run_agent_streamed(
         context_messages=[{"role": "user", "content": prompt}],
         user_id=str(user_id),
         session_id=session_id,
@@ -4255,221 +4255,264 @@ async def execute_flow(
             "ai_curation.flow.run_id": flow_run_id,
             "ai_curation.flow.total_steps": total_steps,
         },
-    ):
-        event_type = event.get("type")
-        event_data = event.get("data", {}) or {}
-
-        if event_type == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
-            continue
-
-        if event_type == "RUN_STARTED" and "trace_id" in event_data:
-            trace_id = event_data.get("trace_id")
-
-        if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
-            output_event = dict(event)
-            output_details = dict(output_event.get("details") or {})
-            if event_type == "CHAT_OUTPUT_READY" and not output_details.get(
-                "formatter_node_id"
-            ):
-                chat_step = next(
-                    (
-                        step
-                        for step in reversed(completed_steps)
-                        if str(step.get("agent_id") or "")
-                        in {"chat_output", "chat_output_formatter"}
-                    ),
-                    None,
+        propagate_runtime_exceptions=True,
+    )
+    try:
+        while True:
+            try:
+                event = await anext(runner_stream)
+            except StopAsyncIteration:
+                break
+            except Exception as exc:
+                terminal_output_ready = bool(pending_output_events) and not (
+                    _missing_consumed_tool_completions()
                 )
-                if chat_step is not None:
-                    formatter_node_id = str(chat_step.get("node_id") or "")
-                    output_details["formatter_node_id"] = formatter_node_id or None
-                    attachment = output_attachment_by_node_id.get(formatter_node_id, {})
-                    source_node_ids = list(
-                        output_source_by_node_id.get(formatter_node_id, ())
+                if not terminal_output_ready:
+                    raise
+                report_runtime_exception(
+                    exc,
+                    component="flow_executor",
+                    operation="post_terminal_runner_drain_failed",
+                    context={
+                        "document_id": document_id,
+                        "session_id": session_id,
+                        "trace_id": trace_id,
+                        "flow_run_id": flow_run_id,
+                        "flow_id": str(flow.id),
+                    },
+                )
+                logger.warning(
+                    "[Flow Executor] Runner drain failed after terminal output "
+                    "for flow '%s'",
+                    flow.name,
+                    exc_info=True,
+                )
+                break
+            event_type = event.get("type")
+            event_data = event.get("data", {}) or {}
+
+            if event_type == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+                continue
+
+            if event_type == "RUN_STARTED" and "trace_id" in event_data:
+                trace_id = event_data.get("trace_id")
+
+            if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
+                output_event = dict(event)
+                output_details = dict(output_event.get("details") or {})
+                if event_type == "CHAT_OUTPUT_READY" and not output_details.get(
+                    "formatter_node_id"
+                ):
+                    chat_step = next(
+                        (
+                            step
+                            for step in reversed(completed_steps)
+                            if str(step.get("agent_id") or "")
+                            in {"chat_output", "chat_output_formatter"}
+                        ),
+                        None,
                     )
-                    output_details["source_node_id"] = (
-                        source_node_ids[0] if source_node_ids else None
+                    if chat_step is not None:
+                        formatter_node_id = str(chat_step.get("node_id") or "")
+                        output_details["formatter_node_id"] = formatter_node_id or None
+                        attachment = output_attachment_by_node_id.get(formatter_node_id, {})
+                        source_node_ids = list(
+                            output_source_by_node_id.get(formatter_node_id, ())
+                        )
+                        output_details["source_node_id"] = (
+                            source_node_ids[0] if source_node_ids else None
+                        )
+                        output_details["source_node_ids"] = source_node_ids
+                        output_details["formatter_label"] = attachment.get("formatter_label")
+                        output_details["source_label"] = attachment.get("source_label")
+                        output_details["source_labels"] = attachment.get("source_labels", [])
+                        output_event["details"] = output_details
+                _queue_output_event(output_event)
+                missing_steps = _missing_consumed_tool_completions()
+                if missing_steps:
+                    logger.info(
+                        "[Flow Executor] Deferring terminal %s for flow '%s' until all "
+                        "required steps complete; missing=%s",
+                        event_type,
+                        flow.name,
+                        missing_steps,
                     )
-                    output_details["source_node_ids"] = source_node_ids
-                    output_details["formatter_label"] = attachment.get("formatter_label")
-                    output_details["source_label"] = attachment.get("source_label")
-                    output_details["source_labels"] = attachment.get("source_labels", [])
-                    output_event["details"] = output_details
-            _queue_output_event(output_event)
-            missing_steps = _missing_consumed_tool_completions()
-            if missing_steps:
+                    continue
                 logger.info(
-                    "[Flow Executor] Deferring terminal %s for flow '%s' until all "
-                    "required steps complete; missing=%s",
+                    "[Flow Executor] Buffering terminal %s for flow '%s' until "
+                    "post-loop validation and persistence complete",
                     event_type,
                     flow.name,
-                    missing_steps,
                 )
                 continue
-            logger.info(
-                "[Flow Executor] Buffering terminal %s for flow '%s' until "
-                "post-loop validation and persistence complete",
-                event_type,
-                flow.name,
-            )
-            break
 
-        flow_step_evidence_event: Optional[dict[str, Any]] = None
-        flow_validator_audit_events: list[dict[str, Any]] = []
-        if event_type == "TOOL_COMPLETE":
-            details = event.get("details", {}) or {}
-            tool_name = str(details.get("toolName") or "").strip()
-            completed_step = _find_completed_step_by_tool_name(completed_steps, tool_name)
-            if completed_step is not None:
-                consumed_tool_completions.add(tool_name)
-                flow_validator_audit_events = (
-                    _build_flow_validator_lookup_audit_events(completed_step)
+            flow_step_evidence_event: Optional[dict[str, Any]] = None
+            flow_validator_audit_events: list[dict[str, Any]] = []
+            if event_type == "TOOL_COMPLETE":
+                details = event.get("details", {}) or {}
+                tool_name = str(details.get("toolName") or "").strip()
+                completed_step = _find_completed_step_by_tool_name(completed_steps, tool_name)
+                if completed_step is not None:
+                    consumed_tool_completions.add(tool_name)
+                    flow_validator_audit_events = (
+                        _build_flow_validator_lookup_audit_events(completed_step)
+                    )
+                    step_evidence_records = list(completed_step.get("evidence_records") or [])
+                    step_evidence_preview = _build_step_evidence_preview(step_evidence_records)
+                    flow_step_evidence_event = {
+                        "type": "FLOW_STEP_EVIDENCE",
+                        "timestamp": _now_iso(),
+                        "data": {
+                            "flow_id": str(flow.id),
+                            "flow_name": flow.name,
+                            "flow_run_id": flow_run_id,
+                            "step": completed_step.get("step"),
+                            "tool_name": completed_step.get("tool_name"),
+                            "agent_id": completed_step.get("agent_id"),
+                            "agent_name": completed_step.get("agent_name"),
+                            "evidence_records": step_evidence_preview,
+                            "evidence_preview": step_evidence_preview,
+                            "evidence_count": int(completed_step.get("evidence_count") or 0),
+                            "total_evidence_records": len(evidence_registry.records()),
+                        },
+                    }
+                    projected_chat_output = completed_step.get("projected_chat_output")
+                    if isinstance(projected_chat_output, str):
+                        formatter_node_id = str(completed_step.get("node_id") or "")
+                        _queue_output_event(
+                            {
+                                "type": "CHAT_OUTPUT_READY",
+                                "timestamp": _now_iso(),
+                                "details": {
+                                    "output": projected_chat_output,
+                                    "output_preview": _truncate_tool_output(projected_chat_output),
+                                    "output_length": len(projected_chat_output),
+                                    "formatter_node_id": formatter_node_id or None,
+                                    "source_node_id": (
+                                        output_source_by_node_id.get(formatter_node_id, (None,))[0]
+                                    ),
+                                    "source_node_ids": list(
+                                        output_source_by_node_id.get(formatter_node_id, ())
+                                    ),
+                                    "formatter_label": output_attachment_by_node_id.get(
+                                        formatter_node_id, {}
+                                    ).get("formatter_label"),
+                                    "source_label": output_attachment_by_node_id.get(
+                                        formatter_node_id, {}
+                                    ).get("source_label"),
+                                    "source_labels": output_attachment_by_node_id.get(
+                                        formatter_node_id, {}
+                                    ).get("source_labels", []),
+                                },
+                            }
+                        )
+                terminal_output_ready = bool(pending_output_events) and not (
+                    _missing_consumed_tool_completions()
                 )
-                step_evidence_records = list(completed_step.get("evidence_records") or [])
-                step_evidence_preview = _build_step_evidence_preview(step_evidence_records)
-                flow_step_evidence_event = {
-                    "type": "FLOW_STEP_EVIDENCE",
+                if terminal_output_ready:
+                    yield event
+                    for flow_validator_audit_event in flow_validator_audit_events:
+                        yield flow_validator_audit_event
+                    if flow_step_evidence_event is not None:
+                        yield flow_step_evidence_event
+                    flow_validator_audit_events = []
+                    flow_step_evidence_event = None
+                    continue
+            if event_type == "SPECIALIST_ERROR":
+                yield event
+                details = event.get("details", {}) or {}
+                # Non-fatal specialist errors must NOT fail the whole flow. The
+                # domain-envelope validator dispatch marks recoverable errors as
+                # ``fatal: False`` / ``severity: "warning"`` (streaming_tools): the
+                # extraction already persisted and the validator error was recorded as
+                # an OPEN ``validator_error`` finding for the curator to review. Surface
+                # the event (already yielded above) and keep going so the flow still
+                # produces its output instead of discarding a good extraction because a
+                # lookup-heavy validator could not finish.
+                if details.get("fatal") is False or details.get("severity") == "warning":
+                    continue
+                failure_reason = (
+                    details.get("error")
+                    or details.get("message")
+                    or "A specialist step failed."
+                )
+                flow_status = "failed"
+                logger.error(
+                    "[Flow Executor] Specialist error in flow '%s': %s",
+                    flow.name,
+                    failure_reason,
+                )
+                yield {
+                    "type": "FLOW_ERROR",
                     "timestamp": _now_iso(),
-                    "data": {
-                        "flow_id": str(flow.id),
-                        "flow_name": flow.name,
-                        "flow_run_id": flow_run_id,
-                        "step": completed_step.get("step"),
-                        "tool_name": completed_step.get("tool_name"),
-                        "agent_id": completed_step.get("agent_id"),
-                        "agent_name": completed_step.get("agent_name"),
-                        "evidence_records": step_evidence_preview,
-                        "evidence_preview": step_evidence_preview,
-                        "evidence_count": int(completed_step.get("evidence_count") or 0),
-                        "total_evidence_records": len(evidence_registry.records()),
+                    "details": {
+                        "reason": "specialist_step_failed",
+                        "message": (
+                            f"Flow '{flow.name}' stopped because a specialist step failed. "
+                            f"{failure_reason}"
+                        ),
                     },
                 }
-                projected_chat_output = completed_step.get("projected_chat_output")
-                if isinstance(projected_chat_output, str):
-                    formatter_node_id = str(completed_step.get("node_id") or "")
-                    _queue_output_event(
-                        {
-                            "type": "CHAT_OUTPUT_READY",
-                            "timestamp": _now_iso(),
-                            "details": {
-                                "output": projected_chat_output,
-                                "output_preview": _truncate_tool_output(projected_chat_output),
-                                "output_length": len(projected_chat_output),
-                                "formatter_node_id": formatter_node_id or None,
-                                "source_node_id": (
-                                    output_source_by_node_id.get(formatter_node_id, (None,))[0]
-                                ),
-                                "source_node_ids": list(
-                                    output_source_by_node_id.get(formatter_node_id, ())
-                                ),
-                                "formatter_label": output_attachment_by_node_id.get(
-                                    formatter_node_id, {}
-                                ).get("formatter_label"),
-                                "source_label": output_attachment_by_node_id.get(
-                                    formatter_node_id, {}
-                                ).get("source_label"),
-                                "source_labels": output_attachment_by_node_id.get(
-                                    formatter_node_id, {}
-                                ).get("source_labels", []),
-                            },
-                        }
-                    )
-            terminal_output_ready = bool(pending_output_events) and not (
-                _missing_consumed_tool_completions()
-            )
-            if terminal_output_ready:
-                yield event
-                for flow_validator_audit_event in flow_validator_audit_events:
-                    yield flow_validator_audit_event
-                if flow_step_evidence_event is not None:
-                    yield flow_step_evidence_event
-                flow_validator_audit_events = []
-                flow_step_evidence_event = None
                 break
-        if event_type == "SPECIALIST_ERROR":
-            yield event
-            details = event.get("details", {}) or {}
-            # Non-fatal specialist errors must NOT fail the whole flow. The
-            # domain-envelope validator dispatch marks recoverable errors as
-            # ``fatal: False`` / ``severity: "warning"`` (streaming_tools): the
-            # extraction already persisted and the validator error was recorded as
-            # an OPEN ``validator_error`` finding for the curator to review. Surface
-            # the event (already yielded above) and keep going so the flow still
-            # produces its output instead of discarding a good extraction because a
-            # lookup-heavy validator could not finish.
-            if details.get("fatal") is False or details.get("severity") == "warning":
-                continue
-            failure_reason = (
-                details.get("error")
-                or details.get("message")
-                or "A specialist step failed."
-            )
-            flow_status = "failed"
-            logger.error(
-                "[Flow Executor] Specialist error in flow '%s': %s",
-                flow.name,
-                failure_reason,
-            )
-            yield {
-                "type": "FLOW_ERROR",
-                "timestamp": _now_iso(),
-                "details": {
-                    "reason": "specialist_step_failed",
-                    "message": (
-                        f"Flow '{flow.name}' stopped because a specialist step failed. "
-                        f"{failure_reason}"
-                    ),
-                },
-            }
-            break
-        if event_type == "RUN_ERROR":
-            yield event
-            failure_reason = (
-                event_data.get("message")
-                or event_data.get("error")
-                or "Flow execution failed."
-            )
-            flow_status = "failed"
-            logger.error(
-                "[Flow Executor] Run error in flow '%s': %s",
-                flow.name,
-                failure_reason,
-            )
-            yield {
-                "type": "FLOW_ERROR",
-                "timestamp": _now_iso(),
-                "details": {
-                    "reason": "run_error",
-                    "message": (
-                        f"Flow '{flow.name}' failed during execution. {failure_reason}"
-                    ),
-                },
-            }
-            break
-        if event_type == "RUN_FINISHED":
-            pending_run_finished_event = dict(event)
-            missing_steps = _missing_consumed_tool_completions()
-            if missing_steps:
+            if event_type == "RUN_ERROR":
+                yield event
+                failure_reason = (
+                    event_data.get("message")
+                    or event_data.get("error")
+                    or "Flow execution failed."
+                )
+                flow_status = "failed"
+                logger.error(
+                    "[Flow Executor] Run error in flow '%s': %s",
+                    flow.name,
+                    failure_reason,
+                )
+                yield {
+                    "type": "FLOW_ERROR",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "reason": "run_error",
+                        "message": (
+                            f"Flow '{flow.name}' failed during execution. {failure_reason}"
+                        ),
+                    },
+                }
+                break
+            if event_type == "RUN_FINISHED":
+                pending_run_finished_event = dict(event)
+                missing_steps = _missing_consumed_tool_completions()
+                if missing_steps:
+                    logger.info(
+                        "[Flow Executor] Deferring terminal %s for flow '%s' until all "
+                        "required steps complete; missing=%s",
+                        event_type,
+                        flow.name,
+                        missing_steps,
+                    )
+                    continue
                 logger.info(
-                    "[Flow Executor] Deferring terminal %s for flow '%s' until all "
-                    "required steps complete; missing=%s",
+                    "[Flow Executor] Buffering terminal %s for flow '%s' until "
+                    "post-loop validation and persistence complete",
                     event_type,
                     flow.name,
-                    missing_steps,
                 )
+                break
+            if pending_output_events and not _missing_consumed_tool_completions():
+                # The business output is ready, but the runner must continue consuming
+                # internally until RUN_FINISHED so the SDK and provider can tear down in
+                # lifecycle order. Do not expose the supervisor's trailing drain events.
                 continue
-            logger.info(
-                "[Flow Executor] Buffering terminal %s for flow '%s' until "
-                "post-loop validation and persistence complete",
-                event_type,
-                flow.name,
-            )
-            break
-        yield event
-        for flow_validator_audit_event in flow_validator_audit_events:
-            yield flow_validator_audit_event
-        if flow_step_evidence_event is not None:
-            yield flow_step_evidence_event
+            yield event
+            for flow_validator_audit_event in flow_validator_audit_events:
+                yield flow_validator_audit_event
+            if flow_step_evidence_event is not None:
+                yield flow_step_evidence_event
+
+    finally:
+        # External cancellation or an early client disconnect can close this
+        # generator while it is suspended at a yielded event. Always close the
+        # nested runner so its provider teardown cannot be bypassed.
+        await runner_stream.aclose()
 
     if flow_status != "failed":
         missing_steps = _missing_required_flow_steps(flow_execution_state)

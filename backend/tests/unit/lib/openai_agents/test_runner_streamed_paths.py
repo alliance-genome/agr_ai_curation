@@ -1,5 +1,6 @@
 """Branch tests for run_agent_streamed orchestration paths."""
 
+import asyncio
 import logging
 import uuid
 from types import SimpleNamespace
@@ -641,6 +642,60 @@ async def test_run_agent_streamed_specialist_output_error_path(monkeypatch):
         for update in captured["span_updates"]
     )
     assert captured["logged"][0][0] == "trace-specialist"
+
+
+@pytest.mark.asyncio
+async def test_provided_agent_keeps_runtime_error_events_by_default(monkeypatch):
+    """Agent Studio-style callers must retain RUN_ERROR and Sentry notification."""
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "flush_agent_configs", lambda _span: 0)
+
+    class _RootSpan:
+        trace_id = "trace-agent-studio"
+        id = "span-agent-studio"
+
+        def update(self, **_kwargs):
+            return None
+
+    class _Langfuse:
+        def start_as_current_observation(self, **_kwargs):
+            return _FakeContextManager(_RootSpan())
+
+    monkeypatch.setattr(runner, "get_langfuse", lambda: _Langfuse())
+    monkeypatch.setattr(
+        runner,
+        "propagate_attributes",
+        lambda **_kwargs: _FakeContextManager(),
+    )
+
+    async def _notify_tool_failure(**kwargs):
+        captured["notification"] = kwargs
+
+    async def _raising_stream(**_kwargs):
+        if False:
+            yield {}
+        raise RuntimeError("agent studio provider failure")
+
+    monkeypatch.setattr(runner, "notify_tool_failure", _notify_tool_failure)
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _raising_stream)
+
+    events = await _collect_events(
+        runner.run_agent_streamed(
+            context_messages=[{"role": "user", "content": "hello"}],
+            user_id="user-agent-studio",
+            agent=SimpleNamespace(name="Agent Studio Test", model="gpt-5", tools=[]),
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert [event["type"] for event in events][-2:] == [
+        "SUPERVISOR_ERROR",
+        "RUN_ERROR",
+    ]
+    assert captured["notification"]["error_message"] == (
+        "agent studio provider failure"
+    )
 
 
 @pytest.mark.asyncio

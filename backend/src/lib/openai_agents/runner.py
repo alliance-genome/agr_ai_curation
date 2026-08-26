@@ -749,7 +749,7 @@ async def _run_agent_with_groq_retry(
 
     while True:
         try:
-            async for event in _run_agent_with_tracing(
+            tracing_stream = _run_agent_with_tracing(
                 agent=agent,
                 input_items=input_items,
                 user_id=user_id,
@@ -761,8 +761,12 @@ async def _run_agent_with_groq_retry(
                 chat_turn_id=chat_turn_id,
                 sentry_workflow=sentry_workflow,
                 sentry_span_data=sentry_span_data,
-            ):
-                yield event
+            )
+            try:
+                async for event in tracing_stream:
+                    yield event
+            finally:
+                await tracing_stream.aclose()
             return
         except SpecialistOutputError:
             raise
@@ -2034,6 +2038,7 @@ async def run_agent_streamed(
     trace_context: Optional[Dict[str, str]] = None,
     sentry_workflow: Optional[str] = None,
     sentry_span_data: Optional[Dict[str, Any]] = None,
+    propagate_runtime_exceptions: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Run an agent with streaming output.
@@ -2075,6 +2080,11 @@ async def run_agent_streamed(
         sentry_workflow: Optional Sentry workflow label for this run.
         sentry_span_data: Optional additional `ai_curation.*`/`gen_ai.*` Sentry
                           span data for the manual AI span.
+        propagate_runtime_exceptions: Re-raise traced runtime failures so a
+                                      caller such as the flow executor can
+                                      classify them using its own lifecycle
+                                      state. Other callers retain RUN_ERROR
+                                      conversion and failure notification.
 
     Yields:
         SSE-compatible event dictionaries with types:
@@ -2205,6 +2215,7 @@ async def run_agent_streamed(
             extra={"user_id": user_id, "session_id": session_id},
         )
 
+    traced_runtime_exception: Optional[Exception] = None
     if langfuse:
         # Use start_as_current_observation() to SET THE ACTIVE CONTEXT
         # All OpenAI calls inside will automatically be nested under this span
@@ -2339,7 +2350,7 @@ async def run_agent_streamed(
                 try:
                     # Run agent inside the active span context
                     # All OpenAI calls will automatically be children of root_span
-                    async for event in _run_agent_with_groq_retry(
+                    agent_stream = _run_agent_with_groq_retry(
                         agent=agent,
                         input_items=input_items,
                         user_id=user_id,
@@ -2351,37 +2362,41 @@ async def run_agent_streamed(
                         chat_turn_id=turn_id if not provided_runtime_agent else None,
                         sentry_workflow=sentry_workflow,
                         sentry_span_data=sentry_span_data,
-                    ):
-                        # Capture completion data to update span
-                        if event.get("type") == "RUN_FINISHED":
-                            data = event.get("data", {})
-                            trace_final_output = {"response": data.get("response", "")}
-                            root_span.update(
-                                output={
-                                    "response": data.get("response", ""),
-                                    "response_length": data.get("response_length", 0),
-                                    "tool_calls": data.get("tool_calls", 0),
-                                    "agents_used": data.get("agents_used", []),
-                                }
-                            )
-                            _set_langfuse_trace_io(
-                                langfuse,
-                                root_span,
-                                output=trace_final_output,
-                            )
-                            logger.info(
-                                "Trace completed",
-                                extra={
-                                    "trace_id": trace_id,
-                                    "session_id": session_id,
-                                    "user_id": user_id,
-                                    "response_length": data.get("response_length", 0),
-                                    "tool_calls": data.get("tool_calls", 0),
-                                    "agents_used": data.get("agents_used", []),
-                                },
-                            )
-                            # Note: Prompt logging moved to finally block for guaranteed execution
-                        yield event
+                    )
+                    try:
+                        async for event in agent_stream:
+                            # Capture completion data to update span
+                            if event.get("type") == "RUN_FINISHED":
+                                data = event.get("data", {})
+                                trace_final_output = {"response": data.get("response", "")}
+                                root_span.update(
+                                    output={
+                                        "response": data.get("response", ""),
+                                        "response_length": data.get("response_length", 0),
+                                        "tool_calls": data.get("tool_calls", 0),
+                                        "agents_used": data.get("agents_used", []),
+                                    }
+                                )
+                                _set_langfuse_trace_io(
+                                    langfuse,
+                                    root_span,
+                                    output=trace_final_output,
+                                )
+                                logger.info(
+                                    "Trace completed",
+                                    extra={
+                                        "trace_id": trace_id,
+                                        "session_id": session_id,
+                                        "user_id": user_id,
+                                        "response_length": data.get("response_length", 0),
+                                        "tool_calls": data.get("tool_calls", 0),
+                                        "agents_used": data.get("agents_used", []),
+                                    },
+                                )
+                                # Note: Prompt logging moved to finally block for guaranteed execution
+                            yield event
+                    finally:
+                        await agent_stream.aclose()
 
                 except SpecialistOutputError as e:
                     # Specialist failed to produce structured output after retry
@@ -2464,6 +2479,24 @@ async def run_agent_streamed(
                     yield run_error_event
 
                 except Exception as e:
+                    if propagate_runtime_exceptions:
+                        traced_runtime_exception = e
+                        root_span.update(
+                            output={"error": str(e), "error_type": type(e).__name__},
+                            level="ERROR",
+                            status_message=str(e),
+                        )
+                        trace_final_output = {
+                            "status": "error",
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        }
+                        _set_langfuse_trace_io(
+                            langfuse,
+                            root_span,
+                            output=trace_final_output,
+                        )
+                        raise
                     logger.error(
                         "Run error: %s",
                         e,
@@ -2557,6 +2590,8 @@ async def run_agent_streamed(
                 )
 
         except Exception as e:
+            if e is traced_runtime_exception:
+                raise
             logger.error(
                 "Failed to create span context: %s",
                 e,
@@ -2591,7 +2626,7 @@ async def run_agent_streamed(
             write_stream_event(supervisor_start_event, trace_id=fallback_trace_id)
             yield supervisor_start_event
             try:
-                async for event in _run_agent_with_groq_retry(
+                agent_stream = _run_agent_with_groq_retry(
                     agent=agent,
                     input_items=input_items,
                     user_id=user_id,
@@ -2603,8 +2638,12 @@ async def run_agent_streamed(
                     chat_turn_id=turn_id if not provided_runtime_agent else None,
                     sentry_workflow=sentry_workflow,
                     sentry_span_data=sentry_span_data,
-                ):
-                    yield event
+                )
+                try:
+                    async for event in agent_stream:
+                        yield event
+                finally:
+                    await agent_stream.aclose()
             finally:
                 # Guarantee prompt logging even on client disconnect
                 _log_used_prompts_to_db(trace_id=fallback_trace_id, session_id=session_id)
@@ -2642,7 +2681,7 @@ async def run_agent_streamed(
         write_stream_event(supervisor_start_event, trace_id=fallback_trace_id)
         yield supervisor_start_event
         try:
-            async for event in _run_agent_with_groq_retry(
+            agent_stream = _run_agent_with_groq_retry(
                 agent=agent,
                 input_items=input_items,
                 user_id=user_id,
@@ -2654,8 +2693,12 @@ async def run_agent_streamed(
                 chat_turn_id=turn_id if not provided_runtime_agent else None,
                 sentry_workflow=sentry_workflow,
                 sentry_span_data=sentry_span_data,
-            ):
-                yield event
+            )
+            try:
+                async for event in agent_stream:
+                    yield event
+            finally:
+                await agent_stream.aclose()
         finally:
             # Guarantee prompt logging even on client disconnect
             _log_used_prompts_to_db(trace_id=fallback_trace_id, session_id=session_id)
