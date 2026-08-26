@@ -49,3 +49,23 @@ typed results and record lookup provenance.
 `agent.yaml` keeps `group_rules_enabled: false`. The locked core owns the JSON
 output mandate, while this editable prompt retains the tool workflow, typed status
 mapping, source/provenance contract, and structured-finalization requirement.
+
+## Source contract details
+
+The adapter calls only
+`GET https://api.geneontology.org/api/bioentity/gene/{gene_id}/function?rows=-1`.
+It accepts a supported Alliance gene CURIE rather than a URL, validates the
+namespace-specific identifier before dispatch, requests the complete collection
+in one call, and does not fall back to another annotation source.
+
+Every successful annotation retains the returned gene-product ID, GO term and
+aspect, legacy evidence code and ECO identifier, evidence label, references,
+relation, With/From values, qualifiers, negation, providers, product type, and
+exact source URL and association ID. The requested CURIE remains the result-level
+identity because returned subjects are not uniformly prefix-identical: for
+example, an `FB:` query can return a `FlyBase:` subject and an `HGNC:` query can
+return a `UniProtKB:` product.
+
+QuickGO remains the separate GO term metadata and hierarchy source. It is not an
+annotation fallback because a direct request for the recorded `RGD:620474`
+contract example rejects that identifier as an invalid gene-product ID.
