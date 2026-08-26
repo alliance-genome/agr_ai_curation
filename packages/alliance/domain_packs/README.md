@@ -16,7 +16,7 @@ provider-neutral `DomainEnvelope`:
 
 The base scaffold defines shared object-role conventions and pinned Alliance
 LinkML schema references. Concrete packs such as `gene_expression`, `gene`,
-`allele`, `disease`, `chemical_condition`, and `phenotype` keep LinkML and AGR
+`allele`, `disease`, `go`, `chemical_condition`, and `phenotype` keep LinkML and AGR
 curation DB grounding in package metadata, fixtures, and Alliance package Python
 adapters instead of adding those fields to core schemas.
 
