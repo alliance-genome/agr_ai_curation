@@ -3,7 +3,8 @@
 services:
   # Langfuse Worker for background processing
   langfuse-worker:
-    image: docker.io/langfuse/langfuse-worker:3
+    # Langfuse 4.21.0 (multi-architecture manifest digest).
+    image: ${LANGFUSE_WORKER_IMAGE:-docker.io/langfuse/langfuse-worker@sha256:98dd41e7a7f0112e63f1006086155488d968ca5e637908b4558bf347be7440d4}
     restart: always
     depends_on: &langfuse-depends-on
       postgres:
@@ -15,7 +16,7 @@ services:
       clickhouse:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'node worker/dist/index.js' > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider 'http://127.0.0.1:3030/api/health?failIfEventPropagationStuck=true' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -58,6 +59,12 @@ services:
       LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: ${LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE:-true}
       LANGFUSE_INGESTION_QUEUE_DELAY_MS: ${LANGFUSE_INGESTION_QUEUE_DELAY_MS:-}
       LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: ${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-}
+      LANGFUSE_MIGRATION_V4_WRITE_MODE: ${LANGFUSE_MIGRATION_V4_WRITE_MODE:-events_only}
+      LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR: ${LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR:-direct}
+      LANGFUSE_MIGRATION_V4_ALLOW_PREVIEW_OPT_IN: ${LANGFUSE_MIGRATION_V4_ALLOW_PREVIEW_OPT_IN:-true}
+      LANGFUSE_BACKGROUND_MIGRATION_V4_ENABLE_HISTORIC_BACKFILL: ${LANGFUSE_BACKGROUND_MIGRATION_V4_ENABLE_HISTORIC_BACKFILL:-true}
+      LANGFUSE_BACKGROUND_MIGRATION_V4_DROP_PID_TID_SORTING_TABLES: ${LANGFUSE_BACKGROUND_MIGRATION_V4_DROP_PID_TID_SORTING_TABLES:-false}
+      LANGFUSE_EVENT_PROPAGATION_STUCK_THRESHOLD_MINUTES: ${LANGFUSE_EVENT_PROPAGATION_STUCK_THRESHOLD_MINUTES:-15}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_AUTH: ${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}
@@ -65,7 +72,8 @@ services:
 
   # Langfuse Web UI and API
   langfuse:
-    image: docker.io/langfuse/langfuse:3
+    # Langfuse 4.21.0 (multi-architecture manifest digest).
+    image: ${LANGFUSE_IMAGE:-docker.io/langfuse/langfuse@sha256:e5b04db8e261cc6f8d137f3a84b496efee75d6c4eb1653bd3c7709d1500c763c}
     restart: always
     depends_on: *langfuse-depends-on
     ports:
@@ -472,12 +480,15 @@ services:
     restart: always
     command: >
       --requirepass ${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}
+      --maxmemory-policy noeviction
     labels:
       log_env: dev
       log_tier: cache
       log_component: redis
     ports:
       - "${REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - langfuse_redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}", "ping"]
       interval: 15s
@@ -487,7 +498,8 @@ services:
 
   # ClickHouse for Langfuse analytics
   clickhouse:
-    image: docker.io/clickhouse/clickhouse-server:24.6.2.17-alpine
+    # ClickHouse 25.12 is the Langfuse v4 minimum and upstream Compose pin.
+    image: ${CLICKHOUSE_IMAGE:-docker.io/clickhouse/clickhouse-server@sha256:8a790dd3468db22b1d4e7b18a176f378ff5ff6053b9c48dd4ea1fa71a24c5ba6}
     restart: always
     user: "101:101"
     environment:
@@ -495,6 +507,7 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-CHANGE_ME_CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      TZ: UTC
     volumes:
       - langfuse_clickhouse_data:/var/lib/clickhouse
       - langfuse_clickhouse_logs:/var/log/clickhouse-server
@@ -544,6 +557,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-ai_curation}
+      TZ: UTC
+      PGTZ: UTC
     ports:
       - 127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432
     volumes:
@@ -583,6 +598,8 @@ volumes:
   langfuse_clickhouse_logs:
     driver: local
   langfuse_minio_data:
+    driver: local
+  langfuse_redis_data:
     driver: local
 
 # Use Compose's per-project default network name for workspace isolation.

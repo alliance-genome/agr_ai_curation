@@ -59,6 +59,12 @@ x-langfuse-worker-env: &langfuse-worker-env
   LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: "${LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE:-true}"
   LANGFUSE_INGESTION_QUEUE_DELAY_MS: "${LANGFUSE_INGESTION_QUEUE_DELAY_MS:-}"
   LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: "${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-}"
+  LANGFUSE_MIGRATION_V4_WRITE_MODE: "${LANGFUSE_MIGRATION_V4_WRITE_MODE:-events_only}"
+  LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR: "${LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR:-direct}"
+  LANGFUSE_MIGRATION_V4_ALLOW_PREVIEW_OPT_IN: "${LANGFUSE_MIGRATION_V4_ALLOW_PREVIEW_OPT_IN:-true}"
+  LANGFUSE_BACKGROUND_MIGRATION_V4_ENABLE_HISTORIC_BACKFILL: "${LANGFUSE_BACKGROUND_MIGRATION_V4_ENABLE_HISTORIC_BACKFILL:-true}"
+  LANGFUSE_BACKGROUND_MIGRATION_V4_DROP_PID_TID_SORTING_TABLES: "${LANGFUSE_BACKGROUND_MIGRATION_V4_DROP_PID_TID_SORTING_TABLES:-false}"
+  LANGFUSE_EVENT_PROPAGATION_STUCK_THRESHOLD_MINUTES: "${LANGFUSE_EVENT_PROPAGATION_STUCK_THRESHOLD_MINUTES:-15}"
   REDIS_HOST: "${REDIS_HOST:-redis}"
   REDIS_PORT: "${REDIS_PORT:-6379}"
   REDIS_AUTH:
@@ -66,7 +72,8 @@ x-langfuse-worker-env: &langfuse-worker-env
 
 services:
   langfuse-worker:
-    image: docker.io/langfuse/langfuse-worker@sha256:080377807b6d1fca2117662840161e60a0ab6842b2578ef39ea17df80ba42bfd
+    # Langfuse 4.21.0 (multi-architecture manifest digest).
+    image: ${LANGFUSE_WORKER_IMAGE:-docker.io/langfuse/langfuse-worker@sha256:98dd41e7a7f0112e63f1006086155488d968ca5e637908b4558bf347be7440d4}
     restart: always
     depends_on: *langfuse-depends-on
     labels:
@@ -74,7 +81,7 @@ services:
       log_tier: observability
       log_component: langfuse-worker
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'node worker/dist/index.js' > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider 'http://127.0.0.1:3030/api/health?failIfEventPropagationStuck=true' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -82,7 +89,8 @@ services:
     environment: *langfuse-worker-env
 
   langfuse:
-    image: docker.io/langfuse/langfuse@sha256:35461119756177199bf4412ceed03e0f637ca5c4a6b8b85d9e31c35e515e670d
+    # Langfuse 4.21.0 (multi-architecture manifest digest).
+    image: ${LANGFUSE_IMAGE:-docker.io/langfuse/langfuse@sha256:e5b04db8e261cc6f8d137f3a84b496efee75d6c4eb1653bd3c7709d1500c763c}
     restart: always
     depends_on: *langfuse-depends-on
     labels:
@@ -443,6 +451,7 @@ services:
     restart: always
     command: >
       --requirepass ${REDIS_AUTH:?set in standalone env}
+      --maxmemory-policy noeviction
     labels:
       log_env: "${LOG_ENV:-production}"
       log_tier: cache
@@ -453,9 +462,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+    volumes:
+      - langfuse_redis_data:/data
 
   clickhouse:
-    image: docker.io/clickhouse/clickhouse-server@sha256:43d8d67ea843c5687b6bfe859427a29da2bebd2ec88eb3c337cae3a711bc017f
+    # ClickHouse 25.12 is the Langfuse v4 minimum and upstream Compose pin.
+    image: ${CLICKHOUSE_IMAGE:-docker.io/clickhouse/clickhouse-server@sha256:8a790dd3468db22b1d4e7b18a176f378ff5ff6053b9c48dd4ea1fa71a24c5ba6}
     restart: always
     labels:
       log_env: "${LOG_ENV:-production}"
@@ -467,6 +479,7 @@ services:
       CLICKHOUSE_USER: "${CLICKHOUSE_USER:-default}"
       CLICKHOUSE_PASSWORD:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      TZ: UTC
     volumes:
       - langfuse_clickhouse_data:/var/lib/clickhouse
       - langfuse_clickhouse_logs:/var/log/clickhouse-server
@@ -515,6 +528,8 @@ services:
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
       POSTGRES_PASSWORD:
       POSTGRES_DB: "${POSTGRES_DB:-ai_curation}"
+      TZ: UTC
+      PGTZ: UTC
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -557,4 +572,6 @@ volumes:
   langfuse_clickhouse_logs:
     driver: local
   langfuse_minio_data:
+    driver: local
+  langfuse_redis_data:
     driver: local
