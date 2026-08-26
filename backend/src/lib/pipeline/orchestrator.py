@@ -11,6 +11,7 @@ from src.models.pipeline import ProcessingStage
 from .tracker import PipelineTracker
 from src.models.strategy import ChunkingStrategy
 from ..exceptions import PDFCancellationError
+from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
 from src.lib.observability.runtime import report_runtime_exception
 
 logger = logging.getLogger(__name__)
@@ -445,7 +446,9 @@ class DocumentPipelineOrchestrator:
                 if doc.processing_started_at is None:
                     doc.processing_started_at = now
                 doc.processing_completed_at = now
-                doc.error_message = (error_message or "Pipeline failed")[:1000]
+                doc.error_message = (error_message or "Pipeline failed")[
+                    :get_pdf_document_error_message_max_chars()
+                ]
 
             session.commit()
             logger.info("Updated SQL document status for %s to %s", document_id, status)

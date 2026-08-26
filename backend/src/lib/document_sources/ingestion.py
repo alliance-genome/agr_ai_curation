@@ -18,6 +18,7 @@ from src.lib.document_sources.figure_metadata import (
     append_provider_figure_metadata_markdown,
 )
 from src.lib.document_sources.provenance import sanitize_document_source_provenance
+from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
 from src.lib.pipeline.orchestrator import ProcessingResult
 from src.lib.storage_permissions import ensure_writable_directory
 from src.models.pipeline import ProcessingStage
@@ -469,7 +470,9 @@ async def _sync_sql_document_status(
             if document.processing_started_at is None:
                 document.processing_started_at = now
             document.processing_completed_at = now
-            document.error_message = (error_message or "Provider Markdown ingestion failed")[:1000]
+            document.error_message = (
+                error_message or "Provider Markdown ingestion failed"
+            )[:get_pdf_document_error_message_max_chars()]
         session.commit()
     except Exception:
         session.rollback()

@@ -29,6 +29,7 @@ from src.lib.openai_agents.config import (
     get_inspect_results_validation_detail_list_limit,
     get_inspect_results_validation_page_size,
     get_openai_responses_websocket_ping_timeout_seconds,
+    get_pdf_document_error_message_max_chars,
     get_pdf_max_file_size_bytes,
     get_pdf_upload_max_page_count,
     get_model_for_agent,
@@ -615,6 +616,17 @@ def test_pdf_max_file_size_default_is_500mb(monkeypatch):
     monkeypatch.delenv("PDF_MAX_FILE_SIZE_BYTES", raising=False)
 
     assert get_pdf_max_file_size_bytes() == 500 * 1024 * 1024
+
+
+def test_pdf_document_error_message_max_chars_is_configurable(monkeypatch):
+    monkeypatch.delenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", raising=False)
+    assert get_pdf_document_error_message_max_chars() == 1000
+
+    monkeypatch.setenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", "17")
+    assert get_pdf_document_error_message_max_chars() == 17
+
+    monkeypatch.setenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", "0")
+    assert get_pdf_document_error_message_max_chars() == 1
 
 
 def test_pdf_max_file_size_env_override_can_raise_former_ceiling(monkeypatch):
