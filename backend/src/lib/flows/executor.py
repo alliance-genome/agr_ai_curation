@@ -4256,7 +4256,37 @@ async def execute_flow(
             "ai_curation.flow.total_steps": total_steps,
         },
     )
-    async for event in runner_stream:
+    while True:
+        try:
+            event = await anext(runner_stream)
+        except StopAsyncIteration:
+            break
+        except Exception as exc:
+            terminal_output_ready = bool(pending_output_events) and not (
+                _missing_consumed_tool_completions()
+            )
+            await runner_stream.aclose()
+            if not terminal_output_ready:
+                raise
+            report_runtime_exception(
+                exc,
+                component="flow_executor",
+                operation="post_terminal_runner_drain_failed",
+                context={
+                    "document_id": document_id,
+                    "session_id": session_id,
+                    "trace_id": trace_id,
+                    "flow_run_id": flow_run_id,
+                    "flow_id": str(flow.id),
+                },
+            )
+            logger.warning(
+                "[Flow Executor] Runner drain failed after terminal output "
+                "for flow '%s'",
+                flow.name,
+                exc_info=True,
+            )
+            break
         event_type = event.get("type")
         event_data = event.get("data", {}) or {}
 

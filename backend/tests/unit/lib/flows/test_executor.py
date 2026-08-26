@@ -6124,9 +6124,14 @@ class TestExecuteFlowTermination:
             "Formatter could not create an output: Unable to create JSON"
         )
 
+    @pytest.mark.parametrize(
+        "drain_error_timing",
+        [None, "post-output", "pre-output"],
+        ids=["clean-drain", "failed-drain", "pre-output-failure"],
+    )
     @pytest.mark.asyncio
     async def test_formatter_and_handoff_events_complete_before_terminal_output(
-        self, monkeypatch
+        self, monkeypatch, drain_error_timing
     ):
         """Future handoff state must not overtake its runner completion event."""
 
@@ -6189,6 +6194,7 @@ class TestExecuteFlowTermination:
             ),
         )
         persisted_requests = []
+        reported_drain_errors = []
 
         monkeypatch.setattr(
             "src.lib.flows.executor.create_flow_supervisor",
@@ -6209,6 +6215,10 @@ class TestExecuteFlowTermination:
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
             _recording_persist_idempotent_extraction_results(persisted_requests),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: reported_drain_errors.append((exc, kwargs)),
         )
 
         runner = importlib.import_module("src.lib.openai_agents.runner")
@@ -6255,8 +6265,12 @@ class TestExecuteFlowTermination:
             final_output = "should not leak"
 
             async def stream_events(self):
+                if drain_error_timing == "pre-output":
+                    raise RuntimeError("pre-output supervisor failure")
                 for sdk_event in sdk_events:
                     yield sdk_event
+                if drain_error_timing == "post-output":
+                    raise RuntimeError("post-output supervisor failure")
                 lifecycle_order.append("sdk_stream_drained")
 
         class _FakeProvider:
@@ -6297,15 +6311,21 @@ class TestExecuteFlowTermination:
         monkeypatch.setattr(runner, "get_collected_events", lambda: [])
         monkeypatch.setattr(runner.Runner, "run_streamed", _fake_sdk_run_streamed)
 
-        events = [
-            event
-            async for event in execute_flow(
-                flow,
-                user_id="u1",
-                session_id="s1",
-                document_id="doc-1",
-            )
-        ]
+        flow_events = execute_flow(
+            flow,
+            user_id="u1",
+            session_id="s1",
+            document_id="doc-1",
+        )
+        if drain_error_timing == "pre-output":
+            with pytest.raises(RuntimeError, match="pre-output supervisor failure"):
+                _ = [event async for event in flow_events]
+            assert lifecycle_order == ["provider_closed"]
+            assert reported_drain_errors == []
+            assert persisted_requests == []
+            return
+
+        events = [event async for event in flow_events]
         event_types = [event.get("type") for event in events]
 
         assert "FLOW_ERROR" not in event_types
@@ -6333,7 +6353,26 @@ class TestExecuteFlowTermination:
             "FLOW_FINISHED"
         )
         assert "RUN_FINISHED" not in event_types
-        assert lifecycle_order == ["sdk_stream_drained", "provider_closed"]
+        expected_lifecycle_order = ["provider_closed"]
+        if drain_error_timing is None:
+            expected_lifecycle_order.insert(0, "sdk_stream_drained")
+            assert reported_drain_errors == []
+        else:
+            assert len(reported_drain_errors) == 1
+            reported_error, report_kwargs = reported_drain_errors[0]
+            assert str(reported_error) == "post-output supervisor failure"
+            assert report_kwargs["component"] == "flow_executor"
+            assert report_kwargs["operation"] == "post_terminal_runner_drain_failed"
+            assert report_kwargs["context"] == {
+                "document_id": "doc-1",
+                "session_id": "s1",
+                "trace_id": report_kwargs["context"]["trace_id"],
+                "flow_run_id": report_kwargs["context"]["flow_run_id"],
+                "flow_id": str(flow.id),
+            }
+            assert report_kwargs["context"]["trace_id"]
+            assert report_kwargs["context"]["flow_run_id"]
+        assert lifecycle_order == expected_lifecycle_order
         chat_ready = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
         assert chat_ready["details"]["output"] == "Found one supported gene."
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
