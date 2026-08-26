@@ -235,6 +235,20 @@ def test_explicit_terminal_finalizers_reconcile_document(
     assert session.commit_calls == 1
 
 
+def test_terminal_reconciliation_honors_configured_document_error_limit(monkeypatch):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    document = _build_document(job)
+    session = _FakeSession([job, job, document])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    monkeypatch.setenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", "7")
+
+    response = service_module.mark_failed(job_id=job.id, message="extractor crashed")
+
+    assert response is not None
+    assert response.error_message == "extractor crashed"
+    assert document.error_message == "extract"
+
+
 @pytest.mark.parametrize("finalizer", ["failed", "cancelled"])
 def test_explicit_terminal_finalizers_leave_completed_document_unchanged(
     monkeypatch,

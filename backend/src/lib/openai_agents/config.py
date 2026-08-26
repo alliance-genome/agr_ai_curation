@@ -2042,6 +2042,17 @@ def get_pdf_max_file_size_bytes() -> int:
     return value
 
 
+def get_pdf_document_error_message_max_chars() -> int:
+    """Max chars retained for persisted PDF document failure context.
+
+    Default 1000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", 1000),
+    )
+
+
 def get_pdf_upload_max_page_count() -> int:
     """Max page count admitted for PDF uploads (PDF_UPLOAD_MAX_PAGE_COUNT).
 

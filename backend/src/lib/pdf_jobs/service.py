@@ -9,6 +9,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 
+from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
@@ -139,7 +140,9 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     if document.processing_started_at is None:
         document.processing_started_at = job.started_at or job.created_at
     document.processing_completed_at = job.completed_at
-    document.error_message = terminal_message[:1000]
+    document.error_message = terminal_message[
+        :get_pdf_document_error_message_max_chars()
+    ]
     return True
 
 
