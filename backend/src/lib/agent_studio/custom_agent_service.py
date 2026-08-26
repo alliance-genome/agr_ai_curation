@@ -68,7 +68,7 @@ class CustomOverlayNormalization:
 
 def _read_allowed_group_ids(record: Any, *, field_name: str = "allowed_group_ids") -> list[str]:
     return normalize_allowed_group_ids(
-        list(getattr(record, "allowed_group_ids", None) or []),
+        list(record.allowed_group_ids),
         field_name=field_name,
     )
 
@@ -530,7 +530,7 @@ def _validate_inherited_access_floor(
 
     requested = normalize_allowed_group_ids(requested_allowed_group_ids)
     return require_allowed_group_ids_narrowing(
-        list(getattr(custom_agent, "inherited_allowed_group_ids", None) or []),
+        list(custom_agent.inherited_allowed_group_ids),
         requested,
         source_name="clone/template source",
     )

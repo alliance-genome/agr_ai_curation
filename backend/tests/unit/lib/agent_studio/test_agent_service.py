@@ -3,11 +3,14 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from src.lib.agent_studio.agent_service import (
     agent_to_execution_spec,
     is_agent_editable_by_user,
     is_agent_visible_to_user,
 )
+from src.models.sql.agent import Agent
 
 
 def test_is_agent_visible_to_user_allows_system_agents():
@@ -64,3 +67,18 @@ def test_agent_to_execution_spec_maps_and_normalizes_json_fields():
     assert spec.tool_ids == ["agr_query"]
     assert spec.allowed_group_ids == ["RGD"]
     assert spec.group_prompt_overrides == {"WB": "WormBase rules"}
+
+
+def test_agent_to_execution_spec_requires_persisted_access_field():
+    agent = Agent(
+        agent_key="gene_validation",
+        name="Gene Validator",
+        instructions="You are a specialist.",
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="medium",
+        tool_ids=["agr_query"],
+    )
+
+    with pytest.raises(TypeError, match="NoneType.*iterable"):
+        agent_to_execution_spec(agent)

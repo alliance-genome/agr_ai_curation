@@ -476,9 +476,7 @@ async def get_agent_templates_endpoint(
                     category=agent.category,
                     model_id=agent.model_id,
                     tool_ids=list(agent.tool_ids or []),
-                    allowed_group_ids=list(
-                        getattr(agent, "allowed_group_ids", None) or []
-                    ),
+                    allowed_group_ids=list(agent.allowed_group_ids),
                     output_schema_key=agent.output_schema_key,
                 )
                 for agent in rows
@@ -733,9 +731,7 @@ async def get_registry_metadata(
                 output_schema_key=getattr(custom, "output_schema_key", None),
                 is_active=bool(getattr(custom, "is_active", True)),
                 visible=True,
-                allowed_group_ids=list(
-                    getattr(custom, "allowed_group_ids", None) or []
-                ),
+                allowed_group_ids=list(custom.allowed_group_ids),
                 produces_flow_artifacts=_produces_flow_artifacts(
                     {
                         "category": category,

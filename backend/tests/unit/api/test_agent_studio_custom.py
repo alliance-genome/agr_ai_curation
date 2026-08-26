@@ -640,6 +640,22 @@ class TestCustomAgentCrudErrorsAndBranches:
 
         assert response.allowed_group_ids == ["RGD"]
 
+    def test_version_response_requires_persisted_access_field(self):
+        import src.api.agent_studio_custom as api_module
+
+        version = SimpleNamespace(
+            id=uuid.uuid4(),
+            custom_agent_id=uuid.uuid4(),
+            version=3,
+            custom_prompt="Prompt",
+            group_prompt_overrides={},
+            notes="Incomplete snapshot",
+            created_at=datetime(2026, 8, 26, tzinfo=UTC),
+        )
+
+        with pytest.raises(AttributeError, match="allowed_group_ids"):
+            api_module._as_version_payload(version)
+
     def test_update_endpoint_maps_value_and_integrity_errors(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 

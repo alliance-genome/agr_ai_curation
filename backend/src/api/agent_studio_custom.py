@@ -237,7 +237,7 @@ def _as_version_payload(version_obj) -> CustomAgentVersionResponse:
         version=version_obj.version,
         custom_prompt=version_obj.custom_prompt,
         group_prompt_overrides=version_obj.group_prompt_overrides or {},
-        allowed_group_ids=getattr(version_obj, "allowed_group_ids", None) or [],
+        allowed_group_ids=version_obj.allowed_group_ids,
         notes=version_obj.notes,
         created_at=version_obj.created_at,
     )

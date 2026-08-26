@@ -186,7 +186,7 @@ def sync_system_agents(
         # should reactivate any previously disabled row before runtime
         # validation decides whether it remains runnable in this environment.
         for field_name, field_value in values.items():
-            if getattr(row, field_name, None) != field_value:
+            if getattr(row, field_name) != field_value:
                 setattr(row, field_name, field_value)
                 metadata_changed = True
 

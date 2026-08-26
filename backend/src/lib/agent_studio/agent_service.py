@@ -118,7 +118,7 @@ def agent_to_execution_spec(agent: Agent) -> AgentExecutionSpec:
         model_temperature=float(agent.model_temperature),
         model_reasoning=agent.model_reasoning,
         tool_ids=list(agent.tool_ids or []),
-        allowed_group_ids=list(getattr(agent, "allowed_group_ids", None) or []),
+        allowed_group_ids=list(agent.allowed_group_ids),
         output_schema_key=agent.output_schema_key,
         group_rules_enabled=bool(agent.group_rules_enabled),
         group_rules_component=agent.group_rules_component,

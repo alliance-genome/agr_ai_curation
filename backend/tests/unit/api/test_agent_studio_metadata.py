@@ -288,6 +288,7 @@ class TestGetRegistryMetadata:
             icon="🔧",
             output_schema_key="GeneResultEnvelope",
             is_active=True,
+            allowed_group_ids=[],
         )
         monkeypatch.setattr(
             api_module,
@@ -333,6 +334,7 @@ class TestGetRegistryMetadata:
             category="Extraction",
             name="Custom Gene Extractor",
             icon=None,
+            allowed_group_ids=[],
         )
         monkeypatch.setattr(
             api_module,
