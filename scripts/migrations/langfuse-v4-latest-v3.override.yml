@@ -1,0 +1,9 @@
+services:
+  # One-time pre-v4 staging images. Include this file only for migration step 1.
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker@sha256:7d0f28214bd2d1bb03056439f810442b147f0143c7ebf9bdf0f39dc4e47df6cd
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'node worker/dist/index.js' > /dev/null || exit 1"]
+
+  langfuse:
+    image: docker.io/langfuse/langfuse@sha256:a921990b3cf6f62e9452eaf8ab9bea045852375a6883abd1fdbe63afa08defa0
