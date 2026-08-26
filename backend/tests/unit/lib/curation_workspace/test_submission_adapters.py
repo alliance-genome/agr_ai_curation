@@ -7,8 +7,11 @@ import pytest
 from src.lib.curation_workspace.submission_adapters import (
     DEFAULT_NOOP_SUBMISSION_TARGET_KEY,
     NoOpSubmissionAdapter,
+    READ_ONLY_HANDOFF_WARNING,
+    ReadOnlyHandoffSubmissionAdapter,
     SubmissionAdapterRegistry,
     SubmissionTransportError,
+    SubmissionTransportResult,
     build_default_submission_adapter_registry,
     coerce_submission_transport_result,
     normalize_submission_transport_result,
@@ -29,6 +32,29 @@ def _payload(*, target_key: str = DEFAULT_NOOP_SUBMISSION_TARGET_KEY) -> Submiss
         candidate_ids=["candidate-1"],
         payload_json={"candidate_count": 1},
     )
+
+
+class _ExampleReadOnlyHandoffAdapter(ReadOnlyHandoffSubmissionAdapter):
+    def __init__(self) -> None:
+        super().__init__(
+            transport_key="example_read_only_handoff",
+            supported_target_keys=("submit.example",),
+        )
+
+    def _submit(
+        self,
+        *,
+        payload: SubmissionPayloadContract,
+        idempotency_key: str,
+    ) -> SubmissionTransportResult:
+        return self.build_read_only_handoff_result(
+            payload=payload,
+            idempotency_key=idempotency_key,
+            external_reference="example:submit.example:1",
+            response_message="Export prepared for manual handoff.",
+            submission_state={"record_count": 1},
+            target_result_state={"record_count": 1},
+        )
 
 
 def test_submission_adapter_registry_registers_and_looks_up_adapters():
@@ -70,6 +96,34 @@ def test_noop_submission_adapter_invokes_transport_with_mock_payload():
     assert result.validation_errors == ()
     assert result.warnings == ("Awaiting downstream worker.",)
     assert result.completed_at is not None
+
+
+def test_read_only_handoff_adapter_returns_real_non_mutating_result():
+    result = _ExampleReadOnlyHandoffAdapter().submit(
+        payload=_payload(target_key="submit.example"),
+        idempotency_key="test-handoff",
+    )
+
+    assert result.status is CurationSubmissionStatus.MANUAL_REVIEW_REQUIRED
+    assert result.external_reference == "example:submit.example:1"
+    assert result.warnings == (READ_ONLY_HANDOFF_WARNING,)
+    assert result.submission_state == {
+        "record_count": 1,
+        "idempotency_key": "test-handoff",
+        "target_status": "manual_review_required",
+        "target_key": "submit.example",
+        "target_transport": "example_read_only_handoff",
+        "external_reference": "example:submit.example:1",
+        "write_mode": "read_only_handoff",
+    }
+    assert result.target_result_history == (
+        {
+            "record_count": 1,
+            "status": "manual_review_required",
+            "target_key": "submit.example",
+            "write_mode": "read_only_handoff",
+        },
+    )
 
 
 @pytest.mark.parametrize("status_value", list(CurationSubmissionStatus))

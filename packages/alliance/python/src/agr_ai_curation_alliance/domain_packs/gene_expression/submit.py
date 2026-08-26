@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from src.lib.curation_workspace.submission_adapters.base import (
-    SubmissionTransportAdapter,
     SubmissionTransportResult,
     normalize_submission_transport_result,
+)
+from src.lib.curation_workspace.submission_adapters.read_only_handoff import (
+    ReadOnlyHandoffSubmissionAdapter,
 )
 from src.schemas.curation_workspace import CurationSubmissionStatus, SubmissionPayloadContract
 
@@ -17,7 +19,7 @@ from .export import (
 )
 
 
-class GeneExpressionSubmissionAdapter(SubmissionTransportAdapter):
+class GeneExpressionSubmissionAdapter(ReadOnlyHandoffSubmissionAdapter):
     """Validate and record a target-shaped gene-expression submission handoff.
 
     The configured curation database connection is read-only, so this adapter
@@ -65,35 +67,19 @@ class GeneExpressionSubmissionAdapter(SubmissionTransportAdapter):
         external_reference = (
             f"alliance:gene_expression:{payload.target_key}:{annotation_count}"
         )
-        submission_state = {
-            "idempotency_key": idempotency_key,
-            "target_status": "manual_review_required",
-            "target_key": payload.target_key,
-            "target_transport": self.transport_key,
-            "external_reference": external_reference,
-            "annotation_count": annotation_count,
-            "envelope_revisions": envelope_revisions,
-            "write_mode": "read_only_handoff",
-        }
-        return normalize_submission_transport_result(
-            status=CurationSubmissionStatus.MANUAL_REVIEW_REQUIRED,
+        return self.build_read_only_handoff_result(
+            payload=payload,
+            idempotency_key=idempotency_key,
             external_reference=external_reference,
             response_message=(
                 "Gene-expression target payload was prepared for curation DB "
                 "handoff; live database mutation requires an approved write transport."
             ),
-            warnings=(
-                "Read-only handoff recorded; no Alliance curation DB rows were mutated.",
-            ),
-            submission_state=submission_state,
-            target_result_history=[
-                {
-                    "status": "manual_review_required",
-                    "target_key": payload.target_key,
-                    "annotation_count": annotation_count,
-                    "write_mode": "read_only_handoff",
-                }
-            ],
+            submission_state={
+                "annotation_count": annotation_count,
+                "envelope_revisions": envelope_revisions,
+            },
+            target_result_state={"annotation_count": annotation_count},
         )
 
 
