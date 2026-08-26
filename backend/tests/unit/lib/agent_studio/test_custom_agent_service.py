@@ -1065,6 +1065,7 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
         category="Validation",
         model_temperature=0.1,
         model_reasoning="medium",
+        allowed_group_ids=["RGD"],
     )
     observed = {}
 
@@ -1099,3 +1100,46 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
     assert observed["name"] == "Shared Agent (Copy)"
     assert observed["template_source"] == "gene_validation"
     assert observed["custom_prompt"] == "prompt"
+    assert observed["allowed_group_ids"] == ["RGD"]
+    assert observed["inherited_allowed_group_ids"] == ["RGD"]
+
+
+def test_clone_visible_agent_rejects_widening_source_restriction(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    source = SimpleNamespace(
+        agent_key="restricted",
+        visibility="system",
+        name="Restricted",
+        template_source=None,
+        allowed_group_ids=["RGD"],
+    )
+    monkeypatch.setattr(service, "get_agent_by_key", lambda *_args, **_kwargs: source)
+    monkeypatch.setattr(service, "_has_active_custom_name", lambda *_args: False)
+
+    with pytest.raises(ValueError, match="cannot widen"):
+        service.clone_visible_agent_for_user(
+            db=SimpleNamespace(),
+            user_id=7,
+            source_agent_key="restricted",
+            name="Widened",
+            allowed_group_ids=[],
+        )
+
+
+def test_inherited_access_floor_blocks_later_widening():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        template_source="system_template",
+        inherited_allowed_group_ids=["RGD"],
+    )
+
+    assert service._validate_inherited_access_floor(
+        SimpleNamespace(), custom_agent, ["RGD"]  # type: ignore[arg-type]
+    ) == ["RGD"]
+    with pytest.raises(ValueError, match="cannot widen"):
+        service._validate_inherited_access_floor(
+            SimpleNamespace(), custom_agent, []  # type: ignore[arg-type]
+        )

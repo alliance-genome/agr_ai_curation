@@ -49,6 +49,7 @@ def test_agent_to_execution_spec_maps_and_normalizes_json_fields():
         model_temperature=0.1,
         model_reasoning="medium",
         tool_ids=["agr_query"],
+        allowed_group_ids=["RGD"],
         output_schema_key="GeneResultEnvelope",
         group_rules_enabled=True,
         group_rules_component="gene",
@@ -61,4 +62,5 @@ def test_agent_to_execution_spec_maps_and_normalizes_json_fields():
     assert spec.agent_key == "gene_validation"
     assert spec.model_id == "gpt-4o"
     assert spec.tool_ids == ["agr_query"]
+    assert spec.allowed_group_ids == ["RGD"]
     assert spec.group_prompt_overrides == {"WB": "WormBase rules"}

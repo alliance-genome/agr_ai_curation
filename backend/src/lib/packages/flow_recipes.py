@@ -12,6 +12,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from src.lib.agent_access import normalize_allowed_group_ids
 from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 
 from .models import ExportKind
@@ -48,6 +49,22 @@ class FlowRecipeStep(BaseModel):
         return _validate_flow_agent_id(value)
 
 
+class FlowRecipeAccess(BaseModel):
+    """Provider-neutral availability restrictions for one flow recipe."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    allowed_group_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("allowed_group_ids")
+    @classmethod
+    def _validate_allowed_group_ids(cls, value: list[str]) -> list[str]:
+        return normalize_allowed_group_ids(
+            value,
+            field_name="flow recipe access.allowed_group_ids",
+        )
+
+
 class FlowRecipe(BaseModel):
     """One package-advertised flow recipe."""
 
@@ -55,6 +72,7 @@ class FlowRecipe(BaseModel):
 
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
+    access: FlowRecipeAccess = Field(default_factory=FlowRecipeAccess)
     steps: list[FlowRecipeStep] = Field(min_length=1)
 
 

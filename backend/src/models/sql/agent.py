@@ -129,6 +129,18 @@ class Agent(Base):
         default=list,
         server_default=text("'[]'::jsonb"),
     )
+    allowed_group_ids = Column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    inherited_allowed_group_ids = Column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
     output_schema_key = Column(String(100), nullable=True)
 
     group_rules_enabled = Column(

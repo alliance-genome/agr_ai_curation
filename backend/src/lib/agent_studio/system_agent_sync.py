@@ -89,6 +89,8 @@ def _build_system_agent_values(
         "model_temperature": float(agent.model_config.temperature),
         "model_reasoning": agent.model_config.reasoning,
         "tool_ids": tool_ids,
+        "allowed_group_ids": list(agent.access.allowed_group_ids),
+        "inherited_allowed_group_ids": [],
         "output_schema_key": agent.output_schema,
         "group_rules_enabled": bool(agent.group_rules_enabled),
         "group_rules_component": agent_key if agent.group_rules_enabled else None,
@@ -184,7 +186,7 @@ def sync_system_agents(
         # should reactivate any previously disabled row before runtime
         # validation decides whether it remains runnable in this environment.
         for field_name, field_value in values.items():
-            if getattr(row, field_name) != field_value:
+            if getattr(row, field_name, None) != field_value:
                 setattr(row, field_name, field_value)
                 metadata_changed = True
 

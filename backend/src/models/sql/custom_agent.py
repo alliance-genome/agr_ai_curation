@@ -43,6 +43,12 @@ class CustomAgentVersion(Base):
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+    allowed_group_ids = Column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
     notes = Column(Text, nullable=True)
     created_at = Column(
         DateTime(timezone=True),

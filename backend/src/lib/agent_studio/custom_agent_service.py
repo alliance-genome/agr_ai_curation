@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 from src.lib.agent_studio.agent_service import get_agent_by_key, get_project_ids_for_user
 from src.lib.agent_studio.agent_identity import require_canonical_agent_identity
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
+from src.lib.agent_access import (
+    normalize_allowed_group_ids,
+    require_allowed_group_ids_narrowing,
+)
 from src.lib.config.models_loader import get_model
 from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.models.sql.agent import Agent as CustomAgent, ProjectMember
@@ -60,6 +64,13 @@ class CustomOverlayNormalization:
     status: str
     removed_layer_kinds: List[str]
     warning: Optional[str] = None
+
+
+def _read_allowed_group_ids(record: Any, *, field_name: str = "allowed_group_ids") -> list[str]:
+    return normalize_allowed_group_ids(
+        list(getattr(record, "allowed_group_ids", None) or []),
+        field_name=field_name,
+    )
 
 
 def _looks_like_legacy_curator_overlay(prompt: str) -> bool:
@@ -510,6 +521,21 @@ def _resolve_system_template_agent(db: Session, template_source: str) -> CustomA
     raise ValueError(f"No active system agent found for parent id '{raw_id}'")
 
 
+def _validate_inherited_access_floor(
+    db: Session,
+    custom_agent: CustomAgent,
+    requested_allowed_group_ids: list[str],
+) -> list[str]:
+    """Enforce the immutable access floor captured from a template/clone source."""
+
+    requested = normalize_allowed_group_ids(requested_allowed_group_ids)
+    return require_allowed_group_ids_narrowing(
+        list(getattr(custom_agent, "inherited_allowed_group_ids", None) or []),
+        requested,
+        source_name="clone/template source",
+    )
+
+
 def _has_active_custom_name(db: Session, user_id: int, name: str) -> bool:
     """Case-insensitive active-name check for a user's private/project custom agents."""
     return db.query(CustomAgent).filter(
@@ -561,6 +587,8 @@ def create_custom_agent(
     category: Optional[str] = None,
     model_temperature: Optional[float] = None,
     model_reasoning: Optional[str] = None,
+    allowed_group_ids: Optional[List[str]] = None,
+    inherited_allowed_group_ids: Optional[List[str]] = None,
 ) -> CustomAgent:
     """Create a new custom agent and seed version snapshot."""
     selected_template_key = str(template_source or "").strip()
@@ -577,6 +605,7 @@ def create_custom_agent(
             "tool_ids": list(parent_template.tool_ids or []),
             "output_schema_key": parent_template.output_schema_key,
             "category": parent_template.category,
+            "allowed_group_ids": _read_allowed_group_ids(parent_template),
         }
     else:
         if not str(model_id or "").strip():
@@ -588,6 +617,7 @@ def create_custom_agent(
             "tool_ids": [],
             "output_schema_key": None,
             "category": "Custom",
+            "allowed_group_ids": [],
         }
 
     agent_prompt = _normalize_editable_custom_prompt(
@@ -596,6 +626,29 @@ def create_custom_agent(
         target="Custom agent main prompt",
     )
     normalized_group_overrides = normalize_editable_group_prompt_overrides(group_prompt_overrides)
+    normalized_allowed_group_ids = normalize_allowed_group_ids(
+        allowed_group_ids
+        if allowed_group_ids is not None
+        else list(parent_defaults["allowed_group_ids"]),
+    )
+    normalized_allowed_group_ids = require_allowed_group_ids_narrowing(
+        list(parent_defaults["allowed_group_ids"]),
+        normalized_allowed_group_ids,
+        source_name=(
+            f"template '{parent_agent_key}'" if parent_agent_key else "scratch source"
+        ),
+    )
+    normalized_inherited_allowed_group_ids = normalize_allowed_group_ids(
+        inherited_allowed_group_ids
+        if inherited_allowed_group_ids is not None
+        else list(parent_defaults["allowed_group_ids"]),
+        field_name="inherited_allowed_group_ids",
+    )
+    normalized_allowed_group_ids = require_allowed_group_ids_narrowing(
+        normalized_inherited_allowed_group_ids,
+        normalized_allowed_group_ids,
+        source_name="clone/template source",
+    )
     custom_uuid = uuid.uuid4()
 
     effective_model_id = _validate_model_id(model_id or parent_defaults["model_id"] or "")
@@ -648,6 +701,8 @@ def create_custom_agent(
         group_rules_enabled=include_group_rules,
         group_rules_component=parent_agent_key,
         group_prompt_overrides=normalized_group_overrides,
+        allowed_group_ids=normalized_allowed_group_ids,
+        inherited_allowed_group_ids=normalized_inherited_allowed_group_ids,
         icon=(icon or "\U0001F527"),
         category=category if category is not None else parent_defaults["category"],
         template_source=parent_agent_key,
@@ -676,6 +731,7 @@ def create_custom_agent(
         version=1,
         custom_prompt=agent_prompt,
         group_prompt_overrides=normalized_group_overrides,
+        allowed_group_ids=normalized_allowed_group_ids,
         notes="Initial version",
     ))
 
@@ -830,6 +886,7 @@ def clone_visible_agent_for_user(
     user_id: int,
     source_agent_key: str,
     name: Optional[str] = None,
+    allowed_group_ids: Optional[List[str]] = None,
 ) -> CustomAgent:
     """Clone any user-visible agent (system/private/project) into user's private space."""
     source_key = str(source_agent_key or "").strip()
@@ -850,6 +907,15 @@ def clone_visible_agent_for_user(
     template_source = str(source_agent.template_source or "").strip() or (
         source_agent.agent_key if source_agent.visibility == "system" else None
     )
+    source_allowed_group_ids = normalize_allowed_group_ids(
+        _read_allowed_group_ids(source_agent),
+        field_name=f"source agent '{source_key}' allowed_group_ids",
+    )
+    clone_allowed_group_ids = require_allowed_group_ids_narrowing(
+        source_allowed_group_ids,
+        source_allowed_group_ids if allowed_group_ids is None else allowed_group_ids,
+        source_name=f"source agent '{source_key}'",
+    )
     return create_custom_agent(
         db=db,
         user_id=user_id,
@@ -866,6 +932,8 @@ def clone_visible_agent_for_user(
         category=source_agent.category,
         model_temperature=source_agent.model_temperature,
         model_reasoning=source_agent.model_reasoning,
+        allowed_group_ids=clone_allowed_group_ids,
+        inherited_allowed_group_ids=source_allowed_group_ids,
     )
 
 
@@ -885,6 +953,7 @@ def update_custom_agent(
     tool_ids: Optional[List[str]] = None,
     output_schema_key: Optional[str] = None,
     allow_empty_tool_ids: bool = False,
+    allowed_group_ids: Optional[List[str]] = None,
 ) -> CustomAgent:
     """Update custom-agent config and snapshot previous prompt when prompt changes."""
     if name is not None:
@@ -917,6 +986,20 @@ def update_custom_agent(
     group_overrides_changed = (
         next_group_overrides is not None
         and next_group_overrides != current_group_overrides
+    )
+    current_allowed_group_ids = normalize_allowed_group_ids(
+        _read_allowed_group_ids(custom_agent),
+    )
+    next_allowed_group_ids: Optional[list[str]] = None
+    if allowed_group_ids is not None:
+        next_allowed_group_ids = _validate_inherited_access_floor(
+            db,
+            custom_agent,
+            allowed_group_ids,
+        )
+    allowed_group_ids_changed = (
+        next_allowed_group_ids is not None
+        and next_allowed_group_ids != current_allowed_group_ids
     )
 
     next_tool_ids = list(custom_agent.tool_ids or [])
@@ -960,7 +1043,7 @@ def update_custom_agent(
         tool_ids=list(next_tool_ids),
     )
 
-    if prompt_changed or group_overrides_changed:
+    if prompt_changed or group_overrides_changed or allowed_group_ids_changed:
         next_version = _get_next_version(db, custom_agent.id)
         db.add(
             CustomAgentVersion(
@@ -968,6 +1051,7 @@ def update_custom_agent(
                 version=next_version,
                 custom_prompt=custom_agent.instructions,
                 group_prompt_overrides=current_group_overrides,
+                allowed_group_ids=current_allowed_group_ids,
                 notes=notes or "Auto-snapshot before prompt update",
             )
         )
@@ -976,6 +1060,8 @@ def update_custom_agent(
         custom_agent.instructions = str(next_custom_prompt)
     if group_overrides_changed and next_group_overrides is not None:
         _write_group_prompt_overrides(custom_agent, next_group_overrides)
+    if allowed_group_ids_changed and next_allowed_group_ids is not None:
+        custom_agent.allowed_group_ids = next_allowed_group_ids
 
     if name is not None:
         custom_agent.name = name
@@ -997,7 +1083,7 @@ def update_custom_agent(
     if output_schema_key is not None:
         custom_agent.output_schema_key = output_schema_key
 
-    if prompt_changed or group_overrides_changed:
+    if prompt_changed or group_overrides_changed or allowed_group_ids_changed:
         custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
 
@@ -1044,6 +1130,11 @@ def revert_custom_agent_to_version(
     target_group_overrides = normalize_editable_group_prompt_overrides(
         _read_group_prompt_overrides(target)
     )
+    target_allowed_group_ids = _validate_inherited_access_floor(
+        db,
+        custom_agent,
+        _read_allowed_group_ids(target),
+    )
     snapshot_version = _get_next_version(db, custom_agent.id)
     db.add(
         CustomAgentVersion(
@@ -1051,12 +1142,14 @@ def revert_custom_agent_to_version(
             version=snapshot_version,
             custom_prompt=custom_agent.instructions,
             group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
+            allowed_group_ids=_read_allowed_group_ids(custom_agent),
             notes=notes or f"Snapshot before revert to v{version}",
         )
     )
 
     custom_agent.instructions = target_custom_prompt
     _write_group_prompt_overrides(custom_agent, target_group_overrides)
+    custom_agent.allowed_group_ids = target_allowed_group_ids
     custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
 
@@ -1072,6 +1165,7 @@ class CustomAgentRuntimeInfo:
     group_prompt_overrides: Dict[str, str]
     include_group_rules: bool
     requires_document: bool
+    allowed_group_ids: List[str]
 
 
 def get_custom_agent_runtime_info(
@@ -1116,6 +1210,7 @@ def get_custom_agent_runtime_info(
             group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
             include_group_rules=bool(custom_agent.group_rules_enabled),
             requires_document=requires_document,
+            allowed_group_ids=_read_allowed_group_ids(custom_agent),
         )
     finally:
         if own_session and db is not None:
@@ -1151,6 +1246,7 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "custom_prompt_removed_layer_kinds": overlay_normalization.removed_layer_kinds,
         "custom_prompt_warning": overlay_normalization.warning,
         "group_prompt_overrides": group_prompt_overrides,
+        "allowed_group_ids": _read_allowed_group_ids(custom_agent),
         "icon": custom_agent.icon,
         "include_group_rules": include_group_rules,
         "model_id": custom_agent.model_id,

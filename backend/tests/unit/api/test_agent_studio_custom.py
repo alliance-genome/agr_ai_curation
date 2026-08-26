@@ -155,6 +155,7 @@ def _custom_agent_payload(template_source: str = "gene") -> dict:
         "description": "Desc",
         "custom_prompt": "Prompt",
         "group_prompt_overrides": {},
+        "allowed_group_ids": ["RGD"],
         "icon": "🔧",
         "include_group_rules": True,
         "model_id": "gpt-4o",
@@ -204,6 +205,7 @@ class TestCustomAgentCrudContract:
                     name="My Agent",
                     custom_prompt="Prompt",
                     model_id="gpt-4o",
+                    allowed_group_ids=["RGD"],
                 ),
                 user={"sub": "auth-sub"},
                 db=db,
@@ -211,6 +213,8 @@ class TestCustomAgentCrudContract:
         )
 
         assert observed_kwargs["template_source"] == "gene"
+        assert observed_kwargs["allowed_group_ids"] == ["RGD"]
+        assert response.allowed_group_ids == ["RGD"]
         assert "parent_agent_id" not in observed_kwargs
         assert response.template_source == "gene"
         assert "parent_agent_key" not in response.model_dump()
@@ -582,6 +586,7 @@ class TestCustomAgentCrudErrorsAndBranches:
         import src.api.agent_studio_custom as api_module
 
         custom_agent = SimpleNamespace(id=uuid.uuid4())
+        observed_kwargs = {}
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -592,22 +597,48 @@ class TestCustomAgentCrudErrorsAndBranches:
             "get_custom_agent_for_user",
             lambda *_args, **_kwargs: custom_agent,
         )
-        monkeypatch.setattr(api_module, "update_custom_agent", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            api_module,
+            "update_custom_agent",
+            lambda **kwargs: observed_kwargs.update(kwargs),
+        )
         monkeypatch.setattr(api_module, "custom_agent_to_dict", lambda _agent: _custom_agent_payload("gene"))
 
         db = _db_mock()
         response = asyncio.run(
             api_module.update_custom_agent_endpoint(
                 custom_agent_id=custom_agent.id,
-                request=api_module.UpdateCustomAgentRequest(name="Updated name"),
+                request=api_module.UpdateCustomAgentRequest(
+                    name="Updated name", allowed_group_ids=["RGD"]
+                ),
                 user={"sub": "auth-sub"},
                 db=db,
             )
         )
 
         assert response.template_source == "gene"
+        assert response.allowed_group_ids == ["RGD"]
+        assert observed_kwargs["allowed_group_ids"] == ["RGD"]
         db.commit.assert_called_once()
         db.refresh.assert_called_once_with(custom_agent)
+
+    def test_version_response_returns_allowed_group_ids(self):
+        import src.api.agent_studio_custom as api_module
+
+        version = SimpleNamespace(
+            id=uuid.uuid4(),
+            custom_agent_id=uuid.uuid4(),
+            version=3,
+            custom_prompt="Prompt",
+            group_prompt_overrides={},
+            allowed_group_ids=["RGD"],
+            notes="Restricted snapshot",
+            created_at=datetime(2026, 8, 26, tzinfo=UTC),
+        )
+
+        response = api_module._as_version_payload(version)
+
+        assert response.allowed_group_ids == ["RGD"]
 
     def test_update_endpoint_maps_value_and_integrity_errors(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module

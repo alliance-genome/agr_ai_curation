@@ -272,6 +272,24 @@ startup with package and source-file context. Core-only installs expose no
 domain recipes. See the developer configuration guide for the complete YAML
 shape.
 
+Recipes use the same canonical group-availability contract as agents:
+
+```yaml
+flow_recipes_api_version: 1.0.0
+recipes:
+  - name: RGD Curation
+    description: Starter flow for RGD curators
+    access:
+      allowed_group_ids: [RGD]
+    steps:
+      - agent_id: gene_validation
+```
+
+`allowed_group_ids: []` (and an omitted `access` block) is unrestricted by
+group. Values are case-sensitive IDs owned by `config/groups.yaml`; arbitrary
+labels fail package loading. Custom-agent clones inherit a restricted source
+as a floor and may select a non-empty subset, but cannot clear or broaden it.
+
 ### Agent Studio system prompt
 
 Each healthy package profile must resolve exactly one `agent_studio_prompt`

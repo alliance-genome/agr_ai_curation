@@ -798,6 +798,7 @@ def _filter_flow_templates(
                 {
                     "name": template["name"],
                     "description": template["description"],
+                    "allowed_group_ids": template["access"]["allowed_group_ids"],
                     "steps": filtered_steps,
                 }
             )
