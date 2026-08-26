@@ -20,6 +20,8 @@ interface MockDocumentListProps {
   sortModel?: GridSortModel;
   onSortModelChange?: (model: GridSortModel) => void;
   onRefresh?: () => void;
+  onDelete?: (id: string) => void;
+  onReembed?: (id: string) => void;
 }
 
 interface MockInlineFilterBarProps {
@@ -39,6 +41,8 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
     sortModel,
     onSortModelChange,
     onRefresh,
+    onDelete,
+    onReembed,
   }: MockDocumentListProps) => (
     <section
       data-testid="document-list"
@@ -68,6 +72,12 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
       </button>
       <button type="button" onClick={() => onRefresh?.()}>
         Refresh documents
+      </button>
+      <button type="button" onClick={() => onDelete?.(documents[0]?.id ?? '')}>
+        Delete first document
+      </button>
+      <button type="button" onClick={() => onReembed?.(documents[0]?.id ?? '')}>
+        Re-embed first document
       </button>
     </section>
   ),
@@ -216,6 +226,39 @@ describe('DocumentsPage request ownership', () => {
     expect(await screen.findByText('Refresh failed')).toBeInTheDocument();
     expect(screen.getByText('retained-document.pdf')).toBeInTheDocument();
     expect(screen.getByTestId('document-list')).toHaveAttribute('data-total-count', '37');
+  });
+
+  it.each([
+    ['Delete first document', '/api/weaviate/documents/action-document', 'DELETE'],
+    ['Re-embed first document', '/api/weaviate/documents/action-document/reembed', 'POST'],
+  ])('routes %s through the shared document mutation boundary', async (buttonName, mutationUrl, method) => {
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(documentListResponse('action-document', 1))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        success: true,
+        message: 'Operation started',
+        document_id: 'action-document',
+        operation: method === 'DELETE' ? 'delete_document' : 'reembed_document',
+        error: null,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(documentListResponse('action-document', 1));
+
+    render(<DocumentsPage />);
+    await screen.findByText('action-document.pdf');
+    fireEvent.click(screen.getByRole('button', { name: buttonName }));
+
+    await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(global.fetch).mock.calls[1]).toEqual([
+      mutationUrl,
+      expect.objectContaining({
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        method,
+      }),
+    ]);
   });
 
   it('propagates controlled pagination and resets the page for sort and filter changes', async () => {

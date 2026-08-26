@@ -3,7 +3,11 @@ import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
-import { fetchDocumentList } from '../../services/weaviate';
+import {
+  fetchDocumentList,
+  useDeleteDocument,
+  useReembedDocument,
+} from '../../services/weaviate';
 import type {
   DocumentSummary,
   DocumentFilter,
@@ -90,6 +94,8 @@ const DocumentsPage: React.FC = () => {
   const requestControllerRef = useRef<AbortController | null>(null);
   const documentRequestIdRef = useRef(0);
   const debouncedSearchTerm = useDebouncedDocumentSearchTerm(filters.searchTerm ?? '');
+  const { mutateAsync: deleteDocument } = useDeleteDocument();
+  const { mutateAsync: reembedDocument } = useReembedDocument();
 
   const queryFilters = useMemo(
     () => ({
@@ -169,33 +175,9 @@ const DocumentsPage: React.FC = () => {
 
   useEffect(() => () => requestControllerRef.current?.abort(), []);
 
-  const buildActionErrorMessage = React.useCallback(async (response: Response, fallback: string) => {
-    try {
-      const payload = await response.json();
-      const detail = payload?.detail;
-      if (typeof detail === 'string' && detail.trim()) {
-        return detail;
-      }
-      if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
-        return detail.message;
-      }
-    } catch {
-      // Fall through to status-based fallback message.
-    }
-    return `${fallback} (${response.status})`;
-  }, []);
-
   const handleDelete = React.useCallback(async (id: string) => {
     try {
-      const response = await fetch(`/api/weaviate/documents/${id}`, {
-        method: 'DELETE',
-        credentials: 'include', // Include httpOnly cookies for authentication
-      });
-      if (!response.ok) {
-        const message = await buildActionErrorMessage(response, 'Failed to delete document');
-        setSnackbar({ open: true, message, severity: 'error' });
-        return;
-      }
+      await deleteDocument(id);
       void handleRefresh();
     } catch (error) {
       console.error('Error deleting document:', error);
@@ -205,19 +187,11 @@ const DocumentsPage: React.FC = () => {
         severity: 'error',
       });
     }
-  }, [buildActionErrorMessage, handleRefresh]);
+  }, [deleteDocument, handleRefresh]);
 
   const handleReembed = React.useCallback(async (id: string) => {
     try {
-      const response = await fetch(`/api/weaviate/documents/${id}/reembed`, {
-        method: 'POST',
-        credentials: 'include', // Include httpOnly cookies for authentication
-      });
-      if (!response.ok) {
-        const message = await buildActionErrorMessage(response, 'Failed to re-embed document');
-        setSnackbar({ open: true, message, severity: 'error' });
-        return;
-      }
+      await reembedDocument(id);
       void handleRefresh();
     } catch (error) {
       console.error('Error re-embedding document:', error);
@@ -227,7 +201,7 @@ const DocumentsPage: React.FC = () => {
         severity: 'error',
       });
     }
-  }, [buildActionErrorMessage, handleRefresh]);
+  }, [handleRefresh, reembedDocument]);
 
   const handleTitleUpdate = React.useCallback(async (documentId: string, title: string) => {
     const response = await fetch(`/api/weaviate/documents/${documentId}`, {

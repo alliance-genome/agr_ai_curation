@@ -43,6 +43,14 @@ export interface PDFDocument {
   };
 }
 
+export interface OperationResult {
+  success: boolean;
+  message: string;
+  document_id: string | null;
+  operation: string | null;
+  error: Record<string, string> | null;
+}
+
 interface DocumentChunk {
   id: string;
   documentId: string;
@@ -598,7 +606,12 @@ export const fetchApi = async <T>(
         message: `HTTP error! status: ${response.status}`,
       }));
 
-      const errorMessage = error.message || `Failed to fetch ${path}`;
+      const detailMessage = typeof error.detail === 'string'
+        ? error.detail
+        : error.detail && typeof error.detail === 'object' && typeof error.detail.message === 'string'
+          ? error.detail.message
+          : undefined;
+      const errorMessage = detailMessage || error.message || `Failed to fetch ${path}`;
 
       // Log API error
       logger.error('API request failed', new Error(errorMessage), {
@@ -971,13 +984,13 @@ export const useWeaviateSettings = (
 
 // Mutation hooks
 export const useDeleteDocument = (
-  options?: UseMutationOptions<void, Error, string>
+  options?: UseMutationOptions<OperationResult, Error, string>
 ) => {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (id: string) =>
-      fetchApi<void>(`/documents/${id}`, {
+      fetchApi<OperationResult>(`/documents/${id}`, {
         method: 'DELETE',
       }),
     onSuccess: (_, id) => {
@@ -989,13 +1002,13 @@ export const useDeleteDocument = (
 };
 
 export const useReembedDocument = (
-  options?: UseMutationOptions<PDFDocument, Error, string>
+  options?: UseMutationOptions<OperationResult, Error, string>
 ) => {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (id: string) =>
-      fetchApi<PDFDocument>(`/documents/${id}/reembed`, {
+      fetchApi<OperationResult>(`/documents/${id}/reembed`, {
         method: 'POST',
       }),
     onSuccess: (_data, id) => {

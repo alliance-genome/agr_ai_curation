@@ -71,6 +71,8 @@ describe('DocumentDetail page', () => {
     await lastDialogProps.onDelete('doc-123');
 
     expect(mockFetch).toHaveBeenCalledWith('/api/weaviate/documents/doc-123', {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       method: 'DELETE',
     });
   });
@@ -81,6 +83,8 @@ describe('DocumentDetail page', () => {
     await lastDialogProps.onReembed('doc-123');
 
     expect(mockFetch).toHaveBeenCalledWith('/api/weaviate/documents/doc-123/reembed', {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       method: 'POST',
     });
   });
