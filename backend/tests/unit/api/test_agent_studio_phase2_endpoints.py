@@ -121,6 +121,7 @@ def test_get_agent_templates_endpoint_returns_system_templates():
                     model_id="gpt-4o",
                     tool_ids=["agr_curation_query"],
                     output_schema_key=None,
+                    allowed_group_ids=[],
                 )
             ]
 
@@ -136,6 +137,7 @@ def test_get_agent_templates_endpoint_returns_system_templates():
     assert len(response.templates) == 1
     assert response.templates[0].agent_id == "gene"
     assert response.templates[0].model_id == "gpt-4o"
+    assert response.templates[0].allowed_group_ids == []
 
 
 def test_get_models_endpoint_returns_500_on_loader_error(monkeypatch):
