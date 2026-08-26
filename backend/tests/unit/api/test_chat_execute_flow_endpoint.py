@@ -15,6 +15,7 @@ import pytest
 
 from src.lib import http_errors
 from src.lib.executable_runs import ExecutableRun
+from src.lib.persistence_sanitization import sanitize_persisted_json_value
 from tests.chat_api_test_support import patch_chat_impl_for
 
 chat = importlib.import_module("src.api.chat_execute_flow")
@@ -243,8 +244,8 @@ class _FakeChatHistoryRepository:
             turn_id=turn_id,
             role=role,
             message_type=message_type,
-            content=content,
-            payload_json=payload_json,
+            content=content.replace("\x00", ""),
+            payload_json=sanitize_persisted_json_value(payload_json),
             trace_id=trace_id,
             created_at=message_created_at,
         )
@@ -342,7 +343,11 @@ class _FakeChatHistoryRepository:
                 role=message.role,
                 message_type=message.message_type,
                 content=message.content,
-                payload_json=payload_json if payload_json is not None else message.payload_json,
+                payload_json=(
+                    sanitize_persisted_json_value(payload_json)
+                    if payload_json is not None
+                    else message.payload_json
+                ),
                 trace_id=trace_id if trace_id is not None else message.trace_id,
                 created_at=message.created_at,
             )
@@ -614,6 +619,142 @@ def test_execute_flow_endpoint_suppresses_duplicates_but_preserves_distinct_file
     assert "trace_gene_results.json" in summary_message.payload_json[
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
+
+
+def test_execute_flow_endpoint_replays_file_result_when_evidence_contains_nul(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-nul-evidence",
+        turn_id="turn-flow-nul-evidence",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Tumor Terms",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    repository, _completion_db = _patch_durable_history(monkeypatch)
+    execute_calls = []
+
+    async def _fake_execute_flow(**_kwargs):
+        execute_calls.append(_kwargs["flow_run_id"])
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-nul-evidence"}}
+        yield {
+            "type": "FLOW_STEP_EVIDENCE",
+            "timestamp": "2026-07-28T14:31:00+00:00",
+            "details": {
+                "flow_run_id": "flow-run-nul-evidence",
+                "step": 2,
+                "evidence_count": 1,
+                "total_evidence_records": 1,
+                "evidence_records": [
+                    {
+                        "quote": "A\x00B",
+                        "nested": {"unsafe\x00key": "C\x00D"},
+                        "sequence": ["E\x00F", {"value": "G\x00H"}],
+                    }
+                ],
+            },
+        }
+        yield {
+            "type": "FILE_READY",
+            "timestamp": "2026-07-28T14:31:01+00:00",
+            "details": {
+                "file_id": "d9018522-d2dc-4eea-9152-68a56bf040d0",
+                "filename": "tumor_terms.csv",
+                "format": "csv",
+                "row_count": 7,
+                "size_bytes": 1176,
+                "download_path": (
+                    "/api/files/d9018522-d2dc-4eea-9152-68a56bf040d0/download"
+                ),
+            },
+        }
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"output": "Generated 7 tumor-term rows."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "completed",
+                "flow_run_id": "flow-run-nul-evidence",
+                "total_evidence_records": 1,
+            },
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+
+    first_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    first_events = asyncio.run(_consume_stream(first_response))
+
+    replay_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+            observer_recovery=True,
+        )
+    )
+    replay_events = asyncio.run(_consume_stream(replay_response))
+
+    assert len(execute_calls) == 1
+    assert [event["type"] for event in first_events] == [
+        "RUN_STARTED",
+        "FLOW_STEP_EVIDENCE",
+        "FILE_READY",
+        "CHAT_OUTPUT_READY",
+        "FLOW_FINISHED",
+    ]
+    assert [event["type"] for event in replay_events] == [
+        "RUN_STARTED",
+        "FLOW_STEP_EVIDENCE",
+        "FILE_READY",
+        "CHAT_OUTPUT_READY",
+        "FLOW_FINISHED",
+    ]
+
+    stored_messages = repository.messages[("auth-sub", "session-flow-nul-evidence")]
+    evidence_row = next(
+        message
+        for message in stored_messages
+        if message.message_type == "flow_step_evidence"
+    )
+    assert evidence_row.payload_json["details"]["evidence_records"] == [
+        {
+            "quote": "AB",
+            "nested": {"unsafekey": "CD"},
+            "sequence": ["EF", {"value": "GH"}],
+        }
+    ]
+    file_row = next(
+        message for message in stored_messages if message.message_type == "file_download"
+    )
+    assert file_row.payload_json["details"] == {
+        "file_id": "d9018522-d2dc-4eea-9152-68a56bf040d0",
+        "filename": "tumor_terms.csv",
+        "format": "csv",
+        "row_count": 7,
+        "size_bytes": 1176,
+        "download_path": "/api/files/d9018522-d2dc-4eea-9152-68a56bf040d0/download",
+    }
+    summary_row = next(
+        message
+        for message in stored_messages
+        if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    )
+    assert summary_row.content == "Generated 7 tumor-term rows."
+    assert replay_events[2]["details"] == file_row.payload_json["details"]
 
 
 def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(monkeypatch):
@@ -1767,6 +1908,14 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     async def _fake_execute_flow(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-completion-failure"}}
         yield {
+            "type": "FLOW_STEP_EVIDENCE",
+            "details": {
+                "step": 1,
+                "evidence_count": 1,
+                "evidence_records": [{"quote": "A\x00B"}],
+            },
+        }
+        yield {
             "type": "CHAT_OUTPUT_READY",
             "details": {"output": "This output should be discarded when persistence fails."},
         }
@@ -1815,15 +1964,16 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
+        "FLOW_STEP_EVIDENCE",
         "SUPERVISOR_ERROR",
         "RUN_ERROR",
     ]
     assert all(event["type"] != "FLOW_FINISHED" for event in events)
     assert all(event["type"] != "CURATION_HANDOFF_READY" for event in events)
     assert "output should be discarded" not in json.dumps(events).lower()
-    assert events[1]["details"]["context"] == "RuntimeError"
-    assert events[1]["details"]["error"] == "Flow execution failed unexpectedly."
-    assert events[2]["message"] == "Flow execution failed unexpectedly."
+    assert events[2]["details"]["context"] == "RuntimeError"
+    assert events[2]["details"]["error"] == "Flow execution failed unexpectedly."
+    assert events[3]["message"] == "Flow execution failed unexpectedly."
     assert "completion transcript write failed" not in json.dumps(events)
     assert "completion transcript write failed" in caplog.text
     turn_messages = calls["repository"].list_messages_for_turn(
@@ -1832,7 +1982,12 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
         chat_kind=chat.ASSISTANT_CHAT_KIND,
         turn_id="turn-completion-persistence-failure",
     )
-    assert [message.role for message in turn_messages] == ["user", "flow"]
+    assert [message.role for message in turn_messages] == ["user", "flow", "flow"]
+    recovered_evidence = turn_messages[-2]
+    assert recovered_evidence.message_type == "flow_step_evidence"
+    assert recovered_evidence.payload_json["details"]["evidence_records"] == [
+        {"quote": "AB"}
+    ]
     failure_summary = turn_messages[-1]
     assert failure_summary.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
     assert failure_summary.payload_json["status"] == "failed"
@@ -1860,7 +2015,12 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     )
     replay_events = asyncio.run(_consume_stream(replay_response))
 
-    assert replay_events == events
+    assert [event["type"] for event in replay_events] == [
+        event["type"] for event in events
+    ]
+    assert replay_events[0] == events[0]
+    assert replay_events[1]["details"]["evidence_records"] == [{"quote": "AB"}]
+    assert replay_events[2:] == events[2:]
     assert persistence_attempts == 2
     assert calls["unregister"] == [
         ("session-completion-persistence-failure", "auth-sub", ANY),
