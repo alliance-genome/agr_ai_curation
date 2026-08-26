@@ -10,6 +10,10 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
+from src.lib.pipeline.processing_receipt import (
+    PDF_PROCESSING_RECEIPT_KEY,
+    minimal_terminal_receipt,
+)
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
@@ -49,6 +53,27 @@ def _clamp_progress(value: Optional[int]) -> Optional[int]:
     if value is None:
         return None
     return max(0, min(100, int(value)))
+
+
+def _store_terminal_metadata(
+    job: PdfProcessingJob,
+    *,
+    metadata: Optional[dict],
+    outcome: str,
+    completed_at: datetime,
+) -> None:
+    """Atomically merge terminal metadata and guarantee the canonical receipt."""
+    current_metadata = dict(job.metadata_json or {})
+    if metadata:
+        current_metadata.update(metadata)
+    if not isinstance(current_metadata.get(PDF_PROCESSING_RECEIPT_KEY), dict):
+        started_at = job.started_at or job.created_at or completed_at
+        current_metadata[PDF_PROCESSING_RECEIPT_KEY] = minimal_terminal_receipt(
+            started_at=_as_utc(started_at),
+            completed_at=_as_utc(completed_at),
+            outcome=outcome,
+        )
+    job.metadata_json = current_metadata
 
 
 def _to_response(job: PdfProcessingJob) -> PdfJobResponse:
@@ -183,6 +208,17 @@ def _reconcile_stale_job(
         job.current_stage = job.current_stage or "failed"
         job.error_message = stale_message
         job.message = stale_message
+
+    _store_terminal_metadata(
+        job,
+        metadata=None,
+        outcome=(
+            "cancelled"
+            if job.status == PdfJobStatus.CANCELLED.value
+            else "failed"
+        ),
+        completed_at=now,
+    )
 
     _reconcile_terminal_document(session, job)
     return True
@@ -477,7 +513,12 @@ def update_progress(
         session.close()
 
 
-def mark_completed(*, job_id: UUID | str, message: Optional[str] = None) -> Optional[PdfJobResponse]:
+def mark_completed(
+    *,
+    job_id: UUID | str,
+    message: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> Optional[PdfJobResponse]:
     """Mark job terminal success state."""
     session = SessionLocal()
     try:
@@ -498,6 +539,12 @@ def mark_completed(*, job_id: UUID | str, message: Optional[str] = None) -> Opti
         job.progress_percentage = 100
         job.message = message or "Processing completed"
         job.error_message = None
+        _store_terminal_metadata(
+            job,
+            metadata=metadata,
+            outcome="completed",
+            completed_at=now,
+        )
 
         session.commit()
         session.refresh(job)
@@ -506,7 +553,13 @@ def mark_completed(*, job_id: UUID | str, message: Optional[str] = None) -> Opti
         session.close()
 
 
-def mark_failed(*, job_id: UUID | str, message: str, stage: Optional[str] = None) -> Optional[PdfJobResponse]:
+def mark_failed(
+    *,
+    job_id: UUID | str,
+    message: str,
+    stage: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> Optional[PdfJobResponse]:
     """Mark job terminal failure state."""
     session = SessionLocal()
     try:
@@ -529,6 +582,12 @@ def mark_failed(*, job_id: UUID | str, message: str, stage: Optional[str] = None
         job.current_stage = stage or job.current_stage or "failed"
         job.error_message = (message or "Processing failed")[:2000]
         job.message = job.error_message
+        _store_terminal_metadata(
+            job,
+            metadata=metadata,
+            outcome="failed",
+            completed_at=now,
+        )
 
         _reconcile_terminal_document(session, job)
         session.commit()
@@ -541,7 +600,12 @@ def mark_failed(*, job_id: UUID | str, message: str, stage: Optional[str] = None
         session.close()
 
 
-def mark_cancelled(*, job_id: UUID | str, reason: Optional[str] = None) -> Optional[PdfJobResponse]:
+def mark_cancelled(
+    *,
+    job_id: UUID | str,
+    reason: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> Optional[PdfJobResponse]:
     """Mark job terminal cancelled state."""
     session = SessionLocal()
     try:
@@ -565,6 +629,12 @@ def mark_cancelled(*, job_id: UUID | str, reason: Optional[str] = None) -> Optio
         job.current_stage = "cancelled"
         job.message = reason or "Cancelled by user"
         job.error_message = None
+        _store_terminal_metadata(
+            job,
+            metadata=metadata,
+            outcome="cancelled",
+            completed_at=now,
+        )
 
         _reconcile_terminal_document(session, job)
         session.commit()

@@ -434,6 +434,11 @@ _AI_CURATION_SAFE_TEXT_DATA_KEYS = {
     "ai_curation.flow.id_hash",
     "ai_curation.flow.name",
     "ai_curation.flow.run_id_hash",
+    "ai_curation.pdf.download_variant",
+    "ai_curation.pdf.chunking_method",
+    "ai_curation.pdf.extraction_methods",
+    "ai_curation.pdf.stage",
+    "ai_curation.pdf.stage_outcome",
     "ai_curation.specialist.name",
     "ai_curation.tool.kind",
     "ai_curation.tool.name",
@@ -472,6 +477,7 @@ _AI_CURATION_NUMERIC_DATA_KEYS = {
     "ai_curation.finalization.attempt",
     "ai_curation.finalization.max_attempts",
     "ai_curation.flow.total_steps",
+    "ai_curation.pdf.stage_duration_ms",
     "ai_curation.validator.batch_size",
     "ai_curation.tool_call.count",
     "ai_curation.validation.error_count",
@@ -483,6 +489,8 @@ _AI_CURATION_NUMERIC_DATA_KEYS = {
 _AI_CURATION_BOOLEAN_DATA_KEYS = {
     "ai_curation.document.present",
     "ai_curation.finalization.required",
+    "ai_curation.pdf.cache_hit",
+    "ai_curation.pdf.merge_enabled",
 }
 
 
@@ -652,6 +660,96 @@ def set_sentry_span_status(span: Any, status: str) -> None:
             set_status(safe_status)
         except Exception as exc:
             logger.debug("Sentry span status update failed: %s", exc)
+
+
+@contextmanager
+def pdf_processing_stage_span(
+    *,
+    stage: str,
+    document_id: str,
+    selection: Mapping[str, Any] | None = None,
+):
+    """Create a content-redacted span for one application-observable PDF stage."""
+    safe_stage = _safe_gen_ai_text(stage)
+    if safe_stage is None:
+        yield None
+        return
+
+    span_context: Any | None = None
+    span = None
+    try:
+        sentry_sdk = importlib.import_module("sentry_sdk")
+        start_span = getattr(sentry_sdk, "start_span", None)
+        if not callable(start_span):
+            yield None
+            return
+        span_context = start_span(
+            op="pdf_processing.stage",
+            name=f"pdf_processing {safe_stage}",
+        )
+        span = span_context.__enter__()
+        _set_sentry_identifier_tags(span, {"document_id": document_id})
+        set_tag = getattr(span, "set_tag", None)
+        if callable(set_tag):
+            set_tag("ai_curation.pdf.stage", safe_stage)
+        set_redacted_ai_span_data(span, "ai_curation.pdf.stage", safe_stage)
+        selected = selection or {}
+        methods = selected.get("extraction_methods")
+        if isinstance(methods, list):
+            set_redacted_ai_span_data(
+                span,
+                "ai_curation.pdf.extraction_methods",
+                " ".join(str(method) for method in methods),
+            )
+        for key in (
+            "chunking_method",
+            "download_variant",
+            "merge_enabled",
+            "cache_hit",
+        ):
+            value = selected.get(key)
+            if value is not None:
+                set_redacted_ai_span_data(span, f"ai_curation.pdf.{key}", value)
+    except Exception as exc:
+        logger.debug("PDF processing Sentry span unavailable: %s", exc)
+        yield None
+        return
+
+    try:
+        yield span
+    finally:
+        if span_context is not None:
+            try:
+                span_context.__exit__(None, None, None)
+            except Exception as exc:
+                logger.debug("PDF processing Sentry span close failed: %s", exc)
+
+
+def set_pdf_processing_span_outcome(
+    span: Any,
+    *,
+    outcome: str,
+    duration_ms: float,
+) -> None:
+    """Attach the bounded terminal fields shared with the durable receipt."""
+    if span is None:
+        return
+    set_redacted_ai_span_data(span, "ai_curation.pdf.stage_outcome", outcome)
+    set_tag = getattr(span, "set_tag", None)
+    if callable(set_tag):
+        safe_outcome = _safe_gen_ai_text(outcome)
+        if safe_outcome is not None:
+            set_tag("ai_curation.pdf.stage_outcome", safe_outcome)
+    set_redacted_ai_span_data(
+        span,
+        "ai_curation.pdf.stage_duration_ms",
+        round(max(0.0, duration_ms), 1),
+    )
+    sentry_status = {
+        "completed": "ok",
+        "cancelled": "cancelled",
+    }.get(outcome, "internal_error")
+    set_sentry_span_status(span, sentry_status)
 
 
 class _SentryParentOnlySpan:

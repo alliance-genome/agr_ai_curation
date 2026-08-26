@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable, Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import time
 
@@ -13,6 +13,7 @@ from src.models.strategy import ChunkingStrategy
 from ..exceptions import PDFCancellationError
 from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
 from src.lib.observability.runtime import report_runtime_exception
+from .processing_receipt import PDFProcessingReceipt
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class ProcessingResult:
     error: Optional[str] = None
     duration_seconds: float = 0.0
     cancelled: bool = False
+    observability_receipt: dict[str, Any] = field(default_factory=dict)
 
 
 class DocumentPipelineOrchestrator:
@@ -88,10 +90,15 @@ class DocumentPipelineOrchestrator:
 
         start_time = datetime.now()
         stages_completed = []
+        receipt = PDFProcessingReceipt(document_id=document_id)
 
         # Always use research strategy
         if strategy is None:
             strategy = ChunkingStrategy.get_research_strategy()
+        chunking_method = getattr(strategy, "chunking_method", None)
+        receipt.set_selection(
+            chunking_method=getattr(chunking_method, "value", chunking_method),
+        )
 
         try:
             # Stage 0: Validate PDF if requested
@@ -120,6 +127,9 @@ class DocumentPipelineOrchestrator:
                     message=message,
                 )
 
+            def _record_external_observation(observation: Dict[str, Any]) -> None:
+                receipt.record_external_observation(observation)
+
             parse_start = time.monotonic()
             # T032: Pass user_id to enable user-specific file storage (FR-012)
             parse_result = await parse_pdf_document(
@@ -130,6 +140,7 @@ class DocumentPipelineOrchestrator:
                 progress_callback=_track_parser_progress,
                 process_id_callback=process_id_callback,
                 cancel_requested_callback=cancel_requested_callback,
+                observability_callback=_record_external_observation,
             )
 
             # Extract elements and file paths from the result
@@ -154,26 +165,27 @@ class DocumentPipelineOrchestrator:
             hierarchy_metadata = None
             try:
                 hierarchy_start = time.monotonic()
-                logger.info("Resolving section hierarchy for document %s", document_id)
-                await self._raise_if_cancel_requested(cancel_requested_callback)
-                # Send progress update to prevent UI freeze perception
-                await self.tracker.track_pipeline_progress(
-                    document_id,
-                    ProcessingStage.PARSING,
-                    message="Resolving document structure..."
-                )
-                from .hierarchy_resolution import resolve_document_hierarchy
-                elements, hierarchy_metadata = await resolve_document_hierarchy(elements)
-
-                # Store hierarchy metadata in document record for later trace injection
-                if hierarchy_metadata:
-                    await self._store_hierarchy_metadata(document_id, hierarchy_metadata)
-                    hierarchy_duration_ms = (time.monotonic() - hierarchy_start) * 1000
-                    logger.info(
-                        "Stored hierarchy metadata with %s top-level sections",
-                        len(hierarchy_metadata.top_level_sections),
-                        extra={"duration_ms": round(hierarchy_duration_ms, 1), "operation": "hierarchy_resolution"},
+                with receipt.observe_stage("hierarchy"):
+                    logger.info("Resolving section hierarchy for document %s", document_id)
+                    await self._raise_if_cancel_requested(cancel_requested_callback)
+                    # Send progress update to prevent UI freeze perception
+                    await self.tracker.track_pipeline_progress(
+                        document_id,
+                        ProcessingStage.PARSING,
+                        message="Resolving document structure..."
                     )
+                    from .hierarchy_resolution import resolve_document_hierarchy
+                    elements, hierarchy_metadata = await resolve_document_hierarchy(elements)
+
+                    # Store hierarchy metadata in document record for later trace injection
+                    if hierarchy_metadata:
+                        await self._store_hierarchy_metadata(document_id, hierarchy_metadata)
+                        hierarchy_duration_ms = (time.monotonic() - hierarchy_start) * 1000
+                        logger.info(
+                            "Stored hierarchy metadata with %s top-level sections",
+                            len(hierarchy_metadata.top_level_sections),
+                            extra={"duration_ms": round(hierarchy_duration_ms, 1), "operation": "hierarchy_resolution"},
+                        )
             except Exception as e:
                 logger.warning("Hierarchy resolution failed (continuing with flat structure): %s", e)
 
@@ -184,7 +196,8 @@ class DocumentPipelineOrchestrator:
 
             from .chunk import chunk_parsed_document
             chunk_start = time.monotonic()
-            chunks = await chunk_parsed_document(elements, strategy, document_id)
+            with receipt.observe_stage("chunking"):
+                chunks = await chunk_parsed_document(elements, strategy, document_id)
             stages_completed.append(ProcessingStage.CHUNKING)
             chunk_duration_ms = (time.monotonic() - chunk_start) * 1000
             logger.info(
@@ -196,7 +209,8 @@ class DocumentPipelineOrchestrator:
 
             from .figure_locator_resolution import resolve_figure_locators
 
-            chunks = await resolve_figure_locators(chunks)
+            with receipt.observe_stage("figure_locator"):
+                chunks = await resolve_figure_locators(chunks)
 
             # Stage 3: Store to Weaviate (Weaviate handles embeddings)
             logger.info("Storing to Weaviate for document %s", document_id)
@@ -205,12 +219,13 @@ class DocumentPipelineOrchestrator:
 
             from .store import store_to_weaviate
             store_start = time.monotonic()
-            await store_to_weaviate(
-                chunks,
-                document_id,
-                self.weaviate_client,
-                user_id
-            )
+            with receipt.observe_stage("embedding_storage"):
+                await store_to_weaviate(
+                    chunks,
+                    document_id,
+                    self.weaviate_client,
+                    user_id
+                )
             stages_completed.append(ProcessingStage.STORING)
             store_duration_ms = (time.monotonic() - store_start) * 1000
             logger.info(
@@ -230,7 +245,8 @@ class DocumentPipelineOrchestrator:
                 stages_completed=stages_completed,
                 total_chunks=len(chunks),
                 total_embeddings=len(chunks),
-                duration_seconds=duration
+                duration_seconds=duration,
+                observability_receipt=receipt.finalize("completed"),
             )
 
         except PDFCancellationError as e:
@@ -263,6 +279,7 @@ class DocumentPipelineOrchestrator:
                 error=str(e),
                 duration_seconds=duration,
                 cancelled=True,
+                observability_receipt=receipt.finalize("cancelled"),
             )
 
         except Exception as e:
@@ -290,7 +307,8 @@ class DocumentPipelineOrchestrator:
                 document_id=document_id,
                 stages_completed=stages_completed,
                 error=str(e),
-                duration_seconds=duration
+                duration_seconds=duration,
+                observability_receipt=receipt.finalize("failed"),
             )
 
     async def _raise_if_cancel_requested(

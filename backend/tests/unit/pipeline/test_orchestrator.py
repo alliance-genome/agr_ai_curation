@@ -58,6 +58,11 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
         ProcessingStage.CHUNKING,
         ProcessingStage.STORING,
     ]
+    assert result.observability_receipt["outcome"] == "completed"
+    assert result.observability_receipt["stages"]["chunking"]["status"] == "completed"
+    assert result.observability_receipt["stages"]["figure_locator"]["status"] == "completed"
+    assert result.observability_receipt["stages"]["embedding_storage"]["status"] == "completed"
+    assert result.observability_receipt["stages"]["total"]["status"] == "completed"
     orchestrator._sync_sql_document_status.assert_any_await(document_id, status="processing")
     orchestrator._sync_sql_document_status.assert_any_await(document_id, status="completed")
 
@@ -155,6 +160,8 @@ async def test_process_pdf_document_cancellation_does_not_report_runtime_excepti
 
     assert result.success is False
     assert result.cancelled is True
+    assert result.observability_receipt["outcome"] == "cancelled"
+    assert result.observability_receipt["stages"]["total"]["status"] == "cancelled"
     assert runtime_reports == []
 
 
@@ -191,6 +198,8 @@ async def test_process_pdf_document_chunking_error_reports_completed_stage_conte
 
     assert result.success is False
     assert result.stages_completed == [ProcessingStage.PARSING]
+    assert result.observability_receipt["outcome"] == "failed"
+    assert result.observability_receipt["stages"]["chunking"]["status"] == "failed"
     assert len(runtime_reports) == 1
     assert runtime_reports[0][1] == {
         "component": "document_pipeline",

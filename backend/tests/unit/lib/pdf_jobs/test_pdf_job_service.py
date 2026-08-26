@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from src.lib.pdf_jobs import service as service_module
+from src.lib.pipeline.processing_receipt import PDF_PROCESSING_RECEIPT_KEY
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 
@@ -152,6 +153,10 @@ def test_single_job_readers_reconcile_stale_nonterminal_job(
         "Job marked failed automatically after stale inactivity; "
         "likely interrupted before terminal state update"
     )
+    assert response.metadata is not None
+    receipt = response.metadata[PDF_PROCESSING_RECEIPT_KEY]
+    assert receipt["outcome"] == "failed"
+    assert receipt["stages"]["total"]["status"] == "failed"
     assert session.commit_calls == 1
     assert session.refresh_calls == 1
     assert document.status == "failed"
@@ -172,6 +177,9 @@ def test_list_jobs_reconciles_stale_cancel_requested_job(monkeypatch):
 
     assert response.total == 1
     assert response.jobs[0].status == PdfJobStatus.CANCELLED.value
+    assert response.jobs[0].metadata is not None
+    receipt = response.jobs[0].metadata[PDF_PROCESSING_RECEIPT_KEY]
+    assert receipt["outcome"] == "cancelled"
     assert document.status == "failed"
     assert document.processing_completed_at == job.completed_at
     assert document.error_message == "Cancellation finalized automatically after stale inactivity"
@@ -232,6 +240,64 @@ def test_explicit_terminal_finalizers_reconcile_document(
     assert document.processing_started_at == job.started_at
     assert document.processing_completed_at == job.completed_at
     assert document.error_message == expected_error
+    assert response.metadata is not None
+    receipt = response.metadata[PDF_PROCESSING_RECEIPT_KEY]
+    assert receipt["outcome"] == (
+        "cancelled" if finalizer == "cancelled" else "failed"
+    )
+    assert receipt["stages"]["total"]["status"] == receipt["outcome"]
+    assert session.commit_calls == 1
+
+
+def test_mark_completed_atomically_preserves_detailed_receipt_in_api_metadata(monkeypatch):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    session = _FakeSession(job)
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    detailed_receipt = {
+        "schema_version": 1,
+        "outcome": "completed",
+        "selection": {"cache_hit": True},
+        "stages": {"external_request": {"status": "completed", "duration_ms": 12.3}},
+    }
+
+    response = service_module.mark_completed(
+        job_id=job.id,
+        metadata={PDF_PROCESSING_RECEIPT_KEY: detailed_receipt},
+    )
+
+    assert response is not None
+    assert response.metadata == {PDF_PROCESSING_RECEIPT_KEY: detailed_receipt}
+    assert job.metadata_json == response.metadata
+    assert session.commit_calls == 1
+
+
+def test_mark_failed_atomically_preserves_detailed_receipt_in_api_metadata(monkeypatch):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    document = _build_document(job)
+    session = _FakeSession([job, job, document])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    detailed_receipt = {
+        "schema_version": 1,
+        "outcome": "failed",
+        "selection": {"extraction_method": "pdf_service"},
+        "stages": {
+            "external_request": {
+                "status": "failed",
+                "duration_ms": 456.7,
+            }
+        },
+    }
+
+    response = service_module.mark_failed(
+        job_id=job.id,
+        message="extractor failed",
+        metadata={PDF_PROCESSING_RECEIPT_KEY: detailed_receipt},
+    )
+
+    assert response is not None
+    assert response.metadata == {PDF_PROCESSING_RECEIPT_KEY: detailed_receipt}
+    assert job.metadata_json == response.metadata
+    assert document.status == "failed"
     assert session.commit_calls == 1
 
 
