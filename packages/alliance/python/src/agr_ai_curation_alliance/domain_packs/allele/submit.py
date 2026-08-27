@@ -130,17 +130,17 @@ class AllelePaperEvidenceSubmissionAdapter(ReadOnlyHandoffSubmissionAdapter):
         )
 
 
-def _allele_export_plans(payload_json: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+def _allele_export_plans(payload_json: Mapping[str, Any]) -> list[Any]:
     raw_plans = payload_json.get("plans")
     if not isinstance(raw_plans, list):
         return []
-    return [plan for plan in raw_plans if isinstance(plan, Mapping)]
+    return raw_plans
 
 
 def _allele_payload_validation_errors(
     payload: SubmissionPayloadContract,
     payload_json: Mapping[str, Any],
-    plans: list[Mapping[str, Any]],
+    plans: list[Any],
 ) -> tuple[str, ...]:
     errors: list[str] = []
     if payload.adapter_key != "allele":
@@ -158,6 +158,9 @@ def _allele_payload_validation_errors(
         errors.append("Payload must contain at least one plans item.")
 
     for index, plan in enumerate(plans):
+        if not isinstance(plan, Mapping):
+            errors.append(f"plans[{index}] must be an object.")
+            continue
         submission_plan = plan.get("submission_plan")
         if not isinstance(submission_plan, Mapping):
             errors.append(f"plans[{index}].submission_plan is required.")

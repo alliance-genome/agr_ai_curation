@@ -220,6 +220,36 @@ def test_allele_submission_adapter_records_read_only_handoff_without_mutation():
     )
 
 
+def test_allele_submission_adapter_rejects_non_object_plan_in_mixed_bundle():
+    adapter = AllelePaperEvidenceSubmissionAdapter()
+    payload = SubmissionPayloadContract(
+        mode=SubmissionMode.DIRECT_SUBMIT,
+        target_key=ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+        adapter_key="allele",
+        candidate_ids=["candidate-1"],
+        payload_json={
+            "bundle_type": "alliance_allele_paper_evidence_association",
+            "plans": [
+                {
+                    "submission_plan": {
+                        "status": "ready",
+                        "target_key": ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+                        "operations": [{"operation": "insert"}],
+                        "blockers": [],
+                    }
+                },
+                "malformed-plan",
+            ],
+        },
+    )
+
+    result = adapter.submit(payload=payload, idempotency_key="allele-handoff-2")
+
+    assert result.status == CurationSubmissionStatus.VALIDATION_ERRORS
+    assert result.validation_errors == ("plans[1] must be an object.",)
+    assert result.submission_state["plan_count"] == 2
+
+
 def test_gene_expression_export_adapter_projects_fixture_to_schema_pinned_target_payload():
     candidate = _gene_expression_fixture_candidate()
     adapter = GeneExpressionExportAdapter()
