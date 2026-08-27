@@ -83,6 +83,8 @@ from src.lib.observability.background_tasks import (
 )
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.config import list_groups
+from src.lib.agent_access import is_resource_access_allowed
+from src.lib.agent_studio.agent_service import get_agent_by_key
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.flow_edge_roles import agent_can_source_output_attachment
 from src.lib.config.schema_discovery import resolve_output_schema
@@ -224,6 +226,57 @@ def _load_agent_studio_system_prompt_template() -> str:
 router = APIRouter(prefix="/api/agent-studio")
 
 
+def _authenticated_group_ids(user: Any) -> list[str]:
+    """Return canonical groups exclusively from authenticated provider claims."""
+
+    if not isinstance(user, dict):
+        return []
+    return get_groups_from_provider_groups(user.get("cognito:groups", []))
+
+
+def _agent_record_is_group_accessible(agent: Any, user: Any) -> bool:
+    return is_resource_access_allowed(
+        visibility_allowed=True,
+        allowed_group_ids=list(agent.allowed_group_ids),
+        active_group_ids=_authenticated_group_ids(user),
+        resource_kind="agent",
+    )
+
+
+def _require_selected_agent_access(
+    *,
+    db: Session,
+    db_user_id: int,
+    user: Dict[str, Any],
+    agent_id: str,
+) -> None:
+    """Fail non-enumeratingly when Agent Studio context names an unavailable agent."""
+
+    if agent_id.startswith("ca_"):
+        custom_uuid = parse_custom_agent_id(agent_id)
+        if not custom_uuid:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        try:
+            custom_agent = get_custom_agent_visible_to_user(
+                db,
+                custom_uuid,
+                db_user_id,
+            )
+        except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+            raise HTTPException(status_code=404, detail="Agent not found") from exc
+        if not _agent_record_is_group_accessible(custom_agent, user):
+            raise HTTPException(status_code=404, detail="Agent not found")
+        return
+
+    if get_agent_by_key(
+        db,
+        agent_id,
+        user_id=db_user_id,
+        active_group_ids=_authenticated_group_ids(user),
+    ) is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+
 def _merge_custom_agents_into_catalog(
     catalog: PromptCatalog,
     auth_user: Any,
@@ -233,12 +286,36 @@ def _merge_custom_agents_into_catalog(
     if not isinstance(auth_user, dict) or not hasattr(db, "query"):
         return catalog
 
-    db_user = set_global_user_from_cognito(db, auth_user)
-    custom_agents = list_custom_agents_visible_to_user(db, db_user.id)
-    if not custom_agents:
-        return catalog
-
     augmented = catalog.model_copy(deep=True)
+    active_group_ids = _authenticated_group_ids(auth_user)
+    for category in augmented.categories:
+        category.agents = [
+            agent
+            for agent in category.agents
+            if is_resource_access_allowed(
+                visibility_allowed=True,
+                allowed_group_ids=list(
+                    (catalog_service.AGENT_REGISTRY.get(agent.agent_id) or {}).get(
+                        "allowed_group_ids"
+                    )
+                    or []
+                ),
+                active_group_ids=active_group_ids,
+                resource_kind="agent_catalog",
+            )
+        ]
+    augmented.categories = [category for category in augmented.categories if category.agents]
+    augmented.total_agents = sum(len(category.agents) for category in augmented.categories)
+
+    db_user = set_global_user_from_cognito(db, auth_user)
+    custom_agents = [
+        agent
+        for agent in list_custom_agents_visible_to_user(db, db_user.id)
+        if _agent_record_is_group_accessible(agent, auth_user)
+    ]
+    if not custom_agents:
+        return augmented
+
     categories_by_name: Dict[str, AgentPrompts] = {c.category: c for c in augmented.categories}
     parent_agents_by_id: Dict[str, PromptInfo] = {
         agent.agent_id: agent
@@ -458,7 +535,6 @@ async def get_agent_templates_endpoint(
     user: Any = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> AgentTemplatesResponse:
-    _ = user
     try:
         rows = (
             db.query(UnifiedAgent)
@@ -484,6 +560,7 @@ async def get_agent_templates_endpoint(
                     output_schema_key=agent.output_schema_key,
                 )
                 for agent in rows
+                if _agent_record_is_group_accessible(agent, user)
             ],
             group_options=[
                 GroupOption(group_id=group.group_id, name=group.name)
@@ -578,6 +655,7 @@ async def clone_agent_endpoint(
             source_agent_key=agent_id,
             name=request.name,
             allowed_group_ids=request.allowed_group_ids,
+            active_group_ids=_authenticated_group_ids(user),
         )
         db.commit()
         db.refresh(custom_agent)
@@ -690,6 +768,13 @@ async def get_registry_metadata(
         return bool(output_schema_key and resolve_output_schema(output_schema_key))
 
     for agent_id, entry in AGENT_REGISTRY.items():
+        if not is_resource_access_allowed(
+            visibility_allowed=True,
+            allowed_group_ids=list(entry.get("allowed_group_ids") or []),
+            active_group_ids=_authenticated_group_ids(user),
+            resource_kind="agent_registry",
+        ):
+            continue
         supervisor = entry.get("supervisor", {})
         # supervisor_tool is only set if supervisor is enabled (default True)
         supervisor_enabled = supervisor.get("enabled", True)
@@ -720,7 +805,11 @@ async def get_registry_metadata(
     # Direct unit-test calls pass dependency placeholders, so guard by type.
     if isinstance(user, dict):
         db_user = set_global_user_from_cognito(db, user)
-        custom_agents = list_custom_agents_visible_to_user(db, db_user.id)
+        custom_agents = [
+            agent
+            for agent in list_custom_agents_visible_to_user(db, db_user.id)
+            if _agent_record_is_group_accessible(agent, user)
+        ]
         for custom in custom_agents:
             category = custom.category or "Custom"
             custom_id = make_custom_agent_id(custom.id)
@@ -795,6 +884,9 @@ def _build_custom_agent_effective_prompt_bundle(
             access_denied_detail="Access denied to custom agent",
             not_found_error_types=(CustomAgentNotFoundError,),
         )
+
+    if not _agent_record_is_group_accessible(custom_agent, user):
+        raise HTTPException(status_code=404, detail="Custom agent not found")
 
     custom_group_rules_enabled = bool(custom_agent.group_rules_enabled)
     try:
@@ -928,6 +1020,14 @@ async def get_combined_prompt(
                 layer_manifest=bundle.to_manifest(),
             )
 
+        db_user = set_global_user_from_cognito(db, user)
+        if get_agent_by_key(
+            db,
+            request.agent_id,
+            user_id=db_user.id,
+            active_group_ids=_authenticated_group_ids(user),
+        ) is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
         service = get_prompt_catalog()
         bundle = service.get_effective_prompt_bundle(request.agent_id, group_id=request.group_id)
         if bundle is None:
@@ -1002,6 +1102,14 @@ async def get_prompt_preview(
             )
 
         # System agent preview
+        db_user = set_global_user_from_cognito(db, user)
+        if get_agent_by_key(
+            db,
+            agent_id,
+            user_id=db_user.id,
+            active_group_ids=_authenticated_group_ids(user),
+        ) is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
         service = get_prompt_catalog()
         bundle = service.get_effective_prompt_bundle(agent_id, group_id=group_id)
         if bundle is None:
@@ -1042,6 +1150,7 @@ async def test_agent_endpoint(
 ) -> StreamingResponse:
     """Run a one-off isolated agent test and stream execution events."""
     db_user = set_global_user_from_cognito(db, user)
+    authenticated_groups = _authenticated_group_ids(user)
 
     resolved_agent_id = agent_id
     if agent_id.startswith("ca_"):
@@ -1050,6 +1159,8 @@ async def test_agent_endpoint(
             raise HTTPException(status_code=400, detail="Invalid custom agent id")
         try:
             custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
+            if not _agent_record_is_group_accessible(custom_agent, user):
+                raise CustomAgentNotFoundError("Custom agent not found")
             resolved_agent_id = make_custom_agent_id(custom_agent.id)
         except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
             _raise_agent_studio_lookup_http_exception(
@@ -1060,7 +1171,11 @@ async def test_agent_endpoint(
             )
 
     try:
-        metadata = get_agent_metadata(resolved_agent_id, db_user_id=db_user.id)
+        metadata = get_agent_metadata(
+            resolved_agent_id,
+            db_user_id=db_user.id,
+            authenticated_groups=authenticated_groups,
+        )
     except ValueError as exc:
         _raise_agent_studio_validation_http_exception(
             exc=exc,
@@ -1081,10 +1196,6 @@ async def test_agent_endpoint(
 
     session_id = request.session_id or f"agent-test-{uuid.uuid4()}"
     active_groups = [request.group_id] if request.group_id else []
-    authenticated_groups = get_groups_from_provider_groups(
-        user.get("cognito:groups", [])
-    )
-
     set_current_session_id(session_id)
     set_current_user_id(str(user_sub))
 
@@ -3191,6 +3302,21 @@ async def chat_with_opus(
             except Exception as exc:
                 logger.warning('Could not resolve workflow user context: %s', exc)
 
+            selected_agent_id = (
+                request.context.selected_agent_id
+                if request.context is not None
+                else None
+            )
+            if selected_agent_id:
+                if db_user_id is None:
+                    raise HTTPException(status_code=403, detail="Agent not available")
+                _require_selected_agent_access(
+                    db=db,
+                    db_user_id=db_user_id,
+                    user=user,
+                    agent_id=selected_agent_id,
+                )
+
             prepared_turn = _prepare_agent_studio_turn(
                 db=db,
                 user_id=user_id,
@@ -3268,7 +3394,11 @@ async def chat_with_opus(
         raise HTTPException(status_code=500, detail="Agent Studio chat model is not configured")
 
     if db_user_id is not None:
-        set_workflow_user_context(user_id=db_user_id, user_email=user_email)
+        set_workflow_user_context(
+            user_id=db_user_id,
+            user_email=user_email,
+            active_group_ids=_authenticated_group_ids(user),
+        )
         logger.debug('Set workflow context for user %s', db_user_id)
 
     # Set flow context if user is on Flows tab (for get_current_flow tool)
@@ -3979,12 +4109,31 @@ async def submit_suggestion_direct(
                 if not custom_uuid:
                     raise HTTPException(status_code=400, detail=f"Invalid agent_id: {selected_agent_id}")
                 try:
-                    get_custom_agent_for_user(db, custom_uuid, db_user.id)
+                    selected_custom_agent = get_custom_agent_for_user(
+                        db,
+                        custom_uuid,
+                        db_user.id,
+                    )
+                    if not _agent_record_is_group_accessible(
+                        selected_custom_agent,
+                        user,
+                    ):
+                        raise CustomAgentNotFoundError("Custom agent not found")
                 except CustomAgentNotFoundError:
                     raise HTTPException(status_code=400, detail=f"Invalid agent_id: {selected_agent_id}")
                 except CustomAgentAccessError:
                     raise HTTPException(status_code=403, detail="Access denied to custom agent")
             else:
+                if get_agent_by_key(
+                    db,
+                    selected_agent_id,
+                    user_id=db_user.id,
+                    active_group_ids=_authenticated_group_ids(user),
+                ) is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid agent_id: {selected_agent_id}",
+                    )
                 service = get_prompt_catalog()
                 agent = service.get_agent(selected_agent_id)
                 if not agent:

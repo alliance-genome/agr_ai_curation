@@ -33,6 +33,7 @@ from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.observability.sentry import set_sentry_transaction_identifiers
 from src.lib.flows.outcome import FlowRunOutcome, FlowRunOutcomeNotDurableError
+from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -751,6 +752,13 @@ async def execute_flow_endpoint(
 
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
+    if inaccessible_flow_agent_keys(
+        db,
+        flow.flow_definition or {},
+        user_id=db_user.id,
+        active_group_ids=active_groups,
+    ):
+        raise HTTPException(status_code=403, detail="Flow contains unavailable agents")
     if active_groups:
         logger.info(
             "User has active groups: %s",

@@ -275,7 +275,7 @@ def configure_chat_stream_mocks(
         SimpleNamespace(get_document=lambda _uid: {"id": document_id, "filename": filename}),
     )
     patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_provider_groups", lambda _groups: [])
-    patch_chat_impl(monkeypatch, chat_modules, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map))
+    patch_chat_impl(monkeypatch, chat_modules, "get_supervisor_tool_agent_map", lambda _active_groups=None: dict(tool_agent_map))
 
     async def _register_active_stream(
         session_id: str,

@@ -265,7 +265,7 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
     monkeypatch.setattr(
         service,
         "_resolve_system_template_agent",
-        lambda _db, _agent_id: SimpleNamespace(
+        lambda _db, _agent_id, **_kwargs: SimpleNamespace(
             agent_key="gene_validation",
             instructions="base system prompt",
             model_id="gpt-5.5",
@@ -446,7 +446,7 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
     monkeypatch.setattr(
         service,
         "_resolve_system_template_agent",
-        lambda _db, _agent_id: SimpleNamespace(
+        lambda _db, _agent_id, **_kwargs: SimpleNamespace(
             agent_key="allele_extractor",
             instructions="base system prompt",
             model_id="gpt-5.5",
@@ -529,7 +529,7 @@ def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
     monkeypatch.setattr(
         service,
         "_resolve_system_template_agent",
-        lambda _db, _agent_id: SimpleNamespace(
+        lambda _db, _agent_id, **_kwargs: SimpleNamespace(
             agent_key="allele_extractor",
             instructions="base system prompt",
             model_id="gpt-5.5",
@@ -594,7 +594,7 @@ def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
     monkeypatch.setattr(
         service,
         "_resolve_system_template_agent",
-        lambda _db, _agent_id: SimpleNamespace(
+        lambda _db, _agent_id, **_kwargs: SimpleNamespace(
             agent_key="allele_extractor",
             instructions="base system prompt",
             model_id="gpt-5.5",
@@ -654,7 +654,7 @@ def test_create_custom_agent_rejects_unknown_inherited_non_runtime_tool_ids(monk
     monkeypatch.setattr(
         service,
         "_resolve_system_template_agent",
-        lambda _db, _agent_id: SimpleNamespace(
+        lambda _db, _agent_id, **_kwargs: SimpleNamespace(
             agent_key="typo_template",
             instructions="base system prompt",
             model_id="gpt-5.5",
@@ -830,7 +830,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
     monkeypatch.setattr(
         service,
         "_resolve_system_template_agent",
-        lambda _db, _agent_id: SimpleNamespace(
+        lambda _db, _agent_id, **_kwargs: SimpleNamespace(
             tool_ids=[
                 "search_document",
                 "record_evidence",
@@ -889,7 +889,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
     monkeypatch.setattr(
         service,
         "_resolve_system_template_agent",
-        lambda _db, _agent_id: SimpleNamespace(
+        lambda _db, _agent_id, **_kwargs: SimpleNamespace(
             tool_ids=[
                 "search_document",
                 "record_evidence",
@@ -1117,7 +1117,7 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
     )
     observed = {}
 
-    monkeypatch.setattr(service, "get_agent_by_key", lambda _db, _key, user_id=None: source)
+    monkeypatch.setattr(service, "get_agent_by_key", lambda _db, _key, user_id=None, **_kwargs: source)
     monkeypatch.setattr(service, "_generate_clone_name", lambda _db, _uid, _name: "Shared Agent (Copy)")
     monkeypatch.setattr(service, "_has_active_custom_name", lambda _db, _uid, _name: False)
     monkeypatch.setattr(

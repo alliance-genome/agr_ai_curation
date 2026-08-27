@@ -3,6 +3,7 @@
 import pytest
 
 from src.lib.agent_access import (
+    is_resource_access_allowed,
     normalize_allowed_group_ids,
     require_allowed_group_ids_narrowing,
 )
@@ -11,6 +12,49 @@ from src.lib.config.agent_loader import AgentDefinition
 
 def test_normalize_allowed_group_ids_uses_registry_order_and_canonical_case():
     assert normalize_allowed_group_ids(["RGD", "FB"]) == ["FB", "RGD"]
+
+
+@pytest.mark.parametrize(
+    "visibility_allowed, allowed_group_ids, active_group_ids, expected",
+    [
+        (True, [], [], True),
+        (True, ["RGD"], ["RGD"], True),
+        (True, ["RGD"], ["MGI"], False),
+        (True, ["RGD"], [], False),
+        (True, ["MGI", "RGD"], ["WB", "RGD"], True),
+        (False, [], ["RGD"], False),
+    ],
+)
+def test_resource_access_combines_visibility_and_group_intersection(
+    visibility_allowed, allowed_group_ids, active_group_ids, expected
+):
+    assert (
+        is_resource_access_allowed(
+            visibility_allowed=visibility_allowed,
+            allowed_group_ids=allowed_group_ids,
+            active_group_ids=active_group_ids,
+        )
+        is expected
+    )
+
+
+def test_resource_access_denial_audit_is_bounded_and_redacted(caplog):
+    with caplog.at_level("WARNING"):
+        assert not is_resource_access_allowed(
+            visibility_allowed=True,
+            allowed_group_ids=["RGD"],
+            active_group_ids=["MGI"],
+            resource_kind="flow_recipe",
+        )
+
+    record = caplog.records[-1]
+    assert record.operation == "resource_authorization_denied"
+    assert record.resource_kind == "flow_recipe"
+    assert record.denial_reason == "group_scope"
+    assert record.allowed_group_count == 1
+    assert record.active_group_count == 1
+    assert "RGD" not in record.getMessage()
+    assert "MGI" not in record.getMessage()
 
 
 @pytest.mark.parametrize("value", [["rgd"], ["UNKNOWN"], [" RGD"], ["RGD", "RGD"]])

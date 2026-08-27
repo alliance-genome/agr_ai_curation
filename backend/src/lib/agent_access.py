@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_allowed_group_ids(
@@ -75,3 +79,50 @@ def require_allowed_group_ids_narrowing(
             f"{source_name} ({detail}); allowed values are: {', '.join(source)}"
         )
     return requested
+
+
+def is_resource_access_allowed(
+    *,
+    visibility_allowed: bool,
+    allowed_group_ids: Any,
+    active_group_ids: Any,
+    resource_kind: str = "agent",
+) -> bool:
+    """Apply visibility and authenticated group availability as one decision.
+
+    ``active_group_ids`` must be the canonical, server-derived group snapshot for
+    the current request or queued job. An empty resource restriction means that
+    ordinary visibility is sufficient; a restricted resource requires a
+    non-empty intersection. Denial diagnostics intentionally omit resource IDs,
+    user identity, claims, prompts, and document content.
+    """
+
+    allowed = normalize_allowed_group_ids(
+        allowed_group_ids,
+        field_name=f"{resource_kind}.allowed_group_ids",
+    )
+    active = normalize_allowed_group_ids(
+        active_group_ids,
+        field_name="active_group_ids",
+    )
+
+    denial_reason: str | None = None
+    if not visibility_allowed:
+        denial_reason = "visibility"
+    elif allowed and not set(allowed).intersection(active):
+        denial_reason = "group_scope"
+
+    if denial_reason is None:
+        return True
+
+    logger.warning(
+        "Resource authorization denied",
+        extra={
+            "operation": "resource_authorization_denied",
+            "resource_kind": resource_kind,
+            "denial_reason": denial_reason,
+            "allowed_group_count": len(allowed),
+            "active_group_count": len(active),
+        },
+    )
+    return False

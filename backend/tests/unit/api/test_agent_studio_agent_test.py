@@ -270,7 +270,10 @@ class TestAgentTestEndpoint:
         monkeypatch.setattr(
             api_module,
             "get_custom_agent_for_user",
-            lambda _db, _uuid, _uid: SimpleNamespace(id=custom_uuid),
+            lambda _db, _uuid, _uid: SimpleNamespace(
+                id=custom_uuid,
+                allowed_group_ids=[],
+            ),
         )
         monkeypatch.setattr(
             api_module,

@@ -131,7 +131,14 @@ def test_validate_model_id_paths(monkeypatch):
 
 def test_resolve_system_template_agent_paths():
     db = _FakeDB(
-        [_FakeQuery(first_value=SimpleNamespace(agent_key="gene_validation"))]
+        [
+            _FakeQuery(
+                first_value=SimpleNamespace(
+                    agent_key="gene_validation",
+                    allowed_group_ids=[],
+                )
+            )
+        ]
     )
     assert (
         service._resolve_system_template_agent(db, "gene_validation").agent_key

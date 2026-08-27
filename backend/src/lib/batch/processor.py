@@ -30,6 +30,7 @@ from src.models.sql.user import User
 from src.models.sql.file_output import FileOutput
 from src.models.sql.pdf_document import PDFDocument
 from src.lib.observability.background_tasks import report_background_task_exception
+from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 from src.lib.openai_agents.config import (
     get_batch_worker_heartbeat_seconds,
     get_batch_worker_lease_seconds,
@@ -360,6 +361,13 @@ def _process_single_document(
 
     try:
         _require_running_batch(db, batch, lease_owner=lease_owner)
+        if inaccessible_flow_agent_keys(
+            db,
+            flow.flow_definition or {},
+            user_id=batch.user_id,
+            active_group_ids=batch.active_group_ids,
+        ):
+            raise RuntimeError("Batch flow contains agents unavailable to its authenticated group snapshot")
         # Execute the flow on this document
         # Use asyncio.run() since we're in a sync context
         source_document = db.query(PDFDocument).filter(

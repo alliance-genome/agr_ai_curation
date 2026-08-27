@@ -521,6 +521,34 @@ def test_flow_definition_payload_rejects_missing_agent_reference(monkeypatch):
     assert "fixture_agent_without_pack" in str(exc.value.detail)
 
 
+def test_flow_definition_validation_uses_authenticated_group_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    observed = []
+
+    def _policy_entry(agent_id, **kwargs):
+        observed.append((agent_id, kwargs))
+        return {"category": "Extraction", "supervisor": {"enabled": True}}
+
+    monkeypatch.setattr(flows, "_flow_agent_policy_entry", _policy_entry)
+
+    flows._validated_flow_definition_payload(
+        FlowDefinition.model_validate(_minimal_flow_definition_payload()),
+        db_user_id=7,
+        active_group_ids=["WB", "RGD"],
+        enforce_agent_references=True,
+    )
+
+    assert observed
+    assert all(
+        kwargs["active_group_ids"] == ["WB", "RGD"]
+        for _, kwargs in observed
+    )
+
+
 @pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
 def test_flow_definition_payload_rejects_retired_validator_alias(retired_alias):
     payload = _minimal_flow_definition_payload()

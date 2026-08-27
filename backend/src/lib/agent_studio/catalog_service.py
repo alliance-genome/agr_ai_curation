@@ -1985,7 +1985,12 @@ def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
 
     db = SessionLocal()
     try:
-        return get_agent_by_key(db, agent_id, user_id=db_user_id)
+        return get_agent_by_key(
+            db,
+            agent_id,
+            user_id=db_user_id,
+            active_group_ids=list(kwargs.get("authenticated_groups", []) or []),
+        )
     except Exception:
         logger.exception("[CatalogService] Failed DB lookup for agent '%s'", agent_id)
         return None
@@ -2240,7 +2245,10 @@ def get_active_visible_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str,
     return get_agent_metadata(agent_id, _resolved_db_agent=db_agent, **kwargs)
 
 
-def list_available_agents(db_user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+def list_available_agents(
+    db_user_id: Optional[int] = None,
+    authenticated_groups: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """List active unified agents with metadata.
 
     Args:
@@ -2264,11 +2272,14 @@ def list_available_agents(db_user_id: Optional[int] = None) -> List[Dict[str, An
     metadata_kwargs: Dict[str, Any] = {}
     if db_user_id is not None:
         metadata_kwargs["db_user_id"] = db_user_id
+    metadata_kwargs["authenticated_groups"] = list(authenticated_groups or [])
 
     visible: List[Dict[str, Any]] = []
     for agent_id in keys:
         try:
-            visible.append(get_agent_metadata(agent_id, **metadata_kwargs))
+            visible.append(
+                get_active_visible_agent_metadata(agent_id, **metadata_kwargs)
+            )
         except ValueError:
             continue
     return visible
