@@ -1415,6 +1415,11 @@ def run_package_scoped_validator_agent(
             request,
             finalization_state=finalization_state,
             function_tool_factory=function_tool,
+            result_schema=(
+                output_type
+                if is_domain_validator_result_schema(output_type)
+                else DomainValidatorResultBase
+            ),
         ),
     ]
     _append_validator_source_context_instructions(
@@ -2154,6 +2159,7 @@ def _build_finalize_validator_result_tool(
     *,
     finalization_state: _ValidatorFinalizationState,
     function_tool_factory: Any,
+    result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
 ) -> Any:
     @function_tool_factory(name_override="finalize_validator_result", strict_mode=False)
     def finalize_validator_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -2162,6 +2168,7 @@ def _build_finalize_validator_result_tool(
         feedback = _validator_result_finalization_feedback(
             result,
             request=request,
+            result_schema=result_schema,
         )
         if feedback.accepted_result is not None:
             finalization_state.accepted_result = feedback.accepted_result
@@ -2204,10 +2211,14 @@ def _validator_result_finalization_feedback(
     raw_result: Any,
     *,
     request: DomainValidationRequest,
+    result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
 ) -> _ValidatorFinalizationFeedback:
     try:
         payload = _extract_structured_output(raw_result)
-        result = DomainValidatorResultBase.model_validate(payload)
+        result = result_schema.model_validate(
+            payload,
+            context={"domain_validation_request": request},
+        )
     except ValidationError as exc:
         message = (
             "Validator result rejected: incompatible DomainValidatorResultBase "

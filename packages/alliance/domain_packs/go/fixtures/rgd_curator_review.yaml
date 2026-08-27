@@ -9,7 +9,7 @@ fixtures:
     envelope:
       envelope_id: go-rgd-lta-protein-1
       domain_pack_id: agr.alliance.go
-      domain_pack_version: 0.1.0
+      domain_pack_version: 0.2.0
       status: validated
       extracted_objects:
         - object_type: GOCuratableObject
@@ -57,6 +57,7 @@ fixtures:
         evidence_records:
           - evidence_record_id: go-evidence-rgd-lta-1
             object_id: go-candidate-rgd-lta-1
+            verified_quote: Lta protein was detected in the extracellular fraction.
             field_paths:
               - gene_product
               - go_term
@@ -79,7 +80,7 @@ fixtures:
     envelope:
       envelope_id: go-rgd-mature-mirna-1
       domain_pack_id: agr.alliance.go
-      domain_pack_version: 0.1.0
+      domain_pack_version: 0.2.0
       status: validating
       extracted_objects:
         - object_type: GOCuratableObject
@@ -146,6 +147,7 @@ fixtures:
         evidence_records:
           - evidence_record_id: go-evidence-rgd-mirna-1
             object_id: go-candidate-rgd-mature-mirna-1
+            verified_quote: Nuclear rno-miR-21-5p was detected after fractionation.
             field_paths:
               - gene_product.mention
               - go_term

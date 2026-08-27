@@ -86,6 +86,8 @@ agent_bundles:
     has_schema: true
   - name: go_annotations
     has_schema: true
+  - name: rgd_go_evidence_policy
+    has_schema: true
   - name: json_formatter
   - name: ontology_term
     has_schema: true
