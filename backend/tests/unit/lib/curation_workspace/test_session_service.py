@@ -101,6 +101,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
 )
+from src.schemas.domain_pack_metadata import DomainPackObjectDefinition
 
 
 @compiles(PostgresUUID, "sqlite")
@@ -3637,6 +3638,33 @@ def test_submission_export_blocks_unstable_definition_state(
     assert blocker.status == "definition_state"
     assert blocker.code == "domain_envelope.definition_state_blocked"
     assert blocker.details["definition_state"] == "draft"
+
+
+def test_definition_state_gate_accepts_validated_promoted_builder_object():
+    promoted_object = CuratableObjectEnvelope(
+        object_type="FixtureMention",
+        pending_ref_id="fixture-mention-1",
+        status=CuratableObjectStatus.VALIDATED,
+        definition_state=DefinitionState.STABLE,
+    )
+    envelope = DomainEnvelope(
+        envelope_id="builder-envelope",
+        domain_pack_id="fixture.pack",
+        extracted_objects=[promoted_object],
+    )
+    object_definition = DomainPackObjectDefinition(
+        object_type="FixtureMention",
+        display_name="Fixture mention",
+        definition_state=DefinitionState.STABLE,
+    )
+
+    assert submission_module._definition_state_blockers(
+        envelope=envelope,
+        object_id="fixture-mention-1",
+        domain_object=promoted_object,
+        object_definition=object_definition,
+        projection_ref={},
+    ) == []
 
 
 def test_execute_submission_rejects_domain_envelope_readiness_blockers(

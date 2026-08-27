@@ -30,6 +30,7 @@ from src.lib.domain_packs.validation_registry import (
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
+    DefinitionState,
     DomainEnvelope,
     DomainEnvelopeStatus,
     FieldRef,
@@ -696,7 +697,10 @@ def test_validator_result_materialization_compacts_finding_audit_payloads():
     assert huge_quote not in str(history_event.details)
 
 
-def test_validator_result_materialization_patches_target_payload_from_resolved_values():
+@pytest.mark.parametrize("prepopulated", [False, True], ids=["patched", "unchanged"])
+def test_validator_result_materialization_promotes_builder_after_active_binding_resolves(
+    prepopulated: bool,
+):
     metadata = DomainPackMetadata(
         pack_id="fixture.target_patch",
         display_name="Fixture Target Patch Pack",
@@ -767,7 +771,19 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
                 object_type="GeneMention",
                 pending_ref_id="gene-mention-1",
                 status=CuratableObjectStatus.PENDING,
-                payload={"mention": "crumbs"},
+                definition_state=DefinitionState.IN_DEVELOPMENT,
+                payload={
+                    "mention": "crumbs",
+                    **(
+                        {
+                            "primary_external_id": "FB:FBgn0259685",
+                            "gene_symbol": "crb",
+                            "taxon": "NCBITaxon:7227",
+                        }
+                        if prepopulated
+                        else {}
+                    ),
+                },
             )
         ],
     )
@@ -795,6 +811,7 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
     assert result.materialized_objects == ()
     patched = result.envelope.extracted_objects[0]
     assert patched.status is CuratableObjectStatus.VALIDATED
+    assert patched.definition_state is DefinitionState.STABLE
     assert patched.payload == {
         "mention": "crumbs",
         "primary_external_id": "FB:FBgn0259685",
@@ -809,12 +826,103 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
         "path": "mention",
         "required": True,
     }
-    assert patch_event["original_values"] == {}
+    assert patch_event["original_values"] == (
+        {
+            "primary_external_id": "FB:FBgn0259685",
+            "gene_symbol": "crb",
+            "taxon": "NCBITaxon:7227",
+        }
+        if prepopulated
+        else {}
+    )
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.RESOLVED
     assert finding.details["validation_result"]["resolved_values"]["curie"] == (
         "FB:FBgn0259685"
     )
+
+    replay = materialize_validator_results_into_envelope(
+        result.envelope, metadata, [item]
+    )
+    assert len(
+        replay.envelope.extracted_objects[0].metadata[
+            "validator_resolved_value_materialization"
+        ]
+    ) == 1
+
+
+def test_validator_result_materialization_preserves_in_development_definition_state():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.target_patch",
+        display_name="Fixture Target Patch Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        metadata={
+            "validator_bindings": {
+                "active": [
+                    {
+                        "binding_id": "fixture.lookup",
+                        "validator_agent": {
+                            "package_id": "fixture.validators",
+                            "agent_id": "validator",
+                        },
+                        "applies_to": {
+                            "domain_pack_id": "fixture.target_patch",
+                            "object_types": ["FixtureMention"],
+                        },
+                        "input_fields": {
+                            "mention": {"source": "payload", "path": "mention"}
+                        },
+                        "expected_result_fields": {"curie": "identifier"},
+                    }
+                ],
+                "under_development": [],
+            }
+        },
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="FixtureMention",
+                display_name="Fixture mention",
+                definition_state=DefinitionState.IN_DEVELOPMENT,
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="mention",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="identifier",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="target-patch-env",
+        domain_pack_id="fixture.target_patch",
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="FixtureMention",
+                pending_ref_id="fixture-mention-1",
+                status=CuratableObjectStatus.PENDING,
+                definition_state=DefinitionState.IN_DEVELOPMENT,
+                payload={"mention": "example"},
+            )
+        ],
+    )
+    item = _validator_item(
+        metadata,
+        envelope,
+        resolved_values={"curie": "FIXTURE:1"},
+        resolved_objects=[],
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    patched = result.envelope.extracted_objects[0]
+    assert patched.status is CuratableObjectStatus.VALIDATED
+    assert patched.definition_state is DefinitionState.IN_DEVELOPMENT
 
 
 def test_validator_result_materialization_projects_expected_result_fields_to_target_fields():
@@ -1331,6 +1439,15 @@ def test_validator_result_materialization_is_deterministic_for_existing_referenc
 def test_unresolved_validator_result_materializes_missing_field_finding():
     metadata = _validator_metadata()
     envelope = _validator_envelope()
+    envelope = envelope.model_copy(
+        update={
+            "extracted_objects": [
+                envelope.extracted_objects[0].model_copy(
+                    update={"definition_state": DefinitionState.IN_DEVELOPMENT}
+                )
+            ]
+        }
+    )
     item = _validator_item(
         metadata,
         envelope,
@@ -1342,6 +1459,10 @@ def test_unresolved_validator_result_materializes_missing_field_finding():
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
 
     assert result.materialized_objects == ()
+    assert (
+        result.envelope.extracted_objects[0].definition_state
+        is DefinitionState.IN_DEVELOPMENT
+    )
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.OPEN
     assert finding.code == "domain_pack.validator_unresolved"

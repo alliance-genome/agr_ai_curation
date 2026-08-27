@@ -40,6 +40,7 @@ from .validation_registry import (
     validate_active_validator_agent_references,
 )
 from .validation_findings import append_validation_findings_to_envelope
+from .export_verification import runtime_validator_resolved_object_ids
 from .structural_checks import (
     DomainEnvelopeStructuralCheckResult,
     run_domain_envelope_structural_checks,
@@ -80,6 +81,7 @@ __all__ = [
     "ValidatorResultMaterializationInput",
     "ValidatorResultMaterializationResult",
     "append_validation_findings_to_envelope",
+    "runtime_validator_resolved_object_ids",
     "dispatch_active_validator_bindings",
     "load_domain_fixture_pack",
     "load_domain_pack_metadata",
