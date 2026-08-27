@@ -2061,6 +2061,49 @@ def get_pdf_document_error_message_max_chars() -> int:
     )
 
 
+def get_pdf_no_job_orphan_threshold_seconds() -> int:
+    """Minimum pending-document age before no-job repair. Default 86400."""
+    return max(
+        300,
+        _get_env_int_with_fallback(
+            "PDF_NO_JOB_ORPHAN_THRESHOLD_SECONDS",
+            86400,
+        ),
+    )
+
+
+def get_pdf_no_job_orphan_batch_size() -> int:
+    """Maximum no-job orphan documents inspected per run. Default 100."""
+    return max(
+        1,
+        _get_env_int_with_fallback("PDF_NO_JOB_ORPHAN_BATCH_SIZE", 100),
+    )
+
+
+def get_pdf_no_job_orphan_repair_timeout_seconds() -> int:
+    """Database statement timeout for one orphan repair attempt. Default 30."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "PDF_NO_JOB_ORPHAN_REPAIR_TIMEOUT_SECONDS",
+            30,
+        ),
+    )
+
+
+def get_pdf_no_job_orphan_repair_retry_count() -> int:
+    """Transient database retries for manual orphan repair. Default 2."""
+    return max(
+        0,
+        _get_env_int_with_fallback("PDF_NO_JOB_ORPHAN_REPAIR_RETRY_COUNT", 2),
+    )
+
+
+def get_pdf_no_job_orphan_repair_apply() -> bool:
+    """Whether manual no-job orphan repair writes by default. Default false."""
+    return _get_env_bool("PDF_NO_JOB_ORPHAN_REPAIR_APPLY", False)
+
+
 def get_pdf_upload_max_page_count() -> int:
     """Max page count admitted for PDF uploads (PDF_UPLOAD_MAX_PAGE_COUNT).
 

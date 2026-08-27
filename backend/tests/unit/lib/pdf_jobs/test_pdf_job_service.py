@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from src.lib.pdf_jobs import service as service_module
 from src.lib.pipeline.processing_receipt import PDF_PROCESSING_RECEIPT_KEY
@@ -38,14 +39,29 @@ class _FakeSession:
         self.refresh_calls = 0
         self.rollback_calls = 0
         self.closed = False
+        self.added = []
+        self.flush_calls = 0
+        self.statements = []
 
-    def execute(self, *_args, **_kwargs):
+    def execute(self, statement, *_args, **_kwargs):
+        self.statements.append(statement)
         if not self.responses:
             raise AssertionError("unexpected query")
         response = self.responses.pop(0)
+        if callable(response):
+            response = response(self)
         if isinstance(response, Exception):
             raise response
         return _ScalarResult(response)
+
+    def add(self, row):
+        self.added.append(row)
+
+    def flush(self):
+        self.flush_calls += 1
+        for row in self.added:
+            if getattr(row, "id", None) is None:
+                row.id = uuid4()
 
     def commit(self):
         self.commit_calls += 1
@@ -358,6 +374,145 @@ def test_repeated_finalizer_reconciles_from_durable_first_terminal_winner(monkey
     assert document.status == "failed"
     assert document.error_message == "Original cancellation"
     assert session.commit_calls == 1
+
+
+def test_no_job_orphan_dry_run_reports_without_writes():
+    now = datetime(2026, 8, 27, 12, tzinfo=timezone.utc)
+    document = PDFDocument(
+        id=uuid4(),
+        filename="private-paper.pdf",
+        file_path="private-paper.pdf",
+        file_hash=uuid4().hex,
+        file_size=100,
+        page_count=1,
+        user_id=42,
+        status="pending",
+        upload_timestamp=now - timedelta(days=7),
+    )
+    session = _FakeSession([[document]])
+
+    summary = service_module._reconcile_pending_documents_without_jobs(
+        session,
+        apply=False,
+        cutoff=now - timedelta(days=1),
+        batch_size=25,
+        now=now,
+    )
+
+    assert summary.dry_run is True
+    assert summary.qualifying_count == 1
+    assert summary.records[0].status == "would_fail"
+    assert summary.records[0].job_id is None
+    assert "private-paper.pdf" not in str(summary.to_json())
+    assert session.added == []
+    assert session.flush_calls == 0
+    compiled = str(session.statements[0])
+    assert "pdf_documents.status" in compiled
+    assert "pdf_documents.upload_timestamp" in compiled
+    assert "NOT (EXISTS" in compiled
+    assert "pdf_processing_jobs.document_id = pdf_documents.id" in compiled
+
+
+def test_no_job_orphan_apply_creates_canonical_failed_job_and_reconciles_document():
+    now = datetime(2026, 8, 27, 12, tzinfo=timezone.utc)
+    document = PDFDocument(
+        id=uuid4(),
+        filename="paper.pdf",
+        file_path="paper.pdf",
+        file_hash=uuid4().hex,
+        file_size=100,
+        page_count=1,
+        user_id=42,
+        status="pending",
+        upload_timestamp=now - timedelta(days=7),
+        error_message=None,
+    )
+    session = _FakeSession(
+        [
+            [document],
+            lambda current_session: current_session.added[-1],
+            document,
+        ]
+    )
+
+    summary = service_module._reconcile_pending_documents_without_jobs(
+        session,
+        apply=True,
+        cutoff=now - timedelta(days=1),
+        batch_size=25,
+        now=now,
+    )
+
+    assert summary.dry_run is False
+    assert summary.qualifying_count == 1
+    assert summary.records[0].status == "failed"
+    assert summary.records[0].job_id is not None
+    job = session.added[0]
+    assert job.status == PdfJobStatus.FAILED.value
+    assert job.error_message == service_module.NO_JOB_ORPHAN_FAILURE_MESSAGE
+    assert job.started_at == document.upload_timestamp
+    assert job.completed_at == now
+    assert job.metadata_json[PDF_PROCESSING_RECEIPT_KEY]["outcome"] == "failed"
+    assert document.status == "failed"
+    assert document.processing_started_at == document.upload_timestamp
+    assert document.processing_completed_at == now
+    assert document.error_message == service_module.NO_JOB_ORPHAN_FAILURE_MESSAGE
+
+
+def test_no_job_orphan_repair_is_idempotent_when_no_pending_no_job_rows_remain():
+    now = datetime(2026, 8, 27, 12, tzinfo=timezone.utc)
+    session = _FakeSession([[]])
+
+    summary = service_module._reconcile_pending_documents_without_jobs(
+        session,
+        apply=True,
+        cutoff=now - timedelta(days=1),
+        batch_size=25,
+        now=now,
+    )
+
+    assert summary.qualifying_count == 0
+    assert session.added == []
+    assert session.flush_calls == 0
+
+
+def test_no_job_orphan_repair_retries_transient_database_failure(monkeypatch):
+    failure = OperationalError("select", {}, RuntimeError("transient"))
+    failed_session = _FakeSession([failure])
+    successful_session = _FakeSession([[]])
+    sessions = iter((failed_session, successful_session))
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: next(sessions))
+    monkeypatch.setattr(
+        service_module,
+        "get_pdf_no_job_orphan_threshold_seconds",
+        lambda: 86400,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "get_pdf_no_job_orphan_batch_size",
+        lambda: 10,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "get_pdf_no_job_orphan_repair_timeout_seconds",
+        lambda: 30,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "get_pdf_no_job_orphan_repair_retry_count",
+        lambda: 1,
+    )
+
+    summary = service_module.reconcile_pending_documents_without_jobs(
+        apply=False,
+        now=datetime(2026, 8, 27, 12, tzinfo=timezone.utc),
+    )
+
+    assert summary.qualifying_count == 0
+    assert failed_session.rollback_calls == 1
+    assert failed_session.closed is True
+    assert successful_session.rollback_calls == 1
+    assert successful_session.closed is True
 
 
 def test_terminal_reconciliation_rejects_missing_failure_message(monkeypatch):

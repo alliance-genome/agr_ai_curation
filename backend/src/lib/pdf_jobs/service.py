@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select, text
+from sqlalchemy.exc import OperationalError
 
-from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
+from src.lib.openai_agents.config import (
+    get_pdf_document_error_message_max_chars,
+    get_pdf_no_job_orphan_batch_size,
+    get_pdf_no_job_orphan_repair_apply,
+    get_pdf_no_job_orphan_repair_retry_count,
+    get_pdf_no_job_orphan_repair_timeout_seconds,
+    get_pdf_no_job_orphan_threshold_seconds,
+)
 from src.lib.pipeline.processing_receipt import (
     PDF_PROCESSING_RECEIPT_KEY,
     minimal_terminal_receipt,
@@ -41,6 +50,53 @@ _JOB_CREATION_ORDERING = (
 )
 _DEFAULT_STALE_TIMEOUT_SECONDS = 7200
 _MIN_STALE_TIMEOUT_SECONDS = 300
+NO_JOB_ORPHAN_FAILURE_MESSAGE = (
+    "PDF processing did not start because no durable processing job was created; "
+    "retry the document processing request"
+)
+
+
+@dataclass(frozen=True)
+class NoJobOrphanRepairRecord:
+    """Content-free report row for one qualifying pending document."""
+
+    document_id: str
+    upload_timestamp: datetime
+    status: str
+    reason: str
+    job_id: str | None = None
+
+    def to_json(self) -> dict[str, str | None]:
+        return {
+            "document_id": self.document_id,
+            "upload_timestamp": _as_utc(self.upload_timestamp).isoformat(),
+            "status": self.status,
+            "reason": self.reason,
+            "job_id": self.job_id,
+        }
+
+
+@dataclass(frozen=True)
+class NoJobOrphanRepairSummary:
+    """Bounded result from one manual no-job orphan reconciliation run."""
+
+    dry_run: bool
+    cutoff: datetime
+    batch_size: int
+    records: tuple[NoJobOrphanRepairRecord, ...]
+
+    @property
+    def qualifying_count(self) -> int:
+        return len(self.records)
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "dry_run": self.dry_run,
+            "cutoff": _as_utc(self.cutoff).isoformat(),
+            "batch_size": self.batch_size,
+            "qualifying_count": self.qualifying_count,
+            "records": [record.to_json() for record in self.records],
+        }
 
 
 def _to_uuid(value: UUID | str) -> UUID:
@@ -222,6 +278,156 @@ def _reconcile_stale_job(
 
     _reconcile_terminal_document(session, job)
     return True
+
+
+def _configure_orphan_repair_timeout(session, timeout_seconds: int) -> None:
+    """Apply a transaction-local PostgreSQL timeout when supported."""
+    get_bind = getattr(session, "get_bind", None)
+    if not callable(get_bind):
+        return
+    bind = get_bind()
+    if getattr(getattr(bind, "dialect", None), "name", None) != "postgresql":
+        return
+    session.execute(
+        text("SELECT set_config('statement_timeout', :timeout, true)"),
+        {"timeout": f"{timeout_seconds * 1000}ms"},
+    )
+
+
+def _terminalize_no_job_orphan(
+    session,
+    document: PDFDocument,
+    *,
+    now: datetime,
+) -> PdfProcessingJob:
+    """Create the canonical failed job and reconcile its pending document."""
+    job = PdfProcessingJob(
+        document_id=document.id,
+        user_id=document.user_id,
+        filename=document.filename,
+        status=PdfJobStatus.FAILED.value,
+        current_stage="failed",
+        progress_percentage=0,
+        message=NO_JOB_ORPHAN_FAILURE_MESSAGE,
+        cancel_requested=False,
+        error_message=NO_JOB_ORPHAN_FAILURE_MESSAGE,
+        started_at=document.upload_timestamp,
+        updated_at=now,
+        completed_at=now,
+    )
+    _store_terminal_metadata(
+        job,
+        metadata=None,
+        outcome="failed",
+        completed_at=now,
+    )
+    session.add(job)
+    session.flush()
+    if not _reconcile_terminal_document(session, job):
+        raise RuntimeError(
+            f"Pending no-job orphan {document.id} could not be terminalized"
+        )
+    return job
+
+
+def _reconcile_pending_documents_without_jobs(
+    session,
+    *,
+    apply: bool,
+    cutoff: datetime,
+    batch_size: int,
+    now: datetime,
+) -> NoJobOrphanRepairSummary:
+    """Select one bounded orphan batch and optionally reconcile it."""
+    has_job = exists(
+        select(PdfProcessingJob.id).where(
+            PdfProcessingJob.document_id == PDFDocument.id
+        )
+    )
+    statement = (
+        select(PDFDocument)
+        .where(
+            PDFDocument.status == "pending",
+            PDFDocument.upload_timestamp <= cutoff,
+            ~has_job,
+        )
+        .order_by(PDFDocument.upload_timestamp.asc(), PDFDocument.id.asc())
+        .limit(batch_size)
+    )
+    if apply:
+        statement = statement.with_for_update(skip_locked=True)
+
+    documents = session.execute(statement).scalars().all()
+    records: list[NoJobOrphanRepairRecord] = []
+    for document in documents:
+        job = (
+            _terminalize_no_job_orphan(session, document, now=now)
+            if apply
+            else None
+        )
+        records.append(
+            NoJobOrphanRepairRecord(
+                document_id=str(document.id),
+                upload_timestamp=document.upload_timestamp,
+                status="failed" if apply else "would_fail",
+                reason=NO_JOB_ORPHAN_FAILURE_MESSAGE,
+                job_id=str(job.id) if job is not None else None,
+            )
+        )
+
+    return NoJobOrphanRepairSummary(
+        dry_run=not apply,
+        cutoff=cutoff,
+        batch_size=batch_size,
+        records=tuple(records),
+    )
+
+
+def reconcile_pending_documents_without_jobs(
+    *,
+    apply: bool | None = None,
+    now: datetime | None = None,
+) -> NoJobOrphanRepairSummary:
+    """Run the bounded, idempotent manual repair with transient DB retries."""
+    should_apply = (
+        get_pdf_no_job_orphan_repair_apply()
+        if apply is None
+        else apply
+    )
+    current_time = _as_utc(now or datetime.now(timezone.utc))
+    threshold_seconds = get_pdf_no_job_orphan_threshold_seconds()
+    cutoff = current_time - timedelta(seconds=threshold_seconds)
+    batch_size = get_pdf_no_job_orphan_batch_size()
+    timeout_seconds = get_pdf_no_job_orphan_repair_timeout_seconds()
+    retry_count = get_pdf_no_job_orphan_repair_retry_count()
+
+    for attempt in range(retry_count + 1):
+        session = SessionLocal()
+        try:
+            _configure_orphan_repair_timeout(session, timeout_seconds)
+            summary = _reconcile_pending_documents_without_jobs(
+                session,
+                apply=should_apply,
+                cutoff=cutoff,
+                batch_size=batch_size,
+                now=current_time,
+            )
+            if should_apply:
+                session.commit()
+            else:
+                session.rollback()
+            return summary
+        except OperationalError:
+            session.rollback()
+            if attempt >= retry_count:
+                raise
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    raise RuntimeError("No-job orphan reconciliation exhausted its retry loop")
 
 
 def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str] = None) -> PdfJobResponse:

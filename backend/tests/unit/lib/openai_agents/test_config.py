@@ -31,6 +31,11 @@ from src.lib.openai_agents.config import (
     get_openai_responses_websocket_ping_timeout_seconds,
     get_pdf_document_error_message_max_chars,
     get_pdf_max_file_size_bytes,
+    get_pdf_no_job_orphan_batch_size,
+    get_pdf_no_job_orphan_repair_apply,
+    get_pdf_no_job_orphan_repair_retry_count,
+    get_pdf_no_job_orphan_repair_timeout_seconds,
+    get_pdf_no_job_orphan_threshold_seconds,
     get_pdf_upload_max_page_count,
     get_model_for_agent,
     get_sentry_log_event_level,
@@ -627,6 +632,34 @@ def test_pdf_document_error_message_max_chars_is_configurable(monkeypatch):
 
     monkeypatch.setenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", "0")
     assert get_pdf_document_error_message_max_chars() == 1
+
+
+def test_pdf_no_job_orphan_repair_limits_and_mode_are_configurable(monkeypatch):
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_THRESHOLD_SECONDS", "600")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_BATCH_SIZE", "7")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_REPAIR_TIMEOUT_SECONDS", "9")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_REPAIR_RETRY_COUNT", "4")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_REPAIR_APPLY", "true")
+
+    assert get_pdf_no_job_orphan_threshold_seconds() == 600
+    assert get_pdf_no_job_orphan_batch_size() == 7
+    assert get_pdf_no_job_orphan_repair_timeout_seconds() == 9
+    assert get_pdf_no_job_orphan_repair_retry_count() == 4
+    assert get_pdf_no_job_orphan_repair_apply() is True
+
+
+def test_pdf_no_job_orphan_repair_limits_preserve_safety_floors(monkeypatch):
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_THRESHOLD_SECONDS", "1")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_BATCH_SIZE", "0")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_REPAIR_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_REPAIR_RETRY_COUNT", "-1")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_REPAIR_APPLY", "false")
+
+    assert get_pdf_no_job_orphan_threshold_seconds() == 300
+    assert get_pdf_no_job_orphan_batch_size() == 1
+    assert get_pdf_no_job_orphan_repair_timeout_seconds() == 1
+    assert get_pdf_no_job_orphan_repair_retry_count() == 0
+    assert get_pdf_no_job_orphan_repair_apply() is False
 
 
 def test_pdf_max_file_size_env_override_can_raise_former_ceiling(monkeypatch):
