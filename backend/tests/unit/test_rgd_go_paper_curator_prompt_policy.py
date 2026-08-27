@@ -41,6 +41,7 @@ def test_rgd_go_paper_curator_is_registered_and_rgd_restricted():
     assert agent.output_schema is None
     assert agent.curation.adapter_key == "go"
     assert agent.curation.domain_pack_id == "agr.alliance.go"
+    assert "agr_literature_reference_lookup" in agent.tools
 
     manifest = load_package_manifest(
         REPO_ROOT / "packages" / "alliance" / "package.yaml"
@@ -95,6 +96,7 @@ def test_prompt_requires_grounding_sections_and_canonical_lifecycle():
         "Introduction and Discussion text",
         "never sufficient evidence",
         "resolve_gene_product",
+        "agr_literature_reference_lookup",
         "quickgo_api_call",
         "go_api_call",
         "record_evidence",

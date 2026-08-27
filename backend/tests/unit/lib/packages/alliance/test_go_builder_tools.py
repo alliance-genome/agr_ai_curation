@@ -139,9 +139,43 @@ def _evidence():
 def _ground_candidate(candidate, ledger):
     payload = candidate.staged_fields["payload"]
     outputs = {
-        "call-identity": ("resolve_gene_product", payload),
-        "call-term": ("quickgo_api_call", payload),
-        "call-annotations": ("go_api_call", payload),
+        "call-identity": (
+            "resolve_gene_product",
+            {
+                "gene_product": {
+                    "mention": payload["gene_product"]["mention"],
+                    "curie": payload["gene_product"].get("curie"),
+                },
+                "resolution": payload["provider_context"]["identity_resolution"],
+            },
+        ),
+        "call-term": (
+            "quickgo_api_call",
+            {
+                "results": [payload["go_term"]],
+                "evidence": {
+                    "code": payload["evidence_code"],
+                    "eco_curie": payload["evidence_eco_curie"],
+                },
+            },
+        ),
+        "call-annotations": (
+            "go_api_call",
+            {
+                "query_gene_id": payload["gene_product"].get("curie"),
+                "annotations": payload["provider_context"][
+                    "existing_annotation_context"
+                ]["annotations"],
+                "provenance": payload["provider_context"][
+                    "existing_annotation_context"
+                ]["provenance"],
+                "with_from": payload["with_from"],
+            },
+        ),
+        "call-reference": (
+            "agr_literature_reference_lookup",
+            {"match": {"reference_curie": payload["reference_curie"]}},
+        ),
     }
     for call_id, (tool_name, output) in outputs.items():
         ledger.record_tool_output(
@@ -267,6 +301,90 @@ def test_go_stage_and_finalize_tools_emit_typed_extraction_result(
     assert payload["curatable_objects"][0]["object_type"] == "GOCuratableObject"
     assert payload["curatable_objects"][0]["evidence_record_ids"] == ["go-evidence-1"]
     assert payload["metadata"]["evidence_records"][0]["section"] == "Results"
+
+
+def test_reference_curie_grounding_requires_literature_lookup():
+    requirements = go_builder_tools._grounding_requirements(
+        _candidate().staged_fields["payload"]
+    )
+
+    reference_requirements = [
+        requirement
+        for requirement in requirements
+        if requirement["field_path"] == "reference_curie"
+    ]
+    assert reference_requirements == [
+        {
+            "field_path": "reference_curie",
+            "tool_names": ["agr_literature_reference_lookup"],
+            "value": "AGRKB:101000000400377",
+        }
+    ]
+
+
+def test_go_builder_emits_complete_decision_lifecycle_events(
+    active_go_builder_context,
+):
+    workspace, events = active_go_builder_context
+    staged = go_builder_tools._stage_go_recommendation_impl(
+        pending_ref_id="go-recommendation-1",
+        gene_product_mention="Cttn",
+        gene_product_label="Cttn",
+        gene_product_entity_type="protein_coding_gene",
+        gene_product_taxon_curie="NCBITaxon:10116",
+        gene_product_curie="RGD:619839",
+        resolution_state="resolved",
+        go_term_curie="GO:0005515",
+        go_term_label="protein binding",
+        go_term_aspect="molecular_function",
+        evidence_code="IPI",
+        evidence_eco_curie="ECO:0000353",
+        reference_curie="AGRKB:101000000400377",
+        rationale="The Results interaction assay directly supports protein binding.",
+        evidence_record_ids=["go-evidence-1"],
+        with_from=["RGD:621255"],
+        existing_annotation_status="available",
+        existing_annotations=[],
+        existing_annotation_provenance={
+            "source": "GO Consortium API",
+            "request_gene_id": "RGD:619839",
+        },
+        identity_resolution={"status": "resolved"},
+    )
+    candidate_id = staged.data["candidate_id"]
+
+    go_builder_tools._patch_go_recommendation_impl(
+        candidate_id, [{"field_path": "rationale", "value": "Updated rationale"}]
+    )
+    go_builder_tools._list_staged_go_recommendations_impl(False)
+    go_builder_tools._find_staged_go_recommendations_impl(candidate_id=candidate_id)
+    candidate = workspace.get_candidate(candidate_id)
+    workspace.upsert_candidate(
+        candidate_id="go-candidate-discard",
+        staged_fields=copy.deepcopy(candidate.staged_fields),
+        pending_ref_ids=["go-recommendation-discard"],
+        evidence_record_ids=list(candidate.evidence_record_ids),
+        resolver_selection_refs=list(candidate.resolver_selection_refs),
+        status=candidate.status,
+    )
+    go_builder_tools._discard_go_recommendation_impl(
+        "go-candidate-discard", "Not retained"
+    )
+    go_builder_tools._finalize_go_extraction_impl([candidate_id])
+
+    event_types = {event["event_type"] for event in events}
+    assert {
+        "go_builder.patch_requested",
+        "go_builder.patch_completed",
+        "go_builder.discard_requested",
+        "go_builder.discard_completed",
+        "go_builder.list_requested",
+        "go_builder.list_completed",
+        "go_builder.find_requested",
+        "go_builder.find_completed",
+        "go_builder.finalize_requested",
+        "go_builder.finalize_completed",
+    } <= event_types
 
 
 def test_go_builder_rejects_evidence_less_finalization():

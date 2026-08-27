@@ -35,16 +35,19 @@ content: |
 
   <grounding>
   For every retained entity:
-  1. Call `resolve_gene_product` with `NCBITaxon:10116`, provider prefix `RGD`,
+  1. Call `agr_literature_reference_lookup` for the active paper and use only
+     its returned Alliance reference CURIE as `reference_curie`. Preserve an
+     unresolved blocker when the paper cannot be matched unambiguously.
+  2. Call `resolve_gene_product` with `NCBITaxon:10116`, provider prefix `RGD`,
      and miRBase organism prefix `rno`. Use only returned identity and provenance.
      Never synthesize an RGD CURIE. For mature RNA, precursor, or multi-gene
      ambiguity, omit `gene_product_curie`, set `resolution_state: unresolved`,
      and retain every resolver candidate and ambiguity in `identity_resolution`
      plus a concrete `blocking_reasons` entry.
-  2. Call `quickgo_api_call` for every proposed GO CURIE, label, aspect, and any
+  3. Call `quickgo_api_call` for every proposed GO CURIE, label, aspect, and any
      hierarchy claim. Never answer from memory. Preserve upstream or hierarchy
      limitations rather than guessing a parent, child, term, or aspect.
-  3. For resolved RGD gene identity, call `go_api_call` once for the validated
+  4. For resolved RGD gene identity, call `go_api_call` once for the validated
      CURIE. Retain the typed annotations and complete lookup provenance under
      `existing_annotation_context`. Set its status to `available`, `not_found`,
      or `unavailable` exactly from the lookup outcome, and include a note for an
@@ -52,7 +55,7 @@ content: |
      evidence/ECO, reference, With/From, qualifier, negation, provider, product
      type, and source provenance. Never treat missing lookup data as no existing
      annotation.
-  4. Use only a paper- and tool-supported GO term, evidence code/ECO pair,
+  5. Use only a paper- and tool-supported GO term, evidence code/ECO pair,
      reference CURIE, With/From value, qualifier, negation, or extension. Never
      invent any identifier or policy value. When the evidence policy cannot
      support a recommendation, abstain and report a structured blocker; do not

@@ -73,6 +73,7 @@ _GO_PATCH_FIELD_PATHS = frozenset(
 _IDENTITY_TOOLS = {"resolve_gene_product"}
 _TERM_TOOLS = {"quickgo_api_call"}
 _ANNOTATION_TOOLS = {"go_api_call"}
+_REFERENCE_TOOLS = {"agr_literature_reference_lookup"}
 _CONTROLLED_VALUE_TOOLS = {
     *_IDENTITY_TOOLS,
     *_TERM_TOOLS,
@@ -434,10 +435,17 @@ def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             tool_names=_ANNOTATION_TOOLS,
             values=annotation_values,
         )
+    reference_curie = payload.get("reference_curie")
+    if reference_curie:
+        _append_grounding_requirements(
+            requirements,
+            field_path="reference_curie",
+            tool_names=_REFERENCE_TOOLS,
+            values=reference_curie,
+        )
     for field_path in (
         "evidence_code",
         "evidence_eco_curie",
-        "reference_curie",
         "with_from",
         "qualifiers",
         "annotation_extensions",
@@ -626,6 +634,9 @@ def _patch_go_recommendation_impl(
         candidate_id=candidate_id,
         updates=list(updates or []),
     )
+    _emit_go_builder_event(
+        "go_builder.patch_requested", action="patch", input_summary=attempted_query
+    )
     try:
         patch_input = GOPatchInput.model_validate(
             {"candidate_id": candidate_id, "updates": list(updates or [])}
@@ -706,6 +717,12 @@ def _patch_go_recommendation_impl(
         "patched_field_count": len(patch_input.updates),
         "builder": _builder_summary(workspace),
     }
+    _emit_go_builder_event(
+        "go_builder.patch_completed",
+        action="patch",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
     return _ok(data=summary, count=1, lookup_status=LOOKUP_STATUS_SUCCESS)
 
 
@@ -715,6 +732,11 @@ def _discard_go_recommendation_impl(
 ) -> AgrQueryResult:
     attempted_query = _attempt_query(
         "discard_go_recommendation", candidate_id=candidate_id, reason=reason
+    )
+    _emit_go_builder_event(
+        "go_builder.discard_requested",
+        action="discard",
+        input_summary=attempted_query,
     )
     try:
         discard_input = GODiscardInput(candidate_id=candidate_id, reason=reason)
@@ -744,6 +766,12 @@ def _discard_go_recommendation_impl(
             attempted_query=attempted_query,
         )
     summary = _builder_summary(workspace, include_discarded=True)
+    _emit_go_builder_event(
+        "go_builder.discard_completed",
+        action="discard",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
     return _ok(
         data=summary,
         count=summary["candidate_count"],
@@ -756,6 +784,15 @@ def _list_staged_go_recommendations_impl(
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
 ) -> AgrQueryResult:
+    attempted_query = _attempt_query(
+        "list_staged_go_recommendations",
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
+    )
+    _emit_go_builder_event(
+        "go_builder.list_requested", action="list", input_summary=attempted_query
+    )
     try:
         list_input = GOListInput(
             include_discarded=include_discarded, limit=limit, offset=offset
@@ -765,6 +802,7 @@ def _list_staged_go_recommendations_impl(
             message="list_staged_go_recommendations failed input validation.",
             issues=_model_validation_issues(exc),
             method="list_staged_go_recommendations",
+            attempted_query=attempted_query,
         )
     workspace = get_active_extraction_builder_workspace()
     summary = _builder_candidate_list(
@@ -772,6 +810,12 @@ def _list_staged_go_recommendations_impl(
         include_discarded=list_input.include_discarded,
         limit=list_input.limit,
         offset=list_input.offset,
+    )
+    _emit_go_builder_event(
+        "go_builder.list_completed",
+        action="list",
+        input_summary=attempted_query,
+        output_summary=summary,
     )
     return _ok(
         data=summary,
@@ -790,6 +834,20 @@ def _find_staged_go_recommendations_impl(
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
 ) -> AgrQueryResult:
+    attempted_query = _attempt_query(
+        "find_staged_go_recommendations",
+        field_value_contains=field_value_contains,
+        pending_ref_id=pending_ref_id,
+        evidence_record_id=evidence_record_id,
+        candidate_id=candidate_id,
+        has_validation_errors=has_validation_errors,
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
+    )
+    _emit_go_builder_event(
+        "go_builder.find_requested", action="find", input_summary=attempted_query
+    )
     try:
         find_input = GOFindInput(
             field_value_contains=field_value_contains,
@@ -806,6 +864,7 @@ def _find_staged_go_recommendations_impl(
             message="find_staged_go_recommendations failed input validation.",
             issues=_model_validation_issues(exc),
             method="find_staged_go_recommendations",
+            attempted_query=attempted_query,
         )
     workspace = get_active_extraction_builder_workspace()
     summary = _search_builder_candidates(
@@ -818,6 +877,12 @@ def _find_staged_go_recommendations_impl(
         include_discarded=find_input.include_discarded,
         limit=find_input.limit,
         offset=find_input.offset,
+    )
+    _emit_go_builder_event(
+        "go_builder.find_completed",
+        action="find",
+        input_summary=attempted_query,
+        output_summary=summary,
     )
     return _ok(
         data=summary,
@@ -861,6 +926,11 @@ def _materialize_go_with_events(
 def _finalize_go_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
     attempted_query = _attempt_query(
         "finalize_go_extraction", candidate_ids=candidate_ids
+    )
+    _emit_go_builder_event(
+        "go_builder.finalize_requested",
+        action="finalize",
+        input_summary=attempted_query,
     )
     try:
         GOFinalizeInput(candidate_ids=candidate_ids)

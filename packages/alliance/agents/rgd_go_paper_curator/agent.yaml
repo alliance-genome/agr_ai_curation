@@ -32,6 +32,7 @@ tools:
   - discard_recorded_evidence
   - update_recorded_evidence_metadata
   - get_agent_contract
+  - agr_literature_reference_lookup
   - quickgo_api_call
   - stage_go_recommendation
   - patch_go_recommendation
