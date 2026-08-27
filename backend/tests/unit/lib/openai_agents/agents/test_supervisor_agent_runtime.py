@@ -587,6 +587,13 @@ def test_rgd_go_specialist_is_discoverable_only_to_authenticated_rgd(monkeypatch
         "disease_extractor",
     ]
     assert [spec["agent_key"] for spec in non_rgd_specs] == ["disease_extractor"]
+    rgd_spec = next(
+        spec for spec in rgd_specs if spec["agent_key"] == "rgd_go_paper_curator"
+    )
+    assert rgd_spec["input_validation"]["curie_patterns"] == {
+        "GO": r"^GO:\d{7}$",
+        "RGD": r"^RGD:\d+$",
+    }
 
 
 def test_create_dynamic_specialist_tools_skips_document_required_tools_without_document(monkeypatch):

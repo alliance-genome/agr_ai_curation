@@ -23,6 +23,11 @@ supervisor_routing:
     persisted extraction-result reference. Reject blank or unsupported CURIEs
     locally instead of dispatching document extraction.
   batchable: false
+  input_validation:
+    curie_patterns:
+      GO: '^GO:\d{7}$'
+      RGD: '^RGD:\d+$'
+    unsupported_curie_prefixes: [DOID, FB, MGI, SGD, WB, XB, ZFIN]
 
 tools:
   - search_document

@@ -1576,6 +1576,18 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
     """
 
     captured_events: list[dict] = []
+    validated_handoffs = []
+    expected_handoff = streaming_tools.SupervisorExtractionHandoff(
+        tool_name="ask_gene_expression_specialist",
+        specialist_name="Gene Expression Extractor",
+        result_ref="extraction-result:00000000-0000-4000-8000-000000000001",
+        extraction_result_id="00000000-0000-4000-8000-000000000001",
+        result_status="non_empty_extraction_ready",
+        object_count=1,
+        adapter_key="gene_expression",
+        agent_key="gene_expression_extraction",
+        created_new=True,
+    )
     _disable_package_tool_rebinding(monkeypatch)
     persist_calls = _spy_inline_persistence(monkeypatch)
 
@@ -1604,6 +1616,11 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
         "_dispatch_domain_envelope_validators_for_chat",
         _materialize_domain_envelope,
     )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_build_supervisor_extraction_handoff",
+        lambda **_kwargs: expected_handoff,
+    )
 
     agent = SimpleNamespace(
         name="Gene Expression Extractor",
@@ -1620,10 +1637,14 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
         max_turns=3,
         tool_name="ask_gene_expression_specialist",
         inline_chat_persistence=True,
+        validated_handoff_callback=validated_handoffs.append,
     )
 
     # The CHAT-source inline persist helper fired exactly once.
     assert len(persist_calls) == 1
+    assert len(validated_handoffs) == 1
+    assert validated_handoffs[0] == expected_handoff
+    assert validated_handoffs[0].object_count == 1
     persisted_payload = persist_calls[0]["builder_finalization"].payload
     assert "curatable_objects" not in persisted_payload
     assert persisted_payload["extracted_objects"][0]["pending_ref_id"] == (

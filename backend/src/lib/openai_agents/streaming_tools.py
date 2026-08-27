@@ -27,7 +27,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import List, Dict, Any, Mapping, Optional, Sequence
+from typing import List, Dict, Any, Callable, Mapping, Optional, Sequence
 
 from agents import (
     Agent,
@@ -4433,6 +4433,9 @@ async def run_specialist_with_events(
     max_turns: Optional[int] = None,
     tool_name: Optional[str] = None,
     inline_chat_persistence: bool = True,
+    validated_handoff_callback: Optional[
+        Callable[[SupervisorExtractionHandoff], None]
+    ] = None,
 ) -> str:
     """
     Run a specialist agent and collect its internal tool call events.
@@ -4453,6 +4456,10 @@ async def run_specialist_with_events(
             False (flow execution path), inline CHAT persistence is skipped entirely;
             flows own their FLOW-source persistence separately, so the internal event is
             emitted without CHAT persisted identifiers.
+        validated_handoff_callback: Optional chat-supervisor lifecycle callback invoked
+            only after a validated builder payload has been persisted and converted to
+            a canonical extraction-result handoff. This lets a caller retain validated
+            partial state while later stream/provider cleanup is still cancellable.
 
     Returns:
         The specialist's final output as a string
@@ -6151,6 +6158,8 @@ async def run_specialist_with_events(
             )
             if handoff is not None:
                 _set_last_supervisor_extraction_handoff(handoff)
+                if validated_handoff_callback is not None:
+                    validated_handoff_callback(handoff)
             add_specialist_event(
                 build_internal_extraction_result_event(
                     tool_name=tool_name,

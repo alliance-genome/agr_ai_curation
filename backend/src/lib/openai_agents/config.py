@@ -827,9 +827,10 @@ def get_supervisor_max_calls_per_specialist() -> int:
 def get_supervisor_specialist_deadline_seconds() -> float:
     """Wall-clock deadline for one Automatic-mode supervisor specialist run.
 
-    The deadline covers the complete nested specialist stream and its cancellation
-    cleanup. Preferred Agent/Flow runs do not use the chat supervisor ledger and
-    therefore are intentionally outside this bound.
+    The deadline bounds the complete user-facing nested specialist invocation. At
+    expiry it starts the specialist/provider cancellation and close lifecycle but
+    does not wait beyond the same absolute bound for blocked cleanup. Preferred
+    Agent/Flow runs do not use the chat supervisor ledger and are outside this bound.
     """
 
     return max(

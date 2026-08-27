@@ -2,6 +2,7 @@
 import asyncio
 import importlib
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -204,14 +205,59 @@ async def test_automatic_specialist_deadline_cancels_and_returns_unresolved(monk
 
 
 @pytest.mark.asyncio
+async def test_automatic_specialist_deadline_does_not_wait_for_slow_cleanup(monkeypatch):
+    supervisor = _supervisor_module()
+    from src.lib.openai_agents import config
+
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+
+    async def _run_specialist_with_events(**_kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await cleanup_release.wait()
+
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", _run_specialist_with_events)
+    monkeypatch.setattr(config, "get_supervisor_specialist_deadline_seconds", lambda: 0.01)
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda *_args, **_kwargs: True,
+    )
+    ledger = supervisor.SupervisorCallLedger(max_total_calls=2, max_calls_per_tool=2)
+    tool = supervisor._create_streaming_tool(
+        agent=SimpleNamespace(name="Paper Specialist"),
+        tool_name="ask_paper_curator_specialist",
+        tool_description="Extract paper recommendations",
+        specialist_name="Paper Curator",
+        ledger=ledger,
+        propagate_errors=False,
+    )
+
+    started_at = time.monotonic()
+    output = await tool.on_invoke_tool(
+        SimpleNamespace(tool_name=tool.name, run_config=None),
+        json.dumps({"query": "Assess Cttn"}),
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert json.loads(output)["reason"] == "specialist_deadline_exceeded"
+    assert cleanup_started.is_set()
+    assert elapsed < 0.1
+    cleanup_release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
 async def test_deadline_preserves_only_validated_structured_handoff(monkeypatch):
     supervisor = _supervisor_module()
     from src.lib.openai_agents import config, streaming_tools
 
     result_ref = "extraction-result:00000000-0000-4000-8000-000000000872"
 
-    async def _run_specialist_with_events(**_kwargs):
-        streaming_tools._set_last_supervisor_extraction_handoff(
+    async def _run_specialist_with_events(**kwargs):
+        kwargs["validated_handoff_callback"](
             streaming_tools.SupervisorExtractionHandoff(
                 tool_name="ask_paper_curator_specialist",
                 specialist_name="Paper Curator",

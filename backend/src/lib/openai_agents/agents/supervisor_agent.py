@@ -84,6 +84,7 @@ _SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
         _RECALL_CHAT_HISTORY_TOOL_NAME,
     }
 )
+_SPECIALIST_DEADLINE_CLEANUP_TASKS: set["asyncio.Task[str]"] = set()
 _FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY = {
     "csv_formatter": "csv",
     "tsv_formatter": "tsv",
@@ -672,6 +673,58 @@ _SPECIALIST_DEADLINE_MESSAGE = (
     "unresolved; do not retry this specialist or substitute a general PDF "
     "extractor. Continue only separately requested domain work."
 )
+_SPECIALIST_INPUT_REJECTION_MESSAGE = (
+    "The specialist request contains a blank, malformed, or unsupported CURIE. "
+    "Correct the identifier before retrying; do not search the document or use a "
+    "general PDF extractor."
+)
+_QUERY_CURIE_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?P<prefix>[A-Za-z][A-Za-z0-9_.-]*):"
+    r"(?P<local>[A-Za-z0-9_.-]*)"
+)
+
+
+def _specialist_query_input_rejection(
+    query: str,
+    input_validation: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """Return a local structured rejection for package-declared CURIE rules."""
+
+    config = input_validation or {}
+    raw_patterns = config.get("curie_patterns") or {}
+    curie_patterns = {
+        str(prefix): re.compile(str(pattern))
+        for prefix, pattern in raw_patterns.items()
+        if str(prefix).strip() and str(pattern).strip()
+    }
+    unsupported_prefixes = {
+        str(prefix).strip()
+        for prefix in (config.get("unsupported_curie_prefixes") or [])
+        if str(prefix).strip()
+    }
+    if not curie_patterns and not unsupported_prefixes:
+        return None
+
+    for match in _QUERY_CURIE_TOKEN_PATTERN.finditer(str(query or "")):
+        prefix = match.group("prefix")
+        curie = match.group(0)
+        pattern = curie_patterns.get(prefix)
+        reason = None
+        if pattern is not None and pattern.fullmatch(curie) is None:
+            reason = "malformed_curie"
+        elif prefix in unsupported_prefixes:
+            reason = "unsupported_curie_prefix"
+        if reason is not None:
+            return json.dumps(
+                {
+                    "status": "unresolved",
+                    "reason": reason,
+                    "curie_prefix": prefix,
+                    "message": _SPECIALIST_INPUT_REJECTION_MESSAGE,
+                },
+                ensure_ascii=True,
+            )
+    return None
 
 
 def _normalize_ledger_query(query: str) -> str:
@@ -867,6 +920,7 @@ async def _run_streaming_specialist_tool(
     ledger: Optional[SupervisorCallLedger] = None,
     inline_chat_persistence: bool = True,
     isolate_run_config: bool = False,
+    input_validation: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Run a specialist through the streaming event wrapper."""
 
@@ -875,8 +929,25 @@ async def _run_streaming_specialist_tool(
     # WebSocket connection instead of opening a new one. The SDK threads the parent
     # run's RunConfig via the tool context in openai-agents 0.17+.
     effective_run_config = getattr(ctx, "run_config", None) or run_config
+    input_rejection = _specialist_query_input_rejection(query, input_validation)
+    if input_rejection is not None:
+        return input_rejection
 
-    async def _runner_coro_factory() -> str:
+    async def _runner_coro_factory(
+        validated_handoff_callback: Optional[
+            Callable[[SupervisorExtractionHandoff], None]
+        ] = None,
+    ) -> str:
+        validated_handoff: SupervisorExtractionHandoff | None = None
+
+        def _record_validated_handoff(handoff: SupervisorExtractionHandoff) -> None:
+            nonlocal validated_handoff
+            validated_handoff = handoff
+            if ledger is not None:
+                ledger.record_extraction_handoff(tool_name, query, handoff)
+            if validated_handoff_callback is not None:
+                validated_handoff_callback(handoff)
+
         run_config_for_specialist = effective_run_config
         isolated_provider = None
         close_isolated_provider = None
@@ -903,9 +974,12 @@ async def _run_streaming_specialist_tool(
                 run_config=run_config_for_specialist,
                 tool_name=tool_name,  # Pass tool_name for batching nudge tracking
                 inline_chat_persistence=inline_chat_persistence,
+                validated_handoff_callback=(
+                    _record_validated_handoff if ledger is not None else None
+                ),
             )
             handoff = pop_last_supervisor_extraction_handoff()
-            if ledger is not None and handoff is not None:
+            if ledger is not None and handoff is not None and validated_handoff is None:
                 ledger.record_extraction_handoff(tool_name, query, handoff)
             return result
         finally:
@@ -929,55 +1003,98 @@ async def _run_streaming_specialist_tool(
 
         async def _run_with_deadline() -> str:
             deadline_seconds = get_supervisor_specialist_deadline_seconds()
-            try:
-                # asyncio.timeout cancels this task in place. That preserves the
-                # ContextVar handoff set by validated inline persistence while the
-                # specialist's cancellation/finally lifecycle drains before control
-                # returns here.
-                async with asyncio.timeout(deadline_seconds):
-                    return await _runner_coro_factory()
-            except TimeoutError as exc:
-                handoff = pop_last_supervisor_extraction_handoff()
-                if handoff is not None:
-                    ledger.record_extraction_handoff(tool_name, query, handoff)
-                report_runtime_exception(
-                    exc,
-                    component="supervisor_agent",
-                    operation="specialist_deadline_exceeded",
-                    context={
-                        "tool_name": tool_name,
-                        "deadline_seconds": deadline_seconds,
-                        "validated_result_available": handoff is not None,
-                    },
-                )
-                logger.warning(
-                    "Automatic chat specialist deadline exceeded",
-                    extra={
-                        "operation": "specialist_deadline_exceeded",
-                        "tool_name": tool_name,
-                        "deadline_seconds": deadline_seconds,
-                        "validated_result_available": handoff is not None,
-                    },
-                )
-                payload: Dict[str, Any] = {
-                    "status": "partial" if handoff is not None else "unresolved",
-                    "reason": "specialist_deadline_exceeded",
-                    "message": _SPECIALIST_DEADLINE_MESSAGE,
-                }
-                if handoff is not None:
-                    payload.update(
-                        {
-                            "result_ref": handoff.result_ref,
-                            "result_status": handoff.result_status,
-                            "validated_object_count": handoff.object_count,
-                            "message": (
-                                f"{_SPECIALIST_DEADLINE_MESSAGE} Only the already "
-                                f"validated structured result at {handoff.result_ref} "
-                                "may be reported; ignore incomplete model prose."
-                            ),
-                        }
+            validated_handoff: SupervisorExtractionHandoff | None = None
+
+            def _capture_validated_handoff(
+                handoff: SupervisorExtractionHandoff,
+            ) -> None:
+                nonlocal validated_handoff
+                validated_handoff = handoff
+
+            specialist_task = asyncio.create_task(
+                _runner_coro_factory(_capture_validated_handoff)
+            )
+            done, _pending = await asyncio.wait(
+                {specialist_task}, timeout=deadline_seconds
+            )
+            if done:
+                return specialist_task.result()
+
+            specialist_task.cancel()
+            # Give cancellation one event-loop turn to enter the specialist's
+            # existing finally/close lifecycle. Do not await that lifecycle: its
+            # cleanup may itself block or suppress cancellation.
+            await asyncio.sleep(0)
+
+            def _consume_terminal_task(task: "asyncio.Task[str]") -> None:
+                _SPECIALIST_DEADLINE_CLEANUP_TASKS.discard(task)
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    return
+                except Exception as cleanup_exc:
+                    report_runtime_exception(
+                        cleanup_exc,
+                        component="supervisor_agent",
+                        operation="specialist_deadline_cleanup_failed",
+                        context={"tool_name": tool_name},
                     )
-                return json.dumps(payload, ensure_ascii=True)
+                    logger.exception(
+                        "Automatic chat specialist failed during deadline cleanup",
+                        extra={
+                            "operation": "specialist_deadline_cleanup_failed",
+                            "tool_name": tool_name,
+                        },
+                    )
+
+            # Cancellation starts the merged specialist/provider finally lifecycle,
+            # but the user-facing wall-clock bound must not wait for a cleanup path
+            # that blocks or suppresses cancellation. Retain and observe the task so
+            # its eventual terminal exception is consumed.
+            _SPECIALIST_DEADLINE_CLEANUP_TASKS.add(specialist_task)
+            specialist_task.add_done_callback(_consume_terminal_task)
+            exc = TimeoutError(
+                f"Automatic specialist exceeded {deadline_seconds} seconds"
+            )
+            handoff = validated_handoff
+            report_runtime_exception(
+                exc,
+                component="supervisor_agent",
+                operation="specialist_deadline_exceeded",
+                context={
+                    "tool_name": tool_name,
+                    "deadline_seconds": deadline_seconds,
+                    "validated_result_available": handoff is not None,
+                },
+            )
+            logger.warning(
+                "Automatic chat specialist deadline exceeded",
+                extra={
+                    "operation": "specialist_deadline_exceeded",
+                    "tool_name": tool_name,
+                    "deadline_seconds": deadline_seconds,
+                    "validated_result_available": handoff is not None,
+                },
+            )
+            payload: Dict[str, Any] = {
+                "status": "partial" if handoff is not None else "unresolved",
+                "reason": "specialist_deadline_exceeded",
+                "message": _SPECIALIST_DEADLINE_MESSAGE,
+            }
+            if handoff is not None:
+                payload.update(
+                    {
+                        "result_ref": handoff.result_ref,
+                        "result_status": handoff.result_status,
+                        "validated_object_count": handoff.object_count,
+                        "message": (
+                            f"{_SPECIALIST_DEADLINE_MESSAGE} Only the already "
+                            f"validated structured result at {handoff.result_ref} "
+                            "may be reported; ignore incomplete model prose."
+                        ),
+                    }
+                )
+            return json.dumps(payload, ensure_ascii=True)
 
         return await ledger.run_or_replay(tool_name, query, _run_with_deadline)
 
@@ -1036,6 +1153,7 @@ def _create_streaming_tool(
     authoritative_user_request: Optional[str] = None,
     inline_chat_persistence: bool = True,
     isolate_run_config: bool = False,
+    input_validation: Optional[Dict[str, Any]] = None,
     *,
     propagate_errors: bool,
 ) -> Callable:
@@ -1062,6 +1180,8 @@ def _create_streaming_tool(
             provider for this invocation and close it after the specialist stream drains.
             Flow steps use this so each step owns its WebSocket lifecycle, while chat
             keeps warm provider reuse across a single turn.
+        input_validation: Optional package-owned validation rules applied to the
+            supervisor delegation before any nested specialist work starts.
         propagate_errors: When True, disable the Agents SDK's default conversion of
             raised exceptions into tool-output strings. Flow execution uses this so a
             failed specialist reaches the run error path instead of completing a step.
@@ -1082,6 +1202,7 @@ def _create_streaming_tool(
             ledger=ledger,
             inline_chat_persistence=inline_chat_persistence,
             isolate_run_config=isolate_run_config,
+            input_validation=input_validation,
         )
 
     tool_decorator = function_tool(
@@ -1264,6 +1385,7 @@ def _get_supervisor_specialist_specs(
     from src.models.sql.database import SessionLocal
     from src.lib.agent_studio.catalog_service import get_agent_metadata
     from src.lib.agent_access import is_resource_access_allowed
+    from src.lib.config.agent_loader import get_agent_definition
 
     db = SessionLocal()
     try:
@@ -1288,6 +1410,7 @@ def _get_supervisor_specialist_specs(
             metadata = get_agent_metadata(row.agent_key)
             requires_document = bool(metadata.get("requires_document", False))
             category = metadata.get("category")
+            agent_definition = get_agent_definition(row.agent_key)
         except Exception:
             logger.exception(
                 "Failed to resolve metadata for supervisor specialist '%s'",
@@ -1305,6 +1428,11 @@ def _get_supervisor_specialist_specs(
                 "batchable": bool(row.supervisor_batchable),
                 "batching_entity": row.supervisor_batching_entity,
                 "category": category,
+                "input_validation": dict(
+                    agent_definition.supervisor_routing.input_validation
+                    if agent_definition is not None
+                    else {}
+                ),
             }
         )
 
@@ -1549,6 +1677,7 @@ def _create_dynamic_specialist_tools(
                 ledger=ledger,
                 authoritative_user_request=specialist_user_request,
                 inline_chat_persistence=True,
+                input_validation=tool_meta.get("input_validation"),
                 # Ordinary chat intentionally preserves handled tool errors as output.
                 propagate_errors=False,
             )
