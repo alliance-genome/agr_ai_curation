@@ -75,7 +75,14 @@ def _db_stub(*, commits: list[str] | None = None, rollbacks: list[str] | None = 
     )
 
 
-def _assistant_record(*, session_id: str, turn_id: str, content: str, trace_id: str | None = None):
+def _assistant_record(
+    *,
+    session_id: str,
+    turn_id: str,
+    content: str,
+    trace_id: str | None = None,
+    payload_json=None,
+):
     return chat.ChatMessageRecord(
         message_id=uuid4(),
         session_id=session_id,
@@ -84,7 +91,7 @@ def _assistant_record(*, session_id: str, turn_id: str, content: str, trace_id: 
         role="assistant",
         message_type="text",
         content=content,
-        payload_json=None,
+        payload_json=payload_json,
         trace_id=trace_id,
         created_at=datetime.now(timezone.utc),
     )
@@ -143,6 +150,7 @@ def _stub_stream_turn_persistence(monkeypatch):
         extraction_candidates,
         persisted_extraction_refs=None,
         document_id: str | None = None,
+        flow_terminal_events=None,
     ):
         chat._persist_extraction_candidates(
             candidates=extraction_candidates,
@@ -1912,6 +1920,67 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     assert events[0]["content"] == "stored response"
     assert events[1]["turn_id"] == "turn-replay"
     assert events[1]["trace_id"] == "trace-replay"
+
+
+def test_chat_stream_endpoint_replays_preferred_flow_file_output(monkeypatch):
+    file_event = {
+        "type": "FILE_READY",
+        "details": {"file_id": "file-123", "filename": "review.tsv", "format": "tsv"},
+    }
+    durable_assistant = _assistant_record(
+        session_id="session-flow-replay",
+        turn_id="turn-flow-replay",
+        content="Flow completed. Review the generated results above.",
+        trace_id="trace-flow-replay",
+        payload_json={
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
+                file_event,
+                {"type": "FLOW_FINISHED", "status": "completed"},
+            ]
+        },
+    )
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
+        "_get_chat_history_repository",
+        lambda _db: SimpleNamespace(get_message_by_turn_id=lambda **_kwargs: durable_assistant),
+    )
+    _patch_chat_impl(
+        monkeypatch,
+        "_prepare_chat_stream_turn",
+        lambda **_kwargs: chat.PreparedChatStreamTurn(
+            turn_id="turn-flow-replay",
+            effective_user_message="create a review file",
+            route=chat.ResolvedChatRoute(mode="flow", target_id="flow-1", flow_run_id="run-1"),
+            user_turn_created=False,
+            replay_assistant_turn=durable_assistant,
+        ),
+    )
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="create a review file",
+                session_id="session-flow-replay",
+                turn_id="turn-flow-replay",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+            observer_recovery=True,
+        )
+    )
+    events = asyncio.run(_consume_stream(response))
+
+    assert [event["type"] for event in events] == [
+        "FILE_READY",
+        "FLOW_FINISHED",
+        "TEXT_MESSAGE_CONTENT",
+        "turn_completed",
+    ]
+    assert events[0]["details"]["file_id"] == "file-123"
+    assert events[2]["content"] == durable_assistant.content
 
 
 def test_chat_stream_observer_recovery_does_not_start_missing_local_run(monkeypatch):

@@ -5578,11 +5578,22 @@ class TestExecuteFlowTermination:
             _fake_run_agent_streamed,
         )
 
-        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                chat_route_mode="flow",
+                chat_route_target_id="flow-123",
+            )
+        ]
 
         assert events[0]["type"] == "FLOW_STARTED"
         assert captured["context_messages"] == [{"role": "user", "content": "run flow"}]
         assert captured["trace_context"] is None
+        assert captured["chat_route_mode"] == "flow"
+        assert captured["chat_route_target_id"] == "flow-123"
         assert captured["propagate_runtime_exceptions"] is True
         assert construction_order == ["clear", "build"]
 

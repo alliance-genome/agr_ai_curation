@@ -195,6 +195,7 @@ async def chat_endpoint(
         sentry_error_event_count = 0
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
+        flow_terminal_events: List[Dict[str, Any]] = []
 
         with gen_ai_workflow_transaction(
             name="/api/chat",
@@ -224,6 +225,16 @@ async def chat_endpoint(
             ):
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
+
+                if event_type == _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE:
+                    internal = event.get("internal")
+                    raw_events = internal.get("events") if isinstance(internal, dict) else None
+                    flow_terminal_events = (
+                        [dict(item) for item in raw_events if isinstance(item, dict)]
+                        if isinstance(raw_events, list)
+                        else []
+                    )
+                    continue
 
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
@@ -320,6 +331,14 @@ async def chat_endpoint(
                         source_kind=CurationExtractionSourceKind.CHAT,
                         db=db,
                     )
+                    _append_preferred_flow_transcript_rows(
+                        repository=repository,
+                        session_id=session_id,
+                        user_id=user_id,
+                        turn_id=turn_id,
+                        trace_id=trace_id,
+                        flow_terminal_events=flow_terminal_events,
+                    )
                     assistant_turn = repository.append_message(
                         session_id=session_id,
                         user_auth_sub=user_id,
@@ -328,6 +347,11 @@ async def chat_endpoint(
                         content=full_response,
                         turn_id=turn_id,
                         trace_id=trace_id,
+                        payload_json=(
+                            {_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: flow_terminal_events}
+                            if flow_terminal_events
+                            else None
+                        ),
                     )
                     if requested_turn_id and not assistant_turn.created:
                         db.rollback()
@@ -565,15 +589,31 @@ async def chat_stream_endpoint(
         await stream_lifecycle.finalize(generated_title_candidate)
 
         async def replay_stream():
-            yield _stream_event_sse(
-                _stream_event_payload(
-                    "TEXT_MESSAGE_CONTENT",
-                    session_id=session_id,
-                    turn_id=prepared_turn.turn_id,
-                    trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                    content=prepared_turn.replay_assistant_turn.content,
-                )
+            replay_events = _preferred_flow_replay_events(
+                prepared_turn.replay_assistant_turn
             )
+            has_chat_output = any(
+                event.get("type") == "CHAT_OUTPUT_READY" for event in replay_events
+            )
+            for replay_event in replay_events:
+                if replay_event.get("type") == "RUN_FINISHED":
+                    continue
+                replay_event["session_id"] = session_id
+                replay_event["turn_id"] = prepared_turn.turn_id
+                replay_event.setdefault(
+                    "trace_id", prepared_turn.replay_assistant_turn.trace_id
+                )
+                yield _stream_event_sse(replay_event)
+            if not has_chat_output:
+                yield _stream_event_sse(
+                    _stream_event_payload(
+                        "TEXT_MESSAGE_CONTENT",
+                        session_id=session_id,
+                        turn_id=prepared_turn.turn_id,
+                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                        content=prepared_turn.replay_assistant_turn.content,
+                    )
+                )
             yield _stream_event_sse(
                 _build_terminal_turn_event(
                     "turn_completed",
@@ -622,6 +662,7 @@ async def chat_stream_endpoint(
         interrupted_message: Optional[str] = None
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
+        flow_terminal_events: List[Dict[str, Any]] = []
         evidence_records: List[Dict[str, Any]] = []
         evidence_summary_event_received = False
         sentry_error_event_count = 0
@@ -673,6 +714,16 @@ async def chat_stream_endpoint(
 
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
+
+                if event_type == _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE:
+                    internal = event.get("internal")
+                    raw_events = internal.get("events") if isinstance(internal, dict) else None
+                    flow_terminal_events = (
+                        [dict(item) for item in raw_events if isinstance(item, dict)]
+                        if isinstance(raw_events, list)
+                        else []
+                    )
+                    continue
 
                 if "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
@@ -877,6 +928,7 @@ async def chat_stream_endpoint(
                         extraction_candidates=extraction_candidates,
                         persisted_extraction_refs=persisted_extraction_refs,
                         document_id=document_id,
+                        flow_terminal_events=flow_terminal_events,
                     )
                 except ChatHistorySessionNotFoundError:
                     sentry_terminal_status = "session_gone"
@@ -991,6 +1043,15 @@ async def chat_stream_endpoint(
                     "ai_curation.agent.output",
                     assistant_turn.content,
                 )
+                for flow_event in flow_terminal_events:
+                    if flow_event.get("type") == "RUN_FINISHED":
+                        continue
+                    durable_flow_event = dict(flow_event)
+                    durable_flow_event["session_id"] = current_session_id
+                    durable_flow_event["turn_id"] = current_turn_id
+                    if not durable_flow_event.get("trace_id"):
+                        durable_flow_event["trace_id"] = assistant_turn.trace_id or trace_id
+                    yield _stream_event_sse(durable_flow_event)
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
                         "turn_completed",

@@ -55,6 +55,75 @@ class _TurnRepository:
         return AppendMessageResult(message=self.user_turn, created=True)
 
 
+def test_completed_legacy_turn_replays_before_strict_route_parsing(monkeypatch):
+    user_turn = _record(content="legacy request", turn_id="turn-legacy", payload_json={})
+    assistant_turn = ChatMessageRecord(
+        message_id=uuid4(),
+        session_id="session-1",
+        chat_kind=ASSISTANT_CHAT_KIND,
+        turn_id="turn-legacy",
+        role="assistant",
+        message_type="text",
+        content="legacy response",
+        payload_json=None,
+        trace_id="trace-legacy",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    class _LegacyRepository:
+        def get_or_create_session(self, **_kwargs):
+            return None
+
+        def get_message_by_turn_id(self, *, role: str, **_kwargs):
+            return user_turn if role == "user" else assistant_turn
+
+    monkeypatch.setattr(
+        chat_common,
+        "resolve_chat_route_selection",
+        lambda *_args, **_kwargs: pytest.fail("completed replay must not reauthorize"),
+    )
+
+    prepared = chat_common._prepare_chat_stream_turn(
+        repository=_LegacyRepository(),
+        db=SimpleNamespace(commit=lambda: None),
+        session_id="session-1",
+        user_id="auth-sub",
+        user_message="ignored retry content",
+        requested_turn_id="turn-legacy",
+        active_document_id=None,
+        db_user_id=7,
+        active_groups=[],
+    )
+
+    assert prepared.replay_assistant_turn == assistant_turn
+    assert prepared.effective_user_message == "legacy request"
+    assert prepared.route == ResolvedChatRoute(mode="automatic")
+
+
+def test_incomplete_turn_without_pinned_route_remains_invalid():
+    user_turn = _record(content="incomplete request", turn_id="turn-incomplete", payload_json={})
+
+    class _IncompleteRepository:
+        def get_or_create_session(self, **_kwargs):
+            return None
+
+        def get_message_by_turn_id(self, *, role: str, **_kwargs):
+            return user_turn if role == "user" else None
+
+    with pytest.raises(ValueError, match="missing its resolved route identity"):
+        chat_common._prepare_chat_stream_turn(
+            repository=_IncompleteRepository(),
+            db=SimpleNamespace(commit=lambda: None),
+            session_id="session-1",
+            user_id="auth-sub",
+            user_message="retry",
+            requested_turn_id="turn-incomplete",
+            active_document_id=None,
+            db_user_id=7,
+            active_groups=[],
+        )
+
+
 def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(monkeypatch):
     repository = _TurnRepository()
     db = SimpleNamespace(commit=lambda: None)
@@ -244,6 +313,15 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
         if event["type"] == chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
     )
     assert internal["details"]["extraction_result_id"] == result_id
+    terminal = next(
+        event
+        for event in events
+        if event["type"] == chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE
+    )
+    assert [event["type"] for event in terminal["internal"]["events"]] == [
+        "CHAT_OUTPUT_READY",
+        "FLOW_FINISHED",
+    ]
     assert events[-1] == {
         "type": "RUN_FINISHED",
         "data": {
@@ -252,6 +330,75 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
             "agents_used": [],
         },
     }
+
+
+def test_preferred_flow_file_output_is_persisted_for_durable_replay(monkeypatch):
+    file_event = {
+        "type": "FILE_READY",
+        "details": {
+            "file_id": "file-123",
+            "filename": "review.tsv",
+            "format": "tsv",
+        },
+    }
+    flow_finished = {
+        "type": "FLOW_FINISHED",
+        "status": "completed",
+        "flow_run_id": "flow-run-1",
+    }
+    appended: list[dict] = []
+
+    class _CompletionRepository:
+        def get_session(self, **_kwargs):
+            return SimpleNamespace(session_id="session-1")
+
+        def get_message_by_turn_id(self, **_kwargs):
+            return None
+
+        def append_message(self, **kwargs):
+            appended.append(kwargs)
+            record = ChatMessageRecord(
+                message_id=uuid4(),
+                session_id=kwargs["session_id"],
+                chat_kind=kwargs["chat_kind"],
+                turn_id=kwargs["turn_id"],
+                role=kwargs["role"],
+                message_type=kwargs.get("message_type", "text"),
+                content=kwargs["content"],
+                payload_json=kwargs.get("payload_json"),
+                trace_id=kwargs.get("trace_id"),
+                created_at=datetime.now(timezone.utc),
+            )
+            return AppendMessageResult(message=record, created=True)
+
+    completion_db = SimpleNamespace(commit=lambda: None, rollback=lambda: None, close=lambda: None)
+    monkeypatch.setattr(chat_common, "SessionLocal", lambda: completion_db)
+    monkeypatch.setattr(
+        chat_common, "_get_chat_history_repository", lambda _db: _CompletionRepository()
+    )
+    monkeypatch.setattr(chat_common, "_persist_extraction_candidates", lambda **_kwargs: None)
+
+    assistant = chat_common._persist_completed_chat_stream_turn(
+        session_id="session-1",
+        user_id="auth-sub",
+        turn_id="turn-1",
+        user_message="create a review file",
+        assistant_message="Flow completed. Review the generated results above.",
+        trace_id="trace-1",
+        extraction_candidates=[],
+        document_id=None,
+        flow_terminal_events=[file_event, flow_finished],
+    )
+
+    assert [(row["role"], row.get("message_type", "text")) for row in appended] == [
+        ("flow", "file_download"),
+        ("assistant", "text"),
+    ]
+    assert appended[0]["payload_json"] == file_event
+    assert chat_common._preferred_flow_replay_events(assistant) == [
+        file_event,
+        flow_finished,
+    ]
 
 
 def test_revoked_persisted_target_fails_closed_with_actionable_error(monkeypatch):

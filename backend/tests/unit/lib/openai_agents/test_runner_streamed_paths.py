@@ -487,6 +487,8 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
             agent=SimpleNamespace(name="Flow Supervisor", model="gpt-5", tools=[]),
             doc_context=SimpleNamespace(hierarchy={"sections": []}, abstract="abstract text", section_count=lambda: 0),
             active_groups=["WB"],
+            chat_route_mode="flow",
+            chat_route_target_id="flow-123",
         )
     )
 
@@ -495,6 +497,8 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     assert events[-1]["type"] == "RUN_FINISHED"
     assert captured["trace_ids"][-1] == "trace-abc"
     assert captured["span_start"]["as_type"] == "span"
+    assert captured["span_start"]["metadata"]["chat_route_mode"] == "flow"
+    assert captured["span_start"]["metadata"]["chat_route_target_id"] == "flow-123"
     assert captured["propagate_attributes"]["user_id"] == "user-2"
     assert captured["propagate_attributes"]["session_id"] == "session-2"
     assert captured["propagate_attributes"]["tags"] == ["chat", "openai-agents", "group:WB"]

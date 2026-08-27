@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Sequence, Set, cast
+from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, cast
 from uuid import uuid4
 
 from agents import Agent, RunContextWrapper, function_tool
@@ -4107,6 +4107,8 @@ async def execute_flow(
     active_groups: Optional[List[str]] = None,
     flow_run_id: Optional[str] = None,
     trace_context: Optional[Dict[str, str]] = None,
+    chat_route_mode: Literal["automatic", "agent", "flow"] | None = None,
+    chat_route_target_id: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -4126,6 +4128,8 @@ async def execute_flow(
         active_groups: Active group IDs for database queries
         flow_run_id: Optional batch/grouping identifier shared across flow executions
         trace_context: Optional existing Langfuse trace identifiers to reuse on retry
+        chat_route_mode: Optional server-resolved ordinary-chat route mode
+        chat_route_target_id: Optional server-resolved flow identity
 
     Yields:
         dict: Streaming events - FLOW_STARTED, then all regular chat events
@@ -4333,6 +4337,8 @@ async def execute_flow(
         agent=supervisor,  # Pass the flow supervisor
         doc_context=doc_context,  # Pass pre-fetched context (optimization)
         trace_context=trace_context,
+        chat_route_mode=chat_route_mode,
+        chat_route_target_id=chat_route_target_id,
         sentry_workflow="execute_flow",
         sentry_span_data={
             "ai_curation.flow.id": str(flow.id),

@@ -35,6 +35,10 @@ class AgentContextAnalyzer:
 
         # Get trace-level metadata
         trace_metadata = raw_trace.get("metadata", {})
+        route_metadata = {
+            "chat_route_mode": trace_metadata.get("chat_route_mode"),
+            "chat_route_target_id": trace_metadata.get("chat_route_target_id"),
+        }
 
         # Filter GENERATION observations and sort by time
         generations = [o for o in observations if o.get("type") == "GENERATION"]
@@ -42,11 +46,12 @@ class AgentContextAnalyzer:
 
         if not generations:
             return {
-                "found": False,
+                "found": bool(route_metadata["chat_route_mode"]),
                 "supervisor": None,
                 "specialists": [],
                 "all_tools": [],
                 "model_configs": {},
+                "trace_metadata": route_metadata,
                 "domain_envelope_context": DomainEnvelopeTraceAnalyzer.compact(domain_envelope),
             }
 
@@ -118,7 +123,8 @@ class AgentContextAnalyzer:
             "trace_metadata": {
                 "supervisor_agent": trace_metadata.get("supervisor_agent"),
                 "supervisor_model": trace_metadata.get("supervisor_model"),
-                "has_document": trace_metadata.get("has_document")
+                "has_document": trace_metadata.get("has_document"),
+                **route_metadata,
             },
             "supervisor": supervisor,
             "specialists": specialists,

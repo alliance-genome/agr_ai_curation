@@ -78,7 +78,7 @@ from ..lib.openai_agents.evidence_summary import (
 )
 from ..lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from ..lib.flows.executor import execute_flow
-from ..lib.flows.outcome import FlowRunOutcome
+from ..lib.flows.outcome import FlowRunOutcome, flow_typed_output_transcript_values
 from ..lib.agent_studio.catalog_service import get_agent_by_id
 from ..lib.weaviate_client.documents import get_document
 from ..models.sql import CurationFlow, SessionLocal, get_db
@@ -111,6 +111,7 @@ from ..lib.context import set_current_session_id, set_current_user_id
 logger = logging.getLogger("src.api.chat")
 
 _CHAT_ROUTE_PAYLOAD_KEY = "chat_route"
+_PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE = "_PREFERRED_FLOW_TERMINAL_EVENTS"
 
 # Create router with prefix
 router = APIRouter(prefix="/api")
@@ -998,7 +999,7 @@ def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
             key: value
             for key, value in record.payload_json.items()
             if not (
-                (record.role == "flow" and key in _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS)
+                key in _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS
                 or key == _EXECUTE_FLOW_RUNTIME_STATE_KEY
                 or key == _CHAT_ROUTE_PAYLOAD_KEY
             )
@@ -1324,6 +1325,8 @@ async def _run_resolved_chat_route(
             user_query=context_messages[-1]["content"],
             active_groups=active_groups,
             flow_run_id=route.flow_run_id,
+            chat_route_mode=route.mode,
+            chat_route_target_id=route.target_id,
         )
         try:
             async for event in flow_stream:
@@ -1340,7 +1343,6 @@ async def _run_resolved_chat_route(
                         if name
                     )
                     continue
-                yield event
                 if event_type == "FLOW_FINISHED":
                     for ref in event_data.get("extraction_result_refs") or []:
                         if not isinstance(ref, dict):
@@ -1354,6 +1356,15 @@ async def _run_resolved_chat_route(
                             },
                             "internal": dict(ref),
                         }
+                if event_type in {
+                    "CHAT_OUTPUT_READY",
+                    "FILE_READY",
+                    "CURATION_HANDOFF_READY",
+                    "RUN_ERROR",
+                    "FLOW_FINISHED",
+                }:
+                    continue
+                yield event
         finally:
             await flow_stream.aclose()
 
@@ -1367,6 +1378,11 @@ async def _run_resolved_chat_route(
                 },
             }
             return
+        terminal_events = outcome.events_for_persistence()
+        yield {
+            "type": _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE,
+            "internal": {"events": terminal_events},
+        }
         response = outcome.final_user_visible_text or (
             f"Flow '{flow.name}' completed. Review the generated results above."
         )
@@ -1416,6 +1432,8 @@ async def _run_resolved_chat_route(
             if runtime_agent is not None
             else None
         ),
+        chat_route_mode=route.mode,
+        chat_route_target_id=route.target_id,
     )
     try:
         async for event in agent_stream:
@@ -1477,8 +1495,6 @@ def _prepare_chat_stream_turn(
         user_turn = AppendMessageResult(message=existing_user_turn, created=False)
     db.commit()
 
-    route = _chat_route_from_payload(user_turn.message.payload_json)
-
     replay_assistant_turn: ChatMessageRecord | None = None
     if not user_turn.created:
         effective_user_message = user_turn.message.content
@@ -1489,6 +1505,13 @@ def _prepare_chat_stream_turn(
             role="assistant",
         )
         if replay_assistant_turn is not None:
+            route_payload = user_turn.message.payload_json
+            route = (
+                _chat_route_from_payload(route_payload)
+                if isinstance(route_payload, dict)
+                and _CHAT_ROUTE_PAYLOAD_KEY in route_payload
+                else ResolvedChatRoute(mode="automatic")
+            )
             logger.info(
                 "Returning durable replay for streaming chat turn %s",
                 turn_id,
@@ -1513,6 +1536,8 @@ def _prepare_chat_stream_turn(
                 turn_id,
                 extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
             )
+
+    route = _chat_route_from_payload(user_turn.message.payload_json)
 
     route = _authorize_chat_route(
         db=db,
@@ -1540,6 +1565,7 @@ def _persist_completed_chat_stream_turn(
     extraction_candidates: List[ExtractionEnvelopeCandidate],
     persisted_extraction_refs: Sequence[PersistedExtractionResultRef] | None = None,
     document_id: Optional[str],
+    flow_terminal_events: Sequence[Dict[str, Any]] | None = None,
 ) -> ChatMessageRecord:
     """Persist the completed stream assistant turn using a fresh SQL session."""
 
@@ -1583,6 +1609,14 @@ def _persist_completed_chat_stream_turn(
         completion_db.commit()
 
         try:
+            _append_preferred_flow_transcript_rows(
+                repository=repository,
+                session_id=session_id,
+                user_id=user_id,
+                turn_id=turn_id,
+                trace_id=trace_id,
+                flow_terminal_events=flow_terminal_events or [],
+            )
             assistant_turn = repository.append_message(
                 session_id=session_id,
                 user_auth_sub=user_id,
@@ -1591,6 +1625,11 @@ def _persist_completed_chat_stream_turn(
                 content=assistant_message,
                 turn_id=turn_id,
                 trace_id=trace_id,
+                payload_json=(
+                    {_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: list(flow_terminal_events)}
+                    if flow_terminal_events
+                    else None
+                ),
             )
             _link_persisted_extraction_results_to_chat_turn(
                 refs=persisted_extraction_refs or [],
@@ -1618,6 +1657,53 @@ def _persist_completed_chat_stream_turn(
         raise
     finally:
         completion_db.close()
+
+
+def _append_preferred_flow_transcript_rows(
+    *,
+    repository: ChatHistoryRepository,
+    session_id: str,
+    user_id: str,
+    turn_id: str,
+    trace_id: str | None,
+    flow_terminal_events: Sequence[Dict[str, Any]],
+) -> None:
+    """Persist first-class typed outputs from the canonical flow outcome."""
+
+    for event in flow_terminal_events:
+        transcript_values = flow_typed_output_transcript_values(event)
+        if transcript_values is None:
+            continue
+        content, message_type, payload_json = transcript_values
+        repository.append_message(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
+            role="flow",
+            content=content,
+            message_type=message_type,
+            turn_id=turn_id,
+            payload_json=payload_json,
+            trace_id=trace_id,
+        )
+
+
+def _preferred_flow_replay_events(
+    assistant_turn: ChatMessageRecord,
+) -> List[Dict[str, Any]]:
+    """Read canonical preferred-flow terminal events from an assistant row."""
+
+    payload = assistant_turn.payload_json
+    if not isinstance(payload, dict):
+        return []
+    raw_events = payload.get(_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY)
+    if not isinstance(raw_events, list):
+        return []
+    return [
+        dict(event)
+        for event in raw_events
+        if isinstance(event, dict) and isinstance(event.get("type"), str)
+    ]
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

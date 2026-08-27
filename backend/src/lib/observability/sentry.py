@@ -413,6 +413,7 @@ _GEN_AI_NUMERIC_DATA_PREFIXES = (
 )
 
 _AI_CURATION_IDENTIFIER_DATA_KEYS = {
+    "ai_curation.agent.id",
     "ai_curation.chat.session_id",
     "ai_curation.document.id",
     "ai_curation.flow.id",

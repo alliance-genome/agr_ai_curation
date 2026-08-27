@@ -32,7 +32,11 @@ from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.observability.sentry import set_sentry_transaction_identifiers
-from src.lib.flows.outcome import FlowRunOutcome, FlowRunOutcomeNotDurableError
+from src.lib.flows.outcome import (
+    FlowRunOutcome,
+    FlowRunOutcomeNotDurableError,
+    flow_typed_output_transcript_values,
+)
 from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 
 
@@ -335,13 +339,14 @@ def _build_execute_flow_transcript_row_from_event(
         )
 
     if event_type == "FILE_READY":
-        filename_value = details.get("filename") or event_payload.get("filename")
-        filename = filename_value.strip() if isinstance(filename_value, str) else ""
-        content = f"Generated file: {filename}" if filename else "Generated file event missing filename metadata."
+        transcript_values = flow_typed_output_transcript_values(event_payload)
+        if transcript_values is None:
+            return None
+        content, message_type, payload_json = transcript_values
         return ExecuteFlowTranscriptRow(
             content=content,
-            message_type="file_download",
-            payload_json=dict(event_payload),
+            message_type=message_type,
+            payload_json=payload_json,
             trace_id=trace_id,
             created_at=created_at,
         )

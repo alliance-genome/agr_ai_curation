@@ -116,6 +116,13 @@ export function AgentContextView({ data }: AgentContextViewProps) {
           {data.trace_metadata.has_document && (
             <Chip label="Has Document" color="info" variant="outlined" />
           )}
+          {data.trace_metadata.chat_route_mode && (
+            <Chip
+              label={`Chat route: ${data.trace_metadata.chat_route_mode}`}
+              color="secondary"
+              variant="outlined"
+            />
+          )}
         </Box>
       </Box>
 
@@ -134,6 +141,14 @@ export function AgentContextView({ data }: AgentContextViewProps) {
           <Grid item xs={12} md={4}>
             <Typography color="text.secondary" variant="body2">Has Document</Typography>
             <Typography variant="body1">{data.trace_metadata.has_document ? 'Yes' : 'No'}</Typography>
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <Typography color="text.secondary" variant="body2">Chat route</Typography>
+            <Typography variant="body1">{data.trace_metadata.chat_route_mode || 'N/A'}</Typography>
+          </Grid>
+          <Grid item xs={12} md={8}>
+            <Typography color="text.secondary" variant="body2">Selected target</Typography>
+            <Typography variant="body1">{data.trace_metadata.chat_route_target_id || 'Automatic'}</Typography>
           </Grid>
         </Grid>
       </Paper>
