@@ -928,7 +928,7 @@ def test_flow_templates_renumber_sources_after_optional_formatter_is_removed(
     ) == []
 
 
-def test_flow_template_shared_validation_failure_reports_package_recipe_context(
+def test_startup_validation_rejects_invalid_group_restricted_recipe(
     monkeypatch,
     tmp_path,
 ):
@@ -959,6 +959,7 @@ def test_flow_template_shared_validation_failure_reports_package_recipe_context(
                             {
                                 "name": "Broken Output",
                                 "description": "Invalid ordered source binding",
+                                "access": {"allowed_group_ids": ["RGD"]},
                                 "steps": [
                                     {"agent_id": "pdf_extraction"},
                                     {
@@ -975,10 +976,7 @@ def test_flow_template_shared_validation_failure_reports_package_recipe_context(
     )
 
     with pytest.raises(FlowRecipeLoadError) as exc_info:
-        flow_tools._filter_flow_templates(
-            {"pdf_extraction", "chat_output"},
-            catalog,
-        )
+        flow_tools.validate_installed_flow_recipe_catalog(catalog)
 
     message = str(exc_info.value)
     assert "Broken Output" in message

@@ -727,13 +727,6 @@ def _filter_flow_templates(
         for recipe in contribution.manifest.recipes:
             from src.lib.agent_access import is_resource_access_allowed
 
-            if not is_resource_access_allowed(
-                visibility_allowed=True,
-                allowed_group_ids=recipe.access.allowed_group_ids,
-                active_group_ids=list(active_group_ids or []),
-                resource_kind="flow_recipe",
-            ):
-                continue
             template = recipe.model_dump(exclude_none=True)
             contract_agent_ids = sorted(
                 {str(step["agent_id"]) for step in template["steps"]}
@@ -837,6 +830,14 @@ def _filter_flow_templates(
                     f"'{contribution.package_id}' at {contribution.source_path}: "
                     f"{'; '.join(exc.errors)}"
                 ) from exc
+
+            if not is_resource_access_allowed(
+                visibility_allowed=True,
+                allowed_group_ids=recipe.access.allowed_group_ids,
+                active_group_ids=list(active_group_ids or []),
+                resource_kind="flow_recipe",
+            ):
+                continue
 
             templates.append(
                 {
