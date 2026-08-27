@@ -8,6 +8,7 @@ import pytest
 
 from src.lib.openai_agents.config import (
     AgentConfig,
+    build_default_model_retry,
     build_model_settings,
     get_agent_config,
     get_agent_studio_flow_custom_instructions_max_chars,
@@ -609,6 +610,220 @@ def test_build_model_settings_retry_disabled_when_max_retries_zero(monkeypatch):
     settings = build_model_settings(model="gpt-5.5")
 
     assert settings.retry is None
+
+
+def _responses_websocket_error(
+    *,
+    event_type="error",
+    error_type="service_unavailable_error",
+    code="server_is_overloaded",
+):
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    return ResponsesWebSocketError(
+        {
+            "type": event_type,
+            "sequence_number": 2,
+            "error": {
+                "type": error_type,
+                "code": code,
+                "message": "redacted fixture message",
+            },
+        }
+    )
+
+
+def _zero_model_retry_delay(monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL_RETRY_INITIAL_DELAY", "0")
+    monkeypatch.setenv("OPENAI_MODEL_RETRY_MAX_DELAY", "0")
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_overload_retries_then_succeeds(monkeypatch, caplog):
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "2")
+    _zero_model_retry_delay(monkeypatch)
+    attempts = 0
+    rewinds = 0
+
+    def get_stream():
+        async def stream():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                yield {"type": "response.created"}
+                yield {"type": "response.in_progress"}
+                raise _responses_websocket_error()
+            yield {"type": "response.completed"}
+
+        return stream()
+
+    async def rewind():
+        nonlocal rewinds
+        rewinds += 1
+
+    with caplog.at_level("INFO", logger="src.lib.openai_agents.config"):
+        events = [
+            event
+            async for event in stream_response_with_retry(
+                get_stream=get_stream,
+                rewind=rewind,
+                retry_settings=build_default_model_retry(),
+                get_retry_advice=lambda _request: None,
+                previous_response_id="response_1",
+                conversation_id=None,
+            )
+        ]
+
+    assert events == [
+        {"type": "response.created"},
+        {"type": "response.in_progress"},
+        {"type": "response.completed"},
+    ]
+    assert attempts == 2
+    assert rewinds == 1
+    assert "retry 1/2; retry_budget_exhausted=False" in caplog.text
+    assert "redacted fixture message" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_overload_exhausts_configured_retries(
+    monkeypatch,
+    caplog,
+):
+    from agents.models.openai_responses import ResponsesWebSocketError
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "2")
+    _zero_model_retry_delay(monkeypatch)
+    attempts = 0
+    rewinds = 0
+
+    def get_stream():
+        async def stream():
+            nonlocal attempts
+            attempts += 1
+            raise _responses_websocket_error()
+            yield  # pragma: no cover - keeps this an async generator
+
+        return stream()
+
+    async def rewind():
+        nonlocal rewinds
+        rewinds += 1
+
+    with caplog.at_level("INFO", logger="src.lib.openai_agents.config"):
+        with pytest.raises(ResponsesWebSocketError) as exc_info:
+            async for _event in stream_response_with_retry(
+                get_stream=get_stream,
+                rewind=rewind,
+                retry_settings=build_default_model_retry(),
+                get_retry_advice=lambda _request: None,
+                previous_response_id="response_1",
+                conversation_id=None,
+            ):
+                pass
+
+    assert attempts == 3
+    assert rewinds == 2
+    assert exc_info.value.error_type == "service_unavailable_error"
+    assert exc_info.value.code == "server_is_overloaded"
+    assert "retry 2/2; retry_budget_exhausted=True" in caplog.text
+    assert "redacted fixture message" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        _responses_websocket_error(
+            error_type="authentication_error",
+            code="invalid_api_key",
+        ),
+        _responses_websocket_error(event_type="response.error"),
+    ],
+)
+async def test_non_retryable_responses_websocket_frames_fail_immediately(
+    monkeypatch,
+    error,
+):
+    from agents.models.openai_responses import ResponsesWebSocketError
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "2")
+    _zero_model_retry_delay(monkeypatch)
+    attempts = 0
+    rewinds = 0
+
+    def get_stream():
+        async def stream():
+            nonlocal attempts
+            attempts += 1
+            raise error
+            yield  # pragma: no cover - keeps this an async generator
+
+        return stream()
+
+    async def rewind():
+        nonlocal rewinds
+        rewinds += 1
+
+    with pytest.raises(ResponsesWebSocketError):
+        async for _event in stream_response_with_retry(
+            get_stream=get_stream,
+            rewind=rewind,
+            retry_settings=build_default_model_retry(),
+            get_retry_advice=lambda _request: None,
+            previous_response_id="response_1",
+            conversation_id=None,
+        ):
+            pass
+
+    assert attempts == 1
+    assert rewinds == 0
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_overload_is_not_retried_after_usable_event(monkeypatch):
+    from agents.models.openai_responses import ResponsesWebSocketError
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "2")
+    _zero_model_retry_delay(monkeypatch)
+    attempts = 0
+    rewinds = 0
+
+    def get_stream():
+        async def stream():
+            nonlocal attempts
+            attempts += 1
+            yield {"type": "response.output_text.delta", "delta": "usable"}
+            raise _responses_websocket_error()
+
+        return stream()
+
+    async def rewind():
+        nonlocal rewinds
+        rewinds += 1
+
+    events = stream_response_with_retry(
+        get_stream=get_stream,
+        rewind=rewind,
+        retry_settings=build_default_model_retry(),
+        get_retry_advice=lambda _request: None,
+        previous_response_id="response_1",
+        conversation_id=None,
+    )
+    assert await anext(events) == {
+        "type": "response.output_text.delta",
+        "delta": "usable",
+    }
+    with pytest.raises(ResponsesWebSocketError):
+        await anext(events)
+
+    assert attempts == 1
+    assert rewinds == 0
 
 
 def test_openai_responses_websocket_ping_timeout_invalid_env_uses_default(monkeypatch):

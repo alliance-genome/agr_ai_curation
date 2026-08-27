@@ -468,14 +468,49 @@ def build_default_model_retry():
     """Opt-in runner-managed retry for transient model-call failures.
 
     The Agents SDK retries model calls when ``ModelSettings.retry`` is set,
-    classifying HTTP 5xx (e.g. a Responses WebSocket handshake ``503``) and
-    never-sent WebSocket errors as safe to retry, with exponential backoff and
-    ``Retry-After`` support. Without this, a transient WebSocket ``503`` hard-fails
-    the turn. Disable by setting ``OPENAI_MODEL_MAX_RETRIES=0``.
+    classifying HTTP 5xx (e.g. a Responses WebSocket handshake ``503``),
+    never-sent WebSocket errors, and typed pre-response overload frames as safe
+    to retry, with exponential backoff and ``Retry-After`` support. Disable by
+    setting ``OPENAI_MODEL_MAX_RETRIES=0``.
     """
     # Import here to avoid circular dependency at module load.
     from agents import retry_policies
     from agents.retry import ModelRetrySettings, ModelRetryBackoffSettings
+
+    def retry_responses_websocket_overload(context):
+        """Retry a typed pre-response overload frame without logging frame content."""
+        from agents.models.openai_responses import ResponsesWebSocketError
+        from agents.retry import RetryDecision
+
+        error = context.error
+        if not (
+            isinstance(error, ResponsesWebSocketError)
+            and error.event_type == "error"
+            and error.error_type == "service_unavailable_error"
+            and error.code == "server_is_overloaded"
+        ):
+            return False
+
+        retry_budget_exhausted = context.attempt == context.max_retries
+        log = logger.warning if retry_budget_exhausted else logger.info
+        log(
+            "Retrying transient Responses WebSocket overload frame "
+            "(retry %s/%s; retry_budget_exhausted=%s)",
+            context.attempt,
+            context.max_retries,
+            retry_budget_exhausted,
+        )
+
+        decision = RetryDecision(
+            retry=True,
+            reason="responses_websocket_server_overloaded",
+        )
+        # The typed `error` frame is raised by the pinned SDK before it yields a
+        # model event. Marking this decision replay-safe permits stateful model
+        # calls to use the shared runner loop; the runner still vetoes retries
+        # after any response/tool-bearing stream event.
+        setattr(decision, "_approves_replay", True)  # noqa: B010
+        return decision
 
     try:
         max_retries = int(os.getenv("OPENAI_MODEL_MAX_RETRIES", "3"))
@@ -493,6 +528,7 @@ def build_default_model_retry():
         ),
         policy=retry_policies.any(
             retry_policies.provider_suggested(),
+            retry_responses_websocket_overload,
             retry_policies.retry_after(),
             retry_policies.network_error(),
             retry_policies.http_status([408, 409, 429, 500, 502, 503, 504]),
