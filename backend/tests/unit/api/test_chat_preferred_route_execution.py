@@ -196,7 +196,10 @@ def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(mon
     assert retried.effective_user_message == "For RGD:619738, assess GO:0005515."
 
 
-@pytest.mark.parametrize("agent_id", ["gene_validation", f"ca_{uuid4()}"])
+@pytest.mark.parametrize(
+    "agent_id",
+    ["gene_validation", "ca_00000000-0000-4000-8000-000000000001"],
+)
 @pytest.mark.asyncio
 async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, agent_id):
     captured: dict = {}
