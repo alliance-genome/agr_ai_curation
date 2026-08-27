@@ -38,7 +38,7 @@ def test_live_rat_mir_124_3p_mapping_is_complete_and_cardinality_driven():
         use_cache=False,
     )
 
-    assert result.identity_kind == "mature_product"
+    assert result.identity_kind == "mature_product", result.message
     assert result.mature_product is not None
     assert result.mature_product.rnacentral_id.startswith("RNAcentral:URS")
     assert result.mature_product.mirbase_id is not None
@@ -46,6 +46,18 @@ def test_live_rat_mir_124_3p_mapping_is_complete_and_cardinality_driven():
     assert result.candidate_mappings
     assert all(
         validate_go_gene_id(candidate.gene_id) == candidate.gene_id
+        for candidate in result.candidate_mappings
+    )
+    assert all(
+        candidate.identity_kind != "precursor_locus"
+        or (
+            candidate.mirbase_hairpin_ids
+            and all(
+                hairpin_id.startswith("miRBase:MI")
+                and not hairpin_id.startswith("miRBase:MIMAT")
+                for hairpin_id in candidate.mirbase_hairpin_ids
+            )
+        )
         for candidate in result.candidate_mappings
     )
     assert "RGD:miR-124" not in {

@@ -1,10 +1,10 @@
 """Typed Alliance gene and mature-RNA product resolution.
 
 RGD locus identity remains owned by the read-only Alliance curation database.
-RNAcentral supplies species-specific RNA identity, while its miRBase cross-reference
-supplies the mature accession.  A mature product is mapped back to every curation
-gene carrying that RNAcentral cross-reference; this module never selects one of
-multiple precursor loci.
+RNAcentral supplies species-specific RNA identity, while its miRBase cross-references
+ground mature and precursor accessions.  A mature product is mapped back to every
+curation gene carrying that RNAcentral cross-reference; this module never selects
+one of multiple precursor loci.
 """
 
 from __future__ import annotations
@@ -34,6 +34,8 @@ _RNACENTRAL_API_BASE = "https://rnacentral.org/api/v1"
 _TAXON_PATTERN = re.compile(r"NCBITaxon:(\d+)")
 _PROVIDER_PATTERN = re.compile(r"[A-Z][A-Z0-9._-]*")
 _RNACENTRAL_ID_PATTERN = re.compile(r"URS[0-9A-F]{10}_(\d+)")
+_MIRBASE_MATURE_PATTERN = re.compile(r"MIMAT\d+")
+_MIRBASE_HAIRPIN_PATTERN = re.compile(r"MI\d+")
 
 ResolutionStatus = Literal["resolved", "ambiguous", "not_found", "upstream_error"]
 IdentityKind = Literal[
@@ -76,6 +78,7 @@ class GeneProductCandidate(_StrictModel):
     organism_taxon_id: str
     gene_type: str | None = None
     rnacentral_ids: list[str] = Field(default_factory=list)
+    mirbase_hairpin_ids: list[str] = Field(default_factory=list)
     provenance: list[ResolutionProvenance] = Field(default_factory=list)
 
 
@@ -355,13 +358,41 @@ def _mature_label(query: str, mirbase_organism_prefix: str) -> str:
     return f"{mirbase_organism_prefix}-{query}"
 
 
+def _rnacentral_xrefs(
+    *,
+    urs: str,
+    taxon_number: str,
+    requester: Callable[..., Any],
+) -> tuple[list[Mapping[str, Any]], bool]:
+    xref_url = f"{_RNACENTRAL_API_BASE}/rna/{urs}/xrefs/{taxon_number}/"
+    payload = _json_response(
+        requester,
+        xref_url,
+        params={"page_size": _max_candidates() + 1},
+    )
+    raw_xrefs = payload.get("results")
+    count = payload.get("count")
+    if not isinstance(raw_xrefs, list):
+        raise ValueError("RNAcentral xref response must contain a results list")
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < len(raw_xrefs)
+    ):
+        raise ValueError("RNAcentral xref response must contain a valid count")
+    if not all(isinstance(xref, Mapping) for xref in raw_xrefs):
+        raise ValueError("RNAcentral xref result must be an object")
+    source_incomplete = payload.get("next") is not None or count > len(raw_xrefs)
+    return list(raw_xrefs), source_incomplete
+
+
 def _search_mature_products(
     *,
     query: str,
     organism_taxon_id: str,
     mirbase_organism_prefix: str,
     requester: Callable[..., Any],
-) -> tuple[list[MatureProductIdentity], list[ResolutionProvenance]]:
+) -> tuple[list[MatureProductIdentity], list[ResolutionProvenance], bool]:
     taxon = _TAXON_PATTERN.fullmatch(organism_taxon_id)
     assert taxon is not None
     taxon_number = taxon.group(1)
@@ -379,6 +410,14 @@ def _search_mature_products(
     entries = payload.get("entries")
     if not isinstance(entries, list):
         raise ValueError("RNAcentral search response must contain an entries list")
+    hit_count = payload.get("hitCount")
+    if (
+        not isinstance(hit_count, int)
+        or isinstance(hit_count, bool)
+        or hit_count < len(entries)
+    ):
+        raise ValueError("RNAcentral search response must contain a valid hitCount")
+    source_incomplete = hit_count > len(entries)
 
     products: list[MatureProductIdentity] = []
     provenance: list[ResolutionProvenance] = []
@@ -426,23 +465,18 @@ def _search_mature_products(
         )
 
     if len(products) != 1:
-        return products, provenance
+        return products, provenance, source_incomplete
 
     product = products[0]
     urs = product.rnacentral_id.split(":", 1)[1].split("_", 1)[0]
-    xref_url = f"{_RNACENTRAL_API_BASE}/rna/{urs}/xrefs/{taxon_number}/"
-    xrefs_payload = _json_response(
-        requester,
-        xref_url,
-        params={"page_size": _max_candidates() + 1},
+    xrefs, xrefs_incomplete = _rnacentral_xrefs(
+        urs=urs,
+        taxon_number=taxon_number,
+        requester=requester,
     )
-    xrefs = xrefs_payload.get("results")
-    if not isinstance(xrefs, list):
-        raise ValueError("RNAcentral xref response must contain a results list")
+    source_incomplete = source_incomplete or xrefs_incomplete
     mirbase_ids: set[str] = set()
     for xref in xrefs:
-        if not isinstance(xref, Mapping):
-            raise ValueError("RNAcentral xref result must be an object")
         if str(xref.get("database", "")).casefold() != "mirbase" or not xref.get(
             "is_active"
         ):
@@ -454,7 +488,7 @@ def _search_mature_products(
         optional_id = accession.get("optional_id")
         if (
             isinstance(external_id, str)
-            and external_id.startswith("MIMAT")
+            and _MIRBASE_MATURE_PATTERN.fullmatch(external_id) is not None
             and isinstance(optional_id, str)
             and optional_id.casefold() == label.casefold()
         ):
@@ -477,7 +511,94 @@ def _search_mature_products(
             for mirbase_id in sorted(mirbase_ids)
         )
         products.pop(0)
-    return products, provenance
+    return products, provenance, source_incomplete
+
+
+def _enrich_precursor_candidates(
+    candidates: list[GeneProductCandidate],
+    *,
+    organism_taxon_id: str,
+    requester: Callable[..., Any],
+) -> tuple[list[GeneProductCandidate], bool]:
+    """Attach every bounded active miRBase hairpin identity to precursor loci."""
+
+    taxon = _TAXON_PATTERN.fullmatch(organism_taxon_id)
+    assert taxon is not None
+    taxon_number = taxon.group(1)
+    candidate_limit = _max_candidates()
+    enriched: list[GeneProductCandidate] = []
+    source_incomplete = False
+    xref_cache: dict[str, tuple[list[Mapping[str, Any]], bool]] = {}
+
+    for candidate in candidates:
+        if candidate.identity_kind != "precursor_locus":
+            enriched.append(candidate)
+            continue
+
+        rnacentral_ids = candidate.rnacentral_ids
+        if len(rnacentral_ids) > candidate_limit:
+            source_incomplete = True
+            rnacentral_ids = rnacentral_ids[:candidate_limit]
+
+        hairpin_ids: set[str] = set()
+        hairpin_provenance: list[ResolutionProvenance] = []
+        for rnacentral_id in rnacentral_ids:
+            urs = rnacentral_id.split(":", 1)[1].split("_", 1)[0]
+            cached_xrefs = xref_cache.get(urs)
+            if cached_xrefs is None:
+                cached_xrefs = _rnacentral_xrefs(
+                    urs=urs,
+                    taxon_number=taxon_number,
+                    requester=requester,
+                )
+                xref_cache[urs] = cached_xrefs
+            xrefs, xrefs_incomplete = cached_xrefs
+            source_incomplete = source_incomplete or xrefs_incomplete
+            for xref in xrefs:
+                if str(xref.get("database", "")).casefold() != "mirbase" or not xref.get(
+                    "is_active"
+                ):
+                    continue
+                accession = xref.get("accession")
+                if not isinstance(accession, Mapping):
+                    raise ValueError("miRBase xref must contain accession details")
+                external_id = accession.get("external_id")
+                if (
+                    not isinstance(external_id, str)
+                    or _MIRBASE_HAIRPIN_PATTERN.fullmatch(external_id) is None
+                ):
+                    continue
+                mirbase_id = f"miRBase:{external_id}"
+                if mirbase_id in hairpin_ids:
+                    continue
+                hairpin_ids.add(mirbase_id)
+                hairpin_provenance.extend(
+                    [
+                        ResolutionProvenance(
+                            source="RNAcentral",
+                            source_url=f"https://rnacentral.org/rna/{urs}",
+                            source_record_id=f"RNAcentral:{urs}",
+                            evidence="Species-scoped precursor RNA record with an active miRBase cross-reference",
+                        ),
+                        ResolutionProvenance(
+                            source="miRBase",
+                            source_url=f"https://www.mirbase.org/hairpin/{external_id}",
+                            source_record_id=mirbase_id,
+                            evidence="Active precursor hairpin accession exposed by RNAcentral cross-reference",
+                        ),
+                    ]
+                )
+
+        enriched.append(
+            candidate.model_copy(
+                update={
+                    "mirbase_hairpin_ids": sorted(hairpin_ids),
+                    "provenance": [*candidate.provenance, *hairpin_provenance],
+                }
+            )
+        )
+
+    return enriched, source_incomplete
 
 
 def _base_result(
@@ -593,19 +714,47 @@ def resolve_gene_product(
                 provider_prefix=provider_prefix,
                 message=f"Alliance curation database contract failed: {exc}",
             )
-        if len(safe_exact) == 1:
-            candidate = safe_exact[0]
-            result = _base_result(
-                status="resolved",
+        try:
+            safe_exact, precursor_source_incomplete = _enrich_precursor_candidates(
+                safe_exact,
+                organism_taxon_id=organism_taxon_id,
+                requester=requester,
+            )
+        except Exception as exc:
+            return _base_result(
+                status="upstream_error",
                 query=query,
-                identity_kind=candidate.identity_kind,
+                identity_kind="precursor_locus",
                 organism_taxon_id=organism_taxon_id,
                 provider_prefix=provider_prefix,
-                resolved_gene_id=candidate.gene_id,
-                candidate_mappings=safe_exact,
-                provenance=candidate.provenance,
-                message="Resolved one current Alliance gene/locus identity",
+                message=f"Precursor RNA source lookup failed: {exc}",
             )
+        if len(safe_exact) == 1:
+            candidate = safe_exact[0]
+            if precursor_source_incomplete:
+                result = _base_result(
+                    status="ambiguous",
+                    query=query,
+                    identity_kind=candidate.identity_kind,
+                    organism_taxon_id=organism_taxon_id,
+                    provider_prefix=provider_prefix,
+                    candidate_mappings=safe_exact,
+                    candidate_limit_reached=True,
+                    provenance=candidate.provenance,
+                    message="Alliance locus was unique, but bounded precursor source evidence was incomplete",
+                )
+            else:
+                result = _base_result(
+                    status="resolved",
+                    query=query,
+                    identity_kind=candidate.identity_kind,
+                    organism_taxon_id=organism_taxon_id,
+                    provider_prefix=provider_prefix,
+                    resolved_gene_id=candidate.gene_id,
+                    candidate_mappings=safe_exact,
+                    provenance=candidate.provenance,
+                    message="Resolved one current Alliance gene/locus identity",
+                )
         elif len(safe_exact) > 1:
             candidate_limit = _max_candidates()
             result = _base_result(
@@ -615,19 +764,35 @@ def resolve_gene_product(
                 organism_taxon_id=organism_taxon_id,
                 provider_prefix=provider_prefix,
                 candidate_mappings=safe_exact[:candidate_limit],
-                candidate_limit_reached=len(safe_exact) > candidate_limit,
+                candidate_limit_reached=(
+                    len(safe_exact) > candidate_limit or precursor_source_incomplete
+                ),
                 provenance=[item for candidate in safe_exact for item in candidate.provenance],
                 message="Multiple exact Alliance gene/locus identities matched; none was selected",
             )
         else:
             try:
-                products, product_provenance = _search_mature_products(
+                products, product_provenance, product_source_incomplete = _search_mature_products(
                     query=query,
                     organism_taxon_id=organism_taxon_id,
                     mirbase_organism_prefix=mirbase_organism_prefix,
                     requester=requester,
                 )
-                if not products:
+                if product_source_incomplete:
+                    candidate_limit = _max_candidates()
+                    result = _base_result(
+                        status="ambiguous",
+                        query=query,
+                        identity_kind="mature_product",
+                        organism_taxon_id=organism_taxon_id,
+                        provider_prefix=provider_prefix,
+                        mature_product=products[0] if len(products) == 1 else None,
+                        product_candidates=products[:candidate_limit],
+                        candidate_limit_reached=True,
+                        provenance=product_provenance,
+                        message="Bounded RNAcentral source evidence was incomplete; product identity was not selected",
+                    )
+                elif not products:
                     result = _base_result(
                         status="not_found",
                         query=query,
@@ -672,11 +837,31 @@ def resolve_gene_product(
                         rnacentral_id=base_rnacentral_id,
                     )
                     safe_mapped = _validated_candidates(mapped)
+                    safe_mapped, precursor_source_incomplete = _enrich_precursor_candidates(
+                        safe_mapped,
+                        organism_taxon_id=organism_taxon_id,
+                        requester=requester,
+                    )
                     provenance = [
                         *product_provenance,
                         *(item for candidate in safe_mapped for item in candidate.provenance),
                     ]
-                    if len(safe_mapped) == 1:
+                    if precursor_source_incomplete:
+                        candidate_limit = _max_candidates()
+                        result = _base_result(
+                            status="ambiguous",
+                            query=query,
+                            identity_kind="mature_product",
+                            organism_taxon_id=organism_taxon_id,
+                            provider_prefix=provider_prefix,
+                            mature_product=product,
+                            product_candidates=[product],
+                            candidate_mappings=safe_mapped[:candidate_limit],
+                            candidate_limit_reached=True,
+                            provenance=provenance,
+                            message="Bounded precursor source evidence was incomplete; no gene/locus mapping was selected",
+                        )
+                    elif len(safe_mapped) == 1:
                         result = _base_result(
                             status="resolved",
                             query=query,

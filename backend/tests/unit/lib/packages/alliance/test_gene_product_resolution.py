@@ -10,7 +10,6 @@ import requests
 from agr_ai_curation_alliance.tools import gene_product_resolution as resolver_module
 from agr_ai_curation_alliance.tools.gene_product_resolution import (
     GeneProductCandidate,
-    ResolutionProvenance,
     resolve_gene_product,
 )
 
@@ -35,26 +34,7 @@ def _fixture() -> dict:
 
 
 def _candidate(row: dict) -> GeneProductCandidate:
-    return GeneProductCandidate(
-        gene_id=row["gene_id"],
-        symbol=row["gene_symbol"],
-        name=row["gene_name"],
-        identity_kind="precursor_locus",
-        organism_taxon_id=row["taxon_id"],
-        gene_type=row["gene_type"],
-        rnacentral_ids=row["rnacentral_ids"],
-        provenance=[
-            ResolutionProvenance(
-                source="Alliance curation database",
-                source_url=(
-                    "https://rgd.mcw.edu/rgdweb/report/gene/main.html?id="
-                    + row["gene_id"].split(":", 1)[1]
-                ),
-                source_record_id=row["gene_id"],
-                evidence="Recorded current read-only curation identity",
-            )
-        ],
-    )
+    return resolver_module._candidate_from_row(row)
 
 
 def _recorded_requester(fixture: dict, calls: list[tuple[str, dict]]):
@@ -64,6 +44,10 @@ def _recorded_requester(fixture: dict, calls: list[tuple[str, dict]]):
             return _Response(200, fixture["rnacentral_search"])
         if url.endswith("/rna/URS000020BE6A/xrefs/10116/"):
             return _Response(200, fixture["rnacentral_mature_xrefs"])
+        for rnacentral_id, payload in fixture["rnacentral_precursor_xrefs"].items():
+            urs = rnacentral_id.split(":", 1)[1]
+            if url.endswith(f"/rna/{urs}/xrefs/10116/"):
+                return _Response(200, payload)
         raise AssertionError(f"unexpected URL: {url}")
 
     return requester
@@ -106,6 +90,11 @@ def test_recorded_rat_mature_product_returns_every_current_mapping_as_ambiguous(
     assert {candidate.identity_kind for candidate in result.candidate_mappings} == {
         "precursor_locus"
     }
+    assert {
+        hairpin_id
+        for candidate in result.candidate_mappings
+        for hairpin_id in candidate.mirbase_hairpin_ids
+    } == {"miRBase:MI0000892", "miRBase:MI0000893", "miRBase:MI0000894"}
     assert lookup_calls[1]["rnacentral_id"] == "RNAcentral:URS000020BE6A"
     assert request_calls[0][1]["timeout"] == 10.0
     assert {item.source for item in result.provenance} == {
@@ -149,7 +138,7 @@ def test_mapping_cardinality_is_data_driven_not_fixed_by_rat_fixture(monkeypatch
     assert bounded.candidate_limit_reached is True
 
 
-def test_exact_precursor_and_ordinary_gene_are_distinct_and_skip_rna_sources():
+def test_exact_precursor_and_ordinary_gene_are_distinct_and_grounded():
     fixture = _fixture()
     precursor = _candidate(fixture["curation_db_candidates"][0])
     ordinary = GeneProductCandidate(
@@ -161,26 +150,131 @@ def test_exact_precursor_and_ordinary_gene_are_distinct_and_skip_rna_sources():
         gene_type="protein_coding_gene",
     )
 
-    def no_network(*_args, **_kwargs):
-        raise AssertionError("exact curation identity must not call RNA sources")
+    precursor_result = resolve_gene_product(
+        "Mir124-1",
+        "NCBITaxon:10116",
+        "RGD",
+        "rno",
+        requester=_recorded_requester(fixture, []),
+        curation_lookup=lambda **_kwargs: [precursor],
+        use_cache=False,
+    )
 
-    for query, candidate, expected_kind in (
-        ("Mir124-1", precursor, "precursor_locus"),
-        ("Cttn", ordinary, "ordinary_gene"),
-    ):
-        result = resolve_gene_product(
-            query,
-            "NCBITaxon:10116",
-            "RGD",
-            "rno",
-            requester=no_network,
-            curation_lookup=lambda **_kwargs: [candidate],
-            use_cache=False,
-        )
+    assert precursor_result.status == "resolved"
+    assert precursor_result.identity_kind == "precursor_locus"
+    assert precursor_result.resolved_gene_id == precursor.gene_id
+    assert precursor_result.candidate_mappings[0].mirbase_hairpin_ids == [
+        fixture["curation_db_candidates"][0]["mirbase_hairpin_id"]
+    ]
+    assert {item.source for item in precursor_result.provenance} == {
+        "Alliance curation database",
+        "RNAcentral",
+        "miRBase",
+    }
 
-        assert result.status == "resolved"
-        assert result.identity_kind == expected_kind
-        assert result.resolved_gene_id == candidate.gene_id
+    ordinary_result = resolve_gene_product(
+        "Cttn",
+        "NCBITaxon:10116",
+        "RGD",
+        "rno",
+        requester=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ordinary curation identity must not call RNA sources")
+        ),
+        curation_lookup=lambda **_kwargs: [ordinary],
+        use_cache=False,
+    )
+    assert ordinary_result.status == "resolved"
+    assert ordinary_result.identity_kind == "ordinary_gene"
+    assert ordinary_result.resolved_gene_id == ordinary.gene_id
+
+
+def test_truncated_rnacentral_search_is_ambiguous_without_resolved_identity():
+    fixture = _fixture()
+    truncated_search = {**fixture["rnacentral_search"], "hitCount": 7}
+
+    def requester(url: str, **_kwargs):
+        if "ebisearch" in url:
+            return _Response(200, truncated_search)
+        if url.endswith("/rna/URS000020BE6A/xrefs/10116/"):
+            return _Response(200, fixture["rnacentral_mature_xrefs"])
+        raise AssertionError(f"unexpected URL: {url}")
+
+    result = resolve_gene_product(
+        "miR-124-3p",
+        "NCBITaxon:10116",
+        "RGD",
+        "rno",
+        requester=requester,
+        curation_lookup=lambda **_kwargs: [],
+        use_cache=False,
+    )
+
+    assert result.status == "ambiguous"
+    assert result.candidate_limit_reached is True
+    assert result.resolved_gene_id is None
+
+
+def test_truncated_rnacentral_xrefs_are_ambiguous_without_resolved_identity():
+    fixture = _fixture()
+    truncated_xrefs = {
+        **fixture["rnacentral_mature_xrefs"],
+        "next": "https://rnacentral.org/api/v1/rna/URS000020BE6A/xrefs/10116/?page=2",
+    }
+
+    def requester(url: str, **_kwargs):
+        if "ebisearch" in url:
+            return _Response(200, fixture["rnacentral_search"])
+        if url.endswith("/rna/URS000020BE6A/xrefs/10116/"):
+            return _Response(200, truncated_xrefs)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    result = resolve_gene_product(
+        "miR-124-3p",
+        "NCBITaxon:10116",
+        "RGD",
+        "rno",
+        requester=requester,
+        curation_lookup=lambda **_kwargs: [],
+        use_cache=False,
+    )
+
+    assert result.status == "ambiguous"
+    assert result.candidate_limit_reached is True
+    assert result.resolved_gene_id is None
+
+
+def test_truncated_precursor_xrefs_are_ambiguous_without_resolved_identity():
+    fixture = _fixture()
+    precursor = _candidate(fixture["curation_db_candidates"][0])
+    complete_requester = _recorded_requester(fixture, [])
+
+    def requester(url: str, **kwargs):
+        if url.endswith("/rna/URS000075A939/xrefs/10116/"):
+            return _Response(
+                200,
+                {
+                    **fixture["rnacentral_precursor_xrefs"][
+                        "RNAcentral:URS000075A939"
+                    ],
+                    "next": "https://rnacentral.org/api/v1/rna/URS000075A939/xrefs/10116/?page=2",
+                },
+            )
+        return complete_requester(url, **kwargs)
+
+    result = resolve_gene_product(
+        "Mir124-1",
+        "NCBITaxon:10116",
+        "RGD",
+        "rno",
+        requester=requester,
+        curation_lookup=lambda **_kwargs: [precursor],
+        use_cache=False,
+    )
+
+    assert result.status == "ambiguous"
+    assert result.identity_kind == "precursor_locus"
+    assert result.candidate_limit_reached is True
+    assert result.resolved_gene_id is None
 
 
 def test_not_found_has_no_synthetic_identity_or_candidates():
