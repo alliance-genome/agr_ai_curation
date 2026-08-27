@@ -91,12 +91,13 @@ class ResolverCallLedger:
     ) -> ResolverCallLedgerEntry | None:
         normalized_call_id = _optional_string(tool_call_id)
         if not normalized_call_id:
-            self._emit_rejection(
-                reason="missing_tool_call_id",
-                tool_call_id=None,
-                tool_name=tool_name,
-                output=output,
-            )
+            if tool_name == RESOLVER_TOOL_NAME:
+                self._emit_rejection(
+                    reason="missing_tool_call_id",
+                    tool_call_id=None,
+                    tool_name=tool_name,
+                    output=output,
+                )
             return None
         payload = _coerce_mapping(output)
         if payload is None:
