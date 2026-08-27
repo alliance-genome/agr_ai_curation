@@ -1,4 +1,4 @@
-"""Contract tests for Alliance disease/phenotype export and submit adapters."""
+"""Contract tests for Alliance domain export and submission adapters."""
 
 from __future__ import annotations
 
@@ -17,7 +17,11 @@ from src.lib.curation_workspace.submission_adapters import (
     build_default_submission_adapter_registry,
 )
 from src.lib.domain_packs.loader import load_domain_fixture_pack
-from src.schemas.curation_workspace import CurationSubmissionStatus, SubmissionMode
+from src.schemas.curation_workspace import (
+    CurationSubmissionStatus,
+    SubmissionMode,
+    SubmissionPayloadContract,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -25,6 +29,11 @@ ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 if str(ALLIANCE_PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
 
+from agr_ai_curation_alliance.domain_packs.allele import (  # noqa: E402
+    ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+    AllelePaperEvidenceExportAdapter,
+    AllelePaperEvidenceSubmissionAdapter,
+)
 from agr_ai_curation_alliance.domain_packs.disease import (  # noqa: E402
     DISEASE_EXPORT_TARGET_ID,
     DiseaseAnnotationExportAdapter,
@@ -129,6 +138,10 @@ def test_alliance_default_registries_expose_domain_export_and_submission_adapter
     submission_registry = build_default_submission_adapter_registry()
 
     assert isinstance(
+        export_registry.require("allele"),
+        AllelePaperEvidenceExportAdapter,
+    )
+    assert isinstance(
         export_registry.require("disease"),
         DiseaseAnnotationExportAdapter,
     )
@@ -141,6 +154,10 @@ def test_alliance_default_registries_expose_domain_export_and_submission_adapter
         GeneExpressionExportAdapter,
     )
     assert isinstance(
+        submission_registry.require(ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY),
+        AllelePaperEvidenceSubmissionAdapter,
+    )
+    assert isinstance(
         submission_registry.require(DISEASE_EXPORT_TARGET_ID),
         DiseaseAnnotationSubmissionBlockerAdapter,
     )
@@ -151,6 +168,55 @@ def test_alliance_default_registries_expose_domain_export_and_submission_adapter
     assert isinstance(
         submission_registry.require(GENE_EXPRESSION_TARGET_KEY),
         GeneExpressionSubmissionAdapter,
+    )
+
+
+def test_allele_submission_adapter_records_read_only_handoff_without_mutation():
+    adapter = AllelePaperEvidenceSubmissionAdapter()
+    payload = SubmissionPayloadContract(
+        mode=SubmissionMode.DIRECT_SUBMIT,
+        target_key=ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+        adapter_key="allele",
+        candidate_ids=["candidate-1"],
+        payload_json={
+            "bundle_type": "alliance_allele_paper_evidence_association",
+            "plans": [
+                {
+                    "submission_plan": {
+                        "status": "ready",
+                        "target_key": ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+                        "operations": [
+                            {
+                                "operation": "insert",
+                                "target_table": "public.allele_reference",
+                                "mutates_base_rows": False,
+                            }
+                        ],
+                        "blockers": [],
+                    }
+                }
+            ],
+        },
+    )
+
+    result = adapter.submit(payload=payload, idempotency_key="allele-handoff-1")
+
+    assert result.status == CurationSubmissionStatus.MANUAL_REVIEW_REQUIRED
+    assert result.submission_state == {
+        "plan_count": 1,
+        "operation_count": 1,
+        "idempotency_key": "allele-handoff-1",
+        "target_status": "manual_review_required",
+        "target_key": ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+        "target_transport": "alliance_allele_paper_evidence_submission",
+        "external_reference": (
+            "alliance:allele:allele_verified_association_targets:1:1"
+        ),
+        "write_mode": "read_only_handoff",
+    }
+    assert result.warnings == (
+        "Read-only handoff recorded; no curation database rows were mutated.",
+        "No Alliance curation DB rows were mutated.",
     )
 
 

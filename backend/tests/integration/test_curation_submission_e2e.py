@@ -1164,6 +1164,25 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
         assert preview_payload["submission"]["payload"]["payload_json"][
             "readiness_blockers"
         ]
+        if case_key == "allele":
+            submit_response = client.post(
+                f"/api/curation-workspace/sessions/{session_id}/submit",
+                json={
+                    "session_id": session_id,
+                    "candidate_ids": [candidate_id],
+                    "mode": "direct_submit",
+                    "target_key": gate_case["target_key"],
+                    "idempotency_key": str(uuid4()),
+                },
+            )
+            assert submit_response.status_code == 400, submit_response.text
+            submit_detail = submit_response.json()["detail"]
+            assert submit_detail["message"] == (
+                "Domain-envelope readiness blockers prevent direct submission"
+            )
+            assert {
+                blocker["code"] for blocker in submit_detail["blockers"]
+            } & gate_case["expected_blocker_codes"]
 
 
 def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_history(

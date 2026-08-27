@@ -47,6 +47,7 @@ from .export import (
 )
 from .submit import (
     ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+    AllelePaperEvidenceSubmissionAdapter,
     VERIFIED_ALLELE_ASSOCIATION_TARGETS,
     build_allele_association_submission_plan,
 )
@@ -733,6 +734,7 @@ __all__ = [
     "AlleleBuilderExtractionOutput",
     "AlleleMaterializationResult",
     "AllelePaperEvidenceExportAdapter",
+    "AllelePaperEvidenceSubmissionAdapter",
     "VERIFIED_ALLELE_ASSOCIATION_TARGETS",
     "build_allele_association_export",
     "build_allele_association_submission_plan",

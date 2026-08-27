@@ -3060,6 +3060,22 @@ def test_default_direct_submission_target_requires_supported_adapter_target(monk
     assert exc.value.detail == "Submission target is not configured"
 
 
+def test_default_direct_submission_target_selects_registered_allele_transport():
+    submission_module._export_adapter_registry.cache_clear()
+    submission_module._submission_adapter_registry.cache_clear()
+
+    try:
+        target_key = submission_module._default_direct_submission_target_key(
+            adapter_key="allele",
+            supported_target_keys=(),
+        )
+    finally:
+        submission_module._export_adapter_registry.cache_clear()
+        submission_module._submission_adapter_registry.cache_clear()
+
+    assert target_key == "allele_verified_association_targets"
+
+
 def test_submission_preview_routes_payload_generation_through_submission_adapter(
     db_session,
     monkeypatch,

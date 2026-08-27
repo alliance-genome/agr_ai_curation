@@ -5,6 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from src.lib.curation_workspace.submission_adapters.base import (
+    SubmissionTransportResult,
+    normalize_submission_transport_result,
+)
+from src.lib.curation_workspace.submission_adapters.read_only_handoff import (
+    ReadOnlyHandoffSubmissionAdapter,
+)
+from src.schemas.curation_workspace import (
+    CurationSubmissionStatus,
+    SubmissionPayloadContract,
+)
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DefinitionState,
@@ -50,6 +61,122 @@ VERIFIED_ALLELE_ASSOCIATION_TARGETS = {
     },
 }
 BASE_ROW_TABLES = ("public.allele", "public.gene")
+
+
+class AllelePaperEvidenceSubmissionAdapter(ReadOnlyHandoffSubmissionAdapter):
+    """Validate and record a non-mutating allele association handoff."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            transport_key="alliance_allele_paper_evidence_submission",
+            supported_target_keys=(ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,),
+        )
+
+    def _submit(
+        self,
+        *,
+        payload: SubmissionPayloadContract,
+        idempotency_key: str,
+    ) -> SubmissionTransportResult:
+        payload_json = (
+            payload.payload_json if isinstance(payload.payload_json, Mapping) else {}
+        )
+        plans = _allele_export_plans(payload_json)
+        validation_errors = _allele_payload_validation_errors(payload, payload_json, plans)
+        if validation_errors:
+            return normalize_submission_transport_result(
+                status=CurationSubmissionStatus.VALIDATION_ERRORS,
+                response_message="Allele association target payload failed adapter validation.",
+                validation_errors=validation_errors,
+                submission_state={
+                    "idempotency_key": idempotency_key,
+                    "target_status": "validation_errors",
+                    "target_key": payload.target_key,
+                    "plan_count": len(plans),
+                },
+                target_result_history=[
+                    {
+                        "status": "validation_errors",
+                        "target_key": payload.target_key,
+                        "validation_error_count": len(validation_errors),
+                    }
+                ],
+            )
+
+        operation_count = sum(
+            len(plan["submission_plan"]["operations"])
+            for plan in plans
+        )
+        external_reference = (
+            f"alliance:allele:{payload.target_key}:{len(plans)}:{operation_count}"
+        )
+        return self.build_read_only_handoff_result(
+            payload=payload,
+            idempotency_key=idempotency_key,
+            external_reference=external_reference,
+            response_message=(
+                "Allele association target payload was prepared for curation DB "
+                "handoff; live database mutation requires an approved write transport."
+            ),
+            submission_state={
+                "plan_count": len(plans),
+                "operation_count": operation_count,
+            },
+            target_result_state={
+                "plan_count": len(plans),
+                "operation_count": operation_count,
+            },
+            warnings=("No Alliance curation DB rows were mutated.",),
+        )
+
+
+def _allele_export_plans(payload_json: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    raw_plans = payload_json.get("plans")
+    if not isinstance(raw_plans, list):
+        return []
+    return [plan for plan in raw_plans if isinstance(plan, Mapping)]
+
+
+def _allele_payload_validation_errors(
+    payload: SubmissionPayloadContract,
+    payload_json: Mapping[str, Any],
+    plans: list[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    if payload.adapter_key != "allele":
+        errors.append(f"Payload adapter_key must be allele; found {payload.adapter_key}.")
+    if payload.target_key != ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY:
+        errors.append(
+            "Payload target_key must be "
+            f"{ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY}; found {payload.target_key}."
+        )
+    if payload_json.get("bundle_type") != "alliance_allele_paper_evidence_association":
+        errors.append(
+            "Payload bundle_type is not alliance_allele_paper_evidence_association."
+        )
+    if not plans:
+        errors.append("Payload must contain at least one plans item.")
+
+    for index, plan in enumerate(plans):
+        submission_plan = plan.get("submission_plan")
+        if not isinstance(submission_plan, Mapping):
+            errors.append(f"plans[{index}].submission_plan is required.")
+            continue
+        if submission_plan.get("status") != "ready":
+            errors.append(f"plans[{index}].submission_plan.status must be ready.")
+        if submission_plan.get("target_key") != ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY:
+            errors.append(
+                f"plans[{index}].submission_plan.target_key must be "
+                f"{ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY}."
+            )
+        if submission_plan.get("blockers") != []:
+            errors.append(f"plans[{index}].submission_plan.blockers must be empty.")
+        operations = submission_plan.get("operations")
+        if not isinstance(operations, list) or not operations:
+            errors.append(
+                f"plans[{index}].submission_plan.operations must contain at least one item."
+            )
+    return tuple(errors)
 
 
 def build_allele_association_submission_plan(
@@ -382,6 +509,7 @@ def _blocker(
 __all__ = [
     "ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY",
     "ALLELE_PAPER_EVIDENCE_ASSOCIATION_OBJECT_TYPE",
+    "AllelePaperEvidenceSubmissionAdapter",
     "BASE_ROW_TABLES",
     "VERIFIED_ALLELE_ASSOCIATION_TARGETS",
     "build_allele_association_submission_plan",
