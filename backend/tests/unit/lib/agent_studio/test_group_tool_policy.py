@@ -208,6 +208,7 @@ def test_create_custom_db_agent_enforces_inherited_group_tool_policy(
     assert built is not None
     assert captured["tool_ids"] == expected_tool_ids
     assert built.group_tool_exposure["active_group_ids"] == authenticated_groups
+    assert built.authenticated_groups == tuple(authenticated_groups)
     assert built.group_tool_exposure["added_tool_ids"] == []
     assert built.group_tool_exposure["denied_tool_ids"] == (
         [] if authenticated_groups else ["restricted_base_helper"]

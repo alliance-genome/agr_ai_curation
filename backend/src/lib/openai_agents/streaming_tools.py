@@ -27,7 +27,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import List, Dict, Any, Mapping, Optional
+from typing import List, Dict, Any, Mapping, Optional, Sequence
 
 from agents import (
     Agent,
@@ -6003,6 +6003,9 @@ async def run_specialist_with_events(
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
+                    authenticated_groups=getattr(
+                        agent, "authenticated_groups", None
+                    ),
                 ),
             )
         except SpecialistOutputError as exc:
@@ -6061,6 +6064,9 @@ async def run_specialist_with_events(
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
+                    authenticated_groups=getattr(
+                        agent, "authenticated_groups", None
+                    ),
                 ),
             )
         except SpecialistOutputError as exc:
@@ -6292,6 +6298,7 @@ def _validator_runtime_context_for_chat(
     *,
     document_id: Optional[str],
     user_id: Optional[str],
+    authenticated_groups: Optional[Sequence[str]] = None,
 ) -> Optional[Any]:
     normalized_document_id = str(document_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
@@ -6307,4 +6314,7 @@ def _validator_runtime_context_for_chat(
     return ValidatorRuntimeContext(
         document_id=normalized_document_id,
         user_id=normalized_user_id,
+        authenticated_groups=(
+            tuple(authenticated_groups) if authenticated_groups is not None else None
+        ),
     )

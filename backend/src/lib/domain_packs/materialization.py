@@ -107,6 +107,7 @@ class ValidatorResultMaterializationInput:
     match: ValidatorBindingMatch
     request: DomainValidationRequest
     result: DomainValidatorResultBase
+    dispatch_context: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -1399,6 +1400,11 @@ def _validator_result_finding_details(
         "validation_metadata": {
             **item.match.binding.identity_details(),
             "target": item.match.target_details(),
+            **(
+                {"dispatch_context": dict(item.dispatch_context)}
+                if item.dispatch_context is not None
+                else {}
+            ),
             **(
                 {"source_envelope_revision": source_envelope_revision}
                 if source_envelope_revision is not None

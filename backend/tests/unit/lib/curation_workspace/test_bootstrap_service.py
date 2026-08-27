@@ -740,6 +740,7 @@ async def test_prepare_chat_curation_sessions_bootstraps_each_adapter(monkeypatc
         request,
         *,
         current_user_id,
+        active_groups,
         db,
         manage_transaction,
     ):
@@ -747,6 +748,7 @@ async def test_prepare_chat_curation_sessions_bootstraps_each_adapter(monkeypatc
         manage_transaction_calls.append(manage_transaction)
         assert request.origin_session_id == "chat-session-1"
         assert current_user_id == "user-1"
+        assert active_groups == ("ZFIN",)
         assert db is fake_db
         return SimpleNamespace(
             created=request.adapter_key == "gene",
@@ -760,6 +762,7 @@ async def test_prepare_chat_curation_sessions_bootstraps_each_adapter(monkeypatc
     response = await module.prepare_chat_curation_sessions(
         module.CurationPrepChatRunRequest(session_id="chat-session-1"),
         current_user_id="user-1",
+        active_groups=("ZFIN",),
         db=fake_db,
     )
 
@@ -817,10 +820,12 @@ async def test_prepare_chat_curation_sessions_rolls_back_when_a_later_adapter_fa
         request,
         *,
         current_user_id,
+        active_groups,
         db,
         manage_transaction,
     ):
         bootstrap_calls.append(request.adapter_key)
+        assert active_groups == ("ZFIN",)
         if request.adapter_key == "disease":
             raise RuntimeError("pipeline failed")
         return SimpleNamespace(
@@ -836,6 +841,7 @@ async def test_prepare_chat_curation_sessions_rolls_back_when_a_later_adapter_fa
         await module.prepare_chat_curation_sessions(
             module.CurationPrepChatRunRequest(session_id="chat-session-1"),
             current_user_id="user-1",
+            active_groups=("ZFIN",),
             db=fake_db,
         )
 

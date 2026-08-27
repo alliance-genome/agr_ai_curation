@@ -578,9 +578,22 @@ def test_envelope_mutation_flushes_without_committing_caller_session(
 def test_update_candidate_draft_materializes_envelope_backed_payload(
     db_session,
     loaded_pack,
+    monkeypatch,
 ):
     session, candidate = _create_session_with_envelope_projection(db_session)
     draft_id = str(candidate.draft.id)
+    real_runtime_context = validation_module._validator_runtime_context_for_candidate
+    captured_groups = []
+
+    def _runtime_context(candidate, *, user_id, authenticated_groups=None):
+        captured_groups.append(authenticated_groups)
+        return real_runtime_context(
+            candidate,
+            user_id=user_id,
+            authenticated_groups=authenticated_groups,
+        )
+
+    monkeypatch.setattr(module, "_validator_runtime_context_for_candidate", _runtime_context)
 
     response = module.update_candidate_draft(
         db_session,
@@ -599,8 +612,14 @@ def test_update_candidate_draft_materializes_envelope_backed_payload(
             ],
             autosave=True,
         ),
-        {"sub": "curator-1", "email": "curator@example.org"},
+        {
+            "sub": "curator-1",
+            "email": "curator@example.org",
+            "cognito:groups": ["zfin-curators"],
+        },
     )
+
+    assert captured_groups == [["ZFIN"]]
 
     assert response.candidate.normalized_payload == {}
     assert response.candidate.projection_ref is not None

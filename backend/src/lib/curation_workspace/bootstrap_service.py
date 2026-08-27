@@ -117,6 +117,7 @@ async def prepare_chat_curation_sessions(
     request: CurationPrepChatRunRequest,
     *,
     current_user_id: str,
+    active_groups: tuple[str, ...] | None = None,
     db: Session,
 ) -> CurationPrepChatRunResponse:
     """Prepare chat findings and bootstrap one review session per adapter in scope."""
@@ -137,6 +138,7 @@ async def prepare_chat_curation_sessions(
                     origin_session_id=request.session_id,
                 ),
                 current_user_id=current_user_id,
+                active_groups=active_groups,
                 db=db,
                 manage_transaction=False,
             )
@@ -406,6 +408,7 @@ async def bootstrap_document_session(
     request: CurationDocumentBootstrapRequest,
     *,
     current_user_id: str,
+    active_groups: tuple[str, ...] | None = None,
     db: Session,
     manage_transaction: bool = True,
 ) -> CurationDocumentBootstrapResponse:
@@ -440,6 +443,7 @@ async def bootstrap_document_session(
                 origin_session_id=extraction_result.origin_session_id,
                 trace_id=extraction_result.trace_id,
                 user_id=current_user_id,
+                active_groups=active_groups,
                 created_by_id=(
                     reusable_session.created_by_id if reusable_session else current_user_id
                 ),

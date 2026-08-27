@@ -1900,6 +1900,9 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     )
     runtime_agent.agent_key = str(db_agent.agent_key)
     runtime_agent.group_tool_exposure = group_tool_audit
+    runtime_agent.authenticated_groups = tuple(
+        group_tool_resolution.active_group_ids
+    )
     try:
         from src.lib.config.agent_loader import get_agent_by_folder, get_agent_definition
 

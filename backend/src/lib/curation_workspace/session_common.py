@@ -13,6 +13,7 @@ from sqlalchemy import asc, desc
 from src.lib.curation_workspace.models import (
     CurationValidationSnapshot as ValidationSnapshotModel,
 )
+from src.lib.group_rules import get_groups_from_provider_groups
 from src.schemas.curation_workspace import CurationSortDirection
 
 LIKE_ESCAPE_CHAR = "\\"
@@ -128,6 +129,27 @@ def _actor_claims_payload(actor_claims: dict[str, Any]) -> dict[str, str]:
     return payload
 
 
+def actor_user_id(actor_claims: Mapping[str, Any]) -> str | None:
+    """Return the authenticated actor identifier carried by token claims."""
+
+    value = actor_claims.get("sub") or actor_claims.get("uid")
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def active_groups_from_actor_claims(actor_claims: Mapping[str, Any]) -> list[str]:
+    """Return normalized provider-neutral groups carried by token claims."""
+
+    raw_groups = actor_claims.get("groups")
+    if raw_groups is None:
+        raw_groups = actor_claims.get("cognito:groups", [])
+    if not isinstance(raw_groups, list):
+        raw_groups = [str(raw_groups)] if raw_groups else []
+    return get_groups_from_provider_groups(raw_groups)
+
+
 def build_actor_claims_payload(actor_claims: dict[str, Any]) -> dict[str, str]:
     """Public actor payload helper shared across curation workspace services."""
 
@@ -135,6 +157,8 @@ def build_actor_claims_payload(actor_claims: dict[str, Any]) -> dict[str, str]:
 
 __all__ = [
     "LIKE_ESCAPE_CHAR",
+    "active_groups_from_actor_claims",
+    "actor_user_id",
     "build_actor_claims_payload",
     "normalize_uuid",
 ]

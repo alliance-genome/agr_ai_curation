@@ -106,6 +106,7 @@ class PostCurationPipelineRequest:
     origin_session_id: str | None = None
     trace_id: str | None = None
     user_id: str | None = None
+    active_groups: tuple[str, ...] | None = None
     created_by_id: str | None = None
     assigned_curator_id: str | None = None
     notes: str | None = None
@@ -475,6 +476,7 @@ def _materialized_review_rows(
             ValidatorRuntimeContext(
                 document_id=request.document_id,
                 user_id=request.user_id,
+                authenticated_groups=request.active_groups,
             )
             if request.user_id
             else None
@@ -546,12 +548,44 @@ def _refresh_domain_envelope_validation_for_ref(
         )
         dispatch_appended_findings = dispatch_result.appended_findings
         result_envelope = dispatch_result.envelope
+    dispatch_metadata_changed = result_envelope.metadata != validator_envelope.metadata
+    binding_audit = result_envelope.metadata.get("validator_binding_audit")
+    group_sensitive = isinstance(binding_audit, list) and any(
+        isinstance(entry, dict) and entry.get("group_scope") is not None
+        for entry in binding_audit
+    )
+    persisted_groups = (
+        tuple(envelope.authenticated_context.active_groups)
+        if envelope.authenticated_context is not None
+        else None
+    )
+    authenticated_groups = (
+        tuple(
+            sorted(
+                {
+                    group.strip()
+                    for group in runtime_context.authenticated_groups
+                    if group.strip()
+                }
+            )
+        )
+        if group_sensitive
+        and runtime_context is not None
+        and runtime_context.authenticated_groups is not None
+        else None
+    )
+    group_context_changed = (
+        group_sensitive
+        and runtime_context is not None
+        and runtime_context.authenticated_groups is not None
+        and persisted_groups != authenticated_groups
+    )
     appended_findings = (
         *structural_result.appended_findings,
         *package_appended_findings,
         *dispatch_appended_findings,
     )
-    if not appended_findings:
+    if not appended_findings and not dispatch_metadata_changed and not group_context_changed:
         return envelope_row.revision
 
     checkpoint = write_domain_envelope_checkpoint(
@@ -565,6 +599,7 @@ def _refresh_domain_envelope_validation_for_ref(
             flow_run_id=envelope_row.flow_run_id,
             object_model_ref_json=envelope_row.object_model_ref_json or {},
             model_field_ref_json=envelope_row.model_field_ref_json or {},
+            authenticated_groups=authenticated_groups if group_sensitive else None,
         ),
     )
     return checkpoint.revision

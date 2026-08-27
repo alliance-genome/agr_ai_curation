@@ -31,6 +31,7 @@ from src.lib.curation_workspace.saved_view_service import (
     list_saved_views as list_saved_view_records,
 )
 from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.domain_packs.materialization import (
     DomainEnvelopeMaterializationError,
     DomainEnvelopeRevisionUnavailableError,
@@ -276,6 +277,15 @@ def _build_next_request(
 
 def _current_user_id(user: dict) -> str | None:
     return user.get("sub") or user.get("uid")
+
+
+def _authenticated_active_groups(user: dict) -> list[str]:
+    raw_groups = user.get("groups")
+    if raw_groups is None:
+        raw_groups = user.get("cognito:groups", [])
+    if not isinstance(raw_groups, list):
+        raw_groups = [str(raw_groups)] if raw_groups else []
+    return get_groups_from_provider_groups(raw_groups)
 
 
 def _require_current_user_id(user: dict) -> str:
@@ -530,6 +540,7 @@ async def post_document_bootstrap(
         document_id,
         request,
         current_user_id=user_id,
+        active_groups=tuple(_authenticated_active_groups(user)),
         db=db,
     )
 
@@ -593,6 +604,7 @@ async def trigger_chat_prep(
         return await prepare_chat_curation_sessions(
             request,
             current_user_id=user_id,
+            active_groups=tuple(_authenticated_active_groups(user)),
             db=db,
         )
     except ValueError as exc:
@@ -779,6 +791,7 @@ async def post_candidate_validation(
             candidate_id,
             request,
             user_id=_current_user_id(user),
+            active_groups=_authenticated_active_groups(user),
         ),
     )
 
@@ -801,6 +814,7 @@ async def post_session_validation(
             session_id,
             request,
             user_id=_current_user_id(user),
+            active_groups=_authenticated_active_groups(user),
         ),
     )
 
@@ -818,7 +832,7 @@ async def post_submission_preview(
     set_global_user_from_cognito(db, user)
     return _run_curation_mutation(
         db,
-        lambda: submission_preview(db, session_id, request),
+        lambda: submission_preview(db, session_id, request, actor_claims=user),
     )
 
 

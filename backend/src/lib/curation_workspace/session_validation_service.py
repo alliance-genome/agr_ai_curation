@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from typing import Any, Sequence
 from uuid import UUID, uuid4
 
@@ -184,6 +185,11 @@ def _compute_candidate_validation(
         and latest_snapshot.envelope_id == candidate.envelope_id
         and latest_snapshot.envelope_revision == candidate.envelope_revision
     )
+    snapshot_matches_group_context = (
+        not _candidate_has_group_scoped_dispatch(candidate)
+        or _candidate_group_context_identity(candidate)
+        == _runtime_group_context_identity(runtime_context)
+    )
 
     if (
         not requested_field_keys
@@ -191,6 +197,7 @@ def _compute_candidate_validation(
         and latest_snapshot is not None
         and latest_snapshot.state == CurationValidationSnapshotState.COMPLETED
         and snapshot_matches_projection
+        and snapshot_matches_group_context
         and all(
             not field.stale_validation and _existing_result(field) is not None
             for field in draft_fields
@@ -208,6 +215,9 @@ def _compute_candidate_validation(
         or latest_snapshot.state != CurationValidationSnapshotState.COMPLETED
     )
     snapshot_projection_mismatch = latest_snapshot is not None and not snapshot_matches_projection
+    snapshot_group_context_mismatch = (
+        latest_snapshot is not None and not snapshot_matches_group_context
+    )
     (
         envelope_results,
         envelope_warnings,
@@ -237,6 +247,7 @@ def _compute_candidate_validation(
                 or existing_result is None
                 or snapshot_missing_or_incomplete
                 or snapshot_projection_mismatch
+                or snapshot_group_context_mismatch
             )
         )
         next_result = (
@@ -481,7 +492,16 @@ def _dispatch_workspace_envelope_validation(
         *dispatch_result.appended_findings,
         *stale_resolution.resolved_findings,
     )
-    if not appended_findings and not stale_resolution.changed:
+    group_sensitive = any(
+        entry.get("group_scope") is not None
+        for entry in getattr(dispatch_result, "binding_audit", ())
+    )
+    context_changed = (
+        group_sensitive
+        and _envelope_group_context_identity(envelope)
+        != _runtime_group_context_identity(runtime_context)
+    )
+    if not appended_findings and not stale_resolution.changed and not context_changed:
         return stale_resolution.envelope, source_revision, []
 
     try:
@@ -496,6 +516,11 @@ def _dispatch_workspace_envelope_validation(
                 flow_run_id=envelope_row.flow_run_id,
                 object_model_ref_json=dict(envelope_row.object_model_ref_json),
                 model_field_ref_json=dict(envelope_row.model_field_ref_json),
+                authenticated_groups=(
+                    runtime_context.authenticated_groups
+                    if group_sensitive and runtime_context is not None
+                    else None
+                ),
             ),
         )
     except DomainEnvelopePersistenceError as exc:
@@ -577,6 +602,7 @@ def validate_candidate(
     request: CurationCandidateValidationRequest,
     *,
     user_id: str | None = None,
+    active_groups: Sequence[str] | None = None,
 ) -> CurationCandidateValidationResponse:
     """Validate a candidate within the transaction owned by the caller.
 
@@ -616,6 +642,7 @@ def validate_candidate(
     runtime_context = _validator_runtime_context_for_candidate(
         candidate,
         user_id=user_id,
+        authenticated_groups=active_groups,
     )
     validation_snapshot, changed = _apply_candidate_validation(
         db,
@@ -649,6 +676,7 @@ def validate_session(
     request: CurationSessionValidationRequest,
     *,
     user_id: str | None = None,
+    active_groups: Sequence[str] | None = None,
 ) -> CurationSessionValidationResponse:
     """Validate a review session within the transaction owned by the caller.
 
@@ -684,6 +712,7 @@ def validate_session(
         runtime_context = _validator_runtime_context_for_candidate(
             candidate_map[target_candidate_id],
             user_id=user_id,
+            authenticated_groups=active_groups,
         )
         validation_snapshot, candidate_changed = _apply_candidate_validation(
             db,
@@ -734,6 +763,7 @@ def _validator_runtime_context_for_candidate(
     candidate: CurationCandidate,
     *,
     user_id: str | None,
+    authenticated_groups: Sequence[str] | None = None,
 ) -> ValidatorRuntimeContext | None:
     document_id: str | None = None
     if candidate.domain_envelope is not None and candidate.domain_envelope.document_id is not None:
@@ -741,9 +771,72 @@ def _validator_runtime_context_for_candidate(
     elif candidate.session is not None and candidate.session.document_id is not None:
         document_id = str(candidate.session.document_id)
 
+    persisted_groups: tuple[str, ...] | None = None
+    if authenticated_groups is None and candidate.domain_envelope is not None:
+        persisted_envelope = DomainEnvelope.model_validate(
+            candidate.domain_envelope.envelope_json
+        )
+        if persisted_envelope.authenticated_context is not None:
+            persisted_groups = tuple(
+                persisted_envelope.authenticated_context.active_groups
+            )
+
     if not document_id or not user_id:
         return None
-    return ValidatorRuntimeContext(document_id=document_id, user_id=str(user_id))
+    return ValidatorRuntimeContext(
+        document_id=document_id,
+        user_id=str(user_id),
+        authenticated_groups=(
+            tuple(authenticated_groups)
+            if authenticated_groups is not None
+            else persisted_groups
+        ),
+    )
+
+
+def _normalized_group_identity(groups: Sequence[str] | None) -> str:
+    normalized = (
+        sorted({group.strip() for group in groups if group.strip()})
+        if groups is not None
+        else None
+    )
+    return json.dumps(normalized, separators=(",", ":"))
+
+
+def _runtime_group_context_identity(
+    runtime_context: ValidatorRuntimeContext | None,
+) -> str:
+    groups = (
+        runtime_context.authenticated_groups if runtime_context is not None else None
+    )
+    return _normalized_group_identity(groups)
+
+
+def _envelope_group_context_identity(envelope: DomainEnvelope) -> str:
+    groups = (
+        envelope.authenticated_context.active_groups
+        if envelope.authenticated_context is not None
+        else None
+    )
+    return _normalized_group_identity(groups)
+
+
+def _candidate_group_context_identity(candidate: CurationCandidate) -> str:
+    if candidate.domain_envelope is None:
+        return _normalized_group_identity(None)
+    envelope = DomainEnvelope.model_validate(candidate.domain_envelope.envelope_json)
+    return _envelope_group_context_identity(envelope)
+
+
+def _candidate_has_group_scoped_dispatch(candidate: CurationCandidate) -> bool:
+    if candidate.domain_envelope is None:
+        return False
+    envelope = DomainEnvelope.model_validate(candidate.domain_envelope.envelope_json)
+    audit = envelope.metadata.get("validator_binding_audit")
+    return isinstance(audit, list) and any(
+        isinstance(entry, dict) and entry.get("group_scope") is not None
+        for entry in audit
+    )
 
 __all__ = [
     "validate_candidate",

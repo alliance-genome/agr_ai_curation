@@ -14,6 +14,7 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.schemas.domain_pack_metadata import (
     DomainPackActiveValidatorBinding,
+    DomainPackValidatorGroupScope,
     DomainPackFieldType,
     DomainPackFieldDefinition,
     DomainPackMetadata,
@@ -461,6 +462,16 @@ def _proxy_active_binding(
         required=binding.required,
         blocking=binding.blocking,
         allow_opt_out=binding.allow_opt_out,
+        group_scope=(
+            DomainPackValidatorGroupScope(
+                required_any_active_group=list(binding.required_any_active_group),
+                provider_value_field_paths=list(binding.provider_value_field_paths),
+                allowed_provider_values=list(binding.allowed_provider_values),
+                allow_cross_provider=binding.allow_cross_provider,
+            )
+            if binding.required_any_active_group
+            else None
+        ),
         batch=DomainPackValidatorBatchConfig(
             enabled=binding.batch_enabled,
             family=binding.batch_family,
@@ -497,6 +508,16 @@ def _proxy_under_development_binding(
         input_fields=binding.input_fields,
         expected_result_fields=dict(binding.expected_result_fields),
         max_tool_calls=binding.max_tool_calls,
+        group_scope=(
+            DomainPackValidatorGroupScope(
+                required_any_active_group=list(binding.required_any_active_group),
+                provider_value_field_paths=list(binding.provider_value_field_paths),
+                allowed_provider_values=list(binding.allowed_provider_values),
+                allow_cross_provider=binding.allow_cross_provider,
+            )
+            if binding.required_any_active_group
+            else None
+        ),
         definition_state=binding.definition_state,
     )
 

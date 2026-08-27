@@ -113,6 +113,35 @@ are not runtime validation findings. Active bindings are executed through
 package-scoped validator dispatch and materialized as resolved or unresolved
 validator results.
 
+Bindings that require provider/group authority declare `group_scope` in the
+package-owned metadata. `required_any_active_group` contains canonical group
+IDs and is matched only against authenticated or durably persisted curator
+groups; extracted provider values never make a binding eligible. Optional
+`provider_value_field_paths` and `allowed_provider_values` identify payload
+fields and explicit package-owned values that should agree with the eligible
+group scope. A conflict preserves the extracted value and adds a field-addressed
+finding unless `allow_cross_provider: true` is declared.
+Generic bindings remain eligible for an authenticated empty group set.
+
+Dispatch records the normalized scope, trusted group identity, and eligibility
+reason in binding audit metadata. Missing trusted context skips scoped bindings
+with a field finding. Multiple groups may activate distinct targets, while two
+scoped bindings claiming the same target are skipped with a deterministic
+ambiguity finding. Group identity participates in result finding identity only
+for scoped bindings, preventing stale provider-specific reuse without changing
+provider-neutral finding identities.
+
+Trusted group authority is persisted in the envelope's server-owned
+`authenticated_context`, not domain-pack `metadata`. The canonical checkpoint
+writer removes payload-supplied values, records only groups supplied by an
+authenticated server path, and preserves the last trusted snapshot when a
+background checkpoint has no new claims. An authenticated empty group set is
+stored distinctly from missing context. Workspace snapshot and flow finding
+reuse compare this normalized group identity for scoped bindings; generic
+bindings keep their provider-neutral reuse behavior. TraceReview exposes the
+bounded `validator_group_scope_audits` signal from binding audit entries and
+finding dispatch details.
+
 Active validator `input_fields` must use explicit selector objects. Supported
 selector sources are `payload`, `envelope_metadata`, `object_metadata`,
 `evidence_record`, `object_ref`, and `literal`. Active payload selectors are

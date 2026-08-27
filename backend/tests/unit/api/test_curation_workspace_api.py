@@ -388,10 +388,13 @@ async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatc
     expected = object()
     captured: dict[str, object] = {}
 
-    async def _bootstrap_document_session(document_id, request, *, current_user_id, db):
+    async def _bootstrap_document_session(
+        document_id, request, *, current_user_id, active_groups, db
+    ):
         captured["document_id"] = document_id
         captured["request"] = request
         captured["current_user_id"] = current_user_id
+        captured["active_groups"] = active_groups
         captured["db"] = db
         return expected
 
@@ -408,7 +411,7 @@ async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatc
     response = await module.post_document_bootstrap(
         "document-1",
         request,
-        user={"sub": "user-1"},
+        user={"sub": "user-1", "cognito:groups": ["zfin-curators"]},
         db=db,
     )
 
@@ -417,6 +420,7 @@ async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatc
         "document_id": "document-1",
         "request": request,
         "current_user_id": "user-1",
+        "active_groups": ("ZFIN",),
         "db": db,
     }
 
@@ -876,11 +880,14 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _validate_candidate(db, candidate_id, request, *, user_id=None):
+    def _validate_candidate(
+        db, candidate_id, request, *, user_id=None, active_groups=None
+    ):
         captured["db"] = db
         captured["candidate_id"] = candidate_id
         captured["request"] = request
         captured["user_id"] = user_id
+        captured["active_groups"] = active_groups
         return expected
 
     monkeypatch.setattr(module, "validate_candidate", _validate_candidate)
@@ -897,7 +904,7 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
     response = await module.post_candidate_validation(
         candidate_id,
         request,
-        user={"sub": "user-1"},
+        user={"sub": "user-1", "cognito:groups": ["zfin-curators"]},
         db=db,
     )
 
@@ -907,6 +914,7 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
         "candidate_id": candidate_id,
         "request": request,
         "user_id": "user-1",
+        "active_groups": ["ZFIN"],
     }
     db.commit.assert_called_once_with()
 
@@ -946,11 +954,12 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _validate_session(db, session_id, request, *, user_id=None):
+    def _validate_session(db, session_id, request, *, user_id=None, active_groups=None):
         captured["db"] = db
         captured["session_id"] = session_id
         captured["request"] = request
         captured["user_id"] = user_id
+        captured["active_groups"] = active_groups
         return expected
 
     monkeypatch.setattr(module, "validate_session", _validate_session)
@@ -966,7 +975,7 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
     response = await module.post_session_validation(
         session_id,
         request,
-        user={"sub": "user-1"},
+        user={"sub": "user-1", "cognito:groups": ["rgd-curators"]},
         db=db,
     )
 
@@ -976,6 +985,7 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
         "session_id": session_id,
         "request": request,
         "user_id": "user-1",
+        "active_groups": ["RGD"],
     }
     db.commit.assert_called_once_with()
 
@@ -986,10 +996,11 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _submission_preview(db, session_id, request):
+    def _submission_preview(db, session_id, request, *, actor_claims):
         captured["db"] = db
         captured["session_id"] = session_id
         captured["request"] = request
+        captured["actor_claims"] = actor_claims
         return expected
 
     monkeypatch.setattr(module, "submission_preview", _submission_preview)
@@ -1006,7 +1017,7 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
     response = await module.post_submission_preview(
         session_id,
         request,
-        user={"sub": "user-1"},
+        user={"sub": "user-1", "cognito:groups": ["rgd-curators"]},
         db=db,
     )
 
@@ -1015,6 +1026,10 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
         "db": db,
         "session_id": session_id,
         "request": request,
+        "actor_claims": {
+            "sub": "user-1",
+            "cognito:groups": ["rgd-curators"],
+        },
     }
     db.commit.assert_called_once_with()
 

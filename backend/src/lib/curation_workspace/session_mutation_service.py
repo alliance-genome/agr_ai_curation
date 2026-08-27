@@ -38,6 +38,8 @@ from src.lib.curation_workspace.session_common import (
     _normalize_uuid,
     _normalized_optional_string,
     _normalized_required_string,
+    active_groups_from_actor_claims,
+    actor_user_id,
 )
 from src.lib.curation_workspace.session_persistence import (
     _apply_candidate_progress_counts,
@@ -660,7 +662,8 @@ def update_candidate_draft(
             validated_at=now,
             runtime_context=_validator_runtime_context_for_candidate(
                 candidate,
-                user_id=_actor_user_id(actor_claims),
+                user_id=actor_user_id(actor_claims),
+                authenticated_groups=active_groups_from_actor_claims(actor_claims),
             ),
             field_keys=changed_field_keys,
         )
@@ -697,14 +700,6 @@ def update_candidate_draft(
         validation_snapshot=validation_snapshot,
         action_log_entry=_action_log_entry(action_log_row),
     )
-
-
-def _actor_user_id(actor_claims: Mapping[str, Any]) -> str | None:
-    value = actor_claims.get("sub") or actor_claims.get("uid")
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _domain_envelope_candidate(candidate: CurationCandidate) -> bool:

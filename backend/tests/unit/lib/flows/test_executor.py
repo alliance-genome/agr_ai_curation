@@ -2858,6 +2858,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 )
             },
             expected_result_fields={"identifier": "gene.identifier"},
+            required_any_active_group=("ZFIN",),
         )
         match = ValidatorBindingMatch(
             binding=binding,
@@ -2921,7 +2922,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     }
                 ],
                 flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
+                agent_context={
+                    "user_id": "curator-1",
+                    "authenticated_groups": ["ZFIN"],
+                },
                 document_id="document-1",
                 user_id="curator-1",
             )
@@ -2933,8 +2937,13 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert calls[0]["request"].validator_binding_id == "fixture.identifier_lookup"
         assert calls[0]["runtime_context"].document_id == "document-1"
         assert calls[0]["runtime_context"].user_id == "curator-1"
+        assert calls[0]["runtime_context"].authenticated_groups == ("ZFIN",)
         assert len(materialization_inputs) == 1
         assert materialization_inputs[0].match is match
+        assert materialization_inputs[0].dispatch_context["authenticated_groups"] == [
+            "ZFIN"
+        ]
+        metadata = [item for item in metadata if item.get("group_id")]
         assert len(metadata) == 1
         assert {
             "group_id": metadata[0]["group_id"],
@@ -3518,6 +3527,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 )
             },
             expected_result_fields={"identifier": "gene.identifier"},
+            required_any_active_group=("ZFIN",),
         )
         match = ValidatorBindingMatch(
             binding=binding,
@@ -3536,6 +3546,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "validation_metadata": {
                                 "validator_binding_id": binding.binding_id,
                                 "target": match.target_details(),
+                                "dispatch_context": {
+                                    "authenticated_groups": ["MGI", "ZFIN"],
+                                    "group_context_identity": '["MGI","ZFIN"]',
+                                },
                             }
                         },
                     )
@@ -3556,6 +3570,13 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _unexpected_package_validator,
         )
 
+        assert not executor._source_envelope_has_validator_finding(
+            envelope,
+            binding_id=binding.binding_id,
+            match=match,
+            group_context_identity='["RGD"]',
+        )
+
         materialization_inputs, selector_findings, metadata = asyncio.run(
             executor._collect_flow_validator_materialization_inputs(
                 source_envelope=envelope,
@@ -3569,20 +3590,22 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     }
                 ],
                 flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
+                agent_context={
+                    "user_id": "curator-1",
+                    "authenticated_groups": ["ZFIN", " MGI ", "ZFIN"],
+                },
             )
         )
 
         assert materialization_inputs == []
         assert selector_findings == []
-        assert metadata == [
-            {
-                "group_id": "automatic-lookup",
-                "state": "automatic",
-                "validator_binding_id": "fixture.identifier_lookup",
-                "status": "already_validated",
-            }
+        assert [entry["status"] for entry in metadata] == [
+            "group_scope_eligible",
+            "already_validated",
         ]
+        assert metadata[0]["group_scope_audit"]["group_context_identity"] == (
+            '["MGI","ZFIN"]'
+        )
 
     def test_automatic_validation_group_reuses_existing_unresolved_finding(
         self, monkeypatch

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -24,6 +24,7 @@ from src.lib.curation_workspace.models import (
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
+    DomainEnvelopeAuthenticatedContext,
     HistoryEvent,
     ObjectRef,
     ValidationFinding,
@@ -101,6 +102,7 @@ class DomainEnvelopeCheckpointRequest:
     adapter_key: str | None = None
     source_extraction_result_id: str | UUID | None = None
     source_payload_hash: str | None = None
+    authenticated_groups: Sequence[str] | None = None
     object_model_ref_json: Mapping[str, Any] = field(default_factory=dict)
     model_field_ref_json: Mapping[str, Any] = field(default_factory=dict)
 
@@ -137,7 +139,6 @@ def write_domain_envelope_checkpoint(
 
     project_key = _required_string(request.project_key, field_name="project_key")
     flow_run_id = _optional_non_empty_string(request.flow_run_id, field_name="flow_run_id")
-    envelope_json = envelope.model_dump(mode="json")
     requested_source_payload_hash = request.source_payload_hash
     now = datetime.now(timezone.utc)
 
@@ -214,6 +215,14 @@ def write_domain_envelope_checkpoint(
         next_revision = envelope_row.revision + 1
         envelope_row.revision = next_revision
 
+    authenticated_context = _checkpoint_authenticated_context(
+        envelope_row=envelope_row,
+        authenticated_groups=request.authenticated_groups,
+    )
+    envelope_json = envelope.model_copy(
+        update={"authenticated_context": authenticated_context}
+    ).model_dump(mode="json")
+
     envelope_row.project_key = project_key
     envelope_row.domain_pack_key = envelope.domain_pack_id
     envelope_row.domain_pack_version = envelope.domain_pack_version
@@ -252,7 +261,32 @@ def write_domain_envelope_checkpoint(
 def domain_envelope_payload_hash(envelope: DomainEnvelope) -> str:
     """Return the canonical hash for the materialized source payload."""
 
-    return canonical_domain_envelope_payload_hash(envelope.model_dump(mode="json"))
+    payload = envelope.model_dump(mode="json")
+    payload.pop("authenticated_context", None)
+    return canonical_domain_envelope_payload_hash(payload)
+
+
+def _checkpoint_authenticated_context(
+    *,
+    envelope_row: DomainEnvelopeModel,
+    authenticated_groups: Sequence[str] | None,
+) -> DomainEnvelopeAuthenticatedContext | None:
+    """Resolve only server-supplied or previously checkpointed group authority."""
+
+    if authenticated_groups is not None:
+        return DomainEnvelopeAuthenticatedContext(
+            active_groups=list(authenticated_groups)
+        )
+    stored_payload = getattr(envelope_row, "envelope_json", None)
+    if not isinstance(stored_payload, Mapping):
+        return None
+    stored_context = stored_payload.get("authenticated_context")
+    if not isinstance(stored_context, Mapping):
+        return None
+    try:
+        return DomainEnvelopeAuthenticatedContext.model_validate(stored_context)
+    except ValueError:
+        return None
 
 
 def _validate_checkpoint_scope(

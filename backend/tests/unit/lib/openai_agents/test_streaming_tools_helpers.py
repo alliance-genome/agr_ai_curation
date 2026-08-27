@@ -3267,10 +3267,13 @@ def test_chat_validator_runtime_context_requires_real_document_and_user():
     context = streaming_tools._validator_runtime_context_for_chat(
         document_id="document-1",
         user_id="curator-1",
+        authenticated_groups=["ZFIN"],
     )
 
+    assert context is not None
     assert context.document_id == "document-1"
     assert context.user_id == "curator-1"
+    assert context.authenticated_groups == ("ZFIN",)
     assert (
         streaming_tools._validator_runtime_context_for_chat(
             document_id="chat-runtime",
