@@ -250,6 +250,51 @@ async def test_automatic_specialist_deadline_does_not_wait_for_slow_cleanup(monk
 
 
 @pytest.mark.asyncio
+async def test_automatic_specialist_propagates_outer_cancellation(monkeypatch):
+    supervisor = _supervisor_module()
+    from src.lib.openai_agents import config
+
+    specialist_started = asyncio.Event()
+    specialist_cancelled = asyncio.Event()
+
+    async def _run_specialist_with_events(**_kwargs):
+        specialist_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            specialist_cancelled.set()
+            raise
+
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", _run_specialist_with_events)
+    monkeypatch.setattr(
+        config, "get_supervisor_specialist_deadline_seconds", lambda: 60.0
+    )
+    ledger = supervisor.SupervisorCallLedger(max_total_calls=2, max_calls_per_tool=2)
+    tool = supervisor._create_streaming_tool(
+        agent=SimpleNamespace(name="Paper Specialist"),
+        tool_name="ask_paper_curator_specialist",
+        tool_description="Extract paper recommendations",
+        specialist_name="Paper Curator",
+        ledger=ledger,
+        propagate_errors=False,
+    )
+
+    invocation = asyncio.create_task(
+        tool.on_invoke_tool(
+            SimpleNamespace(tool_name=tool.name, run_config=None),
+            json.dumps({"query": "Assess Cttn"}),
+        )
+    )
+    await specialist_started.wait()
+    invocation.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await invocation
+    await specialist_cancelled.wait()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
 async def test_deadline_preserves_only_validated_structured_handoff(monkeypatch):
     supervisor = _supervisor_module()
     from src.lib.openai_agents import config, streaming_tools

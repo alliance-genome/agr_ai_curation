@@ -296,13 +296,18 @@ async def test_rgd_tool_rejects_blank_malformed_or_unsupported_curie_before_disp
 def test_rgd_tool_accepts_supported_curies_with_sentence_punctuation():
     validation = _agent().supervisor_routing.input_validation
 
-    assert (
-        supervisor_agent._specialist_query_input_rejection(
-            "What about GO:0005515 for RGD:619839?",
-            validation,
+    for query in (
+        "What about GO:0005515 for RGD:619839?",
+        "Assess Cttn for GO:0005515.",
+        "Recommend a term for RGD:619839.",
+    ):
+        assert (
+            supervisor_agent._specialist_query_input_rejection(
+                query,
+                validation,
+            )
+            is None
         )
-        is None
-    )
 
 
 def test_fixture_set_covers_named_ambiguity_discovery_and_abstention_cases():

@@ -707,7 +707,7 @@ def _specialist_query_input_rejection(
 
     for match in _QUERY_CURIE_TOKEN_PATTERN.finditer(str(query or "")):
         prefix = match.group("prefix")
-        curie = match.group(0)
+        curie = match.group(0).rstrip(".-")
         pattern = curie_patterns.get(prefix)
         reason = None
         if pattern is not None and pattern.fullmatch(curie) is None:
@@ -1014,18 +1014,6 @@ async def _run_streaming_specialist_tool(
             specialist_task = asyncio.create_task(
                 _runner_coro_factory(_capture_validated_handoff)
             )
-            done, _pending = await asyncio.wait(
-                {specialist_task}, timeout=deadline_seconds
-            )
-            if done:
-                return specialist_task.result()
-
-            specialist_task.cancel()
-            # Give cancellation one event-loop turn to enter the specialist's
-            # existing finally/close lifecycle. Do not await that lifecycle: its
-            # cleanup may itself block or suppress cancellation.
-            await asyncio.sleep(0)
-
             def _consume_terminal_task(task: "asyncio.Task[str]") -> None:
                 _SPECIALIST_DEADLINE_CLEANUP_TASKS.discard(task)
                 try:
@@ -1046,6 +1034,24 @@ async def _run_streaming_specialist_tool(
                             "tool_name": tool_name,
                         },
                     )
+
+            try:
+                done, _pending = await asyncio.wait(
+                    {specialist_task}, timeout=deadline_seconds
+                )
+            except asyncio.CancelledError:
+                specialist_task.cancel()
+                _SPECIALIST_DEADLINE_CLEANUP_TASKS.add(specialist_task)
+                specialist_task.add_done_callback(_consume_terminal_task)
+                raise
+            if done:
+                return specialist_task.result()
+
+            specialist_task.cancel()
+            # Give cancellation one event-loop turn to enter the specialist's
+            # existing finally/close lifecycle. Do not await that lifecycle: its
+            # cleanup may itself block or suppress cancellation.
+            await asyncio.sleep(0)
 
             # Cancellation starts the merged specialist/provider finally lifecycle,
             # but the user-facing wall-clock bound must not wait for a cleanup path
