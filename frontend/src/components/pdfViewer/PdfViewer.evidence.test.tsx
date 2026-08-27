@@ -804,10 +804,6 @@ const installMockPdfViewer = ({
     configurable: true,
     value: {
       document: iframeDocument,
-      Mark: class {
-        unmark(): void {}
-        mark(): void {}
-      },
       PDFViewerApplication: pdfApp,
     },
   })
