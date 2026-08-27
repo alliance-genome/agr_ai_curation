@@ -28,6 +28,7 @@ from src.schemas.curation_workspace import (
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
+    DefinitionState,
     DomainEnvelope,
     FieldRef,
     ObjectRef,
@@ -536,6 +537,12 @@ def _patch_target_object_from_resolved_values(
         update={
             "payload": payload,
             "status": CuratableObjectStatus.VALIDATED,
+            "definition_state": (
+                DefinitionState.STABLE
+                if item.match.binding.state is ValidationBindingState.ACTIVE
+                and object_definition.definition_state is DefinitionState.STABLE
+                else target.definition_state
+            ),
             "metadata": metadata,
         }
     )
