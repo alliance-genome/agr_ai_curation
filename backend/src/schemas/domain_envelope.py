@@ -55,6 +55,20 @@ class DomainEnvelopeStatus(str, Enum):
     FAILED = "failed"
 
 
+class DomainEnvelopeAuthenticatedContext(DomainEnvelopeBaseModel):
+    """Server-owned authenticated context persisted with an envelope checkpoint."""
+
+    active_groups: list[str] = Field(
+        default_factory=list,
+        description="Normalized authenticated curator groups captured by the server",
+    )
+
+    @field_validator("active_groups")
+    @classmethod
+    def _normalize_active_groups(cls, value: list[str]) -> list[str]:
+        return sorted({group.strip() for group in value if group.strip()})
+
+
 class CuratableObjectStatus(str, Enum):
     """Provider-neutral lifecycle states for one curatable object."""
 
@@ -542,6 +556,13 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
     history: list[HistoryEvent] = Field(
         default_factory=list,
         description="Provider-neutral envelope history events",
+    )
+    authenticated_context: Optional[DomainEnvelopeAuthenticatedContext] = Field(
+        default=None,
+        description=(
+            "Server-owned authenticated context. The checkpoint writer replaces "
+            "payload-supplied values and is the only authority for this field."
+        ),
     )
     metadata: dict[str, Any] = Field(
         default_factory=dict,

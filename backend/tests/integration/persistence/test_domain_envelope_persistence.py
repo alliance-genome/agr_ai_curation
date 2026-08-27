@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +49,7 @@ from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
     DomainEnvelope,
+    DomainEnvelopeAuthenticatedContext,
     DomainEnvelopeStatus,
     FieldRef,
     HistoryActorType,
@@ -350,6 +352,49 @@ def test_migrated_constraints_accept_curator_field_patch_history_and_action_log(
 
 
 @pytest.mark.integration
+def test_checkpoint_owns_authenticated_group_context(db_session):
+    envelope = _envelope().model_copy(
+        update={
+            "envelope_id": "env-authenticated-context-test",
+            "authenticated_context": DomainEnvelopeAuthenticatedContext(
+                active_groups=["RGD"]
+            ),
+        }
+    )
+
+    write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(envelope, expected_revision=0),
+    )
+    assert load_domain_envelope(
+        db_session, envelope.envelope_id
+    ).authenticated_context is None
+
+    trusted_request = replace(
+        _checkpoint_request(envelope, expected_revision=1),
+        authenticated_groups=("ZFIN",),
+    )
+    write_domain_envelope_checkpoint(db_session, trusted_request)
+    trusted = load_domain_envelope(db_session, envelope.envelope_id)
+    assert trusted.authenticated_context is not None
+    assert trusted.authenticated_context.active_groups == ["ZFIN"]
+
+    forged_update = envelope.model_copy(
+        update={
+            "authenticated_context": DomainEnvelopeAuthenticatedContext(
+                active_groups=["MGI"]
+            )
+        }
+    )
+    write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(forged_update, expected_revision=2),
+    )
+    preserved = load_domain_envelope(db_session, envelope.envelope_id)
+    assert preserved.authenticated_context is not None
+    assert preserved.authenticated_context.active_groups == ["ZFIN"]
+
+
 def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_session):
     legacy_counts_before = _legacy_semantic_row_counts(db_session)
 

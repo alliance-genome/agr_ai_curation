@@ -967,7 +967,8 @@ def test_group_scope_normalizes_and_matching_authenticated_group_dispatches(
         "authenticated_groups": ["ZFIN"],
         "group_context_identity": '["ZFIN"]',
     }
-    assert result.envelope.metadata["authenticated_group_snapshot"] == ["ZFIN"]
+    assert "authenticated_group_snapshot" not in result.envelope.metadata
+    assert result.envelope.authenticated_context is None
 
 
 def test_group_scope_missing_or_mismatching_context_skips_deterministically(

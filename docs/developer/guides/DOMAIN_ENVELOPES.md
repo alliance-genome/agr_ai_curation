@@ -131,6 +131,17 @@ ambiguity finding. Group identity participates in result finding identity only
 for scoped bindings, preventing stale provider-specific reuse without changing
 provider-neutral finding identities.
 
+Trusted group authority is persisted in the envelope's server-owned
+`authenticated_context`, not domain-pack `metadata`. The canonical checkpoint
+writer removes payload-supplied values, records only groups supplied by an
+authenticated server path, and preserves the last trusted snapshot when a
+background checkpoint has no new claims. An authenticated empty group set is
+stored distinctly from missing context. Workspace snapshot and flow finding
+reuse compare this normalized group identity for scoped bindings; generic
+bindings keep their provider-neutral reuse behavior. TraceReview exposes the
+bounded `validator_group_scope_audits` signal from binding audit entries and
+finding dispatch details.
+
 Active validator `input_fields` must use explicit selector objects. Supported
 selector sources are `payload`, `envelope_metadata`, `object_metadata`,
 `evidence_record`, `object_ref`, and `literal`. Active payload selectors are

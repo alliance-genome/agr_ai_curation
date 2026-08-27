@@ -2387,9 +2387,18 @@ def test_workspace_validation_passes_document_user_runtime_context(
 
     def _dispatch(envelope, domain_pack, *, runtime_context=None, **kwargs):
         assert domain_pack is loaded_pack
-        assert kwargs["source_envelope_revision"] == 1
+        assert kwargs["source_envelope_revision"] >= 1
         captured_contexts.append(runtime_context)
-        return SimpleNamespace(envelope=envelope, appended_findings=())
+        binding_audit = (
+            {"group_scope": {"required_any_active_group": ["ZFIN"]}},
+        )
+        metadata = dict(envelope.metadata)
+        metadata["validator_binding_audit"] = list(binding_audit)
+        return SimpleNamespace(
+            envelope=envelope.model_copy(update={"metadata": metadata}),
+            appended_findings=(),
+            binding_audit=binding_audit,
+        )
 
     monkeypatch.setattr(
         validation_module,
@@ -2420,6 +2429,9 @@ def test_workspace_validation_passes_document_user_runtime_context(
     captured_contexts.clear()
     envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
     persisted_envelope = dict(envelope_row.envelope_json)
+    assert persisted_envelope["authenticated_context"] == {
+        "active_groups": ["ZFIN"]
+    }
     persisted_metadata = dict(persisted_envelope.get("metadata", {}))
     persisted_metadata["authenticated_group_snapshot"] = ["RGD"]
     persisted_envelope["metadata"] = persisted_metadata
@@ -2446,8 +2458,24 @@ def test_workspace_validation_passes_document_user_runtime_context(
     assert len(captured_contexts) == 1
     assert captured_contexts[0].document_id == str(session_row.document_id)
     assert captured_contexts[0].user_id == "curator-43"
-    assert captured_contexts[0].authenticated_groups == ("RGD",)
+    assert captured_contexts[0].authenticated_groups == ("ZFIN",)
     assert commit_calls == 0
+
+    captured_contexts.clear()
+    module.validate_candidate(
+        db_session,
+        seeded["candidate_id"],
+        CurationCandidateValidationRequest(
+            session_id=seeded["session_id"],
+            candidate_id=seeded["candidate_id"],
+            force=False,
+        ),
+        user_id="curator-44",
+        active_groups=["RGD"],
+    )
+
+    assert len(captured_contexts) == 1
+    assert captured_contexts[0].authenticated_groups == ("RGD",)
 
 
 def test_workspace_validation_runs_package_domain_envelope_validator_before_bindings(

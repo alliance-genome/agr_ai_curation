@@ -1323,13 +1323,7 @@ async def _collect_flow_validator_materialization_inputs(
     list[ValidationFinding],
     list[dict[str, Any]],
 ]:
-    authenticated_groups_value = agent_context.get("authenticated_groups")
-    authenticated_groups = (
-        tuple(str(group) for group in authenticated_groups_value)
-        if isinstance(authenticated_groups_value, Sequence)
-        and not isinstance(authenticated_groups_value, (str, bytes))
-        else None
-    )
+    authenticated_groups = _authenticated_groups_from_agent_context(agent_context)
     eligible_matches, group_scope_findings, binding_audit = (
         resolve_group_scoped_validator_matches(
             list(
@@ -1430,6 +1424,7 @@ async def _collect_flow_validator_materialization_inputs(
                 source_envelope,
                 binding_id=binding_id,
                 match=match,
+                group_context_identity=dispatch_context["group_context_identity"],
             ):
                 result_metadata.append(
                     {
@@ -1629,6 +1624,7 @@ def _source_envelope_has_validator_finding(
     *,
     binding_id: str,
     match: ValidatorBindingMatch,
+    group_context_identity: str,
 ) -> bool:
     """Return whether an automatic flow validator already ran upstream."""
 
@@ -1640,9 +1636,27 @@ def _source_envelope_has_validator_finding(
         if str(validation_metadata.get("validator_binding_id") or "") != binding_id:
             continue
         target = validation_metadata.get("target")
-        if _validator_finding_target_matches(target, match):
+        if not _validator_finding_target_matches(target, match):
+            continue
+        if not match.binding.required_any_active_group:
+            return True
+        finding_dispatch_context = validation_metadata.get("dispatch_context")
+        if (
+            isinstance(finding_dispatch_context, Mapping)
+            and finding_dispatch_context.get("group_context_identity")
+            == group_context_identity
+        ):
             return True
     return False
+
+
+def _authenticated_groups_from_agent_context(
+    agent_context: Mapping[str, Any],
+) -> tuple[str, ...] | None:
+    raw_groups = agent_context.get("authenticated_groups")
+    if not isinstance(raw_groups, Sequence) or isinstance(raw_groups, (str, bytes)):
+        return None
+    return tuple(str(group) for group in raw_groups)
 
 
 def _validator_runtime_context_for_flow(
@@ -1881,6 +1895,14 @@ async def _execute_validation_groups_for_step(
                     flow_run_id=envelope_row.flow_run_id,
                     object_model_ref_json=envelope_row.object_model_ref_json or {},
                     model_field_ref_json=envelope_row.model_field_ref_json or {},
+                    authenticated_groups=(
+                        _authenticated_groups_from_agent_context(agent_context)
+                        if any(
+                            entry.get("group_scope_audit") is not None
+                            for entry in result_metadata
+                        )
+                        else None
+                    ),
                 ),
             )
             materialized_revision = checkpoint.revision

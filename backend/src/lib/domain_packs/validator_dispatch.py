@@ -453,10 +453,6 @@ def dispatch_active_validator_bindings(
     if any(entry.get("group_scope") is not None for entry in binding_audit):
         updated_metadata = dict(updated_envelope.metadata)
         updated_metadata["validator_binding_audit"] = list(binding_audit)
-        if authenticated_groups is not None:
-            updated_metadata["authenticated_group_snapshot"] = list(
-                authenticated_groups
-            )
         updated_envelope = updated_envelope.model_copy(
             update={"metadata": updated_metadata}
         )

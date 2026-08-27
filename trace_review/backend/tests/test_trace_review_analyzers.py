@@ -462,6 +462,60 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(domain["curator_edits"][0]["field_path"], "gene.symbol")
         self.assertEqual(summary["tool_summary"]["domain_envelope_tool_call_count"], 1)
 
+    def test_domain_envelope_analyzer_surfaces_group_scoped_validator_audit(self):
+        envelope = self._make_domain_envelope()
+        envelope["metadata"] = {
+            "validator_binding_audit": [
+                {
+                    "binding_id": "zfin_genotype_validation",
+                    "target": {
+                        "object_type": "gene_expression",
+                        "field_path": "specimen_genomic_model",
+                    },
+                    "group_scope": {"required_any_active_group": ["ZFIN"]},
+                    "authenticated_groups": ["ZFIN"],
+                    "eligible": True,
+                    "eligibility_reason": "group_scope_satisfied",
+                    "group_context_identity": '["ZFIN"]',
+                }
+            ]
+        }
+        envelope["validation_findings"][0]["details"] = {
+            "validation_metadata": {
+                "validator_binding_id": "zfin_genotype_validation",
+                "group_scope": {"required_any_active_group": ["ZFIN"]},
+                "dispatch_context": {
+                    "authenticated_groups": ["ZFIN"],
+                    "group_context_identity": '["ZFIN"]',
+                },
+            }
+        }
+
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload(envelope)
+        compact = DomainEnvelopeTraceAnalyzer.compact(domain)
+
+        self.assertEqual(domain["summary"]["validator_group_scope_audit_count"], 2)
+        self.assertIn(
+            "group_scope_satisfied",
+            {
+                audit["eligibility_reason"]
+                for audit in domain["validator_group_scope_audits"]
+            },
+        )
+        self.assertIn(
+            "finding-required-symbol",
+            {
+                audit["finding_id"]
+                for audit in domain["validator_group_scope_audits"]
+            },
+        )
+        self.assertTrue(
+            all(
+                audit["group_context_identity"] == '["ZFIN"]'
+                for audit in compact["validator_group_scope_audits"]
+            )
+        )
+
     def test_trace_summary_includes_score_domain_envelope_signals(self):
         summary = TraceSummaryAnalyzer.analyze(
             {

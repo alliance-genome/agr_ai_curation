@@ -137,6 +137,9 @@ class DomainEnvelopeTraceAnalyzer:
             "pending_ref_ids": list(summary.get("pending_ref_ids") or []),
             "finding_ids": list(summary.get("finding_ids") or []),
             "field_paths": list(summary.get("field_paths") or []),
+            "validator_group_scope_audits": list(
+                summary.get("validator_group_scope_audits") or []
+            ),
             "validation_state_counts": dict(summary.get("validation_state_counts") or {}),
             "definition_state_counts": dict(summary.get("definition_state_counts") or {}),
             "has_blockers": bool(summary.get("blockers")),
@@ -170,6 +173,7 @@ class DomainEnvelopeTraceAnalyzer:
             "envelopes": [],
             "objects": [],
             "validation_findings": [],
+            "validator_group_scope_audits": [],
             "definition_state_flags": [],
             "blockers": [],
             "curator_edits": [],
@@ -253,6 +257,18 @@ class DomainEnvelopeTraceAnalyzer:
                 field_path=field_path,
                 source="payload",
                 message=_as_string(payload.get("message")),
+            )
+
+        if isinstance(payload.get("group_scope"), Mapping) and (
+            payload.get("eligibility_reason") is not None
+            or payload.get("group_context_identity") is not None
+        ) and ".metadata.validator_binding_audit[" not in source_path:
+            cls._record_group_scope_audit(
+                accumulator,
+                payload,
+                source_path=source_path,
+                envelope_id=envelope_id,
+                finding_id=finding_id,
             )
 
         if cls._looks_like_envelope(payload):
@@ -407,6 +423,12 @@ class DomainEnvelopeTraceAnalyzer:
 
         findings = list(_iter_mappings(envelope.get("validation_findings")))
         history = list(_iter_mappings(envelope.get("history")))
+        metadata = envelope.get("metadata")
+        binding_audit = (
+            metadata.get("validator_binding_audit")
+            if isinstance(metadata, Mapping)
+            else None
+        )
 
         cls._add_unique(accumulator, "envelope_ids", envelope_id)
         cls._add_detail(
@@ -467,6 +489,19 @@ class DomainEnvelopeTraceAnalyzer:
                 finding,
                 source_path=finding_path,
                 envelope_id=envelope_id,
+            )
+
+        for index, audit in enumerate(_iter_mappings(binding_audit)):
+            if not isinstance(audit.get("group_scope"), Mapping):
+                continue
+            cls._record_group_scope_audit(
+                accumulator,
+                audit,
+                source_path=(
+                    f"{source_path}.metadata.validator_binding_audit[{index}]"
+                ),
+                envelope_id=envelope_id,
+                finding_id=None,
             )
 
         for index, event in enumerate(history):
@@ -592,8 +627,75 @@ class DomainEnvelopeTraceAnalyzer:
             detail,
         )
 
+        details = finding.get("details")
+        validation_metadata = (
+            details.get("validation_metadata")
+            if isinstance(details, Mapping)
+            else None
+        )
+        if (
+            isinstance(validation_metadata, Mapping)
+            and isinstance(validation_metadata.get("group_scope"), Mapping)
+        ):
+            cls._record_group_scope_audit(
+                accumulator,
+                validation_metadata,
+                source_path=f"{source_path}.details.validation_metadata",
+                envelope_id=detail["envelope_id"],
+                finding_id=finding_id,
+            )
+
         if severity in _DOMAIN_BLOCKER_SEVERITIES and status != "resolved":
             cls._record_blocker(accumulator, finding, source_path, envelope_id=detail["envelope_id"])
+
+    @classmethod
+    def _record_group_scope_audit(
+        cls,
+        accumulator: dict[str, Any],
+        audit: Mapping[str, Any],
+        *,
+        source_path: str,
+        envelope_id: Optional[str],
+        finding_id: Optional[str],
+    ) -> None:
+        dispatch_context = audit.get("dispatch_context")
+        if not isinstance(dispatch_context, Mapping):
+            dispatch_context = {}
+        detail = {
+            "envelope_id": envelope_id,
+            "finding_id": finding_id,
+            "binding_id": _as_string(audit.get("binding_id"))
+            or _as_string(audit.get("validator_binding_id")),
+            "target": _short_value(audit.get("target")),
+            "group_scope": _short_value(audit.get("group_scope")),
+            "authenticated_groups": _short_value(
+                audit.get("authenticated_groups")
+                if "authenticated_groups" in audit
+                else dispatch_context.get("authenticated_groups")
+            ),
+            "eligible": audit.get("eligible")
+            if isinstance(audit.get("eligible"), bool)
+            else None,
+            "eligibility_reason": _as_string(audit.get("eligibility_reason")),
+            "group_context_identity": _as_string(
+                audit.get("group_context_identity")
+            )
+            or _as_string(dispatch_context.get("group_context_identity")),
+            "source_path": source_path,
+        }
+        cls._add_detail(
+            accumulator,
+            "validator_group_scope_audits",
+            (
+                detail["envelope_id"],
+                detail["finding_id"],
+                detail["binding_id"],
+                detail["group_context_identity"],
+                detail["eligibility_reason"],
+                source_path,
+            ),
+            detail,
+        )
 
     @classmethod
     def _record_definition_state(
@@ -853,6 +955,9 @@ class DomainEnvelopeTraceAnalyzer:
             "envelope_count": len(accumulator["envelope_ids"]),
             "object_count": len(accumulator["objects"]),
             "finding_count": len(accumulator["validation_findings"]),
+            "validator_group_scope_audit_count": len(
+                accumulator["validator_group_scope_audits"]
+            ),
             "field_path_count": len(accumulator["field_paths"]),
             "definition_state_flag_count": len(accumulator["definition_state_flags"]),
             "blocker_count": len(accumulator["blockers"]),

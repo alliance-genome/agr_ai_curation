@@ -3527,6 +3527,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 )
             },
             expected_result_fields={"identifier": "gene.identifier"},
+            required_any_active_group=("ZFIN",),
         )
         match = ValidatorBindingMatch(
             binding=binding,
@@ -3545,6 +3546,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "validation_metadata": {
                                 "validator_binding_id": binding.binding_id,
                                 "target": match.target_details(),
+                                "dispatch_context": {
+                                    "authenticated_groups": ["ZFIN"],
+                                    "group_context_identity": '["ZFIN"]',
+                                },
                             }
                         },
                     )
@@ -3565,6 +3570,13 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _unexpected_package_validator,
         )
 
+        assert not executor._source_envelope_has_validator_finding(
+            envelope,
+            binding_id=binding.binding_id,
+            match=match,
+            group_context_identity='["RGD"]',
+        )
+
         materialization_inputs, selector_findings, metadata = asyncio.run(
             executor._collect_flow_validator_materialization_inputs(
                 source_envelope=envelope,
@@ -3578,20 +3590,20 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     }
                 ],
                 flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
+                agent_context={
+                    "user_id": "curator-1",
+                    "authenticated_groups": ["ZFIN"],
+                },
             )
         )
 
         assert materialization_inputs == []
         assert selector_findings == []
-        assert metadata == [
-            {
-                "group_id": "automatic-lookup",
-                "state": "automatic",
-                "validator_binding_id": "fixture.identifier_lookup",
-                "status": "already_validated",
-            }
+        assert [entry["status"] for entry in metadata] == [
+            "group_scope_eligible",
+            "already_validated",
         ]
+        assert metadata[0]["group_scope_audit"]["group_context_identity"] == '["ZFIN"]'
 
     def test_automatic_validation_group_reuses_existing_unresolved_finding(
         self, monkeypatch
