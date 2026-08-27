@@ -49,7 +49,6 @@ async def chat_endpoint(
     active_groups = get_groups_from_provider_groups(provider_groups)
     db_user = set_global_user_from_cognito(db, user)
     effective_user_message = chat_message.message
-    resolved_route = ResolvedChatRoute(mode="automatic")
     turn_claim_key: Optional[str] = None
     turn_claim_token: Optional[str] = None
     turn_claim_acquired = False
