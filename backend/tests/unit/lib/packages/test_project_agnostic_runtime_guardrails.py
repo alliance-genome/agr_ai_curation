@@ -151,6 +151,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/config/test_prompt_loader_runtime.py"),
     Path("backend/tests/unit/lib/packages/test_identifier_prefix_provider_loader.py"),
     Path("backend/tests/unit/lib/config/test_reference_validator_result_contract.py"),
+    Path("backend/tests/unit/lib/config/test_rgd_go_evidence_policy_validation_agent.py"),
     Path("backend/tests/unit/lib/config/test_runtime_config_defaults.py"),
     Path("backend/tests/unit/lib/packages/__init__.py"),
     Path("backend/tests/unit/lib/packages/test_agent_studio_prompt_loader.py"),
