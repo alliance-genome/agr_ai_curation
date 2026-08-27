@@ -2520,6 +2520,93 @@ tools:
                 type: string
                 description: Optional JSON string for the request body.
             required: [url]
+  # RGD GO paper-curation builder tools. These stage typed GOCuratableObject drafts and
+  # finalize only through the canonical extraction-builder handoff.
+  - tool_id: stage_go_recommendation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.go_builder_tools:stage_go_recommendation
+    required_context: []
+    description: Stage one evidence-backed RGD GO recommendation for canonical finalization.
+    source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
+    metadata:
+      name: Stage GO Recommendation
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Stage GO Recommendation
+      documentation:
+        summary: Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations.
+  - tool_id: patch_go_recommendation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.go_builder_tools:patch_go_recommendation
+    required_context: []
+    description: Correct an allowed field on a staged RGD GO recommendation.
+    source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
+    metadata:
+      name: Patch GO Recommendation
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Patch GO Recommendation
+      documentation:
+        summary: Applies explicit typed corrections to a staged GO recommendation before finalization.
+  - tool_id: discard_go_recommendation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.go_builder_tools:discard_go_recommendation
+    required_context: []
+    description: Discard a staged RGD GO recommendation that is unsupported or out of scope.
+    source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
+    metadata:
+      name: Discard GO Recommendation
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Discard GO Recommendation
+      documentation:
+        summary: Withdraws one staged GO recommendation so it cannot be finalized.
+  - tool_id: list_staged_go_recommendations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.go_builder_tools:list_staged_go_recommendations
+    required_context: []
+    description: Review the bounded manifest of staged RGD GO recommendations.
+    source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
+    metadata:
+      name: List Staged GO Recommendations
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: List Staged GO Recommendations
+      documentation:
+        summary: Lists compact staged-candidate summaries so the specialist can stop once the requested and discovered manifest is complete.
+  - tool_id: find_staged_go_recommendations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.go_builder_tools:find_staged_go_recommendations
+    required_context: []
+    description: Find an RGD GO draft by identity, evidence, content, or candidate ID.
+    source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
+    metadata:
+      name: Find Staged GO Recommendations
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Find Staged GO Recommendations
+      documentation:
+        summary: Searches the current builder workspace without relisting the full recommendation manifest.
+  - tool_id: finalize_go_extraction
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.go_builder_tools:finalize_go_extraction
+    required_context: []
+    description: Finalize staged RGD GO recommendations through canonical domain materialization.
+    source_file: python/src/agr_ai_curation_alliance/tools/go_builder_tools.py
+    metadata:
+      name: Finalize GO Extraction
+      category: Database
+      builder_run_state: true
+      builder_finalization: true
+      audit:
+        display_name: Finalize GO Extraction
+      documentation:
+        summary: Rejects evidence-less or structurally invalid drafts, then materializes a typed DomainEnvelopeExtractionResult for automatic validation and workspace projection.
   - tool_id: quickgo_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:quickgo_api_call

@@ -76,6 +76,18 @@ _LAZY_EXPORTS = {
         ".gene_product_resolution",
         "resolve_gene_product_tool",
     ),
+    "stage_go_recommendation": (".go_builder_tools", "stage_go_recommendation"),
+    "patch_go_recommendation": (".go_builder_tools", "patch_go_recommendation"),
+    "discard_go_recommendation": (".go_builder_tools", "discard_go_recommendation"),
+    "list_staged_go_recommendations": (
+        ".go_builder_tools",
+        "list_staged_go_recommendations",
+    ),
+    "find_staged_go_recommendations": (
+        ".go_builder_tools",
+        "find_staged_go_recommendations",
+    ),
+    "finalize_go_extraction": (".go_builder_tools", "finalize_go_extraction"),
 }
 
 __all__ = list(_LAZY_EXPORTS)

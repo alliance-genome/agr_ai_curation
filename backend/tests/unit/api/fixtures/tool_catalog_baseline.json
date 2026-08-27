@@ -1488,6 +1488,41 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
   },
+  "discard_go_recommendation": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Discard GO Recommendation"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Discard a staged RGD GO recommendation that is unsupported or out of scope.",
+    "documentation": {
+      "parameters": [
+        {
+          "name": "candidate_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": null,
+          "name": "reason",
+          "required": false,
+          "type": "any"
+        }
+      ],
+      "summary": "Withdraws one staged GO recommendation so it cannot be finalized."
+    },
+    "methods": null,
+    "name": "Discard GO Recommendation",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/go_builder_tools.py"
+  },
   "discard_phenotype_observation": {
     "agent_methods": null,
     "audit": {
@@ -1767,6 +1802,36 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
+  },
+  "finalize_go_extraction": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Finalize GO Extraction"
+    },
+    "binding_kind": "static",
+    "builder_finalization": true,
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Finalize staged RGD GO recommendations through canonical domain materialization.",
+    "documentation": {
+      "parameters": [
+        {
+          "name": "candidate_ids",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "summary": "Rejects evidence-less or structurally invalid drafts, then materializes a typed DomainEnvelopeExtractionResult for automatic validation and workspace projection."
+    },
+    "methods": null,
+    "name": "Finalize GO Extraction",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/go_builder_tools.py"
   },
   "finalize_phenotype_extraction": {
     "agent_methods": null,
@@ -2158,6 +2223,78 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
+  },
+  "find_staged_go_recommendations": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Find Staged GO Recommendations"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Find an RGD GO draft by identity, evidence, content, or candidate ID.",
+    "documentation": {
+      "parameters": [
+        {
+          "default": null,
+          "name": "field_value_contains",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "pending_ref_id",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "evidence_record_id",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "candidate_id",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "has_validation_errors",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": false,
+          "name": "include_discarded",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": 50,
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "default": 0,
+          "name": "offset",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Searches the current builder workspace without relisting the full recommendation manifest."
+    },
+    "methods": null,
+    "name": "Find Staged GO Recommendations",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/go_builder_tools.py"
   },
   "find_staged_phenotype_observations": {
     "agent_methods": null,
@@ -3262,6 +3399,47 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
   },
+  "list_staged_go_recommendations": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "List Staged GO Recommendations"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Review the bounded manifest of staged RGD GO recommendations.",
+    "documentation": {
+      "parameters": [
+        {
+          "name": "include_discarded",
+          "required": true,
+          "type": "boolean"
+        },
+        {
+          "default": 50,
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "default": 0,
+          "name": "offset",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Lists compact staged-candidate summaries so the specialist can stop once the requested and discovered manifest is complete."
+    },
+    "methods": null,
+    "name": "List Staged GO Recommendations",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/go_builder_tools.py"
+  },
   "list_staged_phenotype_observations": {
     "agent_methods": null,
     "audit": {
@@ -3619,6 +3797,40 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
+  },
+  "patch_go_recommendation": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Patch GO Recommendation"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Correct an allowed field on a staged RGD GO recommendation.",
+    "documentation": {
+      "parameters": [
+        {
+          "name": "candidate_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "updates",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "summary": "Applies explicit typed corrections to a staged GO recommendation before finalization."
+    },
+    "methods": null,
+    "name": "Patch GO Recommendation",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/go_builder_tools.py"
   },
   "patch_phenotype_observation": {
     "agent_methods": null,
@@ -5246,6 +5458,177 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
+  },
+  "stage_go_recommendation": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Stage GO Recommendation"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Stage one evidence-backed RGD GO recommendation for canonical finalization.",
+    "documentation": {
+      "parameters": [
+        {
+          "name": "pending_ref_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "gene_product_mention",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "gene_product_label",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "gene_product_entity_type",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "gene_product_taxon_curie",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "resolution_state",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "go_term_curie",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "go_term_label",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "go_term_aspect",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "evidence_code",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "evidence_eco_curie",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "reference_curie",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "existing_annotation_status",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "evidence_record_ids",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "default": null,
+          "name": "gene_product_curie",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "with_from",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "qualifiers",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "annotation_extensions",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": false,
+          "name": "negated",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": null,
+          "name": "blocking_reasons",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "existing_annotations",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "existing_annotation_provenance",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "existing_annotation_note",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "identity_resolution",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "hierarchy_limitations",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "default": null,
+          "name": "section_limitations",
+          "required": false,
+          "type": "any"
+        }
+      ],
+      "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations."
+    },
+    "methods": null,
+    "name": "Stage GO Recommendation",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/go_builder_tools.py"
   },
   "stage_phenotype_observation": {
     "agent_methods": null,
