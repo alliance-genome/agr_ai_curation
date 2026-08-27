@@ -268,7 +268,11 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             states = list(executor.map(replace_concurrently, ("agent", "flow")))
-        assert {state.mode for state in states} == {"agent", "flow"}
+        assert all(
+            (state.mode, state.agent_id is not None, state.flow_id is not None)
+            in {("agent", True, False), ("flow", False, True)}
+            for state in states
+        )
         db.expire_all()
         row = db.get(ChatRoutePreference, owner.id)
         assert row is not None
@@ -287,6 +291,15 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
                 active_group_ids=["RGD"],
             )
 
+        flow_state = update_chat_route_preference(
+            db,
+            user_id=owner.id,
+            mode="flow",
+            agent_key=None,
+            flow_id=active_flow.id,
+            active_group_ids=["RGD"],
+        )
+        assert flow_state.available is True
         active_flow.is_active = False
         db.commit()
         stale_flow_state = get_chat_route_preference(
