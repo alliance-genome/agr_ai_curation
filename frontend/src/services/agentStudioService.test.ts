@@ -129,12 +129,16 @@ describe('agentStudioService', () => {
   })
 
   it('listCustomAgents sends template_source query param when provided', async () => {
+    const responseBody = {
+      custom_agents: [{ inherited_allowed_group_ids: ['RGD'] }],
+      total: 1,
+    }
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ custom_agents: [], total: 0 }),
+      json: async () => responseBody,
     })
 
-    await listCustomAgents('gene')
+    await expect(listCustomAgents('gene')).resolves.toEqual(responseBody)
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agent-studio/custom-agents?template_source=gene')
   })

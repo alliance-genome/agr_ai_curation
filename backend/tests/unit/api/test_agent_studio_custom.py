@@ -179,6 +179,7 @@ def _custom_agent_payload(template_source: str = "gene") -> dict:
         "custom_prompt": "Prompt",
         "group_prompt_overrides": {},
         "allowed_group_ids": ["RGD"],
+        "inherited_allowed_group_ids": ["RGD", "WB"],
         "icon": "🔧",
         "include_group_rules": True,
         "model_id": "gpt-4o",
@@ -238,6 +239,7 @@ class TestCustomAgentCrudContract:
         assert observed_kwargs["template_source"] == "gene"
         assert observed_kwargs["allowed_group_ids"] == ["RGD"]
         assert response.allowed_group_ids == ["RGD"]
+        assert response.inherited_allowed_group_ids == ["RGD", "WB"]
         assert "parent_agent_id" not in observed_kwargs
         assert response.template_source == "gene"
         assert "parent_agent_key" not in response.model_dump()

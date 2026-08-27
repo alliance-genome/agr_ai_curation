@@ -1261,6 +1261,7 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "custom_prompt_warning": overlay_normalization.warning,
         "group_prompt_overrides": group_prompt_overrides,
         "allowed_group_ids": _read_allowed_group_ids(custom_agent),
+        "inherited_allowed_group_ids": list(custom_agent.inherited_allowed_group_ids),
         "icon": custom_agent.icon,
         "include_group_rules": include_group_rules,
         "model_id": custom_agent.model_id,

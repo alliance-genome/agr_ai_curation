@@ -209,6 +209,7 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     custom_prompt: 'Prompt',
     group_prompt_overrides: {},
     allowed_group_ids: [],
+    inherited_allowed_group_ids: [],
     icon: '🔧',
     include_group_rules: true,
     model_id: 'gpt-5.6-terra',
@@ -561,6 +562,41 @@ describe('PromptWorkshop', () => {
     fireEvent.click(screen.getByRole('option', { name: /Rat Genome Database RGD/ }))
     fireEvent.keyDown(modSelect, { key: 'Escape' })
     expect(modSelect).toHaveTextContent('RGD')
+  }, 15000)
+
+  it('uses a restricted custom clone persisted access floor when its system template is unrestricted', async () => {
+    const restrictedClone = buildCustomAgent({
+      allowed_group_ids: ['RGD', 'WB'],
+      inherited_allowed_group_ids: ['RGD', 'WB'],
+    })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [restrictedClone], total: 1 })
+    serviceMocks.updateCustomAgent.mockResolvedValue({
+      ...restrictedClone,
+      allowed_group_ids: ['RGD'],
+    })
+
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={restrictedClone.id} />)
+
+    await waitForAgentName('My Agent')
+    const modSelect = screen.getByRole('combobox', { name: 'Available to MODs' })
+    expect(modSelect).toHaveTextContent('RGD, WB')
+    expect(screen.getByText(/inherits a RGD, WB access floor and may only be narrowed/)).toBeInTheDocument()
+
+    fireEvent.mouseDown(modSelect)
+    expect(screen.queryByRole('option', { name: 'All MODs' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /ZFIN/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /WormBase WB/ }))
+    fireEvent.keyDown(modSelect, { key: 'Escape' })
+    expect(modSelect).toHaveTextContent('RGD')
+    expect(modSelect).not.toHaveTextContent('WB')
+
+    fireEvent.click(screen.getByText('File'))
+    fireEvent.click(await screen.findByText('Save Agent'))
+    const warningDialog = await screen.findByRole('dialog', { name: 'Save a restriction that excludes you?' })
+    fireEvent.click(within(warningDialog).getByRole('button', { name: 'Save restriction' }))
+
+    await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.updateCustomAgent.mock.calls[0][1].allowed_group_ids).toEqual(['RGD'])
   }, 15000)
 
   it('shows locked inherited layers separately from the editable main/base prompt', async () => {

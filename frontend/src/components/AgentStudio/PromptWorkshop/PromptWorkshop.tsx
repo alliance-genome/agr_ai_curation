@@ -489,6 +489,9 @@ function PromptWorkshop({
   )
 
   const inheritedAllowedGroupIds = useMemo(() => {
+    if (selectedCustomAgent) {
+      return selectedCustomAgent.inherited_allowed_group_ids
+    }
     if (gettingStartedMode === 'clone' && !selectedCustomAgent) {
       return selectedCloneSource?.allowed_group_ids || []
     }

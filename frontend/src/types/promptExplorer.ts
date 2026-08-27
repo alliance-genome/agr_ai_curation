@@ -215,6 +215,7 @@ export interface CustomAgent {
   custom_prompt_warning?: string
   group_prompt_overrides: Record<string, string>
   allowed_group_ids: string[]
+  inherited_allowed_group_ids: string[]
   icon: string
   include_group_rules: boolean
   model_id: string
