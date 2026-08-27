@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -127,6 +128,7 @@ from src.lib.openai_agents.config import (
 from src.lib.runtime_payload_budget import provider_context_preflight
 from src.lib.openai_agents.evidence_summary import _EvidenceRegistry
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from src.lib.openai_agents.inspect_results import inspect_results
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
@@ -148,6 +150,16 @@ logger = logging.getLogger(__name__)
 #   FLOW_STEP_OUTPUT_PREVIEW_CHARS, FLOW_STEP_EVIDENCE_PREVIEW_LIMIT.
 _FLOW_STEP_OUTPUT_PREVIEW_CHARS = get_flow_step_output_preview_chars()
 _FLOW_STEP_EVIDENCE_PREVIEW_LIMIT = get_flow_step_evidence_preview_limit()
+
+
+@dataclass(frozen=True)
+class PreferredFlowInspectionContext:
+    """Server-authorized persisted refs available to one preferred-flow turn."""
+
+    flow_id: str
+    flow_run_id: str
+    document_id: str | None
+    result_refs: tuple[str, ...]
 _FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
 _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME = "input"
 _FLOW_TEMPLATE_DEFAULT_TRACE_ID = "trace"
@@ -2629,6 +2641,7 @@ def get_all_agent_tools(
         "in_flight_step": None,
         "evidence_registry": _EvidenceRegistry(),
         "persisted_extraction_results": [],
+        "inspected_result_refs": set(),
     }
     flow_conversation_summary = _build_flow_conversation_summary(flow, user_query)
 
@@ -3580,6 +3593,7 @@ def create_flow_supervisor(
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
+    inspection_context: PreferredFlowInspectionContext | None = None,
 ) -> Agent:
     """Create a supervisor agent configured for flow execution.
 
@@ -3597,6 +3611,7 @@ def create_flow_supervisor(
         document_name: Optional filename for prompt context
         active_groups: Active group IDs for database queries
         doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
+        inspection_context: Server-authorized prior refs for a preferred-flow follow-up
 
     Returns:
         Configured Agent instance for flow supervision
@@ -3633,7 +3648,9 @@ def create_flow_supervisor(
         include_unavailable=True,
     )
 
-    # Fail fast if no tools could be created — the supervisor would have nothing to call
+    # The configured flow must remain executable independently of optional
+    # follow-up context. The inspection tool never substitutes for a missing
+    # or inaccessible configured step.
     if not tools:
         step_count = sum(
             1 for n in flow.flow_definition.get("nodes", [])
@@ -3643,6 +3660,64 @@ def create_flow_supervisor(
             f"Flow '{flow.name}' has {step_count} step(s) but no agent tools could be created. "
             f"Check that all agent IDs resolve in the unified agents table and required documents are provided."
         )
+
+    if inspection_context is not None:
+        bound_refs = frozenset(inspection_context.result_refs)
+
+        @function_tool(
+            name_override="inspect_results",
+            description_override=(
+                "Inspect one server-authorized persisted result from the immediately "
+                "available same-flow context. Supply only a result_ref listed in the "
+                "supervisor instructions. This tool cannot browse or authorize any "
+                "other result."
+            ),
+        )
+        async def inspect_bound_preferred_flow_result(
+            action: str = "summary",
+            query: str | None = None,
+            result_ref: str | None = None,
+            object_ref: str | None = None,
+            field_path: str | None = None,
+            limit: int | None = None,
+            cursor: str | None = None,
+        ) -> str:
+            normalized_ref = str(result_ref or "").strip()
+            if normalized_ref not in bound_refs:
+                return json.dumps(
+                    {
+                        "status": "unauthorized_bound_ref",
+                        "message": (
+                            "result_ref must be one of the server-authorized refs "
+                            "bound to this preferred-flow follow-up."
+                        ),
+                    }
+                )
+
+            output = await inspect_results(
+                action=action,
+                query=query,
+                result_ref=normalized_ref,
+                target="this_chat",
+                object_ref=object_ref,
+                field_path=field_path,
+                limit=limit,
+                cursor=cursor,
+            )
+            try:
+                payload = json.loads(output)
+            except (TypeError, ValueError):
+                payload = None
+            if (
+                str(action or "").strip().lower() != "help"
+                and isinstance(payload, Mapping)
+                and payload.get("status") == "ok"
+            ):
+                execution_state["inspected_result_refs"].add(normalized_ref)
+            return output
+
+        tools.append(inspect_bound_preferred_flow_result)
+        created_tool_names.add("inspect_results")
 
     # Determine if document guidance should be included in system instructions
     # Only include when: 1) a document is provided AND 2) the flow has document-requiring agents
@@ -3660,6 +3735,24 @@ def create_flow_supervisor(
         document_name=document_name,
         available_tools=created_tool_names,
     )
+    if inspection_context is not None:
+        refs = "\n".join(f"- {result_ref}" for result_ref in inspection_context.result_refs)
+        instructions += f"""
+
+Preferred-flow follow-up inspection context:
+- The server authorized these persisted results from the same conversation,
+  saved flow, and document:
+{refs}
+- Decide from the exact user request whether it asks only about those prior
+  results without changing the document or extraction scope.
+- For such an inspection-only follow-up, call inspect_results for one or more
+  listed refs, answer from the returned data, and do not call any configured
+  flow-step tool.
+- For a new request or any changed scope, do not take the inspection-only path;
+  execute every configured flow step exactly once as instructed above.
+- A failed or unauthorized inspection is not completion proof. Continue with
+  the strict flow or allow the run to fail; never claim inspection success.
+"""
 
     # Create flow supervisor agent
     supervisor = Agent(
@@ -4109,6 +4202,7 @@ async def execute_flow(
     trace_context: Optional[Dict[str, str]] = None,
     chat_route_mode: Literal["automatic", "agent", "flow"] | None = None,
     chat_route_target_id: str | None = None,
+    inspection_context: PreferredFlowInspectionContext | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -4130,6 +4224,7 @@ async def execute_flow(
         trace_context: Optional existing Langfuse trace identifiers to reuse on retry
         chat_route_mode: Optional server-resolved ordinary-chat route mode
         chat_route_target_id: Optional server-resolved flow identity
+        inspection_context: Server-authorized prior refs for preferred-flow inspection
 
     Yields:
         dict: Streaming events - FLOW_STARTED, then all regular chat events
@@ -4142,6 +4237,16 @@ async def execute_flow(
     flow_run_id = flow_run_id or str(uuid4())
     set_current_session_id(session_id)
     set_current_user_id(str(user_id))
+
+    normalized_document_id = str(document_id or "").strip() or None
+    if inspection_context is not None and not (
+        chat_route_mode == "flow"
+        and chat_route_target_id == str(flow.id)
+        and inspection_context.flow_id == str(flow.id)
+        and inspection_context.document_id == normalized_document_id
+        and inspection_context.result_refs
+    ):
+        inspection_context = None
 
     # Pre-fetch document context BEFORE creating supervisor (optimization)
     # This matches how chat pre-fetches and passes through to avoid redundant Weaviate queries
@@ -4168,6 +4273,7 @@ async def execute_flow(
         document_name=document_name,
         active_groups=active_groups,
         doc_context=doc_context,
+        inspection_context=inspection_context,
     )
 
     # Build flow prompt
@@ -4235,6 +4341,7 @@ async def execute_flow(
         for step in completed_steps
         if str(step.get("tool_name") or "").strip()
     }
+    attempted_flow_tool_names: set[str] = set()
 
     def _missing_consumed_tool_completions() -> list[str]:
         return [
@@ -4381,6 +4488,13 @@ async def execute_flow(
                 break
             event_type = event.get("type")
             event_data = event.get("data", {}) or {}
+
+            if event_type == "TOOL_START":
+                started_tool_name = str(
+                    (event.get("details") or {}).get("toolName") or ""
+                ).strip()
+                if started_tool_name in flow_execution_state.get("ordered_tool_names", []):
+                    attempted_flow_tool_names.add(started_tool_name)
 
             if event_type == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
                 continue
@@ -4604,6 +4718,72 @@ async def execute_flow(
         # generator while it is suspended at a yielded event. Always close the
         # nested runner so its provider teardown cannot be bypassed.
         await runner_stream.aclose()
+
+    inspected_result_refs = sorted(
+        str(result_ref)
+        for result_ref in flow_execution_state.get("inspected_result_refs") or set()
+    )
+    pending_run_finished_data = (
+        pending_run_finished_event.get("data") or {}
+        if pending_run_finished_event is not None
+        else {}
+    )
+    inspection_response = str(pending_run_finished_data.get("response") or "")
+    inspection_only_completed = bool(
+        flow_status == "completed"
+        and inspected_result_refs
+        and not completed_steps
+        and not attempted_flow_tool_names
+        and not pending_output_events
+        and pending_run_finished_event is not None
+        and inspection_response.strip()
+    )
+    if inspection_only_completed:
+        output_event = {
+            "type": "CHAT_OUTPUT_READY",
+            "timestamp": _now_iso(),
+            "details": {
+                "output": inspection_response,
+                "output_preview": _truncate_tool_output(inspection_response),
+                "output_length": len(inspection_response),
+                "inspection_only": True,
+                "inspected_result_refs": inspected_result_refs,
+            },
+        }
+        yield output_event
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": _now_iso(),
+            "data": {
+                "flow_id": str(flow.id),
+                "flow_name": flow.name,
+                "flow_run_id": flow_run_id,
+                "document_id": document_id,
+                "origin_session_id": session_id,
+                "status": "completed",
+                "completion_mode": "inspection_only",
+                "output_status": "complete",
+                "output_count": 1,
+                "outputs": [
+                    {"type": output_event["type"], **dict(output_event["details"])}
+                ],
+                "output_branches": [],
+                "failure_reason": None,
+                "total_evidence_records": 0,
+                "step_evidence_counts": {},
+                "adapter_keys": [],
+                "extraction_handoff_audits": [],
+                "extraction_result_refs": [],
+                "extraction_result_ids": [],
+                "review_session_ids": [],
+                "inspected_result_refs": inspected_result_refs,
+            },
+        }
+        logger.info(
+            "[Flow Executor] Preferred flow inspection-only follow-up completed: '%s'",
+            flow.name,
+        )
+        return
 
     if flow_status != "failed":
         missing_steps = _missing_required_flow_steps(flow_execution_state)

@@ -34,6 +34,23 @@ def _record(*, content: str, turn_id: str, payload_json: dict) -> ChatMessageRec
     )
 
 
+def _assistant_record(*, turn_id: str, terminal_events: list[dict]) -> ChatMessageRecord:
+    return ChatMessageRecord(
+        message_id=uuid4(),
+        session_id="session-1",
+        chat_kind=ASSISTANT_CHAT_KIND,
+        turn_id=turn_id,
+        role="assistant",
+        message_type="text",
+        content="flow answer",
+        payload_json={
+            chat_common._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: terminal_events
+        },
+        trace_id="trace-1",
+        created_at=datetime.now(timezone.utc),
+    )
+
+
 class _TurnRepository:
     def __init__(self) -> None:
         self.user_turn: ChatMessageRecord | None = None
@@ -256,6 +273,12 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
     flow = SimpleNamespace(id=flow_id, name="Paper Review")
     captured: dict = {}
     result_id = str(uuid4())
+    inspection_context = chat_common.PreferredFlowInspectionContext(
+        flow_id=str(flow_id),
+        flow_run_id="prior-flow-run",
+        document_id=None,
+        result_refs=(f"extraction-result:{result_id}",),
+    )
 
     async def _execute_flow(**kwargs):
         captured.update(kwargs)
@@ -305,11 +328,13 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
             specialist_temperature=None,
             supervisor_reasoning=None,
             specialist_reasoning=None,
+            inspection_context=inspection_context,
         )
     ]
     assert len(message) > 2000
     assert captured["user_query"] == message
     assert captured["flow_run_id"] == "flow-run-1"
+    assert captured["inspection_context"] == inspection_context
     internal = next(
         event
         for event in events
@@ -404,6 +429,193 @@ def test_preferred_flow_file_output_is_persisted_for_durable_replay(monkeypatch)
     ]
 
 
+def test_preferred_flow_followup_context_uses_same_conversation_flow_and_document():
+    flow_id = str(uuid4())
+    other_flow_id = str(uuid4())
+    result_id = str(uuid4())
+    messages = [
+        _assistant_record(
+            turn_id="turn-other-flow",
+            terminal_events=[
+                {
+                    "type": "FLOW_FINISHED",
+                    "data": {
+                        "status": "completed",
+                        "flow_id": other_flow_id,
+                        "flow_run_id": "other-run",
+                        "document_id": "doc-1",
+                        "extraction_result_refs": [
+                            {"result_ref": f"extraction-result:{uuid4()}"}
+                        ],
+                    },
+                }
+            ],
+        ),
+        _assistant_record(
+            turn_id="turn-matching",
+            terminal_events=[
+                {
+                    "type": "FLOW_FINISHED",
+                    "data": {
+                        "status": "completed",
+                        "flow_id": flow_id,
+                        "flow_run_id": "matching-run",
+                        "document_id": "doc-1",
+                        "extraction_result_refs": [
+                            {"result_ref": f"extraction-result:{result_id}"},
+                            {"result_ref": "client-result:arbitrary"},
+                        ],
+                    },
+                }
+            ],
+        ),
+        _assistant_record(
+            turn_id="turn-inspection-only",
+            terminal_events=[
+                {
+                    "type": "FLOW_FINISHED",
+                    "data": {
+                        "status": "completed",
+                        "completion_mode": "inspection_only",
+                        "flow_id": flow_id,
+                        "flow_run_id": "inspection-run",
+                        "document_id": "doc-1",
+                        "extraction_result_refs": [],
+                    },
+                }
+            ],
+        ),
+    ]
+    calls: list[dict] = []
+
+    class _Repository:
+        def list_recent_messages(self, **kwargs):
+            calls.append(kwargs)
+            return messages
+
+    context = chat_common._preferred_flow_inspection_context(
+        repository=_Repository(),
+        session_id="session-1",
+        user_id="auth-sub",
+        flow_id=flow_id,
+        document_id="doc-1",
+    )
+
+    assert calls == [
+        {
+            "session_id": "session-1",
+            "user_auth_sub": "auth-sub",
+            "chat_kind": ASSISTANT_CHAT_KIND,
+        }
+    ]
+    assert context == chat_common.PreferredFlowInspectionContext(
+        flow_id=flow_id,
+        flow_run_id="matching-run",
+        document_id="doc-1",
+        result_refs=(f"extraction-result:{result_id}",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("flow_matches", "document_id"),
+    [(False, "doc-1"), (True, "doc-2")],
+)
+def test_preferred_flow_followup_context_rejects_mismatched_flow_or_document(
+    flow_matches, document_id
+):
+    flow_id = str(uuid4())
+    event_flow_id = flow_id if flow_matches else str(uuid4())
+    result_id = str(uuid4())
+    assistant = _assistant_record(
+        turn_id="turn-1",
+        terminal_events=[
+            {
+                "type": "FLOW_FINISHED",
+                "data": {
+                    "status": "completed",
+                    "flow_id": event_flow_id,
+                    "flow_run_id": "flow-run-1",
+                    "document_id": "doc-1",
+                    "extraction_result_refs": [
+                        {"result_ref": f"extraction-result:{result_id}"}
+                    ],
+                },
+            }
+        ],
+    )
+
+    class _Repository:
+        def list_recent_messages(self, **_kwargs):
+            return [assistant]
+
+    assert (
+        chat_common._preferred_flow_inspection_context(
+            repository=_Repository(),
+            session_id="session-1",
+            user_id="auth-sub",
+            flow_id=flow_id,
+            document_id=document_id,
+        )
+        is None
+    )
+
+
+def test_newest_same_flow_changed_document_blocks_older_matching_refs():
+    flow_id = str(uuid4())
+    older_result_id = str(uuid4())
+    messages = [
+        _assistant_record(
+            turn_id="turn-older",
+            terminal_events=[
+                {
+                    "type": "FLOW_FINISHED",
+                    "data": {
+                        "status": "completed",
+                        "flow_id": flow_id,
+                        "flow_run_id": "older-run",
+                        "document_id": "doc-1",
+                        "extraction_result_refs": [
+                            {"result_ref": f"extraction-result:{older_result_id}"}
+                        ],
+                    },
+                }
+            ],
+        ),
+        _assistant_record(
+            turn_id="turn-newer",
+            terminal_events=[
+                {
+                    "type": "FLOW_FINISHED",
+                    "data": {
+                        "status": "completed",
+                        "flow_id": flow_id,
+                        "flow_run_id": "newer-run",
+                        "document_id": "doc-2",
+                        "extraction_result_refs": [
+                            {"result_ref": f"extraction-result:{uuid4()}"}
+                        ],
+                    },
+                }
+            ],
+        ),
+    ]
+
+    class _Repository:
+        def list_recent_messages(self, **_kwargs):
+            return messages
+
+    assert (
+        chat_common._preferred_flow_inspection_context(
+            repository=_Repository(),
+            session_id="session-1",
+            user_id="auth-sub",
+            flow_id=flow_id,
+            document_id="doc-1",
+        )
+        is None
+    )
+
+
 def test_revoked_persisted_target_fails_closed_with_actionable_error(monkeypatch):
     target = ChatRouteTarget(
         id="gene_validation",
@@ -436,6 +648,41 @@ def test_revoked_persisted_target_fails_closed_with_actionable_error(monkeypatch
         "Your preferred chat agent 'Gene Validation' is no longer available. "
         "Choose another chat route in Tools and retry."
     )
+
+
+def test_revoked_persisted_flow_fails_before_followup_context_can_run(monkeypatch):
+    flow_id = str(uuid4())
+    target = ChatRouteTarget(
+        id=flow_id,
+        kind="flow",
+        display_name="Paper Review",
+        description=None,
+        category=None,
+        available=False,
+    )
+    monkeypatch.setattr(
+        chat_common,
+        "resolve_chat_route_selection",
+        lambda *_args, **_kwargs: ChatRoutePreferenceState(
+            "flow", target.id, None, False, target
+        ),
+    )
+
+    with pytest.raises(chat_common.HTTPException) as exc:
+        chat_common._authorize_chat_route(
+            db=SimpleNamespace(),
+            db_user_id=7,
+            active_groups=[],
+            route=ResolvedChatRoute(
+                mode="flow",
+                target_id=flow_id,
+                target_display_name=target.display_name,
+                flow_run_id="flow-run-2",
+            ),
+        )
+
+    assert exc.value.status_code == 409
+    assert "preferred chat flow 'Paper Review' is no longer available" in exc.value.detail
 
 
 def test_unavailable_new_selection_persists_turn_before_failing_closed(monkeypatch):

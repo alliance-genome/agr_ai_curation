@@ -172,6 +172,18 @@ async def chat_endpoint(
     if resolved_route is None:
         raise RuntimeError("Prepared executable chat turn is missing its resolved route")
 
+    inspection_context = (
+        _preferred_flow_inspection_context(
+            repository=repository,
+            session_id=session_id,
+            user_id=user_id,
+            flow_id=resolved_route.target_id or "",
+            document_id=document_id,
+        )
+        if resolved_route.mode == "flow"
+        else None
+    )
+
     tool_agent_map: Dict[str, str] = {}
     if resolved_route.mode == "automatic":
         try:
@@ -224,6 +236,7 @@ async def chat_endpoint(
                 specialist_temperature=chat_message.specialist_temperature,
                 supervisor_reasoning=chat_message.supervisor_reasoning,
                 specialist_reasoning=chat_message.specialist_reasoning,
+                inspection_context=inspection_context,
             ):
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
@@ -640,6 +653,18 @@ async def chat_stream_endpoint(
     if resolved_route is None:
         raise RuntimeError("Prepared executable chat turn is missing its resolved route")
 
+    inspection_context = (
+        _preferred_flow_inspection_context(
+            repository=repository,
+            session_id=session_id,
+            user_id=user_id,
+            flow_id=resolved_route.target_id or "",
+            document_id=document_id,
+        )
+        if resolved_route.mode == "flow"
+        else None
+    )
+
     tool_agent_map: Dict[str, str] = {}
     if resolved_route.mode == "automatic":
         try:
@@ -703,6 +728,7 @@ async def chat_stream_endpoint(
                 specialist_temperature=chat_message.specialist_temperature,
                 supervisor_reasoning=chat_message.supervisor_reasoning,
                 specialist_reasoning=chat_message.specialist_reasoning,
+                inspection_context=inspection_context,
             ):
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
                     interrupted_message = "Run cancelled by user"

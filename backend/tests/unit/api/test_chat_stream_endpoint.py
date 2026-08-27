@@ -104,7 +104,11 @@ def _stub_stream_turn_persistence(monkeypatch):
     chat.executable_run_manager._runs.clear()
     chat.executable_run_manager._active_session_run_ids.clear()
 
-    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: object())
+    _patch_chat_impl(
+        monkeypatch,
+        "_get_chat_history_repository",
+        lambda _db: SimpleNamespace(list_recent_messages=lambda **_kwargs: []),
+    )
     _patch_chat_impl(
         monkeypatch,
         "set_global_user_from_cognito",
@@ -236,8 +240,11 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     assert "session-chat-stream" not in chat._LOCAL_SESSION_OWNERS
 
 
-def test_chat_stream_endpoint_runs_selected_flow_with_unbounded_chat_message(monkeypatch):
+def test_chat_stream_endpoint_binds_prior_flow_refs_and_preserves_unbounded_message(
+    monkeypatch,
+):
     flow_id = uuid4()
+    result_id = uuid4()
     flow = SimpleNamespace(id=flow_id, name="Paper Review")
     message = "For MOD:619738, assess GO:0005515. " + ("x" * 2500)
     captured = {}
@@ -245,6 +252,37 @@ def test_chat_stream_endpoint_runs_selected_flow_with_unbounded_chat_message(mon
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    prior_assistant = _assistant_record(
+        session_id="session-flow",
+        turn_id="turn-prior",
+        content="prior flow answer",
+        payload_json={
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
+                {
+                    "type": "FLOW_FINISHED",
+                    "data": {
+                        "status": "completed",
+                        "flow_id": str(flow_id),
+                        "flow_run_id": "flow-run-prior",
+                        "document_id": None,
+                        "extraction_result_refs": [
+                            {
+                                "result_ref": f"extraction-result:{result_id}",
+                                "extraction_result_id": str(result_id),
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    )
+    _patch_chat_impl(
+        monkeypatch,
+        "_get_chat_history_repository",
+        lambda _db: SimpleNamespace(
+            list_recent_messages=lambda **_kwargs: [prior_assistant]
+        ),
+    )
 
     async def _register(*_args, **_kwargs):
         return True
@@ -298,6 +336,12 @@ def test_chat_stream_endpoint_runs_selected_flow_with_unbounded_chat_message(mon
     events = asyncio.run(_consume_stream(response))
     assert captured["user_query"] == message
     assert captured["flow_run_id"] == "flow-run-1"
+    assert captured["inspection_context"] == chat_common.PreferredFlowInspectionContext(
+        flow_id=str(flow_id),
+        flow_run_id="flow-run-prior",
+        document_id=None,
+        result_refs=(f"extraction-result:{result_id}",),
+    )
     assert any(event["type"] == "CHAT_OUTPUT_READY" for event in events)
     assert events[-1]["type"] == "turn_completed"
 
