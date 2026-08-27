@@ -77,6 +77,24 @@ def test_get_supervisor_agent_tools_excludes_task_input():
     assert "task_input" not in tools
 
 
+def test_get_supervisor_tool_agent_map_filters_for_active_groups():
+    """The runtime routing map must use the same group-filtered specialist set."""
+    supervisor = _supervisor_module()
+
+    with patch.object(
+        supervisor,
+        "_get_supervisor_specialist_specs",
+        return_value=MOCK_SUPERVISOR_SPECS,
+    ) as get_specs:
+        tool_agent_map = supervisor.get_supervisor_tool_agent_map(["group-a"])
+
+    get_specs.assert_called_once_with(["group-a"])
+    assert tool_agent_map == {
+        "ask_gene_specialist": "gene",
+        "ask_pdf_extraction_specialist": "pdf_extraction",
+    }
+
+
 @pytest.mark.asyncio
 async def test_chat_specialist_receives_complete_authoritative_user_request(monkeypatch):
     supervisor = _supervisor_module()

@@ -415,6 +415,7 @@ class TestGetRegistryMetadata:
             instructions="Custom prompt text",
             group_prompt_overrides={"WB": "Custom WB Rules"},
             created_at=None,
+            allowed_group_ids=[],
         )
 
         class _FakeDB:
@@ -486,6 +487,7 @@ class TestGetRegistryMetadata:
             instructions="Custom prompt text",
             group_prompt_overrides={},
             created_at=None,
+            allowed_group_ids=[],
         )
 
         monkeypatch.setattr(
@@ -547,6 +549,7 @@ class TestGetRegistryMetadata:
             instructions=flagged_overlay,
             group_prompt_overrides={},
             created_at=None,
+            allowed_group_ids=[],
         )
         captured_base_overrides = []
 
@@ -664,6 +667,7 @@ class TestGetRegistryMetadata:
             instructions="Curator note",
             group_prompt_overrides={},
             created_at=None,
+            allowed_group_ids=[],
         )
 
         monkeypatch.setattr(
@@ -728,6 +732,12 @@ class TestGetRegistryMetadata:
                 )
 
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: _FakeService())
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1),
+        )
+        monkeypatch.setattr(api_module, "get_agent_by_key", lambda *_args, **_kwargs: object())
 
         result = asyncio.run(
             api_module.get_prompt_preview(
@@ -773,6 +783,7 @@ class TestGetRegistryMetadata:
             instructions="CUSTOM BASE PROMPT",
             group_prompt_overrides={},
             group_rules_enabled=True,
+            allowed_group_ids=[],
         )
         monkeypatch.setattr(
             api_module,
@@ -831,6 +842,7 @@ class TestGetRegistryMetadata:
             instructions="CUSTOM BASE PROMPT",
             group_prompt_overrides={"WB": "CUSTOM WB OVERRIDE"},
             group_rules_enabled=True,
+            allowed_group_ids=[],
         )
 
         monkeypatch.setattr(
@@ -890,6 +902,7 @@ class TestGetRegistryMetadata:
                 "WB": "Platform Runtime Contract\nCurator tried to copy this.",
             },
             group_rules_enabled=True,
+            allowed_group_ids=[],
         )
 
         monkeypatch.setattr(
@@ -989,6 +1002,12 @@ class TestGetRegistryMetadata:
                 raise RuntimeError("preview exploded")
 
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: _BrokenService())
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1),
+        )
+        monkeypatch.setattr(api_module, "get_agent_by_key", lambda *_args, **_kwargs: object())
 
         with pytest.raises(api_module.HTTPException) as exc_info:
             await api_module.get_prompt_preview(

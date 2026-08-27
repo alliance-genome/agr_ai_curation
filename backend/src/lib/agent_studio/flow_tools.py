@@ -68,6 +68,10 @@ if TYPE_CHECKING:
 # Context variable for storing the current user ID during request processing
 _current_user_id: ContextVar[Optional[int]] = ContextVar("current_user_id", default=None)
 _current_user_email: ContextVar[Optional[str]] = ContextVar("current_user_email", default=None)
+_current_active_group_ids: ContextVar[tuple[str, ...]] = ContextVar(
+    "current_active_group_ids",
+    default=(),
+)
 
 # Context variable for storing the current flow being edited in the UI
 # This allows tools to access the flow state without it being embedded in the system prompt
@@ -80,7 +84,11 @@ def _truncate_preview(text: str, max_chars: int) -> str:
     return text[:max_chars] + ("..." if len(text) > max_chars else "")
 
 
-def set_workflow_user_context(user_id: int, user_email: Optional[str] = None) -> None:
+def set_workflow_user_context(
+    user_id: int,
+    user_email: Optional[str] = None,
+    active_group_ids: Optional[List[str]] = None,
+) -> None:
     """Set the current user context for flow tools.
 
     Called by the API layer before executing tools that need user context.
@@ -91,6 +99,7 @@ def set_workflow_user_context(user_id: int, user_email: Optional[str] = None) ->
     """
     _current_user_id.set(user_id)
     _current_user_email.set(user_email)
+    _current_active_group_ids.set(tuple(active_group_ids or []))
     logger.debug('Set workflow user context: user_id=%s, email=%s', user_id, user_email)
 
 
@@ -98,6 +107,7 @@ def clear_workflow_user_context() -> None:
     """Clear the current user context after request processing."""
     _current_user_id.set(None)
     _current_user_email.set(None)
+    _current_active_group_ids.set(())
 
 
 def get_current_user_id() -> Optional[int]:
@@ -113,6 +123,12 @@ def get_current_user_id() -> Optional[int]:
 def get_current_user_email() -> Optional[str]:
     """Get the current user email from context."""
     return _current_user_email.get()
+
+
+def get_current_active_group_ids() -> List[str]:
+    """Return the authenticated canonical group snapshot for flow tools."""
+
+    return list(_current_active_group_ids.get())
 
 
 def set_current_flow_context(flow_context: Optional[Dict[str, Any]]) -> None:
@@ -632,6 +648,24 @@ def _build_simplified_flow_definition(
         raise _SimplifiedFlowValidationError([str(exc)]) from exc
 
 
+def _accessible_flow_agent_ids() -> set[str]:
+    """Return database-backed flow agents available to the current request."""
+
+    from src.lib.agent_studio.catalog_service import list_available_agents
+
+    user_id = get_current_user_id()
+    if user_id is None:
+        return set()
+    return {
+        str(agent["agent_id"])
+        for agent in list_available_agents(
+            db_user_id=user_id,
+            authenticated_groups=get_current_active_group_ids(),
+        )
+        if str(agent.get("agent_id") or "") in FLOW_AGENT_IDS
+    }
+
+
 def _build_output_suggestion(
     seen_agents: set[str],
     available_agent_ids: set[str],
@@ -682,6 +716,7 @@ def _build_output_suggestion(
 def _filter_flow_templates(
     available_agent_ids: set[str],
     catalog: FlowRecipeCatalog | None = None,
+    active_group_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Filter template steps to installed agents without advertising missing specialists."""
     catalog = catalog or load_flow_recipe_catalog()
@@ -690,6 +725,8 @@ def _filter_flow_templates(
 
     for contribution in catalog.contributions:
         for recipe in contribution.manifest.recipes:
+            from src.lib.agent_access import is_resource_access_allowed
+
             template = recipe.model_dump(exclude_none=True)
             contract_agent_ids = sorted(
                 {str(step["agent_id"]) for step in template["steps"]}
@@ -793,6 +830,14 @@ def _filter_flow_templates(
                     f"'{contribution.package_id}' at {contribution.source_path}: "
                     f"{'; '.join(exc.errors)}"
                 ) from exc
+
+            if not is_resource_access_allowed(
+                visibility_allowed=True,
+                allowed_group_ids=recipe.access.allowed_group_ids,
+                active_group_ids=list(active_group_ids or []),
+                resource_kind="flow_recipe",
+            ):
+                continue
 
             templates.append(
                 {
@@ -943,6 +988,20 @@ def _create_flow_handler():
                 "help": _simplified_flow_recovery_help(exc.errors),
             }
 
+        accessible_agent_ids = _accessible_flow_agent_ids()
+        if any(
+            isinstance(step, dict)
+            and str(step.get("agent_id") or "").strip() in FLOW_AGENT_IDS
+            and str(step.get("agent_id") or "").strip()
+            not in accessible_agent_ids
+            for step in steps
+        ):
+            return {
+                "success": False,
+                "error": "Flow references unavailable agents",
+                "help": "Re-select agents from get_available_agents before saving.",
+            }
+
         flow_definition = validated_flow_def.model_dump()
 
         # Save to database
@@ -1015,7 +1074,7 @@ def _validate_flow_handler():
         errors = _simplified_flow_metadata_errors(name=name)
         warnings: List[str] = []
         suggestions: List[str] = []
-        available_agent_ids = set(FLOW_AGENT_IDS)
+        available_agent_ids = _accessible_flow_agent_ids()
         recipe_catalog = load_flow_recipe_catalog()
         equivalences = _agent_id_equivalences(recipe_catalog)
 
@@ -1028,12 +1087,20 @@ def _validate_flow_handler():
             errors.extend(exc.errors)
 
         validated_steps = steps if isinstance(steps, list) else []
+        if any(
+            isinstance(step, dict)
+            and str(step.get("agent_id") or "").strip() in FLOW_AGENT_IDS
+            and str(step.get("agent_id") or "").strip()
+            not in available_agent_ids
+            for step in validated_steps
+        ):
+            errors.append("Flow references unavailable agents")
         seen_agents: set[str] = set()
         for i, step in enumerate(validated_steps):
             if not isinstance(step, dict):
                 continue
             agent_id = step.get("agent_id")
-            if not isinstance(agent_id, str) or agent_id not in FLOW_AGENT_IDS:
+            if not isinstance(agent_id, str) or agent_id not in available_agent_ids:
                 continue
             if agent_id in seen_agents:
                 warnings.append(
@@ -1111,6 +1178,7 @@ def _get_flow_templates_handler():
         """
         normalized_category = str(category).strip() if category else None
 
+        accessible_agent_ids = _accessible_flow_agent_ids()
         all_agents = [
             {
                 "agent_id": agent_id,
@@ -1120,6 +1188,7 @@ def _get_flow_templates_handler():
                 "requires_document": AGENT_REGISTRY.get(agent_id, {}).get("requires_document", False),
             }
             for agent_id in FLOW_AGENT_IDS
+            if agent_id in accessible_agent_ids
         ]
 
         matched_agents = [
@@ -1135,7 +1204,10 @@ def _get_flow_templates_handler():
         ]
 
         available_agent_ids = {agent["agent_id"] for agent in matched_agents}
-        templates = _filter_flow_templates(available_agent_ids)
+        templates = _filter_flow_templates(
+            available_agent_ids,
+            active_group_ids=get_current_active_group_ids(),
+        )
 
         total_count = len(matched_agents)
         bounded_limit = normalize_page_limit(limit)
@@ -1209,7 +1281,10 @@ def _get_available_agents_handler():
         normalized_category = str(category).strip() if category else None
 
         matched: List[Dict[str, Any]] = []
+        accessible_agent_ids = _accessible_flow_agent_ids()
         for agent_id, config in AGENT_REGISTRY.items():
+            if agent_id not in accessible_agent_ids:
+                continue
             if not agent_allows_ordinary_flow_step(agent_id, config):
                 continue
 

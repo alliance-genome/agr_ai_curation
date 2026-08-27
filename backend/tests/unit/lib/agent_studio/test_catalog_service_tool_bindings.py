@@ -365,15 +365,16 @@ def test_get_agent_metadata_db_lookup_prefers_db_user_id(monkeypatch):
         description="Reads documents",
         tool_ids=["search_document", "finalize_gene_extraction"],
     )
-    observed = {"user_id": None, "closed": False}
+    observed = {"user_id": None, "active_group_ids": None, "closed": False}
 
     fake_db = SimpleNamespace(close=lambda: observed.__setitem__("closed", True))
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: fake_db)
 
-    def _fake_get_agent_by_key(db, agent_id, user_id):
+    def _fake_get_agent_by_key(db, agent_id, user_id, active_group_ids):
         assert db is fake_db
         assert agent_id == "pdf_extraction"
         observed["user_id"] = user_id
+        observed["active_group_ids"] = active_group_ids
         return fake_row
 
     monkeypatch.setattr("src.lib.agent_studio.agent_service.get_agent_by_key", _fake_get_agent_by_key)
@@ -385,6 +386,7 @@ def test_get_agent_metadata_db_lookup_prefers_db_user_id(monkeypatch):
     )
 
     assert observed["user_id"] == 42
+    assert observed["active_group_ids"] == []
     assert observed["closed"] is True
     assert metadata["display_name"] == "PDF Specialist"
 
@@ -396,15 +398,16 @@ def test_get_agent_metadata_db_lookup_coerces_string_user_id(monkeypatch):
         description="Curates genes",
         tool_ids=["agr_curation_query"],
     )
-    observed = {"user_id": None}
+    observed = {"user_id": None, "active_group_ids": None}
 
     fake_db = SimpleNamespace(close=lambda: None)
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: fake_db)
 
-    def _fake_get_agent_by_key(db, agent_id, user_id):
+    def _fake_get_agent_by_key(db, agent_id, user_id, active_group_ids):
         assert db is fake_db
         assert agent_id == "gene_validation"
         observed["user_id"] = user_id
+        observed["active_group_ids"] = active_group_ids
         return fake_row
 
     monkeypatch.setattr("src.lib.agent_studio.agent_service.get_agent_by_key", _fake_get_agent_by_key)
@@ -412,6 +415,7 @@ def test_get_agent_metadata_db_lookup_coerces_string_user_id(monkeypatch):
     metadata = catalog_service.get_agent_metadata("gene_validation", user_id="17")
 
     assert observed["user_id"] == 17
+    assert observed["active_group_ids"] == []
     assert metadata["required_params"] == []
 
 

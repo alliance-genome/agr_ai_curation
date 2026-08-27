@@ -2506,9 +2506,14 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
             package_id=package_id,
         ),
     )
+
+    def _get_agent_by_id(agent_key, **kwargs):
+        captured["agent_lookup"] = (agent_key, kwargs)
+        return source_agent
+
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_by_id",
-        lambda agent_key: source_agent,
+        _get_agent_by_id,
     )
     monkeypatch.setattr(
         "src.lib.openai_agents.config.resolve_model_provider",
@@ -2548,7 +2553,11 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
 
     binding = cast(Any, SimpleNamespace(max_tool_calls=16))
-    run_package_scoped_validator_agent(request, binding=binding)
+    run_package_scoped_validator_agent(
+        request,
+        binding=binding,
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+    )
 
     runtime_agent = captured["agent"]
     assert runtime_agent is not source_agent
@@ -2568,6 +2577,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert "evidence" not in runtime_payload
     assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
     assert captured["kwargs"]["max_turns"] == 18
+    assert captured["agent_lookup"][1] == {"authenticated_groups": ("RGD",)}
     assert captured_preflight["provider"] == "anthropic"
     assert captured_preflight["model"] == "validator-model"
     assert ("conversation", request.request_id) in sentry_calls
@@ -2950,9 +2960,14 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
             batch_capabilities=["domain_validator_batch"],
         ),
     )
+
+    def _get_agent_by_id(agent_key, **kwargs):
+        captured["agent_lookup"] = (agent_key, kwargs)
+        return source_agent
+
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_by_id",
-        lambda agent_key: source_agent,
+        _get_agent_by_id,
     )
     monkeypatch.setattr(
         "src.lib.openai_agents.config.resolve_model_provider",
@@ -2978,6 +2993,7 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     run_package_scoped_validator_agent_batch(
         cast(Any, [SimpleNamespace(request=request)]),
         binding=binding,
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
     )
 
     runtime_agent = captured["agent"]
@@ -3009,6 +3025,53 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
         "evidence_record_ids": ["evidence-1"],
     }
     assert captured["kwargs"]["max_turns"] == 6
+    assert captured["agent_lookup"][1] == {"authenticated_groups": ("RGD",)}
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_package_scoped_validator_lookup_rejects_nonmatching_runtime_groups(
+    monkeypatch: pytest.MonkeyPatch,
+    batch: bool,
+):
+    request = _validation_request()
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"] if batch else [],
+        ),
+    )
+
+    def _deny_nonmatching_agent(_agent_key, **kwargs):
+        assert kwargs == {"authenticated_groups": ("MGI",)}
+        raise ValueError("restricted validator agent is unavailable")
+
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        _deny_nonmatching_agent,
+    )
+
+    with pytest.raises(ValueError, match="restricted validator agent is unavailable"):
+        if batch:
+            run_package_scoped_validator_agent_batch(
+                cast(Any, [SimpleNamespace(request=request)]),
+                binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+                runtime_context=ValidatorRuntimeContext(
+                    authenticated_groups=("MGI",),
+                ),
+            )
+        else:
+            run_package_scoped_validator_agent(
+                request,
+                binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+                runtime_context=ValidatorRuntimeContext(
+                    authenticated_groups=("MGI",),
+                ),
+            )
 
 
 def _batchable_dispatch_job(batch_max_size: int | None) -> Any:

@@ -440,6 +440,7 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    monkeypatch.setattr(chat, "inaccessible_flow_agent_keys", lambda *_args, **_kwargs: [])
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
 
@@ -469,6 +470,7 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
         name="Flow A",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -511,6 +513,39 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert calls["clear"] == ["session-flow-1"]
 
 
+def test_execute_flow_endpoint_rechecks_saved_agent_access(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Restricted flow",
+        execution_count=0,
+        last_executed_at=None,
+        flow_definition={"nodes": [{"data": {"agent_id": "rgd-only"}}]},
+    )
+    _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    monkeypatch.setattr(
+        chat,
+        "inaccessible_flow_agent_keys",
+        lambda *_args, **_kwargs: ["rgd-only"],
+    )
+
+    with pytest.raises(chat.HTTPException) as exc_info:
+        asyncio.run(
+            chat.execute_flow_endpoint(
+                request=chat.ExecuteFlowRequest(
+                    flow_id=flow_id,
+                    session_id="revoked-membership",
+                ),
+                db=_DummyDB(flow=flow),
+                user={"sub": "auth-sub", "cognito:groups": ["MGI"]},
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Flow contains unavailable agents"
+
+
 def test_execute_flow_endpoint_suppresses_duplicates_but_preserves_distinct_files(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(
@@ -524,6 +559,7 @@ def test_execute_flow_endpoint_suppresses_duplicates_but_preserves_distinct_file
         name="Flow File Dedupe",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -634,6 +670,7 @@ def test_execute_flow_endpoint_replays_file_result_when_evidence_contains_nul(mo
         name="Tumor Terms",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -770,6 +807,7 @@ def test_execute_flow_endpoint_persists_and_replays_mixed_text_and_file_outputs(
         name="Mixed Output Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -866,6 +904,7 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
         name="Stale Success Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -977,6 +1016,7 @@ def test_execute_flow_endpoint_maps_real_mgi_provider_groups_to_active_groups(mo
         name="MGI Alleles Test",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     captured_execute_kwargs = {}
@@ -1028,6 +1068,7 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
         name="Flow Title",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -1137,6 +1178,7 @@ def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
         name="Flow Cancel",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -1176,6 +1218,7 @@ def test_execute_flow_endpoint_preserves_event_order_and_domain_warning(monkeypa
         name="Flow Warning",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -1229,6 +1272,7 @@ def test_execute_flow_endpoint_preserves_flow_step_evidence_payload(monkeypatch)
         name="Flow Evidence",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -1311,6 +1355,7 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
         name="Gene Selection Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -1422,6 +1467,7 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(
         name="Replayable Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -1550,6 +1596,7 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
         name="Retry Flow",
         execution_count=1,
         last_executed_at=datetime(2026, 2, 26, 0, 0, tzinfo=timezone.utc),
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -1666,6 +1713,7 @@ def test_execute_flow_endpoint_terminal_failure_reattach_replays_trace_context(m
         name="Trace Reuse Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -1748,6 +1796,7 @@ def test_execute_flow_endpoint_terminal_replay_releases_lifecycle_before_next_tu
         name="Replay Cleanup Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -1945,6 +1994,7 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
         name="Trace Checkpoint Failure Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -1997,6 +2047,7 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
         name="Completion Persistence Failure Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -2141,6 +2192,7 @@ def test_execute_flow_endpoint_suppresses_terminal_sse_when_failure_cannot_persi
         name="Double Persistence Failure Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -2242,6 +2294,7 @@ def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypat
         name="Flow Collision",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
 
@@ -2288,6 +2341,7 @@ def test_execute_flow_endpoint_rejects_local_session_collision_before_register(m
         name="Flow Collision",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     chat._LOCAL_SESSION_OWNERS["session-preowned"] = "different-user"
@@ -2338,6 +2392,7 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
         name="Flow Already Active",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     existing_event = asyncio.Event()
@@ -2380,6 +2435,7 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
         name="Flow Active Reattach",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     existing_event = asyncio.Event()
@@ -2462,6 +2518,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
         name="Flow Error",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -2531,6 +2588,7 @@ def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, cap
         name="Runner Error Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -2594,6 +2652,7 @@ def test_execute_flow_endpoint_returns_403_for_cross_user_flow(monkeypatch):
         name="Other User Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     request = chat.ExecuteFlowRequest(flow_id=flow.id, session_id="session-cross-user-flow")
     db = _DummyDB(flow=flow)
@@ -2625,6 +2684,7 @@ def test_execute_flow_endpoint_sanitizes_validation_error(monkeypatch, caplog):
         name="Flow Validation",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -2660,6 +2720,7 @@ def test_execute_flow_endpoint_requires_user_sub(monkeypatch):
         name="Valid Flow",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     request = chat.ExecuteFlowRequest(flow_id=flow.id, session_id="session-no-user-sub")
     db = _DummyDB(flow=flow)
@@ -2693,6 +2754,7 @@ def test_execute_flow_endpoint_cleans_up_when_commit_fails(monkeypatch):
         name="Flow Commit Failure",
         execution_count=0,
         last_executed_at=None,
+        flow_definition={},
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)

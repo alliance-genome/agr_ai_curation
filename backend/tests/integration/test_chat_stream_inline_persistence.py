@@ -67,7 +67,7 @@ def _configure_stream_mocks(
         monkeypatch,
         chat_modules,
         "get_supervisor_tool_agent_map",
-        lambda: dict(tool_agent_map),
+        lambda _active_groups=None: dict(tool_agent_map),
     )
 
     async def _register_active_stream(session_id, user_id=None, stream_token=None):

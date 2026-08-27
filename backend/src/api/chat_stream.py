@@ -187,7 +187,7 @@ async def chat_endpoint(
             )
 
     try:
-        tool_agent_map = get_supervisor_tool_agent_map()
+        tool_agent_map = get_supervisor_tool_agent_map(active_groups)
     except Exception as exc:
         await _release_non_stream_turn_claim()
         raise_sanitized_http_exception(
@@ -504,7 +504,7 @@ async def chat_stream_endpoint(
             )
 
     try:
-        tool_agent_map = get_supervisor_tool_agent_map()
+        tool_agent_map = get_supervisor_tool_agent_map(active_groups)
     except Exception as exc:
         raise_sanitized_http_exception(
             logger,

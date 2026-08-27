@@ -14,13 +14,19 @@ from src.models.sql.agent import Agent
 
 
 def test_is_agent_visible_to_user_allows_system_agents():
-    agent = SimpleNamespace(visibility="system", user_id=None, project_id=None)
+    agent = SimpleNamespace(
+        visibility="system", user_id=None, project_id=None, allowed_group_ids=[]
+    )
     assert is_agent_visible_to_user(agent, user_id=123, project_ids=None)
 
 
 def test_is_agent_visible_to_user_restricts_private_agents_to_owner():
-    owner_agent = SimpleNamespace(visibility="private", user_id=7, project_id=None)
-    non_owner_agent = SimpleNamespace(visibility="private", user_id=9, project_id=None)
+    owner_agent = SimpleNamespace(
+        visibility="private", user_id=7, project_id=None, allowed_group_ids=[]
+    )
+    non_owner_agent = SimpleNamespace(
+        visibility="private", user_id=9, project_id=None, allowed_group_ids=[]
+    )
 
     assert is_agent_visible_to_user(owner_agent, user_id=7)
     assert not is_agent_visible_to_user(non_owner_agent, user_id=7)
@@ -28,10 +34,36 @@ def test_is_agent_visible_to_user_restricts_private_agents_to_owner():
 
 def test_is_agent_visible_to_user_requires_project_membership():
     project_id = uuid4()
-    agent = SimpleNamespace(visibility="project", user_id=8, project_id=project_id)
+    agent = SimpleNamespace(
+        visibility="project",
+        user_id=8,
+        project_id=project_id,
+        allowed_group_ids=[],
+    )
 
     assert not is_agent_visible_to_user(agent, user_id=8, project_ids=None)
     assert is_agent_visible_to_user(agent, user_id=8, project_ids={project_id})
+
+
+def test_is_agent_visible_to_user_requires_matching_authenticated_group():
+    agent = SimpleNamespace(
+        visibility="system",
+        user_id=None,
+        project_id=None,
+        allowed_group_ids=["RGD"],
+    )
+
+    assert is_agent_visible_to_user(
+        agent,
+        user_id=8,
+        active_group_ids=["WB", "RGD"],
+    )
+    assert not is_agent_visible_to_user(
+        agent,
+        user_id=8,
+        active_group_ids=["MGI"],
+    )
+    assert not is_agent_visible_to_user(agent, user_id=8, active_group_ids=[])
 
 
 def test_is_agent_editable_by_user_owner_only_for_non_system():

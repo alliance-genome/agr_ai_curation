@@ -339,7 +339,7 @@ class TestCustomAgentCrudContract:
         def _fake_list_custom_agents_for_user(_db, user_id, template_source=None):
             observed["user_id"] = user_id
             observed["template_source"] = template_source
-            return [SimpleNamespace()]
+            return [SimpleNamespace(allowed_group_ids=[])]
 
         monkeypatch.setattr(api_module, "list_custom_agents_for_user", _fake_list_custom_agents_for_user)
         monkeypatch.setattr(api_module, "custom_agent_to_dict", lambda _agent: _custom_agent_payload("gene"))
@@ -355,6 +355,45 @@ class TestCustomAgentCrudContract:
         assert observed == {"user_id": 1, "template_source": "gene"}
         assert response.total == 1
         assert response.custom_agents[0].template_source == "gene"
+
+    def test_list_endpoint_filters_group_restricted_agents(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_groups_from_provider_groups",
+            lambda _groups: ["MGI"],
+        )
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_for_user",
+            lambda *_args, **_kwargs: [
+                SimpleNamespace(allowed_group_ids=[]),
+                SimpleNamespace(allowed_group_ids=["RGD"]),
+            ],
+        )
+        monkeypatch.setattr(
+            api_module,
+            "_as_response_payload",
+            lambda agent: _custom_agent_payload(
+                "open" if not agent.allowed_group_ids else "restricted"
+            ),
+        )
+
+        response = asyncio.run(
+            api_module.list_custom_agents_endpoint(
+                user={"sub": "auth-sub", "cognito:groups": ["MGI"]},
+                db=SimpleNamespace(),
+            )
+        )
+
+        assert response.total == 1
+        assert response.custom_agents[0].template_source == "open"
         assert "parent_agent_key" not in response.custom_agents[0].model_dump()
 
 

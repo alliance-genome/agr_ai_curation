@@ -916,7 +916,7 @@ async def test_chat_endpoint_success(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     captured_run_kwargs = []
 
@@ -990,7 +990,7 @@ async def test_chat_endpoint_keeps_sentry_transaction_open_for_non_stream(monkey
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-non-stream", "filename": "paper.pdf"}),
     )
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
     _patch_chat_impl(monkeypatch, "gen_ai_workflow_transaction", _fake_transaction)
 
     async def _stream(**_kwargs):
@@ -1043,7 +1043,7 @@ async def test_chat_endpoint_generates_turn_id_for_non_stream_compaction(monkeyp
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
     captured_run_kwargs = []
 
     async def _stream(**kwargs):
@@ -1077,7 +1077,7 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
@@ -1109,7 +1109,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _register_active_stream(
         session_id: str,
@@ -1215,7 +1215,7 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
     _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
 
-    def _raise_tool_map():
+    def _raise_tool_map(_active_groups=None):
         raise RuntimeError("agent registry unavailable")
 
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", _raise_tool_map)
@@ -1240,7 +1240,7 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     assert [call["role"] for call in repository.append_calls] == ["user"]
     assert "non-stream-turn:session-tool-map:turn-tool-map" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
 
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     result = await chat.chat_endpoint(
         chat.ChatMessage(
@@ -1301,7 +1301,7 @@ async def test_chat_endpoint_omits_unfinished_prior_user_turn_from_context_messa
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _stream(**kwargs):
         captured_context_messages.append(kwargs["context_messages"])
@@ -1381,7 +1381,7 @@ async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatc
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
-        lambda: pytest.fail("tool map should not resolve for a completed replayed turn"),
+        lambda _active_groups=None: pytest.fail("tool map should not resolve for a completed replayed turn"),
     )
 
     async def _stream(**_kwargs):
@@ -1451,7 +1451,7 @@ async def test_chat_endpoint_replay_keeps_next_turn_runner_input_current_only(mo
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
-        lambda: pytest.fail("tool map should not resolve for a completed replayed turn"),
+        lambda _active_groups=None: pytest.fail("tool map should not resolve for a completed replayed turn"),
     )
 
     async def _unexpected_stream(**_kwargs):
@@ -1468,7 +1468,7 @@ async def test_chat_endpoint_replay_keeps_next_turn_runner_input_current_only(mo
 
     assert replay_result.response == "stored answer"
 
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _stream(**kwargs):
         captured_context_messages.append(kwargs["context_messages"])
@@ -1535,7 +1535,7 @@ async def test_chat_endpoint_follow_up_turn_keeps_runner_input_current_only(monk
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _stream(**kwargs):
         captured_context_messages.append(kwargs["context_messages"])
@@ -1566,7 +1566,7 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _stream(**kwargs):
         captured.update(kwargs)
@@ -1608,7 +1608,7 @@ async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypat
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _stream(**kwargs):
         captured.update(kwargs)
@@ -1648,7 +1648,7 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog):
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
@@ -1686,7 +1686,7 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
-        lambda: {"ask_gene_expression_specialist": "gene-expression"},
+        lambda _active_groups=None: {"ask_gene_expression_specialist": "gene-expression"},
     )
     monkeypatch.setattr(
         extraction_results_module,
@@ -1785,7 +1785,7 @@ async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypat
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
-        lambda: (_ for _ in ()).throw(RuntimeError("agent registry unavailable")),
+        lambda _active_groups=None: (_ for _ in ()).throw(RuntimeError("agent registry unavailable")),
     )
 
     # run_agent_streamed should never be reached; provide a sentinel to verify.
@@ -1859,7 +1859,7 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _raise(**_kwargs):
         raise RuntimeError("boom")
@@ -1894,7 +1894,7 @@ async def test_chat_endpoint_reports_tool_map_resolution_failure(monkeypatch):
         calls.append((exc, kwargs))
         return True
 
-    def _raise_tool_map():
+    def _raise_tool_map(_active_groups=None):
         raise RuntimeError("agent registry unavailable")
 
     monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)

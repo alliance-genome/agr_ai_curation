@@ -8,6 +8,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from src.models.sql.agent import Agent, ProjectMember
+from src.lib.agent_access import is_resource_access_allowed
 
 
 @dataclass
@@ -42,17 +43,25 @@ def is_agent_visible_to_user(
     agent: Agent,
     user_id: int,
     project_ids: Optional[Iterable[UUID]] = None,
+    active_group_ids: Optional[Iterable[str]] = None,
 ) -> bool:
-    """Visibility policy for agent browsing and execution."""
+    """Combined visibility and authenticated-group policy for agent access."""
+    visibility_allowed = False
     if agent.visibility == "system":
-        return True
-    if agent.visibility == "private":
-        return agent.user_id == user_id
-    if agent.visibility == "project":
+        visibility_allowed = True
+    elif agent.visibility == "private":
+        visibility_allowed = agent.user_id == user_id
+    elif agent.visibility == "project":
         if not project_ids or agent.project_id is None:
-            return False
-        return agent.project_id in set(project_ids)
-    return False
+            visibility_allowed = False
+        else:
+            visibility_allowed = agent.project_id in set(project_ids)
+    return is_resource_access_allowed(
+        visibility_allowed=visibility_allowed,
+        allowed_group_ids=list(agent.allowed_group_ids),
+        active_group_ids=list(active_group_ids or []),
+        resource_kind="agent",
+    )
 
 
 def is_agent_editable_by_user(agent: Agent, user_id: int) -> bool:
@@ -62,7 +71,11 @@ def is_agent_editable_by_user(agent: Agent, user_id: int) -> bool:
     return agent.user_id == user_id
 
 
-def list_agents_visible_to_user(db: Session, user_id: int) -> List[Agent]:
+def list_agents_visible_to_user(
+    db: Session,
+    user_id: int,
+    active_group_ids: Optional[Iterable[str]] = None,
+) -> List[Agent]:
     """List active agents visible to a user under private/project/system rules."""
     project_ids = list(get_project_ids_for_user(db, user_id))
     visibility_filters = [
@@ -74,10 +87,20 @@ def list_agents_visible_to_user(db: Session, user_id: int) -> List[Agent]:
             and_(Agent.visibility == "project", Agent.project_id.in_(project_ids))
         )
 
-    return db.query(Agent).filter(
+    rows = db.query(Agent).filter(
         Agent.is_active == True,  # noqa: E712
         or_(*visibility_filters),
     ).order_by(Agent.updated_at.desc(), Agent.created_at.desc()).all()
+    return [
+        agent
+        for agent in rows
+        if is_agent_visible_to_user(
+            agent,
+            user_id,
+            project_ids,
+            active_group_ids,
+        )
+    ]
 
 
 def get_agent_by_key(
@@ -85,6 +108,7 @@ def get_agent_by_key(
     agent_key: str,
     user_id: Optional[int] = None,
     include_inactive: bool = False,
+    active_group_ids: Optional[Iterable[str]] = None,
 ) -> Optional[Agent]:
     """Fetch one agent by key, with visibility enforcement.
 
@@ -96,14 +120,31 @@ def get_agent_by_key(
     if not include_inactive:
         query = query.filter(Agent.is_active == True)  # noqa: E712
     if user_id is None:
-        return query.filter(Agent.visibility == "system").first()
+        agent = query.filter(Agent.visibility == "system").first()
+        if agent is None:
+            return None
+        return (
+            agent
+            if is_resource_access_allowed(
+                visibility_allowed=True,
+                allowed_group_ids=list(agent.allowed_group_ids),
+                active_group_ids=list(active_group_ids or []),
+                resource_kind="agent",
+            )
+            else None
+        )
 
     agent = query.first()
     if not agent:
         return None
 
     project_ids = get_project_ids_for_user(db, user_id)
-    if not is_agent_visible_to_user(agent, user_id, project_ids):
+    if not is_agent_visible_to_user(
+        agent,
+        user_id,
+        project_ids,
+        active_group_ids,
+    ):
         return None
     return agent
 
@@ -126,3 +167,35 @@ def agent_to_execution_spec(agent: Agent) -> AgentExecutionSpec:
         supervisor_enabled=bool(agent.supervisor_enabled),
         show_in_palette=bool(agent.show_in_palette),
     )
+
+
+def inaccessible_flow_agent_keys(
+    db: Session,
+    flow_definition: Dict[str, object],
+    *,
+    user_id: int,
+    active_group_ids: Iterable[str],
+) -> List[str]:
+    """Return referenced agent keys unavailable under the current auth snapshot."""
+
+    inaccessible: List[str] = []
+    nodes = flow_definition.get("nodes", [])
+    if not isinstance(nodes, list):
+        return inaccessible
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        data = node.get("data", node)
+        if not isinstance(data, dict):
+            continue
+        agent_key = str(data.get("agent_id") or "").strip()
+        if not agent_key or agent_key == "task_input" or agent_key in inaccessible:
+            continue
+        if get_agent_by_key(
+            db,
+            agent_key,
+            user_id=user_id,
+            active_group_ids=active_group_ids,
+        ) is None:
+            inaccessible.append(agent_key)
+    return inaccessible

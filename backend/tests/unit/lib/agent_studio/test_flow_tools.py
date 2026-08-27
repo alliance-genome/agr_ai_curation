@@ -7,7 +7,9 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
+import src.lib.agent_studio.catalog_service as catalog_service
 import src.lib.agent_studio.flow_tools as flow_tools
+from src.lib.agent_access import is_resource_access_allowed
 from src.lib.agent_studio.models import FlowContextDefinition
 from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 from src.lib.packages.flow_recipes import (
@@ -32,12 +34,30 @@ def _isolate_flow_tool_state(monkeypatch):
         monkeypatch.delenv(environment_name, raising=False)
     flow_tools.clear_workflow_user_context()
     flow_tools.clear_current_flow_context()
+
+    def _available_agents(*, db_user_id=None, authenticated_groups=None):
+        assert db_user_id is not None
+        return [
+            {"agent_id": agent_id}
+            for agent_id, entry in flow_tools.AGENT_REGISTRY.items()
+            if is_resource_access_allowed(
+                visibility_allowed=True,
+                allowed_group_ids=list(entry.get("allowed_group_ids") or []),
+                active_group_ids=list(authenticated_groups or []),
+            )
+        ]
+
+    monkeypatch.setattr(catalog_service, "list_available_agents", _available_agents)
+    # Flow-tool tests run with explicit server-derived user/group context unless
+    # an authentication or denial case overrides it.
+    flow_tools.set_workflow_user_context(42, active_group_ids=["RGD"])
     yield
     flow_tools.clear_workflow_user_context()
     flow_tools.clear_current_flow_context()
 
 
 def test_workflow_user_context_set_get_clear():
+    flow_tools.clear_workflow_user_context()
     assert flow_tools.get_current_user_id() is None
     assert flow_tools.get_current_user_email() is None
 
@@ -776,7 +796,11 @@ def test_all_ten_alliance_recipes_appear_when_required_agents_are_flow_eligible(
         },
     )
 
-    templates = flow_tools._filter_flow_templates(available_agent_ids, catalog)
+    templates = flow_tools._filter_flow_templates(
+        available_agent_ids,
+        catalog,
+        active_group_ids=["RGD"],
+    )
 
     assert [template["name"] for template in templates] == [
         "Gene Curation",
@@ -883,7 +907,11 @@ def test_flow_templates_renumber_sources_after_optional_formatter_is_removed(
         )
     )
 
-    templates = flow_tools._filter_flow_templates(available_agent_ids, catalog)
+    templates = flow_tools._filter_flow_templates(
+        available_agent_ids,
+        catalog,
+        active_group_ids=["RGD"],
+    )
 
     assert templates[0]["allowed_group_ids"] == ["RGD"]
     assert templates[0]["steps"] == [
@@ -893,8 +921,14 @@ def test_flow_templates_renumber_sources_after_optional_formatter_is_removed(
         {"agent_id": "chat_output", "source_steps": [3]},
     ]
 
+    assert flow_tools._filter_flow_templates(
+        available_agent_ids,
+        catalog,
+        active_group_ids=["MGI"],
+    ) == []
 
-def test_flow_template_shared_validation_failure_reports_package_recipe_context(
+
+def test_startup_validation_rejects_invalid_group_restricted_recipe(
     monkeypatch,
     tmp_path,
 ):
@@ -925,6 +959,7 @@ def test_flow_template_shared_validation_failure_reports_package_recipe_context(
                             {
                                 "name": "Broken Output",
                                 "description": "Invalid ordered source binding",
+                                "access": {"allowed_group_ids": ["RGD"]},
                                 "steps": [
                                     {"agent_id": "pdf_extraction"},
                                     {
@@ -941,10 +976,7 @@ def test_flow_template_shared_validation_failure_reports_package_recipe_context(
     )
 
     with pytest.raises(FlowRecipeLoadError) as exc_info:
-        flow_tools._filter_flow_templates(
-            {"pdf_extraction", "chat_output"},
-            catalog,
-        )
+        flow_tools.validate_installed_flow_recipe_catalog(catalog)
 
     message = str(exc_info.value)
     assert "Broken Output" in message
@@ -977,6 +1009,11 @@ def test_get_flow_templates_handler_reports_core_only_install(monkeypatch):
 def test_get_available_agents_handler_groups_categories(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "gene", "chat_output"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
         "AGENT_REGISTRY",
         {
             "supervisor": {"category": "Routing"},
@@ -1007,6 +1044,30 @@ def test_get_available_agents_handler_groups_categories(monkeypatch):
     assert "chat_output" in result["output_agents"]
     assert "pdf_extraction" in result["extraction_agents"]
     assert "gene" in result["validation_agents"]
+
+
+def test_get_available_agents_filters_restricted_agents_by_authenticated_groups(monkeypatch):
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["open", "rgd_only"])
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "open": {"name": "Open", "category": "Extraction"},
+            "rgd_only": {
+                "name": "RGD only",
+                "category": "Extraction",
+                "allowed_group_ids": ["RGD"],
+            },
+        },
+    )
+    flow_tools._current_active_group_ids.set(("MGI",))
+    denied = flow_tools._get_available_agents_handler()()
+    assert denied["total_agents"] == 1
+    assert denied["extraction_agents"] == ["open"]
+
+    flow_tools._current_active_group_ids.set(("WB", "RGD"))
+    allowed = flow_tools._get_available_agents_handler()()
+    assert set(allowed["extraction_agents"]) == {"open", "rgd_only"}
 
 
 def test_get_available_agents_handler_reports_core_only_install(monkeypatch):
@@ -1721,6 +1782,11 @@ def _multi_agent_registry():
 
 
 def test_get_available_agents_handler_filters_by_query(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["gene_extractor", "gene_validation", "disease_extractor", "chat_output"],
+    )
     monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
     handler = flow_tools._get_available_agents_handler()
 
@@ -1739,6 +1805,11 @@ def test_get_available_agents_handler_filters_by_query(monkeypatch):
 
 
 def test_get_available_agents_handler_filters_by_category(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["gene_extractor", "gene_validation", "disease_extractor", "chat_output"],
+    )
     monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
     handler = flow_tools._get_available_agents_handler()
 
@@ -1750,6 +1821,11 @@ def test_get_available_agents_handler_filters_by_category(monkeypatch):
 
 
 def test_get_available_agents_handler_pages_with_cursor(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["gene_extractor", "gene_validation", "disease_extractor", "chat_output"],
+    )
     monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
     handler = flow_tools._get_available_agents_handler()
 

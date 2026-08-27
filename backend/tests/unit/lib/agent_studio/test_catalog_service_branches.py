@@ -427,7 +427,7 @@ def test_list_available_agents_filters_invalid_metadata(monkeypatch):
             raise ValueError("skip")
         return {"agent_id": agent_id}
 
-    monkeypatch.setattr(catalog_service, "get_agent_metadata", _meta)
+    monkeypatch.setattr(catalog_service, "get_active_visible_agent_metadata", _meta)
 
     listed = catalog_service.list_available_agents(db_user_id=7)
     assert listed == [{"agent_id": "gene"}]

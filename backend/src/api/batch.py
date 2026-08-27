@@ -29,6 +29,7 @@ from ..lib.batch.events import get_batch_broadcaster
 from ..models.sql import get_db, CurationFlow, PDFDocument
 from ..lib.observability.background_tasks import add_observed_background_task
 from ..lib.group_rules import get_groups_from_provider_groups
+from ..lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 from ..models.sql.batch import BatchStatus, BatchDocumentStatus
 from ..models.sql.database import SessionLocal
 from ..schemas.batch import (
@@ -154,6 +155,17 @@ async def create_batch(
     if not flow:
         raise HTTPException(status_code=404, detail="Flow not found")
 
+    active_group_ids = get_groups_from_provider_groups(
+        user.get("cognito:groups", [])
+    )
+    if inaccessible_flow_agent_keys(
+        db,
+        flow.flow_definition or {},
+        user_id=db_user.id,
+        active_group_ids=active_group_ids,
+    ):
+        raise HTTPException(status_code=403, detail="Flow contains unavailable agents")
+
     # Validate flow is batch-compatible
     validation = validate_flow_for_batch(flow.flow_definition)
     if not validation.valid:
@@ -191,9 +203,7 @@ async def create_batch(
         user_id=db_user.id,
         flow_id=request.flow_id,
         document_ids=request.document_ids,
-        active_group_ids=get_groups_from_provider_groups(
-            user.get("cognito:groups", [])
-        ),
+        active_group_ids=active_group_ids,
     )
 
     # Start background processing
@@ -748,5 +758,15 @@ async def validate_flow_for_batch_endpoint(
 
     if not flow:
         raise HTTPException(status_code=404, detail="Flow not found")
+
+    if inaccessible_flow_agent_keys(
+        db,
+        flow.flow_definition or {},
+        user_id=db_user.id,
+        active_group_ids=get_groups_from_provider_groups(
+            user.get("cognito:groups", [])
+        ),
+    ):
+        raise HTTPException(status_code=403, detail="Flow contains unavailable agents")
 
     return validate_flow_for_batch(flow.flow_definition)

@@ -1164,12 +1164,14 @@ def get_supervisor_agent_tools() -> List[str]:
     return [t["tool_name"] for t in tools]
 
 
-def get_supervisor_tool_agent_map() -> Dict[str, str]:
+def get_supervisor_tool_agent_map(
+    active_group_ids: Optional[List[str]] = None,
+) -> Dict[str, str]:
     """Return the runtime mapping from supervisor tool names to agent keys."""
 
     return {
         str(spec["tool_name"]): str(spec["agent_key"])
-        for spec in _get_supervisor_specialist_specs()
+        for spec in _get_supervisor_specialist_specs(active_group_ids)
         if spec.get("tool_name") and spec.get("agent_key")
     }
 
@@ -1193,11 +1195,14 @@ def generate_routing_table() -> str:
     return "\n".join(rows)
 
 
-def _get_supervisor_specialist_specs() -> List[Dict[str, Any]]:
+def _get_supervisor_specialist_specs(
+    active_group_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """Load supervisor-enabled system agents from unified DB records."""
     from src.models.sql.agent import Agent as AgentRecord
     from src.models.sql.database import SessionLocal
     from src.lib.agent_studio.catalog_service import get_agent_metadata
+    from src.lib.agent_access import is_resource_access_allowed
 
     db = SessionLocal()
     try:
@@ -1211,6 +1216,13 @@ def _get_supervisor_specialist_specs() -> List[Dict[str, Any]]:
 
     specs: List[Dict[str, Any]] = []
     for row in rows:
+        if not is_resource_access_allowed(
+            visibility_allowed=True,
+            allowed_group_ids=list(row.allowed_group_ids),
+            active_group_ids=list(active_group_ids or []),
+            resource_kind="supervisor_specialist",
+        ):
+            continue
         try:
             metadata = get_agent_metadata(row.agent_key)
             requires_document = bool(metadata.get("requires_document", False))
@@ -1391,7 +1403,11 @@ def _create_dynamic_specialist_tools(
     """
     from src.lib.agent_studio.catalog_service import get_agent_by_id
 
-    tools_metadata = tool_specs if tool_specs is not None else _get_supervisor_specialist_specs()
+    tools_metadata = (
+        tool_specs
+        if tool_specs is not None
+        else _get_supervisor_specialist_specs(active_groups)
+    )
     specialist_tools = []
 
     for tool_meta in tools_metadata:
@@ -1617,7 +1633,7 @@ def create_supervisor_agent(
         max_calls_per_tool=get_supervisor_max_calls_per_specialist(),
     )
 
-    tool_specs = _get_supervisor_specialist_specs()
+    tool_specs = _get_supervisor_specialist_specs(active_groups)
     formatter_bundle, formatter_runtime_context, formatter_unavailable_note = (
         _build_chat_formatter_bundle(user_id=user_id, document_id=document_id)
     )

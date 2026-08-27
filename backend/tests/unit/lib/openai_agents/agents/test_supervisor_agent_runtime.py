@@ -508,6 +508,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
             group_rules_enabled=1,
             supervisor_batchable=1,
             supervisor_batching_entity="gene",
+            allowed_group_ids=[],
         ),
         SimpleNamespace(
             agent_key="broken-specialist",
@@ -517,6 +518,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
             group_rules_enabled=0,
             supervisor_batchable=0,
             supervisor_batching_entity=None,
+            allowed_group_ids=[],
         ),
     ]
     session = _FakeSession(rows)
@@ -552,7 +554,7 @@ def test_create_dynamic_specialist_tools_skips_document_required_tools_without_d
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
-        lambda: [
+        lambda *_args, **_kwargs: [
             {
                 "tool_name": "ask_pdf_extraction_specialist",
                 "agent_key": "pdf_extraction",
@@ -578,7 +580,7 @@ def test_create_dynamic_specialist_tools_passes_groups_without_prompt_rules(monk
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
-        lambda: [
+        lambda *_args, **_kwargs: [
             {
                 "tool_name": "ask_gene_expression_specialist",
                 "agent_key": "gene-expression",
@@ -624,6 +626,41 @@ def test_create_dynamic_specialist_tools_passes_groups_without_prompt_rules(monk
     assert captured["kwargs"]["active_groups"] == ["WB"]
     assert captured["kwargs"]["authenticated_groups"] == ["WB"]
     assert tools == ["wrapped::ask_gene_expression_specialist::Gene Expression"]
+
+
+def test_dynamic_specialist_tools_filter_group_restricted_agents(monkeypatch):
+    built = []
+    observed_groups = []
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_get_supervisor_specialist_specs",
+        lambda active_groups: observed_groups.append(active_groups)
+        or [
+            {
+                "tool_name": "ask_open_specialist",
+                "agent_key": "open",
+                "name": "Open",
+                "description": "Open",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key, **_kwargs: built.append(agent_key)
+        or SimpleNamespace(name=agent_key),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_streaming_tool",
+        lambda **kwargs: kwargs["tool_name"],
+    )
+    tools = supervisor_agent._create_dynamic_specialist_tools(
+        active_groups=["MGI"],
+    )
+
+    assert tools == ["ask_open_specialist"]
+    assert built == ["open"]
+    assert observed_groups == [["MGI"]]
 
 
 def test_dynamic_tools_limit_current_request_to_extraction_specialists(monkeypatch):
@@ -679,7 +716,7 @@ def test_create_dynamic_specialist_tools_continues_after_agent_construction_fail
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
-        lambda: [
+        lambda *_args, **_kwargs: [
             {
                 "tool_name": "ask_bad_specialist",
                 "agent_key": "bad",
@@ -836,7 +873,7 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
-        lambda: [
+        lambda *_args, **_kwargs: [
             {"tool_name": "ask_gene_specialist", "requires_document": False},
             {"tool_name": "ask_pdf_extraction_specialist", "requires_document": True},
         ],
@@ -1049,7 +1086,7 @@ def test_create_supervisor_agent_exposes_formatter_with_saved_chat_bundle(monkey
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
-        lambda: [
+        lambda *_args, **_kwargs: [
             {
                 "agent_key": "csv_formatter",
                 "name": "CSV File Formatter",
@@ -1350,7 +1387,11 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         lambda model, provider_override=None: model,
     )
     monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
-    monkeypatch.setattr(supervisor_agent, "_get_supervisor_specialist_specs", lambda: [])
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_get_supervisor_specialist_specs",
+        lambda *_args, **_kwargs: [],
+    )
     _patch_supervisor_prompt_bundle(monkeypatch, version=11)
     monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -1431,7 +1472,7 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
-        lambda: [{"tool_name": "ask_pdf_extraction_specialist", "requires_document": True}],
+        lambda *_args, **_kwargs: [{"tool_name": "ask_pdf_extraction_specialist", "requires_document": True}],
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -1490,7 +1531,11 @@ def test_create_supervisor_agent_applies_model_overrides(monkeypatch):
         lambda model, provider_override=None: model,
     )
     monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **kwargs: kwargs)
-    monkeypatch.setattr(supervisor_agent, "_get_supervisor_specialist_specs", lambda: [])
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_get_supervisor_specialist_specs",
+        lambda *_args, **_kwargs: [],
+    )
     monkeypatch.setattr(
         supervisor_agent,
         "_create_dynamic_specialist_tools",

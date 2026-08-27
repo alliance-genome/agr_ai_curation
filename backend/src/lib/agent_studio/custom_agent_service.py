@@ -502,7 +502,12 @@ def _validate_model_id(model_id: str) -> str:
     return normalized
 
 
-def _resolve_system_template_agent(db: Session, template_source: str) -> CustomAgent:
+def _resolve_system_template_agent(
+    db: Session,
+    template_source: str,
+    *,
+    active_group_ids: Optional[List[str]] = None,
+) -> CustomAgent:
     """Resolve a system template by canonical unified `agent_key` only."""
     raw_id = require_canonical_agent_identity(
         template_source,
@@ -517,7 +522,15 @@ def _resolve_system_template_agent(db: Session, template_source: str) -> CustomA
         CustomAgent.is_active == True,  # noqa: E712
     ).first()
     if by_key:
-        return by_key
+        from src.lib.agent_access import is_resource_access_allowed
+
+        if is_resource_access_allowed(
+            visibility_allowed=True,
+            allowed_group_ids=_read_allowed_group_ids(by_key),
+            active_group_ids=list(active_group_ids or []),
+            resource_kind="agent_template",
+        ):
+            return by_key
 
     raise ValueError(f"No active system agent found for parent id '{raw_id}'")
 
@@ -590,6 +603,7 @@ def create_custom_agent(
     allowed_group_ids: Optional[List[str]] = None,
     inherited_allowed_group_ids: Optional[List[str]] = None,
     inherited_group_tool_policy: Optional[Dict[str, Any]] = None,
+    active_group_ids: Optional[List[str]] = None,
 ) -> CustomAgent:
     """Create a new custom agent and seed version snapshot."""
     selected_template_key = str(template_source or "").strip()
@@ -597,7 +611,11 @@ def create_custom_agent(
     parent_agent_key: Optional[str] = None
 
     if selected_template_key:
-        parent_template = _resolve_system_template_agent(db, selected_template_key)
+        parent_template = _resolve_system_template_agent(
+            db,
+            selected_template_key,
+            active_group_ids=active_group_ids,
+        )
         parent_agent_key = parent_template.agent_key
         parent_defaults = {
             "model_id": parent_template.model_id,
@@ -900,13 +918,19 @@ def clone_visible_agent_for_user(
     source_agent_key: str,
     name: Optional[str] = None,
     allowed_group_ids: Optional[List[str]] = None,
+    active_group_ids: Optional[List[str]] = None,
 ) -> CustomAgent:
     """Clone any user-visible agent (system/private/project) into user's private space."""
     source_key = str(source_agent_key or "").strip()
     if not source_key:
         raise ValueError("source_agent_id is required")
 
-    source_agent = get_agent_by_key(db, source_key, user_id=user_id)
+    source_agent = get_agent_by_key(
+        db,
+        source_key,
+        user_id=user_id,
+        active_group_ids=active_group_ids,
+    )
     if source_agent is None:
         raise CustomAgentNotFoundError(f"Agent '{source_key}' not found")
     if source_agent.visibility not in {"system", "private", "project"}:
@@ -950,6 +974,7 @@ def clone_visible_agent_for_user(
         inherited_group_tool_policy=dict(
             getattr(source_agent, "group_tool_policy", {}) or {}
         ),
+        active_group_ids=active_group_ids,
     )
 
 

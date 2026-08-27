@@ -42,7 +42,7 @@ def _build_batch_context() -> tuple[Any, Any, Any]:
         processed_at=None,
         error_message=None,
     )
-    flow = SimpleNamespace(name="Gene Expression Batch Flow")
+    flow = SimpleNamespace(name="Gene Expression Batch Flow", flow_definition={})
     batch.documents = [batch_doc]
     return batch, batch_doc, flow
 
@@ -82,6 +82,11 @@ def mocked_batch_persistence(monkeypatch):
     monkeypatch.setattr(BatchService, "claim_recoverable_batch", claim)
     monkeypatch.setattr(BatchService, "complete_running_batch", complete)
     monkeypatch.setattr(processor, "_maintain_batch_lease", no_heartbeat)
+    monkeypatch.setattr(
+        processor,
+        "inaccessible_flow_agent_keys",
+        lambda *_args, **_kwargs: [],
+    )
 
 
 def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
@@ -132,6 +137,36 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
             "timestamp": batch_doc.processed_at.isoformat(),
         }
     ]
+
+
+def test_batch_processor_rechecks_agents_against_trusted_group_snapshot(monkeypatch):
+    db = Mock()
+    batch, batch_doc, flow = _build_batch_context()
+    flow.flow_definition = {"nodes": [{"data": {"agent_id": "rgd-only"}}]}
+    observed = {}
+
+    def _inaccessible(_db, flow_definition, *, user_id, active_group_ids):
+        observed.update(
+            flow_definition=flow_definition,
+            user_id=user_id,
+            active_group_ids=active_group_ids,
+        )
+        return ["rgd-only"]
+
+    monkeypatch.setattr(processor, "inaccessible_flow_agent_keys", _inaccessible)
+
+    with pytest.raises(RuntimeError, match="authenticated group snapshot"):
+        processor._process_single_document(
+            db=db,
+            batch=batch,
+            batch_doc=batch_doc,
+            flow=flow,
+            cognito_sub="auth-sub",
+        )
+
+    assert observed["user_id"] == batch.user_id
+    assert observed["active_group_ids"] == ["group-a"]
+    assert batch_doc.status == BatchDocumentStatus.FAILED
 
 
 def test_batch_lease_heartbeat_retries_after_session_error(monkeypatch, caplog):

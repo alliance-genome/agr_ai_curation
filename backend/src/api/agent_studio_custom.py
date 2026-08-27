@@ -39,10 +39,25 @@ from src.lib.agent_studio.custom_agent_service import (
 )
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.group_rules import get_groups_from_provider_groups
+from src.lib.agent_access import is_resource_access_allowed
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agent-studio/custom-agents")
+
+
+def _authenticated_group_ids(user: Dict[str, Any]) -> list[str]:
+    return get_groups_from_provider_groups(user.get("cognito:groups", []))
+
+
+def _require_custom_agent_group_access(agent: Any, user: Dict[str, Any]) -> None:
+    if not is_resource_access_allowed(
+        visibility_allowed=True,
+        allowed_group_ids=list(getattr(agent, "allowed_group_ids", []) or []),
+        active_group_ids=_authenticated_group_ids(user),
+        resource_kind="custom_agent",
+    ):
+        raise CustomAgentNotFoundError("Custom agent not found")
 
 
 class _CustomAgentDatabaseError(RuntimeError):
@@ -277,6 +292,7 @@ async def create_custom_agent_endpoint(
             output_schema_key=request.output_schema_key,
             category=request.category,
             allowed_group_ids=request.allowed_group_ids,
+            active_group_ids=_authenticated_group_ids(user),
         )
         db.commit()
         db.refresh(custom_agent)
@@ -334,7 +350,20 @@ async def list_custom_agents_endpoint(
     """List active custom agents for current user."""
     db_user = set_global_user_from_cognito(db, user)
     try:
-        agents = list_custom_agents_for_user(db, db_user.id, template_source=template_source)
+        agents = [
+            agent
+            for agent in list_custom_agents_for_user(
+                db,
+                db_user.id,
+                template_source=template_source,
+            )
+            if is_resource_access_allowed(
+                visibility_allowed=True,
+                allowed_group_ids=list(agent.allowed_group_ids),
+                active_group_ids=_authenticated_group_ids(user),
+                resource_kind="custom_agent_catalog",
+            )
+        ]
         return ListCustomAgentsResponse(
             custom_agents=[_as_response_payload(agent) for agent in agents],
             total=len(agents),
@@ -358,6 +387,7 @@ async def get_custom_agent_endpoint(
     db_user = set_global_user_from_cognito(db, user)
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
+        _require_custom_agent_group_access(custom_agent, user)
         return _as_response_payload(custom_agent)
     except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         _raise_custom_agent_lookup_http_exception(
@@ -383,6 +413,7 @@ async def update_custom_agent_endpoint(
     )
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
+        _require_custom_agent_group_access(custom_agent, user)
         update_custom_agent(
             db=db,
             custom_agent=custom_agent,
@@ -456,6 +487,7 @@ async def delete_custom_agent_endpoint(
     db_user = set_global_user_from_cognito(db, user)
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
+        _require_custom_agent_group_access(custom_agent, user)
         soft_delete_custom_agent(custom_agent)
         db.commit()
         return {"status": "deleted", "id": str(custom_agent_id)}
@@ -477,6 +509,7 @@ async def list_custom_agent_versions_endpoint(
     db_user = set_global_user_from_cognito(db, user)
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
+        _require_custom_agent_group_access(custom_agent, user)
         versions = list_custom_agent_versions(db, custom_agent.id)
         return [_as_version_payload(v) for v in versions]
     except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
@@ -504,6 +537,7 @@ async def revert_custom_agent_endpoint(
     )
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
+        _require_custom_agent_group_access(custom_agent, user)
         revert_custom_agent_to_version(
             db=db,
             custom_agent=custom_agent,
@@ -541,6 +575,7 @@ async def test_custom_agent_endpoint(
     db_user = set_global_user_from_cognito(db, user)
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
+        _require_custom_agent_group_access(custom_agent, user)
     except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         _raise_custom_agent_lookup_http_exception(
             exc=exc,
@@ -562,9 +597,7 @@ async def test_custom_agent_endpoint(
 
     session_id = request.session_id or f"custom-test-{uuid.uuid4()}"
     active_groups = [request.group_id] if request.group_id else []
-    authenticated_groups = get_groups_from_provider_groups(
-        user.get("cognito:groups", [])
-    )
+    authenticated_groups = _authenticated_group_ids(user)
 
     set_current_session_id(session_id)
     set_current_user_id(str(user_sub))
