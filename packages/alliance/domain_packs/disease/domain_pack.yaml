@@ -2,8 +2,8 @@ pack_id: agr.alliance.disease
 display_name: Alliance Disease Domain Pack
 version: 0.1.0
 metadata_api_version: 1.0.0
-description: Pending disease assertion envelopes grounded to Alliance DiseaseAnnotation LinkML metadata and read-only curation DB target tables.
-status: in_development
+description: Disease assertion envelopes grounded to concrete Alliance disease annotation subtypes and read-only curation DB target tables.
+status: active
 schema_refs:
   - schema_id: alliance.linkml
     provider: alliance_linkml
@@ -47,8 +47,8 @@ enum_definitions:
         label: Low
   - enum_id: DiseaseSubjectType
     display_name: Disease assertion subject type
-    description: Pending type for the biological entity subject before concrete annotation materialization.
-    definition_state: in_development
+    description: Biological entity subject type used to select the concrete disease annotation subtype.
+    definition_state: stable
     values:
       - value: gene
         label: Gene
@@ -61,7 +61,7 @@ enum_definitions:
 model_definitions:
   - model_id: PendingDiseaseAssertionPayload
     display_name: Pending disease assertion payload
-    description: One pending disease assertion grounded to abstract DiseaseAnnotation metadata; concrete Gene/Allele/AGM write targets are blocked.
+    description: One disease assertion materialized as a concrete Gene, Allele, or AGM annotation when its subject kind is known.
     schema_ref:
       schema_id: alliance.linkml.DiseaseAnnotation
       provider: alliance_linkml
@@ -70,7 +70,7 @@ model_definitions:
       uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
       definition_state: in_development
       definition_notes:
-        - DiseaseAnnotation is abstract in LinkML; this pack emits pending envelopes and blocks writes until concrete subject materialization is verified.
+        - DiseaseAnnotation is abstract in LinkML and remains the conceptual parent and unknown-subject fallback.
       metadata:
         provider_refs:
           alliance_linkml:
@@ -80,7 +80,7 @@ model_definitions:
             class: DiseaseAnnotation
     definition_state: in_development
     definition_notes:
-      - Required write DTO fields such as subject, reference, evidence code, and data provider are declared but not required for pending assertion validation.
+      - The shared payload remains in development only because durable single_reference materialization is pending.
   - model_id: DiseaseOntologyTermSnapshotPayload
     display_name: Disease ontology term snapshot payload
     description: Embedded Disease Ontology term identity for the asserted disease.
@@ -99,10 +99,10 @@ model_definitions:
             class: DOTerm
   - model_id: DiseaseSubjectSnapshotPayload
     display_name: Pending disease subject snapshot payload
-    description: Extractor-observed subject context before concrete Gene, Allele, or AGM materialization.
-    definition_state: in_development
+    description: Extractor-observed subject context used for concrete Gene, Allele, or AGM materialization.
+    definition_state: stable
     definition_notes:
-      - Subject identity is not a stable write target until the disease extractor migration emits concrete subject identifiers.
+      - Subject identity is resolved by the active disease subject materialization binding.
   - model_id: ReferenceSnapshotPayload
     display_name: Reference snapshot payload
     description: Source paper reference fields needed before a single_reference can be materialized.
@@ -145,7 +145,7 @@ model_definitions:
       name: ConditionRelation
       version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
       uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
-      definition_state: in_development
+      definition_state: stable
       metadata:
         provider_refs:
           alliance_linkml:
@@ -162,7 +162,7 @@ model_definitions:
       name: ExperimentalCondition
       version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
       uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
-      definition_state: in_development
+      definition_state: stable
       metadata:
         provider_refs:
           alliance_linkml:
@@ -177,7 +177,7 @@ model_definitions:
 object_definitions:
   - object_type: DiseaseAnnotation
     display_name: Disease annotation
-    description: Pending curatable unit for one evidence-backed disease assertion before concrete subject/reference/write materialization.
+    description: Abstract LinkML parent and unknown-subject fallback for one evidence-backed disease assertion.
     model_ref: PendingDiseaseAssertionPayload
     schema_ref:
       schema_id: alliance.linkml.DiseaseAnnotation
@@ -185,9 +185,9 @@ object_definitions:
       name: DiseaseAnnotation
       version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
       uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
-      definition_state: in_development
+      definition_state: stable
       definition_notes:
-        - DiseaseAnnotation is abstract in LinkML; pending envelopes distinguish complete extraction fields from blocked write-target fields.
+        - DiseaseAnnotation is abstract in LinkML; concrete subtypes are the curatable write targets.
       metadata:
         provider_refs:
           alliance_linkml:
@@ -195,9 +195,9 @@ object_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
             class: DiseaseAnnotation
-    definition_state: in_development
+    definition_state: stable
     definition_notes:
-      - Pending only; write behavior is blocked until subject type, subject ID, source reference ID, evidence codes, and concrete annotation subtype are verified.
+      - The abstract object is retained as the conceptual parent and unknown-subject fallback, not as a declared write target.
     metadata:
       object_role: curatable_unit
       assertion_kind: pending_disease_assertion
@@ -245,36 +245,21 @@ object_definitions:
             label: Provenance
             fields:
               - data_provider.abbreviation
-      write_behavior:
-        status: blocked
-        blocked_by: ALL-425
-        reason: The read-only DB projection is verified, but writes require concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation, or AGMDiseaseAnnotation materialization plus durable reference and evidence-code mappings.
-        blocked_operations:
-          - insert public.diseaseannotation
-          - insert public.genediseaseannotation
-          - insert public.allelediseaseannotation
-          - insert public.agmdiseaseannotation
-          - insert public.diseaseannotation_conditionrelation
-      export_behavior:
-        status: blocked
-        blocked_by: ALL-425
-        reason: Disease export/submission adapters are out of scope for this pack and wait for verified submission payload mapping.
       definition_state_summary:
         complete:
           - mention
           - disease_annotation_object
+          - disease_annotation_subject
+          - disease_relation_name
           - role
           - confidence
+          - evidence_code_curies
           - evidence_record_ids
           - evidence_records
           - condition_relations
-        under_development:
-          - disease_relation_name
-        blocked:
-          - disease_annotation_subject
-          - single_reference
-          - evidence_code_curies
           - data_provider
+        blocked:
+          - single_reference
       db_projection:
         base_table: public.diseaseannotation
         concrete_tables:
@@ -721,12 +706,12 @@ object_definitions:
       - field_path: data_provider
         field_type: object
         display_name: Data provider
-        definition_state: in_development
+        definition_state: stable
         metadata:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
-          definition_state_category: under_development
+          definition_state_category: complete
           protected: true
           curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
@@ -742,12 +727,12 @@ object_definitions:
       - field_path: data_provider.abbreviation
         field_type: string
         display_name: Data provider abbreviation
-        definition_state: in_development
+        definition_state: stable
         metadata:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
-          definition_state_category: under_development
+          definition_state_category: complete
           protected: true
           curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
@@ -2359,14 +2344,14 @@ object_definitions:
   # Pending sub-objects materialized alongside the concrete annotation (structural object_refs).
   - object_type: DiseaseAnnotationSubject
     display_name: Disease annotation subject
-    description: Pending subject reference; concrete Gene/Allele/AGM identity is resolved by the active subject validator.
-    definition_state: in_development
+    description: Subject reference whose concrete Gene, Allele, or AGM identity is resolved by the active subject validator.
+    definition_state: stable
     metadata:
       object_role: validated_reference
   - object_type: DOTerm
     display_name: Disease ontology term
-    description: Pending Disease Ontology term reference resolved by the active ontology validator.
-    definition_state: in_development
+    description: Disease Ontology term reference resolved by the active ontology validator.
+    definition_state: stable
     metadata:
       object_role: validated_reference
   - object_type: Reference
@@ -2378,7 +2363,7 @@ object_definitions:
   - object_type: EvidenceQuote
     display_name: Evidence quote
     description: Verified evidence quote snapshot supporting the disease assertion.
-    definition_state: in_development
+    definition_state: stable
     metadata:
       object_role: metadata_only
 fixture_packs:
@@ -2396,7 +2381,6 @@ fixture_packs:
       - GeneDiseaseAnnotation
 metadata:
   object_role_key: object_role
-  curatable_unit_object_type: DiseaseAnnotation
   semantic_source: domain_envelope.extracted_objects
   legacy_semantic_lists: []
   supported_object_roles:
@@ -2449,10 +2433,6 @@ metadata:
         display_name: Experimental condition validation
         description: Compose disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision. Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
     under_development:
-      - validator_id: disease.export_submission_projection
-        display_name: Disease ready for export
-        blocked_by: ALL-425
-        description: Export/submission validation waits for verified disease phenotype and chemical export/submission adapters.
       - validator_id: disease_reference_materialization
         display_name: Reference lookup
         description: Durable reference IDs (AGRKB/PMID/DOI) are not available at chat-extraction time (D4 blocked); single_reference resolution is deferred.
