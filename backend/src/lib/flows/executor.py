@@ -3708,10 +3708,21 @@ def create_flow_supervisor(
                 payload = json.loads(output)
             except (TypeError, ValueError):
                 payload = None
-            if (
-                str(action or "").strip().lower() != "help"
-                and isinstance(payload, Mapping)
+            normalized_action = str(action or "").strip().lower()
+            resolved_record = bool(
+                isinstance(payload, Mapping)
                 and payload.get("status") == "ok"
+                and (
+                    normalized_action not in {"list", "search"}
+                    or (
+                        type(payload.get("total_count")) is int
+                        and payload["total_count"] > 0
+                    )
+                )
+            )
+            if (
+                normalized_action != "help"
+                and resolved_record
             ):
                 execution_state["inspected_result_refs"].add(normalized_ref)
             return output
