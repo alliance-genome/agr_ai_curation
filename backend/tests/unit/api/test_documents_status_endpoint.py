@@ -211,6 +211,82 @@ async def test_status_endpoint_prefers_active_job_when_pipeline_is_stale_termina
 
 
 @pytest.mark.asyncio
+async def test_status_endpoint_exposes_no_job_orphan_failure_without_document_content(
+    monkeypatch,
+):
+    document_id = "55555555-5555-5555-5555-555555555555"
+    now = datetime.now(timezone.utc)
+
+    async def fake_get_document(_user_sub, _document_id):
+        return {
+            "document": {
+                "processing_status": "pending",
+                "embedding_status": "pending",
+                "vector_count": 0,
+                "content": "must not be returned in status",
+            },
+            "total_chunks": 0,
+        }
+
+    async def fake_orphan_pipeline_status(_document_id):
+        return None
+
+    orphan_job = SimpleNamespace(
+        status=PdfJobStatus.FAILED.value,
+        current_stage="failed",
+        progress_percentage=0,
+        message="retry the document processing request",
+        error_message="retry the document processing request",
+        cancel_requested=False,
+        updated_at=now,
+        started_at=now,
+        completed_at=now,
+        document_id=document_id,
+        job_id="job-555",
+        metadata={
+            "pdf_processing_receipt": {
+                "schema_version": 1,
+                "outcome": "failed",
+            }
+        },
+    )
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="failed"),
+    )
+    monkeypatch.setattr(
+        documents,
+        "provision_user",
+        lambda *_args, **_kwargs: SimpleNamespace(id="user-1"),
+    )
+    monkeypatch.setattr(documents, "get_document", fake_get_document)
+    monkeypatch.setattr(
+        documents.pipeline_tracker,
+        "get_pipeline_status",
+        fake_orphan_pipeline_status,
+    )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: orphan_job,
+    )
+
+    result = await documents.get_document_processing_status(
+        document_id,
+        {"sub": "dev-user-123"},
+    )
+
+    assert result["processing_status"] == "failed"
+    assert result["job_status"] == "failed"
+    assert result["pipeline_status"]["message"] == orphan_job.error_message
+    assert result["pipeline_status"]["metadata"] == orphan_job.metadata
+    assert "content" not in result
+
+
+@pytest.mark.asyncio
 async def test_status_endpoint_keeps_cancel_requested_job_active_with_live_pipeline_stage(monkeypatch):
     document_id = "55555555-5555-5555-5555-555555555555"
 
