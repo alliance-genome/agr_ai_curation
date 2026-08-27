@@ -382,6 +382,38 @@ object_definitions:
               range: Reference
               db_table: phenotypeannotation
               db_column: evidenceitem_id
+      - field_path: data_provider
+        field_type: object
+        display_name: Data provider
+        metadata:
+          protected: true
+          curator_action_note: Data provider is workflow context, not an extractor edit target.
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: PhenotypeAnnotation
+              slot: data_provider
+              range: Organization
+              db_table: phenotypeannotation
+              db_column: dataprovider_id
+      - field_path: data_provider.abbreviation
+        field_type: string
+        display_name: Data provider abbreviation
+        metadata:
+          protected: true
+          curator_action_note: Data provider is workflow context, not an extractor edit target.
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Organization
+              slot: abbreviation
+              range: string
+              db_table: organization
+              db_column: abbreviation
       - field_path: evidence_quote
         field_type: object_ref
         display_name: Verified evidence quote
@@ -1147,10 +1179,9 @@ metadata:
             required: false
             allow_multiple: true
             context_only: true
-          # NOTE: unlike disease/gene_expression, the phenotype pack does not declare an
-          # annotation-level data_provider.abbreviation field (provider context lives on the term
-          # ontology_lookup_hint), so the optional context_only data_provider_abbreviation input is
-          # omitted here. The composite still resolves on the per-condition ontology components.
+          # The annotation-level data provider is protected workflow context and deliberately
+          # omitted from this validator input. The composite resolves on the per-condition
+          # ontology components.
           # EVIDENCE CONTRACT: the validator sees the backend-resolved exact source text for the
           # spans the condition was read from; the model never types the quote.
           evidence_quote:

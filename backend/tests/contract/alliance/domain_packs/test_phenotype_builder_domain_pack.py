@@ -92,15 +92,19 @@ def _evidence_records() -> list[dict[str, Any]]:
     ]
 
 
-def _materialize_one_candidate() -> Any:
+def _materialize_one_candidate(
+    *,
+    staged_fields: Mapping[str, Any] | None = None,
+) -> Any:
     workspace = ExtractionBuilderWorkspace(
         run_id="phenotype-builder-test-run",
         domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
         agent_id="phenotype_extractor",
     )
+    candidate_fields = dict(staged_fields) if staged_fields is not None else _staged_fields()
     workspace.upsert_candidate(
         candidate_id="phenotype-candidate-1",
-        staged_fields=_staged_fields(),
+        staged_fields=candidate_fields,
         pending_ref_ids=["phenotype-annotation-1"],
         evidence_record_ids=["evidence-cilia-1"],
         resolver_selection_refs=[],
@@ -125,6 +129,48 @@ def test_phenotype_pack_loads_with_builder_fixture():
     assert fixture_ref is not None
     assert fixture_ref.path == "fixtures/cilia_builder_pending.yaml"
     assert PHENOTYPE_OBJECT_TYPE in fixture_ref.object_types
+
+
+def test_phenotype_annotation_declares_protected_data_provider_fields():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(PHENOTYPE_DOMAIN_PACK_ID)
+    assert pack is not None
+    annotation_definition = next(
+        definition
+        for definition in pack.metadata.object_definitions
+        if definition.object_type == PHENOTYPE_OBJECT_TYPE
+    )
+    fields_by_path = {field.field_path: field for field in annotation_definition.fields}
+
+    data_provider = fields_by_path["data_provider"]
+    assert data_provider.field_type == "object"
+    assert data_provider.metadata["protected"] is True
+    assert "validator_binding_id" not in data_provider.metadata
+    assert data_provider.metadata["provider_refs"]["alliance_linkml"] == {
+        "schema_ref": "alliance.linkml",
+        "commit": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+        "source_file": "model/schema/phenotypeAndDiseaseAnnotation.yaml",
+        "class": "PhenotypeAnnotation",
+        "slot": "data_provider",
+        "range": "Organization",
+        "db_table": "phenotypeannotation",
+        "db_column": "dataprovider_id",
+    }
+
+    abbreviation = fields_by_path["data_provider.abbreviation"]
+    assert abbreviation.field_type == "string"
+    assert abbreviation.metadata["protected"] is True
+    assert "validator_binding_id" not in abbreviation.metadata
+    assert abbreviation.metadata["provider_refs"]["alliance_linkml"] == {
+        "schema_ref": "alliance.linkml",
+        "commit": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+        "source_file": "model/schema/core.yaml",
+        "class": "Organization",
+        "slot": "abbreviation",
+        "range": "string",
+        "db_table": "organization",
+        "db_column": "abbreviation",
+    }
 
 
 def test_phenotype_builder_materializer_produces_clean_extraction_output():
@@ -154,6 +200,7 @@ def test_phenotype_builder_materializer_produces_clean_extraction_output():
         annotation["payload"]["phenotype_annotation_object"]
         == "abnormal sensory cilia morphology"
     )
+    assert annotation["payload"]["data_provider"] == {"abbreviation": "WB"}
     # Existing-pack posture preserved: export/write remain blocked.
     assert annotation["metadata"]["export_behavior"]["status"] == "blocked"
     assert annotation["metadata"]["write_behavior"]["status"] == "blocked"
@@ -161,6 +208,20 @@ def test_phenotype_builder_materializer_produces_clean_extraction_output():
     # No resolver/helper machinery (the ontology validator resolves the staged term inline).
     assert "helper_selections" not in payload["metadata"]["provenance"]
     assert result.evidence_record_ids == ("evidence-cilia-1",)
+
+
+def test_phenotype_builder_leaves_data_provider_unset_when_not_staged():
+    staged_fields = _staged_fields()
+    del staged_fields["data_provider"]
+
+    result = _materialize_one_candidate(staged_fields=staged_fields)
+    assert result.payload is not None
+    annotation = next(
+        obj
+        for obj in result.payload["curatable_objects"]
+        if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
+    )
+    assert "data_provider" not in annotation["payload"]
 
 
 def test_phenotype_builder_pending_term_preserves_resolution_state():
@@ -184,6 +245,7 @@ def test_phenotype_builder_pending_term_preserves_resolution_state():
         term["payload"]["ontology_lookup_hint"]["evidence_record_id"]
         == "evidence-cilia-1"
     )
+    assert term["payload"]["ontology_lookup_hint"]["data_provider"] == "WB"
 
 
 def test_phenotype_builder_metadata_refs_are_relative_and_resolve():
@@ -275,6 +337,7 @@ def test_phenotype_builder_golden_fixture_loads_with_relative_refs():
         obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
     assert annotation.pending_ref_id == "phenotype-annotation-1"
+    assert annotation.payload["data_provider"] == {"abbreviation": "WB"}
 
     extraction_metadata = envelope.metadata.get("extraction_metadata")
     assert isinstance(extraction_metadata, Mapping)
