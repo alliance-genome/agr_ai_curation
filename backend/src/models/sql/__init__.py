@@ -4,6 +4,7 @@ from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from .agent import Agent, Project, ProjectMember
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
+from .chat_route_preference import ChatRoutePreference
 from .custom_agent import CustomAgentVersion
 from .curation_flow import CurationFlow
 from .database import Base, SessionLocal, engine, get_db
@@ -31,6 +32,7 @@ __all__ = [
     "ProjectMember",
     "ChatMessage",
     "ChatSession",
+    "ChatRoutePreference",
     "CustomAgentVersion",
     "CurationFlow",
     "FileOutput",
