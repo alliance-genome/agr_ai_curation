@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import {
   HOME_PDF_VIEWER_OWNER,
   buildCurationPDFViewerOwner,
+  dispatchClearHighlights,
   dispatchPDFDocumentChanged,
 } from './pdfEvents'
 import PdfViewer from './PdfViewer'
@@ -88,6 +89,26 @@ describe('PdfViewer document ownership', () => {
     await waitFor(() => {
       expect(screen.getByText('home.pdf')).toBeInTheDocument()
     })
+  })
+
+  it('keeps the production clear-highlights event connected to the PDF viewer', () => {
+    const unmark = vi.fn()
+
+    render(<PdfViewer />)
+
+    const iframe = screen.getByTitle('PDF Viewer') as HTMLIFrameElement
+    const iframeWindow = iframe.contentWindow as Window & {
+      Mark: new (layer: Element) => { unmark: () => void }
+    }
+    iframe.contentDocument?.body.insertAdjacentHTML('beforeend', '<div class="textLayer" />')
+    iframeWindow.Mark = class {
+      constructor(_layer: Element) {}
+      unmark = unmark
+    }
+
+    dispatchClearHighlights('user-action')
+
+    expect(unmark).toHaveBeenCalledTimes(1)
   })
 
   it('ignores chat-document-changed events from an inactive owner', async () => {

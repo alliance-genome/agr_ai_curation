@@ -2,12 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from '@mui/material/styles'
 import { debug, getEnvFlag } from '@/utils/env'
 import {
-  ApplyHighlightsEvent,
   ClearHighlightsEvent,
   HighlightSettingsChangedEvent,
   PDFViewerDocumentChangedEvent,
   dispatchPDFViewerEvidenceAnchorSelected,
-  onApplyHighlights,
   onClearHighlights,
   onHighlightSettingsChanged,
   onPDFDocumentChanged,
@@ -80,7 +78,6 @@ import {
   ensureMarkInjected,
   getTextLayers,
   persistSession,
-  uniqueTerms,
 } from './pdfViewerHighlighting'
 import {
   DEFAULT_STATE,
@@ -128,7 +125,6 @@ export function PdfViewer({
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const pdfAppRef = useRef<any>(null)
   const cleanupRefs = useRef<(() => void)[]>([])
-  const highlightTermsRef = useRef<string[]>([])
   const toolbarSearchQueryRef = useRef('')
   const settingsRef = useRef<HighlightSettings>(defaultHighlightSettings)
   const viewerStateRef = useRef<ViewerState>({ ...DEFAULT_STATE })
@@ -143,15 +139,11 @@ export function PdfViewer({
 
   const [status, setStatus] = useState<ViewerStatus>('idle')
   const [activeDocument, setActiveDocument] = useState<ViewerDocument | null>(null)
-  const [highlightTerms, setHighlightTerms] = useState<string[]>([])
-  const [_highlightSettings, setHighlightSettings] = useState<HighlightSettings>(defaultHighlightSettings)
   const [error, setError] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [_telemetry, setTelemetry] = useState<ViewerTelemetry>({
     lastLoadMs: null,
-    lastHighlightMs: null,
     slowLoad: false,
-    slowHighlight: false,
   })
   const [overlayRenderKey, setOverlayRenderKey] = useState(0)
   const [navigationResult, setNavigationResult] = useState<PdfViewerNavigationResult | null>(null)
@@ -215,13 +207,11 @@ export function PdfViewer({
       ...DEFAULT_STATE,
       lastInteraction: new Date().toISOString(),
     }
-    highlightTermsRef.current = []
     toolbarSearchQueryRef.current = ''
     idleResetErrorRef.current = nextError
     setActiveDocument(null)
     setStatus(nextError ? 'error' : 'idle')
     setError(nextError)
-    setHighlightTerms([])
     setEvidenceHighlight(null)
     setViewerUiState({
       currentPage: DEFAULT_STATE.currentPage,
@@ -906,62 +896,6 @@ export function PdfViewer({
     return result
   }, [commitNavigationResult, executeEvidenceNavigation])
 
-  const applyHighlights = useCallback((specificTextLayer?: HTMLElement) => {
-    const iframeWindow = iframeRef.current?.contentWindow as any
-    const iframeDoc = iframeWindow?.document as Document | undefined
-    if (!iframeDoc || !highlightTermsRef.current.length) {
-      setTelemetry((prev) => ({
-        ...prev,
-        lastHighlightMs: null,
-        slowHighlight: false,
-      }))
-      return
-    }
-
-    if (!iframeWindow?.Mark) {
-      setTimeout(() => applyHighlights(specificTextLayer), 200)
-      return
-    }
-
-    ensureMarkInjected(iframeDoc, settingsRef.current)
-
-    const terms = highlightTermsRef.current
-    const textLayers = getTextLayers(iframeDoc, specificTextLayer)
-    const measurementStart = performance.now()
-    textLayers.forEach((layer) => {
-      const markInstance = new iframeWindow.Mark(layer)
-      markInstance.unmark({
-        done: () => {
-          terms.forEach((term) => {
-            markInstance.mark(term, {
-              className: 'pdf-highlight',
-              separateWordSearch: false,
-              caseSensitive: false,
-              acrossElements: true,
-            })
-          })
-        },
-      })
-    })
-
-    const recordDuration = () => {
-      const duration = performance.now() - measurementStart
-      setTelemetry((prev) => ({
-        ...prev,
-        lastHighlightMs: duration,
-        slowHighlight: duration > 500,
-      }))
-    }
-
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(recordDuration)
-      })
-    } else {
-      setTimeout(recordDuration, 0)
-    }
-  }, [])
-
   const updateViewerState = useCallback(
     (updates: Partial<ViewerState>) => {
       if (!activeDocument) return
@@ -986,9 +920,8 @@ export function PdfViewer({
         const pageDiv = iframeDoc.querySelector<HTMLElement>(`.page[data-page-number="${event.pageNumber}"]`)
         const textLayer = pageDiv?.querySelector<HTMLElement>('.textLayer')
         if (textLayer) {
-          // pdf.js may emit the event before glyphs settle; delay slightly as in legacy viewer
+          // pdf.js may emit the event before glyphs settle; delay the evidence overlay refresh.
           window.setTimeout(() => {
-            applyHighlights(textLayer)
             setOverlayRenderKey((prev) => prev + 1)
           }, 50)
         }
@@ -1023,15 +956,11 @@ export function PdfViewer({
         signalLoadComplete()
         if (loadStartRef.current !== null) {
           const duration = performance.now() - loadStartRef.current
-          setTelemetry((prev) => ({
-            ...prev,
+          setTelemetry({
             lastLoadMs: duration,
             slowLoad: duration > 3000,
-          }))
+          })
           loadStartRef.current = null
-        }
-        if (highlightTermsRef.current.length) {
-          applyHighlights()
         }
         void ensureEvidencePageTextCorpus(pdfApp).catch((corpusError) => {
           console.warn('Unable to warm raw PDF.js evidence page text corpus', corpusError)
@@ -1146,7 +1075,7 @@ export function PdfViewer({
 
       pdfAppRef.current = pdfApp
     },
-    [applyHighlights, ensureEvidencePageTextCorpus, updateViewerState, setOverlayRenderKey],
+    [ensureEvidencePageTextCorpus, updateViewerState, setOverlayRenderKey],
   )
 
   const initialisePdfApplication = useCallback(() => {
@@ -1199,17 +1128,12 @@ export function PdfViewer({
             console.warn('Unable to restore viewer state', error)
           }
         }
-
-        if (highlightTermsRef.current.length) {
-          console.debug('[PDF DEBUG] Reapplying highlight terms after load', highlightTermsRef.current)
-          applyHighlights()
-        }
       }
     }, 150)
 
     cleanupRefs.current.push(() => window.clearInterval(intervalId))
     cleanupRefs.current.push(() => window.clearTimeout(handshakeTimeout))
-  }, [applyHighlights, attachPdfEventListeners, signalLoadError])
+  }, [attachPdfEventListeners, signalLoadError])
 
   const beginDocumentLoad = useCallback((document: ViewerDocument) => {
     console.debug('[PDF DEBUG] beginDocumentLoad invoked', document)
@@ -1228,13 +1152,10 @@ export function PdfViewer({
       searchTotal: null,
       searchNotFound: false,
     }))
-    setTelemetry((prev) => ({
-      ...prev,
+    setTelemetry({
       lastLoadMs: null,
       slowLoad: false,
-      lastHighlightMs: null,
-      slowHighlight: false,
-    }))
+    })
     viewerSessionStorageUserIdRef.current = storageUserId
     setActiveDocument(document)
     setEvidenceHighlight(null)
@@ -1246,12 +1167,8 @@ export function PdfViewer({
   useEffect(() => {
     const storedSettings = loadStoredHighlightSettings(defaultHighlightSettings)
     settingsRef.current = storedSettings
-    setHighlightSettings(storedSettings)
     if (iframeRef.current?.contentWindow?.document) {
       ensureMarkInjected(iframeRef.current.contentWindow.document, storedSettings)
-      if (highlightTermsRef.current.length) {
-        applyHighlights()
-      }
     }
 
     // DO NOT auto-load stored session on mount
@@ -1259,7 +1176,7 @@ export function PdfViewer({
     // This event is dispatched by:
     // 1. DocumentsPage when user selects a document
     // 2. Chat component on mount if backend has an active document (preserves doc across refreshes)
-  }, [applyHighlights, defaultHighlightSettings])
+  }, [defaultHighlightSettings])
 
   useEffect(() => {
     if (activeDocumentOwnerRef.current === activeDocumentOwnerToken) {
@@ -1284,9 +1201,7 @@ export function PdfViewer({
       ...DEFAULT_STATE,
       lastInteraction: new Date().toISOString(),
     }
-    highlightTermsRef.current = []
     toolbarSearchQueryRef.current = ''
-    setHighlightTerms([])
     setActiveDocument(null)
     setStatus('idle')
     setError(null)
@@ -1300,9 +1215,7 @@ export function PdfViewer({
     })
     setTelemetry({
       lastLoadMs: null,
-      lastHighlightMs: null,
       slowLoad: false,
-      slowHighlight: false,
     })
     setEvidenceHighlight(null)
     commitNavigationResult(null)
@@ -1368,24 +1281,13 @@ export function PdfViewer({
         scrollPosition: event.detail.viewerState?.scrollPosition ?? DEFAULT_STATE.scrollPosition,
         lastInteraction: new Date().toISOString(),
       }
-      highlightTermsRef.current = []
-      setHighlightTerms([])
       beginDocumentLoad(nextDoc)
-    })
-
-    const unregisterHighlights = onApplyHighlights((event: ApplyHighlightsEvent) => {
-      const unique = uniqueTerms(event.detail.terms)
-      highlightTermsRef.current = unique
-      setHighlightTerms(unique)
-      applyHighlights()
     })
 
     const unregisterClear = onClearHighlights((event: ClearHighlightsEvent) => {
       if (event.detail?.reason === 'new-query' && !settingsRef.current.clearOnNewQuery) {
         return
       }
-      highlightTermsRef.current = []
-      setHighlightTerms([])
       clearAllHighlights()
     })
 
@@ -1398,12 +1300,8 @@ export function PdfViewer({
           : settingsRef.current.clearOnNewQuery,
       }
       settingsRef.current = nextSettings
-      setHighlightSettings(nextSettings)
       if (iframeRef.current?.contentWindow?.document) {
         ensureMarkInjected(iframeRef.current.contentWindow.document, nextSettings)
-        if (highlightTermsRef.current.length) {
-          applyHighlights()
-        }
       }
     })
 
@@ -1438,7 +1336,6 @@ export function PdfViewer({
 
     return () => {
       unregisterDocument()
-      unregisterHighlights()
       unregisterClear()
       unregisterSettings()
       window.removeEventListener('chat-document-changed', handleChatDocumentChange)
@@ -1446,7 +1343,6 @@ export function PdfViewer({
   }, [
     activeDocument,
     activeDocumentOwnerToken,
-    applyHighlights,
     beginDocumentLoad,
     clearAllHighlights,
     resetViewerToIdle,
@@ -1532,9 +1428,7 @@ export function PdfViewer({
       setError(nextIdleError)
       setTelemetry({
         lastLoadMs: null,
-        lastHighlightMs: null,
         slowLoad: false,
-        slowHighlight: false,
       })
       setEvidenceHighlight(null)
       commitNavigationResult(null)
@@ -1546,12 +1440,6 @@ export function PdfViewer({
       viewerSessionStorageUserIdRef.current = storageUserId
     }
   }, [activeDocument, storageUserId])
-
-  useEffect(() => {
-    if (status === 'ready' && highlightTermsRef.current.length) {
-      applyHighlights()
-    }
-  }, [status, applyHighlights])
 
   useEffect(() => {
     if (!effectivePendingNavigation) {
@@ -2125,7 +2013,6 @@ export function PdfViewer({
       retryKey={retryKey}
       viewerSrc={viewerSrc}
       iframeRef={iframeRef}
-      highlightTerms={highlightTerms}
       navigationResult={navigationResult}
       navigationBannerMessage={navigationBannerMessage}
       dragActive={dragActive}

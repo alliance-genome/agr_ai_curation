@@ -14,14 +14,6 @@ export interface PDFViewerDocumentChangedDetail {
 
 export type PDFViewerDocumentChangedEvent = CustomEvent<PDFViewerDocumentChangedDetail>
 
-export interface ApplyHighlightsDetail {
-  messageId: string
-  terms: string[]
-  pages?: number[]
-}
-
-export type ApplyHighlightsEvent = CustomEvent<ApplyHighlightsDetail>
-
 export interface ClearHighlightsDetail {
   reason: 'new-query' | 'user-action' | 'document-change'
 }
@@ -88,26 +80,6 @@ export function onPDFDocumentChanged(
   const listener = (event: Event) => handler(event as PDFViewerDocumentChangedEvent)
   window.addEventListener('pdf-viewer-document-changed', listener)
   return () => window.removeEventListener('pdf-viewer-document-changed', listener)
-}
-
-export function dispatchApplyHighlights(
-  messageId: string,
-  terms: string[],
-  pages?: number[],
-): void {
-  window.dispatchEvent(
-    new CustomEvent<ApplyHighlightsDetail>('apply-highlights', {
-      detail: { messageId, terms, pages },
-    }),
-  )
-}
-
-export function onApplyHighlights(
-  handler: (event: ApplyHighlightsEvent) => void,
-): () => void {
-  const listener = (event: Event) => handler(event as ApplyHighlightsEvent)
-  window.addEventListener('apply-highlights', listener)
-  return () => window.removeEventListener('apply-highlights', listener)
 }
 
 export function dispatchClearHighlights(reason: ClearHighlightsDetail['reason']): void {

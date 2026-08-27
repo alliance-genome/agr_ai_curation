@@ -40,7 +40,6 @@ interface PdfViewerChromeProps {
   retryKey: number
   viewerSrc: string
   iframeRef: Ref<HTMLIFrameElement>
-  highlightTerms: string[]
   navigationResult: PdfViewerNavigationResult | null
   navigationBannerMessage: string | null
   dragActive: boolean
@@ -77,7 +76,6 @@ export function PdfViewerChrome({
   retryKey,
   viewerSrc,
   iframeRef,
-  highlightTerms,
   navigationResult,
   navigationBannerMessage,
   dragActive,
@@ -259,13 +257,6 @@ export function PdfViewerChrome({
                   {navigationBannerMessage}
                 </Typography>
               </>
-            )}
-            {highlightTerms.length > 0 && (
-              <Stack direction="row" spacing={1} flexWrap="wrap">
-                {highlightTerms.map((term) => (
-                  <Chip key={term} size="small" label={term} color="secondary" sx={{ marginTop: 0.5 }} />
-                ))}
-              </Stack>
             )}
             <Box
               sx={{

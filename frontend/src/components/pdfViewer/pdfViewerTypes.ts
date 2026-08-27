@@ -24,9 +24,7 @@ export type ViewerStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 export interface ViewerTelemetry {
   lastLoadMs: number | null
-  lastHighlightMs: number | null
   slowLoad: boolean
-  slowHighlight: boolean
 }
 
 export interface PdfViewerProps {

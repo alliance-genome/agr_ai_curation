@@ -22,7 +22,6 @@ const renderChrome = (overrides: Partial<Parameters<typeof PdfViewerChrome>[0]> 
     retryKey: 0,
     viewerSrc: '/pdfjs/web/viewer.html',
     iframeRef: createRef<HTMLIFrameElement>(),
-    highlightTerms: [],
     navigationResult: null,
     navigationBannerMessage: null,
     dragActive: false,
@@ -65,7 +64,7 @@ describe('PdfViewerChrome', () => {
     expect(screen.getByTitle('PDF Viewer')).toHaveAttribute('src', '/pdfjs/web/viewer.html')
   })
 
-  it('renders document, navigation, and highlight chrome for an active document', () => {
+  it('renders document and navigation chrome for an active document', () => {
     const navigationResult: PdfViewerNavigationResult = {
       status: 'matched',
       strategy: 'exact-quote',
@@ -94,7 +93,6 @@ describe('PdfViewerChrome', () => {
       },
       status: 'ready',
       viewerSrc: '/pdfjs/web/viewer.html?file=/documents/doc-1/viewer',
-      highlightTerms: ['gene', 'variant'],
       navigationResult,
       navigationBannerMessage: 'Exact quote matched.',
     })
@@ -105,8 +103,6 @@ describe('PdfViewerChrome', () => {
     expect(screen.getByText('Exact quote')).toBeInTheDocument()
     expect(screen.getByText('Selection sync')).toBeInTheDocument()
     expect(screen.getByText('Page 3')).toBeInTheDocument()
-    expect(screen.getByText('gene')).toBeInTheDocument()
-    expect(screen.getByText('variant')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Previous PDF page' })).toBeInTheDocument()
     expect(screen.getByText('1 / 12')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Zoom out' })).toBeInTheDocument()
