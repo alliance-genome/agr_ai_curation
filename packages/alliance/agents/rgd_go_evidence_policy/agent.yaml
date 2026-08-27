@@ -1,0 +1,43 @@
+agent_id: rgd_go_evidence_policy_validation
+
+name: "RGD GO Evidence Policy Validation Agent"
+
+description: >
+  Validates one RGD specialist GO proposal against the approved experimental
+  evidence-code, aspect, With/From, qualifier, negation, and abstention policy.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: false
+  description: >
+    Automatic domain-pack validator for authenticated RGD GO curator context.
+  batchable: false
+
+tools: []
+
+output_schema: RGDGOEvidencePolicyValidationResult
+output_projection:
+  row_list_field: candidates
+  identity_fields: [value]
+
+structured_finalization:
+  enabled: true
+  tool_name: finalize_rgd_go_evidence_policy_validation
+  checks: []
+
+model_config:
+  model: "${AGENT_GO_ANNOTATIONS_MODEL:-gpt-5.6-terra}"
+  temperature: 0.1
+  reasoning: "medium"
+
+requires_document: false
+required_params: []
+batch_capabilities: []
+
+frontend:
+  icon: "✅"
+  show_in_palette: false
+
+group_rules_enabled: false

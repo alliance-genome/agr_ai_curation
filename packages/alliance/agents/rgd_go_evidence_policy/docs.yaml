@@ -1,0 +1,14 @@
+summary: "Validates RGD GO paper-curation candidates against the approved experimental evidence policy."
+capabilities:
+  - name: "RGD GO evidence policy validation"
+    description: "Checks IDA, IPI, IMP, IGI, and IEP selection, aspect, With/From, qualifier, negation, evidence location, and abstention rules."
+    example_query: "Validate this staged RGD GO candidate."
+    example_result: "Returns a typed submit-ready or curator-review-required policy decision attached to the candidate validation summary."
+data_sources:
+  - name: "Candidate paper evidence"
+    description: "Exact evidence quote bundles already attached to the GO domain envelope."
+    species_supported: ["R. norvegicus (RGD:)"]
+    data_types: ["GO candidate", "evidence anchors", "rationale", "identity state"]
+limitations:
+  - "Runs automatically only for authenticated RGD group context through the GO domain-pack binding."
+  - "Does not resolve gene-product identity, search for evidence, alter disease curation, or submit annotations."

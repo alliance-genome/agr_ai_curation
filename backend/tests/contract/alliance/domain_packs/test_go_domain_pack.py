@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from src.lib.curation_workspace import pipeline as workspace_pipeline
 from src.lib.curation_workspace.adapter_registry import CurationAdapterRegistry
 from src.lib.domain_packs.loader import (
@@ -14,6 +16,11 @@ from src.lib.domain_packs.loader import (
 from src.lib.domain_packs.materialization import (
     DomainPackMetadataReviewRowMaterializer,
     project_evidence_anchor_projections,
+)
+from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+from src.lib.domain_packs.validator_dispatch import (
+    ValidatorRuntimeContext,
+    dispatch_active_validator_bindings,
 )
 
 
@@ -39,6 +46,42 @@ def _contracts():
     return metadata, fixtures
 
 
+def _validator_result(request, *, resolved: bool = True):
+    return {
+        "status": "resolved" if resolved else "unresolved",
+        "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id,
+        "validator_agent": request.validator_agent.model_dump(mode="json"),
+        "target": request.target.model_dump(mode="json"),
+        "resolved_values": {},
+        "resolved_objects": [],
+        "missing_expected_fields": [],
+        "candidates": [],
+        "lookup_attempts": [
+            {
+                "provider": "agr.alliance.go",
+                "method": "approved_rgd_evidence_policy",
+                "query": {"profile": "ALL-862"},
+                "result_count": 1,
+                "outcome": "success" if resolved else "conflict",
+            }
+        ],
+        "curator_message": (
+            "RGD GO evidence policy passed."
+            if resolved
+            else (
+                "Insufficient primary evidence for a submit-ready RGD GO "
+                "annotation; curator review is required."
+            )
+        ),
+        "explanation": (
+            "The approved RGD evidence policy accepted the proposal."
+            if resolved
+            else "The candidate lacks primary experimental evidence."
+        ),
+    }
+
+
 def test_go_pack_is_auto_discovered_and_review_only():
     registry = load_alliance_domain_pack_registry()
     pack = registry.get_pack("agr.alliance.go")
@@ -55,6 +98,124 @@ def test_go_pack_is_auto_discovered_and_review_only():
     }
     assert object_definition.metadata["export_behavior"]["status"] == "unsupported"
     assert object_definition.metadata["submission_behavior"]["status"] == "unsupported"
+
+
+def test_go_pack_owns_the_authenticated_rgd_policy_binding():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack("agr.alliance.go")
+    validation_registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    assert pack.metadata.version == "0.2.0"
+    binding = next(
+        item
+        for item in validation_registry.bindings
+        if item.binding_id == "rgd_go_evidence_policy_validation"
+    )
+    assert binding.validator_agent is not None
+    assert binding.validator_agent.package_id == "agr.alliance"
+    assert binding.validator_agent.agent_id == "rgd_go_evidence_policy_validation"
+    assert binding.required_any_active_group == ("RGD",)
+    assert binding.provider_value_field_paths == ("provider_context.provider_key",)
+    assert binding.allowed_provider_values == ("RGD",)
+    assert binding.required is True
+    assert binding.blocking is True
+    assert binding.allow_opt_out is False
+    assert binding.object_types == ("GOCuratableObject",)
+    assert binding.field_paths == ()
+
+
+def test_rgd_policy_dispatch_materializes_established_finding_and_group_trace():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+    envelope = fixtures.fixtures[0].envelope
+    requests = []
+
+    def runner(request, *, binding):
+        requests.append(request)
+        return _validator_result(request)
+
+    result = dispatch_active_validator_bindings(
+        envelope,
+        pack,
+        runner=runner,
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+    )
+
+    assert len(requests) == 1, [
+        finding.model_dump(mode="json") for finding in result.appended_findings
+    ]
+    request = requests[0]
+    assert request.validator_binding_id == "rgd_go_evidence_policy_validation"
+    assert request.selected_inputs["evidence_code"] == "IDA"
+    assert request.selected_inputs["go_term"]["aspect"] == "cellular_component"
+    assert request.selected_inputs["provider_context"]["provider_key"] == "RGD"
+    assert request.selected_inputs["evidence_quotes"][0]["verified_quote"] == (
+        "Lta protein was detected in the extracellular fraction."
+    )
+    finding = result.appended_findings[0]
+    assert finding.code == "domain_pack.validator_resolved"
+    assert finding.status.value == "resolved"
+    assert finding.object_ref is not None
+    assert finding.object_ref.object_id == "go-candidate-rgd-lta-1"
+    assert finding.details["validation_metadata"]["dispatch_context"] == {
+        "authenticated_groups": ["RGD"],
+        "group_context_identity": '["RGD"]',
+    }
+    assert result.binding_audit[0]["eligibility_reason"] == "group_scope_satisfied"
+
+
+@pytest.mark.parametrize("active_groups", [(), ("MGI",), ("WB", "ZFIN")])
+def test_rgd_policy_does_not_run_for_non_rgd_authenticated_groups(active_groups):
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+
+    result = dispatch_active_validator_bindings(
+        fixtures.fixtures[0].envelope,
+        pack,
+        runner=lambda *_args, **_kwargs: pytest.fail("RGD policy binding ran"),
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=active_groups),
+    )
+
+    assert result.validator_agent_run_count == 0
+    assert result.appended_findings == ()
+    assert result.binding_audit[0]["eligibility_reason"] == "group_not_satisfied"
+
+
+def test_insufficient_evidence_materializes_the_approved_blocker_finding():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack("agr.alliance.go")
+    _, fixtures = _contracts()
+
+    result = dispatch_active_validator_bindings(
+        fixtures.fixtures[0].envelope,
+        pack,
+        runner=lambda request, *, binding: _validator_result(
+            request,
+            resolved=False,
+        ),
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+    )
+
+    finding = result.appended_findings[0]
+    assert finding.code == "domain_pack.validator_unresolved"
+    assert finding.severity.value == "blocker"
+    assert finding.status.value == "open"
+    assert finding.message == (
+        "Insufficient primary evidence for a submit-ready RGD GO annotation; "
+        "curator review is required."
+    )
+
+
+def test_rgd_go_policy_binding_is_absent_from_the_disease_pack():
+    registry = load_alliance_domain_pack_registry()
+    disease_pack = registry.get_pack("agr.alliance.disease")
+    disease_registry = DomainPackValidationRegistry.from_domain_pack(disease_pack)
+
+    assert "rgd_go_evidence_policy_validation" not in {
+        binding.binding_id for binding in disease_registry.bindings
+    }
 
 
 def test_go_adapter_materializes_review_rows_without_export_or_submission():

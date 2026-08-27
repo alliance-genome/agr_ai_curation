@@ -1,6 +1,6 @@
 pack_id: agr.alliance.go
 display_name: Alliance Gene Ontology Curation Domain Pack
-version: 0.1.0
+version: 0.2.0
 metadata_api_version: 1.0.0
 description: Provider-neutral proposed GO annotations with package-owned RGD curator-review projection metadata.
 status: in_development
@@ -219,3 +219,85 @@ metadata:
       flow_scope: rgd_go_curator_review
       submission_supported: false
       export_supported: false
+  validators:
+    active:
+      - validator_id: rgd_go_evidence_policy_validation
+        display_name: RGD GO evidence policy validation
+        description: Validate RGD specialist GO proposals against the approved experimental-evidence, aspect, With/From, qualifier, negation, and abstention policy.
+  validator_bindings:
+    active:
+      - binding_id: rgd_go_evidence_policy_validation
+        display_name: RGD GO evidence policy validation
+        description: Apply the approved RGD specialist policy to one complete GO candidate without changing generic GO or disease behavior.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: rgd_go_evidence_policy_validation
+        applies_to:
+          domain_pack_id: agr.alliance.go
+          object_types:
+            - GOCuratableObject
+        group_scope:
+          required_any_active_group:
+            - RGD
+          provider_value_field_paths:
+            - provider_context.provider_key
+          allowed_provider_values:
+            - RGD
+        input_fields:
+          gene_product:
+            source: payload
+            path: gene_product
+          go_term:
+            source: payload
+            path: go_term
+          evidence_code:
+            source: payload
+            path: evidence_code
+          evidence_eco_curie:
+            source: payload
+            path: evidence_eco_curie
+          reference_curie:
+            source: payload
+            path: reference_curie
+          with_from:
+            source: payload
+            path: with_from
+            required: false
+            allow_multiple: true
+          qualifiers:
+            source: payload
+            path: qualifiers
+            required: false
+            allow_multiple: true
+          annotation_extensions:
+            source: payload
+            path: annotation_extensions
+            required: false
+            allow_multiple: true
+          negated:
+            source: payload
+            path: negated
+          rationale:
+            source: payload
+            path: rationale
+          resolution_state:
+            source: payload
+            path: resolution_state
+          blocking_reasons:
+            source: payload
+            path: blocking_reasons
+            required: false
+            allow_multiple: true
+          provider_context:
+            source: payload
+            path: provider_context
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            allow_multiple: true
+            context_only: true
+        required: true
+        blocking: true
+        allow_opt_out: false
+        curator_override:
+          allowed: false
