@@ -1,6 +1,7 @@
 """Tests for strict model/provider config behavior."""
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -40,6 +41,7 @@ from src.lib.openai_agents.config import (
     get_pdf_upload_max_page_count,
     get_model_for_agent,
     get_sentry_log_event_level,
+    get_supervisor_specialist_deadline_seconds,
     get_tool_failure_alert_summary_max_chars,
     get_weaviate_search_hybrid_alpha,
     get_weaviate_search_initial_limit,
@@ -66,6 +68,25 @@ def test_sentry_log_event_level_is_bounded_and_environment_configurable(
     with caplog.at_level("WARNING"):
         assert get_sentry_log_event_level() is None
     assert "Log-event promotion remains disabled" in caplog.text
+
+
+def test_supervisor_specialist_deadline_is_env_configured_and_positive(monkeypatch):
+    monkeypatch.delenv("SUPERVISOR_SPECIALIST_DEADLINE_SECONDS", raising=False)
+    assert get_supervisor_specialist_deadline_seconds() == 900.0
+
+    monkeypatch.setenv("SUPERVISOR_SPECIALIST_DEADLINE_SECONDS", "12.5")
+    assert get_supervisor_specialist_deadline_seconds() == 12.5
+
+    monkeypatch.setenv("SUPERVISOR_SPECIALIST_DEADLINE_SECONDS", "0")
+    assert get_supervisor_specialist_deadline_seconds() == 0.1
+
+    workspace_root = Path("/workspace")
+    if not (workspace_root / ".env.example").exists():
+        workspace_root = Path(__file__).resolve().parents[5]
+    env_example = (workspace_root / ".env.example").read_text(encoding="utf-8")
+    assert "SUPERVISOR_SPECIALIST_DEADLINE_SECONDS=900" in env_example
+    assert "complete nested specialist invocation" in env_example
+    assert "Preferred Agent and\n# Flow runs are not covered" in env_example
 
 
 def test_weaviate_search_defaults_match_benchmark_winner(monkeypatch):

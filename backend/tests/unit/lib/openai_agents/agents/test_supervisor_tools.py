@@ -1,6 +1,8 @@
 """Tests for registry-driven supervisor tool generation."""
+import asyncio
 import importlib
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -143,6 +145,235 @@ async def test_chat_specialist_receives_complete_authoritative_user_request(monk
     assert "supervisor_delegation defines the specialist subtask" in specialist_input[
         "specialist_input_contract"
     ]["execution_scope"]
+
+
+@pytest.mark.asyncio
+async def test_automatic_specialist_deadline_cancels_and_returns_unresolved(monkeypatch):
+    supervisor = _supervisor_module()
+    from src.lib.openai_agents import config
+
+    cancelled = False
+    run_count = 0
+    reports = []
+
+    async def _run_specialist_with_events(**_kwargs):
+        nonlocal cancelled, run_count
+        run_count += 1
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled = True
+
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", _run_specialist_with_events)
+    monkeypatch.setattr(config, "get_supervisor_specialist_deadline_seconds", lambda: 0.01)
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda exc, **kwargs: reports.append((exc, kwargs)) or True,
+    )
+    ledger = supervisor.SupervisorCallLedger(max_total_calls=2, max_calls_per_tool=2)
+    tool = supervisor._create_streaming_tool(
+        agent=SimpleNamespace(name="Paper Specialist"),
+        tool_name="ask_paper_curator_specialist",
+        tool_description="Extract paper recommendations",
+        specialist_name="Paper Curator",
+        ledger=ledger,
+        propagate_errors=False,
+    )
+
+    output = await tool.on_invoke_tool(
+        SimpleNamespace(tool_name=tool.name, run_config=None),
+        json.dumps({"query": "Assess Cttn"}),
+    )
+    payload = json.loads(output)
+
+    assert cancelled is True
+    assert payload == {
+        "status": "unresolved",
+        "reason": "specialist_deadline_exceeded",
+        "message": supervisor._SPECIALIST_DEADLINE_MESSAGE,
+    }
+    assert "general PDF extractor" in payload["message"]
+    assert reports[0][1]["operation"] == "specialist_deadline_exceeded"
+
+    replay = await tool.on_invoke_tool(
+        SimpleNamespace(tool_name=tool.name, run_config=None),
+        json.dumps({"query": "Assess Cttn"}),
+    )
+    assert run_count == 1
+    assert replay.startswith(supervisor._LEDGER_REPLAY_INSTRUCTION)
+    assert "specialist_deadline_exceeded" in replay
+
+
+@pytest.mark.asyncio
+async def test_automatic_specialist_deadline_does_not_wait_for_slow_cleanup(monkeypatch):
+    supervisor = _supervisor_module()
+    from src.lib.openai_agents import config
+
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+
+    async def _run_specialist_with_events(**_kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await cleanup_release.wait()
+
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", _run_specialist_with_events)
+    monkeypatch.setattr(config, "get_supervisor_specialist_deadline_seconds", lambda: 0.01)
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda *_args, **_kwargs: True,
+    )
+    ledger = supervisor.SupervisorCallLedger(max_total_calls=2, max_calls_per_tool=2)
+    tool = supervisor._create_streaming_tool(
+        agent=SimpleNamespace(name="Paper Specialist"),
+        tool_name="ask_paper_curator_specialist",
+        tool_description="Extract paper recommendations",
+        specialist_name="Paper Curator",
+        ledger=ledger,
+        propagate_errors=False,
+    )
+
+    started_at = time.monotonic()
+    output = await tool.on_invoke_tool(
+        SimpleNamespace(tool_name=tool.name, run_config=None),
+        json.dumps({"query": "Assess Cttn"}),
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert json.loads(output)["reason"] == "specialist_deadline_exceeded"
+    assert cleanup_started.is_set()
+    assert elapsed < 0.1
+    cleanup_release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_automatic_specialist_propagates_outer_cancellation(monkeypatch):
+    supervisor = _supervisor_module()
+    from src.lib.openai_agents import config
+
+    specialist_started = asyncio.Event()
+    specialist_cancelled = asyncio.Event()
+
+    async def _run_specialist_with_events(**_kwargs):
+        specialist_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            specialist_cancelled.set()
+            raise
+
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", _run_specialist_with_events)
+    monkeypatch.setattr(
+        config, "get_supervisor_specialist_deadline_seconds", lambda: 60.0
+    )
+    ledger = supervisor.SupervisorCallLedger(max_total_calls=2, max_calls_per_tool=2)
+    tool = supervisor._create_streaming_tool(
+        agent=SimpleNamespace(name="Paper Specialist"),
+        tool_name="ask_paper_curator_specialist",
+        tool_description="Extract paper recommendations",
+        specialist_name="Paper Curator",
+        ledger=ledger,
+        propagate_errors=False,
+    )
+
+    invocation = asyncio.create_task(
+        tool.on_invoke_tool(
+            SimpleNamespace(tool_name=tool.name, run_config=None),
+            json.dumps({"query": "Assess Cttn"}),
+        )
+    )
+    await specialist_started.wait()
+    invocation.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await invocation
+    await specialist_cancelled.wait()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_deadline_preserves_only_validated_structured_handoff(monkeypatch):
+    supervisor = _supervisor_module()
+    from src.lib.openai_agents import config, streaming_tools
+
+    result_ref = "extraction-result:00000000-0000-4000-8000-000000000872"
+
+    async def _run_specialist_with_events(**kwargs):
+        kwargs["validated_handoff_callback"](
+            streaming_tools.SupervisorExtractionHandoff(
+                tool_name="ask_paper_curator_specialist",
+                specialist_name="Paper Curator",
+                result_ref=result_ref,
+                extraction_result_id=result_ref.removeprefix("extraction-result:"),
+                result_status="non_empty_extraction_ready",
+                object_count=2,
+                domain_pack_id="fixture.pack.paper",
+                adapter_key="paper",
+                agent_key="paper_curator",
+                created_new=True,
+            )
+        )
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", _run_specialist_with_events)
+    monkeypatch.setattr(config, "get_supervisor_specialist_deadline_seconds", lambda: 0.01)
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda *_args, **_kwargs: True,
+    )
+    ledger = supervisor.SupervisorCallLedger(max_total_calls=2, max_calls_per_tool=2)
+    tool = supervisor._create_streaming_tool(
+        agent=SimpleNamespace(name="Paper Specialist"),
+        tool_name="ask_paper_curator_specialist",
+        tool_description="Extract paper recommendations",
+        specialist_name="Paper Curator",
+        ledger=ledger,
+        propagate_errors=False,
+    )
+
+    output = await tool.on_invoke_tool(
+        SimpleNamespace(tool_name=tool.name, run_config=None),
+        json.dumps({"query": "Assess Cttn"}),
+    )
+    payload = json.loads(output)
+
+    assert payload["status"] == "partial"
+    assert payload["result_ref"] == result_ref
+    assert payload["validated_object_count"] == 2
+    assert "ignore incomplete model prose" in payload["message"]
+    assert ledger.latest_extraction_handoffs()[0].result_ref == result_ref
+
+
+@pytest.mark.asyncio
+async def test_flow_specialist_is_outside_automatic_chat_deadline(monkeypatch):
+    supervisor = _supervisor_module()
+    from src.lib.openai_agents import config
+
+    async def _run_specialist_with_events(**_kwargs):
+        await asyncio.sleep(0.02)
+        return "flow completed"
+
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", _run_specialist_with_events)
+    monkeypatch.setattr(config, "get_supervisor_specialist_deadline_seconds", lambda: 0.01)
+    tool = supervisor._create_streaming_tool(
+        agent=SimpleNamespace(name="Flow Specialist"),
+        tool_name="run_flow_specialist",
+        tool_description="Run the selected flow step",
+        specialist_name="Flow Specialist",
+        ledger=None,
+        inline_chat_persistence=False,
+        propagate_errors=True,
+    )
+
+    output = await tool.on_invoke_tool(
+        SimpleNamespace(tool_name=tool.name, run_config=None),
+        json.dumps({"query": "Run selected flow"}),
+    )
+
+    assert output == "flow completed"
 
 
 def test_specialist_input_json_frames_adversarial_user_delimiters():

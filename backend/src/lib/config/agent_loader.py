@@ -57,6 +57,7 @@ class SupervisorRouting:
     batchable: bool = False
     batching_instructions: str = ""
     batching_entity: str = ""  # e.g., "genes", "alleles" - for batching nudge prompts
+    input_validation: Dict[str, Any] = field(default_factory=dict)
 
 
 def _expand_env_ref(value: Any) -> str:
@@ -224,6 +225,7 @@ class AgentDefinition:
             batchable=is_batchable,
             batching_instructions=routing_data.get("batching_instructions", "").strip(),
             batching_entity=routing_data.get("batching_entity", default_entity).strip(),
+            input_validation=dict(routing_data.get("input_validation") or {}),
         )
 
         # Parse model_config from the package agent.yaml (the config contract).
@@ -751,6 +753,7 @@ def get_supervisor_tools() -> List[Dict[str, Any]]:
             "description": agent.supervisor_routing.description,
             "batchable": agent.supervisor_routing.batchable,
             "batching_instructions": agent.supervisor_routing.batching_instructions,
+            "input_validation": dict(agent.supervisor_routing.input_validation),
             "agent_id": agent.agent_id,
             "requires_document": agent.requires_document,
             "group_rules_enabled": agent.group_rules_enabled,

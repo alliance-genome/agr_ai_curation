@@ -15,9 +15,19 @@ access:
 supervisor_routing:
   enabled: true
   description: >
-    Use only for an authenticated RGD curator requesting new GO recommendations
-    from the active paper, including named targets and optional additional genes.
+    For authenticated RGD curators only, use for new GO recommendations from the
+    active paper, including named targets, IPI/IEP evidence, and optional additional
+    genes. For a combined GO+disease request, delegate only the GO portion here and
+    call the disease extractor separately. Do not use for term definitions,
+    prior-annotation-only questions, or unchanged-scope follow-ups that can inspect a
+    persisted extraction-result reference. Reject blank or unsupported CURIEs
+    locally instead of dispatching document extraction.
   batchable: false
+  input_validation:
+    curie_patterns:
+      GO: '^GO:\d{7}$'
+      RGD: '^RGD:\d+$'
+    unsupported_curie_prefixes: [DOID, FB, MGI, SGD, WB, XB, ZFIN]
 
 tools:
   - search_document

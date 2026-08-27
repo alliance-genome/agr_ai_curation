@@ -824,6 +824,24 @@ def get_supervisor_max_calls_per_specialist() -> int:
     return max(1, limit)
 
 
+def get_supervisor_specialist_deadline_seconds() -> float:
+    """Wall-clock deadline for one Automatic-mode supervisor specialist run.
+
+    The deadline bounds the complete user-facing nested specialist invocation. At
+    expiry it starts the specialist/provider cancellation and close lifecycle but
+    does not wait beyond the same absolute bound for blocked cleanup. Preferred
+    Agent/Flow runs do not use the chat supervisor ledger and are outside this bound.
+    """
+
+    return max(
+        0.1,
+        _get_env_float_with_fallback(
+            "SUPERVISOR_SPECIALIST_DEADLINE_SECONDS",
+            900.0,
+        ),
+    )
+
+
 def get_flow_supervisor_parallel_tool_calls_enabled() -> bool:
     """Whether flow supervisors may request parallel tool calls from the provider."""
     return _get_env_bool("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", False)

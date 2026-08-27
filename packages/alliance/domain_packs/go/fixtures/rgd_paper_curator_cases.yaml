@@ -62,3 +62,49 @@ cases:
       recommendation_finalized: false
       excluded_section_limitation_reported: true
       broad_pdf_fallback_forbidden: true
+  - id: trace_initial_ipi
+    trace_shape: initial
+    targets: [Cttn]
+    proposed_evidence_code: IPI
+    expect:
+      rgd_go_specialist_dispatched: true
+      go_result_adapter_key: go
+      disease_result_absent: true
+      validated_structured_result_required: true
+  - id: trace_initial_iep_combined_disease
+    trace_shape: initial_combined
+    targets: [Cttn]
+    proposed_evidence_code: IEP
+    requested_domains: [go, disease]
+    expect:
+      rgd_go_specialist_dispatched: true
+      disease_specialist_dispatched_separately: true
+      distinct_typed_results: true
+      combined_payload_forbidden: true
+  - id: trace_follow_up_same_scope
+    trace_shape: follow_up
+    targets: [Cttn]
+    proposed_go_term_curie: GO:0005515
+    prior_result_ref: extraction-result:00000000-0000-4000-8000-000000000872
+    document_changed: false
+    expect:
+      inspect_prior_result: true
+      specialist_redispatch: false
+      broad_pdf_fallback_forbidden: true
+  - id: trace_follow_up_changed_scope
+    trace_shape: follow_up
+    targets: [Ago2]
+    proposed_go_term_curie: GO:0005515
+    prior_result_ref: extraction-result:00000000-0000-4000-8000-000000000872
+    document_changed: false
+    expect:
+      inspect_prior_result: true
+      specialist_redispatch_allowed: true
+  - id: malformed_curie_local_rejection
+    targets: [Cttn]
+    proposed_go_term_curie: DOID:0001
+    expect:
+      specialist_document_tools_called: false
+      resolution_state: unresolved
+      structured_blocker_required: true
+      broad_pdf_fallback_forbidden: true
