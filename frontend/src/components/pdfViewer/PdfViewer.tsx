@@ -2,20 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from '@mui/material/styles'
 import { debug, getEnvFlag } from '@/utils/env'
 import {
-  ClearHighlightsEvent,
-  HighlightSettingsChangedEvent,
   PDFViewerDocumentChangedEvent,
   dispatchPDFViewerEvidenceAnchorSelected,
-  onClearHighlights,
-  onHighlightSettingsChanged,
   onPDFDocumentChanged,
   onPDFViewerNavigateEvidence,
 } from '@/components/pdfViewer/pdfEvents'
-import {
-  buildDefaultHighlightSettings,
-  loadStoredHighlightSettings,
-  type HighlightSettings,
-} from '@/components/pdfViewer/highlightSettings'
 import { normalizePdfViewerDocumentUrl } from '@/components/pdfViewer/viewerDocumentUrl'
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 import {
@@ -74,11 +65,7 @@ import {
   logPdfEvidenceDebug,
   setLastPdfEvidenceNavigationResult,
 } from './pdfViewerDebug'
-import {
-  ensureMarkInjected,
-  getTextLayers,
-  persistSession,
-} from './pdfViewerHighlighting'
+import { persistSession } from './pdfViewerHighlighting'
 import {
   DEFAULT_STATE,
   VIEWER_BASE_PATH,
@@ -117,16 +104,10 @@ export function PdfViewer({
   onNavigationStateChange,
 }: PdfViewerProps) {
   const theme = useTheme()
-  const defaultHighlightColor = theme.palette.success.main
-  const defaultHighlightSettings = useMemo(
-    () => buildDefaultHighlightSettings(defaultHighlightColor),
-    [defaultHighlightColor],
-  )
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const pdfAppRef = useRef<any>(null)
   const cleanupRefs = useRef<(() => void)[]>([])
   const toolbarSearchQueryRef = useRef('')
-  const settingsRef = useRef<HighlightSettings>(defaultHighlightSettings)
   const viewerStateRef = useRef<ViewerState>({ ...DEFAULT_STATE })
   const loadStartRef = useRef<number | null>(null)
   const handledNavigationKeyRef = useRef<string | null>(null)
@@ -403,18 +384,6 @@ export function PdfViewer({
     })
     return nextSrc
   }, [activeDocument])
-
-  const clearAllHighlights = useCallback(() => {
-    const iframeWindow = iframeRef.current?.contentWindow as any
-    const iframeDoc = iframeWindow?.document as Document | undefined
-    if (!iframeDoc || !iframeWindow?.Mark) return
-
-    const textLayers = getTextLayers(iframeDoc)
-    textLayers.forEach((layer) => {
-      const markInstance = new iframeWindow.Mark(layer)
-      markInstance.unmark()
-    })
-  }, [])
 
   const executeEvidenceNavigation = useCallback(async (
     command: EvidenceNavigationCommand,
@@ -1094,8 +1063,6 @@ export function PdfViewer({
     const iframeDoc = iframeWindow?.document
     if (!iframeWindow || !iframeDoc) return
 
-    ensureMarkInjected(iframeDoc, settingsRef.current)
-
     const handshakeTimeout = window.setTimeout(() => {
       if (loadStartRef.current !== null) {
         setStatus('error')
@@ -1163,20 +1130,6 @@ export function PdfViewer({
     setOverlayRenderKey((prev) => prev + 1)
     persistViewerSession(document, viewerStateRef.current)
   }, [commitNavigationResult, persistViewerSession, storageUserId])
-
-  useEffect(() => {
-    const storedSettings = loadStoredHighlightSettings(defaultHighlightSettings)
-    settingsRef.current = storedSettings
-    if (iframeRef.current?.contentWindow?.document) {
-      ensureMarkInjected(iframeRef.current.contentWindow.document, storedSettings)
-    }
-
-    // DO NOT auto-load stored session on mount
-    // The PDF viewer is passive and only loads when it receives a 'pdf-viewer-document-changed' event
-    // This event is dispatched by:
-    // 1. DocumentsPage when user selects a document
-    // 2. Chat component on mount if backend has an active document (preserves doc across refreshes)
-  }, [defaultHighlightSettings])
 
   useEffect(() => {
     if (activeDocumentOwnerRef.current === activeDocumentOwnerToken) {
@@ -1284,27 +1237,6 @@ export function PdfViewer({
       beginDocumentLoad(nextDoc)
     })
 
-    const unregisterClear = onClearHighlights((event: ClearHighlightsEvent) => {
-      if (event.detail?.reason === 'new-query' && !settingsRef.current.clearOnNewQuery) {
-        return
-      }
-      clearAllHighlights()
-    })
-
-    const unregisterSettings = onHighlightSettingsChanged((event: HighlightSettingsChangedEvent) => {
-      const nextSettings: HighlightSettings = {
-        highlightColor: event.detail?.color ?? settingsRef.current.highlightColor,
-        highlightOpacity: typeof event.detail?.opacity === 'number' ? event.detail.opacity : settingsRef.current.highlightOpacity,
-        clearOnNewQuery: typeof event.detail?.clearOnNewQuery === 'boolean'
-          ? event.detail.clearOnNewQuery
-          : settingsRef.current.clearOnNewQuery,
-      }
-      settingsRef.current = nextSettings
-      if (iframeRef.current?.contentWindow?.document) {
-        ensureMarkInjected(iframeRef.current.contentWindow.document, nextSettings)
-      }
-    })
-
     // Listen for chat document changes (including unload)
     const handleChatDocumentChange = (event: Event) => {
       const customEvent = event as CustomEvent
@@ -1336,15 +1268,12 @@ export function PdfViewer({
 
     return () => {
       unregisterDocument()
-      unregisterClear()
-      unregisterSettings()
       window.removeEventListener('chat-document-changed', handleChatDocumentChange)
     }
   }, [
     activeDocument,
     activeDocumentOwnerToken,
     beginDocumentLoad,
-    clearAllHighlights,
     resetViewerToIdle,
     signalLoadComplete,
     signalLoadError,

@@ -3,10 +3,7 @@ import type React from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { debug } from '@/utils/env'
-import {
-  HOME_PDF_VIEWER_OWNER,
-  dispatchClearHighlights,
-} from '@/components/pdfViewer/pdfEvents'
+import { HOME_PDF_VIEWER_OWNER } from '@/components/pdfViewer/pdfEvents'
 import { copyText } from '@/components/Chat/copyText'
 import {
   fetchCurationPrepPreview,
@@ -1185,7 +1182,6 @@ export function useChatController({
             setMessages([])
             clearStoredMessages()
             sessionTraceIds.current = []
-            dispatchClearHighlights('document-change')
           }
         } catch (resetError) {
           if (!operation.ownsLatest()) {
@@ -1525,7 +1521,6 @@ export function useChatController({
         setRefinePrompt(null)
         setRefineText('')
         clearProgressState()
-        dispatchClearHighlights('user-action')
         // Update conversation status
         const statusResponse = await fetch('/api/chat/conversation')
         if (statusResponse.ok) {
@@ -1611,7 +1606,6 @@ export function useChatController({
     }
 
     setLimitNotices([])
-    dispatchClearHighlights('new-query')
 
     const messageToSend = inputMessage
     const turnId = buildTurnId()
@@ -1663,7 +1657,6 @@ export function useChatController({
     }
 
     setLimitNotices([])
-    dispatchClearHighlights('new-query')
     const turnId = buildTurnId()
     activeTurnIdRef.current = turnId
     rescuedTurnIdsRef.current.delete(turnId)
