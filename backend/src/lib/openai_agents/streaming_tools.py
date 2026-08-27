@@ -102,6 +102,7 @@ from src.lib.prompts.context import (
     append_pending_prompt_runtime_context,
     commit_pending_prompts,
 )
+from src.lib.chat_state import document_state
 from src.lib.context import (
     get_current_session_id,
     get_current_trace_id,
@@ -3633,6 +3634,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     adapter_key: Optional[str] = None,
     source_agent_key: Optional[str] = None,
     is_builder_envelope: bool = False,
+    document_id: Optional[str],
     runtime_context: Optional[Any] = None,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
@@ -3714,11 +3716,22 @@ async def _dispatch_domain_envelope_validators_for_chat(
             ),
         )
 
+    normalized_document_id = str(document_id or "").strip()
+    if not normalized_document_id:
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=getattr(expected_output_type, "__name__", "response"),
+            message=(
+                "Domain-envelope validator dispatch requires the durable document "
+                "identity for the paper loaded in chat."
+            ),
+        )
+
     try:
         envelope_started_at = time.monotonic()
         extraction_record = CurationExtractionResultRecord(
-            extraction_result_id=f"chat-runtime:{uuid.uuid4()}",
-            document_id="chat-runtime",
+            extraction_result_id=f"chat:{uuid.uuid4()}",
+            document_id=normalized_document_id,
             adapter_key=candidate.adapter_key,
             agent_key=candidate.agent_key,
             source_kind=CurationExtractionSourceKind.CHAT,
@@ -4646,12 +4659,17 @@ async def run_specialist_with_events(
     evidence_workspace_token = set_active_evidence_records(live_evidence_records)
     trace_run = get_current_extraction_trace_run()
     parent_builder_workspace = _active_builder_workspace_or_none()
+    active_chat_document_id = (
+        _active_chat_document_id(get_current_user_id())
+        if inline_chat_persistence and parent_builder_workspace is None
+        else None
+    )
     builder_workspace = ExtractionBuilderWorkspace(
         run_id=trace_run.trace_id if trace_run is not None else str(uuid.uuid4()),
         document_id=(
             parent_builder_workspace.document_id
             if parent_builder_workspace is not None
-            else None
+            else active_chat_document_id
         ),
         domain_pack_id=(
             parent_builder_workspace.domain_pack_id
@@ -6005,6 +6023,7 @@ async def run_specialist_with_events(
                 tool_name=tool_name,
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
+                document_id=builder_workspace.document_id,
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
@@ -6066,6 +6085,7 @@ async def run_specialist_with_events(
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
                 is_builder_envelope=True,
+                document_id=builder_workspace.document_id,
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
@@ -6301,6 +6321,17 @@ async def run_specialist_with_events(
     return final_output
 
 
+def _active_chat_document_id(user_id: Optional[str]) -> Optional[str]:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return None
+    active_document = document_state.get_document(normalized_user_id)
+    if not isinstance(active_document, Mapping):
+        return None
+    document_id = str(active_document.get("id") or "").strip()
+    return document_id or None
+
+
 def _validator_runtime_context_for_chat(
     *,
     document_id: Optional[str],
@@ -6309,14 +6340,21 @@ def _validator_runtime_context_for_chat(
 ) -> Optional[Any]:
     normalized_document_id = str(document_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
-    if (
-        not normalized_document_id
-        or not normalized_user_id
-        or normalized_document_id == "chat-runtime"
-    ):
+    if not normalized_document_id or not normalized_user_id:
         return None
 
     from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
+    from src.lib.curation_adapters.reference import (
+        reference_lookup_inputs_from_document,
+    )
+
+    active_document = document_state.get_document(normalized_user_id)
+    document_reference_inputs = (
+        reference_lookup_inputs_from_document(active_document)
+        if isinstance(active_document, Mapping)
+        and str(active_document.get("id") or "").strip() == normalized_document_id
+        else {}
+    )
 
     return ValidatorRuntimeContext(
         document_id=normalized_document_id,
@@ -6324,4 +6362,5 @@ def _validator_runtime_context_for_chat(
         authenticated_groups=(
             tuple(authenticated_groups) if authenticated_groups is not None else None
         ),
+        document_reference_inputs=document_reference_inputs or None,
     )

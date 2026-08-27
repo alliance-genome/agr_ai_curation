@@ -2812,7 +2812,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.literature_references:agr_literature_reference_lookup
     required_context: []
-    description: Look up a paper in the Alliance literature collection by its ID, or find candidate papers by title or citation text.
+    description: Look up a paper in the Alliance literature collection and join an unambiguous AGRKB CURIE to its authoritative curation database reference ID.
     source_file: python/src/agr_ai_curation_alliance/tools/literature_references.py
     metadata:
       name: AGR Literature Reference Lookup
@@ -2820,7 +2820,7 @@ tools:
       audit:
         display_name: AGR Literature Reference Lookup
       documentation:
-        summary: Finds papers in the Alliance literature collection. Give it a known ID (such as a PubMed ID or DOI) to fetch the exact paper, or a title/citation to search for likely matches. It reports what it tried, the candidate papers it found, any cases where the match was unclear or nothing matched, and a plain status message.
+        summary: Finds papers in the Alliance literature collection. Give it a known ID (such as a PubMed ID or DOI) to fetch the exact paper, or a title/citation to search for likely matches. For one unambiguous literature match, it joins the confirmed AGRKB CURIE to the read-only curation database so the result includes the authoritative integer reference ID. It reports both lookup stages and preserves unresolved results when either identity is missing, ambiguous, or conflicting.
         example_queries:
           - Resolve PMID:27528223 to an Alliance reference
           - Search Hahm KB Suppressed Helicobocter pylori by title text

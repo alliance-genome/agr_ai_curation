@@ -174,6 +174,7 @@ class ValidatorRuntimeContext:
     document_id: str | None = None
     user_id: str | None = None
     authenticated_groups: tuple[str, ...] | None = None
+    document_reference_inputs: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -2065,6 +2066,10 @@ def validator_request_payload_for_agent(
         payload["validator_runtime_capabilities"] = (
             _validator_runtime_capabilities_payload(request, runtime_context)
         )
+        if runtime_context.document_reference_inputs:
+            payload["document_reference"] = dict(
+                runtime_context.document_reference_inputs
+            )
     return payload
 
 

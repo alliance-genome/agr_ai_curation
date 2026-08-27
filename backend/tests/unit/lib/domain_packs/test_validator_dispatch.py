@@ -13,6 +13,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
+from agr_ai_curation_runtime import reference_resolution
 from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
@@ -682,6 +683,10 @@ def test_validator_request_payload_reports_runtime_capabilities_for_scoped_evide
         runtime_context=ValidatorRuntimeContext(
             document_id="doc-123",
             user_id="user-1",
+            document_reference_inputs={
+                "curie": "AGRKB:101000000924191",
+                "pmid": "PMID:27528223",
+            },
         ),
     )
 
@@ -691,6 +696,10 @@ def test_validator_request_payload_reports_runtime_capabilities_for_scoped_evide
         "allowed_evidence_record_ids": ["evidence-1"],
         "target_object_id": "object-1",
         "target_field_path": "gene.identifier",
+    }
+    assert payload["document_reference"] == {
+        "curie": "AGRKB:101000000924191",
+        "pmid": "PMID:27528223",
     }
 
 
@@ -1572,9 +1581,47 @@ def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context(
     ]
 
 
-def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields():
+def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields(
+    monkeypatch: pytest.MonkeyPatch,
+):
     pack = _alliance_gene_expression_pack()
     captured_bindings: list[str] = []
+    literature_reference = {
+        "reference_id": None,
+        "curie": "AGRKB:101000000924191",
+        "title": "Resolved literature title",
+        "short_citation": "Author et al. (2026)",
+        "cross_references": ["PMID:203506"],
+        "source": "literature_es",
+        "obsolete": False,
+    }
+
+    class FakeCurationClient:
+        def get_reference(self, curie: str):
+            assert curie == literature_reference["curie"]
+            return {
+                "reference_id": 482731,
+                "curie": curie,
+                "source": "curation_db",
+                "obsolete": False,
+            }
+
+    monkeypatch.setattr(
+        reference_resolution,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_db_client=lambda: FakeCurationClient()),
+    )
+    curation_resolution = reference_resolution.resolve_curation_reference(
+        literature_reference["curie"]
+    )
+    assert literature_reference["reference_id"] is None
+    assert curation_resolution.status == "success"
+    assert curation_resolution.reference is not None
+    resolved_reference = {
+        **literature_reference,
+        "reference_id": curation_resolution.reference["reference_id"],
+        "curie": curation_resolution.reference["curie"],
+    }
 
     def _runner(request, *, binding):
         captured_bindings.append(binding.binding_id)
@@ -1621,15 +1668,23 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
             return {
                 **base,
                 "resolved_values": {
-                    "reference_id": 203506,
-                    "curie": "PMID:203506",
-                    "title": "Resolved literature title",
+                    "reference_id": resolved_reference["reference_id"],
+                    "curie": resolved_reference["curie"],
+                    "title": resolved_reference["title"],
                 },
+                "resolved_objects": [resolved_reference],
                 "lookup_attempts": [
                     {
                         "provider": "agr_literature_reference_lookup",
                         "method": "get_literature_reference",
                         "query": {"value": "PMID:203506"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    },
+                    {
+                        "provider": "agr_curation_reference",
+                        "method": "get_reference",
+                        "query": {"curie": literature_reference["curie"]},
                         "result_count": 1,
                         "outcome": "success",
                     }
@@ -1728,8 +1783,8 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
     assert annotation.payload["single_reference"] == {
         "pmid": "PMID:203506",
         "title": "Resolved literature title",
-        "reference_id": 203506,
-        "curie": "PMID:203506",
+        "reference_id": 482731,
+        "curie": "AGRKB:101000000924191",
     }
     patch_events = {
         event["validator_binding_id"]: event

@@ -12,6 +12,9 @@ from src.lib.curation_adapters.reference.normalizer import (
     REFERENCE_VALIDATION_PLAN_KEY,
     ReferenceCandidateNormalizer,
 )
+from src.lib.curation_adapters.reference.document_identity import (
+    reference_lookup_inputs_from_document,
+)
 
 __all__ = [
     "REFERENCE_ADAPTER_KEY",
@@ -22,4 +25,5 @@ __all__ = [
     "REFERENCE_TYPE_OPTIONS",
     "REFERENCE_VALIDATION_PLAN_KEY",
     "ReferenceCandidateNormalizer",
+    "reference_lookup_inputs_from_document",
 ]

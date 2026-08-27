@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, List, Optional
 from agents import function_tool
 from pydantic import BaseModel, Field
 
+from agr_ai_curation_runtime import resolve_curation_reference
+
 logger = logging.getLogger(__name__)
 
 SOURCE = "literature_es"
@@ -233,7 +235,62 @@ def _success_result(
         )
 
     if count == 1:
-        message = "Resolved one literature reference from the Alliance literature search index."
+        literature_candidate = candidates[0]
+        curation_resolution = resolve_curation_reference(
+            str(literature_candidate.get("curie") or "")
+        )
+        curation_attempt = {
+            "provider": "agr_curation_reference",
+            "source": "curation_db",
+            "method": "get_reference",
+            "query": {"curie": literature_candidate.get("curie")},
+            "lookup_status": curation_resolution.status,
+            "result_count": 1 if curation_resolution.reference is not None else 0,
+            "explanation": curation_resolution.explanation,
+        }
+        literature_attempt = _lookup_attempt(
+            method=method,
+            query=query,
+            exact_match=exact_match,
+            limit=limit,
+            lookup_status="success",
+            explanation=(
+                "Resolved one literature reference from the Alliance literature search index."
+            ),
+            candidate_count=1,
+        )
+        if curation_resolution.reference is None:
+            return LiteratureReferenceLookupResult(
+                status=(
+                    "error"
+                    if curation_resolution.status in {"blocked", "transient"}
+                    else "ok"
+                ),
+                method=method,
+                query=query,
+                exact_match=exact_match,
+                count=1,
+                lookup_status=curation_resolution.status,
+                message=curation_resolution.explanation,
+                lookup_attempts=[literature_attempt, curation_attempt],
+                candidate_references=candidates,
+                failure_classification=(
+                    curation_resolution.status
+                    if curation_resolution.status in {"blocked", "transient"}
+                    else None
+                ),
+            )
+
+        curation_reference = curation_resolution.reference
+        resolved_candidate = {
+            **literature_candidate,
+            "reference_id": curation_reference["reference_id"],
+            "curie": curation_reference["curie"],
+        }
+        message = (
+            "Resolved one literature reference and joined its AGRKB CURIE to the "
+            "Alliance curation database reference ID."
+        )
         return LiteratureReferenceLookupResult(
             status="ok",
             method=method,
@@ -242,19 +299,9 @@ def _success_result(
             count=1,
             lookup_status="success",
             message=message,
-            lookup_attempts=[
-                _lookup_attempt(
-                    method=method,
-                    query=query,
-                    exact_match=exact_match,
-                    limit=limit,
-                    lookup_status="success",
-                    explanation=message,
-                    candidate_count=1,
-                )
-            ],
-            resolved_reference=candidates[0],
-            candidate_references=candidates,
+            lookup_attempts=[literature_attempt, curation_attempt],
+            resolved_reference=resolved_candidate,
+            candidate_references=[resolved_candidate],
         )
 
     message = (

@@ -9,6 +9,10 @@ from .file_outputs import (
     persist_file_output,
 )
 from .record_evidence import create_record_evidence_tool
+from .reference_resolution import (
+    CurationReferenceResolution,
+    resolve_curation_reference,
+)
 from .evidence_workspace import (
     create_attach_evidence_to_object_tool,
     create_detach_evidence_from_object_tool,
@@ -37,6 +41,8 @@ __all__ = [
     "get_current_file_output_context",
     "persist_file_output",
     "create_record_evidence_tool",
+    "CurationReferenceResolution",
+    "resolve_curation_reference",
     "create_attach_evidence_to_object_tool",
     "create_detach_evidence_from_object_tool",
     "create_discard_recorded_evidence_tool",

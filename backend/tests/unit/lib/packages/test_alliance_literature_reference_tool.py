@@ -19,6 +19,10 @@ ALLIANCE_PACKAGE_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 sys.path.insert(0, str(ALLIANCE_PACKAGE_SRC))
 
 import agr_ai_curation_alliance.tools.literature_references as literature_references  # noqa: E402
+from agr_ai_curation_runtime import reference_resolution  # noqa: E402
+from agr_ai_curation_runtime.reference_resolution import (  # noqa: E402
+    CurationReferenceResolution,
+)
 from agr_curation_api.exceptions import AGRAPIError  # noqa: E402
 
 
@@ -97,6 +101,23 @@ def _reference(
     )
 
 
+@pytest.fixture(autouse=True)
+def _curation_reference_join(monkeypatch):
+    def _resolve(curie: str) -> CurationReferenceResolution:
+        return CurationReferenceResolution(
+            status="success",
+            reference={
+                "reference_id": 101000000924191,
+                "curie": curie,
+                "source": "curation_db",
+                "obsolete": False,
+            },
+            explanation="Resolved the curation reference.",
+        )
+
+    monkeypatch.setattr(literature_references, "resolve_curation_reference", _resolve)
+
+
 def test_default_factory_uses_api_client_db_mode(monkeypatch):
     calls = []
     fake_module = ModuleType("agr_curation_api")
@@ -161,11 +182,149 @@ def test_exact_identifier_lookup_returns_resolved_reference(
     assert result.source == "literature_es"
     assert result.count == 1
     assert result.resolved_reference["curie"] == curie
+    assert result.resolved_reference["reference_id"] == 101000000924191
     assert result.resolved_reference["source"] == "literature_es"
     assert result.resolved_reference["matched_identifier"] == identifier
     assert result.lookup_attempts[0]["source"] == "literature_es"
     assert result.lookup_attempts[0]["method"] == "get_literature_reference"
     assert calls == [identifier]
+
+
+def test_real_shaped_literature_result_joins_authoritative_curation_reference_id(
+    monkeypatch,
+):
+    literature_reference = _reference()
+    assert literature_reference.reference_id is None
+    calls = []
+
+    class FakeLiteratureClient:
+        def get_literature_reference(self, value):
+            assert value == "PMID:27528223"
+            return literature_reference
+
+    class FakeCurationClient:
+        def get_reference(self, curie):
+            calls.append(curie)
+            return {
+                "reference_id": 482731,
+                "curie": "AGRKB:101000000924191",
+                "source": "curation_db",
+                "obsolete": False,
+            }
+
+    monkeypatch.setattr(literature_references, "_client_factory", FakeLiteratureClient)
+    monkeypatch.setattr(
+        reference_resolution,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_db_client=lambda: FakeCurationClient()),
+    )
+    monkeypatch.setattr(
+        literature_references,
+        "resolve_curation_reference",
+        reference_resolution.resolve_curation_reference,
+    )
+
+    result = _tool_fn()(
+        method="get_literature_reference",
+        identifier="PMID:27528223",
+    )
+
+    assert calls == ["AGRKB:101000000924191"]
+    assert result.lookup_status == "success"
+    assert result.resolved_reference["reference_id"] == 482731
+    assert result.resolved_reference["curie"] == "AGRKB:101000000924191"
+    assert result.resolved_reference["title"] == literature_reference.title
+    assert [attempt["source"] for attempt in result.lookup_attempts] == [
+        "literature_es",
+        "curation_db",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("curation_reference", "expected_status"),
+    [
+        (None, "not_found"),
+        (
+            {
+                "reference_id": 482731,
+                "curie": "AGRKB:DIFFERENT",
+                "source": "curation_db",
+                "obsolete": False,
+            },
+            "conflict",
+        ),
+        (
+            {
+                "reference_id": None,
+                "curie": "AGRKB:101000000924191",
+                "source": "curation_db",
+                "obsolete": False,
+            },
+            "not_found",
+        ),
+        (
+            {
+                "reference_id": 482731,
+                "curie": "AGRKB:101000000924191",
+                "source": "curation_db",
+                "obsolete": True,
+            },
+            "conflict",
+        ),
+    ],
+)
+def test_curation_reference_join_preserves_unresolved_identity_outcomes(
+    monkeypatch,
+    curation_reference,
+    expected_status,
+):
+    monkeypatch.setattr(
+        reference_resolution,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(
+            get_db_client=lambda: SimpleNamespace(
+                get_reference=lambda _curie: curation_reference
+            )
+        ),
+    )
+
+    resolution = reference_resolution.resolve_curation_reference(
+        "AGRKB:101000000924191"
+    )
+
+    assert resolution.status == expected_status
+    assert resolution.reference is None
+
+
+@pytest.mark.parametrize("status", ["not_found", "conflict", "blocked", "transient"])
+def test_unresolved_curation_join_never_exposes_a_resolved_reference(
+    monkeypatch,
+    status,
+):
+    class FakeClient:
+        def get_literature_reference(self, _identifier):
+            return _reference()
+
+    monkeypatch.setattr(literature_references, "_client_factory", FakeClient)
+    monkeypatch.setattr(
+        literature_references,
+        "resolve_curation_reference",
+        lambda _curie: CurationReferenceResolution(
+            status=status,
+            reference=None,
+            explanation=f"Curation join was {status}.",
+        ),
+    )
+
+    result = _tool_fn()(
+        method="get_literature_reference",
+        identifier="PMID:27528223",
+    )
+
+    assert result.lookup_status == status
+    assert result.resolved_reference is None
+    assert result.candidate_references[0]["reference_id"] is None
+    assert result.status == ("error" if status in {"blocked", "transient"} else "ok")
 
 
 def test_fuzzy_title_search_returns_candidate_with_match_context(monkeypatch):
@@ -408,6 +567,11 @@ def test_live_literature_es_smoke_when_environment_is_available(monkeypatch):
         literature_references,
         "_client_factory",
         literature_references._default_client_factory,
+    )
+    monkeypatch.setattr(
+        literature_references,
+        "resolve_curation_reference",
+        reference_resolution.resolve_curation_reference,
     )
 
     pmid_result = _tool_fn()(

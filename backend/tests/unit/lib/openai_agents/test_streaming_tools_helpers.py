@@ -144,10 +144,19 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
 
     def _run_streamed(_agent, *args, **kwargs):
         captured["run_config"] = kwargs["run_config"]
+        captured["document_id"] = (
+            streaming_tools.get_active_extraction_builder_workspace().document_id
+        )
         return _FakeRunResult(events=[], final_output="specialist output", new_items=[])
 
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+    monkeypatch.setattr(streaming_tools, "get_current_user_id", lambda: "curator-1")
+    monkeypatch.setattr(
+        streaming_tools.document_state,
+        "get_document",
+        lambda user_id: {"id": "document-1"} if user_id == "curator-1" else None,
+    )
     monkeypatch.setattr(
         streaming_tools,
         "gen_ai_conversation_scope",
@@ -190,6 +199,7 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
     )
 
     assert result == "specialist output"
+    assert captured["document_id"] == "document-1"
     assert captured["run_config"].tracing_disabled is False
     assert captured["run_config"].trace_include_sensitive_data is True
     assert captured["run_config"].workflow_name == "parent workflow"
@@ -2858,6 +2868,8 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     def fake_envelope_normalizer(record):
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
+        observed_record["document_id"] = record.document_id
+        observed_record["extraction_result_id"] = record.extraction_result_id
         return source_envelope
 
     monkeypatch.setattr(
@@ -2925,6 +2937,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
         expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Gene Extraction",
         tool_name="ask_gene_extractor_specialist",
+        document_id="document-1",
     )
 
     payload = json.loads(result)
@@ -2964,6 +2977,8 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     def fake_envelope_normalizer(record):
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
+        observed_record["document_id"] = record.document_id
+        observed_record["extraction_result_id"] = record.extraction_result_id
         return source_envelope
 
     monkeypatch.setattr(
@@ -3014,11 +3029,14 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
         adapter_key="gene",
         source_agent_key="ca_11111111-2222-3333-4444-555555555555",
         is_builder_envelope=True,
+        document_id="document-1",
     )
 
     assert json.loads(result)["domain_pack_id"] == "gene"
     assert observed_record["agent_key"] == "ca_11111111-2222-3333-4444-555555555555"
     assert observed_record["adapter_key"] == "gene"
+    assert observed_record["document_id"] == "document-1"
+    assert observed_record["extraction_result_id"].startswith("chat:")
     assert observed["domain_pack"].pack_id == "gene"
     assert observed["envelope"] is source_envelope
     assert emitted[0]["details"]["toolName"] == "dispatch_active_validator_bindings"
@@ -3058,6 +3076,7 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
         expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Gene Extraction",
         tool_name="ask_gene_extractor_specialist",
+        document_id="document-1",
     )
 
     payload = json.loads(result)
@@ -3150,6 +3169,7 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
         expected_output_type=DomainEnvelopeExtractionResult,
         specialist_name=f"{agent_key} chat extraction",
         tool_name=tool_name,
+        document_id="document-1",
     )
 
     payload = json.loads(result)
@@ -3209,6 +3229,7 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
+            document_id="document-1",
         )
     )
 
@@ -3260,10 +3281,48 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_tool_agent_key
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name=None,
+            document_id="document-1",
         )
 
 
-def test_chat_validator_runtime_context_requires_real_document_and_user():
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_requires_durable_document_identity(
+    _repo_package_curation_registry,
+):
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="durable document identity",
+    ):
+        await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            _gene_extractor_domain_output(),
+            expected_output_type=GeneExtractionResultEnvelope,
+            specialist_name="Gene Extraction",
+            tool_name="ask_gene_extractor_specialist",
+            document_id=None,
+        )
+
+
+def test_chat_validator_runtime_context_requires_real_document_and_user(monkeypatch):
+    monkeypatch.setattr(
+        streaming_tools.document_state,
+        "get_document",
+        lambda user_id: (
+            {
+                "id": "document-1",
+                "title": "A curated source paper",
+                "metadata": json.dumps(
+                    {
+                        "source_provenance": {
+                            "reference_curie": "AGRKB:101000000924191",
+                            "external_ids": {"pmid": "27528223"},
+                        }
+                    }
+                ),
+            }
+            if user_id == "curator-1"
+            else None
+        ),
+    )
     context = streaming_tools._validator_runtime_context_for_chat(
         document_id="document-1",
         user_id="curator-1",
@@ -3274,13 +3333,15 @@ def test_chat_validator_runtime_context_requires_real_document_and_user():
     assert context.document_id == "document-1"
     assert context.user_id == "curator-1"
     assert context.authenticated_groups == ("ZFIN",)
-    assert (
-        streaming_tools._validator_runtime_context_for_chat(
-            document_id="chat-runtime",
-            user_id="curator-1",
-        )
-        is None
-    )
+    assert context.document_reference_inputs == {
+        "curie": "AGRKB:101000000924191",
+        "pmid": "PMID:27528223",
+        "title": "A curated source paper",
+    }
+    assert streaming_tools._validator_runtime_context_for_chat(
+        document_id="chat-runtime",
+        user_id="curator-1",
+    ) is not None
     assert (
         streaming_tools._validator_runtime_context_for_chat(
             document_id="document-1",
@@ -3288,6 +3349,18 @@ def test_chat_validator_runtime_context_requires_real_document_and_user():
         )
         is None
     )
+
+
+def test_active_chat_document_id_reads_loaded_document_for_user(monkeypatch):
+    monkeypatch.setattr(
+        streaming_tools.document_state,
+        "get_document",
+        lambda user_id: {"id": "document-1"} if user_id == "curator-1" else None,
+    )
+
+    assert streaming_tools._active_chat_document_id("curator-1") == "document-1"
+    assert streaming_tools._active_chat_document_id("other-curator") is None
+    assert streaming_tools._active_chat_document_id(None) is None
 
 
 @pytest.mark.asyncio
@@ -3308,4 +3381,5 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_curation_adapt
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
+            document_id="document-1",
         )
