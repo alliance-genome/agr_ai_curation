@@ -176,7 +176,7 @@ def _source_url_for_gene(gene_id: str) -> str:
     prefix, local_id = gene_id.split(":", 1)
     if prefix == "RGD":
         return f"https://rgd.mcw.edu/rgdweb/report/gene/main.html?id={local_id}"
-    return "https://www.alliancegenome.org/"
+    return f"https://www.alliancegenome.org/gene/{gene_id}"
 
 
 def _candidate_from_row(row: Mapping[str, Any]) -> GeneProductCandidate:

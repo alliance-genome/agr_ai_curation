@@ -37,6 +37,24 @@ def _candidate(row: dict) -> GeneProductCandidate:
     return resolver_module._candidate_from_row(row)
 
 
+def test_non_rgd_candidate_provenance_links_to_its_alliance_gene_record():
+    candidate = _candidate(
+        {
+            "gene_id": "MGI:1923928",
+            "gene_symbol": "Tmem67",
+            "gene_name": "transmembrane protein 67",
+            "gene_type": "protein_coding_gene",
+            "taxon_id": "NCBITaxon:10090",
+            "rnacentral_ids": [],
+        }
+    )
+
+    assert candidate.provenance[0].source_url == (
+        "https://www.alliancegenome.org/gene/MGI:1923928"
+    )
+    assert candidate.provenance[0].source_record_id == "MGI:1923928"
+
+
 def _recorded_requester(fixture: dict, calls: list[tuple[str, dict]]):
     def requester(url: str, **kwargs):
         calls.append((url, kwargs))
@@ -87,6 +105,9 @@ def test_recorded_rat_mature_product_returns_every_current_mapping_as_ambiguous(
         "RGD:2325458",
         "RGD:2325576",
     }
+    assert result.candidate_mappings[0].provenance[0].source_url.startswith(
+        "https://rgd.mcw.edu/rgdweb/report/gene/main.html?id="
+    )
     assert {candidate.identity_kind for candidate in result.candidate_mappings} == {
         "precursor_locus"
     }
