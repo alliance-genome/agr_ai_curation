@@ -376,6 +376,71 @@ class DomainPackValidatorBatchConfig(DomainPackMetadataBaseModel):
         return _validate_symbolic_name(value, "validator_bindings.batch.family")
 
 
+class DomainPackValidatorGroupScope(DomainPackMetadataBaseModel):
+    """Authenticated-group eligibility and provider-payload consistency policy."""
+
+    required_any_active_group: list[str] = Field(min_length=1)
+    provider_value_field_paths: list[str] = Field(default_factory=list)
+    allowed_provider_values: list[str] = Field(default_factory=list)
+    allow_cross_provider: bool = False
+
+    @field_validator("required_any_active_group")
+    @classmethod
+    def _validate_required_groups(cls, value: list[str]) -> list[str]:
+        from src.lib.agent_access import normalize_allowed_group_ids
+
+        return normalize_allowed_group_ids(
+            value,
+            field_name="validator_bindings.group_scope.required_any_active_group",
+        )
+
+    @field_validator("provider_value_field_paths")
+    @classmethod
+    def _validate_provider_paths(cls, value: list[str]) -> list[str]:
+        normalized = [validate_field_path_syntax(path) for path in value]
+        if len(set(normalized)) != len(normalized):
+            raise ValueError(
+                "validator_bindings.group_scope.provider_value_field_paths "
+                "must not contain duplicates"
+            )
+        return normalized
+
+    @field_validator("allowed_provider_values")
+    @classmethod
+    def _validate_provider_values(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for index, raw_value in enumerate(value):
+            if not isinstance(raw_value, str) or not raw_value.strip():
+                raise ValueError(
+                    "validator_bindings.group_scope.allowed_provider_values"
+                    f"[{index}] must be a non-empty string"
+                )
+            provider_value = raw_value.strip()
+            if provider_value != raw_value:
+                raise ValueError(
+                    "validator_bindings.group_scope.allowed_provider_values"
+                    f"[{index}] must not contain surrounding whitespace"
+                )
+            if provider_value.casefold() in {
+                existing.casefold() for existing in normalized
+            }:
+                raise ValueError(
+                    "validator_bindings.group_scope.allowed_provider_values "
+                    "must not contain case-insensitive duplicates"
+                )
+            normalized.append(provider_value)
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_provider_consistency_policy(self) -> "DomainPackValidatorGroupScope":
+        if bool(self.provider_value_field_paths) != bool(self.allowed_provider_values):
+            raise ValueError(
+                "validator_bindings.group_scope.provider_value_field_paths and "
+                "allowed_provider_values must be declared together"
+            )
+        return self
+
+
 class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     """Executable package-scoped validator binding metadata."""
 
@@ -393,6 +458,7 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     required: bool = False
     blocking: bool = False
     allow_opt_out: bool = False
+    group_scope: Optional[DomainPackValidatorGroupScope] = None
     batch: DomainPackValidatorBatchConfig = Field(
         default_factory=DomainPackValidatorBatchConfig
     )
@@ -435,6 +501,7 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
+    group_scope: Optional[DomainPackValidatorGroupScope] = None
     definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
 
     @field_validator("max_tool_calls", mode="before")
@@ -906,6 +973,7 @@ __all__ = [
     "DomainPackObjectDefinition",
     "DomainPackStatus",
     "DomainPackActiveValidatorBinding",
+    "DomainPackValidatorGroupScope",
     "DomainPackUnderDevelopmentValidatorBinding",
     "DomainPackValidatorAgentRef",
     "DomainPackValidatorAppliesTo",

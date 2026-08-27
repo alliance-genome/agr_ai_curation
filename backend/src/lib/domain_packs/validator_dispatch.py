@@ -22,7 +22,10 @@ from pydantic import BaseModel, Field, ValidationError, create_model
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
+    FieldRef,
     ValidationFinding,
+    ValidationFindingSeverity,
+    ValidationFindingStatus,
 )
 from src.schemas.domain_validator import (
     DomainValidationRequest,
@@ -161,6 +164,7 @@ class ActiveValidatorDispatchResult:
     validator_agent_run_count: int
     batch_validator_run_count: int
     validator_batch_groups: tuple[dict[str, Any], ...]
+    binding_audit: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,7 @@ class ValidatorRuntimeContext:
 
     document_id: str | None = None
     user_id: str | None = None
+    authenticated_groups: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -177,6 +182,7 @@ class ValidatorDispatchJob:
 
     match: ValidatorBindingMatch
     request: DomainValidationRequest
+    dispatch_context: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +314,7 @@ def dispatch_validator_jobs(
                     validator_result,
                     request=job.request,
                 ),
+                dispatch_context=job.dispatch_context,
             )
         )
 
@@ -364,9 +371,17 @@ def dispatch_active_validator_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
-    selector_findings: list[ValidationFinding] = []
+    authenticated_groups = _normalized_authenticated_groups(runtime_context)
+    eligible_matches, eligibility_findings, binding_audit = (
+        resolve_group_scoped_validator_matches(
+            list(_ordered_matches(matches)),
+            authenticated_groups=authenticated_groups,
+        )
+    )
+    selector_findings: list[ValidationFinding] = list(eligibility_findings)
     jobs: list[ValidatorDispatchJob] = []
-    for match in _ordered_matches(matches):
+    dispatch_context = _group_dispatch_context(authenticated_groups)
+    for match in eligible_matches:
         if not _binding_has_dispatch_contract(match.binding):
             LOGGER.info(
                 "Skipping active validator binding %s because it declares no "
@@ -381,7 +396,17 @@ def dispatch_active_validator_bindings(
         if selector_result.request is None:
             continue
 
-        jobs.append(ValidatorDispatchJob(match=match, request=selector_result.request))
+        jobs.append(
+            ValidatorDispatchJob(
+                match=match,
+                request=selector_result.request,
+                dispatch_context=(
+                    dispatch_context
+                    if match.binding.required_any_active_group
+                    else None
+                ),
+            )
+        )
 
     job_dispatch = dispatch_validator_jobs(
         jobs,
@@ -425,16 +450,312 @@ def dispatch_active_validator_bindings(
         updated_envelope = materialization_result.envelope
         appended_findings.extend(materialization_result.appended_findings)
 
+    if any(entry.get("group_scope") is not None for entry in binding_audit):
+        updated_metadata = dict(updated_envelope.metadata)
+        updated_metadata["validator_binding_audit"] = list(binding_audit)
+        if authenticated_groups is not None:
+            updated_metadata["authenticated_group_snapshot"] = list(
+                authenticated_groups
+            )
+        updated_envelope = updated_envelope.model_copy(
+            update={"metadata": updated_metadata}
+        )
+
     return ActiveValidatorDispatchResult(
         envelope=updated_envelope,
         registry=validation_registry,
-        matched_bindings=matches,
+        matched_bindings=tuple(eligible_matches),
         appended_findings=tuple(appended_findings),
         validator_results=job_dispatch.validator_results,
         validator_agent_run_count=job_dispatch.validator_agent_run_count,
         batch_validator_run_count=job_dispatch.batch_validator_run_count,
         validator_batch_groups=job_dispatch.validator_batch_groups,
+        binding_audit=binding_audit,
     )
+
+
+def _normalized_authenticated_groups(
+    runtime_context: ValidatorRuntimeContext | None,
+) -> tuple[str, ...] | None:
+    if runtime_context is None or runtime_context.authenticated_groups is None:
+        return None
+    return tuple(
+        sorted(
+            {
+                group.strip()
+                for group in runtime_context.authenticated_groups
+                if isinstance(group, str) and group.strip()
+            }
+        )
+    )
+
+
+def _group_dispatch_context(
+    authenticated_groups: tuple[str, ...] | None,
+) -> dict[str, Any]:
+    return {
+        "authenticated_groups": (
+            list(authenticated_groups) if authenticated_groups is not None else None
+        ),
+        "group_context_identity": json.dumps(
+            list(authenticated_groups) if authenticated_groups is not None else None,
+            separators=(",", ":"),
+        ),
+    }
+
+
+def resolve_group_scoped_validator_matches(
+    matches: list[ValidatorBindingMatch],
+    *,
+    authenticated_groups: tuple[str, ...] | None,
+) -> tuple[
+    list[ValidatorBindingMatch],
+    list[ValidationFinding],
+    tuple[dict[str, Any], ...],
+]:
+    active_set = set(authenticated_groups or ())
+    eligible: list[ValidatorBindingMatch] = []
+    findings: list[ValidationFinding] = []
+    audit: list[dict[str, Any]] = []
+
+    for match in matches:
+        required = match.binding.required_any_active_group
+        if not required:
+            eligible.append(match)
+            audit.append(_binding_group_audit(match, authenticated_groups, True, "generic"))
+            continue
+        if authenticated_groups is None:
+            audit.append(
+                _binding_group_audit(match, authenticated_groups, False, "missing_context")
+            )
+            findings.append(
+                _group_scope_finding(
+                    match,
+                    authenticated_groups=authenticated_groups,
+                    code="domain_pack.validator_group_context_missing",
+                    message=(
+                        f"Validator binding '{match.binding.binding_id}' requires an "
+                        "authenticated curator group, but no trusted group context was available."
+                    ),
+                )
+            )
+            continue
+        if not active_set.intersection(required):
+            audit.append(
+                _binding_group_audit(match, authenticated_groups, False, "group_not_satisfied")
+            )
+            continue
+        eligible.append(match)
+        audit.append(
+            _binding_group_audit(match, authenticated_groups, True, "group_scope_satisfied")
+        )
+        findings.extend(
+            _provider_context_mismatch_findings(
+                match,
+                authenticated_groups=authenticated_groups,
+            )
+        )
+
+    scoped_by_target = _scoped_matches_by_target(eligible)
+    ambiguous_keys = {
+        key for key, scoped_matches in scoped_by_target.items() if len(scoped_matches) > 1
+    }
+    if ambiguous_keys:
+        for key in sorted(ambiguous_keys):
+            competing = scoped_by_target[key]
+            match = competing[0]
+            findings.append(
+                _group_scope_finding(
+                    match,
+                    authenticated_groups=authenticated_groups,
+                    code="domain_pack.validator_group_scope_ambiguous",
+                    message=(
+                        "Multiple authenticated-group validator bindings claim this field: "
+                        + ", ".join(sorted(item.binding.binding_id for item in competing))
+                        + "."
+                    ),
+                    extra_details={
+                        "competing_binding_ids": sorted(
+                            item.binding.binding_id for item in competing
+                        )
+                    },
+                )
+            )
+        eligible = [
+            match
+            for match in eligible
+            if not match.binding.required_any_active_group
+            or _match_target_key(match) not in ambiguous_keys
+        ]
+        audit = [
+            {
+                **entry,
+                "eligible": False,
+                "eligibility_reason": "same_field_ambiguity",
+            }
+            if entry["group_scope"] is not None
+            and entry["eligible"]
+            and json.dumps(entry["target"], sort_keys=True, default=str)
+            in ambiguous_keys
+            else entry
+            for entry in audit
+        ]
+
+    return eligible, findings, tuple(audit)
+
+
+def _binding_group_audit(
+    match: ValidatorBindingMatch,
+    authenticated_groups: tuple[str, ...] | None,
+    eligible: bool,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "binding_id": match.binding.binding_id,
+        "target": match.target_details(),
+        "group_scope": (
+            {
+                "required_any_active_group": list(
+                    match.binding.required_any_active_group
+                ),
+                "provider_value_field_paths": list(
+                    match.binding.provider_value_field_paths
+                ),
+                "allowed_provider_values": list(
+                    match.binding.allowed_provider_values
+                ),
+                "allow_cross_provider": match.binding.allow_cross_provider,
+            }
+            if match.binding.required_any_active_group
+            else None
+        ),
+        "authenticated_groups": (
+            list(authenticated_groups) if authenticated_groups is not None else None
+        ),
+        "eligible": eligible,
+        "eligibility_reason": reason,
+        "group_context_identity": _group_dispatch_context(authenticated_groups)[
+            "group_context_identity"
+        ],
+    }
+
+
+def _scoped_matches_by_target(
+    matches: list[ValidatorBindingMatch],
+) -> dict[str, list[ValidatorBindingMatch]]:
+    grouped: dict[str, list[ValidatorBindingMatch]] = {}
+    for match in matches:
+        if match.binding.required_any_active_group:
+            grouped.setdefault(_match_target_key(match), []).append(match)
+    return grouped
+
+
+def _match_target_key(match: ValidatorBindingMatch) -> str:
+    return json.dumps(match.target_details(), sort_keys=True, default=str)
+
+
+def _group_scope_finding(
+    match: ValidatorBindingMatch,
+    *,
+    authenticated_groups: tuple[str, ...] | None,
+    code: str,
+    message: str,
+    field_path: str | None = None,
+    extra_details: Mapping[str, Any] | None = None,
+) -> ValidationFinding:
+    object_ref = (
+        match.object_envelope.to_object_ref()
+        if match.object_envelope is not None
+        else None
+    )
+    resolved_path = field_path or match.field_path
+    return ValidationFinding(
+        severity=(
+            ValidationFindingSeverity.BLOCKER
+            if match.binding.blocking
+            else ValidationFindingSeverity.WARNING
+        ),
+        status=ValidationFindingStatus.OPEN,
+        code=code,
+        message=message,
+        object_ref=object_ref,
+        field_ref=(
+            FieldRef(object_ref=object_ref, field_path=resolved_path)
+            if object_ref is not None and resolved_path is not None
+            else None
+        ),
+        details={
+            **match.binding.identity_details(),
+            "target": match.target_details(),
+            **_group_dispatch_context(authenticated_groups),
+            **dict(extra_details or {}),
+        },
+    )
+
+
+def _provider_context_mismatch_findings(
+    match: ValidatorBindingMatch,
+    *,
+    authenticated_groups: tuple[str, ...],
+) -> list[ValidationFinding]:
+    binding = match.binding
+    if binding.allow_cross_provider or not binding.provider_value_field_paths:
+        return []
+    if match.object_envelope is None:
+        return []
+    allowed = {value.casefold() for value in binding.allowed_provider_values}
+    findings: list[ValidationFinding] = []
+    for declared_path in binding.provider_value_field_paths:
+        field_path = match.resolve_input_path(declared_path)
+        value = _payload_value(match.object_envelope.payload, field_path)
+        normalized_value = _provider_value(value)
+        if normalized_value is None or normalized_value.casefold() in allowed:
+            continue
+        findings.append(
+            _group_scope_finding(
+                match,
+                authenticated_groups=authenticated_groups,
+                code="domain_pack.validator_provider_group_mismatch",
+                message=(
+                    f"Extracted provider value '{normalized_value}' conflicts with the "
+                    "authenticated curator group context. The extracted value was preserved."
+                ),
+                field_path=field_path,
+                extra_details={
+                    "provider_value": normalized_value,
+                    "provider_value_field_path": field_path,
+                    "allowed_provider_values": list(binding.allowed_provider_values),
+                },
+            )
+        )
+    return findings
+
+
+def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
+    current: Any = payload
+    for raw_part in field_path.replace("]", "").replace("[", ".").split("."):
+        if not raw_part:
+            continue
+        if raw_part.isdigit():
+            if not isinstance(current, list) or int(raw_part) >= len(current):
+                return None
+            current = current[int(raw_part)]
+        elif isinstance(current, Mapping):
+            current = current.get(raw_part)
+        else:
+            return None
+    return current
+
+
+def _provider_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, Mapping):
+        for key in ("abbreviation", "id", "name"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
 
 
 def _apply_validator_evidence_updates_to_envelope(
@@ -639,6 +960,7 @@ def _run_validator_jobs(
                 match=job.match,
                 request=job.request,
                 result=validator_result,
+                dispatch_context=job.dispatch_context,
             )
         )
     return validator_results, materialization_items, {
@@ -2831,6 +3153,7 @@ __all__ = [
     "dispatch_active_validator_bindings",
     "dispatch_validator_jobs",
     "preflight_unresolved_validator_result",
+    "resolve_group_scoped_validator_matches",
     "run_package_scoped_validator_agent_batch",
     "run_package_scoped_validator_agent_batch_in_worker_thread",
     "run_package_scoped_validator_agent_in_worker_thread",

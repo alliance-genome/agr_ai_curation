@@ -188,6 +188,68 @@ def _loaded_pack(
     )
 
 
+def _group_scoped_pack(
+    tmp_path: Path,
+    *,
+    ambiguous_second_binding: bool = False,
+    allow_cross_provider: bool = False,
+) -> LoadedDomainPack:
+    pack_path = tmp_path / "fixture.group-scoped-dispatch"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    text = _pack_text().replace(
+        "        blocking: true\n",
+        """        blocking: true
+        group_scope:
+          required_any_active_group:
+            - ZFIN
+          provider_value_field_paths:
+            - data_provider.abbreviation
+          allowed_provider_values:
+            - ZFIN
+          allow_cross_provider: false
+""",
+        1,
+    )
+    if allow_cross_provider:
+        text = text.replace("          allow_cross_provider: false", "          allow_cross_provider: true", 1)
+    if ambiguous_second_binding:
+        text += """
+      - binding_id: fixture.identifier_lookup_wb
+        display_name: WB identifier lookup
+        validator_agent:
+          package_id: fixture.validators
+          agent_id: identifier_validator
+        applies_to:
+          domain_pack_id: fixture.dispatch
+          object_types:
+            - GeneAssertion
+          field_paths:
+            - gene.identifier
+        required: true
+        blocking: false
+        group_scope:
+          required_any_active_group:
+            - WB
+        input_fields:
+          identifier:
+            source: payload
+            path: gene.identifier
+        expected_result_fields:
+          identifier: gene.identifier
+"""
+    metadata_path.write_text(text, encoding="utf-8")
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+
 def _empty_dispatch_pack(tmp_path: Path) -> LoadedDomainPack:
     pack_path = tmp_path / "fixture.empty-dispatch"
     pack_path.mkdir()
@@ -865,6 +927,166 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
         materialized_gene.to_object_ref()
     ]
     assert result.validator_results[0].status == "resolved"
+
+
+def test_group_scope_normalizes_and_matching_authenticated_group_dispatches(
+    tmp_path: Path,
+):
+    pack = _group_scoped_pack(tmp_path)
+    binding = pack.metadata.metadata["validator_bindings"]["active"][0]
+    assert binding["group_scope"] == {
+        "required_any_active_group": ["ZFIN"],
+        "provider_value_field_paths": ["data_provider.abbreviation"],
+        "allowed_provider_values": ["ZFIN"],
+        "allow_cross_provider": False,
+    }
+    envelope = _envelope().model_copy(deep=True)
+    envelope.extracted_objects[0].payload["data_provider"] = {
+        "abbreviation": "ZFIN"
+    }
+    calls: list[str] = []
+
+    def _runner(request, *, binding):
+        calls.append(binding.binding_id)
+        return _result_payload(request)
+
+    result = dispatch_active_validator_bindings(
+        envelope,
+        pack,
+        runner=_runner,
+        runtime_context=ValidatorRuntimeContext(
+            authenticated_groups=("ZFIN",),
+        ),
+    )
+
+    assert calls == ["fixture.identifier_lookup"]
+    assert result.binding_audit[0]["eligibility_reason"] == "group_scope_satisfied"
+    assert result.binding_audit[0]["authenticated_groups"] == ["ZFIN"]
+    finding = _single_result_finding(result)
+    assert finding.details["validation_metadata"]["dispatch_context"] == {
+        "authenticated_groups": ["ZFIN"],
+        "group_context_identity": '["ZFIN"]',
+    }
+    assert result.envelope.metadata["authenticated_group_snapshot"] == ["ZFIN"]
+
+
+def test_group_scope_missing_or_mismatching_context_skips_deterministically(
+    tmp_path: Path,
+):
+    pack = _group_scoped_pack(tmp_path)
+
+    missing = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=lambda *_args, **_kwargs: pytest.fail("scoped binding ran"),
+    )
+    missing_finding = next(
+        finding
+        for finding in missing.appended_findings
+        if finding.code == "domain_pack.validator_group_context_missing"
+    )
+    assert missing_finding.field_ref is not None
+    assert missing_finding.field_ref.field_path == "gene.identifier"
+    assert missing.binding_audit[0]["eligibility_reason"] == "missing_context"
+
+    mismatching = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=lambda *_args, **_kwargs: pytest.fail("scoped binding ran"),
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("MGI",)),
+    )
+    assert mismatching.validator_agent_run_count == 0
+    assert mismatching.appended_findings == ()
+    assert mismatching.binding_audit[0]["eligibility_reason"] == "group_not_satisfied"
+
+
+def test_group_scope_multiple_groups_runs_non_conflicting_and_reports_provider_mismatch(
+    tmp_path: Path,
+):
+    pack = _group_scoped_pack(tmp_path)
+    envelope = _envelope().model_copy(deep=True)
+    envelope.extracted_objects[0].payload["data_provider"] = {
+        "abbreviation": "MGI"
+    }
+
+    result = dispatch_active_validator_bindings(
+        envelope,
+        pack,
+        runner=lambda request, *, binding: _result_payload(request),
+        runtime_context=ValidatorRuntimeContext(
+            authenticated_groups=("WB", "ZFIN"),
+        ),
+    )
+
+    assert result.validator_agent_run_count == 1
+    mismatch = next(
+        finding
+        for finding in result.appended_findings
+        if finding.code == "domain_pack.validator_provider_group_mismatch"
+    )
+    assert mismatch.field_ref is not None
+    assert mismatch.field_ref.field_path == "data_provider.abbreviation"
+    assert mismatch.details["provider_value"] == "MGI"
+    assert envelope.extracted_objects[0].payload["data_provider"]["abbreviation"] == "MGI"
+
+
+def test_group_scope_explicit_cross_provider_policy_suppresses_mismatch(tmp_path: Path):
+    pack = _group_scoped_pack(tmp_path, allow_cross_provider=True)
+    envelope = _envelope().model_copy(deep=True)
+    envelope.extracted_objects[0].payload["data_provider"] = {
+        "abbreviation": "MGI"
+    }
+
+    result = dispatch_active_validator_bindings(
+        envelope,
+        pack,
+        runner=lambda request, *, binding: _result_payload(request),
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("ZFIN",)),
+    )
+
+    assert result.validator_agent_run_count == 1
+    assert not any(
+        finding.code == "domain_pack.validator_provider_group_mismatch"
+        for finding in result.appended_findings
+    )
+
+
+def test_group_scope_same_field_ambiguity_blocks_only_scoped_bindings(tmp_path: Path):
+    pack = _group_scoped_pack(tmp_path, ambiguous_second_binding=True)
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=lambda *_args, **_kwargs: pytest.fail("ambiguous binding ran"),
+        runtime_context=ValidatorRuntimeContext(
+            authenticated_groups=("WB", "ZFIN"),
+        ),
+    )
+
+    assert result.validator_agent_run_count == 0
+    ambiguity_findings = [
+        finding
+        for finding in result.appended_findings
+        if finding.code == "domain_pack.validator_group_scope_ambiguous"
+    ]
+    assert ambiguity_findings
+    assert all(
+        entry["eligibility_reason"] == "same_field_ambiguity"
+        for entry in result.binding_audit
+    )
+
+
+def test_generic_binding_runs_with_authenticated_empty_group_set(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=lambda request, *, binding: _result_payload(request),
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=()),
+    )
+
+    assert result.validator_agent_run_count == 1
+    assert result.binding_audit[0]["eligibility_reason"] == "generic"
 
 
 def test_dispatch_default_runner_uses_worker_thread_from_running_event_loop(

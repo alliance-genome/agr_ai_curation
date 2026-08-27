@@ -2858,6 +2858,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 )
             },
             expected_result_fields={"identifier": "gene.identifier"},
+            required_any_active_group=("ZFIN",),
         )
         match = ValidatorBindingMatch(
             binding=binding,
@@ -2921,7 +2922,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     }
                 ],
                 flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
+                agent_context={
+                    "user_id": "curator-1",
+                    "authenticated_groups": ["ZFIN"],
+                },
                 document_id="document-1",
                 user_id="curator-1",
             )
@@ -2933,8 +2937,13 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert calls[0]["request"].validator_binding_id == "fixture.identifier_lookup"
         assert calls[0]["runtime_context"].document_id == "document-1"
         assert calls[0]["runtime_context"].user_id == "curator-1"
+        assert calls[0]["runtime_context"].authenticated_groups == ("ZFIN",)
         assert len(materialization_inputs) == 1
         assert materialization_inputs[0].match is match
+        assert materialization_inputs[0].dispatch_context["authenticated_groups"] == [
+            "ZFIN"
+        ]
+        metadata = [item for item in metadata if item.get("group_id")]
         assert len(metadata) == 1
         assert {
             "group_id": metadata[0]["group_id"],

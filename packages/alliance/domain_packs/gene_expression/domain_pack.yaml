@@ -2577,6 +2577,14 @@ metadata:
             - expression_experiment.detection_reagents
             - expression_experiment.specimen_genomic_model
             - expression_experiment.specimen_alleles
+        group_scope:
+          required_any_active_group:
+            - ZFIN
+          provider_value_field_paths:
+            - data_provider.abbreviation
+          allowed_provider_values:
+            - ZFIN
+          allow_cross_provider: false
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

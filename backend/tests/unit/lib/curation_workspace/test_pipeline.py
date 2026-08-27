@@ -480,7 +480,13 @@ def test_draft_fields_require_workspace_group_metadata_for_workspace_fields():
         module._draft_fields_from_review_row(review_row)
 
 
-def _make_request(prep_output: CurationPrepAgentOutput, *, document_id: str, review_session_id: str | None = None):
+def _make_request(
+    prep_output: CurationPrepAgentOutput,
+    *,
+    document_id: str,
+    review_session_id: str | None = None,
+    active_groups: tuple[str, ...] | None = None,
+):
     return module.PostCurationPipelineRequest(
         prep_output=prep_output,
         document_id=document_id,
@@ -490,6 +496,7 @@ def _make_request(prep_output: CurationPrepAgentOutput, *, document_id: str, rev
         origin_session_id="chat-session-1",
         trace_id="trace-1",
         user_id="user-1",
+        active_groups=active_groups,
         notes="Pipeline bootstrap.",
         tags=("wave-5",),
         prepared_at=_now(),
@@ -718,6 +725,7 @@ metadata:
                 {
                     "request": request,
                     "max_tool_calls": binding.max_tool_calls,
+                    "runtime_context": runtime_context,
                 }
             )
             return {
@@ -861,7 +869,11 @@ metadata:
     monkeypatch.setattr(module, "materialize_persisted_envelope_review_rows", _fake_materialize)
 
     result = module.execute_post_curation_pipeline(
-        _make_request(prep_output, document_id=str(document.id)),
+        _make_request(
+            prep_output,
+            document_id=str(document.id),
+            active_groups=("ZFIN",),
+        ),
         db=db_session,
     )
 
@@ -874,6 +886,7 @@ metadata:
     assert dispatch_calls[0]["request"].target.input_values == (
         dispatch_calls[0]["request"].selected_inputs
     )
+    assert dispatch_calls[0]["runtime_context"].authenticated_groups == ("ZFIN",)
     assert envelope_row.envelope_json["validation_findings"][0]["code"] == (
         "domain_pack.validator_unresolved"
     )

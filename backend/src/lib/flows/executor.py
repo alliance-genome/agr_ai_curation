@@ -84,6 +84,7 @@ from src.lib.domain_packs.validator_dispatch import (
     ValidatorDispatchJob,
     ValidatorRuntimeContext,
     dispatch_validator_jobs,
+    resolve_group_scoped_validator_matches,
     unresolved_validator_result_for_dispatch_problem,
     validator_request_payload_for_agent,
     validator_result_from_agent_output,
@@ -1322,11 +1323,26 @@ async def _collect_flow_validator_materialization_inputs(
     list[ValidationFinding],
     list[dict[str, Any]],
 ]:
-    matches_by_binding = _validation_matches_by_binding(
-        registry.match_bindings(
-            source_envelope,
-            states=[ValidationBindingState.ACTIVE],
+    authenticated_groups_value = agent_context.get("authenticated_groups")
+    authenticated_groups = (
+        tuple(str(group) for group in authenticated_groups_value)
+        if isinstance(authenticated_groups_value, Sequence)
+        and not isinstance(authenticated_groups_value, (str, bytes))
+        else None
+    )
+    eligible_matches, group_scope_findings, binding_audit = (
+        resolve_group_scoped_validator_matches(
+            list(
+                registry.match_bindings(
+                    source_envelope,
+                    states=[ValidationBindingState.ACTIVE],
+                )
+            ),
+            authenticated_groups=authenticated_groups,
         )
+    )
+    matches_by_binding = _validation_matches_by_binding(
+        tuple(eligible_matches)
     )
     nodes_by_id = _flow_node_by_id(flow)
     materialization_units: list[
@@ -1334,12 +1350,33 @@ async def _collect_flow_validator_materialization_inputs(
     ] = []
     automatic_jobs: list[ValidatorDispatchJob] = []
     automatic_metadata_entries: list[tuple[str, dict[str, Any]]] = []
-    selector_findings: list[ValidationFinding] = []
-    result_metadata: list[dict[str, Any]] = []
+    selector_findings: list[ValidationFinding] = list(group_scope_findings)
+    result_metadata: list[dict[str, Any]] = [
+        {
+            "state": "automatic",
+            "validator_binding_id": entry["binding_id"],
+            "status": (
+                "group_scope_eligible" if entry["eligible"] else "group_scope_skipped"
+            ),
+            "group_scope_audit": entry,
+        }
+        for entry in binding_audit
+        if entry.get("group_scope") is not None
+    ]
     runtime_context = _validator_runtime_context_for_flow(
         document_id=document_id,
         user_id=user_id,
+        authenticated_groups=authenticated_groups,
     )
+    dispatch_context = {
+        "authenticated_groups": (
+            list(authenticated_groups) if authenticated_groups is not None else None
+        ),
+        "group_context_identity": json.dumps(
+            list(authenticated_groups) if authenticated_groups is not None else None,
+            separators=(",", ":"),
+        ),
+    }
 
     for group in groups:
         state = str(group.get("state") or "")
@@ -1432,7 +1469,15 @@ async def _collect_flow_validator_materialization_inputs(
             if state in {"replaced", "supplemental"} and validator_node is not None:
                 request = _request_for_flow_validator_node(request, validator_node)
             if state == "automatic":
-                job = ValidatorDispatchJob(match=match, request=request)
+                job = ValidatorDispatchJob(
+                    match=match,
+                    request=request,
+                    dispatch_context=(
+                        dispatch_context
+                        if match.binding.required_any_active_group
+                        else None
+                    ),
+                )
                 automatic_jobs.append(job)
                 materialization_units.append(job)
                 metadata_entry = {
@@ -1483,6 +1528,11 @@ async def _collect_flow_validator_materialization_inputs(
                     match=match,
                     request=request,
                     result=validator_result,
+                    dispatch_context=(
+                        dispatch_context
+                        if match.binding.required_any_active_group
+                        else None
+                    ),
                 )
             )
             result_metadata.append(
@@ -1599,6 +1649,7 @@ def _validator_runtime_context_for_flow(
     *,
     document_id: str | None,
     user_id: str | None,
+    authenticated_groups: Sequence[str] | None,
 ) -> ValidatorRuntimeContext | None:
     normalized_document_id = str(document_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
@@ -1607,6 +1658,9 @@ def _validator_runtime_context_for_flow(
     return ValidatorRuntimeContext(
         document_id=normalized_document_id,
         user_id=normalized_user_id,
+        authenticated_groups=(
+            tuple(authenticated_groups) if authenticated_groups is not None else None
+        ),
     )
 
 

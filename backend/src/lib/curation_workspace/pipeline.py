@@ -106,6 +106,7 @@ class PostCurationPipelineRequest:
     origin_session_id: str | None = None
     trace_id: str | None = None
     user_id: str | None = None
+    active_groups: tuple[str, ...] | None = None
     created_by_id: str | None = None
     assigned_curator_id: str | None = None
     notes: str | None = None
@@ -475,6 +476,7 @@ def _materialized_review_rows(
             ValidatorRuntimeContext(
                 document_id=request.document_id,
                 user_id=request.user_id,
+                authenticated_groups=request.active_groups,
             )
             if request.user_id
             else None
@@ -546,12 +548,13 @@ def _refresh_domain_envelope_validation_for_ref(
         )
         dispatch_appended_findings = dispatch_result.appended_findings
         result_envelope = dispatch_result.envelope
+    dispatch_metadata_changed = result_envelope.metadata != validator_envelope.metadata
     appended_findings = (
         *structural_result.appended_findings,
         *package_appended_findings,
         *dispatch_appended_findings,
     )
-    if not appended_findings:
+    if not appended_findings and not dispatch_metadata_changed:
         return envelope_row.revision
 
     checkpoint = write_domain_envelope_checkpoint(

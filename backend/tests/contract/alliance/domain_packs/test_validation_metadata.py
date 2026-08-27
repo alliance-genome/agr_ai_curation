@@ -692,6 +692,17 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert relation_binding.object_types == ("GeneExpressionAnnotation",)
     assert relation_binding.field_paths == ("relation.name",)
     assert relation_binding.input_fields["vocabulary"].value == "Expression Relation"
+    zfin_reagent_binding = gene_expression_bindings["reagent_context_materialization"]
+    assert zfin_reagent_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert zfin_reagent_binding.required_any_active_group == ("ZFIN",)
+    assert zfin_reagent_binding.provider_value_field_paths == (
+        "data_provider.abbreviation",
+    )
+    assert zfin_reagent_binding.allowed_provider_values == ("ZFIN",)
+    assert zfin_reagent_binding.allow_cross_provider is False
+    assert "expression_experiment.specimen_genomic_model" in (
+        zfin_reagent_binding.field_paths
+    )
     assert "relation_vocabulary_validation" in registries[
         "agr.alliance.gene_expression"
     ].policy_for(

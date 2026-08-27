@@ -577,6 +577,7 @@ def validate_candidate(
     request: CurationCandidateValidationRequest,
     *,
     user_id: str | None = None,
+    active_groups: Sequence[str] | None = None,
 ) -> CurationCandidateValidationResponse:
     """Validate a candidate within the transaction owned by the caller.
 
@@ -616,6 +617,7 @@ def validate_candidate(
     runtime_context = _validator_runtime_context_for_candidate(
         candidate,
         user_id=user_id,
+        authenticated_groups=active_groups,
     )
     validation_snapshot, changed = _apply_candidate_validation(
         db,
@@ -649,6 +651,7 @@ def validate_session(
     request: CurationSessionValidationRequest,
     *,
     user_id: str | None = None,
+    active_groups: Sequence[str] | None = None,
 ) -> CurationSessionValidationResponse:
     """Validate a review session within the transaction owned by the caller.
 
@@ -684,6 +687,7 @@ def validate_session(
         runtime_context = _validator_runtime_context_for_candidate(
             candidate_map[target_candidate_id],
             user_id=user_id,
+            authenticated_groups=active_groups,
         )
         validation_snapshot, candidate_changed = _apply_candidate_validation(
             db,
@@ -734,6 +738,7 @@ def _validator_runtime_context_for_candidate(
     candidate: CurationCandidate,
     *,
     user_id: str | None,
+    authenticated_groups: Sequence[str] | None = None,
 ) -> ValidatorRuntimeContext | None:
     document_id: str | None = None
     if candidate.domain_envelope is not None and candidate.domain_envelope.document_id is not None:
@@ -741,9 +746,38 @@ def _validator_runtime_context_for_candidate(
     elif candidate.session is not None and candidate.session.document_id is not None:
         document_id = str(candidate.session.document_id)
 
-    if not document_id or not user_id:
+    resolved_user_id = user_id
+    if (
+        resolved_user_id is None
+        and candidate.session is not None
+        and candidate.session.created_by_id is not None
+    ):
+        resolved_user_id = str(candidate.session.created_by_id)
+
+    persisted_groups: tuple[str, ...] | None = None
+    if authenticated_groups is None and candidate.domain_envelope is not None:
+        raw_metadata = candidate.domain_envelope.envelope_json.get("metadata", {})
+        raw_groups = (
+            raw_metadata.get("authenticated_group_snapshot")
+            if isinstance(raw_metadata, dict)
+            else None
+        )
+        if isinstance(raw_groups, list) and all(
+            isinstance(group, str) for group in raw_groups
+        ):
+            persisted_groups = tuple(raw_groups)
+
+    if not document_id or not resolved_user_id:
         return None
-    return ValidatorRuntimeContext(document_id=document_id, user_id=str(user_id))
+    return ValidatorRuntimeContext(
+        document_id=document_id,
+        user_id=str(resolved_user_id),
+        authenticated_groups=(
+            tuple(authenticated_groups)
+            if authenticated_groups is not None
+            else persisted_groups
+        ),
+    )
 
 __all__ = [
     "validate_candidate",

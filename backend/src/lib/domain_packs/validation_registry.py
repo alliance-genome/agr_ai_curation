@@ -126,6 +126,10 @@ class ValidatorBinding:
     blocking: bool = False
     required: bool = False
     allow_opt_out: bool = False
+    required_any_active_group: tuple[str, ...] = ()
+    provider_value_field_paths: tuple[str, ...] = ()
+    allowed_provider_values: tuple[str, ...] = ()
+    allow_cross_provider: bool = False
     max_tool_calls: int | None = None
     preflight_policy: str | None = None
     batch_enabled: bool = False
@@ -154,6 +158,13 @@ class ValidatorBinding:
             "required": self.required,
             "allow_opt_out": self.allow_opt_out,
         }
+        if self.required_any_active_group:
+            details["group_scope"] = {
+                "required_any_active_group": list(self.required_any_active_group),
+                "provider_value_field_paths": list(self.provider_value_field_paths),
+                "allowed_provider_values": list(self.allowed_provider_values),
+                "allow_cross_provider": self.allow_cross_provider,
+            }
         optional_values = {
             "display_name": self.display_name,
             "validator_agent": (
@@ -988,6 +999,7 @@ def _collect_validator_bindings(
             "curator_override",
         )
         batch_config = _optional_mapping(raw_item.get("batch"), "batch")
+        group_scope = _optional_mapping(raw_item.get("group_scope"), "group_scope")
 
         if state is ValidationBindingState.UNDER_DEVELOPMENT:
             display_name = _required_string(
@@ -1020,6 +1032,21 @@ def _collect_validator_bindings(
                 blocking=blocking,
                 required=required,
                 allow_opt_out=allow_opt_out,
+                required_any_active_group=_coerce_string_tuple(
+                    group_scope.get("required_any_active_group")
+                ),
+                provider_value_field_paths=tuple(
+                    validate_field_path_syntax(path)
+                    for path in _coerce_string_tuple(
+                        group_scope.get("provider_value_field_paths")
+                    )
+                ),
+                allowed_provider_values=_coerce_string_tuple(
+                    group_scope.get("allowed_provider_values")
+                ),
+                allow_cross_provider=_optional_bool(
+                    group_scope.get("allow_cross_provider")
+                ),
                 applies_to_domain_pack_id=_optional_string(
                     applies_to.get("domain_pack_id")
                 ),

@@ -2406,16 +2406,25 @@ def test_workspace_validation_passes_document_user_runtime_context(
             force=True,
         ),
         user_id="curator-42",
+        active_groups=["ZFIN"],
     )
 
     assert len(captured_contexts) == 1
     assert captured_contexts[0].document_id == str(session_row.document_id)
     assert captured_contexts[0].user_id == "curator-42"
+    assert captured_contexts[0].authenticated_groups == ("ZFIN",)
 
     # The caller completes the candidate-validation transaction before starting
     # the next unit of work.
     db_session.commit()
     captured_contexts.clear()
+    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
+    persisted_envelope = dict(envelope_row.envelope_json)
+    persisted_metadata = dict(persisted_envelope.get("metadata", {}))
+    persisted_metadata["authenticated_group_snapshot"] = ["RGD"]
+    persisted_envelope["metadata"] = persisted_metadata
+    envelope_row.envelope_json = persisted_envelope
+    db_session.flush()
     commit_calls = 0
 
     def _commit_spy():
@@ -2437,6 +2446,7 @@ def test_workspace_validation_passes_document_user_runtime_context(
     assert len(captured_contexts) == 1
     assert captured_contexts[0].document_id == str(session_row.document_id)
     assert captured_contexts[0].user_id == "curator-43"
+    assert captured_contexts[0].authenticated_groups == ("RGD",)
     assert commit_calls == 0
 
 
