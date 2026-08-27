@@ -97,7 +97,7 @@ def test_completed_legacy_turn_replays_before_strict_route_parsing(monkeypatch):
 
     assert prepared.replay_assistant_turn == assistant_turn
     assert prepared.effective_user_message == "legacy request"
-    assert prepared.route == ResolvedChatRoute(mode="automatic")
+    assert prepared.route is None
 
 
 def test_incomplete_turn_without_pinned_route_remains_invalid():
@@ -156,11 +156,11 @@ def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(mon
         db=db,
         session_id="session-1",
         user_id="auth-sub",
-        user_message="For RGD:619738, assess GO:0005515.",
+        user_message="For MOD:619738, assess GO:0005515.",
         requested_turn_id="turn-1",
         active_document_id=None,
         db_user_id=7,
-        active_groups=["RGD"],
+        active_groups=["MOD"],
     )
     assert first.route == ResolvedChatRoute(
         mode="agent",
@@ -189,11 +189,11 @@ def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(mon
         requested_turn_id="turn-1",
         active_document_id=None,
         db_user_id=7,
-        active_groups=["RGD"],
+        active_groups=["MOD"],
     )
     assert preference_reads == 1
     assert retried.route == first.route
-    assert retried.effective_user_message == "For RGD:619738, assess GO:0005515."
+    assert retried.effective_user_message == "For MOD:619738, assess GO:0005515."
 
 
 @pytest.mark.parametrize(
@@ -216,7 +216,7 @@ async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, ag
 
     monkeypatch.setattr(chat_common, "get_agent_by_id", _get_agent)
     monkeypatch.setattr(chat_common, "run_agent_streamed", _runner)
-    message = "For RGD:619738, assess GO:0005515 and explain the evidence."
+    message = "For MOD:619738, assess GO:0005515 and explain the evidence."
     events = [
         event
         async for event in chat_common._run_resolved_chat_route(
@@ -233,7 +233,7 @@ async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, ag
             turn_id="turn-1",
             document_id=None,
             document_name=None,
-            active_groups=["RGD"],
+            active_groups=["MOD"],
             supervisor_model=None,
             specialist_model=None,
             supervisor_temperature=None,
@@ -280,7 +280,7 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
         }
 
     monkeypatch.setattr(chat_common, "execute_flow", _execute_flow)
-    message = "For RGD:619738, assess GO:0005515. " + ("x" * 2500)
+    message = "For MOD:619738, assess GO:0005515. " + ("x" * 2500)
     events = [
         event
         async for event in chat_common._run_resolved_chat_route(
@@ -298,7 +298,7 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
             turn_id="turn-1",
             document_id=None,
             document_name=None,
-            active_groups=["RGD"],
+            active_groups=["MOD"],
             supervisor_model=None,
             specialist_model=None,
             supervisor_temperature=None,

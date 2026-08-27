@@ -244,11 +244,11 @@ class ResolvedChatRoute:
 
 @dataclass(frozen=True)
 class PreparedChatStreamTurn:
-    """Durable stream state prepared before the runner starts."""
+    """Durable turn state; completed replays omit the unneeded execution route."""
 
     turn_id: str
     effective_user_message: str
-    route: ResolvedChatRoute
+    route: ResolvedChatRoute | None
     user_turn_created: bool
     replay_assistant_turn: ChatMessageRecord | None = None
 

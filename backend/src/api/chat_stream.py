@@ -108,7 +108,6 @@ async def chat_endpoint(
         )
         turn_id = prepared_turn.turn_id
         effective_user_message = prepared_turn.effective_user_message
-        resolved_route = prepared_turn.route
     except HTTPException:
         await _release_non_stream_turn_claim()
         raise
@@ -169,6 +168,10 @@ async def chat_endpoint(
                 requested_turn_id,
                 extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
             )
+
+    resolved_route = prepared_turn.route
+    if resolved_route is None:
+        raise RuntimeError("Prepared executable chat turn is missing its resolved route")
 
     tool_agent_map: Dict[str, str] = {}
     if resolved_route.mode == "automatic":
@@ -634,8 +637,12 @@ async def chat_stream_endpoint(
             },
         )
 
+    resolved_route = prepared_turn.route
+    if resolved_route is None:
+        raise RuntimeError("Prepared executable chat turn is missing its resolved route")
+
     tool_agent_map: Dict[str, str] = {}
-    if prepared_turn.route.mode == "automatic":
+    if resolved_route.mode == "automatic":
         try:
             tool_agent_map = get_supervisor_tool_agent_map(active_groups)
         except Exception as exc:
@@ -679,7 +686,7 @@ async def chat_stream_endpoint(
 
         try:
             async for event in _run_resolved_chat_route(
-                route=prepared_turn.route,
+                route=resolved_route,
                 db=db,
                 db_user_id=db_user.id,
                 context_messages=[
@@ -802,8 +809,8 @@ async def chat_stream_endpoint(
                     event,
                     tool_agent_map=tool_agent_map,
                     fallback_agent_key=(
-                        prepared_turn.route.target_id
-                        if prepared_turn.route.mode == "agent"
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
                         else None
                     ),
                 )
@@ -816,8 +823,8 @@ async def chat_stream_endpoint(
                     conversation_summary=prepared_turn.effective_user_message,
                     metadata={"document_name": document_name} if document_name else None,
                     fallback_agent_key=(
-                        prepared_turn.route.target_id
-                        if prepared_turn.route.mode == "agent"
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
                         else None
                     ),
                 )

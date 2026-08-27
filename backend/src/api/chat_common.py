@@ -1505,13 +1505,6 @@ def _prepare_chat_stream_turn(
             role="assistant",
         )
         if replay_assistant_turn is not None:
-            route_payload = user_turn.message.payload_json
-            route = (
-                _chat_route_from_payload(route_payload)
-                if isinstance(route_payload, dict)
-                and _CHAT_ROUTE_PAYLOAD_KEY in route_payload
-                else ResolvedChatRoute(mode="automatic")
-            )
             logger.info(
                 "Returning durable replay for streaming chat turn %s",
                 turn_id,
@@ -1520,7 +1513,7 @@ def _prepare_chat_stream_turn(
             return PreparedChatStreamTurn(
                 turn_id=turn_id,
                 effective_user_message=effective_user_message,
-                route=route,
+                route=None,
                 user_turn_created=user_turn.created,
                 replay_assistant_turn=replay_assistant_turn,
             )

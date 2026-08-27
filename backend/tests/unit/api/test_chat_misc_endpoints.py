@@ -1001,7 +1001,7 @@ async def test_chat_endpoint_runs_selected_agent_with_exact_message(monkeypatch)
         yield {"type": "RUN_FINISHED", "data": {"response": "selected answer"}}
 
     _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
-    message = "For RGD:619738, assess GO:0005515 and explain the evidence."
+    message = "For MOD:619738, assess GO:0005515 and explain the evidence."
     result = await chat.chat_endpoint(
         chat.ChatMessage(message=message, session_id="session-agent", turn_id="turn-agent"),
         {"sub": "user-1", "cognito:groups": []},

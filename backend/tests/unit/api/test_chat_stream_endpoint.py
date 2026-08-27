@@ -239,7 +239,7 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
 def test_chat_stream_endpoint_runs_selected_flow_with_unbounded_chat_message(monkeypatch):
     flow_id = uuid4()
     flow = SimpleNamespace(id=flow_id, name="Paper Review")
-    message = "For RGD:619738, assess GO:0005515. " + ("x" * 2500)
+    message = "For MOD:619738, assess GO:0005515. " + ("x" * 2500)
     captured = {}
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
@@ -1870,7 +1870,7 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
         lambda **_kwargs: chat.PreparedChatStreamTurn(
             turn_id="turn-replay",
             effective_user_message="hello",
-            route=chat.ResolvedChatRoute(mode="automatic"),
+            route=None,
             user_turn_created=False,
             replay_assistant_turn=durable_assistant,
         ),
@@ -1954,7 +1954,7 @@ def test_chat_stream_endpoint_replays_preferred_flow_file_output(monkeypatch):
         lambda **_kwargs: chat.PreparedChatStreamTurn(
             turn_id="turn-flow-replay",
             effective_user_message="create a review file",
-            route=chat.ResolvedChatRoute(mode="flow", target_id="flow-1", flow_run_id="run-1"),
+            route=None,
             user_turn_created=False,
             replay_assistant_turn=durable_assistant,
         ),
