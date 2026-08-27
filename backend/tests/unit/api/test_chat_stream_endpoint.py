@@ -100,6 +100,11 @@ def _stub_stream_turn_persistence(monkeypatch):
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: object())
     _patch_chat_impl(
         monkeypatch,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=7, auth_sub=_user.get("sub")),
+    )
+    _patch_chat_impl(
+        monkeypatch,
         "_resolve_session_create_active_document",
         lambda **_kwargs: (None, None),
     )
@@ -118,10 +123,13 @@ def _stub_stream_turn_persistence(monkeypatch):
         user_message: str,
         requested_turn_id: str | None,
         active_document_id,
+        **_kwargs,
     ):
         return chat.PreparedChatStreamTurn(
             turn_id=requested_turn_id or "generated-turn",
             effective_user_message=user_message,
+            route=chat.ResolvedChatRoute(mode="automatic"),
+            user_turn_created=True,
         )
 
     def _finalize(
@@ -167,6 +175,7 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _register_active_stream(
@@ -217,6 +226,72 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     assert calls["clear"] == ["session-chat-stream"]
     assert "session-chat-stream" not in chat._LOCAL_CANCEL_EVENTS
     assert "session-chat-stream" not in chat._LOCAL_SESSION_OWNERS
+
+
+def test_chat_stream_endpoint_runs_selected_flow_with_unbounded_chat_message(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="Paper Review")
+    message = "For RGD:619738, assess GO:0005515. " + ("x" * 2500)
+    captured = {}
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+
+    async def _register(*_args, **_kwargs):
+        return True
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    async def _not_cancelled(*_args, **_kwargs):
+        return False
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _noop)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _noop)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _not_cancelled)
+    _patch_chat_impl(
+        monkeypatch,
+        "_prepare_chat_stream_turn",
+        lambda **_kwargs: chat.PreparedChatStreamTurn(
+            turn_id="turn-flow",
+            effective_user_message=message,
+            route=chat.ResolvedChatRoute(
+                mode="flow",
+                target_id=str(flow_id),
+                target_display_name="Paper Review",
+                flow_run_id="flow-run-1",
+            ),
+            user_turn_created=True,
+        ),
+    )
+
+    async def _execute_flow(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "CHAT_OUTPUT_READY", "details": {"output": "flow answer"}}
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "extraction_result_refs": []},
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _execute_flow)
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message=message,
+                session_id="session-flow",
+                turn_id="turn-flow",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+            db=SimpleNamespace(get=lambda _model, _id: flow, rollback=lambda: None),
+        )
+    )
+    events = asyncio.run(_consume_stream(response))
+    assert captured["user_query"] == message
+    assert captured["flow_run_id"] == "flow-run-1"
+    assert any(event["type"] == "CHAT_OUTPUT_READY" for event in events)
+    assert events[-1]["type"] == "turn_completed"
 
 
 def test_chat_stream_endpoint_keeps_sentry_transaction_open_for_stream(monkeypatch):
@@ -1787,6 +1862,8 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
         lambda **_kwargs: chat.PreparedChatStreamTurn(
             turn_id="turn-replay",
             effective_user_message="hello",
+            route=chat.ResolvedChatRoute(mode="automatic"),
+            user_turn_created=False,
             replay_assistant_turn=durable_assistant,
         ),
     )
@@ -2155,7 +2232,8 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
 
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", _raise_tool_map)
 
-    # Stream infrastructure should never be reached; provide sentinels to verify.
+    # Turn preparation now precedes Automatic runner configuration, so the
+    # lifecycle claim must be released when tool-map resolution fails.
     stream_infra_called = False
 
     async def _register_active_stream(
@@ -2179,7 +2257,8 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
 
     assert exc.value.status_code == 500
     assert "Internal configuration error" in exc.value.detail
-    assert not stream_infra_called, "Stream registration should not run when tool-map resolution fails"
+    assert stream_infra_called
+    assert "session-toolmap-fail" not in chat._LOCAL_SESSION_OWNERS
     assert len(calls) == 1
     assert calls[0][1]["component"] == "api"
     assert calls[0][1]["operation"] == "sanitized_http_exception"

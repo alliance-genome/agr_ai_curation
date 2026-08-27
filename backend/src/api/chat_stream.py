@@ -47,7 +47,9 @@ async def chat_endpoint(
     # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
+    db_user = set_global_user_from_cognito(db, user)
     effective_user_message = chat_message.message
+    resolved_route = ResolvedChatRoute(mode="automatic")
     turn_claim_key: Optional[str] = None
     turn_claim_token: Optional[str] = None
     turn_claim_acquired = False
@@ -93,21 +95,20 @@ async def chat_endpoint(
             repository=repository,
             user_id=user_id,
         )
-        repository.get_or_create_session(
+        prepared_turn = _prepare_chat_stream_turn(
+            repository=repository,
+            db=db,
             session_id=session_id,
-            user_auth_sub=user_id,
-            chat_kind=ASSISTANT_CHAT_KIND,
+            user_id=user_id,
+            user_message=chat_message.message,
+            requested_turn_id=requested_turn_id,
             active_document_id=active_document_id,
+            db_user_id=db_user.id,
+            active_groups=active_groups,
         )
-        user_turn = repository.append_message(
-            session_id=session_id,
-            user_auth_sub=user_id,
-            chat_kind=ASSISTANT_CHAT_KIND,
-            role="user",
-            content=chat_message.message,
-            turn_id=turn_id,
-        )
-        db.commit()
+        turn_id = prepared_turn.turn_id
+        effective_user_message = prepared_turn.effective_user_message
+        resolved_route = prepared_turn.route
     except HTTPException:
         await _release_non_stream_turn_claim()
         raise
@@ -136,25 +137,8 @@ async def chat_endpoint(
             exc=exc,
         )
 
-    if requested_turn_id and not user_turn.created:
-        effective_user_message = user_turn.message.content
-        try:
-            assistant_turn = repository.get_message_by_turn_id(
-                session_id=session_id,
-                user_auth_sub=user_id,
-                turn_id=requested_turn_id,
-                role="assistant",
-            )
-        except ValueError as exc:
-            await _release_non_stream_turn_claim()
-            raise_sanitized_http_exception(
-                logger,
-                status_code=400,
-                detail="Invalid chat replay request",
-                log_message=f"Failed to load durable replay state for session {session_id}",
-                exc=exc,
-                level=logging.WARNING,
-            )
+    if requested_turn_id and not prepared_turn.user_turn_created:
+        assistant_turn = prepared_turn.replay_assistant_turn
 
         if assistant_turn is not None:
             _queue_chat_title_backfill(
@@ -186,17 +170,19 @@ async def chat_endpoint(
                 extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
             )
 
-    try:
-        tool_agent_map = get_supervisor_tool_agent_map(active_groups)
-    except Exception as exc:
-        await _release_non_stream_turn_claim()
-        raise_sanitized_http_exception(
-            logger,
-            status_code=500,
-            detail="Internal configuration error: unable to process chat request",
-            log_message="Supervisor tool-map resolution failed; aborting chat run",
-            exc=exc,
-        )
+    tool_agent_map: Dict[str, str] = {}
+    if resolved_route.mode == "automatic":
+        try:
+            tool_agent_map = get_supervisor_tool_agent_map(active_groups)
+        except Exception as exc:
+            await _release_non_stream_turn_claim()
+            raise_sanitized_http_exception(
+                logger,
+                status_code=500,
+                detail="Internal configuration error: unable to process chat request",
+                log_message="Supervisor tool-map resolution failed; aborting chat run",
+                exc=exc,
+            )
 
     try:
         context_messages = [{"role": "user", "content": effective_user_message}]
@@ -218,7 +204,10 @@ async def chat_endpoint(
             document_present=bool(document_id),
             input_preview=effective_user_message,
         ) as sentry_transaction:
-            async for event in run_agent_streamed(
+            async for event in _run_resolved_chat_route(
+                route=resolved_route,
+                db=db,
+                db_user_id=db_user.id,
                 context_messages=context_messages,
                 user_id=user_id,
                 session_id=session_id,
@@ -261,6 +250,11 @@ async def chat_endpoint(
                 persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
                     event,
                     tool_agent_map=tool_agent_map,
+                    fallback_agent_key=(
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
+                        else None
+                    ),
                 )
                 if persisted_ref:
                     persisted_extraction_refs.append(persisted_ref)
@@ -270,6 +264,11 @@ async def chat_endpoint(
                     tool_agent_map=tool_agent_map,
                     conversation_summary=effective_user_message,
                     metadata={"document_name": document_name} if document_name else None,
+                    fallback_agent_key=(
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
+                        else None
+                    ),
                 )
                 if candidate:
                     extraction_candidates.append(candidate)
@@ -448,6 +447,7 @@ async def chat_stream_endpoint(
     # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
+    db_user = set_global_user_from_cognito(db, user)
     if active_groups:
         logger.info(
             "User has active groups: %s (from provider groups: %s)",
@@ -503,17 +503,6 @@ async def chat_stream_endpoint(
                 ),
             )
 
-    try:
-        tool_agent_map = get_supervisor_tool_agent_map(active_groups)
-    except Exception as exc:
-        raise_sanitized_http_exception(
-            logger,
-            status_code=500,
-            detail="Internal configuration error: unable to process chat request",
-            log_message="Supervisor tool-map resolution failed; aborting chat stream",
-            exc=exc,
-        )
-
     generated_title_candidate: str | None = None
     stream_lifecycle = await _claim_active_stream_lifecycle(
         session_id=session_id,
@@ -533,6 +522,8 @@ async def chat_stream_endpoint(
             user_message=chat_message.message,
             requested_turn_id=chat_message.turn_id,
             active_document_id=active_document_id,
+            db_user_id=db_user.id,
+            active_groups=active_groups,
         )
         generated_title_candidate = _generate_title_from_turn(
             user_message=prepared_turn.effective_user_message,
@@ -603,6 +594,20 @@ async def chat_stream_endpoint(
             },
         )
 
+    tool_agent_map: Dict[str, str] = {}
+    if prepared_turn.route.mode == "automatic":
+        try:
+            tool_agent_map = get_supervisor_tool_agent_map(active_groups)
+        except Exception as exc:
+            await stream_lifecycle.cleanup()
+            raise_sanitized_http_exception(
+                logger,
+                status_code=500,
+                detail="Internal configuration error: unable to process chat request",
+                log_message="Supervisor tool-map resolution failed; aborting chat stream",
+                exc=exc,
+            )
+
     async def generate_stream():
         """Generate SSE events from the agent runner."""
         nonlocal generated_title_candidate
@@ -632,7 +637,10 @@ async def chat_stream_endpoint(
         sentry_transaction = sentry_transaction_context_manager.__enter__()
 
         try:
-            async for event in run_agent_streamed(
+            async for event in _run_resolved_chat_route(
+                route=prepared_turn.route,
+                db=db,
+                db_user_id=db_user.id,
                 context_messages=[
                     {"role": "user", "content": prepared_turn.effective_user_message}
                 ],
@@ -742,6 +750,11 @@ async def chat_stream_endpoint(
                 persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
                     event,
                     tool_agent_map=tool_agent_map,
+                    fallback_agent_key=(
+                        prepared_turn.route.target_id
+                        if prepared_turn.route.mode == "agent"
+                        else None
+                    ),
                 )
                 if persisted_ref:
                     persisted_extraction_refs.append(persisted_ref)
@@ -751,6 +764,11 @@ async def chat_stream_endpoint(
                     tool_agent_map=tool_agent_map,
                     conversation_summary=prepared_turn.effective_user_message,
                     metadata={"document_name": document_name} if document_name else None,
+                    fallback_agent_key=(
+                        prepared_turn.route.target_id
+                        if prepared_turn.route.mode == "agent"
+                        else None
+                    ),
                 )
                 if candidate:
                     extraction_candidates.append(candidate)

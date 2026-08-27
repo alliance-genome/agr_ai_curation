@@ -136,9 +136,46 @@ def get_chat_route_preference(
     if preference is None or preference.mode == "automatic":
         return ChatRoutePreferenceState("automatic", None, None, True, None)
 
+    return resolve_chat_route_selection(
+        db,
+        user_id=user_id,
+        active_group_ids=active_group_ids,
+        mode=preference.mode,
+        agent_id=preference.agent_id,
+        flow_id=preference.flow_id,
+        target_public_id=str(preference.target_public_id),
+        target_display_name=str(preference.target_display_name),
+    )
+
+
+def resolve_chat_route_selection(
+    db: Session,
+    *,
+    user_id: int,
+    active_group_ids: Iterable[str],
+    mode: Literal["automatic", "agent", "flow"],
+    agent_id: UUID | str | None = None,
+    flow_id: UUID | None = None,
+    target_public_id: str | None = None,
+    target_display_name: str | None = None,
+) -> ChatRoutePreferenceState:
+    """Re-authorize one explicit route identity under the current auth snapshot."""
+
+    if mode == "automatic":
+        return ChatRoutePreferenceState("automatic", None, None, True, None)
+
     groups = tuple(active_group_ids)
-    if preference.mode == "agent":
-        agent = db.get(Agent, preference.agent_id)
+    if mode == "agent":
+        agent = (
+            db.get(Agent, agent_id)
+            if isinstance(agent_id, UUID)
+            else get_agent_by_key(
+                db,
+                str(agent_id or target_public_id or ""),
+                user_id=user_id,
+                active_group_ids=groups,
+            )
+        )
         project_ids = get_project_ids_for_user(db, user_id)
         if (
             agent is not None
@@ -153,19 +190,19 @@ def get_chat_route_preference(
             return ChatRoutePreferenceState(
                 "agent", agent.agent_key, None, True, _agent_target(agent)
             )
-        target_public_id = str(preference.target_public_id)
-        target_display_name = str(preference.target_display_name)
+        unavailable_public_id = str(target_public_id or "")
+        unavailable_display_name = str(target_display_name or unavailable_public_id)
         target = ChatRouteTarget(
-            id=target_public_id,
+            id=unavailable_public_id,
             kind="agent",
-            display_name=target_display_name,
+            display_name=unavailable_display_name,
             description=None,
             category=None,
             available=False,
         )
         return ChatRoutePreferenceState("agent", target.id, None, False, target)
 
-    flow = db.get(CurationFlow, preference.flow_id)
+    flow = db.get(CurationFlow, flow_id)
     if flow is not None and _is_flow_executable_for_user(
         db,
         flow,
@@ -173,18 +210,18 @@ def get_chat_route_preference(
         active_group_ids=groups,
     ):
         return ChatRoutePreferenceState("flow", None, flow.id, True, _flow_target(flow))
-    target_public_id = str(preference.target_public_id)
-    target_display_name = str(preference.target_display_name)
+    unavailable_public_id = str(target_public_id or flow_id or "")
+    unavailable_display_name = str(target_display_name or unavailable_public_id)
     target = ChatRouteTarget(
-        id=target_public_id,
+        id=unavailable_public_id,
         kind="flow",
-        display_name=target_display_name,
+        display_name=unavailable_display_name,
         description=None,
         category=None,
         available=False,
     )
     return ChatRoutePreferenceState(
-        "flow", None, UUID(target_public_id), False, target
+        "flow", None, flow_id, False, target
     )
 
 

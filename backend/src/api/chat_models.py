@@ -233,11 +233,23 @@ class AssistantRescueResponse(BaseModel):
 
 
 @dataclass(frozen=True)
+class ResolvedChatRoute:
+    """Authorized executor identity pinned to one durable ordinary-chat turn."""
+
+    mode: Literal["automatic", "agent", "flow"]
+    target_id: str | None = None
+    target_display_name: str | None = None
+    flow_run_id: str | None = None
+
+
+@dataclass(frozen=True)
 class PreparedChatStreamTurn:
     """Durable stream state prepared before the runner starts."""
 
     turn_id: str
     effective_user_message: str
+    route: ResolvedChatRoute
+    user_turn_created: bool
     replay_assistant_turn: ChatMessageRecord | None = None
 
 
