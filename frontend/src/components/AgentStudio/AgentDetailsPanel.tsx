@@ -346,7 +346,7 @@ function AgentDetailsPanel({
                 icon={<LockOutlinedIcon fontSize="inherit" />}
                 sx={{ mt: 1.5 }}
               >
-                Available to MODs: {allowedGroupIds.join(', ')}.
+                Available to groups: {allowedGroupIds.join(', ')}.
                 {!agent.agent_id.startsWith('ca_')
                   ? ' This package-owned system restriction is read-only.'
                   : ' Sharing and group-specific instructions do not widen this access restriction.'}

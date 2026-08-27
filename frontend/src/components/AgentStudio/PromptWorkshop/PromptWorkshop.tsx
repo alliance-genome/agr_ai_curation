@@ -78,7 +78,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
 
 const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
-const ALL_MODS_VALUE = '__all_mods__'
+const ALL_GROUPS_VALUE = '__all_groups__'
 
 function areStringRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftKeys = Object.keys(left).sort()
@@ -1783,28 +1783,28 @@ function PromptWorkshop({
               </Box>
 
               <FormControl size="small" fullWidth>
-                <InputLabel id="available-mods-label">Available to MODs</InputLabel>
+                <InputLabel id="available-groups-label">Available to groups</InputLabel>
                 <Select
-                  labelId="available-mods-label"
-                  label="Available to MODs"
+                  labelId="available-groups-label"
+                  label="Available to groups"
                   multiple
                   value={selectedAllowedGroupIds}
-                  aria-describedby="available-mods-helper-text"
+                  aria-describedby="available-groups-helper-text"
                   onChange={(event) => {
                     const value = event.target.value as string[]
-                    const nextValue = value.includes(ALL_MODS_VALUE) ? [] : value
+                    const nextValue = value.includes(ALL_GROUPS_VALUE) ? [] : value
                     if (inheritedAllowedGroupIds.length > 0 && nextValue.length === 0) return
                     setSelectedAllowedGroupIds(nextValue)
                   }}
                   renderValue={(selected) => {
                     const groupIds = selected as string[]
-                    return groupIds.length === 0 ? 'All MODs' : groupIds.join(', ')
+                    return groupIds.length === 0 ? 'All groups' : groupIds.join(', ')
                   }}
                 >
                   {inheritedAllowedGroupIds.length === 0 && (
-                    <MenuItem value={ALL_MODS_VALUE}>
+                    <MenuItem value={ALL_GROUPS_VALUE}>
                       <Checkbox checked={selectedAllowedGroupIds.length === 0} />
-                      <ListItemText primary="All MODs" />
+                      <ListItemText primary="All groups" />
                     </MenuItem>
                   )}
                   {selectableGroupOptions.map((group) => (
@@ -1814,8 +1814,8 @@ function PromptWorkshop({
                     </MenuItem>
                   ))}
                 </Select>
-                <FormHelperText id="available-mods-helper-text">
-                  Sharing determines which people or projects could otherwise see this agent. Allowed MODs further
+                <FormHelperText id="available-groups-helper-text">
+                  Sharing determines which people or projects could otherwise see this agent. Allowed groups further
                   restrict which authenticated curator groups may use it. Group-specific instructions only change
                   behavior after access is granted.
                   {inheritedAllowedGroupIds.length > 0
@@ -2700,7 +2700,7 @@ function PromptWorkshop({
           <DialogTitle>Save a restriction that excludes you?</DialogTitle>
           <DialogContent>
             <Alert severity="warning">
-              Available to MODs is set to {selectedAllowedGroupIds.join(', ')}, but your current groups are
+              Available to groups is set to {selectedAllowedGroupIds.join(', ')}, but your current groups are
               {' '}{currentUserGroupIds.join(', ')}. After saving, server authorization may prevent you from using
               this agent.
             </Alert>

@@ -8,7 +8,7 @@ const serviceMocks = vi.hoisted(() => ({
 }))
 const metadataMocks = vi.hoisted(() => ({
   agents: {
-    rgd_agent: { icon: 'R', allowed_group_ids: ['RGD'] },
+    restricted_agent: { icon: 'R', allowed_group_ids: ['GROUP_A'] },
   } as Record<string, unknown>,
   refresh: vi.fn(),
 }))
@@ -37,8 +37,8 @@ describe('AgentPalette access-aware choices', () => {
       categories: [{
         category: 'Validation',
         agents: [{
-          agent_id: 'rgd_agent',
-          agent_name: 'RGD Agent',
+          agent_id: 'restricted_agent',
+          agent_name: 'Restricted Agent',
           description: 'Authorized restricted agent',
           base_prompt: '',
           source_file: 'database',
@@ -57,8 +57,8 @@ describe('AgentPalette access-aware choices', () => {
   it('renders only server-returned choices and marks authorized restricted agents', async () => {
     render(<AgentPalette />)
 
-    expect(await screen.findByText('RGD Agent')).toBeInTheDocument()
-    expect(screen.getByLabelText('RGD Agent restricted to RGD')).toBeInTheDocument()
+    expect(await screen.findByText('Restricted Agent')).toBeInTheDocument()
+    expect(screen.getByLabelText('Restricted Agent restricted to GROUP_A')).toBeInTheDocument()
     expect(screen.queryByText('Unauthorized Agent')).not.toBeInTheDocument()
   })
 })

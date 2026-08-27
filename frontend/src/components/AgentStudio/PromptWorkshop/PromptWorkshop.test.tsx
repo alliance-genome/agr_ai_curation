@@ -421,10 +421,10 @@ describe('PromptWorkshop', () => {
   ]
 
   const groupOptions: GroupOption[] = [
-    { group_id: 'FB', name: 'FlyBase' },
-    { group_id: 'RGD', name: 'Rat Genome Database' },
-    { group_id: 'WB', name: 'WormBase' },
-    { group_id: 'ZFIN', name: 'ZFIN' },
+    { group_id: 'GROUP_A', name: 'Group A' },
+    { group_id: 'GROUP_B', name: 'Group B' },
+    { group_id: 'GROUP_C', name: 'Group C' },
+    { group_id: 'GROUP_D', name: 'Group D' },
   ]
 
   beforeEach(() => {
@@ -499,18 +499,18 @@ describe('PromptWorkshop', () => {
     expect(payload).not.toHaveProperty('parent_agent_id')
   }, 15000) // Increased because full workshop bootstrap can exceed the default timeout under CI load.
 
-  it('uses canonical MOD options and warns before saving a restriction that excludes the owner', async () => {
+  it('uses canonical group options and warns before saving a restriction that excludes the owner', async () => {
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [], total: 0 })
-      .mockResolvedValueOnce({ custom_agents: [buildCustomAgent({ allowed_group_ids: ['RGD'] })], total: 1 })
+      .mockResolvedValueOnce({ custom_agents: [buildCustomAgent({ allowed_group_ids: ['GROUP_B'] })], total: 1 })
 
     render(<PromptWorkshop catalog={buildCatalog()} />)
 
-    const modSelect = await screen.findByLabelText('Available to MODs')
+    const groupSelect = await screen.findByLabelText('Available to groups')
     expect(screen.getByText(/Sharing determines which people or projects could otherwise see this agent/)).toBeInTheDocument()
-    fireEvent.mouseDown(modSelect)
-    fireEvent.click(await screen.findByRole('option', { name: /Rat Genome Database RGD/ }))
-    fireEvent.keyDown(modSelect, { key: 'Escape' })
+    fireEvent.mouseDown(groupSelect)
+    fireEvent.click(await screen.findByRole('option', { name: /Group B GROUP_B/ }))
+    fireEvent.keyDown(groupSelect, { key: 'Escape' })
 
     fireEvent.click(screen.getByText('File'))
     fireEvent.click(await screen.findByText('Save New Agent'))
@@ -521,18 +521,18 @@ describe('PromptWorkshop', () => {
 
     fireEvent.click(within(warningDialog).getByRole('button', { name: 'Save restriction' }))
     await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
-    expect(serviceMocks.createCustomAgent.mock.calls[0][0].allowed_group_ids).toEqual(['RGD'])
+    expect(serviceMocks.createCustomAgent.mock.calls[0][0].allowed_group_ids).toEqual(['GROUP_B'])
   }, 15000)
 
-  it('hydrates and updates an existing MOD restriction', async () => {
-    const restrictedAgent = buildCustomAgent({ allowed_group_ids: ['RGD'] })
+  it('hydrates and updates an existing group restriction', async () => {
+    const restrictedAgent = buildCustomAgent({ allowed_group_ids: ['GROUP_B'] })
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [restrictedAgent], total: 1 })
     serviceMocks.updateCustomAgent.mockResolvedValue(restrictedAgent)
 
     render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={restrictedAgent.id} />)
 
     await waitForAgentName('My Agent')
-    expect(screen.getByLabelText('Available to MODs')).toHaveTextContent('RGD')
+    expect(screen.getByLabelText('Available to groups')).toHaveTextContent('GROUP_B')
 
     fireEvent.click(screen.getByText('File'))
     fireEvent.click(await screen.findByText('Save Agent'))
@@ -540,11 +540,11 @@ describe('PromptWorkshop', () => {
     fireEvent.click(within(warningDialog).getByRole('button', { name: 'Save restriction' }))
 
     await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledTimes(1))
-    expect(serviceMocks.updateCustomAgent.mock.calls[0][1].allowed_group_ids).toEqual(['RGD'])
+    expect(serviceMocks.updateCustomAgent.mock.calls[0][1].allowed_group_ids).toEqual(['GROUP_B'])
   }, 15000)
 
   it('keeps a package-owned template restriction as the clone access floor', async () => {
-    const restrictedTemplate: AgentTemplate = { ...templates[0], allowed_group_ids: ['RGD'] }
+    const restrictedTemplate: AgentTemplate = { ...templates[0], allowed_group_ids: ['GROUP_B'] }
     serviceMocks.fetchAgentTemplates.mockResolvedValue({
       templates: [restrictedTemplate],
       group_options: groupOptions,
@@ -552,43 +552,43 @@ describe('PromptWorkshop', () => {
 
     render(<PromptWorkshop catalog={buildCatalog()} />)
 
-    expect(await screen.findByText(/Package restriction \(read-only\): available to RGD/)).toBeInTheDocument()
-    expect(screen.getByLabelText('Available to MODs')).toHaveTextContent('RGD')
-    expect(screen.getByText(/inherits a RGD access floor and may only be narrowed/)).toBeInTheDocument()
+    expect(await screen.findByText(/Package restriction \(read-only\): available to GROUP_B/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Available to groups')).toHaveTextContent('GROUP_B')
+    expect(screen.getByText(/inherits a GROUP_B access floor and may only be narrowed/)).toBeInTheDocument()
 
-    const modSelect = screen.getByRole('combobox', { name: 'Available to MODs' })
-    fireEvent.mouseDown(modSelect)
-    expect(screen.queryByRole('option', { name: 'All MODs' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('option', { name: /Rat Genome Database RGD/ }))
-    fireEvent.keyDown(modSelect, { key: 'Escape' })
-    expect(modSelect).toHaveTextContent('RGD')
+    const groupSelect = screen.getByRole('combobox', { name: 'Available to groups' })
+    fireEvent.mouseDown(groupSelect)
+    expect(screen.queryByRole('option', { name: 'All groups' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /Group B GROUP_B/ }))
+    fireEvent.keyDown(groupSelect, { key: 'Escape' })
+    expect(groupSelect).toHaveTextContent('GROUP_B')
   }, 15000)
 
   it('uses a restricted custom clone persisted access floor when its system template is unrestricted', async () => {
     const restrictedClone = buildCustomAgent({
-      allowed_group_ids: ['RGD', 'WB'],
-      inherited_allowed_group_ids: ['RGD', 'WB'],
+      allowed_group_ids: ['GROUP_B', 'GROUP_C'],
+      inherited_allowed_group_ids: ['GROUP_B', 'GROUP_C'],
     })
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [restrictedClone], total: 1 })
     serviceMocks.updateCustomAgent.mockResolvedValue({
       ...restrictedClone,
-      allowed_group_ids: ['RGD'],
+      allowed_group_ids: ['GROUP_B'],
     })
 
     render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={restrictedClone.id} />)
 
     await waitForAgentName('My Agent')
-    const modSelect = screen.getByRole('combobox', { name: 'Available to MODs' })
-    expect(modSelect).toHaveTextContent('RGD, WB')
-    expect(screen.getByText(/inherits a RGD, WB access floor and may only be narrowed/)).toBeInTheDocument()
+    const groupSelect = screen.getByRole('combobox', { name: 'Available to groups' })
+    expect(groupSelect).toHaveTextContent('GROUP_B, GROUP_C')
+    expect(screen.getByText(/inherits a GROUP_B, GROUP_C access floor and may only be narrowed/)).toBeInTheDocument()
 
-    fireEvent.mouseDown(modSelect)
-    expect(screen.queryByRole('option', { name: 'All MODs' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: /ZFIN/ })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('option', { name: /WormBase WB/ }))
-    fireEvent.keyDown(modSelect, { key: 'Escape' })
-    expect(modSelect).toHaveTextContent('RGD')
-    expect(modSelect).not.toHaveTextContent('WB')
+    fireEvent.mouseDown(groupSelect)
+    expect(screen.queryByRole('option', { name: 'All groups' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /GROUP_D/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /Group C GROUP_C/ }))
+    fireEvent.keyDown(groupSelect, { key: 'Escape' })
+    expect(groupSelect).toHaveTextContent('GROUP_B')
+    expect(groupSelect).not.toHaveTextContent('GROUP_C')
 
     fireEvent.click(screen.getByText('File'))
     fireEvent.click(await screen.findByText('Save Agent'))
@@ -596,7 +596,7 @@ describe('PromptWorkshop', () => {
     fireEvent.click(within(warningDialog).getByRole('button', { name: 'Save restriction' }))
 
     await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledTimes(1))
-    expect(serviceMocks.updateCustomAgent.mock.calls[0][1].allowed_group_ids).toEqual(['RGD'])
+    expect(serviceMocks.updateCustomAgent.mock.calls[0][1].allowed_group_ids).toEqual(['GROUP_B'])
   }, 15000)
 
   it('shows locked inherited layers separately from the editable main/base prompt', async () => {

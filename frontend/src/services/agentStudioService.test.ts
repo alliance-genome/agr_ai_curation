@@ -33,9 +33,9 @@ describe('agentStudioService', () => {
         icon: 'G',
         model_id: 'gpt-5.6-terra',
         tool_ids: [],
-        allowed_group_ids: ['RGD'],
+        allowed_group_ids: ['GROUP_A'],
       }],
-      group_options: [{ group_id: 'RGD', name: 'Rat Genome Database' }],
+      group_options: [{ group_id: 'GROUP_A', name: 'Group A' }],
     }
     mockFetch.mockResolvedValueOnce({ ok: true, json: async () => responseBody })
 
@@ -130,7 +130,7 @@ describe('agentStudioService', () => {
 
   it('listCustomAgents sends template_source query param when provided', async () => {
     const responseBody = {
-      custom_agents: [{ inherited_allowed_group_ids: ['RGD'] }],
+      custom_agents: [{ inherited_allowed_group_ids: ['GROUP_A'] }],
       total: 1,
     }
     mockFetch.mockResolvedValueOnce({
@@ -186,7 +186,7 @@ describe('agentStudioService', () => {
       name: 'My Agent',
       custom_prompt: 'Prompt',
       model_id: 'gpt-4o',
-      allowed_group_ids: ['RGD'],
+      allowed_group_ids: ['GROUP_A'],
     })
 
     expect(mockFetch).toHaveBeenCalledWith(
@@ -199,7 +199,7 @@ describe('agentStudioService', () => {
     const fetchOptions = mockFetch.mock.calls[0][1]
     const parsedBody = JSON.parse(fetchOptions.body as string)
     expect(parsedBody.template_source).toBe('gene')
-    expect(parsedBody.allowed_group_ids).toEqual(['RGD'])
+    expect(parsedBody.allowed_group_ids).toEqual(['GROUP_A'])
     expect(parsedBody).not.toHaveProperty('parent_agent_id')
   })
 
@@ -230,7 +230,7 @@ describe('agentStudioService', () => {
       }),
     })
 
-    await cloneAgentToWorkshop('ca_source', { name: 'Gene Copy', allowed_group_ids: ['RGD'] })
+    await cloneAgentToWorkshop('ca_source', { name: 'Gene Copy', allowed_group_ids: ['GROUP_A'] })
 
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/agent-studio/agents/ca_source/clone',
@@ -240,16 +240,16 @@ describe('agentStudioService', () => {
       })
     )
     const fetchOptions = mockFetch.mock.calls[0][1]
-    expect(JSON.parse(fetchOptions.body as string)).toEqual({ name: 'Gene Copy', allowed_group_ids: ['RGD'] })
+    expect(JSON.parse(fetchOptions.body as string)).toEqual({ name: 'Gene Copy', allowed_group_ids: ['GROUP_A'] })
   })
 
   it('updateCustomAgent sends allowed_group_ids', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) })
 
-    await updateCustomAgent('custom-id', { allowed_group_ids: ['RGD'] })
+    await updateCustomAgent('custom-id', { allowed_group_ids: ['GROUP_A'] })
 
     const fetchOptions = mockFetch.mock.calls[0][1]
-    expect(JSON.parse(fetchOptions.body as string)).toEqual({ allowed_group_ids: ['RGD'] })
+    expect(JSON.parse(fetchOptions.body as string)).toEqual({ allowed_group_ids: ['GROUP_A'] })
   })
 
   it('setCustomAgentVisibility posts visibility payload', async () => {

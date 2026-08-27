@@ -97,10 +97,10 @@ describe('AgentDetailsPanel', () => {
     metadataMocks.agents = {}
   })
 
-  it('presents package-owned MOD restrictions as read-only', () => {
+  it('presents package-owned group restrictions as read-only', () => {
     const systemAgent = { ...buildCleanCustomAgent(), agent_id: 'gene', agent_name: 'Gene Specialist' }
     metadataMocks.agents = {
-      gene: { allowed_group_ids: ['RGD'] },
+      gene: { allowed_group_ids: ['GROUP_A'] },
     }
 
     render(
@@ -111,7 +111,7 @@ describe('AgentDetailsPanel', () => {
       />
     )
 
-    expect(screen.getByText(/Available to MODs: RGD/)).toBeInTheDocument()
+    expect(screen.getByText(/Available to groups: GROUP_A/)).toBeInTheDocument()
     expect(screen.getByText(/package-owned system restriction is read-only/)).toBeInTheDocument()
   })
 

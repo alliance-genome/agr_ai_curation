@@ -6,7 +6,7 @@ import type { PromptCatalog, PromptInfo } from '@/types/promptExplorer'
 
 const metadataMocks = vi.hoisted(() => ({
   agents: {
-    rgd_agent: { allowed_group_ids: ['RGD'] },
+    restricted_agent: { allowed_group_ids: ['GROUP_A'] },
   } as Record<string, unknown>,
 }))
 
@@ -35,12 +35,12 @@ const buildAgent = (agentId: string, name: string): PromptInfo => ({
   subcategory: 'Data Validation',
 })
 
-describe('AgentBrowser MOD restrictions', () => {
+describe('AgentBrowser group restrictions', () => {
   it('shows a restriction badge for an authorized catalog entry and does not invent filtered entries', () => {
     const catalog: PromptCatalog = {
       categories: [{
         category: 'Validation',
-        agents: [buildAgent('rgd_agent', 'RGD Agent')],
+        agents: [buildAgent('restricted_agent', 'Restricted Agent')],
       }],
       total_agents: 1,
       available_groups: [],
@@ -50,15 +50,15 @@ describe('AgentBrowser MOD restrictions', () => {
     render(
       <AgentBrowser
         catalog={catalog}
-        selectedAgentId="rgd_agent"
+        selectedAgentId="restricted_agent"
         selectedGroupId={null}
         onAgentSelect={vi.fn()}
         onGroupSelect={vi.fn()}
       />
     )
 
-    expect(screen.getByLabelText('RGD Agent restricted to RGD')).toBeInTheDocument()
-    expect(screen.getByText(/Available to MODs: RGD/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Restricted Agent restricted to GROUP_A')).toBeInTheDocument()
+    expect(screen.getByText(/Available to groups: GROUP_A/)).toBeInTheDocument()
     expect(screen.queryByText('Unauthorized Agent')).not.toBeInTheDocument()
   })
 })
