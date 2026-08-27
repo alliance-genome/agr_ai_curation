@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from agents import function_tool
@@ -30,6 +31,7 @@ from agr_ai_curation_runtime.extraction_builder import (
     get_active_extraction_builder_workspace,
 )
 from agr_ai_curation_runtime.extraction_trace_events import write_extraction_trace_event
+from agr_ai_curation_runtime.resolver_call_ledger import get_active_resolver_call_ledger
 
 from agr_ai_curation_alliance.domain_packs.go import (
     GO_DOMAIN_PACK_ID,
@@ -67,6 +69,20 @@ _GO_PATCH_FIELD_PATHS = frozenset(
         "evidence_record_ids",
     }
 )
+
+_IDENTITY_TOOLS = {"resolve_gene_product"}
+_TERM_TOOLS = {"quickgo_api_call"}
+_ANNOTATION_TOOLS = {"go_api_call"}
+_CONTROLLED_VALUE_TOOLS = {
+    *_IDENTITY_TOOLS,
+    *_TERM_TOOLS,
+    *_ANNOTATION_TOOLS,
+    "search_document",
+    "read_chunk",
+    "read_section",
+    "read_subsection",
+    "record_evidence",
+}
 
 
 class _StrictToolModel(BaseModel):
@@ -347,6 +363,138 @@ def _stage_payload(stage_input: GOStageInput) -> dict[str, Any]:
     }
 
 
+def _grounding_leaf_values(value: Any) -> list[Any]:
+    if isinstance(value, Mapping):
+        return [
+            leaf
+            for nested in value.values()
+            for leaf in _grounding_leaf_values(nested)
+        ]
+    if isinstance(value, list):
+        return [leaf for nested in value for leaf in _grounding_leaf_values(nested)]
+    if value in (None, "", [], {}) or isinstance(value, bool):
+        return []
+    return [value]
+
+
+def _append_grounding_requirements(
+    requirements: list[dict[str, Any]],
+    *,
+    field_path: str,
+    tool_names: set[str],
+    values: Any,
+) -> None:
+    for value in _grounding_leaf_values(values):
+        requirement = {
+            "field_path": field_path,
+            "tool_names": sorted(tool_names),
+            "value": value,
+        }
+        if requirement not in requirements:
+            requirements.append(requirement)
+
+
+def _grounding_requirements(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    gene_product = payload.get("gene_product") or {}
+    go_term = payload.get("go_term") or {}
+    provider_context = payload.get("provider_context") or {}
+    existing = provider_context.get("existing_annotation_context") or {}
+    identity = provider_context.get("identity_resolution") or {}
+    requirements: list[dict[str, Any]] = []
+
+    identity_value = gene_product.get("curie") or gene_product.get("mention")
+    _append_grounding_requirements(
+        requirements,
+        field_path="gene_product",
+        tool_names=_IDENTITY_TOOLS,
+        values=identity_value,
+    )
+    if identity:
+        _append_grounding_requirements(
+            requirements,
+            field_path="provider_context.identity_resolution",
+            tool_names=_IDENTITY_TOOLS,
+            values=identity,
+        )
+    _append_grounding_requirements(
+        requirements,
+        field_path="go_term",
+        tool_names=_TERM_TOOLS,
+        values=go_term,
+    )
+    if gene_product.get("curie"):
+        annotation_values = [
+            identity_value,
+            existing.get("annotations"),
+            existing.get("provenance"),
+        ]
+        _append_grounding_requirements(
+            requirements,
+            field_path="provider_context.existing_annotation_context",
+            tool_names=_ANNOTATION_TOOLS,
+            values=annotation_values,
+        )
+    for field_path in (
+        "evidence_code",
+        "evidence_eco_curie",
+        "reference_curie",
+        "with_from",
+        "qualifiers",
+        "annotation_extensions",
+    ):
+        value = payload.get(field_path)
+        if value in (None, "", []):
+            continue
+        _append_grounding_requirements(
+            requirements,
+            field_path=field_path,
+            tool_names=_CONTROLLED_VALUE_TOOLS,
+            values=value,
+        )
+    return requirements
+
+
+def _ground_payload(
+    payload: Mapping[str, Any],
+) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+    requirements = _grounding_requirements(payload)
+    try:
+        ledger = get_active_resolver_call_ledger()
+    except RuntimeError as exc:
+        return (
+            [],
+            requirements,
+            [
+                {
+                    "field_path": "source_grounding",
+                    "reason": "tool_output_ledger_unavailable",
+                    "message": str(exc),
+                }
+            ],
+        )
+
+    refs: list[str] = []
+    issues: list[dict[str, Any]] = []
+    for requirement in requirements:
+        entry = ledger.find_tool_output_containing(
+            tool_names=set(requirement["tool_names"]), value=requirement["value"]
+        )
+        if entry is None:
+            issues.append(
+                {
+                    "field_path": requirement["field_path"],
+                    "reason": "unobserved_tool_value",
+                    "message": (
+                        "The staged value does not match a run-scoped output from an "
+                        "authoritative read-only tool."
+                    ),
+                }
+            )
+        elif entry.tool_call_id not in refs:
+            refs.append(entry.tool_call_id)
+    return refs, requirements, issues
+
+
 def _stage_go_recommendation_impl(
     pending_ref_id: str,
     gene_product_mention: str,
@@ -426,14 +574,30 @@ def _stage_go_recommendation_impl(
             attempted_query=attempted_query,
         )
 
+    staged_fields = _stage_payload(stage_input)
+    grounding_refs, grounding_requirements, grounding_issues = _ground_payload(
+        staged_fields["payload"]
+    )
+    if grounding_issues:
+        return _go_validation_result(
+            message="stage_go_recommendation rejected ungrounded source values.",
+            issues=grounding_issues,
+            method="stage_go_recommendation",
+            attempted_query=attempted_query,
+        )
+    staged_fields["source_grounding"] = {
+        "payload": copy.deepcopy(staged_fields["payload"]),
+        "requirements": grounding_requirements,
+    }
+
     workspace = get_active_extraction_builder_workspace()
     candidate_id = _go_candidate_id(workspace, stage_input.pending_ref_id)
     candidate = workspace.upsert_candidate(
         candidate_id=candidate_id,
-        staged_fields=_stage_payload(stage_input),
+        staged_fields=staged_fields,
         pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=list(stage_input.evidence_record_ids),
-        resolver_selection_refs=[],
+        resolver_selection_refs=grounding_refs,
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -517,12 +681,24 @@ def _patch_go_recommendation_impl(
         else:
             payload[update.field_path] = update.value
     staged_fields["payload"] = payload
+    grounding_refs, grounding_requirements, grounding_issues = _ground_payload(payload)
+    if grounding_issues:
+        return _go_validation_result(
+            message="patch_go_recommendation rejected ungrounded source values.",
+            issues=grounding_issues,
+            method="patch_go_recommendation",
+            attempted_query=attempted_query,
+        )
+    staged_fields["source_grounding"] = {
+        "payload": copy.deepcopy(payload),
+        "requirements": grounding_requirements,
+    }
     workspace.upsert_candidate(
         candidate_id=patch_input.candidate_id,
         staged_fields=staged_fields,
         pending_ref_ids=list(candidate.pending_ref_ids),
         evidence_record_ids=evidence_ids,
-        resolver_selection_refs=[],
+        resolver_selection_refs=grounding_refs,
         status=CANDIDATE_STATUS_VALID,
     )
     summary = {
@@ -705,10 +881,10 @@ def _finalize_go_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
         candidate_ids=candidate_ids,
         materialize=_materialize_go_with_events,
         evidence_records=evidence_records,
-        resolver_entry_lookup=None,
+        resolver_entry_lookup=get_active_resolver_call_ledger().get_tool_output,
         materialized_candidate_prefix="rgd-go-envelope",
         require_evidence_record_ids=True,
-        require_resolver_selections=False,
+        require_resolver_selections=True,
     )
     if not outcome.ok:
         return _go_validation_result(

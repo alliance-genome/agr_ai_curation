@@ -32,7 +32,30 @@ _CURIE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:[^\s:]+$")
 _GO_CURIE_PATTERN = re.compile(r"^GO:\d{7}$")
 _ECO_CURIE_PATTERN = re.compile(r"^ECO:\d{7}$")
 _EVIDENCE_CODE_PATTERN = re.compile(r"^[A-Z]{2,4}$")
-_EXCLUDED_EVIDENCE_SECTIONS = frozenset({"introduction", "discussion"})
+_EXCLUDED_EVIDENCE_SECTION_PATTERN = re.compile(
+    r"\b(?:abstract|introduction|discussion|conclusions?)\b", re.IGNORECASE
+)
+_POSITIVE_EVIDENCE_SECTION_PATTERN = re.compile(
+    r"\b(?:results?|methods?|materials\s+and\s+methods|figure|table|legend)\b",
+    re.IGNORECASE,
+)
+_SUPPORTED_EVIDENCE_FIELD_ROOTS = frozenset(
+    {
+        "gene_product",
+        "go_term",
+        "evidence_code",
+        "evidence_eco_curie",
+        "reference_curie",
+        "with_from",
+        "qualifiers",
+        "annotation_extensions",
+        "negated",
+        "rationale",
+        "provider_context",
+        "resolution_state",
+        "blocking_reasons",
+    }
+)
 _REQUIRED_PAYLOAD_PATHS = (
     "gene_product.mention",
     "gene_product.label",
@@ -110,7 +133,6 @@ def materialize_go_builder_state(
 ) -> GOMaterializationResult:
     """Build canonical ``DomainEnvelopeExtractionResult`` data from GO drafts."""
 
-    del resolver_entry_lookup
     normalized_candidate_ids = tuple(_unique_strings(candidate_ids))
     normalized_evidence = _normalized_evidence_records(evidence_records or ())
     evidence_by_id = {
@@ -151,6 +173,15 @@ def materialize_go_builder_state(
         payload = copy.deepcopy(dict(payload))
         _validate_payload(payload, candidate_id=candidate_id, issues=issues)
 
+        _validate_source_grounding(
+            candidate,
+            staged_fields,
+            payload,
+            resolver_entry_lookup=resolver_entry_lookup,
+            candidate_id=candidate_id,
+            issues=issues,
+        )
+
         evidence_ids = _unique_strings(
             getattr(candidate, "evidence_record_ids", None)
             or staged_fields.get("evidence_record_ids")
@@ -186,17 +217,30 @@ def materialize_go_builder_state(
             for evidence_id in evidence_ids
             if evidence_id in evidence_by_id
         ]
-        if candidate_evidence and all(
-            _excluded_evidence_section(record.get("section"))
-            for record in candidate_evidence
+        pending_ref_id = _pending_ref_id(candidate, staged_fields, index)
+        for record in candidate_evidence:
+            if not _evidence_attached_to_candidate(record, pending_ref_id):
+                issues.append(
+                    _issue(
+                        "evidence_record_ids",
+                        "unattached_candidate_evidence",
+                        (
+                            "Every GO evidence record must target the recommendation's "
+                            "pending_ref_id and at least one supported GO payload field."
+                        ),
+                        candidate_id,
+                    )
+                )
+        if candidate_evidence and not any(
+            _positively_scoped_evidence(record) for record in candidate_evidence
         ):
             issues.append(
                 _issue(
                     "evidence_record_ids",
-                    "excluded_section_only_evidence",
+                    "out_of_scope_evidence",
                     (
-                        "GO recommendations cannot finalize when every supporting "
-                        "record is from Introduction or Discussion."
+                        "GO recommendations require verified support from Results, "
+                        "Methods, a figure legend, or a table."
                     ),
                     candidate_id,
                 )
@@ -204,7 +248,6 @@ def materialize_go_builder_state(
         if any(issue.get("candidate_id") == candidate_id for issue in issues):
             continue
 
-        pending_ref_id = _pending_ref_id(candidate, staged_fields, index)
         gene_product = payload["gene_product"]
         mention = str(gene_product["mention"])
         metadata_refs = [
@@ -354,9 +397,9 @@ def _validate_payload(
             )
         )
     gene_product = payload.get("gene_product")
+    blockers = payload.get("blocking_reasons")
     if isinstance(gene_product, Mapping):
         has_curie = bool(str(gene_product.get("curie") or "").strip())
-        blockers = payload.get("blocking_reasons")
         if resolution_state == "resolved" and not has_curie:
             issues.append(
                 _issue(
@@ -575,8 +618,123 @@ def _normalized_evidence_records(
 
 
 def _excluded_evidence_section(value: Any) -> bool:
-    normalized = str(value or "").strip().casefold()
-    return normalized in _EXCLUDED_EVIDENCE_SECTIONS
+    return bool(_EXCLUDED_EVIDENCE_SECTION_PATTERN.search(str(value or "")))
+
+
+def _positively_scoped_evidence(record: Mapping[str, Any]) -> bool:
+    heading = " ".join(
+        str(record.get(field) or "") for field in ("section", "subsection")
+    )
+    if _excluded_evidence_section(heading):
+        return False
+    if _POSITIVE_EVIDENCE_SECTION_PATTERN.search(heading):
+        return True
+    figure_reference = str(record.get("figure_reference") or "")
+    return bool(
+        re.search(r"\b(?:figure|fig\.?|table)\b", figure_reference, re.IGNORECASE)
+    )
+
+
+def _evidence_attached_to_candidate(
+    record: Mapping[str, Any], pending_ref_id: str
+) -> bool:
+    targets: list[tuple[str, str]] = []
+    direct_paths = record.get("field_paths") or []
+    direct_field_path = str(record.get("field_path") or "")
+    if direct_field_path:
+        targets.append(
+            (str(record.get("pending_ref_id") or ""), direct_field_path)
+        )
+    for field_path in direct_paths if isinstance(direct_paths, list) else []:
+        targets.append((str(record.get("pending_ref_id") or ""), str(field_path)))
+    for key in ("envelope_target",):
+        target = record.get(key)
+        if isinstance(target, Mapping):
+            targets.append(
+                (
+                    str(target.get("pending_ref_id") or ""),
+                    str(target.get("field_path") or ""),
+                )
+            )
+    object_ref = record.get("object_ref")
+    if isinstance(object_ref, Mapping):
+        for field_path in direct_paths if isinstance(direct_paths, list) else []:
+            targets.append(
+                (str(object_ref.get("pending_ref_id") or ""), str(field_path))
+            )
+    envelope_targets = record.get("envelope_targets")
+    for target in envelope_targets if isinstance(envelope_targets, list) else []:
+        if isinstance(target, Mapping):
+            targets.append(
+                (
+                    str(target.get("pending_ref_id") or ""),
+                    str(target.get("field_path") or ""),
+                )
+            )
+    return any(
+        target_ref == pending_ref_id
+        and field_path.split(".", 1)[0] in _SUPPORTED_EVIDENCE_FIELD_ROOTS
+        for target_ref, field_path in targets
+    )
+
+
+def _validate_source_grounding(
+    candidate: Any,
+    staged_fields: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    resolver_entry_lookup: Any,
+    candidate_id: str,
+    issues: list[dict[str, Any]],
+) -> None:
+    grounding = staged_fields.get("source_grounding")
+    refs = list(getattr(candidate, "resolver_selection_refs", None) or [])
+    if not isinstance(grounding, Mapping) or grounding.get("payload") != payload:
+        issues.append(
+            _issue(
+                "source_grounding",
+                "stale_or_missing_source_grounding",
+                "Finalized GO payload values must match the tool-grounded staged snapshot.",
+                candidate_id,
+            )
+        )
+        return
+    requirements = grounding.get("requirements")
+    if not refs or not isinstance(requirements, list) or resolver_entry_lookup is None:
+        issues.append(
+            _issue(
+                "source_grounding",
+                "missing_tool_output_provenance",
+                "Finalized GO recommendations require run-scoped tool-output provenance.",
+                candidate_id,
+            )
+        )
+        return
+    entries = []
+    for ref in refs:
+        try:
+            entries.append(resolver_entry_lookup(ref))
+        except (KeyError, ValueError):
+            continue
+    for requirement in requirements:
+        if not isinstance(requirement, Mapping):
+            continue
+        allowed_tools = set(requirement.get("tool_names") or [])
+        value = requirement.get("value")
+        if not any(
+            getattr(entry, "tool_name", None) in allowed_tools
+            and callable(getattr(entry, "contains", None))
+            and entry.contains(value)
+            for entry in entries
+        ):
+            issues.append(
+                _issue(
+                    str(requirement.get("field_path") or "source_grounding"),
+                    "unobserved_tool_value",
+                    "A controlled GO value no longer matches its run-scoped tool output.",
+                    candidate_id,
+                )
+            )
 
 
 def _pending_ref_id(

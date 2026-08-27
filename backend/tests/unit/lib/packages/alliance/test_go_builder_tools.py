@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,7 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 from src.lib.openai_agents import extraction_builder_workspace as builder
+from src.lib.openai_agents import resolver_call_ledger
 from src.lib.openai_agents.tools import evidence_workspace
 
 
@@ -114,6 +116,7 @@ def _candidate(*, resolution_state: str = "resolved", evidence_ids=None):
         },
         pending_ref_ids=["go-recommendation-1"],
         evidence_record_ids=retained_evidence_ids,
+        resolver_selection_refs=[],
     )
 
 
@@ -131,6 +134,40 @@ def _evidence():
         "pending_ref_id": "go-recommendation-1",
         "field_paths": ["gene_product", "go_term", "rationale"],
     }
+
+
+def _ground_candidate(candidate, ledger):
+    payload = candidate.staged_fields["payload"]
+    outputs = {
+        "call-identity": ("resolve_gene_product", payload),
+        "call-term": ("quickgo_api_call", payload),
+        "call-annotations": ("go_api_call", payload),
+    }
+    for call_id, (tool_name, output) in outputs.items():
+        ledger.record_tool_output(
+            tool_call_id=call_id, tool_name=tool_name, output=output
+        )
+    requirements = go_builder_tools._grounding_requirements(payload)
+    candidate.staged_fields["source_grounding"] = {
+        "payload": copy.deepcopy(payload),
+        "requirements": requirements,
+    }
+    candidate.resolver_selection_refs = list(outputs)
+    return candidate
+
+
+def _materialize(candidate, *, evidence_records=None, ground=True):
+    ledger = resolver_call_ledger.ResolverCallLedger(trace_id="rgd-go-test")
+    if ground:
+        _ground_candidate(candidate, ledger)
+    return materialize_go_builder_state(
+        workspace=_Workspace({candidate.candidate_id: candidate}),
+        candidate_ids=[candidate.candidate_id],
+        evidence_records=[_evidence()]
+        if evidence_records is None
+        else evidence_records,
+        resolver_entry_lookup=ledger.get_tool_output,
+    )
 
 
 @pytest.fixture
@@ -152,22 +189,23 @@ def active_go_builder_context(monkeypatch):
         domain_pack_id="agr.alliance.go",
         agent_id="rgd_go_paper_curator",
     )
+    seed_candidate = _candidate()
+    ledger = resolver_call_ledger.ResolverCallLedger(trace_id=workspace.run_id)
+    _ground_candidate(seed_candidate, ledger)
     builder_token = builder.set_active_extraction_builder_workspace(workspace)
+    ledger_token = resolver_call_ledger.set_active_resolver_call_ledger(ledger)
     evidence_token = evidence_workspace.set_active_evidence_records([_evidence()])
     try:
         yield workspace, events
     finally:
         evidence_workspace.reset_active_evidence_records(evidence_token)
+        resolver_call_ledger.reset_active_resolver_call_ledger(ledger_token)
         builder.reset_active_extraction_builder_workspace(builder_token)
 
 
 def _materialized_payload(*, resolution_state: str = "resolved"):
     candidate = _candidate(resolution_state=resolution_state)
-    result = materialize_go_builder_state(
-        workspace=_Workspace({candidate.candidate_id: candidate}),
-        candidate_ids=[candidate.candidate_id],
-        evidence_records=[_evidence()],
-    )
+    result = _materialize(candidate)
     assert result.ok, result.issues
     assert result.payload is not None
     return result.payload
@@ -215,9 +253,9 @@ def test_go_stage_and_finalize_tools_emit_typed_extraction_result(
             "source": "GO Consortium API",
             "request_gene_id": "RGD:619839",
         },
-        identity_resolution={"status": "resolved", "candidate_count": 1},
+        identity_resolution={"status": "resolved"},
     )
-    assert staged.status == "ok"
+    assert staged.status == "ok", staged.model_dump(mode="json")
 
     finalized = go_builder_tools._finalize_go_extraction_impl(
         [staged.data["candidate_id"]]
@@ -233,11 +271,7 @@ def test_go_stage_and_finalize_tools_emit_typed_extraction_result(
 
 def test_go_builder_rejects_evidence_less_finalization():
     candidate = _candidate(evidence_ids=[])
-    result = materialize_go_builder_state(
-        workspace=_Workspace({candidate.candidate_id: candidate}),
-        candidate_ids=[candidate.candidate_id],
-        evidence_records=[],
-    )
+    result = _materialize(candidate, evidence_records=[])
 
     assert not result.ok
     assert {issue["reason"] for issue in result.issues} == {
@@ -248,16 +282,75 @@ def test_go_builder_rejects_evidence_less_finalization():
 def test_go_builder_rejects_excluded_section_only_evidence():
     candidate = _candidate()
     evidence = {**_evidence(), "section": "Discussion"}
-    result = materialize_go_builder_state(
-        workspace=_Workspace({candidate.candidate_id: candidate}),
-        candidate_ids=[candidate.candidate_id],
-        evidence_records=[evidence],
+    result = _materialize(candidate, evidence_records=[evidence])
+
+    assert not result.ok
+    assert "out_of_scope_evidence" in {issue["reason"] for issue in result.issues}
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        "Abstract",
+        "1. Introduction",
+        "6. Discussion and conclusions",
+        "Results and Discussion",
+    ],
+)
+def test_go_builder_rejects_non_positive_and_combined_section_headings(section):
+    result = _materialize(
+        _candidate(),
+        evidence_records=[
+            {**_evidence(), "section": section, "figure_reference": None}
+        ],
     )
 
     assert not result.ok
-    assert "excluded_section_only_evidence" in {
+    assert "out_of_scope_evidence" in {issue["reason"] for issue in result.issues}
+
+
+@pytest.mark.parametrize("section", ["Results", "2. Materials and Methods"])
+def test_go_builder_preserves_positive_results_and_methods_evidence(section):
+    result = _materialize(
+        _candidate(),
+        evidence_records=[
+            {**_evidence(), "section": section, "figure_reference": None}
+        ],
+    )
+
+    assert result.ok, result.issues
+
+
+def test_go_builder_rejects_cross_candidate_or_unrelated_evidence_attachment():
+    evidence = {
+        **_evidence(),
+        "pending_ref_id": "other-recommendation",
+        "field_paths": ["unrelated_field"],
+    }
+    result = _materialize(_candidate(), evidence_records=[evidence])
+
+    assert not result.ok
+    assert "unattached_candidate_evidence" in {
         issue["reason"] for issue in result.issues
     }
+
+
+def test_go_builder_accepts_canonical_envelope_target_attachment():
+    evidence = {
+        **_evidence(),
+        "pending_ref_id": None,
+        "field_paths": None,
+        "envelope_targets": [
+            {
+                "pending_ref_id": "go-recommendation-1",
+                "field_path": "go_term.curie",
+            }
+        ],
+    }
+
+    result = _materialize(_candidate(), evidence_records=[evidence])
+
+    assert result.ok, result.issues
 
 
 def test_go_builder_rejects_invented_or_malformed_identifiers():
@@ -266,11 +359,7 @@ def test_go_builder_rejects_invented_or_malformed_identifiers():
     candidate.staged_fields["payload"]["go_term"]["curie"] = "GO:123"
     candidate.staged_fields["payload"]["evidence_eco_curie"] = "ECO:guess"
     candidate.staged_fields["payload"]["with_from"] = ["Ago2"]
-    result = materialize_go_builder_state(
-        workspace=_Workspace({candidate.candidate_id: candidate}),
-        candidate_ids=[candidate.candidate_id],
-        evidence_records=[_evidence()],
-    )
+    result = _materialize(candidate)
 
     reasons = {issue["reason"] for issue in result.issues}
     assert {
@@ -281,14 +370,83 @@ def test_go_builder_rejects_invented_or_malformed_identifiers():
     } <= reasons
 
 
-def test_go_builder_requires_explicit_blocker_for_unresolved_identity():
-    candidate = _candidate(resolution_state="unresolved")
-    candidate.staged_fields["payload"]["blocking_reasons"] = []
+@pytest.mark.parametrize(
+    ("field_path", "invented_value"),
+    [
+        ("gene_product.curie", "RGD:999999999"),
+        ("go_term.curie", "GO:9999999"),
+        ("evidence_eco_curie", "ECO:9999999"),
+        ("reference_curie", "PMID:99999999"),
+        ("with_from", ["RGD:999999998"]),
+        (
+            "provider_context.existing_annotation_context.provenance",
+            {"source": "invented source", "request_gene_id": "RGD:619839"},
+        ),
+    ],
+)
+def test_go_builder_rejects_well_formed_values_not_present_in_tool_outputs(
+    field_path, invented_value
+):
+    candidate = _candidate()
+    ledger = resolver_call_ledger.ResolverCallLedger(trace_id="rgd-go-grounding")
+    _ground_candidate(candidate, ledger)
+    target = candidate.staged_fields["payload"]
+    parts = field_path.split(".")
+    for part in parts[:-1]:
+        target = target[part]
+    target[parts[-1]] = invented_value
+
     result = materialize_go_builder_state(
         workspace=_Workspace({candidate.candidate_id: candidate}),
         candidate_ids=[candidate.candidate_id],
         evidence_records=[_evidence()],
+        resolver_entry_lookup=ledger.get_tool_output,
     )
+
+    assert not result.ok
+    assert "stale_or_missing_source_grounding" in {
+        issue["reason"] for issue in result.issues
+    }
+
+
+def test_go_stage_rejects_well_formed_unobserved_gene_identity(
+    active_go_builder_context,
+):
+    result = go_builder_tools._stage_go_recommendation_impl(
+        pending_ref_id="go-recommendation-invented",
+        gene_product_mention="Cttn",
+        gene_product_label="Cttn",
+        gene_product_entity_type="protein_coding_gene",
+        gene_product_taxon_curie="NCBITaxon:10116",
+        gene_product_curie="RGD:999999999",
+        resolution_state="resolved",
+        go_term_curie="GO:0005515",
+        go_term_label="protein binding",
+        go_term_aspect="molecular_function",
+        evidence_code="IPI",
+        evidence_eco_curie="ECO:0000353",
+        reference_curie="AGRKB:101000000400377",
+        rationale="The Results interaction assay directly supports protein binding.",
+        evidence_record_ids=["go-evidence-1"],
+        with_from=["RGD:621255"],
+        existing_annotation_status="available",
+        existing_annotation_provenance={
+            "source": "GO Consortium API",
+            "request_gene_id": "RGD:999999999",
+        },
+        identity_resolution={"status": "resolved"},
+    )
+
+    assert result.status == "error"
+    assert "unobserved_tool_value" in {
+        issue["reason"] for issue in result.data["validation_issues"]
+    }
+
+
+def test_go_builder_requires_explicit_blocker_for_unresolved_identity():
+    candidate = _candidate(resolution_state="unresolved")
+    candidate.staged_fields["payload"]["blocking_reasons"] = []
+    result = _materialize(candidate)
 
     assert not result.ok
     assert "unresolved_identity_missing_blocker" in {
@@ -305,6 +463,18 @@ def test_mature_product_ambiguity_survives_typed_materialization():
     assert obj["payload"]["resolution_state"] == "unresolved"
     assert obj["payload"]["blocking_reasons"]
     assert payload["metadata"]["ambiguities"][0]["mention"] == "miR-124-3p"
+
+
+def test_unresolved_mature_product_does_not_require_existing_annotation_lookup():
+    candidate = _candidate(resolution_state="unresolved")
+
+    requirements = go_builder_tools._grounding_requirements(
+        candidate.staged_fields["payload"]
+    )
+
+    assert "provider_context.existing_annotation_context" not in {
+        requirement["field_path"] for requirement in requirements
+    }
 
 
 def test_evidence_anchor_survives_result_reference_envelope_and_workspace_projection():

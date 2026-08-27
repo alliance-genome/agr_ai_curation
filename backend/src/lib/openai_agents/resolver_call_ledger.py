@@ -62,12 +62,25 @@ class ResolverCallLedgerEntry:
         return selection
 
 
+@dataclass(frozen=True)
+class AuthoritativeToolOutputEntry:
+    """One structured, run-scoped read-only tool output."""
+
+    tool_call_id: str
+    tool_name: str
+    raw_output: dict[str, Any]
+
+    def contains(self, value: Any) -> bool:
+        return _contains_value(self.raw_output, value)
+
+
 class ResolverCallLedger:
     """Validated resolver outputs for one active extraction run."""
 
     def __init__(self, *, trace_id: str | None = None) -> None:
         self.trace_id = _optional_string(trace_id)
         self._entries: dict[str, ResolverCallLedgerEntry] = {}
+        self._tool_outputs: dict[str, AuthoritativeToolOutputEntry] = {}
 
     def record_tool_output(
         self,
@@ -85,17 +98,24 @@ class ResolverCallLedger:
                 output=output,
             )
             return None
-        if tool_name != RESOLVER_TOOL_NAME:
-            return None
-
         payload = _coerce_mapping(output)
         if payload is None:
-            self._emit_rejection(
-                reason="unparseable_output",
-                tool_call_id=normalized_call_id,
-                tool_name=tool_name,
-                output=output,
-            )
+            if tool_name == RESOLVER_TOOL_NAME:
+                self._emit_rejection(
+                    reason="unparseable_output",
+                    tool_call_id=normalized_call_id,
+                    tool_name=tool_name,
+                    output=output,
+                )
+            return None
+
+        self._tool_outputs[normalized_call_id] = AuthoritativeToolOutputEntry(
+            tool_call_id=normalized_call_id,
+            tool_name=tool_name,
+            raw_output=deepcopy(payload),
+        )
+
+        if tool_name != RESOLVER_TOOL_NAME:
             return None
 
         try:
@@ -149,7 +169,10 @@ class ResolverCallLedger:
             return None
         match: ResolverCallLedgerEntry | None = None
         for entry in self._entries.values():
-            if entry.field_path == target_field and entry.selected_value == target_value:
+            if (
+                entry.field_path == target_field
+                and entry.selected_value == target_value
+            ):
                 match = entry
         return match
 
@@ -170,12 +193,34 @@ class ResolverCallLedger:
             )
             raise KeyError(f"Unknown resolver_call_id: {normalized_call_id}") from exc
 
+    def get_tool_output(self, tool_call_id: str) -> AuthoritativeToolOutputEntry:
+        """Return a structured tool output recorded in this extraction run."""
+
+        normalized_call_id = _required_string(tool_call_id, "tool_call_id")
+        try:
+            return self._tool_outputs[normalized_call_id]
+        except KeyError as exc:
+            raise KeyError(f"Unknown tool_call_id: {normalized_call_id}") from exc
+
+    def find_tool_output_containing(
+        self, *, tool_names: set[str], value: Any
+    ) -> AuthoritativeToolOutputEntry | None:
+        """Find the latest allowed tool output containing an exact value/subtree."""
+
+        match: AuthoritativeToolOutputEntry | None = None
+        for entry in self._tool_outputs.values():
+            if entry.tool_name in tool_names and entry.contains(value):
+                match = entry
+        return match
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "trace_id": self.trace_id,
             "entry_count": len(self._entries),
             "tool_call_ids": sorted(self._entries),
             "entries": [entry.summary() for entry in self._entries.values()],
+            "tool_output_count": len(self._tool_outputs),
+            "tool_output_ids": sorted(self._tool_outputs),
         }
 
     def _entry_from_payload(
@@ -213,12 +258,22 @@ class ResolverCallLedger:
         return ResolverCallLedgerEntry(
             tool_call_id=tool_call_id,
             tool_name=tool_name,
-            domain_pack_id=_required_string(data.get("domain_pack_id"), "domain_pack_id"),
+            domain_pack_id=_required_string(
+                data.get("domain_pack_id"), "domain_pack_id"
+            ),
             object_type=_required_string(data.get("object_type"), "object_type"),
-            field_path=_required_string(helper_selection.get("field_path"), "field_path"),
-            source_phrase=_required_string(helper_selection.get("source_phrase"), "source_phrase"),
-            selected_value=_required_string(helper_selection.get("selected_value"), "selected_value"),
-            lookup_status=_required_string(helper_selection.get("lookup_status"), "lookup_status"),
+            field_path=_required_string(
+                helper_selection.get("field_path"), "field_path"
+            ),
+            source_phrase=_required_string(
+                helper_selection.get("source_phrase"), "source_phrase"
+            ),
+            selected_value=_required_string(
+                helper_selection.get("selected_value"), "selected_value"
+            ),
+            lookup_status=_required_string(
+                helper_selection.get("lookup_status"), "lookup_status"
+            ),
             helper_selection=deepcopy(dict(helper_selection)),
             payload_field_instructions=deepcopy(dict(payload_instructions)),
             raw_output=deepcopy(dict(payload)),
@@ -278,6 +333,29 @@ def _coerce_mapping(output: Any) -> dict[str, Any] | None:
     return None
 
 
+def _contains_value(container: Any, expected: Any) -> bool:
+    if isinstance(expected, Mapping):
+        if isinstance(container, Mapping) and all(
+            key in container and _contains_value(container[key], value)
+            for key, value in expected.items()
+        ):
+            return True
+    elif isinstance(expected, list):
+        if isinstance(container, list) and all(
+            any(_contains_value(item, value) for item in container)
+            for value in expected
+        ):
+            return True
+    elif container == expected:
+        return True
+
+    if isinstance(container, Mapping):
+        return any(_contains_value(value, expected) for value in container.values())
+    if isinstance(container, list):
+        return any(_contains_value(value, expected) for value in container)
+    return False
+
+
 def _optional_string(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
@@ -291,6 +369,7 @@ def _required_string(value: Any, field_name: str) -> str:
 
 
 __all__ = [
+    "AuthoritativeToolOutputEntry",
     "RESOLVER_TOOL_NAME",
     "ResolverCallLedger",
     "ResolverCallLedgerEntry",
