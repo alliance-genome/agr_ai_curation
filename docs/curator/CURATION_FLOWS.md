@@ -253,6 +253,11 @@ Understanding how flows run helps you build effective workflows:
 
 ## Running a Flow
 
+RGD curators using the package-owned paper-review recipes should follow the
+task-specific **[RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md)**
+guide for upload, starter fields, saved Chat default selection, blocker review,
+and result-reference follow-ups.
+
 After building and saving your flow:
 
 1. **Navigate to the main chat screen** (click "Home" in the navigation bar)

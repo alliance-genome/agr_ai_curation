@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from src.lib.packages.flow_recipes import (
     FlowRecipeLoadError,
@@ -73,6 +74,8 @@ def test_shipped_alliance_flow_recipe_contract_uses_canonical_validator_ids():
         "Allele/Variant Extraction",
         "Allele Annotation",
         "GO Annotation Pipeline",
+        "RGD GO and Disease Paper Review",
+        "RGD GO Paper Review",
     ]
     assert {tuple(group.agent_ids) for group in catalog.equivalence_groups} == {
         ("gene_expression", "gene_expression_extraction"),
@@ -91,6 +94,98 @@ def test_shipped_alliance_flow_recipe_contract_uses_canonical_validator_ids():
         "document_extraction_first",
         "validate_expression_gene_identifiers",
     }
+
+
+def test_shipped_rgd_paper_review_recipes_keep_go_and_disease_policy_distinct():
+    catalog = build_flow_recipe_catalog(load_package_registry(REPO_ROOT / "packages"))
+    recipes = {recipe.name: recipe for recipe in catalog.recipes}
+
+    combined = recipes["RGD GO and Disease Paper Review"]
+    go_only = recipes["RGD GO Paper Review"]
+
+    assert combined.access.allowed_group_ids == ["RGD"]
+    assert go_only.access.allowed_group_ids == ["RGD"]
+    assert [step.agent_id for step in combined.steps] == [
+        "rgd_go_paper_curator",
+        "disease_extractor",
+        "chat_output",
+    ]
+    assert combined.steps[-1].source_steps == [1, 2]
+    assert [step.agent_id for step in go_only.steps] == [
+        "rgd_go_paper_curator",
+        "chat_output",
+    ]
+    assert go_only.steps[-1].source_steps == [1]
+    assert all(
+        step.agent_id != "pdf_extraction"
+        for step in (*combined.steps, *go_only.steps)
+    )
+    assert "target_entities" in combined.description
+    assert "include_other_genes" in combined.description
+    assert "Introduction/Discussion" in combined.description
+    assert "evidence-location" in combined.description
+    assert "disease" not in (go_only.steps[0].step_goal or "").casefold()
+
+
+def test_rgd_paper_review_fixture_covers_starter_results_and_follow_up_refs():
+    fixture = yaml.safe_load(
+        (
+            REPO_ROOT
+            / "backend/tests/fixtures/flows/rgd_go_disease_paper_review.yaml"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert fixture["starter_request"] == {
+        "target_entities": ["Cttn", "MicroRNA-124-3p"],
+        "include_other_genes": True,
+        "exclude_sections": ["Introduction", "Discussion"],
+        "include_go": True,
+        "include_disease": True,
+        "require": ["evidence_code", "rationale", "evidence_location"],
+    }
+    assert fixture["expected_review"]["additional_genes"] == ["Pfn1"]
+    assert fixture["expected_review"]["unresolved"][0]["entity"] == "MicroRNA-124-3p"
+    assert [result["agent_key"] for result in fixture["expected_review"]["results"]] == [
+        "rgd_go_paper_curator",
+        "disease_extractor",
+    ]
+    assert fixture["follow_up"]["reuse_result_refs"] == [
+        "extraction-result:go-review-fixture",
+        "extraction-result:disease-review-fixture",
+    ]
+    assert fixture["processing_receipt"] == {
+        "schema_version": 1,
+        "outcome": "completed",
+        "total_stage": "completed",
+    }
+
+
+def test_rgd_paper_review_curator_guide_is_linked_and_covers_release_tasks():
+    guide_name = "RGD_GO_DISEASE_PAPER_REVIEW.md"
+    guide = (REPO_ROOT / "docs/curator" / guide_name).read_text(encoding="utf-8")
+    curator_index = (REPO_ROOT / "docs/curator/README.md").read_text(encoding="utf-8")
+    flows_guide = (REPO_ROOT / "docs/curator/CURATION_FLOWS.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert guide_name in curator_index
+    assert guide_name in flows_guide
+    for required_text in (
+        "Documents → Upload Documents",
+        "normal high-accuracy PDF path",
+        "target_entities:",
+        "include_other_genes: true",
+        "Introduction",
+        "Discussion",
+        "unresolved gene-product identity",
+        "result references",
+        "default 15-minute deadline",
+        "pdf_processing_receipt",
+        "Production verification checklist",
+        "non-RGD account",
+        "Automatic",
+    ):
+        assert required_text in guide
 
 
 def test_core_package_alone_exposes_no_domain_flow_recipes(tmp_path):

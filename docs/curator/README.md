@@ -14,7 +14,8 @@ Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide
 
 4. **[Agent Studio](AGENT_STUDIO.md)** - Browse prompts, build flows, and chat with Claude Opus
 5. **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain multiple agents together
-6. **[Batch Processing](BATCH_PROCESSING.md)** - Process multiple documents through flows automatically
+6. **[RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md)** - Run the RGD paper-review flow and review blockers or follow-ups
+7. **[Batch Processing](BATCH_PROCESSING.md)** - Process multiple documents through flows automatically
 
 ## What Can the AI Help With?
 
@@ -188,4 +189,5 @@ For general questions or suggestions, please reach out to the development team.
 | [Available Agents](AVAILABLE_AGENTS.md) | All specialist agents and their capabilities |
 | [Agent Studio](AGENT_STUDIO.md) | Browse prompts, build flows, chat with Opus |
 | [Curation Flows](CURATION_FLOWS.md) | Visual workflow builder guide |
+| [RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md) | RGD paper-review flow task guide |
 | [Batch Processing](BATCH_PROCESSING.md) | Process multiple documents through flows |

@@ -129,3 +129,39 @@ recipes:
       - agent_id: chat_output
         step_goal: Display GO annotations
         source_steps: [2, 3]
+  - name: RGD GO and Disease Paper Review
+    description: >
+      Review the current uploaded paper for separately labeled RGD GO and disease
+      candidates. Honor each chat request's target_entities, include_other_genes,
+      Introduction/Discussion exclusions, and evidence-code, rationale, and
+      evidence-location requirements; report unresolved identity or policy blockers.
+    access:
+      allowed_group_ids: [RGD]
+    steps:
+      - agent_id: rgd_go_paper_curator
+        step_goal: >
+          Apply only RGD GO paper-curation policy to the current request and preserve
+          structured candidate, evidence, and unresolved-state references.
+      - agent_id: disease_extractor
+        step_goal: >
+          Apply only disease extraction policy to the current request and preserve
+          structured candidate, evidence, and unresolved-state references.
+      - agent_id: chat_output
+        step_goal: Display separately labeled GO and disease review results
+        source_steps: [1, 2]
+  - name: RGD GO Paper Review
+    description: >
+      Review the current uploaded paper for RGD GO candidates. Honor each chat
+      request's target_entities, include_other_genes, Introduction/Discussion
+      exclusions, and evidence-code, rationale, and evidence-location requirements;
+      report unresolved identity or policy blockers.
+    access:
+      allowed_group_ids: [RGD]
+    steps:
+      - agent_id: rgd_go_paper_curator
+        step_goal: >
+          Apply RGD GO paper-curation policy to the current request and preserve
+          structured candidate, evidence, and unresolved-state references.
+      - agent_id: chat_output
+        step_goal: Display the GO review results
+        source_steps: [1]

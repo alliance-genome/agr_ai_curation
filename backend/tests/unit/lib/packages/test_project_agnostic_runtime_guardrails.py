@@ -218,6 +218,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/api/test_agent_studio_custom.py"),
     Path("backend/tests/unit/api/test_agent_studio_metadata.py"),
     Path("backend/tests/unit/api/test_agent_studio_phase2_endpoints.py"),
+    Path("backend/tests/unit/api/test_chat_preferred_route_execution.py"),
+    Path("backend/tests/unit/api/test_chat_route_preferences_api.py"),
     Path("backend/tests/unit/api/test_agent_studio_phase3_endpoints.py"),
     Path("backend/tests/unit/api/test_agent_studio_tools_endpoints.py"),
     Path("backend/tests/unit/api/test_agent_studio_trace_tools.py"),
