@@ -1399,7 +1399,15 @@ def run_package_scoped_validator_agent(
             f"{request.validator_agent.package_id}:{request.validator_agent.agent_id}"
         )
 
-    agent = get_agent_by_id(canonical_system_agent_key(agent_definition))
+    authenticated_groups = _normalized_authenticated_groups(runtime_context)
+    agent = get_agent_by_id(
+        canonical_system_agent_key(agent_definition),
+        **(
+            {"authenticated_groups": authenticated_groups}
+            if authenticated_groups is not None
+            else {}
+        ),
+    )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
     output_type = getattr(agent, "output_type", None)
@@ -1571,7 +1579,15 @@ def run_package_scoped_validator_agent_batch(
             f"{representative_request.validator_agent.agent_id}"
         )
 
-    agent = get_agent_by_id(canonical_system_agent_key(agent_definition))
+    authenticated_groups = _normalized_authenticated_groups(runtime_context)
+    agent = get_agent_by_id(
+        canonical_system_agent_key(agent_definition),
+        **(
+            {"authenticated_groups": authenticated_groups}
+            if authenticated_groups is not None
+            else {}
+        ),
+    )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
     output_type = getattr(agent, "output_type", None)

@@ -705,6 +705,9 @@ async def share_agent_endpoint(
 
     try:
         custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
+        if not _agent_record_is_group_accessible(custom_agent, user):
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Custom agent not found")
         set_custom_agent_visibility(
             db=db,
             custom_agent=custom_agent,
@@ -3316,6 +3319,29 @@ async def chat_with_opus(
                     user=user,
                     agent_id=selected_agent_id,
                 )
+
+            workshop_custom_agent_id = (
+                request.context.agent_workshop.custom_agent_id
+                if request.context is not None
+                and request.context.agent_workshop is not None
+                else None
+            )
+            if workshop_custom_agent_id:
+                workshop_custom_uuid = _parse_workshop_custom_agent_uuid(
+                    workshop_custom_agent_id
+                )
+                if workshop_custom_uuid is None:
+                    raise HTTPException(status_code=404, detail="Agent not found")
+                workshop_runtime_agent_id = make_custom_agent_id(workshop_custom_uuid)
+                if workshop_runtime_agent_id != selected_agent_id:
+                    if db_user_id is None:
+                        raise HTTPException(status_code=403, detail="Agent not available")
+                    _require_selected_agent_access(
+                        db=db,
+                        db_user_id=db_user_id,
+                        user=user,
+                        agent_id=workshop_runtime_agent_id,
+                    )
 
             prepared_turn = _prepare_agent_studio_turn(
                 db=db,

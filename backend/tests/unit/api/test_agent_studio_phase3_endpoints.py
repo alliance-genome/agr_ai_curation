@@ -201,7 +201,10 @@ def test_share_agent_endpoint_updates_visibility(monkeypatch):
     import src.api.agent_studio as api_module
 
     custom_agent_uuid = uuid.uuid4()
-    fake_agent = SimpleNamespace(id=custom_agent_uuid)
+    fake_agent = SimpleNamespace(
+        id=custom_agent_uuid,
+        allowed_group_ids=["RGD"],
+    )
     observed = {}
 
     monkeypatch.setattr(
@@ -233,7 +236,7 @@ def test_share_agent_endpoint_updates_visibility(monkeypatch):
         api_module.share_agent_endpoint(
             agent_id="ca_11111111-1111-1111-1111-111111111111",
             request=api_module.ShareAgentRequest(visibility="project"),
-            user={"sub": "auth-sub"},
+            user={"sub": "auth-sub", "cognito:groups": ["rgd-curators"]},
             db=db,
         )
     )
@@ -242,6 +245,60 @@ def test_share_agent_endpoint_updates_visibility(monkeypatch):
     assert observed["custom_agent"] == fake_agent
     assert observed["visibility"] == "project"
     assert response["agent_id"] == "ca_11111111-1111-1111-1111-111111111111"
+
+
+def test_share_agent_endpoint_hides_group_restricted_agent_from_nonmatching_owner(
+    monkeypatch,
+):
+    import src.api.agent_studio as api_module
+
+    custom_agent_uuid = uuid.uuid4()
+    fake_agent = SimpleNamespace(
+        id=custom_agent_uuid,
+        allowed_group_ids=["RGD"],
+    )
+    calls = {"visibility": 0, "rollback": 0}
+
+    monkeypatch.setattr(
+        api_module,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "parse_custom_agent_id",
+        lambda _agent_id: custom_agent_uuid,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_custom_agent_for_user",
+        lambda _db, _uuid, _uid: fake_agent,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "set_custom_agent_visibility",
+        lambda **_kwargs: calls.__setitem__("visibility", calls["visibility"] + 1),
+    )
+
+    db = SimpleNamespace(
+        commit=lambda: None,
+        refresh=lambda _obj: None,
+        rollback=lambda: calls.__setitem__("rollback", calls["rollback"] + 1),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_module.share_agent_endpoint(
+                agent_id=f"ca_{custom_agent_uuid}",
+                request=api_module.ShareAgentRequest(visibility="project"),
+                user={"sub": "auth-sub", "cognito:groups": ["mgi-curators"]},
+                db=db,
+            )
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Custom agent not found"
+    assert calls == {"visibility": 0, "rollback": 1}
 
 
 def test_share_agent_endpoint_returns_403_on_access_error(monkeypatch, caplog):

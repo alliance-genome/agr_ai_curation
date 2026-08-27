@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from types import SimpleNamespace
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from src.api import agent_studio as api_module
 from src.lib import http_errors
+from src.lib.agent_studio.models import AgentWorkshopContext
 
 
 @pytest.fixture(autouse=True)
@@ -186,6 +188,54 @@ def test_chat_with_opus_sanitizes_invalid_request_errors(monkeypatch, caplog):
     assert exc_info.value.detail == "Agent Studio chat request is invalid"
     assert "session context exploded" not in str(exc_info.value.detail)
     assert "session context exploded" in caplog.text
+
+
+def test_chat_with_opus_hides_group_restricted_workshop_agent_without_selected_id(
+    monkeypatch,
+):
+    custom_agent_uuid = uuid4()
+    db = SimpleNamespace(close=lambda: None)
+
+    def _fake_get_db():
+        yield db
+
+    monkeypatch.setattr(api_module, "get_db", _fake_get_db)
+    monkeypatch.setattr(
+        api_module,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=1),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_custom_agent_visible_to_user",
+        lambda _db, _uuid, _user_id: SimpleNamespace(allowed_group_ids=["RGD"]),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "_prepare_agent_studio_turn",
+        lambda **_kwargs: pytest.fail("inaccessible workshop agent reached persistence"),
+    )
+
+    request = api_module.ChatRequest(
+        messages=[api_module.ChatMessage(role="user", content="Review this prompt")],
+        context=api_module.ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                custom_agent_id=str(custom_agent_uuid),
+            ),
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_module.chat_with_opus(
+                request=request,
+                user={"sub": "auth-sub", "cognito:groups": ["mgi-curators"]},
+            )
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Agent not found"
 
 
 def test_chat_with_opus_reports_sanitized_persistence_errors_and_closes_session(
