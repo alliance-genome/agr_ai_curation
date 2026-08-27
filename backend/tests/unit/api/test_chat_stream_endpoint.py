@@ -15,6 +15,7 @@ from src.api import chat, chat_common, chat_stream
 from src.lib import http_errors
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.executable_runs import ExecutableRun
+from src.lib.flows.outcome import FlowRunOutcome
 from src.lib.observability import sentry
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from tests.chat_api_test_support import patch_chat_impl_for
@@ -252,28 +253,30 @@ def test_chat_stream_endpoint_binds_prior_flow_refs_and_preserves_unbounded_mess
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    first_turn_outcome = FlowRunOutcome()
+    first_turn_outcome.observe(
+        {
+            "type": "FLOW_FINISHED",
+            "status": "completed",
+            "flow_id": str(flow_id),
+            "flow_run_id": "flow-run-prior",
+            "document_id": None,
+            "extraction_result_refs": [
+                {
+                    "result_ref": f"extraction-result:{result_id}",
+                    "extraction_result_id": str(result_id),
+                }
+            ],
+        }
+    )
     prior_assistant = _assistant_record(
         session_id="session-flow",
         turn_id="turn-prior",
         content="prior flow answer",
         payload_json={
-            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
-                {
-                    "type": "FLOW_FINISHED",
-                    "data": {
-                        "status": "completed",
-                        "flow_id": str(flow_id),
-                        "flow_run_id": "flow-run-prior",
-                        "document_id": None,
-                        "extraction_result_refs": [
-                            {
-                                "result_ref": f"extraction-result:{result_id}",
-                                "extraction_result_id": str(result_id),
-                            }
-                        ],
-                    },
-                }
-            ]
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: (
+                first_turn_outcome.events_for_persistence()
+            )
         },
     )
     _patch_chat_impl(

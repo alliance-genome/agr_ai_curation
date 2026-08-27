@@ -8,6 +8,7 @@ import pytest
 
 from src.api import chat_common
 from src.api.chat_models import ResolvedChatRoute
+from src.lib.flows.outcome import FlowRunOutcome
 from src.lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
     AppendMessageResult,
@@ -49,6 +50,12 @@ def _assistant_record(*, turn_id: str, terminal_events: list[dict]) -> ChatMessa
         trace_id="trace-1",
         created_at=datetime.now(timezone.utc),
     )
+
+
+def _persisted_flow_terminal_events(**terminal_data) -> list[dict]:
+    outcome = FlowRunOutcome()
+    outcome.observe({"type": "FLOW_FINISHED", **terminal_data})
+    return outcome.events_for_persistence()
 
 
 class _TurnRepository:
@@ -429,61 +436,46 @@ def test_preferred_flow_file_output_is_persisted_for_durable_replay(monkeypatch)
     ]
 
 
-def test_preferred_flow_followup_context_uses_same_conversation_flow_and_document():
+def test_preferred_flow_two_turn_context_uses_persisted_same_flow_document_refs():
     flow_id = str(uuid4())
     other_flow_id = str(uuid4())
     result_id = str(uuid4())
     messages = [
         _assistant_record(
             turn_id="turn-other-flow",
-            terminal_events=[
-                {
-                    "type": "FLOW_FINISHED",
-                    "data": {
-                        "status": "completed",
-                        "flow_id": other_flow_id,
-                        "flow_run_id": "other-run",
-                        "document_id": "doc-1",
-                        "extraction_result_refs": [
-                            {"result_ref": f"extraction-result:{uuid4()}"}
-                        ],
-                    },
-                }
-            ],
+            terminal_events=_persisted_flow_terminal_events(
+                status="completed",
+                flow_id=other_flow_id,
+                flow_run_id="other-run",
+                document_id="doc-1",
+                extraction_result_refs=[
+                    {"result_ref": f"extraction-result:{uuid4()}"}
+                ],
+            ),
         ),
         _assistant_record(
             turn_id="turn-matching",
-            terminal_events=[
-                {
-                    "type": "FLOW_FINISHED",
-                    "data": {
-                        "status": "completed",
-                        "flow_id": flow_id,
-                        "flow_run_id": "matching-run",
-                        "document_id": "doc-1",
-                        "extraction_result_refs": [
-                            {"result_ref": f"extraction-result:{result_id}"},
-                            {"result_ref": "client-result:arbitrary"},
-                        ],
-                    },
-                }
-            ],
+            terminal_events=_persisted_flow_terminal_events(
+                status="completed",
+                flow_id=flow_id,
+                flow_run_id="matching-run",
+                document_id="doc-1",
+                extraction_result_refs=[
+                    {"result_ref": f"extraction-result:{result_id}"},
+                    {"result_ref": "client-result:arbitrary"},
+                ],
+            ),
         ),
         _assistant_record(
             turn_id="turn-inspection-only",
-            terminal_events=[
-                {
-                    "type": "FLOW_FINISHED",
-                    "data": {
-                        "status": "completed",
-                        "completion_mode": "inspection_only",
-                        "flow_id": flow_id,
-                        "flow_run_id": "inspection-run",
-                        "document_id": "doc-1",
-                        "extraction_result_refs": [],
-                    },
-                }
-            ],
+            terminal_events=_persisted_flow_terminal_events(
+                status="completed",
+                completion_mode="inspection_only",
+                flow_id=flow_id,
+                flow_run_id="inspection-run",
+                document_id="doc-1",
+                extraction_result_refs=[],
+            ),
         ),
     ]
     calls: list[dict] = []
@@ -528,20 +520,15 @@ def test_preferred_flow_followup_context_rejects_mismatched_flow_or_document(
     result_id = str(uuid4())
     assistant = _assistant_record(
         turn_id="turn-1",
-        terminal_events=[
-            {
-                "type": "FLOW_FINISHED",
-                "data": {
-                    "status": "completed",
-                    "flow_id": event_flow_id,
-                    "flow_run_id": "flow-run-1",
-                    "document_id": "doc-1",
-                    "extraction_result_refs": [
-                        {"result_ref": f"extraction-result:{result_id}"}
-                    ],
-                },
-            }
-        ],
+        terminal_events=_persisted_flow_terminal_events(
+            status="completed",
+            flow_id=event_flow_id,
+            flow_run_id="flow-run-1",
+            document_id="doc-1",
+            extraction_result_refs=[
+                {"result_ref": f"extraction-result:{result_id}"}
+            ],
+        ),
     )
 
     class _Repository:
@@ -566,37 +553,27 @@ def test_newest_same_flow_changed_document_blocks_older_matching_refs():
     messages = [
         _assistant_record(
             turn_id="turn-older",
-            terminal_events=[
-                {
-                    "type": "FLOW_FINISHED",
-                    "data": {
-                        "status": "completed",
-                        "flow_id": flow_id,
-                        "flow_run_id": "older-run",
-                        "document_id": "doc-1",
-                        "extraction_result_refs": [
-                            {"result_ref": f"extraction-result:{older_result_id}"}
-                        ],
-                    },
-                }
-            ],
+            terminal_events=_persisted_flow_terminal_events(
+                status="completed",
+                flow_id=flow_id,
+                flow_run_id="older-run",
+                document_id="doc-1",
+                extraction_result_refs=[
+                    {"result_ref": f"extraction-result:{older_result_id}"}
+                ],
+            ),
         ),
         _assistant_record(
             turn_id="turn-newer",
-            terminal_events=[
-                {
-                    "type": "FLOW_FINISHED",
-                    "data": {
-                        "status": "completed",
-                        "flow_id": flow_id,
-                        "flow_run_id": "newer-run",
-                        "document_id": "doc-2",
-                        "extraction_result_refs": [
-                            {"result_ref": f"extraction-result:{uuid4()}"}
-                        ],
-                    },
-                }
-            ],
+            terminal_events=_persisted_flow_terminal_events(
+                status="completed",
+                flow_id=flow_id,
+                flow_run_id="newer-run",
+                document_id="doc-2",
+                extraction_result_refs=[
+                    {"result_ref": f"extraction-result:{uuid4()}"}
+                ],
+            ),
         ),
     ]
 

@@ -1737,21 +1737,20 @@ def _preferred_flow_inspection_context(
         for event in reversed(_preferred_flow_replay_events(message)):
             if event.get("type") != "FLOW_FINISHED":
                 continue
-            data = event.get("data")
-            if not isinstance(data, Mapping) or data.get("status") != "completed":
+            if event.get("status") != "completed":
                 continue
             try:
-                event_flow_id = str(UUID(str(data.get("flow_id") or "")))
+                event_flow_id = str(UUID(str(event.get("flow_id") or "")))
             except ValueError:
                 continue
             if event_flow_id != normalized_flow_id:
                 continue
-            event_document_id = str(data.get("document_id") or "").strip() or None
+            event_document_id = str(event.get("document_id") or "").strip() or None
             if event_document_id != normalized_document_id:
                 return None
 
             refs: list[str] = []
-            for value in data.get("extraction_result_refs") or []:
+            for value in event.get("extraction_result_refs") or []:
                 if not isinstance(value, Mapping):
                     continue
                 result_ref = _canonical_preferred_flow_result_ref(
@@ -1759,7 +1758,7 @@ def _preferred_flow_inspection_context(
                 )
                 if result_ref is not None and result_ref not in refs:
                     refs.append(result_ref)
-            flow_run_id = str(data.get("flow_run_id") or "").strip()
+            flow_run_id = str(event.get("flow_run_id") or "").strip()
             if refs and flow_run_id:
                 return PreferredFlowInspectionContext(
                     flow_id=normalized_flow_id,
@@ -1767,7 +1766,7 @@ def _preferred_flow_inspection_context(
                     document_id=normalized_document_id,
                     result_refs=tuple(refs),
                 )
-            if data.get("completion_mode") != "inspection_only":
+            if event.get("completion_mode") != "inspection_only":
                 return None
     return None
 
