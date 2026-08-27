@@ -1026,6 +1026,11 @@ def materialize_phenotype_builder_state(
             "source_mentions": list(source_mentions),
             "negated": negated,
         }
+        data_provider_abbreviation = ontology_lookup_hint.get("data_provider")
+        if data_provider_abbreviation:
+            annotation_payload["data_provider"] = {
+                "abbreviation": data_provider_abbreviation,
+            }
         # EXPERIMENTAL CONDITIONS: nested condition_relations[].conditions[]. Only carried when the
         # extractor staged them. Each condition references the annotation's evidence
         # (evidence_record_ids on the annotation) per the evidence contract — no condition-level

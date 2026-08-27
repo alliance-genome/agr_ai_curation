@@ -237,6 +237,11 @@ def test_phenotype_export_adapter_projects_complete_envelope_to_target_payload()
     )
 
     assert payload["payload_status"] == "ready"
+    assert not any(
+        blocker.get("field_path") == "data_provider.abbreviation"
+        and blocker.get("code") == "alliance.phenotype.export.required_context_missing"
+        for blocker in payload["adapter_blockers"]
+    )
     annotation = payload["phenotype_annotations"][0]
     assert annotation["target_class"] == "AGMPhenotypeAnnotation"
     assert "public.phenotypeannotation_ontologyterm" in annotation["target_tables"]

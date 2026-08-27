@@ -159,6 +159,8 @@ fixtures:
         - evidence-cilia-1
         source_mentions:
         - sensory cilia were truncated in mutant animals
+        data_provider:
+          abbreviation: WB
         negated: false
       model_ref: PhenotypeAnnotationPayload
       schema_ref:
