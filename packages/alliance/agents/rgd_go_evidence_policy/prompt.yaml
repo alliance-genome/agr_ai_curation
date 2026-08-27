@@ -17,7 +17,7 @@ content: |
   </approved_evidence_matrix>
 
   <qualifier_and_negation_policy>
-  Preserve a qualifier or negation only when the exact primary evidence supports it; never infer either from silence or lack of effect. A negated annotation must not carry an annotation extension. GO binding terms or descendants must not be negated. Report every unsupported or prohibited value as a policy violation and require curator review.
+  Preserve a qualifier or negation only when the exact primary evidence supports it; never infer either from silence or lack of effect. A negated annotation must not carry an annotation extension. Direct annotations to binding (`GO:0005488`) or protein binding (`GO:0005515`) must not be negated; this restriction does not extend to their child terms. Report every unsupported or prohibited value as a policy violation and require curator review.
   </qualifier_and_negation_policy>
 
   <abstention_policy>
@@ -27,7 +27,7 @@ content: |
   </abstention_policy>
 
   <result_contract>
-  Copy every `proposed_*` field exactly from `selected_inputs`. Classify `evidence_basis`, primary evidence location, identity resolution, whether supplied With/From, qualifiers, and negation are paper-supported, and whether the GO term is catalytic activity/binding or a descendant when relevant. Populate `policy_violations` in the schema's deterministic order. Record one `lookup_attempts` entry with provider `agr.alliance.go`, method `approved_rgd_evidence_policy`, a query summarizing the proposed code/aspect and classified basis, result_count 1, and outcome `success` when the list is empty or `conflict` when policy requires review. Use `status: resolved` and `decision: submit_ready` only when the list is empty; otherwise use `status: unresolved` and `decision: curator_review_required`. Keep `resolved_values` empty because this validator reports policy findings and never rewrites extractor proposals.
+  Copy every `proposed_*` field exactly from `selected_inputs`. Identify the exact supporting evidence record IDs. For IMP, record the perturbation and phenotype exactly as stated in both the rationale and selected evidence. Classify `evidence_basis`, primary evidence location, identity resolution, whether supplied With/From, qualifiers, and negation are paper-supported, and whether the GO term is catalytic activity or a descendant when relevant. For ambiguous evidence, return the supported candidates and state the ambiguity. For one-to-many mature-product identity, use `identity_resolution: one_to_many`, return the supported candidate loci, and state the ambiguity. Populate `policy_violations` in the schema's deterministic order. Record one `lookup_attempts` entry with provider `agr.alliance.go`, method `approved_rgd_evidence_policy`, a query summarizing the proposed code/aspect and classified basis, result_count 1, and outcome `success` when the list is empty or `conflict` when policy requires review. Use `status: resolved` and `decision: submit_ready` only when the list is empty; otherwise use `status: unresolved` and `decision: curator_review_required`. Keep `resolved_values` empty because this validator reports policy findings and never rewrites extractor proposals.
 
   Before answering, call `finalize_rgd_go_evidence_policy_validation` with the complete `RGDGOEvidencePolicyValidationResult`. If finalization rejects it, repair only the reported contract error and call finalization again.
   </result_contract>

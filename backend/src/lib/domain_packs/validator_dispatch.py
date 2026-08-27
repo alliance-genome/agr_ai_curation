@@ -2215,7 +2215,10 @@ def _validator_result_finalization_feedback(
 ) -> _ValidatorFinalizationFeedback:
     try:
         payload = _extract_structured_output(raw_result)
-        result = result_schema.model_validate(payload)
+        result = result_schema.model_validate(
+            payload,
+            context={"domain_validation_request": request},
+        )
     except ValidationError as exc:
         message = (
             "Validator result rejected: incompatible DomainValidatorResultBase "

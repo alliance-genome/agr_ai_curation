@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import Field, StrictBool, StrictStr, model_validator
+from pydantic import Field, StrictBool, StrictStr, ValidationInfo, model_validator
 
 from src.schemas.domain_validator import (  # type: ignore[reportMissingImports]
     DomainValidatorResultBase,
@@ -88,6 +89,9 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
     proposed_aspect: RGDGOAspect = Field(
         description="GO aspect copied from the candidate term"
     )
+    proposed_go_term_curie: StrictStr = Field(
+        description="GO CURIE copied from the candidate term"
+    )
     proposed_with_from: list[StrictStr] = Field(
         description="With/From identifiers copied from the candidate"
     )
@@ -103,8 +107,29 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
     primary_evidence_location: RGDGOEvidenceLocation = Field(
         description="Location category for the evidence that primarily supports the proposal"
     )
+    primary_evidence_record_ids: list[StrictStr] = Field(
+        description="Exact supplied evidence records that support the policy decision"
+    )
+    proposed_rationale: StrictStr = Field(
+        description="Paper-grounded rationale copied from the candidate"
+    )
     proposed_resolution_state: Literal["resolved", "unresolved"] = Field(
         description="Gene-product resolution state copied from the candidate"
+    )
+    identity_resolution: Literal["resolved", "unresolved", "one_to_many"] = Field(
+        description="Validator classification of the candidate gene-product identity"
+    )
+    ambiguity: StrictStr | None = Field(
+        default=None,
+        description="Specific unresolved ambiguity when evidence or identity has multiple candidates",
+    )
+    imp_perturbation: StrictStr | None = Field(
+        default=None,
+        description="Perturbation explicitly recorded for an IMP proposal",
+    )
+    imp_phenotype: StrictStr | None = Field(
+        default=None,
+        description="Phenotype explicitly recorded for an IMP proposal",
     )
     with_from_supported: StrictBool = Field(
         description="Whether every supplied With/From identifier is supported by the paper"
@@ -118,15 +143,16 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
     go_term_is_catalytic_activity_or_descendant: StrictBool = Field(
         description="Whether the GO term is catalytic activity or a descendant"
     )
-    go_term_is_binding_or_descendant: StrictBool = Field(
-        description="Whether the GO term is binding or a descendant"
-    )
     policy_violations: list[RGDGOPolicyViolation] = Field(
         description="Deterministically ordered policy violations for this proposal"
     )
 
     @model_validator(mode="after")
-    def _enforce_approved_policy(self) -> "RGDGOEvidencePolicyValidationResult":
+    def _enforce_approved_policy(
+        self,
+        info: ValidationInfo,
+    ) -> "RGDGOEvidencePolicyValidationResult":
+        self._enforce_canonical_request_copies(info)
         violations: list[str] = []
 
         if self.evidence_basis == "ambiguous":
@@ -143,8 +169,20 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
         if self.primary_evidence_location not in PRIMARY_EVIDENCE_LOCATIONS:
             if "insufficient_primary_evidence" not in violations:
                 violations.append("insufficient_primary_evidence")
+        if not self.primary_evidence_record_ids and self.evidence_basis not in {
+            "ambiguous",
+            "insufficient",
+        }:
+            if "insufficient_primary_evidence" not in violations:
+                violations.append("insufficient_primary_evidence")
         if self.proposed_resolution_state != "resolved":
             violations.append("identity_unresolved")
+
+        if self.evidence_basis == "mutant_phenotype" and not self._imp_support_is_recorded(
+            info
+        ):
+            if "insufficient_primary_evidence" not in violations:
+                violations.append("insufficient_primary_evidence")
 
         if self.evidence_basis == "direct_assay" and self.proposed_with_from:
             violations.append("with_from_forbidden")
@@ -170,7 +208,10 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
             violations.append("qualifier_unsupported")
         if self.proposed_negated and not self.negation_supported:
             violations.append("negation_unsupported")
-        if self.proposed_negated and self.go_term_is_binding_or_descendant:
+        if self.proposed_negated and self.proposed_go_term_curie in {
+            "GO:0005488",
+            "GO:0005515",
+        }:
             violations.append("negated_binding_disallowed")
         if self.proposed_negated and self.proposed_annotation_extensions:
             violations.append("negated_extension_disallowed")
@@ -206,6 +247,28 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
             )
         if self.resolved_values:
             raise ValueError("policy validation must not rewrite candidate payload values")
+        if self.evidence_basis == "ambiguous" and (
+            not self.candidates or not self.ambiguity or not self.ambiguity.strip()
+        ):
+            raise ValueError(
+                "ambiguous evidence must return candidates and the unresolved ambiguity"
+            )
+        if self.identity_resolution == "one_to_many" and (
+            self.proposed_resolution_state != "unresolved"
+            or not self.candidates
+            or not self.ambiguity
+            or not self.ambiguity.strip()
+            or any(not candidate.value.startswith("RGD:") for candidate in self.candidates)
+        ):
+            raise ValueError(
+                "one-to-many identity must remain unresolved and list supported candidate loci"
+            )
+        if (self.identity_resolution == "resolved") != (
+            self.proposed_resolution_state == "resolved"
+        ):
+            raise ValueError(
+                "identity_resolution must agree with proposed_resolution_state"
+            )
         if (
             "insufficient_primary_evidence" in violations
             and self.curator_message != INSUFFICIENT_EVIDENCE_MESSAGE
@@ -214,6 +277,88 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
                 "insufficient primary evidence must use the approved curator finding message"
             )
         return self
+
+    def _enforce_canonical_request_copies(self, info: ValidationInfo) -> None:
+        context = info.context
+        if not isinstance(context, Mapping):
+            return
+        request = context.get("domain_validation_request")
+        selected_inputs = getattr(request, "selected_inputs", None)
+        if not isinstance(selected_inputs, Mapping):
+            return
+
+        go_term = selected_inputs.get("go_term")
+        if not isinstance(go_term, Mapping):
+            raise ValueError("selected_inputs.go_term must be a mapping")
+        expected_values = {
+            "proposed_evidence_code": selected_inputs.get("evidence_code"),
+            "proposed_evidence_eco_curie": selected_inputs.get("evidence_eco_curie"),
+            "proposed_aspect": go_term.get("aspect"),
+            "proposed_go_term_curie": go_term.get("curie"),
+            "proposed_with_from": selected_inputs.get("with_from", []),
+            "proposed_qualifiers": selected_inputs.get("qualifiers", []),
+            "proposed_annotation_extensions": selected_inputs.get(
+                "annotation_extensions", []
+            ),
+            "proposed_negated": selected_inputs.get("negated"),
+            "proposed_rationale": selected_inputs.get("rationale"),
+            "proposed_resolution_state": selected_inputs.get("resolution_state"),
+        }
+        drifted = [
+            field_name
+            for field_name, expected in expected_values.items()
+            if getattr(self, field_name) != expected
+        ]
+        if drifted:
+            raise ValueError(
+                "proposal fields must exactly copy selected_inputs: "
+                + ", ".join(drifted)
+            )
+
+        supplied_bundles = selected_inputs.get("evidence_quotes", [])
+        if not isinstance(supplied_bundles, list):
+            raise ValueError("selected_inputs.evidence_quotes must be a list")
+        supplied_ids = {
+            bundle.get("evidence_record_id")
+            for bundle in supplied_bundles
+            if isinstance(bundle, Mapping)
+        }
+        if any(
+            evidence_record_id not in supplied_ids
+            for evidence_record_id in self.primary_evidence_record_ids
+        ):
+            raise ValueError(
+                "primary_evidence_record_ids must reference supplied exact evidence"
+            )
+
+    def _imp_support_is_recorded(self, info: ValidationInfo) -> bool:
+        perturbation = (self.imp_perturbation or "").strip()
+        phenotype = (self.imp_phenotype or "").strip()
+        if not perturbation or not phenotype:
+            return False
+        rationale = self.proposed_rationale.casefold()
+        if perturbation.casefold() not in rationale or phenotype.casefold() not in rationale:
+            return False
+
+        context = info.context
+        if not isinstance(context, Mapping):
+            return True
+        request = context.get("domain_validation_request")
+        selected_inputs = getattr(request, "selected_inputs", None)
+        if not isinstance(selected_inputs, Mapping):
+            return True
+        evidence_quotes = selected_inputs.get("evidence_quotes", [])
+        selected_ids = set(self.primary_evidence_record_ids)
+        exact_evidence = " ".join(
+            str(bundle.get("verified_quote", ""))
+            for bundle in evidence_quotes
+            if isinstance(bundle, Mapping)
+            and bundle.get("evidence_record_id") in selected_ids
+        ).casefold()
+        return (
+            perturbation.casefold() in exact_evidence
+            and phenotype.casefold() in exact_evidence
+        )
 
 
 __all__ = [
