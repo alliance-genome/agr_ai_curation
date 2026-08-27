@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from agr_ai_curation_alliance.domain_packs.allele import AllelePaperEvidenceExportAdapter
+from agr_ai_curation_alliance.domain_packs.allele import (
+    AllelePaperEvidenceExportAdapter,
+    AllelePaperEvidenceSubmissionAdapter,
+)
 from agr_ai_curation_alliance.domain_packs.disease import (
     DiseaseAnnotationExportAdapter,
     DiseaseAnnotationSubmissionBlockerAdapter,
@@ -55,6 +58,7 @@ _DOMAIN_EXPORT_ADAPTERS = {
     "phenotype": PhenotypeAnnotationExportAdapter,
 }
 _DOMAIN_SUBMISSION_TRANSPORTS = {
+    "allele": AllelePaperEvidenceSubmissionAdapter,
     "disease": DiseaseAnnotationSubmissionBlockerAdapter,
     "gene_expression": GeneExpressionSubmissionAdapter,
     "phenotype": PhenotypeAnnotationSubmissionBlockerAdapter,
