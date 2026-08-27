@@ -3112,6 +3112,188 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
 
 
 @pytest.mark.asyncio
+async def test_chat_gene_expression_dispatch_resolves_loaded_document_reference(
+    monkeypatch,
+    _repo_package_curation_registry,
+):
+    from agr_ai_curation_runtime import reference_resolution
+    from src.lib.curation_workspace import extraction_results
+    from src.lib.domain_packs import validator_dispatch
+
+    literature_reference = {
+        "reference_id": None,
+        "curie": "AGRKB:101000000924191",
+        "title": "Resolved literature title",
+        "short_citation": "Author et al. (2026)",
+        "cross_references": ["PMID:27528223"],
+        "source": "literature_es",
+        "obsolete": False,
+    }
+
+    class FakeCurationClient:
+        def get_reference(self, curie):
+            assert curie == literature_reference["curie"]
+            return {
+                "reference_id": 482731,
+                "curie": curie,
+                "source": "curation_db",
+                "obsolete": False,
+            }
+
+    monkeypatch.setattr(
+        reference_resolution,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_db_client=lambda: FakeCurationClient()),
+    )
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: {
+            "adapter_key": "gene_expression",
+            "domain_pack_id": "agr.alliance.gene_expression",
+            "launchable": True,
+        }
+        if agent_key == "gene_expression"
+        else None,
+    )
+    monkeypatch.setattr(
+        streaming_tools.document_state,
+        "get_document",
+        lambda user_id: {
+            "id": "document-1",
+            "title": literature_reference["title"],
+            "metadata": json.dumps(
+                {
+                    "source_provenance": {
+                        "reference_curie": literature_reference["curie"],
+                        "external_ids": {"pmid": "27528223"},
+                    }
+                }
+            ),
+        }
+        if user_id == "curator-1"
+        else None,
+    )
+    runtime_context = streaming_tools._validator_runtime_context_for_chat(
+        document_id="document-1",
+        user_id="curator-1",
+    )
+    assert runtime_context is not None
+
+    envelope = DomainEnvelope(
+        envelope_id="chat-gene-expression-reference-env",
+        domain_pack_id="agr.alliance.gene_expression",
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneExpressionAnnotation",
+                pending_ref_id="gene-expression-annotation-1",
+                payload={
+                    "relation": {"name": "is_expressed_in"},
+                    "data_provider": {"abbreviation": "ZFIN"},
+                    "expression_annotation_subject": {"gene_symbol": "flcn"},
+                    "single_reference": {"pmid": "PMID:27528223"},
+                },
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        domain_envelope_normalization,
+        "domain_envelope_from_extraction_result",
+        lambda _record: envelope,
+    )
+
+    def _fake_validator_agent(request, *, binding, runtime_context=None):
+        if binding.binding_id != "source_reference_validation":
+            return _generic_unresolved_validator_payload(request)
+
+        assert runtime_context is not None
+        assert runtime_context.document_reference_inputs == {
+            "curie": literature_reference["curie"],
+            "pmid": "PMID:27528223",
+            "title": literature_reference["title"],
+        }
+        resolution = reference_resolution.resolve_curation_reference(
+            literature_reference["curie"]
+        )
+        assert literature_reference["reference_id"] is None
+        assert resolution.reference is not None
+        resolved_reference = {
+            **literature_reference,
+            "reference_id": resolution.reference["reference_id"],
+            "curie": resolution.reference["curie"],
+        }
+        return {
+            "status": "resolved",
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "resolved_values": {
+                "reference_id": resolved_reference["reference_id"],
+                "curie": resolved_reference["curie"],
+                "title": resolved_reference["title"],
+            },
+            "resolved_objects": [resolved_reference],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [
+                {
+                    "provider": "agr_literature_reference_lookup",
+                    "method": "get_literature_reference",
+                    "query": {"value": "PMID:27528223"},
+                    "result_count": 1,
+                    "outcome": "success",
+                },
+                {
+                    "provider": "agr_curation_reference",
+                    "method": "get_reference",
+                    "query": {"curie": literature_reference["curie"]},
+                    "result_count": 1,
+                    "outcome": "success",
+                },
+            ],
+            "curator_message": None,
+            "explanation": "Resolved the loaded document reference.",
+        }
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "run_package_scoped_validator_agent",
+        _fake_validator_agent,
+    )
+
+    result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        _chat_dispatch_probe_output(),
+        expected_output_type=DomainEnvelopeExtractionResult,
+        specialist_name="Gene Expression Extraction",
+        tool_name="ask_gene_expression_specialist",
+        document_id="document-1",
+        runtime_context=runtime_context,
+    )
+
+    payload = json.loads(result)
+    reference = payload["extracted_objects"][0]["payload"]["single_reference"]
+    assert reference == {
+        "pmid": "PMID:27528223",
+        "reference_id": 482731,
+        "curie": literature_reference["curie"],
+        "title": literature_reference["title"],
+    }
+    reference_findings = [
+        finding
+        for finding in payload["validation_findings"]
+        if finding.get("details", {})
+        .get("validation_result", {})
+        .get("validator_binding_id")
+        == "source_reference_validation"
+    ]
+    assert reference_findings
+    assert {finding["code"] for finding in reference_findings} == {
+        "domain_pack.validator_resolved"
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     (
         "tool_name,agent_key,adapter_key,envelope,expected_binding_ids,"

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from agr_curation_api.exceptions import AGRAPIError
+
 from .agr_curation import get_curation_resolver
 
 
@@ -51,7 +53,17 @@ def resolve_curation_reference(curie: str) -> CurationReferenceResolution:
             explanation="The read-only Alliance curation database client is unavailable.",
         )
 
-    reference = db.get_reference(normalized_curie)
+    try:
+        reference = db.get_reference(normalized_curie)
+    except AGRAPIError:
+        return CurationReferenceResolution(
+            status="transient",
+            reference=None,
+            explanation=(
+                "The read-only Alliance curation database reference lookup "
+                "failed temporarily."
+            ),
+        )
 
     if reference is None:
         return CurationReferenceResolution(

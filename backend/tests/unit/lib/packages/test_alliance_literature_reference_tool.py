@@ -240,6 +240,53 @@ def test_real_shaped_literature_result_joins_authoritative_curation_reference_id
     ]
 
 
+def test_curation_client_failure_preserves_literature_candidate_and_stage_evidence(
+    monkeypatch,
+):
+    literature_reference = _reference()
+
+    class FakeLiteratureClient:
+        def get_literature_reference(self, _value):
+            return literature_reference
+
+    class FakeCurationClient:
+        def get_reference(self, _curie):
+            raise AGRAPIError("database query failed with sensitive connection details")
+
+    monkeypatch.setattr(literature_references, "_client_factory", FakeLiteratureClient)
+    monkeypatch.setattr(
+        reference_resolution,
+        "get_curation_resolver",
+        lambda: SimpleNamespace(get_db_client=lambda: FakeCurationClient()),
+    )
+    monkeypatch.setattr(
+        literature_references,
+        "resolve_curation_reference",
+        reference_resolution.resolve_curation_reference,
+    )
+
+    result = _tool_fn()(
+        method="get_literature_reference",
+        identifier="PMID:27528223",
+    )
+
+    assert result.status == "error"
+    assert result.lookup_status == "transient"
+    assert result.resolved_reference is None
+    assert len(result.candidate_references) == 1
+    assert result.candidate_references[0]["reference_id"] is None
+    assert result.candidate_references[0]["curie"] == literature_reference.curie
+    assert result.candidate_references[0]["title"] == literature_reference.title
+    assert [attempt["source"] for attempt in result.lookup_attempts] == [
+        "literature_es",
+        "curation_db",
+    ]
+    assert result.lookup_attempts[0]["lookup_status"] == "success"
+    assert result.lookup_attempts[1]["lookup_status"] == "transient"
+    assert "sensitive connection details" not in result.message
+    assert "literature" not in result.message.casefold()
+
+
 @pytest.mark.parametrize(
     ("curation_reference", "expected_status"),
     [
