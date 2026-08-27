@@ -4707,6 +4707,11 @@ async def run_specialist_with_events(
         span_data={
             "ai_curation.adapter.key": runtime_curation_adapter_key,
             "ai_curation.domain_pack.id": builder_workspace.domain_pack_id,
+            "ai_curation.agent.group_tool_exposure": getattr(
+                runtime_agent,
+                "group_tool_exposure",
+                None,
+            ),
             "ai_curation.agent.output_type": structured_finalization_state.output_type_name,
             "ai_curation.finalization.max_attempts": structured_finalization_state.max_attempts,
             "ai_curation.tool.kind": (
@@ -4752,6 +4757,11 @@ async def run_specialist_with_events(
                 span_data={
                     "ai_curation.adapter.key": runtime_curation_adapter_key,
                     "ai_curation.domain_pack.id": builder_workspace.domain_pack_id,
+                    "ai_curation.agent.group_tool_exposure": getattr(
+                        runtime_agent,
+                        "group_tool_exposure",
+                        None,
+                    ),
                     "ai_curation.agent.events_collected": total_event_count,
                     "ai_curation.finalization.detail": {
                         "phase_timings_ms": dict(phase_timings_ms),

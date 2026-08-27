@@ -281,6 +281,7 @@ class TestCreateBatchMocked:
             user_id=user_id,
             flow_id=flow_id,
             document_ids=document_ids,
+            active_group_ids=["group-a"],
         )
 
         # Verify batch was added
@@ -291,6 +292,7 @@ class TestCreateBatchMocked:
         assert batch.total_documents == 3
         assert batch.completed_documents == 0
         assert batch.failed_documents == 0
+        assert batch.active_group_ids == ["group-a"]
         assert batch.status == BatchStatus.PENDING
 
     def test_create_batch_creates_document_records_with_positions(self):
@@ -311,6 +313,7 @@ class TestCreateBatchMocked:
             user_id=1,
             flow_id=uuid4(),
             document_ids=document_ids,
+            active_group_ids=[],
         )
 
         # Filter to just BatchDocument objects (skip the Batch)

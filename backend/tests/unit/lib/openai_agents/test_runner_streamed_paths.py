@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.lib.openai_agents import runner
+from src.lib.openai_agents import langfuse_client
 from src.lib.prompts.context import (
     bind_prompt_run,
     clear_prompt_context,
@@ -97,7 +98,13 @@ def _manifest(agent_id: str, content: str, hash_value: str) -> dict:
 
 def _patch_common_runtime(monkeypatch, captured):
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
-    monkeypatch.setattr(runner, "clear_pending_configs", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "clear_pending_configs",
+        lambda: captured.update(
+            cleared_configs=captured.get("cleared_configs", 0) + 1
+        ),
+    )
     monkeypatch.setattr(runner, "reset_consecutive_call_tracker", lambda: None)
     monkeypatch.setattr(runner, "clear_prompt_context", lambda: None)
     monkeypatch.setattr(
@@ -219,6 +226,7 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
     assert captured["run_kwargs"]["chat_session_id"] == "session-1"
     assert captured["run_kwargs"]["chat_turn_id"] == "turn-1"
     assert captured["logged"][0][0] == fallback_trace
+    assert captured["cleared_configs"] == 1
 
 
 @pytest.mark.asyncio
@@ -397,7 +405,23 @@ async def test_run_agent_streamed_passes_model_overrides_to_supervisor_builder(m
 async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     captured = {}
     _patch_common_runtime(monkeypatch, captured)
-    monkeypatch.setattr(runner, "flush_agent_configs", lambda _span: 2)
+
+    langfuse_client.clear_pending_configs()
+    monkeypatch.setattr(runner, "clear_pending_configs", langfuse_client.clear_pending_configs)
+    monkeypatch.setattr(runner, "flush_agent_configs", langfuse_client.flush_agent_configs)
+    langfuse_client.log_agent_config(
+        agent_name="Restricted Specialist",
+        instructions="bounded instructions",
+        model="gpt-5",
+        tools=["rgd_identity_lookup"],
+        metadata={
+            "group_tool_exposure": {
+                "active_group_ids": ["RGD"],
+                "added_tool_ids": ["rgd_identity_lookup"],
+                "denied_tool_ids": [],
+            }
+        },
+    )
 
     class _RootSpan:
         trace_id = "trace-abc"
@@ -434,7 +458,12 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
             captured["span_start"] = kwargs
             return _SpanContext()
 
-    monkeypatch.setattr(runner, "get_langfuse", lambda: _Langfuse())
+        def create_event(self, **kwargs):
+            captured.setdefault("config_events", []).append(kwargs)
+
+    fake_langfuse = _Langfuse()
+    monkeypatch.setattr(langfuse_client, "_langfuse_client", fake_langfuse)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: fake_langfuse)
     monkeypatch.setattr(runner, "propagate_attributes", lambda **kwargs: _TraceAttributeContext(kwargs))
 
     async def _fake_run_agent_with_tracing(**_kwargs):
@@ -478,6 +507,33 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
         "input": {"query": "longer message"},
         "output": {"response": "grounded answer"},
     }
+    config_events = [
+        event
+        for event in captured["config_events"]
+        if event["name"] == "restricted_specialist_config"
+    ]
+    assert config_events == [
+        {
+            "name": "restricted_specialist_config",
+            "metadata": {
+                "agent_config": {
+                    "agent_name": "Restricted Specialist",
+                    "instructions": "bounded instructions",
+                    "model": "gpt-5",
+                    "tools": ["rgd_identity_lookup"],
+                    "model_settings": {},
+                    "metadata": {
+                        "group_tool_exposure": {
+                            "active_group_ids": ["RGD"],
+                            "added_tool_ids": ["rgd_identity_lookup"],
+                            "denied_tool_ids": [],
+                        }
+                    },
+                }
+            },
+            "trace_context": {"trace_id": "trace-abc", "parent_span_id": "span-abc"},
+        }
+    ]
     assert captured["logged"][0][0] == "trace-abc"
 
 
@@ -900,6 +956,12 @@ async def test_run_agent_with_tracing_starts_sentry_span_for_explicit_workflow(m
                 tools=[],
                 model="gpt-5.5",
                 output_type=None,
+                group_tool_exposure={
+                    "active_group_ids": ["ZFIN"],
+                    "base_tool_ids": ["search_document"],
+                    "added_tool_ids": ["zfin_helper"],
+                    "denied_tool_ids": [],
+                },
             ),
             input_items=[{"role": "user", "content": "run flow"}],
             user_id="user-1",
@@ -916,6 +978,12 @@ async def test_run_agent_with_tracing_starts_sentry_span_for_explicit_workflow(m
     assert calls[0][0] == "span"
     assert calls[0][1]["workflow"] == "execute_flow"
     assert calls[0][1]["span_data"]["ai_curation.flow.total_steps"] == 2
+    assert calls[0][1]["span_data"]["ai_curation.agent.group_tool_exposure"] == {
+        "active_group_ids": ["ZFIN"],
+        "base_tool_ids": ["search_document"],
+        "added_tool_ids": ["zfin_helper"],
+        "denied_tool_ids": [],
+    }
     assert ("data", "ai_curation.tool_call.count", 0) in calls
     post_stream_span = next(
         call

@@ -30,6 +30,7 @@ import yaml
 from pydantic import BaseModel
 
 from src.lib.agent_access import normalize_allowed_group_ids
+from src.lib.group_tool_policy import GroupToolPolicy, parse_group_tool_policy
 from src.schemas.domain_validator import (
     DomainValidatorResultBase,
     ValidatorOutputProjection,
@@ -153,6 +154,7 @@ class AgentDefinition:
         required_params: List of required parameter names
         batch_capabilities: List of batch operation types supported
         group_rules_enabled: Whether to inject group-specific rules
+        group_tool_policy: Package-owned authenticated-group tool exposure rules
         frontend: Frontend display settings
         tool_name: Generated supervisor tool name (ask_{canonical_system_agent_key}_specialist)
     """
@@ -178,6 +180,7 @@ class AgentDefinition:
     frontend: FrontendConfig = field(default_factory=FrontendConfig)
     curation: CurationConfig = field(default_factory=CurationConfig)
     access: AgentAccessConfig = field(default_factory=AgentAccessConfig)
+    group_tool_policy: GroupToolPolicy = field(default_factory=GroupToolPolicy)
     documentation: Optional[Dict[str, Any]] = None
     structured_finalization: Optional[Dict[str, Any]] = None
     output_projection: ValidatorOutputProjection | None = None
@@ -286,6 +289,10 @@ class AgentDefinition:
                 field_name=f"Agent '{folder_name}' access.allowed_group_ids",
             )
         )
+        group_tool_policy = parse_group_tool_policy(
+            data.get("group_tool_policy"),
+            field_name=f"Agent '{folder_name}' group_tool_policy",
+        )
         structured_finalization_data = data.get("structured_finalization")
         structured_finalization = (
             dict(structured_finalization_data)
@@ -329,6 +336,7 @@ class AgentDefinition:
             frontend=frontend,
             curation=curation,
             access=access,
+            group_tool_policy=group_tool_policy,
             documentation=data.get("documentation"),
             structured_finalization=structured_finalization,
             output_projection=(

@@ -20,6 +20,7 @@ from src.services.user_service import set_global_user_from_cognito
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.openai_agents import run_agent_streamed
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.agent_studio.catalog_service import get_agent_by_id
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
 from src.lib.agent_studio.custom_agent_service import (
@@ -37,6 +38,7 @@ from src.lib.agent_studio.custom_agent_service import (
     update_custom_agent,
 )
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
+from src.lib.group_rules import get_groups_from_provider_groups
 
 logger = logging.getLogger(__name__)
 
@@ -559,10 +561,14 @@ async def test_custom_agent_endpoint(
 
     session_id = request.session_id or f"custom-test-{uuid.uuid4()}"
     active_groups = [request.group_id] if request.group_id else []
+    authenticated_groups = get_groups_from_provider_groups(
+        user.get("cognito:groups", [])
+    )
 
     set_current_session_id(session_id)
     set_current_user_id(str(user_sub))
 
+    clear_pending_configs()
     try:
         agent = get_agent_by_id(
             make_custom_agent_id(custom_agent.id),
@@ -570,6 +576,7 @@ async def test_custom_agent_endpoint(
             document_id=request.document_id,
             user_id=str(user_sub),
             active_groups=active_groups,
+            authenticated_groups=authenticated_groups,
         )
     except Exception as exc:
         raise_sanitized_http_exception(

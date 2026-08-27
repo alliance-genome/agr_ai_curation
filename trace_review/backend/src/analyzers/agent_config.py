@@ -5,13 +5,16 @@ Extracts agent configurations logged to Langfuse traces via EVENT observations.
 Each agent logs its configuration using log_agent_config() which creates an EVENT
 with name pattern: {agent_name}_config (e.g., "pdf_specialist_config")
 
-The event input contains:
+The event metadata contains an ``agent_config`` object with:
 - agent_name: Name of the agent (e.g., "PDF Specialist")
 - instructions: Full system prompt/instructions
 - model: Model name (e.g., "gpt-5.6-sol")
 - tools: List of tool names available to the agent
 - model_settings: Dict with temperature, reasoning, tool_choice
 - metadata: Optional additional metadata (document_id, hierarchy, etc.)
+
+Group-scoped specialist configs also surface active, added, and denied tool IDs
+from metadata.group_tool_exposure alongside the effective tools list.
 """
 from typing import Dict, List, Any, Optional
 
@@ -25,7 +28,7 @@ class AgentConfigAnalyzer:
         Extract all agent configuration events from trace observations.
 
         Agent configs are logged as EVENT type observations with name ending in "_config".
-        The input field contains the full configuration details.
+        The metadata.agent_config field contains the full configuration details.
 
         Args:
             observations: List of all observations from trace
@@ -47,7 +50,12 @@ class AgentConfigAnalyzer:
 
             # Look for EVENT type observations with name ending in "_config"
             if obs_type == "EVENT" and obs_name.endswith("_config"):
-                input_data = obs.get("input", {})
+                observation_metadata = obs.get("metadata", {})
+                input_data = (
+                    observation_metadata.get("agent_config", {})
+                    if isinstance(observation_metadata, dict)
+                    else {}
+                )
 
                 if not isinstance(input_data, dict):
                     continue
@@ -59,6 +67,16 @@ class AgentConfigAnalyzer:
                 tools = input_data.get("tools", [])
                 model_settings = input_data.get("model_settings", {})
                 metadata = input_data.get("metadata", {})
+                raw_group_tool_exposure = (
+                    metadata.get("group_tool_exposure", {})
+                    if isinstance(metadata, dict)
+                    else {}
+                )
+                group_tool_exposure = (
+                    raw_group_tool_exposure
+                    if isinstance(raw_group_tool_exposure, dict)
+                    else {}
+                )
 
                 # Track unique models and tools
                 models_used.add(model)
@@ -75,6 +93,10 @@ class AgentConfigAnalyzer:
                     "tools": tools,
                     "model_settings": model_settings,
                     "metadata": metadata,
+                    "group_tool_exposure": group_tool_exposure,
+                    "active_group_ids": group_tool_exposure.get("active_group_ids", []),
+                    "added_tool_ids": group_tool_exposure.get("added_tool_ids", []),
+                    "denied_tool_ids": group_tool_exposure.get("denied_tool_ids", []),
                     "instructions": instructions,
                     "instruction_stats": instruction_stats,
                     "observation_id": obs.get("id"),
@@ -154,6 +176,10 @@ class AgentConfigAnalyzer:
                 "agent_name": agent.get("agent_name"),
                 "model": agent.get("model"),
                 "tools": agent.get("tools"),
+                "group_tool_exposure": agent.get("group_tool_exposure", {}),
+                "active_group_ids": agent.get("active_group_ids", []),
+                "added_tool_ids": agent.get("added_tool_ids", []),
+                "denied_tool_ids": agent.get("denied_tool_ids", []),
                 "instruction_stats": agent.get("instruction_stats"),
                 "metadata_keys": list(agent.get("metadata", {}).keys()) if agent.get("metadata") else []
             }

@@ -97,7 +97,27 @@ class TestCustomAgentTestEndpoint:
                 requires_document=False,
             ),
         )
-        monkeypatch.setattr(api_module, "get_agent_by_id", lambda _aid, **_kwargs: object())
+        agent_kwargs = {}
+        construction_order = []
+        monkeypatch.setattr(
+            api_module,
+            "clear_pending_configs",
+            lambda: construction_order.append("clear"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_agent_by_id",
+            lambda _aid, **kwargs: (
+                construction_order.append("build"),
+                agent_kwargs.update(kwargs),
+                object(),
+            )[-1],
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_groups_from_provider_groups",
+            lambda provider_groups: ["RGD"] if provider_groups == ["provider-rgd"] else [],
+        )
 
         async def _fake_run_agent_streamed(**kwargs):
             run_kwargs.update(kwargs)
@@ -114,7 +134,7 @@ class TestCustomAgentTestEndpoint:
             api_module.test_custom_agent_endpoint(
                 custom_agent_id=custom_agent_id,
                 request=api_module.TestCustomAgentRequest(input="test query", group_id="WB"),
-                user={"sub": "auth-sub"},
+                user={"sub": "auth-sub", "cognito:groups": ["provider-rgd"]},
                 db=SimpleNamespace(),
             )
         )
@@ -136,6 +156,9 @@ class TestCustomAgentTestEndpoint:
         assert '"type": "DONE"' in stream_text
         assert '"trace_id": "trace-123"' in stream_text
         assert run_kwargs["active_groups"] == ["WB"]
+        assert agent_kwargs["active_groups"] == ["WB"]
+        assert agent_kwargs["authenticated_groups"] == ["RGD"]
+        assert construction_order == ["clear", "build"]
         assert run_kwargs["context_messages"] == [{"role": "user", "content": "test query"}]
 
     def test_test_request_rejects_legacy_mod_id_alias(self):

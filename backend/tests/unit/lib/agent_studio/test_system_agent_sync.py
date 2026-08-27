@@ -11,6 +11,7 @@ from src.lib.config.agent_loader import (
     ModelConfig,
     SupervisorRouting,
 )
+from src.lib.group_tool_policy import parse_group_tool_policy
 
 
 class _AgentQuery:
@@ -50,6 +51,7 @@ def _agent_definition(
     output_schema: str | None = None,
     requires_document: bool = False,
     allowed_group_ids: list[str] | None = None,
+    group_tool_policy: dict | None = None,
 ) -> AgentDefinition:
     return AgentDefinition(
         folder_name=folder_name,
@@ -76,6 +78,7 @@ def _agent_definition(
         group_rules_enabled=(folder_name == "gene"),
         frontend=FrontendConfig(icon="G", show_in_palette=True),
         access=AgentAccessConfig(allowed_group_ids=list(allowed_group_ids or [])),
+        group_tool_policy=parse_group_tool_policy(group_tool_policy),
     )
 
 
@@ -98,6 +101,7 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
         group_prompt_overrides={"x": "y"},
         allowed_group_ids=["FB"],
         inherited_allowed_group_ids=[],
+        group_tool_policy={},
         icon="O",
         category="Old",
         visibility="system",
@@ -132,7 +136,18 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
         lambda _agents_path=None, force_reload=False: {
             "disease_validation": _agent_definition("disease", "disease_validation"),
             "gene_validation": _agent_definition(
-                "gene", "gene_validation", allowed_group_ids=["RGD"]
+                "gene",
+                "gene_validation",
+                allowed_group_ids=["RGD"],
+                group_tool_policy={
+                    "rules": [
+                        {
+                            "tool_id": "zfin_helper",
+                            "allowed_group_ids": ["ZFIN"],
+                            "field_paths": ["expression.specimen"],
+                        }
+                    ]
+                },
             ),
         },
     )
@@ -166,6 +181,15 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
     assert inactive_gene.instructions == "prompt:gene"
     assert inactive_gene.allowed_group_ids == ["RGD"]
     assert inactive_gene.inherited_allowed_group_ids == []
+    assert inactive_gene.group_tool_policy == {
+        "rules": [
+            {
+                "tool_id": "zfin_helper",
+                "allowed_group_ids": ["ZFIN"],
+                "field_paths": ["expression.specimen"],
+            }
+        ]
+    }
 
     assert stale_agent.is_active is False
     assert stale_agent.supervisor_enabled is False
@@ -406,6 +430,7 @@ def test_sync_reactivates_discovered_disabled_agent(monkeypatch):
         model_temperature=0.2,
         model_reasoning="medium",
         tool_ids=["agr_curation_query"],
+        group_tool_policy={},
         output_schema_key="GeneResultEnvelope",
         group_rules_enabled=True,
         group_rules_component="gene",

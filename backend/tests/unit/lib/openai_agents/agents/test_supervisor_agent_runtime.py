@@ -542,7 +542,7 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
     assert specs[0]["tool_name"] == "ask_gene_extractor_specialist"
     assert specs[0]["description"] == "Extract genes from paper text"
     assert specs[0]["requires_document"] is True
-    assert specs[0]["group_rules_enabled"] is True
+    assert "group_rules_enabled" not in specs[0]
     assert specs[0]["batchable"] is True
     assert specs[0]["batching_entity"] == "gene"
     assert specs[0]["category"] == "Extraction"
@@ -574,7 +574,7 @@ def test_create_dynamic_specialist_tools_skips_document_required_tools_without_d
     assert calls == []
 
 
-def test_create_dynamic_specialist_tools_passes_document_and_group_context(monkeypatch):
+def test_create_dynamic_specialist_tools_passes_groups_without_prompt_rules(monkeypatch):
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
@@ -585,7 +585,7 @@ def test_create_dynamic_specialist_tools_passes_document_and_group_context(monke
                 "name": "Gene Expression Agent",
                 "description": "Extract expression assertions",
                 "requires_document": True,
-                "group_rules_enabled": True,
+                "group_rules_enabled": False,
             }
         ],
     )
@@ -622,6 +622,7 @@ def test_create_dynamic_specialist_tools_passes_document_and_group_context(monke
     assert captured["kwargs"]["hierarchy"] == {"sections": [{"name": "Introduction"}]}
     assert captured["kwargs"]["abstract"] == "abstract text"
     assert captured["kwargs"]["active_groups"] == ["WB"]
+    assert captured["kwargs"]["authenticated_groups"] == ["WB"]
     assert tools == ["wrapped::ask_gene_expression_specialist::Gene Expression"]
 
 
@@ -957,6 +958,8 @@ async def test_dynamic_formatter_specialist_binds_bundle_at_call_time(monkeypatc
     assert captured_agent["kwargs"]["additional_runtime_context"] == [
         "FORMATTER SOURCE BUNDLE:\nlatest"
     ]
+    assert captured_agent["kwargs"]["active_groups"] == []
+    assert captured_agent["kwargs"]["authenticated_groups"] == []
     assert captured_run["agent"] is fake_agent
     assert captured_run["tool_name"] == "ask_csv_formatter_specialist"
     assert captured_run["specialist_name"] == "CSV File Formatter"

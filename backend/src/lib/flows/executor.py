@@ -125,6 +125,7 @@ from src.lib.openai_agents.config import (
 from src.lib.runtime_payload_budget import provider_context_preflight
 from src.lib.openai_agents.evidence_summary import _EvidenceRegistry
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
 from src.schemas.curation_workspace import (
@@ -2535,6 +2536,7 @@ def get_all_agent_tools(
         context["document_id"] = document_id
         context["user_id"] = user_id
     context["active_groups"] = active_groups or []
+    context["authenticated_groups"] = active_groups or []
     if db_user_id is not None:
         context["db_user_id"] = db_user_id
 
@@ -4073,6 +4075,7 @@ async def execute_flow(
 
     # Create flow supervisor with restricted tools
     # Pass pre-fetched doc_context to avoid redundant fetches in get_all_agent_tools
+    clear_pending_configs()
     supervisor = create_flow_supervisor(
         flow=flow,
         document_id=document_id,

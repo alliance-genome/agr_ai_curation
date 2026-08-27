@@ -35,6 +35,7 @@ from src.lib.config.agent_loader import (
     get_agent_by_folder,
 )
 from src.lib.file_outputs import FileValidationError, sanitize_output_descriptor
+from src.lib.group_tool_policy import resolve_group_tool_policy
 from src.lib.database.curation_resolver import get_curation_resolver
 from src.lib.prompts.assembly import (
     PromptLayerBundle,
@@ -1770,7 +1771,27 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     )
 
     runtime_kwargs = dict(kwargs)
-    requested_tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
+    base_tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
+    raw_group_tool_policy = getattr(db_agent, "group_tool_policy", {}) or {}
+    group_tool_resolution = resolve_group_tool_policy(
+        base_tool_ids,
+        raw_group_tool_policy,
+        runtime_kwargs.get("authenticated_groups"),
+    )
+    requested_tool_ids = group_tool_resolution.tool_ids
+    group_tool_audit = group_tool_resolution.audit_metadata()
+    if raw_group_tool_policy.get("rules"):
+        logger.info(
+            "Resolved group-scoped tools for agent '%s': base=%s added=%s denied=%s",
+            db_agent.agent_key,
+            group_tool_audit["base_tool_ids"],
+            group_tool_audit["added_tool_ids"],
+            group_tool_audit["denied_tool_ids"],
+            extra={
+                "agent_key": str(db_agent.agent_key),
+                "active_group_ids": group_tool_audit["active_group_ids"],
+            },
+        )
     canonical_tool_ids = _canonical_tool_ids(requested_tool_ids)
     canonical_tool_id_set = set(canonical_tool_ids)
     uses_runtime_formatter_tools = bool(
@@ -1878,6 +1899,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         output_guardrails=output_guardrails,
     )
     runtime_agent.agent_key = str(db_agent.agent_key)
+    runtime_agent.group_tool_exposure = group_tool_audit
     try:
         from src.lib.config.agent_loader import get_agent_by_folder, get_agent_definition
 
@@ -1928,6 +1950,24 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         layer_manifest=prompt_bundle.to_manifest(),
     )
     bind_prompt_run(runtime_agent, prompt_run_id)
+
+    from src.lib.openai_agents.langfuse_client import log_agent_config
+
+    log_agent_config(
+        agent_name=str(db_agent.name),
+        instructions=instructions,
+        model=str(effective_model_id),
+        tools=canonical_tool_ids,
+        model_settings={
+            "temperature": effective_temperature,
+            "reasoning": reasoning_effort,
+        },
+        metadata={
+            "agent_key": str(db_agent.agent_key),
+            "effective_prompt_hash": prompt_bundle.hash,
+            "group_tool_exposure": group_tool_audit,
+        },
+    )
     return runtime_agent
 
 

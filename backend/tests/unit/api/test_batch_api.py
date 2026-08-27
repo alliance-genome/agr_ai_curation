@@ -145,22 +145,34 @@ async def test_create_batch_success(monkeypatch):
     db = SimpleNamespace(query=lambda model: flow_query if model is batch_api.CurationFlow else docs_query)
 
     monkeypatch.setattr(batch_api, "validate_flow_for_batch", lambda *_args, **_kwargs: BatchValidationResponse(valid=True, errors=[]))
+    monkeypatch.setattr(
+        batch_api,
+        "get_groups_from_provider_groups",
+        lambda provider_groups: ["group-a"] if provider_groups == ["provider-a"] else [],
+    )
 
+    create_kwargs = {}
     service = SimpleNamespace(
-        create_batch=lambda **_kwargs: SimpleNamespace(id=batch_id),
+        create_batch=lambda **kwargs: create_kwargs.update(kwargs) or SimpleNamespace(id=batch_id),
         batch_to_response=lambda *_args, **_kwargs: _make_batch_response(batch_id=batch_id, flow_id=flow_id),
     )
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
     background_tasks = BackgroundTasks()
     request = BatchCreateRequest(flow_id=flow_id, document_ids=[doc_id])
-    result = await batch_api.create_batch(request, background_tasks, {"sub": "u-1"}, db)
+    result = await batch_api.create_batch(
+        request,
+        background_tasks,
+        {"sub": "u-1", "cognito:groups": ["provider-a"]},
+        db,
+    )
 
     assert result.id == batch_id
     assert len(background_tasks.tasks) == 1
     assert getattr(background_tasks.tasks[0].func, "__observability_original_task__") is batch_api.process_batch_task
     assert getattr(background_tasks.tasks[0].func, "__observability_task_name__") == "batch.process_batch"
     assert background_tasks.tasks[0].args == (batch_id,)
+    assert create_kwargs["active_group_ids"] == ["group-a"]
 
 
 @pytest.mark.asyncio

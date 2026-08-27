@@ -242,7 +242,18 @@ def test_flush_agent_configs_partial_failure_counts_success(monkeypatch):
     client = FakeClient()
     monkeypatch.setattr(lc, "_langfuse_client", client)
 
-    lc.log_agent_config("Agent One", "i1", "m1")
+    exposure = {
+        "active_group_ids": ["GROUP_ALPHA"],
+        "base_tool_ids": ["search_document"],
+        "added_tool_ids": ["group_alpha_helper"],
+        "denied_tool_ids": [],
+    }
+    lc.log_agent_config(
+        "Agent One",
+        "i1",
+        "m1",
+        metadata={"group_tool_exposure": exposure},
+    )
     lc.log_agent_config("Agent Two", "i2", "m2")
 
     count = lc.flush_agent_configs(SimpleNamespace(trace_id="trace-xyz", id="span-xyz"))
@@ -251,4 +262,7 @@ def test_flush_agent_configs_partial_failure_counts_success(monkeypatch):
     assert "input" not in client.calls[0]
     assert "output" not in client.calls[0]
     assert client.calls[0]["metadata"]["agent_config"]["agent_name"] == "Agent One"
+    assert client.calls[0]["metadata"]["agent_config"]["metadata"] == {
+        "group_tool_exposure": exposure
+    }
     assert lc._get_pending_configs() == []

@@ -97,6 +97,13 @@ supervisor_routing:
 tools:
   - agr_curation_query
 
+group_tool_policy:
+  rules:
+    - tool_id: narrow_group_context_helper
+      allowed_group_ids: [RGD]
+      field_paths:
+        - annotation.subject
+
 output_schema: MyAgentEnvelope
 
 model_config:
@@ -106,6 +113,13 @@ model_config:
 
 group_rules_enabled: true
 ```
+
+`group_tool_policy` is package-owned capability metadata, distinct from agent
+availability under `access.allowed_group_ids`. Each rule exposes its tool only
+when authenticated active groups intersect `allowed_group_ids`. If the ruled
+tool is absent from `tools`, it is added for an allowed group; if it is present,
+the rule restricts that base tool. Every rule requires one or more
+`field_paths`; shared runtime never infers tool access from extracted content.
 
 When a package replaces a public agent ID, declare the canonical unified key
 with `system_agent_key` and list the removed IDs under `retired_agent_ids` in

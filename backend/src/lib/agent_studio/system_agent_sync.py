@@ -89,6 +89,7 @@ def _build_system_agent_values(
         "model_temperature": float(agent.model_config.temperature),
         "model_reasoning": agent.model_config.reasoning,
         "tool_ids": tool_ids,
+        "group_tool_policy": agent.group_tool_policy.to_dict(),
         "allowed_group_ids": list(agent.access.allowed_group_ids),
         "inherited_allowed_group_ids": [],
         "output_schema_key": agent.output_schema,

@@ -460,6 +460,15 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
             output_schema_key="AlleleVariantExtractionEnvelope",
             category="Extraction",
             allowed_group_ids=[],
+            group_tool_policy={
+                "rules": [
+                    {
+                        "tool_id": "search_document",
+                        "allowed_group_ids": ["ZFIN"],
+                        "field_paths": ["expression_experiment.specimen_genomic_model"],
+                    }
+                ]
+            },
         ),
     )
     monkeypatch.setattr(
@@ -486,6 +495,15 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
         "record_evidence",
         "finalize_allele_extraction",
     ]
+    assert custom.group_tool_policy == {
+        "rules": [
+            {
+                "tool_id": "search_document",
+                "allowed_group_ids": ["ZFIN"],
+                "field_paths": ["expression_experiment.specimen_genomic_model"],
+            }
+        ]
+    }
 
 
 def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch):
@@ -1087,6 +1105,15 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
         model_temperature=0.1,
         model_reasoning="medium",
         allowed_group_ids=["RGD"],
+        group_tool_policy={
+            "rules": [
+                {
+                    "tool_id": "agr_curation_query",
+                    "allowed_group_ids": ["RGD"],
+                    "field_paths": ["annotation.subject"],
+                }
+            ]
+        },
     )
     observed = {}
 
@@ -1123,6 +1150,7 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
     assert observed["custom_prompt"] == "prompt"
     assert observed["allowed_group_ids"] == ["RGD"]
     assert observed["inherited_allowed_group_ids"] == ["RGD"]
+    assert observed["inherited_group_tool_policy"] == source.group_tool_policy
 
 
 def test_clone_visible_agent_rejects_widening_source_restriction(monkeypatch):

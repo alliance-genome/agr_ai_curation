@@ -7,7 +7,7 @@ import enum
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PostgresUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -56,6 +56,13 @@ class Batch(Base):
     total_documents: Mapped[int] = mapped_column(Integer, nullable=False)
     completed_documents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_documents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_group_ids: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+        comment="Authenticated internal-group snapshot captured when the batch was created",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

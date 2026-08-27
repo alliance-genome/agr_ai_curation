@@ -129,6 +129,12 @@ class Agent(Base):
         default=list,
         server_default=text("'[]'::jsonb"),
     )
+    group_tool_policy = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     allowed_group_ids = Column(
         JSONB,
         nullable=False,

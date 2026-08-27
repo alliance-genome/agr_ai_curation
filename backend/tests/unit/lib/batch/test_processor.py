@@ -26,6 +26,7 @@ def _build_batch_context() -> tuple[Any, Any, Any]:
         total_documents=1,
         completed_documents=0,
         failed_documents=0,
+        active_group_ids=["group-a"],
         lease_owner=None,
         lease_expires_at=None,
     )
@@ -187,8 +188,10 @@ def test_batch_lease_heartbeat_retries_after_session_error(monkeypatch, caplog):
 def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     db = Mock()
     batch, batch_doc, flow = _build_batch_context()
+    captured = {}
 
-    async def _fake_execute_flow_for_document(**_kwargs):
+    async def _fake_execute_flow_for_document(**kwargs):
+        captured.update(kwargs)
         return (
             [
                 {
@@ -226,6 +229,7 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     ]
     assert batch_doc.output_status == "partial"
     assert batch_doc.review_session_ids is None
+    assert captured["active_groups"] == ["group-a"]
 
 
 def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):
@@ -612,6 +616,7 @@ def test_execute_flow_for_document_marks_reported_persistence_flow_error(monkeyp
                 document_id=str(uuid4()),
                 cognito_sub="auth-sub",
                 batch_id=batch_id,
+                active_groups=[],
             )
         )
 
@@ -652,6 +657,7 @@ def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatc
                 document_id=str(uuid4()),
                 cognito_sub="auth-sub",
                 batch_id=str(uuid4()),
+                active_groups=[],
             )
         )
 
@@ -700,6 +706,7 @@ def test_execute_flow_for_document_fails_file_ready_without_canonical_identity(
                 document_id=str(uuid4()),
                 cognito_sub="auth-sub",
                 batch_id=str(uuid4()),
+                active_groups=[],
                 db_user_id=7,
             )
         )
@@ -753,6 +760,7 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
             document_id=str(uuid4()),
             cognito_sub="auth-sub",
             batch_id=batch_id,
+            active_groups=["group-a"],
             db_user_id=7,
             document_name="paper.pdf",
         )
@@ -779,6 +787,7 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
         [],
     )
     assert captured["flow_run_id"] == batch_id
+    assert captured["active_groups"] == ["group-a"]
     assert captured["document_name"] == "paper.pdf"
 
 
@@ -817,6 +826,7 @@ def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
             document_id=document_id,
             cognito_sub="auth-sub",
             batch_id=batch_id,
+            active_groups=[],
             db_user_id=7,
         )
     )
@@ -879,6 +889,7 @@ def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypat
                 document_id=str(uuid4()),
                 cognito_sub="auth-sub",
                 batch_id=str(uuid4()),
+                active_groups=[],
                 db_user_id=7,
             )
         )
@@ -928,6 +939,7 @@ def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypat
             document_id=str(uuid4()),
             cognito_sub="auth-sub",
             batch_id=str(uuid4()),
+            active_groups=[],
             db_user_id=7,
         )
     )
@@ -963,6 +975,7 @@ def test_execute_flow_for_document_fails_malformed_file_ready_details(monkeypatc
                 document_id=str(uuid4()),
                 cognito_sub="auth-sub",
                 batch_id=str(uuid4()),
+                active_groups=[],
                 db_user_id=7,
             )
         )
@@ -1001,6 +1014,7 @@ def test_execute_flow_for_document_strips_internal_payload_before_publish(monkey
             document_id=document_id,
             cognito_sub="auth-sub",
             batch_id=batch_id,
+            active_groups=[],
             db_user_id=7,
         )
     )

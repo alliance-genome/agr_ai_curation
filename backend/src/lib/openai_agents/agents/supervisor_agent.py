@@ -1040,6 +1040,7 @@ def _create_lazy_formatter_streaming_tool(
     output_format: str,
     user_id: Optional[str],
     document_id: Optional[str],
+    active_groups: Optional[List[str]] = None,
     specialist_model_override: Optional[str] = None,
     specialist_temperature_override: Optional[float] = None,
     specialist_reasoning_override: Optional[str] = None,
@@ -1069,6 +1070,8 @@ def _create_lazy_formatter_streaming_tool(
             "formatter_bundle": formatter_bundle,
             "formatter_output_format": output_format,
             "formatter_agent_id": agent_key,
+            "active_groups": active_groups or [],
+            "authenticated_groups": active_groups or [],
         }
         if formatter_runtime_context:
             agent_kwargs["additional_runtime_context"] = [formatter_runtime_context]
@@ -1226,7 +1229,6 @@ def _get_supervisor_specialist_specs() -> List[Dict[str, Any]]:
                 "description": row.supervisor_description or row.description or f"Ask {row.name}",
                 "tool_name": f"ask_{row.agent_key.replace('-', '_')}_specialist",
                 "requires_document": requires_document,
-                "group_rules_enabled": bool(row.group_rules_enabled),
                 "batchable": bool(row.supervisor_batchable),
                 "batching_entity": row.supervisor_batching_entity,
                 "category": category,
@@ -1397,7 +1399,6 @@ def _create_dynamic_specialist_tools(
         agent_key = tool_meta["agent_key"]
         description = tool_meta["description"]
         requires_document = tool_meta.get("requires_document", False)
-        group_rules_enabled = tool_meta.get("group_rules_enabled", False)
         formatter_output_format = _FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY.get(str(agent_key))
         specialist_user_request = (
             authoritative_user_request
@@ -1419,6 +1420,7 @@ def _create_dynamic_specialist_tools(
                 output_format=formatter_output_format,
                 user_id=user_id,
                 document_id=document_id,
+                active_groups=active_groups,
                 specialist_model_override=specialist_model_override,
                 specialist_temperature_override=specialist_temperature_override,
                 specialist_reasoning_override=specialist_reasoning_override,
@@ -1440,9 +1442,11 @@ def _create_dynamic_specialist_tools(
                 "hierarchy": hierarchy,
                 "abstract": abstract,
             })
-        # Group-aware agents (MODs, institutions, teams, etc.)
-        if group_rules_enabled and active_groups:
+        # Authenticated groups control both prompt overlays and package-owned
+        # tool exposure; tool policy does not depend on prompt-rule enablement.
+        if active_groups:
             agent_kwargs["active_groups"] = active_groups
+        agent_kwargs["authenticated_groups"] = active_groups or []
         if specialist_model_override:
             agent_kwargs["model_id_override"] = specialist_model_override
         if specialist_temperature_override is not None:
@@ -1524,8 +1528,8 @@ def create_supervisor_agent(
         hierarchy: Optional pre-fetched document hierarchy (avoids duplicate fetch)
         abstract: Optional pre-fetched paper abstract (injected into specialist prompts)
         enable_guardrails: Enable input guardrails for safety (default: False)
-        active_groups: Optional list of group IDs to inject rules for (e.g., ["MGI", "FB"]).
-                       Passed to agents with group_rules_enabled=True for group-specific behavior.
+        active_groups: Optional authenticated group IDs passed to every specialist for
+                       prompt overlays and package-owned tool exposure.
         current_user_request: Complete current-turn request supplied losslessly to
                               each isolated chat specialist.
 
@@ -1594,7 +1598,8 @@ def create_supervisor_agent(
     # =========================================================================
     # Discover enabled agents from unified records and create streaming tool wrappers.
     # Document-dependent agents are automatically filtered if no document is loaded.
-    # Group-specific rules are injected for agents with group_rules_enabled=True.
+    # Authenticated groups are passed to every specialist. Each specialist's
+    # database definition independently controls prompt-overlay enablement.
     # =========================================================================
     # One ledger per chat turn (create_supervisor_agent is called fresh per
     # STANDARD CHAT turn; flow supervisors pass their own prebuilt agent and
