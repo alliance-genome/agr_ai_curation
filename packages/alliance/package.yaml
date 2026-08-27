@@ -65,6 +65,8 @@ agent_bundles:
     has_schema: true
   - name: data_provider
     has_schema: true
+  - name: detection_reagent
+    has_schema: true
   - name: csv_formatter
   - name: disease
     has_schema: true

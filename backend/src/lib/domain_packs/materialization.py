@@ -367,8 +367,11 @@ def materialize_validator_results_into_envelope(
     working_envelope = envelope
     findings: list[ValidationFinding] = []
     materialized_objects: list[CuratableObjectEnvelope] = []
+    unresolved_preservation_items: list[ValidatorResultMaterializationInput] = []
 
     for item in items:
+        if _is_genuine_no_match_with_preservation_policy(item):
+            unresolved_preservation_items.append(item)
         (
             working_envelope,
             patch_problem,
@@ -426,6 +429,13 @@ def materialize_validator_results_into_envelope(
                 source_envelope_revision=source_envelope_revision,
             )
         )
+
+    for item in sorted(
+        unresolved_preservation_items,
+        key=_unresolved_preservation_sort_key,
+        reverse=True,
+    ):
+        working_envelope = _preserve_genuine_no_match_value(working_envelope, item)
 
     from .validation_findings import append_validation_findings_to_envelope
 
@@ -597,6 +607,151 @@ def _current_object_for_match(
         if _same_object_identity(candidate, target):
             return candidate
     return None
+
+
+def _is_genuine_no_match_with_preservation_policy(
+    item: ValidatorResultMaterializationInput,
+) -> bool:
+    if item.result.status != "unresolved" or not item.result.lookup_attempts:
+        return False
+    if any(attempt.outcome != "not_found" for attempt in item.result.lookup_attempts):
+        return False
+    field_definition = item.match.field_definition
+    if field_definition is None:
+        return False
+    policy = field_definition.metadata.get("preservation_policy")
+    return (
+        isinstance(policy, Mapping)
+        and isinstance(policy.get("unresolved_text_metadata_path"), str)
+        and isinstance(policy.get("unresolved_reason_code"), str)
+    )
+
+
+def _unresolved_preservation_sort_key(
+    item: ValidatorResultMaterializationInput,
+) -> tuple[int, ...]:
+    field_path = item.match.field_path or ""
+    try:
+        return tuple(
+            part for part in parse_field_path(field_path) if isinstance(part, int)
+        )
+    except ValueError:
+        return ()
+
+
+def _preserve_genuine_no_match_value(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+) -> DomainEnvelope:
+    matched_target = item.match.object_envelope
+    field_definition = item.match.field_definition
+    field_path = item.match.field_path
+    if matched_target is None or field_definition is None or field_path is None:
+        return envelope
+    target = _current_object_for_match(envelope, matched_target)
+    if target is None:
+        return envelope
+    original_value = _payload_value(target.payload, field_path)
+    if original_value is _MISSING:
+        return envelope
+
+    policy = field_definition.metadata["preservation_policy"]
+    metadata_path = str(policy["unresolved_text_metadata_path"])
+    reason_code = str(policy["unresolved_reason_code"])
+    source_text = _unresolved_source_text(original_value)
+    if source_text is None:
+        return envelope
+
+    payload = copy.deepcopy(target.payload)
+    _delete_payload_value(payload, field_path)
+    patched_target = target.model_copy(update={"payload": payload})
+    objects = [
+        patched_target if _same_object_identity(candidate, target) else candidate
+        for candidate in envelope.extracted_objects
+    ]
+
+    metadata = copy.deepcopy(envelope.metadata)
+    _append_metadata_value(
+        metadata,
+        metadata_path,
+        {
+            "source_text": source_text,
+            "payload_field_path": field_path,
+            "unresolved_reason_code": reason_code,
+        },
+    )
+    return envelope.model_copy(
+        update={"extracted_objects": objects, "metadata": metadata}
+    )
+
+
+def _unresolved_source_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        return _optional_string(value)
+    if isinstance(value, Mapping):
+        for key in (
+            "source_text",
+            "name",
+            "label",
+            "symbol",
+            "primary_external_id",
+            "curie",
+            "mod_internal_id",
+            "unique_id",
+        ):
+            source_text = _optional_string(value.get(key))
+            if source_text is not None:
+                return source_text
+    return None
+
+
+def _delete_payload_value(payload: dict[str, Any], field_path: str) -> None:
+    parts = parse_field_path(field_path)
+    current: Any = payload
+    for part in parts[:-1]:
+        if isinstance(part, int):
+            if not isinstance(current, list) or part >= len(current):
+                return
+            current = current[part]
+        else:
+            if not isinstance(current, Mapping) or part not in current:
+                return
+            current = current[part]
+    last = parts[-1]
+    if isinstance(last, int):
+        if isinstance(current, list) and last < len(current):
+            current.pop(last)
+    elif isinstance(current, dict):
+        current.pop(last, None)
+
+
+def _append_metadata_value(
+    metadata: dict[str, Any],
+    metadata_path: str,
+    value: Mapping[str, Any],
+) -> None:
+    parts = parse_field_path(metadata_path)
+    current = metadata
+    for part in parts[:-1]:
+        if not isinstance(part, str):
+            raise DomainEnvelopeMaterializationError(
+                "preservation metadata paths cannot contain list indexes"
+            )
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    leaf = parts[-1]
+    if not isinstance(leaf, str):
+        raise DomainEnvelopeMaterializationError(
+            "preservation metadata paths cannot end with a list index"
+        )
+    existing = current.get(leaf)
+    if not isinstance(existing, list):
+        existing = []
+        current[leaf] = existing
+    existing.append(dict(value))
 
 
 def _same_object_identity(

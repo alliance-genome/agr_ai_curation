@@ -1,0 +1,29 @@
+summary: >
+  Resolves gene-expression detection reagent labels and identifiers to
+  controlled Alliance Construct or SequenceTargetingReagent records.
+capabilities:
+  - name: "Detection reagent lookup"
+    description: >
+      Searches construct and targeting-reagent identities with provider context.
+    example_query: "Resolve Tg(kdrl:EGFP) as a ZFIN detection reagent"
+    example_result: >
+      Returns the controlled ZFIN construct identifier and lookup provenance.
+  - name: "Ambiguity preservation"
+    description: >
+      Keeps all controlled candidates when a label does not identify one record.
+    example_query: "Validate this reporter label for a gene-expression annotation"
+    example_result: >
+      Returns unresolved with candidates instead of guessing an identifier.
+data_sources:
+  - name: "Alliance Curation Database"
+    description: >
+      Read-only Construct and SequenceTargetingReagent identity helpers.
+    species_supported:
+      - "All Alliance provider groups"
+    data_types:
+      - "construct identifiers and symbols"
+      - "sequence-targeting reagent identifiers and names"
+limitations:
+  - "Does not create reagent records or write to the curation database."
+  - "Name lookup requires Alliance provider or taxon context."
+  - "Zero or multiple controlled matches remain unresolved."

@@ -490,7 +490,7 @@ def test_gene_expression_exposes_linkml_experiment_context_targets():
         "preservation_policy"
     ] == {
         "unresolved_text_metadata_path": "extraction_metadata.reagent_context",
-        "unresolved_reason_code": "reagent_lookup_or_export_mapping_unavailable",
+        "unresolved_reason_code": "reagent_lookup_unavailable",
     }
     assert fields_by_path["expression_experiment.specimen_genomic_model"].model_ref == (
         "AffectedGenomicModelSnapshotPayload"
@@ -536,6 +536,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     }
     assert set(active_bindings) == {
         "data_provider_validation",
+        "detection_reagent_validation",
         "expression_anatomical_structure_validation",
         "expression_anatomical_uberon_slim_validation",
         "expression_cellular_component_qualifier_validation",
@@ -575,6 +576,18 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         "expression_annotation_subject.primary_external_id",
         "expression_annotation_subject.gene_symbol",
     )
+    assert active_bindings["detection_reagent_validation"].validator_agent is not None
+    assert active_bindings[
+        "detection_reagent_validation"
+    ].validator_agent.agent_id == "detection_reagent_validation"
+    assert active_bindings["detection_reagent_validation"].field_paths == (
+        "expression_experiment.detection_reagents",
+    )
+    assert active_bindings[
+        "detection_reagent_validation"
+    ].expected_result_fields == {
+        "reagent": "expression_experiment.detection_reagents"
+    }
     assert active_bindings["source_reference_validation"].validator_agent is not None
     assert active_bindings["source_reference_validation"].validator_agent.agent_id == (
         "reference_validation"
@@ -634,6 +647,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     }
     assert {
         "data_provider_validation",
+        "detection_reagent_validation",
         "expression_anatomical_structure_validation",
         "expression_anatomical_uberon_slim_validation",
         "expression_cellular_component_qualifier_validation",
@@ -665,11 +679,11 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     # condition_relations is no longer a planned gap — experimental conditions are now fully wired
     # (active composite + relation-type CV bindings), so it is removed from this set.
     planned_gap_fields = {
-        "expression_experiment.detection_reagents",
         "expression_experiment.specimen_genomic_model",
         "expression_experiment.specimen_alleles",
     }
     promoted_materialization_fields = {
+        "expression_experiment.detection_reagents",
         "expression_experiment.expression_assay_used",
         "expression_experiment.expression_assay_used.curie",
         "expression_experiment.expression_assay_used.name",
@@ -688,6 +702,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         "expression_pattern.where_expressed.cellular_component_qualifiers",
     }
     promoted_normalization_fields = {
+        "expression_experiment.detection_reagents",
         "expression_annotation_subject.primary_external_id",
         "expression_annotation_subject.gene_symbol",
         "single_reference.reference_id",
@@ -723,7 +738,6 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         field_path: fields_by_path[field_path].metadata.get("validator_state")
         for field_path in sorted(planned_gap_fields)
     } == {
-        "expression_experiment.detection_reagents": "under_development",
         "expression_experiment.specimen_alleles": "under_development",
         "expression_experiment.specimen_genomic_model": "under_development",
     }
@@ -944,6 +958,116 @@ def test_gene_expression_assay_materializes_from_validator_result():
         "expression_experiment.expression_assay_used.curie": "resolved",
         "expression_experiment.expression_assay_used.name": "resolved",
     }
+
+
+def test_detection_reagents_fan_out_resolve_and_preserve_only_genuine_no_match():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
+    payload["data_provider"]["abbreviation"] = "ZFIN"
+    payload["expression_experiment"]["detection_reagents"] = [
+        {"name": "Tg(kdrl:EGFP)", "source_text": "Tg(kdrl:EGFP)"},
+        {"name": "paper-only riboprobe", "source_text": "paper-only riboprobe"},
+    ]
+    envelope = _with_payload(envelope, payload)
+    matches = [
+        match
+        for match in _gene_expression_validation_registry().match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == "detection_reagent_validation"
+    ]
+
+    assert [match.field_path for match in matches] == [
+        "expression_experiment.detection_reagents[0]",
+        "expression_experiment.detection_reagents[1]",
+    ]
+    requests = [build_domain_validation_request(match).request for match in matches]
+    assert all(request is not None for request in requests)
+    resolved_request, missing_request = requests
+    assert resolved_request is not None
+    assert missing_request is not None
+    assert resolved_request.selected_inputs["reagent"] == {
+        "name": "Tg(kdrl:EGFP)",
+        "source_text": "Tg(kdrl:EGFP)",
+    }
+    assert resolved_request.selected_inputs["data_provider"] == "ZFIN"
+    assert resolved_request.expected_result_fields == {
+        "reagent": "expression_experiment.detection_reagents[0]"
+    }
+    assert missing_request.expected_result_fields == {
+        "reagent": "expression_experiment.detection_reagents[1]"
+    }
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=matches[0],
+                request=resolved_request,
+                result=_validator_result(
+                    resolved_request,
+                    status="resolved",
+                    resolved_values={
+                        "reagent": {
+                            "primary_external_id": "ZFIN:ZDB-TGCONSTRCT-070117-47",
+                            "placeholder": False,
+                        }
+                    },
+                ),
+            ),
+            ValidatorResultMaterializationInput(
+                match=matches[1],
+                request=missing_request,
+                result=_validator_result(
+                    missing_request,
+                    status="unresolved",
+                    lookup_outcome="not_found",
+                    curator_message="No controlled reagent matched the paper label.",
+                ),
+            ),
+        ],
+    )
+
+    annotation = result.envelope.extracted_objects[0]
+    assert annotation.payload["expression_experiment"]["detection_reagents"] == [
+        {
+            "primary_external_id": "ZFIN:ZDB-TGCONSTRCT-070117-47",
+            "placeholder": False,
+        }
+    ]
+    assert result.envelope.metadata["extraction_metadata"]["reagent_context"] == [
+        {
+            "source_text": "paper-only riboprobe",
+            "payload_field_path": "expression_experiment.detection_reagents[1]",
+            "unresolved_reason_code": "reagent_lookup_unavailable",
+        }
+    ]
+
+    ambiguous = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=matches[1],
+                request=missing_request,
+                result=_validator_result(
+                    missing_request,
+                    status="unresolved",
+                    lookup_outcome="ambiguous",
+                    candidates=[
+                        {"value": "ZFIN:one"},
+                        {"value": "ZFIN:two"},
+                    ],
+                ),
+            )
+        ],
+    )
+    assert ambiguous.envelope.extracted_objects[0].payload["expression_experiment"][
+        "detection_reagents"
+    ][1]["name"] == "paper-only riboprobe"
+    assert "reagent_context" not in ambiguous.envelope.metadata["extraction_metadata"]
 
 
 def test_gene_expression_relation_identity_materializes_from_validator_result():
@@ -1878,10 +2002,8 @@ def test_curator_guidance_fixture_covers_site_routing_and_context_preservation()
     ]["expression_experiment"]
     assert context_payload["detection_reagents"] == [
         {
-            "name": "flcn riboprobe",
-            "placeholder": True,
-            "source_text": "flcn riboprobe",
-            "unresolved_reason_code": "reagent_lookup_or_export_mapping_unavailable",
+            "primary_external_id": "ZFIN:ZDB-TGCONSTRCT-070117-47",
+            "placeholder": False,
         }
     ]
     assert "specimen_genomic_model" in context_payload
@@ -1899,6 +2021,7 @@ def test_curator_guidance_fixture_covers_site_routing_and_context_preservation()
     assert {
         "relation.name",
         "expression_experiment.expression_assay_used",
+        "expression_experiment.detection_reagents",
         "when_expressed_stage_name",
         "expression_pattern.when_expressed.developmental_stage_start",
         "expression_pattern.where_expressed.anatomical_structure",
@@ -1944,11 +2067,6 @@ def test_gene_expression_validator_warns_when_expected_optional_context_is_dropp
     } == {
         (
             "condition_relations",
-            ValidationFindingSeverity.WARNING,
-            False,
-        ),
-        (
-            "expression_experiment.detection_reagents",
             ValidationFindingSeverity.WARNING,
             False,
         ),

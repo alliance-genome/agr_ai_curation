@@ -60,10 +60,8 @@ fixtures:
                 curie: MMO:0000642
                 name: whole mount in situ hybridization assay
               detection_reagents:
-                - name: flcn riboprobe
-                  placeholder: true
-                  source_text: flcn riboprobe
-                  unresolved_reason_code: reagent_lookup_or_export_mapping_unavailable
+                - primary_external_id: ZFIN:ZDB-TGCONSTRCT-070117-47
+                  placeholder: false
               specimen_genomic_model:
                 name: wild-type AB strain embryos
                 placeholder: true
@@ -103,17 +101,12 @@ fixtures:
               role: source_mention
             - metadata_path: evidence_records[0]
               role: verified_evidence
-            - metadata_path: reagent_context[0]
-              role: reagent_context
             - metadata_path: specimen_context[0]
               role: specimen_context
             - metadata_path: condition_context[0]
               role: condition_context
           metadata:
             expected_context_payload_paths:
-              - field_path: expression_experiment.detection_reagents
-                source_metadata_path: extraction_metadata.reagent_context[0]
-                reason_code: reagent_lookup_or_export_mapping_unavailable
               - field_path: expression_experiment.specimen_genomic_model
                 source_metadata_path: extraction_metadata.specimen_context[0]
                 reason_code: specimen_agm_lookup_unavailable
@@ -261,7 +254,7 @@ fixtures:
         extraction_summary: Retained three flcn expression annotations and preserved optional experiment context as LinkML-backed pending fields.
         extraction_metadata:
           raw_mentions:
-            - mention: flcn expression in the pronephric duct at Prim-5 with a flcn riboprobe
+            - mention: flcn expression in the pronephric duct at Prim-5 with Tg(kdrl:EGFP)
               entity_type: gene_expression
               evidence_record_ids:
                 - evidence-flcn-pronephric-duct-1
@@ -277,7 +270,7 @@ fixtures:
           evidence_records:
             - evidence_record_id: evidence-flcn-pronephric-duct-1
               entity: flcn
-              verified_quote: flcn riboprobe signal was detected in the pronephric duct of wild-type AB embryos at Prim-5.
+              verified_quote: Tg(kdrl:EGFP) signal was detected with flcn expression in the pronephric duct of wild-type AB embryos at Prim-5.
               page: 3
               section: Results
               subsection: Expression analysis
@@ -308,10 +301,6 @@ fixtures:
                 - where_expressed_statement
                 - expression_pattern.where_expressed.anatomical_structure
                 - expression_pattern.where_expressed.cellular_component
-          reagent_context:
-            - source_text: flcn riboprobe
-              payload_field_path: expression_experiment.detection_reagents
-              unresolved_reason_code: reagent_lookup_or_export_mapping_unavailable
           specimen_context:
             - source_text: wild-type AB strain embryos; flcn mutant embryos
               payload_field_paths:
@@ -366,6 +355,17 @@ fixtures:
                   kind: ontology
                   ontology_family: assay
                   ontology_term_type: MMOTerm
+              - field_path: expression_experiment.detection_reagents
+                selected_value: ZFIN:ZDB-TGCONSTRCT-070117-47
+                selected_curie: ZFIN:ZDB-TGCONSTRCT-070117-47
+                selected_name: Tg(kdrl:EGFP)
+                source_tool: agr_curation_query
+                source_phrase: Tg(kdrl:EGFP)
+                lookup_status: resolved
+                authority: live_validated_option
+                term_source:
+                  kind: curation_entity
+                  entity_type: construct
               - field_path: when_expressed_stage_name
                 selected_value: ZFS:0000029
                 selected_curie: ZFS:0000029
@@ -424,4 +424,4 @@ fixtures:
           excluded_count: 1
           ambiguous_count: 1
           warnings:
-            - Optional reagent, specimen, and condition context is non-export-blocking but remains preserved.
+            - Optional specimen and condition context is non-export-blocking and remains preserved.

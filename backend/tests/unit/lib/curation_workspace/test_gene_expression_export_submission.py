@@ -353,10 +353,13 @@ def test_gene_expression_export_preserves_specimen_genomic_model_as_warning():
     ]
 
 
-def test_gene_expression_export_preserves_unmapped_experiment_context_as_warnings():
+def test_gene_expression_export_maps_detection_reagent_and_warns_for_unmapped_context():
     candidate = copy.deepcopy(_candidate_from_fixture())
     candidate["payload"]["expression_experiment"]["detection_reagents"] = [
-        {"name": "Tmem67 RNA probe"}
+        {
+            "primary_external_id": "ZFIN:ZDB-TGCONSTRCT-070117-47",
+            "placeholder": False,
+        }
     ]
     candidate["payload"]["expression_experiment"]["specimen_alleles"] = [
         {"primary_external_id": "MGI:1234567"}
@@ -382,10 +385,6 @@ def test_gene_expression_export_preserves_unmapped_experiment_context_as_warning
         (warning["field_path"], warning["details"]["reason_code"])
         for warning in warnings
     } == {
-        (
-            "expression_experiment.detection_reagents",
-            "export_mapping_not_approved",
-        ),
         ("expression_experiment.specimen_alleles", "export_mapping_not_approved"),
         (
             "expression_experiment.specimen_genomic_model",
@@ -395,9 +394,18 @@ def test_gene_expression_export_preserves_unmapped_experiment_context_as_warning
     }
     assert warnings[0]["status"] == "audit_only"
     assert "detection_reagents" in candidate["payload"]["expression_experiment"]
-    assert "detection_reagents" not in payload.payload_json[
-        "gene_expression_annotations"
-    ][0]["target_rows"]["geneexpressionexperiment"]["lookups"]
+    assert payload.payload_json["gene_expression_annotations"][0]["target_rows"][
+        "geneexpressionexperiment"
+    ]["relationships"]["geneexpressionexperiment_detectionreagents"] == [
+        {
+            "table": "reagent",
+            "match": {"primaryexternalid": "ZFIN:ZDB-TGCONSTRCT-070117-47"},
+            "projection": {
+                "placeholder": False,
+                "primary_external_id": "ZFIN:ZDB-TGCONSTRCT-070117-47",
+            },
+        }
+    ]
 
 
 def test_gene_expression_export_maps_curator_guidance_mixed_site_and_context_warnings():
@@ -441,7 +449,6 @@ def test_gene_expression_export_maps_curator_guidance_mixed_site_and_context_war
         for warning in warnings
     } == {
         "condition_relations",
-        "expression_experiment.detection_reagents",
         "expression_experiment.specimen_alleles",
         "expression_experiment.specimen_genomic_model",
     }

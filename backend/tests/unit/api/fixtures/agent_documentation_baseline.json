@@ -580,6 +580,76 @@
     ],
     "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n"
   },
+  "detection_reagent": {
+    "capabilities": [
+      {
+        "description": "Searches construct and targeting-reagent identities with provider context.\n",
+        "example_query": "Resolve Tg(kdrl:EGFP) as a ZFIN detection reagent",
+        "example_result": "Returns the controlled ZFIN construct identifier and lookup provenance.\n",
+        "name": "Detection reagent lookup"
+      },
+      {
+        "description": "Keeps all controlled candidates when a label does not identify one record.\n",
+        "example_query": "Validate this reporter label for a gene-expression annotation",
+        "example_result": "Returns unresolved with candidates instead of guessing an identifier.\n",
+        "name": "Ambiguity preservation"
+      }
+    ],
+    "data_sources": [
+      {
+        "data_types": [
+          "construct identifiers and symbols",
+          "sequence-targeting reagent identifiers and names"
+        ],
+        "description": "Read-only Construct and SequenceTargetingReagent identity helpers.\n",
+        "name": "Alliance Curation Database",
+        "species_supported": [
+          "All Alliance provider groups"
+        ]
+      }
+    ],
+    "limitations": [
+      "Does not create reagent records or write to the curation database.",
+      "Name lookup requires Alliance provider or taxon context.",
+      "Zero or multiple controlled matches remain unresolved."
+    ],
+    "summary": "Resolves gene-expression detection reagent labels and identifiers to controlled Alliance Construct or SequenceTargetingReagent records.\n"
+  },
+  "detection_reagent_validation": {
+    "capabilities": [
+      {
+        "description": "Searches construct and targeting-reagent identities with provider context.\n",
+        "example_query": "Resolve Tg(kdrl:EGFP) as a ZFIN detection reagent",
+        "example_result": "Returns the controlled ZFIN construct identifier and lookup provenance.\n",
+        "name": "Detection reagent lookup"
+      },
+      {
+        "description": "Keeps all controlled candidates when a label does not identify one record.\n",
+        "example_query": "Validate this reporter label for a gene-expression annotation",
+        "example_result": "Returns unresolved with candidates instead of guessing an identifier.\n",
+        "name": "Ambiguity preservation"
+      }
+    ],
+    "data_sources": [
+      {
+        "data_types": [
+          "construct identifiers and symbols",
+          "sequence-targeting reagent identifiers and names"
+        ],
+        "description": "Read-only Construct and SequenceTargetingReagent identity helpers.\n",
+        "name": "Alliance Curation Database",
+        "species_supported": [
+          "All Alliance provider groups"
+        ]
+      }
+    ],
+    "limitations": [
+      "Does not create reagent records or write to the curation database.",
+      "Name lookup requires Alliance provider or taxon context.",
+      "Zero or multiple controlled matches remain unresolved."
+    ],
+    "summary": "Resolves gene-expression detection reagent labels and identifiers to controlled Alliance Construct or SequenceTargetingReagent records.\n"
+  },
   "disease_extractor": {
     "capabilities": [
       {

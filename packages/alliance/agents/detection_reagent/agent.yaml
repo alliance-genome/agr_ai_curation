@@ -1,0 +1,82 @@
+agent_id: detection_reagent_validation
+
+name: "Detection Reagent Validation Agent"
+
+description: >
+  Resolves gene-expression detection reagent labels and identifiers to
+  curation-DB-backed Construct or SequenceTargetingReagent identities.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: false
+  description: Use for validating one gene-expression detection reagent.
+  batchable: true
+  batching_instructions: Keep one result per detection reagent and provider context.
+
+tools:
+  - get_agent_contract
+  - agr_curation_query
+
+output_schema: DetectionReagentValidationResult
+output_projection:
+  row_list_field: reagent_candidates
+  identity_fields: [reagent_id]
+
+structured_finalization:
+  enabled: true
+  tool_name: finalize_detection_reagent_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - reagent
+      - reagent_id
+      - reagent_label
+      - data_provider
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - reagent_candidates
+      - candidates
+    grounded_fact_paths:
+      - reagent_candidates[].reagent_id
+      - reagent_candidates[].name
+      - reagent_candidates[].entity_type
+      - reagent_candidates[].data_provider
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values.reagent
+      - resolved_objects[]
+      - reagent_candidates[]
+    fact_identity_paths:
+      - resolved_values.reagent.curie
+      - resolved_values.reagent.primary_external_id
+      - resolved_values.reagent.mod_internal_id
+      - resolved_values.reagent.unique_id
+      - resolved_objects[].canonical_id
+      - resolved_objects[].name
+      - reagent_candidates[].reagent_id
+      - reagent_candidates[].name
+      - reagent_candidates[].entity_type
+      - reagent_candidates[].data_provider
+
+model_config:
+  model: "${AGENT_DETECTION_REAGENT_MODEL:-gpt-5.6-terra}"
+  temperature: 0.1
+  reasoning: "medium"
+
+requires_document: false
+required_params: []
+batch_capabilities: []
+
+frontend:
+  icon: "🧪"
+  show_in_palette: false
+
+group_rules_enabled: false

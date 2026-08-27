@@ -703,6 +703,21 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert "expression_experiment.specimen_genomic_model" in (
         zfin_reagent_binding.field_paths
     )
+    assert "expression_experiment.detection_reagents" not in (
+        zfin_reagent_binding.field_paths
+    )
+    detection_reagent_binding = gene_expression_bindings[
+        "detection_reagent_validation"
+    ]
+    assert detection_reagent_binding.state is ValidationBindingState.ACTIVE
+    assert detection_reagent_binding.field_paths == (
+        "expression_experiment.detection_reagents",
+    )
+    assert detection_reagent_binding.validator_agent is not None
+    assert (
+        detection_reagent_binding.validator_agent.agent_id
+        == "detection_reagent_validation"
+    )
     assert "relation_vocabulary_validation" in registries[
         "agr.alliance.gene_expression"
     ].policy_for(
@@ -769,10 +784,10 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     # condition_relations[].condition_relation_type is no longer a helper gap — experimental
     # conditions are now fully wired (active composite + relation-type CV bindings).
     assert {
-        "expression_experiment.detection_reagents",
         "expression_experiment.specimen_genomic_model",
         "expression_experiment.specimen_alleles",
     } <= helper_gaps
+    assert "expression_experiment.detection_reagents" not in helper_gaps
     assert "condition_relations[].condition_relation_type" not in helper_gaps
 
     expression_provider_binding = gene_expression_bindings["data_provider_validation"]

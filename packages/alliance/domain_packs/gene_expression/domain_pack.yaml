@@ -355,9 +355,6 @@ object_definitions:
               - relation.name
               - data_provider.abbreviation
       controlled_field_helper_gaps:
-        - field_path: expression_experiment.detection_reagents
-          status: under_development
-          reason: Detection reagent/probe/construct/reporter is LinkML-backed, but controlled reagent lookup and export join materialization are not active yet; preserve exact paper labels with this field path and use structured placeholders only when evidence supports them.
         - field_path: expression_experiment.specimen_genomic_model
           status: under_development
           reason: Specimen AGM/genotype is LinkML-backed, but helper-backed AGM materialization is not active for Gene Expression extraction yet; preserve specimen context with this field path.
@@ -968,15 +965,35 @@ object_definitions:
         field_type: array
         display_name: Detection reagents
         model_ref: ReagentSnapshotPayload
-        definition_state: in_development
         metadata:
+          multivalued: true
           validatable: true
-          validator_binding_id: reagent_context_materialization
-          validator_state: under_development
-          definition_state_category: under_development
+          validator_binding_id: detection_reagent_validation
+          validator_state: active
+          definition_state_category: complete
           preservation_policy:
             unresolved_text_metadata_path: extraction_metadata.reagent_context
-            unresolved_reason_code: reagent_lookup_or_export_mapping_unavailable
+            unresolved_reason_code: reagent_lookup_unavailable
+          term_helper:
+            field_path: expression_experiment.detection_reagents
+            authority: curation_db
+            resolver:
+              primary_tool: agr_curation_query
+              accepted_provenance_tools:
+                - agr_curation_query
+              unresolved_metadata_path: extraction_metadata.reagent_context
+            term_source:
+              kind: curation_entity
+              entity_types:
+                - construct
+                - targeting reagent
+            lookup:
+              package_tool: agr_curation_query
+              methods:
+                - map_entity_names_to_curies
+                - map_entity_curies_to_info
+              provider_required_for_name_lookup: true
+              candidate_authority: curation_db
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -985,19 +1002,6 @@ object_definitions:
               class: ExpressionExperiment
               slot: detection_reagents
               range: Reagent
-      - field_path: expression_experiment.detection_reagents[0].placeholder
-        field_type: boolean
-        display_name: Detection reagent placeholder
-        definition_state: in_development
-        metadata:
-          provider_refs:
-            alliance_linkml:
-              schema_ref: alliance.linkml
-              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
-              source_file: model/schema/core.yaml
-              class: Reagent
-              slot: placeholder
-              range: boolean
       - field_path: expression_experiment.specimen_genomic_model
         field_type: object
         display_name: Specimen genomic model
@@ -1958,10 +1962,13 @@ metadata:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
         description: Compose gene-expression condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision. Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
+      - validator_id: detection_reagent_validation
+        display_name: Detection reagent lookup
+        description: Active package binding resolves each detection reagent label or identifier to a curation-DB-backed Construct or SequenceTargetingReagent identity and materializes a LinkML Reagent reference.
     under_development:
       - validator_id: gene_expression.reagent_context_materialization
         display_name: Reagent context materialization
-        description: Preserve reagent, genotype, reporter, construct, strain, specimen, allele, and condition context as LinkML-backed pending fields when possible, or field-addressed evidence metadata when helper-backed identifiers/export joins are unavailable.
+        description: Preserve specimen genomic-model and allele context as LinkML-backed pending fields when possible, or field-addressed evidence metadata while their helper-backed identifiers and export joins remain unavailable.
       - validator_id: gene_expression.live_write_transport
         display_name: Live database write path
         blocked_by: read_only_curation_db
@@ -2565,16 +2572,50 @@ metadata:
           enabled: true
           family: experimental_condition_validation
           max_size: ${EXPERIMENTAL_CONDITION_VALIDATOR_BATCH_MAX_SIZE:-4}
-    under_development:
-      - binding_id: reagent_context_materialization
-        display_name: Reagent context materialization
-        state_explanation: Reagent, genotype, reporter, construct, strain, specimen, and allele details have explicit LinkML payload fields where supported, but controlled helper-backed identifiers and export joins remain under development; unresolved text remains field-addressed in metadata. (Experimental conditions are now fully wired via the active experimental_condition_validation + gene_expression_condition_relation_lookup bindings.)
+      - binding_id: detection_reagent_validation
+        display_name: Detection reagent lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: detection_reagent_validation
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
             - GeneExpressionAnnotation
           field_paths:
             - expression_experiment.detection_reagents
+        input_fields:
+          reagent:
+            source: payload
+            path: expression_experiment.detection_reagents
+            required: true
+          data_provider:
+            source: payload
+            path: data_provider.abbreviation
+            required: false
+            context_only: true
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: expression_experiment.detection_reagents
+            allow_multiple: true
+            required: false
+            context_only: true
+        expected_result_fields:
+          reagent: expression_experiment.detection_reagents
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+    under_development:
+      - binding_id: reagent_context_materialization
+        display_name: Reagent context materialization
+        state_explanation: Specimen genomic-model and allele details have explicit LinkML payload fields, but their controlled helper-backed identifiers and export joins remain under development; unresolved text remains field-addressed in metadata.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
             - expression_experiment.specimen_genomic_model
             - expression_experiment.specimen_alleles
         group_scope:
@@ -2597,6 +2638,10 @@ metadata:
       inspected_tables:
         - geneexpressionannotation
         - geneexpressionexperiment
+        - reagent
+        - construct
+        - sequencetargetingreagent
+        - slotannotation
         - geneexpressionannotation_conditionrelation
         - expressionpattern
         - temporalcontext
