@@ -472,7 +472,8 @@ def _patch_target_object_from_resolved_values(
 
     declared_fields = {field.field_path: field for field in object_definition.fields}
     payload = copy.deepcopy(target.payload)
-    changed = False
+    has_materializable_resolved_value = False
+    payload_changed = False
 
     for result_field, raw_field_path in item.request.expected_result_fields.items():
         if not isinstance(raw_field_path, str) or not raw_field_path.strip():
@@ -488,6 +489,7 @@ def _patch_target_object_from_resolved_values(
         )
         if materialized_field_path is None:
             continue
+        has_materializable_resolved_value = True
         current_value = _payload_value(payload, materialized_field_path)
         if current_value is not _MISSING and current_value == resolved_value:
             continue
@@ -498,8 +500,21 @@ def _patch_target_object_from_resolved_values(
             resolved_value,
             declared_fields=declared_fields,
         )
-        changed = True
-    if not changed:
+        payload_changed = True
+    if not has_materializable_resolved_value:
+        return envelope, None
+
+    definition_state = (
+        DefinitionState.STABLE
+        if item.match.binding.state is ValidationBindingState.ACTIVE
+        and object_definition.definition_state is DefinitionState.STABLE
+        else target.definition_state
+    )
+    if (
+        not payload_changed
+        and target.status is CuratableObjectStatus.VALIDATED
+        and target.definition_state is definition_state
+    ):
         return envelope, None
 
     original_values = _original_materialized_values(
@@ -537,12 +552,7 @@ def _patch_target_object_from_resolved_values(
         update={
             "payload": payload,
             "status": CuratableObjectStatus.VALIDATED,
-            "definition_state": (
-                DefinitionState.STABLE
-                if item.match.binding.state is ValidationBindingState.ACTIVE
-                and object_definition.definition_state is DefinitionState.STABLE
-                else target.definition_state
-            ),
+            "definition_state": definition_state,
             "metadata": metadata,
         }
     )

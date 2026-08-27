@@ -697,7 +697,10 @@ def test_validator_result_materialization_compacts_finding_audit_payloads():
     assert huge_quote not in str(history_event.details)
 
 
-def test_validator_result_materialization_promotes_builder_after_active_binding_resolves():
+@pytest.mark.parametrize("prepopulated", [False, True], ids=["patched", "unchanged"])
+def test_validator_result_materialization_promotes_builder_after_active_binding_resolves(
+    prepopulated: bool,
+):
     metadata = DomainPackMetadata(
         pack_id="fixture.target_patch",
         display_name="Fixture Target Patch Pack",
@@ -769,7 +772,18 @@ def test_validator_result_materialization_promotes_builder_after_active_binding_
                 pending_ref_id="gene-mention-1",
                 status=CuratableObjectStatus.PENDING,
                 definition_state=DefinitionState.IN_DEVELOPMENT,
-                payload={"mention": "crumbs"},
+                payload={
+                    "mention": "crumbs",
+                    **(
+                        {
+                            "primary_external_id": "FB:FBgn0259685",
+                            "gene_symbol": "crb",
+                            "taxon": "NCBITaxon:7227",
+                        }
+                        if prepopulated
+                        else {}
+                    ),
+                },
             )
         ],
     )
@@ -812,12 +826,29 @@ def test_validator_result_materialization_promotes_builder_after_active_binding_
         "path": "mention",
         "required": True,
     }
-    assert patch_event["original_values"] == {}
+    assert patch_event["original_values"] == (
+        {
+            "primary_external_id": "FB:FBgn0259685",
+            "gene_symbol": "crb",
+            "taxon": "NCBITaxon:7227",
+        }
+        if prepopulated
+        else {}
+    )
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.RESOLVED
     assert finding.details["validation_result"]["resolved_values"]["curie"] == (
         "FB:FBgn0259685"
     )
+
+    replay = materialize_validator_results_into_envelope(
+        result.envelope, metadata, [item]
+    )
+    assert len(
+        replay.envelope.extracted_objects[0].metadata[
+            "validator_resolved_value_materialization"
+        ]
+    ) == 1
 
 
 def test_validator_result_materialization_preserves_in_development_definition_state():
