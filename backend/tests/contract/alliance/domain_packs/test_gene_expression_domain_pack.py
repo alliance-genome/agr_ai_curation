@@ -37,6 +37,13 @@ from src.schemas.domain_pack_metadata import DomainPackFieldType
 from src.lib.openai_agents.extraction_builder_workspace import (
     CANDIDATE_STATUS_VALID,
     ExtractionBuilderWorkspace,
+    reset_active_extraction_builder_workspace,
+    set_active_extraction_builder_workspace,
+)
+from src.lib.openai_agents.resolver_call_ledger import (
+    ResolverCallLedger,
+    reset_active_resolver_call_ledger,
+    set_active_resolver_call_ledger,
 )
 
 
@@ -64,6 +71,7 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     materialize_gene_expression_builder_state,
     validate_pending_gene_expression_envelope,
 )
+from agr_ai_curation_alliance.tools import agr_curation  # noqa: E402
 
 from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _assert_range_exists,
@@ -960,15 +968,148 @@ def test_gene_expression_assay_materializes_from_validator_result():
     }
 
 
-def test_detection_reagents_fan_out_resolve_and_preserve_only_genuine_no_match():
-    envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
-    payload["data_provider"]["abbreviation"] = "ZFIN"
-    payload["expression_experiment"]["detection_reagents"] = [
-        {"name": "Tg(kdrl:EGFP)", "source_text": "Tg(kdrl:EGFP)"},
-        {"name": "paper-only riboprobe", "source_text": "paper-only riboprobe"},
-    ]
-    envelope = _with_payload(envelope, payload)
+def _staged_detection_reagent_envelope() -> DomainEnvelope:
+    workspace = ExtractionBuilderWorkspace(
+        run_id="gene-expression-detection-reagent-run",
+        document_id="doc-detection-reagent",
+        domain_pack_id=GENE_EXPRESSION_DOMAIN_PACK_ID,
+        agent_id="gene_expression_extraction",
+    )
+    ledger = ResolverCallLedger(trace_id=workspace.run_id)
+    resolver_specs = (
+        (
+            "call-relation",
+            "relation.name",
+            "is_expressed_in",
+            "is_expressed_in",
+            {"kind": "controlled_vocabulary", "vocabulary": "Expression Relation"},
+        ),
+        (
+            "call-assay",
+            "expression_experiment.expression_assay_used",
+            "MMO:0000655",
+            {"curie": "MMO:0000655", "name": "GFP reporter assay"},
+            {"kind": "ontology", "ontology_family": "assay"},
+        ),
+        (
+            "call-stage",
+            "when_expressed_stage_name",
+            "adult",
+            "adult",
+            {"kind": "ontology", "ontology_family": "life_stage"},
+        ),
+        (
+            "call-anatomy",
+            "expression_pattern.where_expressed.anatomical_structure",
+            "ZFA:0000151",
+            {"curie": "ZFA:0000151", "name": "blood vessel"},
+            {"kind": "ontology", "ontology_family": "anatomy"},
+        ),
+    )
+    for call_id, field_path, selected_value, instruction_value, term_source in resolver_specs:
+        ledger.record_tool_output(
+            tool_call_id=call_id,
+            tool_name="resolve_domain_field_term",
+            output={
+                "status": "resolved",
+                "data": {
+                    "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
+                    "object_type": GENE_EXPRESSION_OBJECT_TYPE,
+                    "field_path": field_path,
+                    "source_phrase": selected_value,
+                    "payload_field_instructions": {
+                        "set": [{"field_path": field_path, "value": instruction_value}]
+                    },
+                    "helper_selection": {
+                        "field_path": field_path,
+                        "source_tool": "resolve_domain_field_term",
+                        "authority": "selector_evidence",
+                        "lookup_status": "success",
+                        "source_phrase": selected_value,
+                        "term_source": term_source,
+                        "selected_value": selected_value,
+                        "selected_name": (
+                            instruction_value.get("name", selected_value)
+                            if isinstance(instruction_value, Mapping)
+                            else selected_value
+                        ),
+                        **(
+                            {"selected_curie": instruction_value["curie"]}
+                            if isinstance(instruction_value, Mapping)
+                            and "curie" in instruction_value
+                            else {}
+                        ),
+                    },
+                },
+            },
+        )
+
+    workspace_token = set_active_extraction_builder_workspace(workspace)
+    ledger_token = set_active_resolver_call_ledger(ledger)
+    try:
+        stage_result = agr_curation._unwrap_function_tool_callable(
+            agr_curation.stage_gene_expression_observation,
+            "stage_gene_expression_observation",
+        )(
+            pending_ref_id="gene-expression-annotation-kdrl-1",
+            evidence_record_ids=["evidence-detection-reagent"],
+            where_expressed_statement="kdrl reporter expression in blood vessels",
+            subject={
+                "source_phrase": "kdrl",
+                "gene_symbol": "kdrl",
+                "primary_external_id": "ZFIN:ZDB-GENE-990415-8",
+            },
+            reference={
+                "source_phrase": "PMID 18487051",
+                "reference_id": "PMID:18487051",
+            },
+            controlled_fields=[
+                {"field_path": field_path, "selected_value": selected_value}
+                for _call_id, field_path, selected_value, _value, _source in resolver_specs
+            ],
+            detection_reagents=[
+                {"source_text": "Tg(kdrl:EGFP)"},
+                {"source_text": "paper-only riboprobe"},
+            ],
+            condition_relations=None,
+        )
+    finally:
+        reset_active_resolver_call_ledger(ledger_token)
+        reset_active_extraction_builder_workspace(workspace_token)
+    assert stage_result.status == "ok"
+
+    materialized = materialize_gene_expression_builder_state(
+        workspace=workspace,
+        candidate_ids=["gex-candidate-1"],
+        evidence_records=[
+            {
+                "evidence_record_id": "evidence-detection-reagent",
+                "verified_quote": (
+                    "Expression was detected with Tg(kdrl:EGFP) and a paper-only riboprobe."
+                ),
+                "chunk_id": "chunk-detection-reagent",
+                "document_id": "doc-detection-reagent",
+                "pending_ref_id": "gene-expression-annotation-kdrl-1",
+                "field_path": "expression_experiment.detection_reagents",
+                "envelope_target": {
+                    "pending_ref_id": "gene-expression-annotation-kdrl-1",
+                    "field_path": "expression_experiment.detection_reagents",
+                },
+            }
+        ],
+        resolver_entry_lookup=ledger.get,
+    )
+    assert materialized.ok, materialized.summary()
+    assert materialized.payload is not None
+    return gene_expression_extraction_output_to_pending_envelope(
+        materialized.payload,
+        envelope_id="gene-expression-detection-reagent-envelope",
+        document_id="doc-detection-reagent",
+    )
+
+
+def test_detection_reagents_stage_fan_out_resolve_and_preserve_only_genuine_no_match():
+    envelope = _staged_detection_reagent_envelope()
     matches = [
         match
         for match in _gene_expression_validation_registry().match_bindings(
@@ -988,7 +1129,6 @@ def test_detection_reagents_fan_out_resolve_and_preserve_only_genuine_no_match()
     assert resolved_request is not None
     assert missing_request is not None
     assert resolved_request.selected_inputs["reagent"] == {
-        "name": "Tg(kdrl:EGFP)",
         "source_text": "Tg(kdrl:EGFP)",
     }
     assert resolved_request.selected_inputs["data_provider"] == "ZFIN"
@@ -1066,7 +1206,7 @@ def test_detection_reagents_fan_out_resolve_and_preserve_only_genuine_no_match()
     )
     assert ambiguous.envelope.extracted_objects[0].payload["expression_experiment"][
         "detection_reagents"
-    ][1]["name"] == "paper-only riboprobe"
+    ][1]["source_text"] == "paper-only riboprobe"
     assert "reagent_context" not in ambiguous.envelope.metadata["extraction_metadata"]
 
 

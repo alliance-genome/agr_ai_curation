@@ -56,7 +56,6 @@ GENE_EXPRESSION_CURATION_DB_TABLES = (
     "temporalcontext_stageuberonslimterms",
     "anatomicalsite_anatomicalstructureuberonterms",
     "anatomicalsite_cellularcomponentqualifiers",
-    "geneexpressionexperiment_detectionreagents",
 )
 ANATOMICAL_SITE_REQUIRED_COLUMNS = {
     "anatomicalstructureuberontermother": False,
@@ -65,6 +64,10 @@ ANATOMICAL_SITE_REQUIRED_COLUMNS = {
 }
 GENE_EXPRESSION_LINKML_SCHEMA_SOURCE_FILE = "model/schema/expression.yaml"
 _AUDIT_ONLY_CONTEXT_FIELDS = {
+    "expression_experiment.detection_reagents": (
+        "The curation DB currently exposes detection_reagents as a transient "
+        "ExpressionExperiment field and has no approved persistent export relationship."
+    ),
     "expression_experiment.specimen_alleles": (
         "Specimen allele export mapping is not approved for the Gene Expression "
         "0.7.0 curation DB handoff."
@@ -456,13 +459,6 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                     },
                 }
             ),
-            "relationships": _drop_empty(
-                {
-                    "geneexpressionexperiment_detectionreagents": _reagent_list(
-                        expression_experiment.get("detection_reagents")
-                    ),
-                }
-            ),
         },
         "expressionpattern": {
             "table": "expressionpattern",
@@ -608,41 +604,6 @@ def _term_lookup(value: Any) -> dict[str, Any] | None:
         return None
     match = {"curie": term["curie"]} if term.get("curie") else {"name": term["name"]}
     return {"table": "ontologyterm", "match": match, "projection": term}
-
-
-def _reagent_list(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return []
-    return [lookup for item in value if (lookup := _reagent_lookup(item)) is not None]
-
-
-def _reagent_lookup(value: Any) -> dict[str, Any] | None:
-    reagent = _mapping(value)
-    identity_fields = (
-        ("curie", "curie"),
-        ("primary_external_id", "primaryexternalid"),
-        ("mod_internal_id", "modinternalid"),
-        ("unique_id", "uniqueid"),
-    )
-    match = next(
-        (
-            {database_field: reagent[payload_field]}
-            for payload_field, database_field in identity_fields
-            if _optional_string(reagent.get(payload_field)) is not None
-        ),
-        None,
-    )
-    if match is None:
-        return None
-    projection = _drop_empty(
-        {
-            payload_field: reagent.get(payload_field)
-            for payload_field, _database_field in identity_fields
-        }
-    )
-    if reagent.get("placeholder") is False:
-        projection["placeholder"] = False
-    return {"table": "reagent", "match": match, "projection": projection}
 
 
 def _readiness_blocker_from_export_blocker(

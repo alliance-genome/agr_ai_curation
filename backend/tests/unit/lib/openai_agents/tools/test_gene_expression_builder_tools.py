@@ -111,6 +111,10 @@ def active_builder_context(monkeypatch):
                     "pending_ref_id": "gene-expression-annotation-pef-2",
                     "field_path": "expression_pattern.where_expressed.anatomical_structure",
                 },
+                {
+                    "pending_ref_id": "gene-expression-annotation-pef-1",
+                    "field_path": "expression_experiment.detection_reagents",
+                },
             ],
         }
     ]
@@ -222,6 +226,7 @@ def _stage_materializable_observation(ledger: resolver_call_ledger.ResolverCallL
                 "selected_value": "WBbt:0001234",
             },
         ],
+        detection_reagents=[{"source_text": "PEF-1::GFP"}],
     )
 def test_gene_expression_builder_tool_schemas_are_strict():
     tools = [
@@ -466,11 +471,13 @@ def test_patch_rejects_free_form_field_and_requires_resolver_for_controlled_patc
                 "field_path": "free_form.path",
                 "string_value": "nope",
                 "evidence_record_ids": None,
+                "detection_reagents": None,
             },
             {
                 "field_path": "relation.name",
                 "string_value": None,
                 "evidence_record_ids": None,
+                "detection_reagents": None,
             },
         ],
     )
@@ -500,11 +507,13 @@ def test_patch_updates_reference_and_controlled_field_from_ledger(active_builder
                 "field_path": "reference.reference_id",
                 "string_value": "PMID:39550471",
                 "evidence_record_ids": None,
+                "detection_reagents": None,
             },
             {
                 "field_path": "relation.name",
                 "string_value": "is_not_expressed_in",
                 "evidence_record_ids": None,
+                "detection_reagents": None,
             },
         ],
     )
@@ -514,6 +523,38 @@ def test_patch_updates_reference_and_controlled_field_from_ledger(active_builder
     assert candidate.staged_fields["single_reference"]["reference_id"] == "PMID:39550471"
     assert candidate.staged_fields["relation"]["name"] == "is_not_expressed_in"
     assert candidate.resolver_selection_refs == ["call_relation", "call_relation_part_of"]
+
+
+def test_patch_replaces_detection_reagent_labels(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_valid_observation(ledger)
+
+    result = _tool_fn(
+        agr_curation.patch_gene_expression_observation,
+        "patch_gene_expression_observation",
+    )(
+        candidate_id="gex-candidate-1",
+        pending_ref_id="gene-expression-annotation-pef-1",
+        updates=[
+            {
+                "field_path": "expression_experiment.detection_reagents",
+                "string_value": None,
+                "evidence_record_ids": None,
+                "detection_reagents": [
+                    {"source_text": "anti-PEF-1 antibody"},
+                    {"source_text": "PEF-1 riboprobe"},
+                ],
+            }
+        ],
+    )
+
+    assert result.status == "ok"
+    assert workspace.candidates["gex-candidate-1"].staged_fields[
+        "expression_experiment"
+    ]["detection_reagents"] == [
+        {"source_text": "anti-PEF-1 antibody"},
+        {"source_text": "PEF-1 riboprobe"},
+    ]
 
 
 def test_finalize_returns_compact_builder_summary(active_builder_context):
@@ -538,6 +579,9 @@ def test_finalize_returns_compact_builder_summary(active_builder_context):
     assert payload["curatable_objects"][0]["object_type"] == "GeneExpressionAnnotation"
     annotation = payload["curatable_objects"][0]
     assert annotation["evidence_record_ids"] == ["evidence-67598e5688f123c8"]
+    assert annotation["payload"]["expression_experiment"]["detection_reagents"] == [
+        {"source_text": "PEF-1::GFP"}
+    ]
     assert payload["metadata"]["evidence_records"][0]["evidence_record_id"] == (
         "evidence-67598e5688f123c8"
     )

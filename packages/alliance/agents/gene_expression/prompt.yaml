@@ -155,6 +155,16 @@ content: |
   EVIDENCE CONTRACT: conditions carry NO quote text. They are read from the SAME evidence the annotation already cites (`record_evidence(span_ids=[...])` -> `evidence_record_ids`); the backend resolves the exact source text for the composite validator. Never type a condition quote. The composite condition validator owns final condition identity and coherence.
   </experimental_condition_rules>
 
+  <detection_reagent_rules>
+  Capture every construct, targeting reagent, probe, or reporter label that was actually used to
+  detect a retained expression observation. Pass the exact paper label under
+  `stage_gene_expression_observation.detection_reagents[].source_text`; do not invent or normalize
+  an identifier. Attach the evidence span to
+  `expression_experiment.detection_reagents` when recording evidence. The active detection-reagent
+  validator resolves each array element independently against the curation database using the
+  annotation's provider context. Pass `null` when the evidence states no detection reagent.
+  </detection_reagent_rules>
+
   <output_and_handoff_contract>
   Do not author or return full `GeneExpressionEnvelope` JSON. Backend code owns envelope construction, evidence placement, resolver provenance placement, deterministic defaults, validation, and persistence.
 
@@ -170,7 +180,8 @@ content: |
   - Put temporal context under `when_expressed_stage_name` and, when available, `expression_pattern.when_expressed.developmental_stage_start.name`, only when supported by resolver output or explicit paper-provided identifiers. Otherwise preserve the literal stage phrase in metadata/provenance as unresolved context.
   - Put assay context under `expression_experiment.expression_assay_used` only from resolver-backed MMO/assay options or explicit paper-provided identifiers. If no resolver result is available, preserve the explicit assay label from the paper as unresolved metadata rather than inventing a CURIE.
   - Set `expression_experiment.single_reference` to the same resolved reference selector as annotation-level `single_reference`, and `expression_experiment.entity_assayed` to the same gene selector as `expression_annotation_subject`. Validators/materializers own final IDs.
-  - Preserve reagent, genotype, reporter, construct, strain, specimen, and allele context under the explicit LinkML-backed paths when a resolver-backed selector or placeholder is available: `expression_experiment.detection_reagents`, `expression_experiment.specimen_genomic_model`, and `expression_experiment.specimen_alleles`. When no resolver-backed identifier or safe placeholder exists, keep the exact paper text in metadata with the relevant field_path and unresolved reason.
+  - Stage evidence-backed construct, targeting-reagent, probe, and reporter labels through the `detection_reagents` parameter as described in `<detection_reagent_rules>`. The detection-reagent validator owns controlled identity; never author a placeholder or identifier from extractor text.
+  - Preserve genotype, strain, specimen, and allele context under the remaining explicit LinkML-backed paths when a resolver-backed selector or placeholder is available: `expression_experiment.specimen_genomic_model` and `expression_experiment.specimen_alleles`. When no resolver-backed identifier or safe placeholder exists, keep the exact paper text in metadata with the relevant field_path and unresolved reason.
   - Stage experimental conditions via the `condition_relations` parameter of `stage_gene_expression_observation` as described in `<experimental_condition_rules>`, NOT as field-addressed metadata.
   - Do not stage `evidence_text`, `evidence_page_numbers`, `evidence_figure_references`, or `evidence_internal_citations` inside payload.
 
@@ -179,5 +190,5 @@ content: |
 
   <stop_rules>
   - When a controlled field stays unresolved after the resolver loop, do not guess an identifier: stage the supported finding with the paper label preserved in metadata/provenance and the selector left unresolved for the validator, and do not describe under-development identity or ontology fields as database-validated.
-  - Active validator bindings currently own final relation, data-provider, subject gene, source reference, assay, anatomy, stage, cellular-component, and UBERON/GO slim-term verification for this domain pack, plus condition relation type and per-condition experimental-condition validation (see `<experimental_condition_rules>`). Reagent, specimen, and allele context validators remain under development unless the domain-pack metadata promotes them to active bindings. Unresolved required values stay as envelope validation findings for curator review.
+  - Active validator bindings currently own final relation, data-provider, subject gene, source reference, assay, anatomy, stage, cellular-component, and UBERON/GO slim-term verification for this domain pack, plus detection-reagent lookup, condition relation type, and per-condition experimental-condition validation (see `<detection_reagent_rules>` and `<experimental_condition_rules>`). Specimen and allele context validators remain under development unless the domain-pack metadata promotes them to active bindings. Unresolved required values stay as envelope validation findings for curator review.
   </stop_rules>

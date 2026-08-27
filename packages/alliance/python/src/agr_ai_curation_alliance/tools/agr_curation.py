@@ -122,6 +122,7 @@ GeneExpressionPatchFieldPath = Literal[
     "reference.doi",
     "reference.title",
     "data_provider.abbreviation",
+    "expression_experiment.detection_reagents",
     "relation.name",
     "expression_experiment.expression_assay_used",
     "when_expressed_stage_name",
@@ -208,10 +209,25 @@ class GeneExpressionControlledFieldInput(_StrictToolModel):
     selected_value: StrictStr
 
 
+class GeneExpressionDetectionReagentInput(_StrictToolModel):
+    """Exact evidence-backed reagent label captured from the paper."""
+
+    source_text: StrictStr
+
+    @field_validator("source_text")
+    @classmethod
+    def _non_empty_source_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("source_text must be non-empty")
+        return cleaned
+
+
 class GeneExpressionPatchUpdateInput(_StrictToolModel):
     field_path: GeneExpressionPatchFieldPath
     string_value: Optional[StrictStr]
     evidence_record_ids: Optional[List[StrictStr]] = Field(min_length=1, max_length=20)
+    detection_reagents: Optional[List[GeneExpressionDetectionReagentInput]]
 
     @model_validator(mode="after")
     def _validate_update_shape(self) -> "GeneExpressionPatchUpdateInput":
@@ -225,6 +241,12 @@ class GeneExpressionPatchUpdateInput(_StrictToolModel):
             if not self.evidence_record_ids:
                 raise ValueError("evidence_record_ids patch requires evidence_record_ids")
             return self
+        if self.field_path == "expression_experiment.detection_reagents":
+            if not self.detection_reagents:
+                raise ValueError(
+                    "detection reagent patches require detection_reagents"
+                )
+            return self
         if not _clean_string(self.string_value):
             raise ValueError(f"{self.field_path} patch requires string_value")
         return self
@@ -237,6 +259,7 @@ class GeneExpressionStageInput(_StrictToolModel):
     subject: GeneExpressionSubjectInput
     reference: GeneExpressionReferenceInput
     controlled_fields: List[GeneExpressionControlledFieldInput] = Field(min_length=1, max_length=20)
+    detection_reagents: Optional[List[GeneExpressionDetectionReagentInput]]
     # Nested experimental conditions. Each ConditionRelation carries a relation type plus its
     # grounded ExperimentalCondition components; the engine fans out per condition and the composite
     # validator decides each one. Sparse — pass null/[] when the paper states no conditions. Declared
@@ -5937,6 +5960,11 @@ def _stage_payload_from_gene_expression_input(
     }
     for entry in resolver_entries:
         _apply_resolver_selection(payload, entry=entry)
+    if stage_input.detection_reagents:
+        payload.setdefault("expression_experiment", {})["detection_reagents"] = [
+            reagent.model_dump(mode="json")
+            for reagent in stage_input.detection_reagents
+        ]
     staged_condition_relations = _staged_condition_relations(stage_input.condition_relations)
     if staged_condition_relations:
         payload["condition_relations"] = staged_condition_relations
@@ -6122,10 +6150,12 @@ def _stage_gene_expression_observation_impl(
     subject: GeneExpressionSubjectInput,
     reference: GeneExpressionReferenceInput,
     controlled_fields: Annotated[List[GeneExpressionControlledFieldInput], Field(min_length=1, max_length=20)],
+    detection_reagents: Optional[List[GeneExpressionDetectionReagentInput]] = None,
     condition_relations: Optional[List[ConditionRelationInput]] = None,
 ) -> AgrQueryResult:
     """Stage one gene-expression observation candidate through the builder workspace.
 
+    ``detection_reagents`` carries exact paper labels for controlled lookup after staging.
     ``condition_relations`` is required-but-nullable under the strict tool schema: pass ``null`` (or
     ``[]``) when the paper states no experimental conditions; otherwise pass the grounded nested
     ConditionRelation list (see ``<experimental_condition_rules>`` in the extractor prompt).
@@ -6142,6 +6172,10 @@ def _stage_gene_expression_observation_impl(
             item.model_dump(mode="json") if hasattr(item, "model_dump") else item
             for item in (controlled_fields or [])
         ],
+        detection_reagents=[
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in (detection_reagents or [])
+        ],
     )
     _emit_gene_expression_builder_event(
         "gene_expression_builder.stage_requested",
@@ -6156,6 +6190,7 @@ def _stage_gene_expression_observation_impl(
             subject=subject,
             reference=reference,
             controlled_fields=controlled_fields,
+            detection_reagents=list(detection_reagents or []),
             condition_relations=list(condition_relations or []),
         )
     except ValidationError as exc:
@@ -6308,6 +6343,12 @@ def _patch_gene_expression_observation_impl(
             continue
         if update.field_path == "evidence_record_ids":
             evidence_ids = list(update.evidence_record_ids or [])
+            continue
+        if update.field_path == "expression_experiment.detection_reagents":
+            payload.setdefault("expression_experiment", {})["detection_reagents"] = [
+                reagent.model_dump(mode="json")
+                for reagent in (update.detection_reagents or [])
+            ]
             continue
         if update.field_path == "reference.reference_id" and update.string_value:
             reference_issue = _reference_id_validation_issue(update.string_value)

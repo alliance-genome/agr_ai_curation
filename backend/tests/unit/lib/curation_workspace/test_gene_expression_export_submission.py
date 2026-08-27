@@ -353,7 +353,7 @@ def test_gene_expression_export_preserves_specimen_genomic_model_as_warning():
     ]
 
 
-def test_gene_expression_export_maps_detection_reagent_and_warns_for_unmapped_context():
+def test_gene_expression_export_preserves_detection_reagent_without_inventing_join():
     candidate = copy.deepcopy(_candidate_from_fixture())
     candidate["payload"]["expression_experiment"]["detection_reagents"] = [
         {
@@ -385,6 +385,10 @@ def test_gene_expression_export_maps_detection_reagent_and_warns_for_unmapped_co
         (warning["field_path"], warning["details"]["reason_code"])
         for warning in warnings
     } == {
+        (
+            "expression_experiment.detection_reagents",
+            "export_mapping_not_approved",
+        ),
         ("expression_experiment.specimen_alleles", "export_mapping_not_approved"),
         (
             "expression_experiment.specimen_genomic_model",
@@ -394,18 +398,12 @@ def test_gene_expression_export_maps_detection_reagent_and_warns_for_unmapped_co
     }
     assert warnings[0]["status"] == "audit_only"
     assert "detection_reagents" in candidate["payload"]["expression_experiment"]
-    assert payload.payload_json["gene_expression_annotations"][0]["target_rows"][
-        "geneexpressionexperiment"
-    ]["relationships"]["geneexpressionexperiment_detectionreagents"] == [
-        {
-            "table": "reagent",
-            "match": {"primaryexternalid": "ZFIN:ZDB-TGCONSTRCT-070117-47"},
-            "projection": {
-                "placeholder": False,
-                "primary_external_id": "ZFIN:ZDB-TGCONSTRCT-070117-47",
-            },
-        }
-    ]
+    experiment_row = payload.payload_json["gene_expression_annotations"][0][
+        "target_rows"
+    ]["geneexpressionexperiment"]
+    assert "geneexpressionexperiment_detectionreagents" not in experiment_row.get(
+        "relationships", {}
+    )
 
 
 def test_gene_expression_export_maps_curator_guidance_mixed_site_and_context_warnings():
@@ -449,6 +447,7 @@ def test_gene_expression_export_maps_curator_guidance_mixed_site_and_context_war
         for warning in warnings
     } == {
         "condition_relations",
+        "expression_experiment.detection_reagents",
         "expression_experiment.specimen_alleles",
         "expression_experiment.specimen_genomic_model",
     }
