@@ -71,3 +71,20 @@ def test_alliance_gene_expression_does_not_implicitly_expose_broad_database_tool
         rule.tool_id != "agr_curation_query"
         for rule in gene_expression.group_tool_policy.rules
     )
+
+
+def test_rgd_gene_product_resolver_uses_authenticated_group_tool_policy():
+    agents = load_agent_definitions(
+        REPO_ROOT / "packages" / "alliance" / "agents",
+        force_reload=True,
+    )
+    go_annotations = agents["go_annotations_lookup"]
+
+    assert "resolve_gene_product" not in go_annotations.tools
+    assert [rule.to_dict() for rule in go_annotations.group_tool_policy.rules] == [
+        {
+            "tool_id": "resolve_gene_product",
+            "allowed_group_ids": ["RGD"],
+            "field_paths": ["gene_id"],
+        }
+    ]

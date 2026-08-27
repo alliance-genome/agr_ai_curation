@@ -467,6 +467,7 @@ def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
         "chebi_api_call": ("static", (), "agr.alliance"),
         "quickgo_api_call": ("static", (), "agr.alliance"),
         "go_api_call": ("static", (), "agr.alliance"),
+        "resolve_gene_product": ("static", (), "agr.alliance"),
         "alliance_api_call": ("static", (), "agr.alliance"),
     }
 

@@ -1,5 +1,14 @@
 # Test Fixture Licenses
 
+## alliance/gene_product_resolution/rno_mir_124_3p.json
+
+- **Sources**: Read-only Alliance curation database identity rows, RNAcentral search/API cross-references, and miRBase mature/hairpin records for rat miR-124-3p
+- **Source URLs**: https://www.ebi.ac.uk/ebisearch/ws/rest/rnacentral, https://rnacentral.org/api/v1/rna/URS000020BE6A/xrefs/10116/, https://www.mirbase.org/mature/MIMAT0000828, and https://mirbase.org/download/CURRENT/hairpin.fa
+- **Licenses**: RNAcentral CC0; miRBase public domain; Alliance/RGD rows retained as minimal identifier evidence from the repository's configured read-only curation source
+- **License URLs**: https://rnacentral.org/downloads and https://mirbase.org/download/CURRENT/LICENSE/
+- **Retrieved**: 2026-08-27
+- **Usage**: Typed mature-product, precursor-locus, one-to-many candidate, provenance, and no-arbitrary-selection resolver tests
+
 ## alliance/go_annotations/rgd_620474_go_api.json and quickgo_rgd_620474_rejection.json
 
 - **Source**: Gene Ontology Consortium API response and QuickGO identifier-validation response for `RGD:620474`

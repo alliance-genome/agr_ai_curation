@@ -4039,6 +4039,95 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
   },
+  "resolve_gene_product": {
+    "agent_methods": null,
+    "agent_studio": {
+      "diagnostic": {
+        "category": "database",
+        "description": "Resolve organism-scoped gene-product identity through a fixed hierarchy:\n1. Exact current gene/locus identity in the read-only Alliance curation database.\n2. Exact species-specific mature RNA identity in RNAcentral.\n3. Active miRBase mature accession from the RNAcentral cross-reference.\n4. Every current Alliance gene/locus carrying the mature RNAcentral cross-reference.\n\nStatus is one of: resolved, ambiguous, not_found, or upstream_error.\nThe resolver never selects one candidate from an ambiguous mapping.\ncandidate_limit_reached explicitly reports when the configured result\nbound omitted additional candidates from the returned list.\nOnly validated Alliance gene CURIEs accepted by go_api_call appear as\nresolved_gene_id or candidate_mappings[].gene_id.",
+        "enabled": true,
+        "input_schema": {
+          "properties": {
+            "mirbase_organism_prefix": {
+              "description": "miRBase organism prefix.",
+              "type": "string"
+            },
+            "organism_taxon_id": {
+              "description": "Organism NCBI Taxonomy CURIE.",
+              "type": "string"
+            },
+            "provider_prefix": {
+              "description": "Alliance provider namespace.",
+              "type": "string"
+            },
+            "query": {
+              "description": "Gene, precursor, mature product, or gene CURIE query.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query",
+            "organism_taxon_id",
+            "provider_prefix",
+            "mirbase_organism_prefix"
+          ],
+          "type": "object"
+        },
+        "tags": [
+          "gene",
+          "rna",
+          "mirna",
+          "rgd",
+          "rnacentral",
+          "mirbase",
+          "provenance",
+          "typed"
+        ]
+      },
+      "prompt_description": "Resolve a gene, precursor locus, or mature RNA product to typed, source-grounded Alliance gene candidates without choosing among ambiguous precursor mappings."
+    },
+    "binding_kind": "static",
+    "category": "Database",
+    "description": "Resolve genes, precursor loci, and mature RNA products to typed evidence-backed Alliance gene candidates.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Gene symbol, precursor name, mature product name, or existing gene CURIE to resolve.",
+          "name": "query",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "NCBI Taxonomy CURIE for the organism, such as NCBITaxon:10116.",
+          "name": "organism_taxon_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Alliance provider namespace for safe gene candidates, such as RGD.",
+          "name": "provider_prefix",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "miRBase organism prefix, such as rno for rat.",
+          "name": "mirbase_organism_prefix",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "summary": "Distinguishes ordinary genes, precursor loci, and mature RNA products using current Alliance curation identity, RNAcentral, and miRBase evidence; returns ambiguity explicitly and never synthesizes an RGD CURIE."
+    },
+    "methods": null,
+    "name": "Alliance Gene Product Resolver",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/gene_product_resolution.py"
+  },
   "search_alleles": {
     "agent_methods": null,
     "category": "Database",

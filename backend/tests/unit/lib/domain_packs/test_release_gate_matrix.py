@@ -77,7 +77,8 @@ def test_release_gate_matrix_path_files_resolve_to_existing_tests(suite_key: str
 
     if suite_key == "alliance_live_db_contract":
         assert entries == [
-            "tests/contract/alliance/domain_packs/test_live_db_lookup_contract.py"
+            "tests/contract/alliance/domain_packs/test_live_db_lookup_contract.py",
+            "tests/contract/alliance/tools/test_gene_product_resolution_live.py",
         ]
     else:
         assert "test_live_db_lookup_contract.py" not in "\n".join(entries)

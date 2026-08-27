@@ -104,7 +104,9 @@ def _request_timeout_seconds() -> float:
         return 30.0
 
 
-def _validate_gene_id(gene_id: object) -> ExistingGOAnnotationsResult | str:
+def validate_go_gene_id(gene_id: object) -> ExistingGOAnnotationsResult | str:
+    """Return the validated CURIE or the adapter's typed rejection result."""
+
     if not isinstance(gene_id, str) or not gene_id or gene_id != gene_id.strip():
         return ExistingGOAnnotationsResult(
             status="invalid_input",
@@ -226,7 +228,7 @@ def lookup_existing_go_annotations(
 ) -> ExistingGOAnnotationsResult:
     """Validate, fetch, and normalize existing GO annotations without source fallback."""
 
-    validated = _validate_gene_id(gene_id)
+    validated = validate_go_gene_id(gene_id)
     if isinstance(validated, ExistingGOAnnotationsResult):
         return validated
 
@@ -311,4 +313,5 @@ __all__ = [
     "GOAnnotationRelation",
     "go_api_call",
     "lookup_existing_go_annotations",
+    "validate_go_gene_id",
 ]

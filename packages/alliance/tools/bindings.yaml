@@ -2630,6 +2630,69 @@ tools:
                 type: string
                 description: Supported Alliance gene CURIE.
             required: [gene_id]
+  - tool_id: resolve_gene_product
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.gene_product_resolution:resolve_gene_product_tool
+    required_context: []
+    description: Resolve genes, precursor loci, and mature RNA products to typed evidence-backed Alliance gene candidates.
+    source_file: python/src/agr_ai_curation_alliance/tools/gene_product_resolution.py
+    metadata:
+      name: Alliance Gene Product Resolver
+      category: Database
+      documentation:
+        summary: Distinguishes ordinary genes, precursor loci, and mature RNA products using current Alliance curation identity, RNAcentral, and miRBase evidence; returns ambiguity explicitly and never synthesizes an RGD CURIE.
+        parameters:
+        - name: query
+          type: string
+          required: true
+          description: Gene symbol, precursor name, mature product name, or existing gene CURIE to resolve.
+        - name: organism_taxon_id
+          type: string
+          required: true
+          description: NCBI Taxonomy CURIE for the organism, such as NCBITaxon:10116.
+        - name: provider_prefix
+          type: string
+          required: true
+          description: Alliance provider namespace for safe gene candidates, such as RGD.
+        - name: mirbase_organism_prefix
+          type: string
+          required: true
+          description: miRBase organism prefix, such as rno for rat.
+      agent_studio:
+        prompt_description: Resolve a gene, precursor locus, or mature RNA product to typed, source-grounded Alliance gene candidates without choosing among ambiguous precursor mappings.
+        diagnostic:
+          enabled: true
+          description: |-
+            Resolve organism-scoped gene-product identity through a fixed hierarchy:
+            1. Exact current gene/locus identity in the read-only Alliance curation database.
+            2. Exact species-specific mature RNA identity in RNAcentral.
+            3. Active miRBase mature accession from the RNAcentral cross-reference.
+            4. Every current Alliance gene/locus carrying the mature RNAcentral cross-reference.
+
+            Status is one of: resolved, ambiguous, not_found, or upstream_error.
+            The resolver never selects one candidate from an ambiguous mapping.
+            candidate_limit_reached explicitly reports when the configured result
+            bound omitted additional candidates from the returned list.
+            Only validated Alliance gene CURIEs accepted by go_api_call appear as
+            resolved_gene_id or candidate_mappings[].gene_id.
+          category: database
+          tags: [gene, rna, mirna, rgd, rnacentral, mirbase, provenance, typed]
+          input_schema:
+            type: object
+            properties:
+              query:
+                type: string
+                description: Gene, precursor, mature product, or gene CURIE query.
+              organism_taxon_id:
+                type: string
+                description: Organism NCBI Taxonomy CURIE.
+              provider_prefix:
+                type: string
+                description: Alliance provider namespace.
+              mirbase_organism_prefix:
+                type: string
+                description: miRBase organism prefix.
+            required: [query, organism_taxon_id, provider_prefix, mirbase_organism_prefix]
   - tool_id: alliance_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:alliance_api_call

@@ -72,6 +72,10 @@ _LAZY_EXPORTS = {
     ),
     "go_api_call": (".go_annotations", "go_api_call"),
     "quickgo_api_call": (".rest", "quickgo_api_call"),
+    "resolve_gene_product": (
+        ".gene_product_resolution",
+        "resolve_gene_product_tool",
+    ),
 }
 
 __all__ = list(_LAZY_EXPORTS)

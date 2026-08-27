@@ -1,0 +1,191 @@
+{
+  "fixture_metadata": {
+    "retrieved": "2026-08-27",
+    "query": "miR-124-3p",
+    "organism_taxon_id": "NCBITaxon:10116",
+    "provider_prefix": "RGD",
+    "mirbase_organism_prefix": "rno",
+    "notes": "Recorded source fragments demonstrate current identities and mappings. Candidate count is evidence, not resolver policy."
+  },
+  "rnacentral_search": {
+    "hitCount": 6,
+    "entries": [
+      {
+        "id": "URS000020BE6A_10116",
+        "source": "rnacentral",
+        "fields": {
+          "description": ["Rattus norvegicus (Norway rat) rno-miR-124-3p"],
+          "rna_type": ["miRNA"],
+          "expert_db": ["MIRBASE", "RefSeq", "PirBase"]
+        }
+      },
+      {
+        "id": "RNACRNOG49826723980.2",
+        "source": "rnacentral",
+        "fields": {
+          "description": ["Rattus norvegicus (Norway rat) rno-miR-124-3p"],
+          "rna_type": ["Gene"],
+          "expert_db": ["MIRBASE", "RefSeq"]
+        }
+      },
+      {
+        "id": "RNACRNOG84616093293.1",
+        "source": "rnacentral",
+        "fields": {
+          "description": ["Rattus norvegicus (Norway rat) rno-miR-124-3p"],
+          "rna_type": ["Gene"],
+          "expert_db": ["MIRBASE", "RefSeq"]
+        }
+      },
+      {
+        "id": "RNACRNOG93859917613.2",
+        "source": "rnacentral",
+        "fields": {
+          "description": ["Rattus norvegicus (Norway rat) rno-miR-124-3p"],
+          "rna_type": ["Gene"],
+          "expert_db": ["MIRBASE", "RefSeq"]
+        }
+      },
+      {
+        "id": "RNACRNOG67956842819.2",
+        "source": "rnacentral",
+        "fields": {
+          "description": ["Rattus norvegicus (Norway rat) rno-miR-124-3p"],
+          "rna_type": ["Gene"],
+          "expert_db": ["MIRBASE", "RefSeq"]
+        }
+      },
+      {
+        "id": "RNACRNOG72941481558.1",
+        "source": "rnacentral",
+        "fields": {
+          "description": ["Rattus norvegicus (Norway rat) rno-miR-124-3p"],
+          "rna_type": ["Gene"],
+          "expert_db": ["MIRBASE", "RefSeq"]
+        }
+      }
+    ]
+  },
+  "rnacentral_mature_xrefs": {
+    "count": 5,
+    "next": null,
+    "previous": null,
+    "results": [
+      {"database": "piRBase", "is_active": true},
+      {"database": "RefSeq", "is_active": true},
+      {"database": "RefSeq", "is_active": true},
+      {"database": "RefSeq", "is_active": true},
+      {
+        "upi": "URS000020BE6A",
+        "database": "miRBase",
+        "is_active": true,
+        "taxid": 10116,
+        "accession": {
+          "external_id": "MIMAT0000828",
+          "optional_id": "rno-miR-124-3p",
+          "description": "Rattus norvegicus (Norway rat) rno-miR-124-3p",
+          "rna_type": "miRNA"
+        }
+      }
+    ]
+  },
+  "rnacentral_precursor_xrefs": {
+    "RNAcentral:URS00003AA409": {
+      "count": 7,
+      "next": null,
+      "previous": null,
+      "results": [
+        {"database": "MirGeneDB", "is_active": true},
+        {"database": "MirGeneDB", "is_active": true},
+        {"database": "MirGeneDB", "is_active": true},
+        {"database": "RefSeq", "is_active": true},
+        {"database": "RefSeq", "is_active": true},
+        {"database": "RefSeq", "is_active": true},
+        {"database": "miRBase", "is_active": true, "accession": {"external_id": "MIMAT0004728", "optional_id": "rno-miR-124-5p"}}
+      ]
+    },
+    "RNAcentral:URS000075A939": {
+      "count": 7,
+      "next": null,
+      "previous": null,
+      "results": [
+        {"database": "RGD", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "RefSeq", "is_active": true},
+        {"database": "miRBase", "is_active": true, "accession": {"external_id": "MI0000893", "optional_id": "rno-mir-124-1"}}
+      ]
+    },
+    "RNAcentral:URS000075EDDE": {
+      "count": 7,
+      "next": null,
+      "previous": null,
+      "results": [
+        {"database": "RGD", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "RefSeq", "is_active": true},
+        {"database": "miRBase", "is_active": true, "accession": {"external_id": "MI0000892", "optional_id": "rno-mir-124-3"}}
+      ]
+    },
+    "RNAcentral:URS000075E86C": {
+      "count": 7,
+      "next": null,
+      "previous": null,
+      "results": [
+        {"database": "RGD", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "Ensembl", "is_active": true},
+        {"database": "RefSeq", "is_active": true},
+        {"database": "miRBase", "is_active": true, "accession": {"external_id": "MI0000894", "optional_id": "rno-mir-124-2"}}
+      ]
+    }
+  },
+  "curation_db_candidates": [
+    {
+      "gene_id": "RGD:2325336",
+      "gene_symbol": "Mir124-1",
+      "gene_name": "microRNA 124-1",
+      "taxon_id": "NCBITaxon:10116",
+      "gene_type": "ncRNA_gene",
+      "rnacentral_ids": [
+        "RNAcentral:URS000020BE6A",
+        "RNAcentral:URS00003AA409",
+        "RNAcentral:URS000075A939"
+      ],
+      "mirbase_hairpin_id": "miRBase:MI0000893"
+    },
+    {
+      "gene_id": "RGD:2325458",
+      "gene_symbol": "Mir124-3",
+      "gene_name": "microRNA 124-3",
+      "taxon_id": "NCBITaxon:10116",
+      "gene_type": "ncRNA_gene",
+      "rnacentral_ids": [
+        "RNAcentral:URS000020BE6A",
+        "RNAcentral:URS00003AA409",
+        "RNAcentral:URS000075EDDE"
+      ],
+      "mirbase_hairpin_id": "miRBase:MI0000892"
+    },
+    {
+      "gene_id": "RGD:2325576",
+      "gene_symbol": "Mir124-2",
+      "gene_name": "microRNA 124-2",
+      "taxon_id": "NCBITaxon:10116",
+      "gene_type": "ncRNA_gene",
+      "rnacentral_ids": [
+        "RNAcentral:URS000020BE6A",
+        "RNAcentral:URS00003AA409",
+        "RNAcentral:URS000075E86C"
+      ],
+      "mirbase_hairpin_id": "miRBase:MI0000894"
+    }
+  ]
+}

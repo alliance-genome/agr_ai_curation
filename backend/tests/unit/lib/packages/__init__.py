@@ -30,6 +30,7 @@ SHIPPED_TOOLS_PACKAGE_EXPORTS = (
     "stage_gene_expression_observation",
     "go_api_call",
     "quickgo_api_call",
+    "resolve_gene_product",
 )
 
 

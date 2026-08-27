@@ -1,3 +1,4 @@
 # Paths are relative to backend/.
 # Explicit opt-in live DB projection contract suite.
 tests/contract/alliance/domain_packs/test_live_db_lookup_contract.py
+tests/contract/alliance/tools/test_gene_product_resolution_live.py

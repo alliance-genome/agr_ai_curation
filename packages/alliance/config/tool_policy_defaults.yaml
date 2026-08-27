@@ -93,3 +93,12 @@ tool_policies:
     allow_attach: true
     allow_execute: true
     config: {}
+
+  resolve_gene_product:
+    display_name: Alliance Gene Product Resolver
+    description: Resolve genes, precursor loci, and mature RNA products without guessing among mappings.
+    category: Database
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}

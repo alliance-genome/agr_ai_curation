@@ -351,6 +351,7 @@ def test_bundled_alliance_owns_attachable_alliance_bound_tool_policies(monkeypat
         "chebi_api_call",
         "quickgo_api_call",
         "go_api_call",
+        "resolve_gene_product",
     ):
         policy = policies[tool_id]
         assert policy.allow_attach is True
