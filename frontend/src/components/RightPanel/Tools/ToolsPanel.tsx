@@ -2,14 +2,14 @@
  * ToolsPanel Component
  *
  * Container component for the Tools tab content.
- * Includes Curation Flows section and PDF Highlight Tester.
+ * Includes the persistent chat default and Curation Flows sections.
  */
 
 import React from 'react'
 import { Box, Stack } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
+import ChatDefault from './ChatDefault'
 import CurationFlows from './CurationFlows'
-import PdfHighlightTester from '../../pdfViewer/PdfHighlightTester'
 import type { SSEEvent } from '@/hooks/useChatStream'
 
 /**
@@ -34,8 +34,8 @@ export interface ToolsPanelProps {
  * ToolsPanel component that combines all tools for the Tools tab.
  *
  * Layout:
- * - Curation Flows section (top) - for executing saved flows
- * - PDF Highlight Tester section (bottom) - for manual highlighting
+ * - Chat default section (top) - for choosing future chat routing
+ * - Curation Flows section (bottom) - for executing saved flows
  */
 const ToolsPanel: React.FC<ToolsPanelProps> = ({
   sessionId,
@@ -82,6 +82,8 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
         }}
       >
         <Stack spacing={2}>
+          <ChatDefault />
+
           {/* Curation Flows Section */}
           <CurationFlows
             sessionId={sessionId}
@@ -91,18 +93,6 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
             isExecuting={isExecuting}
             currentDocumentId={currentDocumentId}
           />
-
-          {/* PDF Highlight Tester Section */}
-          <Box
-            sx={{
-              border: `1px solid ${theme.palette.divider}`,
-              borderRadius: '8px',
-              padding: '16px',
-              backgroundColor: alpha(theme.palette.background.paper, 0.52),
-            }}
-          >
-            <PdfHighlightTester />
-          </Box>
         </Stack>
       </Box>
     </Box>

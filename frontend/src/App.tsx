@@ -110,7 +110,6 @@ const APP_THEME_GLOBAL_ALPHA = {
 } as const
 
 const HomePage = lazy(() => import('./pages/HomePage'))
-const ViewerSettings = lazy(() => import('./pages/ViewerSettings'))
 const AgentStudioPage = lazy(() => import('./pages/AgentStudioPage'))
 const BatchPage = lazy(() => import('./pages/BatchPage'))
 const ChangelogPage = lazy(() => import('./pages/ChangelogPage'))
@@ -846,7 +845,6 @@ export function AppContent() {
         <Routes>
           <Route path="/history" element={renderLazyRoute(<HistoryPage />)} />
           <Route path="/changelog" element={renderLazyRoute(<ChangelogPage />)} />
-          <Route path="/viewer-settings" element={renderLazyRoute(<ViewerSettings />)} />
           <Route path="/agent-studio" element={renderLazyRoute(<AgentStudioPage />)} />
           <Route path="/batch" element={renderLazyRoute(<BatchPage />)} />
           <Route path="/curation" element={renderLazyRoute(<CurationInventoryPage />)} />

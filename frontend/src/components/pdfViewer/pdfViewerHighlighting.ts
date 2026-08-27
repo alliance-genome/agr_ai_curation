@@ -1,4 +1,3 @@
-import type { HighlightSettings } from '@/components/pdfViewer/highlightSettings'
 import { safeSetJson } from '@/lib/browserStorage'
 import type { ViewerDocument, ViewerSession, ViewerState } from './pdfViewerTypes'
 
@@ -28,39 +27,4 @@ export const persistSession = (storageKey: string | null, doc: ViewerDocument, s
     owner: 'pdf-viewer',
     workflowCritical: true,
   })
-}
-
-export const ensureMarkInjected = (iframeDoc: Document, settings: HighlightSettings) => {
-  if (!iframeDoc.getElementById('mark-js-script')) {
-    const script = iframeDoc.createElement('script')
-    script.id = 'mark-js-script'
-    script.src = 'https://cdn.jsdelivr.net/npm/mark.js@8.11.1/dist/mark.min.js'
-    iframeDoc.head.appendChild(script)
-  }
-
-  let styleEl = iframeDoc.getElementById('pdf-highlight-styles') as HTMLStyleElement | null
-  if (!styleEl) {
-    styleEl = iframeDoc.createElement('style')
-    styleEl.id = 'pdf-highlight-styles'
-    iframeDoc.head.appendChild(styleEl)
-  }
-
-  styleEl.textContent = `
-    mark.pdf-highlight {
-      background-color: ${settings.highlightColor};
-      color: inherit !important;
-      padding: 0 !important;
-      margin: 0 !important;
-      border-radius: 2px;
-      opacity: ${settings.highlightOpacity};
-      mix-blend-mode: multiply;
-    }
-  `
-}
-
-export const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLElement[] => {
-  if (specificLayer) {
-    return [specificLayer]
-  }
-  return Array.from(iframeDoc.querySelectorAll<HTMLElement>('.textLayer'))
 }

@@ -22,7 +22,7 @@ import type { SSEEvent } from '../hooks/useChatStream'
  * of the application. It manages tab state and renders appropriate content based on
  * the active tab. Currently supports:
  * - **Audit tab** (Tab 0, default): Displays real-time AI agent activity via AuditPanel
- * - **Tools tab** (Tab 1): Contains the PdfHighlightTester component
+ * - **Tools tab** (Tab 1): Contains chat defaults and saved curation flows
  *
  * The component uses MUI Tabs for accessibility (ARIA attributes, keyboard navigation)
  * and implements the hidden prop pattern to preserve component state when switching

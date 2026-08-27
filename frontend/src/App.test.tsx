@@ -61,7 +61,6 @@ vi.mock('./pages/HomePage', () => ({
     return <div data-testid="home-page">Home{location.search}</div>;
   },
 }));
-vi.mock('./pages/ViewerSettings', () => ({ default: () => <div>Viewer</div> }));
 vi.mock('./pages/AgentStudioPage', () => ({ default: () => <div>Agent Studio</div> }));
 vi.mock('./pages/BatchPage', () => ({ default: () => <div>Batch</div> }));
 vi.mock('./pages/ChangelogPage', () => ({ default: () => <div>Changelog Page</div> }));

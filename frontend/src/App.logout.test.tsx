@@ -56,7 +56,6 @@ vi.mock('./components/ChangelogDialog', () => ({
 }));
 
 vi.mock('./pages/HomePage', () => ({ default: () => <div>Home</div> }));
-vi.mock('./pages/ViewerSettings', () => ({ default: () => <div>Viewer</div> }));
 vi.mock('./pages/AgentStudioPage', () => ({ default: () => <div>Agent Studio</div> }));
 vi.mock('./pages/BatchPage', () => ({ default: () => <div>Batch</div> }));
 vi.mock('./pages/ChangelogPage', () => ({ default: () => <div>Changelog Page</div> }));
