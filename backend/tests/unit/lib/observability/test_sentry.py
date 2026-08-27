@@ -788,6 +788,25 @@ def test_before_send_transaction_drops_unknown_ai_curation_span_keys():
     assert "ai_curation.unreviewed.new_shape" not in data
 
 
+def test_before_send_transaction_hashes_preferred_agent_identifier():
+    event = {
+        "spans": [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "fedcba9876543210",
+                "op": "gen_ai.invoke_agent",
+                "data": {"ai_curation.agent.id": "private-agent-123"},
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+
+    assert scrubbed["spans"][0]["data"]["ai_curation.agent.id"] == sentry._hash_identifier(
+        "private-agent-123"
+    )
+
+
 def test_before_send_transaction_tier2_preserves_ai_curation_content_with_secret_scrubbing(monkeypatch):
     monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "2")
     monkeypatch.setenv("SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS", "256")

@@ -47,6 +47,7 @@ async def chat_endpoint(
     # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
+    db_user = set_global_user_from_cognito(db, user)
     effective_user_message = chat_message.message
     turn_claim_key: Optional[str] = None
     turn_claim_token: Optional[str] = None
@@ -93,21 +94,19 @@ async def chat_endpoint(
             repository=repository,
             user_id=user_id,
         )
-        repository.get_or_create_session(
+        prepared_turn = _prepare_chat_stream_turn(
+            repository=repository,
+            db=db,
             session_id=session_id,
-            user_auth_sub=user_id,
-            chat_kind=ASSISTANT_CHAT_KIND,
+            user_id=user_id,
+            user_message=chat_message.message,
+            requested_turn_id=requested_turn_id,
             active_document_id=active_document_id,
+            db_user_id=db_user.id,
+            active_groups=active_groups,
         )
-        user_turn = repository.append_message(
-            session_id=session_id,
-            user_auth_sub=user_id,
-            chat_kind=ASSISTANT_CHAT_KIND,
-            role="user",
-            content=chat_message.message,
-            turn_id=turn_id,
-        )
-        db.commit()
+        turn_id = prepared_turn.turn_id
+        effective_user_message = prepared_turn.effective_user_message
     except HTTPException:
         await _release_non_stream_turn_claim()
         raise
@@ -136,25 +135,8 @@ async def chat_endpoint(
             exc=exc,
         )
 
-    if requested_turn_id and not user_turn.created:
-        effective_user_message = user_turn.message.content
-        try:
-            assistant_turn = repository.get_message_by_turn_id(
-                session_id=session_id,
-                user_auth_sub=user_id,
-                turn_id=requested_turn_id,
-                role="assistant",
-            )
-        except ValueError as exc:
-            await _release_non_stream_turn_claim()
-            raise_sanitized_http_exception(
-                logger,
-                status_code=400,
-                detail="Invalid chat replay request",
-                log_message=f"Failed to load durable replay state for session {session_id}",
-                exc=exc,
-                level=logging.WARNING,
-            )
+    if requested_turn_id and not prepared_turn.user_turn_created:
+        assistant_turn = prepared_turn.replay_assistant_turn
 
         if assistant_turn is not None:
             _queue_chat_title_backfill(
@@ -186,17 +168,23 @@ async def chat_endpoint(
                 extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
             )
 
-    try:
-        tool_agent_map = get_supervisor_tool_agent_map(active_groups)
-    except Exception as exc:
-        await _release_non_stream_turn_claim()
-        raise_sanitized_http_exception(
-            logger,
-            status_code=500,
-            detail="Internal configuration error: unable to process chat request",
-            log_message="Supervisor tool-map resolution failed; aborting chat run",
-            exc=exc,
-        )
+    resolved_route = prepared_turn.route
+    if resolved_route is None:
+        raise RuntimeError("Prepared executable chat turn is missing its resolved route")
+
+    tool_agent_map: Dict[str, str] = {}
+    if resolved_route.mode == "automatic":
+        try:
+            tool_agent_map = get_supervisor_tool_agent_map(active_groups)
+        except Exception as exc:
+            await _release_non_stream_turn_claim()
+            raise_sanitized_http_exception(
+                logger,
+                status_code=500,
+                detail="Internal configuration error: unable to process chat request",
+                log_message="Supervisor tool-map resolution failed; aborting chat run",
+                exc=exc,
+            )
 
     try:
         context_messages = [{"role": "user", "content": effective_user_message}]
@@ -209,6 +197,7 @@ async def chat_endpoint(
         sentry_error_event_count = 0
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
+        flow_terminal_events: List[Dict[str, Any]] = []
 
         with gen_ai_workflow_transaction(
             name="/api/chat",
@@ -218,7 +207,10 @@ async def chat_endpoint(
             document_present=bool(document_id),
             input_preview=effective_user_message,
         ) as sentry_transaction:
-            async for event in run_agent_streamed(
+            async for event in _run_resolved_chat_route(
+                route=resolved_route,
+                db=db,
+                db_user_id=db_user.id,
                 context_messages=context_messages,
                 user_id=user_id,
                 session_id=session_id,
@@ -235,6 +227,16 @@ async def chat_endpoint(
             ):
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
+
+                if event_type == _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE:
+                    internal = event.get("internal")
+                    raw_events = internal.get("events") if isinstance(internal, dict) else None
+                    flow_terminal_events = (
+                        [dict(item) for item in raw_events if isinstance(item, dict)]
+                        if isinstance(raw_events, list)
+                        else []
+                    )
+                    continue
 
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
@@ -261,6 +263,11 @@ async def chat_endpoint(
                 persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
                     event,
                     tool_agent_map=tool_agent_map,
+                    fallback_agent_key=(
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
+                        else None
+                    ),
                 )
                 if persisted_ref:
                     persisted_extraction_refs.append(persisted_ref)
@@ -270,6 +277,11 @@ async def chat_endpoint(
                     tool_agent_map=tool_agent_map,
                     conversation_summary=effective_user_message,
                     metadata={"document_name": document_name} if document_name else None,
+                    fallback_agent_key=(
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
+                        else None
+                    ),
                 )
                 if candidate:
                     extraction_candidates.append(candidate)
@@ -321,6 +333,14 @@ async def chat_endpoint(
                         source_kind=CurationExtractionSourceKind.CHAT,
                         db=db,
                     )
+                    _append_preferred_flow_transcript_rows(
+                        repository=repository,
+                        session_id=session_id,
+                        user_id=user_id,
+                        turn_id=turn_id,
+                        trace_id=trace_id,
+                        flow_terminal_events=flow_terminal_events,
+                    )
                     assistant_turn = repository.append_message(
                         session_id=session_id,
                         user_auth_sub=user_id,
@@ -329,6 +349,11 @@ async def chat_endpoint(
                         content=full_response,
                         turn_id=turn_id,
                         trace_id=trace_id,
+                        payload_json=(
+                            {_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: flow_terminal_events}
+                            if flow_terminal_events
+                            else None
+                        ),
                     )
                     if requested_turn_id and not assistant_turn.created:
                         db.rollback()
@@ -448,6 +473,7 @@ async def chat_stream_endpoint(
     # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
+    db_user = set_global_user_from_cognito(db, user)
     if active_groups:
         logger.info(
             "User has active groups: %s (from provider groups: %s)",
@@ -503,17 +529,6 @@ async def chat_stream_endpoint(
                 ),
             )
 
-    try:
-        tool_agent_map = get_supervisor_tool_agent_map(active_groups)
-    except Exception as exc:
-        raise_sanitized_http_exception(
-            logger,
-            status_code=500,
-            detail="Internal configuration error: unable to process chat request",
-            log_message="Supervisor tool-map resolution failed; aborting chat stream",
-            exc=exc,
-        )
-
     generated_title_candidate: str | None = None
     stream_lifecycle = await _claim_active_stream_lifecycle(
         session_id=session_id,
@@ -533,6 +548,8 @@ async def chat_stream_endpoint(
             user_message=chat_message.message,
             requested_turn_id=chat_message.turn_id,
             active_document_id=active_document_id,
+            db_user_id=db_user.id,
+            active_groups=active_groups,
         )
         generated_title_candidate = _generate_title_from_turn(
             user_message=prepared_turn.effective_user_message,
@@ -574,15 +591,31 @@ async def chat_stream_endpoint(
         await stream_lifecycle.finalize(generated_title_candidate)
 
         async def replay_stream():
-            yield _stream_event_sse(
-                _stream_event_payload(
-                    "TEXT_MESSAGE_CONTENT",
-                    session_id=session_id,
-                    turn_id=prepared_turn.turn_id,
-                    trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                    content=prepared_turn.replay_assistant_turn.content,
-                )
+            replay_events = _preferred_flow_replay_events(
+                prepared_turn.replay_assistant_turn
             )
+            has_chat_output = any(
+                event.get("type") == "CHAT_OUTPUT_READY" for event in replay_events
+            )
+            for replay_event in replay_events:
+                if replay_event.get("type") == "RUN_FINISHED":
+                    continue
+                replay_event["session_id"] = session_id
+                replay_event["turn_id"] = prepared_turn.turn_id
+                replay_event.setdefault(
+                    "trace_id", prepared_turn.replay_assistant_turn.trace_id
+                )
+                yield _stream_event_sse(replay_event)
+            if not has_chat_output:
+                yield _stream_event_sse(
+                    _stream_event_payload(
+                        "TEXT_MESSAGE_CONTENT",
+                        session_id=session_id,
+                        turn_id=prepared_turn.turn_id,
+                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                        content=prepared_turn.replay_assistant_turn.content,
+                    )
+                )
             yield _stream_event_sse(
                 _build_terminal_turn_event(
                     "turn_completed",
@@ -603,6 +636,24 @@ async def chat_stream_endpoint(
             },
         )
 
+    resolved_route = prepared_turn.route
+    if resolved_route is None:
+        raise RuntimeError("Prepared executable chat turn is missing its resolved route")
+
+    tool_agent_map: Dict[str, str] = {}
+    if resolved_route.mode == "automatic":
+        try:
+            tool_agent_map = get_supervisor_tool_agent_map(active_groups)
+        except Exception as exc:
+            await stream_lifecycle.cleanup()
+            raise_sanitized_http_exception(
+                logger,
+                status_code=500,
+                detail="Internal configuration error: unable to process chat request",
+                log_message="Supervisor tool-map resolution failed; aborting chat stream",
+                exc=exc,
+            )
+
     async def generate_stream():
         """Generate SSE events from the agent runner."""
         nonlocal generated_title_candidate
@@ -617,6 +668,7 @@ async def chat_stream_endpoint(
         interrupted_message: Optional[str] = None
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
+        flow_terminal_events: List[Dict[str, Any]] = []
         evidence_records: List[Dict[str, Any]] = []
         evidence_summary_event_received = False
         sentry_error_event_count = 0
@@ -632,7 +684,10 @@ async def chat_stream_endpoint(
         sentry_transaction = sentry_transaction_context_manager.__enter__()
 
         try:
-            async for event in run_agent_streamed(
+            async for event in _run_resolved_chat_route(
+                route=resolved_route,
+                db=db,
+                db_user_id=db_user.id,
                 context_messages=[
                     {"role": "user", "content": prepared_turn.effective_user_message}
                 ],
@@ -665,6 +720,16 @@ async def chat_stream_endpoint(
 
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
+
+                if event_type == _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE:
+                    internal = event.get("internal")
+                    raw_events = internal.get("events") if isinstance(internal, dict) else None
+                    flow_terminal_events = (
+                        [dict(item) for item in raw_events if isinstance(item, dict)]
+                        if isinstance(raw_events, list)
+                        else []
+                    )
+                    continue
 
                 if "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
@@ -742,6 +807,11 @@ async def chat_stream_endpoint(
                 persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
                     event,
                     tool_agent_map=tool_agent_map,
+                    fallback_agent_key=(
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
+                        else None
+                    ),
                 )
                 if persisted_ref:
                     persisted_extraction_refs.append(persisted_ref)
@@ -751,6 +821,11 @@ async def chat_stream_endpoint(
                     tool_agent_map=tool_agent_map,
                     conversation_summary=prepared_turn.effective_user_message,
                     metadata={"document_name": document_name} if document_name else None,
+                    fallback_agent_key=(
+                        resolved_route.target_id
+                        if resolved_route.mode == "agent"
+                        else None
+                    ),
                 )
                 if candidate:
                     extraction_candidates.append(candidate)
@@ -859,6 +934,7 @@ async def chat_stream_endpoint(
                         extraction_candidates=extraction_candidates,
                         persisted_extraction_refs=persisted_extraction_refs,
                         document_id=document_id,
+                        flow_terminal_events=flow_terminal_events,
                     )
                 except ChatHistorySessionNotFoundError:
                     sentry_terminal_status = "session_gone"
@@ -973,6 +1049,15 @@ async def chat_stream_endpoint(
                     "ai_curation.agent.output",
                     assistant_turn.content,
                 )
+                for flow_event in flow_terminal_events:
+                    if flow_event.get("type") == "RUN_FINISHED":
+                        continue
+                    durable_flow_event = dict(flow_event)
+                    durable_flow_event["session_id"] = current_session_id
+                    durable_flow_event["turn_id"] = current_turn_id
+                    if not durable_flow_event.get("trace_id"):
+                        durable_flow_event["trace_id"] = assistant_turn.trace_id or trace_id
+                    yield _stream_event_sse(durable_flow_event)
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
                         "turn_completed",

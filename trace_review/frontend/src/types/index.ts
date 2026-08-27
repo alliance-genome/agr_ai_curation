@@ -329,6 +329,8 @@ export interface AgentContextData {
     supervisor_agent?: string;
     supervisor_model?: string;
     has_document?: boolean;
+    chat_route_mode?: 'automatic' | 'agent' | 'flow';
+    chat_route_target_id?: string;
   };
   supervisor?: AgentConfig;
   specialists: AgentConfig[];

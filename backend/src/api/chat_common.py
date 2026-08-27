@@ -18,7 +18,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Mapping, NoReturn, Optional, Sequence
+from typing import Any, Dict, List, Literal, Mapping, NoReturn, Optional, Sequence, cast
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
@@ -31,6 +31,7 @@ from .auth import get_auth_dependency
 from .chat_models import *
 from ..lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
+    AppendMessageResult,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
     ChatMessageCursor,
@@ -77,6 +78,8 @@ from ..lib.openai_agents.evidence_summary import (
 )
 from ..lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from ..lib.flows.executor import execute_flow
+from ..lib.flows.outcome import FlowRunOutcome, flow_typed_output_transcript_values
+from ..lib.agent_studio.catalog_service import get_agent_by_id
 from ..lib.weaviate_client.documents import get_document
 from ..models.sql import CurationFlow, SessionLocal, get_db
 from ..schemas.curation_workspace import (
@@ -85,6 +88,11 @@ from ..schemas.curation_workspace import (
 )
 from ..schemas.flows import ExecuteFlowRequest
 from ..services.user_service import set_global_user_from_cognito
+from ..services.chat_route_preference_service import (
+    ChatRoutePreferenceState,
+    get_chat_route_preference,
+    resolve_chat_route_selection,
+)
 from ..lib.group_rules import get_groups_from_provider_groups
 from ..lib.http_errors import log_exception, raise_sanitized_http_exception
 from ..lib.redis_client import (
@@ -101,6 +109,9 @@ from ..lib.redis_client import (
 from ..lib.context import set_current_session_id, set_current_user_id
 
 logger = logging.getLogger("src.api.chat")
+
+_CHAT_ROUTE_PAYLOAD_KEY = "chat_route"
+_PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE = "_PREFERRED_FLOW_TERMINAL_EVENTS"
 
 # Create router with prefix
 router = APIRouter(prefix="/api")
@@ -122,6 +133,7 @@ def _build_extraction_candidate_from_tool_event(
     tool_agent_map: Dict[str, str],
     conversation_summary: Optional[str],
     metadata: Optional[Dict[str, Any]] = None,
+    fallback_agent_key: Optional[str] = None,
 ) -> Optional[ExtractionEnvelopeCandidate]:
     """Parse a backend-only extraction event into a persistable candidate."""
 
@@ -141,7 +153,11 @@ def _build_extraction_candidate_from_tool_event(
         return None
 
     tool_name = str(details.get("toolName") or "").strip()
-    agent_key = tool_agent_map.get(tool_name)
+    agent_key = (
+        tool_agent_map.get(tool_name)
+        or str(details.get("agent_key") or internal_payload.get("agent_key") or "").strip()
+        or fallback_agent_key
+    )
     if not agent_key:
         return None
 
@@ -180,6 +196,7 @@ def _build_persisted_extraction_result_ref_from_tool_event(
     event: Dict[str, Any],
     *,
     tool_agent_map: Dict[str, str],
+    fallback_agent_key: Optional[str] = None,
 ) -> Optional[PersistedExtractionResultRef]:
     """Read the stable persisted extraction ref from a backend-only event."""
 
@@ -200,7 +217,11 @@ def _build_persisted_extraction_result_ref_from_tool_event(
         extraction_result_id=extraction_result_id,
         result_ref=result_ref or f"extraction-result:{extraction_result_id}",
         tool_name=tool_name,
-        agent_key=tool_agent_map.get(tool_name or ""),
+        agent_key=(
+            tool_agent_map.get(tool_name or "")
+            or str(details.get("agent_key") or internal_payload.get("agent_key") or "").strip()
+            or fallback_agent_key
+        ),
     )
 
 
@@ -978,8 +999,9 @@ def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
             key: value
             for key, value in record.payload_json.items()
             if not (
-                (record.role == "flow" and key in _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS)
+                key in _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS
                 or key == _EXECUTE_FLOW_RUNTIME_STATE_KEY
+                or key == _CHAT_ROUTE_PAYLOAD_KEY
             )
         }
     elif isinstance(record.payload_json, list):
@@ -1151,6 +1173,275 @@ def _build_terminal_turn_event(
     return payload
 
 
+def _chat_route_payload(route: ResolvedChatRoute) -> Dict[str, Any]:
+    route_payload: Dict[str, Any] = {"mode": route.mode}
+    if route.target_id is not None:
+        route_payload["target_id"] = route.target_id
+    if route.target_display_name is not None:
+        route_payload["target_display_name"] = route.target_display_name
+    if route.flow_run_id is not None:
+        route_payload["flow_run_id"] = route.flow_run_id
+    return {_CHAT_ROUTE_PAYLOAD_KEY: route_payload}
+
+
+def _chat_route_from_payload(
+    payload_json: Dict[str, Any] | List[Any] | None,
+) -> ResolvedChatRoute:
+    """Read the required route identity from a durable ordinary-chat user row."""
+
+    route_payload = (
+        payload_json.get(_CHAT_ROUTE_PAYLOAD_KEY)
+        if isinstance(payload_json, dict)
+        else None
+    )
+    if not isinstance(route_payload, dict):
+        raise ValueError("Durable chat turn is missing its resolved route identity")
+
+    mode = str(route_payload.get("mode") or "").strip()
+    if mode not in {"automatic", "agent", "flow"}:
+        raise ValueError("Durable chat turn has an invalid resolved route mode")
+    target_id = str(route_payload.get("target_id") or "").strip() or None
+    target_display_name = (
+        str(route_payload.get("target_display_name") or "").strip() or None
+    )
+    flow_run_id = str(route_payload.get("flow_run_id") or "").strip() or None
+    if mode == "automatic" and (target_id is not None or flow_run_id is not None):
+        raise ValueError("Automatic chat route cannot contain a target identity")
+    if mode == "agent" and (target_id is None or flow_run_id is not None):
+        raise ValueError("Agent chat route requires exactly one agent identity")
+    if mode == "flow" and (target_id is None or flow_run_id is None):
+        raise ValueError("Flow chat route requires a flow and flow-run identity")
+    return ResolvedChatRoute(
+        mode=cast(Literal["automatic", "agent", "flow"], mode),
+        target_id=target_id,
+        target_display_name=target_display_name,
+        flow_run_id=flow_run_id,
+    )
+
+
+def _route_from_preference(state: ChatRoutePreferenceState) -> ResolvedChatRoute:
+    if state.mode == "automatic":
+        return ResolvedChatRoute(mode="automatic")
+    if state.target is None:
+        _raise_unavailable_chat_route(state)
+    target_id = state.target.id
+    return ResolvedChatRoute(
+        mode=state.mode,
+        target_id=target_id,
+        target_display_name=state.target.display_name,
+        flow_run_id=str(uuid.uuid4()) if state.mode == "flow" else None,
+    )
+
+
+def _new_chat_route(
+    *,
+    db: Session,
+    db_user_id: int,
+    active_groups: Sequence[str],
+) -> ResolvedChatRoute:
+    return _route_from_preference(
+        get_chat_route_preference(
+            db,
+            user_id=db_user_id,
+            active_group_ids=active_groups,
+        )
+    )
+
+
+def _authorize_chat_route(
+    *,
+    db: Session,
+    db_user_id: int,
+    active_groups: Sequence[str],
+    route: ResolvedChatRoute,
+) -> ResolvedChatRoute:
+    flow_id: UUID | None = None
+    if route.mode == "flow":
+        try:
+            flow_id = UUID(route.target_id or "")
+        except ValueError as exc:
+            raise ValueError("Durable chat turn has an invalid flow identity") from exc
+    state = resolve_chat_route_selection(
+        db,
+        user_id=db_user_id,
+        active_group_ids=active_groups,
+        mode=route.mode,
+        agent_id=route.target_id if route.mode == "agent" else None,
+        flow_id=flow_id,
+        target_public_id=route.target_id,
+        target_display_name=route.target_display_name,
+    )
+    if not state.available:
+        _raise_unavailable_chat_route(state)
+    return route
+
+
+def _raise_unavailable_chat_route(state: ChatRoutePreferenceState) -> NoReturn:
+    target_kind = state.mode if state.mode in {"agent", "flow"} else "selection"
+    display_name = state.target.display_name if state.target is not None else "selection"
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"Your preferred chat {target_kind} '{display_name}' is no longer available. "
+            "Choose another chat route in Tools and retry."
+        ),
+    )
+
+
+async def _run_resolved_chat_route(
+    *,
+    route: ResolvedChatRoute,
+    db: Session,
+    db_user_id: int,
+    context_messages: List[Dict[str, Any]],
+    user_id: str,
+    session_id: str,
+    turn_id: str,
+    document_id: Optional[str],
+    document_name: Optional[str],
+    active_groups: List[str],
+    supervisor_model: Optional[str],
+    specialist_model: Optional[str],
+    supervisor_temperature: Optional[float],
+    specialist_temperature: Optional[float],
+    supervisor_reasoning: Optional[str],
+    specialist_reasoning: Optional[str],
+):
+    """Yield the shared chat event contract from the turn's pinned executor."""
+
+    if route.mode == "flow":
+        flow = db.get(CurationFlow, UUID(route.target_id or ""))
+        if flow is None:
+            raise RuntimeError("Authorized preferred flow disappeared before execution")
+        outcome = FlowRunOutcome()
+        agents_used: List[str] = []
+        flow_stream = execute_flow(
+            flow=flow,
+            user_id=user_id,
+            session_id=session_id,
+            db_user_id=db_user_id,
+            document_id=document_id,
+            document_name=document_name,
+            user_query=context_messages[-1]["content"],
+            active_groups=active_groups,
+            flow_run_id=route.flow_run_id,
+            chat_route_mode=route.mode,
+            chat_route_target_id=route.target_id,
+        )
+        try:
+            async for event in flow_stream:
+                event_type = str(event.get("type") or "")
+                event_data = event.get("data", {}) or {}
+                flat_event = {"type": event_type, **event_data}
+                if "details" in event:
+                    flat_event["details"] = event["details"]
+                outcome.observe(flat_event)
+                if event_type == "RUN_FINISHED":
+                    agents_used.extend(
+                        str(name)
+                        for name in (event_data.get("agents_used") or [])
+                        if name
+                    )
+                    continue
+                if event_type == "FLOW_FINISHED":
+                    for ref in event_data.get("extraction_result_refs") or []:
+                        if not isinstance(ref, dict):
+                            continue
+                        yield {
+                            "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+                            "details": {
+                                "extraction_result_id": ref.get("extraction_result_id"),
+                                "result_ref": ref.get("result_ref"),
+                                "agent_key": ref.get("agent_key"),
+                            },
+                            "internal": dict(ref),
+                        }
+                if event_type in {
+                    "CHAT_OUTPUT_READY",
+                    "FILE_READY",
+                    "CURATION_HANDOFF_READY",
+                    "RUN_ERROR",
+                    "FLOW_FINISHED",
+                }:
+                    continue
+                yield event
+        finally:
+            await flow_stream.aclose()
+
+        if outcome.status != "completed":
+            failure_reason = outcome.failure_reason or "Flow execution did not complete."
+            yield {
+                "type": "RUN_ERROR",
+                "data": {
+                    "message": failure_reason,
+                    "error_type": "PreferredFlowFailed",
+                },
+            }
+            return
+        terminal_events = outcome.events_for_persistence()
+        yield {
+            "type": _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE,
+            "internal": {"events": terminal_events},
+        }
+        response = outcome.final_user_visible_text or (
+            f"Flow '{flow.name}' completed. Review the generated results above."
+        )
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {
+                "response": response,
+                "response_length": len(response),
+                "agents_used": agents_used,
+            },
+        }
+        return
+
+    runtime_agent = None
+    if route.mode == "agent":
+        runtime_agent = get_agent_by_id(
+            route.target_id or "",
+            db_user_id=db_user_id,
+            document_id=document_id,
+            user_id=user_id,
+            document_name=document_name,
+            active_groups=active_groups,
+            authenticated_groups=active_groups,
+            model_id_override=specialist_model,
+            model_temperature_override=specialist_temperature,
+            model_reasoning_override=specialist_reasoning,
+        )
+
+    agent_stream = run_agent_streamed(
+        context_messages=context_messages,
+        user_id=user_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        document_id=document_id,
+        document_name=document_name,
+        active_groups=active_groups,
+        supervisor_model=supervisor_model,
+        specialist_model=specialist_model,
+        supervisor_temperature=supervisor_temperature,
+        specialist_temperature=specialist_temperature,
+        supervisor_reasoning=supervisor_reasoning,
+        specialist_reasoning=specialist_reasoning,
+        agent=runtime_agent,
+        sentry_workflow=("preferred_agent_chat" if runtime_agent is not None else None),
+        sentry_span_data=(
+            {"ai_curation.agent.id": route.target_id}
+            if runtime_agent is not None
+            else None
+        ),
+        chat_route_mode=route.mode,
+        chat_route_target_id=route.target_id,
+    )
+    try:
+        async for event in agent_stream:
+            yield event
+    finally:
+        await agent_stream.aclose()
+
+
 def _prepare_chat_stream_turn(
     *,
     repository: ChatHistoryRepository,
@@ -1160,8 +1451,10 @@ def _prepare_chat_stream_turn(
     user_message: str,
     requested_turn_id: Optional[str],
     active_document_id: UUID | None,
+    db_user_id: int,
+    active_groups: Sequence[str],
 ) -> PreparedChatStreamTurn:
-    """Persist the durable user turn and build runner context for streaming."""
+    """Persist the user turn and pin its currently authorized executor identity."""
 
     turn_id = requested_turn_id or uuid.uuid4().hex
     effective_user_message = user_message
@@ -1172,14 +1465,34 @@ def _prepare_chat_stream_turn(
         chat_kind=ASSISTANT_CHAT_KIND,
         active_document_id=active_document_id,
     )
-    user_turn = repository.append_message(
-        session_id=session_id,
-        user_auth_sub=user_id,
-        chat_kind=ASSISTANT_CHAT_KIND,
-        role="user",
-        content=user_message,
-        turn_id=turn_id,
+
+    existing_user_turn = (
+        repository.get_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=turn_id,
+            role="user",
+        )
+        if requested_turn_id
+        else None
     )
+    if existing_user_turn is None:
+        route = _new_chat_route(
+            db=db,
+            db_user_id=db_user_id,
+            active_groups=active_groups,
+        )
+        user_turn = repository.append_message(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
+            role="user",
+            content=user_message,
+            turn_id=turn_id,
+            payload_json=_chat_route_payload(route),
+        )
+    else:
+        user_turn = AppendMessageResult(message=existing_user_turn, created=False)
     db.commit()
 
     replay_assistant_turn: ChatMessageRecord | None = None
@@ -1200,6 +1513,8 @@ def _prepare_chat_stream_turn(
             return PreparedChatStreamTurn(
                 turn_id=turn_id,
                 effective_user_message=effective_user_message,
+                route=None,
+                user_turn_created=user_turn.created,
                 replay_assistant_turn=replay_assistant_turn,
             )
 
@@ -1215,9 +1530,20 @@ def _prepare_chat_stream_turn(
                 extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
             )
 
+    route = _chat_route_from_payload(user_turn.message.payload_json)
+
+    route = _authorize_chat_route(
+        db=db,
+        db_user_id=db_user_id,
+        active_groups=active_groups,
+        route=route,
+    )
+
     return PreparedChatStreamTurn(
         turn_id=turn_id,
         effective_user_message=effective_user_message,
+        route=route,
+        user_turn_created=user_turn.created,
     )
 
 
@@ -1232,6 +1558,7 @@ def _persist_completed_chat_stream_turn(
     extraction_candidates: List[ExtractionEnvelopeCandidate],
     persisted_extraction_refs: Sequence[PersistedExtractionResultRef] | None = None,
     document_id: Optional[str],
+    flow_terminal_events: Sequence[Dict[str, Any]] | None = None,
 ) -> ChatMessageRecord:
     """Persist the completed stream assistant turn using a fresh SQL session."""
 
@@ -1275,6 +1602,14 @@ def _persist_completed_chat_stream_turn(
         completion_db.commit()
 
         try:
+            _append_preferred_flow_transcript_rows(
+                repository=repository,
+                session_id=session_id,
+                user_id=user_id,
+                turn_id=turn_id,
+                trace_id=trace_id,
+                flow_terminal_events=flow_terminal_events or [],
+            )
             assistant_turn = repository.append_message(
                 session_id=session_id,
                 user_auth_sub=user_id,
@@ -1283,6 +1618,11 @@ def _persist_completed_chat_stream_turn(
                 content=assistant_message,
                 turn_id=turn_id,
                 trace_id=trace_id,
+                payload_json=(
+                    {_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: list(flow_terminal_events)}
+                    if flow_terminal_events
+                    else None
+                ),
             )
             _link_persisted_extraction_results_to_chat_turn(
                 refs=persisted_extraction_refs or [],
@@ -1310,6 +1650,53 @@ def _persist_completed_chat_stream_turn(
         raise
     finally:
         completion_db.close()
+
+
+def _append_preferred_flow_transcript_rows(
+    *,
+    repository: ChatHistoryRepository,
+    session_id: str,
+    user_id: str,
+    turn_id: str,
+    trace_id: str | None,
+    flow_terminal_events: Sequence[Dict[str, Any]],
+) -> None:
+    """Persist first-class typed outputs from the canonical flow outcome."""
+
+    for event in flow_terminal_events:
+        transcript_values = flow_typed_output_transcript_values(event)
+        if transcript_values is None:
+            continue
+        content, message_type, payload_json = transcript_values
+        repository.append_message(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
+            role="flow",
+            content=content,
+            message_type=message_type,
+            turn_id=turn_id,
+            payload_json=payload_json,
+            trace_id=trace_id,
+        )
+
+
+def _preferred_flow_replay_events(
+    assistant_turn: ChatMessageRecord,
+) -> List[Dict[str, Any]]:
+    """Read canonical preferred-flow terminal events from an assistant row."""
+
+    payload = assistant_turn.payload_json
+    if not isinstance(payload, dict):
+        return []
+    raw_events = payload.get(_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY)
+    if not isinstance(raw_events, list):
+        return []
+    return [
+        dict(event)
+        for event in raw_events
+        if isinstance(event, dict) and isinstance(event.get("type"), str)
+    ]
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

@@ -12,6 +12,26 @@ FlowPersistenceStatus = Literal["pending", "succeeded", "failed"]
 _TYPED_SUCCESS_OUTPUT_EVENTS = {"FILE_READY", "CHAT_OUTPUT_READY"}
 
 
+def flow_typed_output_transcript_values(
+    event: dict[str, Any],
+) -> tuple[str, str, dict[str, Any]] | None:
+    """Return the durable transcript values for a typed flow output event."""
+
+    event_type = str(event.get("type") or "").strip()
+    if event_type != "FILE_READY":
+        return None
+    details = event.get("details")
+    details = details if isinstance(details, dict) else {}
+    filename_value = details.get("filename") or event.get("filename")
+    filename = filename_value.strip() if isinstance(filename_value, str) else ""
+    content = (
+        f"Generated file: {filename}"
+        if filename
+        else "Generated file event missing filename metadata."
+    )
+    return content, "file_download", dict(event)
+
+
 class FlowRunOutcomeNotDurableError(RuntimeError):
     """Signal that no terminal event may publish for the failed outcome."""
 

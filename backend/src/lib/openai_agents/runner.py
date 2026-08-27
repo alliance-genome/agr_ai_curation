@@ -20,7 +20,7 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional, List
+from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Literal, Optional, List
 
 from agents import (
     Agent,
@@ -2043,6 +2043,8 @@ async def run_agent_streamed(
     trace_context: Optional[Dict[str, str]] = None,
     sentry_workflow: Optional[str] = None,
     sentry_span_data: Optional[Dict[str, Any]] = None,
+    chat_route_mode: Literal["automatic", "agent", "flow"] | None = None,
+    chat_route_target_id: str | None = None,
     propagate_runtime_exceptions: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
@@ -2085,6 +2087,8 @@ async def run_agent_streamed(
         sentry_workflow: Optional Sentry workflow label for this run.
         sentry_span_data: Optional additional `ai_curation.*`/`gen_ai.*` Sentry
                           span data for the manual AI span.
+        chat_route_mode: Optional server-resolved ordinary-chat route mode.
+        chat_route_target_id: Optional server-resolved agent or flow identity.
         propagate_runtime_exceptions: Re-raise traced runtime failures so a
                                       caller such as the flow executor can
                                       classify them using its own lifecycle
@@ -2227,7 +2231,7 @@ async def run_agent_streamed(
         # All OpenAI calls inside will automatically be nested under this span
         try:
             # Build trace metadata with optional hierarchy
-            trace_metadata = {
+            resolved_trace_metadata = {
                 "supervisor_agent": agent.name,
                 "supervisor_model": agent.model,
                 "has_document": document_id is not None,
@@ -2235,16 +2239,20 @@ async def run_agent_streamed(
                 "document_name": document_name,
                 "active_groups": active_groups or [],  # Group-specific rules applied to this session
             }
+            if chat_route_mode is not None:
+                resolved_trace_metadata["chat_route_mode"] = chat_route_mode
+            if chat_route_target_id is not None:
+                resolved_trace_metadata["chat_route_target_id"] = chat_route_target_id
             if hierarchy:
                 # Add hierarchy summary to metadata (full structure for trace analysis)
-                trace_metadata["document_hierarchy"] = {
+                resolved_trace_metadata["document_hierarchy"] = {
                     "top_level_sections": hierarchy.get("top_level_sections", []),
                     "sections": hierarchy.get("sections", []),
                     "section_count": len(hierarchy.get("sections", [])),
                 }
             if abstract:
                 # Add abstract info to metadata (length only, not full text)
-                trace_metadata["document_abstract"] = {
+                resolved_trace_metadata["document_abstract"] = {
                     "has_abstract": True,
                     "abstract_length": len(abstract),
                 }
@@ -2271,7 +2279,7 @@ async def run_agent_streamed(
                 name="chat-flow",
                 as_type="span",
                 input={"query": user_message, "document_id": document_id, "document_name": document_name},
-                metadata=trace_metadata
+                metadata=resolved_trace_metadata
             )
             root_span = span_context_manager.__enter__()
             trace_id = root_span.trace_id

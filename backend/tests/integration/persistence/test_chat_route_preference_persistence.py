@@ -24,6 +24,7 @@ from src.services.chat_route_preference_service import (
     clear_chat_route_preference,
     get_chat_route_preference,
     list_chat_route_picker_targets,
+    resolve_chat_route_selection,
     update_chat_route_preference,
 )
 
@@ -211,6 +212,24 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             active_group_ids=[matching_group_id],
         )
         assert matching_state.available is True
+        assert resolve_chat_route_selection(
+            db,
+            user_id=owner.id,
+            mode="agent",
+            agent_id=matching_group.agent_key,
+            target_public_id=matching_group.agent_key,
+            target_display_name=matching_group.name,
+            active_group_ids=[matching_group_id],
+        ) == matching_state
+        assert resolve_chat_route_selection(
+            db,
+            user_id=owner.id,
+            mode="agent",
+            agent_id=matching_group.agent_key,
+            target_public_id=matching_group.agent_key,
+            target_display_name=matching_group.name,
+            active_group_ids=[nonmatching_group_id],
+        ).available is False
         revoked_group_state = get_chat_route_preference(
             db, user_id=owner.id, active_group_ids=[nonmatching_group_id]
         )
@@ -304,6 +323,16 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             active_group_ids=[matching_group_id],
         )
         assert flow_state.available is True
+        resolved_flow_state = resolve_chat_route_selection(
+            db,
+            user_id=owner.id,
+            mode="flow",
+            flow_id=active_flow.id,
+            target_public_id=str(active_flow.id),
+            target_display_name=active_flow.name,
+            active_group_ids=[matching_group_id],
+        )
+        assert resolved_flow_state == flow_state
         active_flow.is_active = False
         db.commit()
         stale_flow_state = get_chat_route_preference(

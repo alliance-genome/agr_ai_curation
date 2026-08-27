@@ -11,6 +11,33 @@ from src.utils.trace_output import extract_trace_response_text, is_trace_output_
 
 
 class TraceReviewAnalyzerTests(unittest.TestCase):
+    def test_agent_context_surfaces_explicit_chat_route_metadata(self):
+        trace = self._make_trace({})
+        trace["metadata"] = {
+            "chat_route_mode": "agent",
+            "chat_route_target_id": "gene_validation",
+        }
+
+        result = AgentContextAnalyzer.analyze(trace, self._make_observations())
+
+        self.assertEqual(result["trace_metadata"]["chat_route_mode"], "agent")
+        self.assertEqual(
+            result["trace_metadata"]["chat_route_target_id"], "gene_validation"
+        )
+
+    def test_agent_context_keeps_flow_route_metadata_without_generations(self):
+        trace = self._make_trace({})
+        trace["metadata"] = {
+            "chat_route_mode": "flow",
+            "chat_route_target_id": "flow-123",
+        }
+
+        result = AgentContextAnalyzer.analyze(trace, [])
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["trace_metadata"]["chat_route_mode"], "flow")
+        self.assertEqual(result["trace_metadata"]["chat_route_target_id"], "flow-123")
+
     def test_rgd_go_paper_curator_precedes_generic_document_classification(self):
         instructions = (
             "You are the RGD GO Paper Curator. Read the active document and call "

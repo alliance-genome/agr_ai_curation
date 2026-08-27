@@ -40,6 +40,21 @@ def _ts(hour: int, minute: int = 0) -> datetime:
 @pytest.fixture(autouse=True)
 def _stub_non_stream_turn_claims(monkeypatch):
     chat._LOCAL_NON_STREAM_TURN_OWNERS.clear()
+    _patch_chat_impl(
+        monkeypatch,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=7, auth_sub=_user.get("sub")),
+    )
+    _patch_chat_impl(
+        monkeypatch,
+        "_new_chat_route",
+        lambda **_kwargs: chat.ResolvedChatRoute(mode="automatic"),
+    )
+    _patch_chat_impl(
+        monkeypatch,
+        "_authorize_chat_route",
+        lambda *, route, **_kwargs: route,
+    )
 
     async def _register_active_stream(
         _session_id: str,
@@ -100,6 +115,8 @@ def _message_record(
     trace_id: str | None = None,
     created_at: datetime | None = None,
 ) -> ChatMessageRecord:
+    if payload_json is None and role == "user" and turn_id is not None:
+        payload_json = {"chat_route": {"mode": "automatic"}}
     return ChatMessageRecord(
         message_id=uuid4(),
         session_id=session_id,
@@ -957,6 +974,46 @@ async def test_chat_endpoint_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_endpoint_runs_selected_agent_with_exact_message(monkeypatch):
+    repository = FakeChatHistoryRepository()
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    route = chat.ResolvedChatRoute(
+        mode="agent",
+        target_id="gene_validation",
+        target_display_name="Gene Validation",
+    )
+    _patch_chat_impl(monkeypatch, "_new_chat_route", lambda **_kwargs: route)
+    _patch_chat_impl(monkeypatch, "_authorize_chat_route", lambda **_kwargs: route)
+    runtime_agent = SimpleNamespace(name="Gene Validation")
+    captured = {}
+    def _get_agent(agent_id, **_kwargs):
+        captured["agent_id"] = agent_id
+        return runtime_agent
+
+    _patch_chat_impl(monkeypatch, "get_agent_by_id", _get_agent)
+
+    async def _stream(**kwargs):
+        captured["runner"] = kwargs
+        yield {"type": "RUN_FINISHED", "data": {"response": "selected answer"}}
+
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
+    message = "For MOD:619738, assess GO:0005515 and explain the evidence."
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message=message, session_id="session-agent", turn_id="turn-agent"),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=[]),
+    )
+    assert result.response == "selected answer"
+    assert captured["agent_id"] == "gene_validation"
+    assert captured["runner"]["context_messages"] == [{"role": "user", "content": message}]
+    assert captured["runner"]["agent"] is runtime_agent
+
+
+@pytest.mark.asyncio
 async def test_chat_endpoint_keeps_sentry_transaction_open_for_non_stream(monkeypatch):
     calls = []
     commits: list[str] = []
@@ -1176,7 +1233,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
         [{"role": "user", "content": "hello"}],
         [{"role": "user", "content": "hello"}],
     ]
-    assert [call["role"] for call in repository.append_calls] == ["user", "user", "assistant"]
+    assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
     assert register_calls[0][0] == "non-stream-turn:session-retry:turn-retry"
     assert register_calls[1][0] == "non-stream-turn:session-retry:turn-retry"
     assert unregister_calls[0][0] == "non-stream-turn:session-retry:turn-retry"
@@ -1256,7 +1313,7 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     assert result.session_id == "session-tool-map"
     assert commits == ["commit", "commit", "commit"]
     assert streamed_context_messages == [[{"role": "user", "content": "hello"}]]
-    assert [call["role"] for call in repository.append_calls] == ["user", "user", "assistant"]
+    assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
     assert register_calls[0][0] == "non-stream-turn:session-tool-map:turn-tool-map"
     assert register_calls[1][0] == "non-stream-turn:session-tool-map:turn-tool-map"
     assert unregister_calls[0][0] == "non-stream-turn:session-tool-map:turn-tool-map"
@@ -1399,7 +1456,7 @@ async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatc
     assert result.response == "stored answer"
     assert result.session_id == "session-replay"
     assert commits == ["commit"]
-    assert [call["role"] for call in repository.append_calls] == ["user"]
+    assert repository.append_calls == []
     assert "non-stream-turn:session-replay:turn-replay" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
 
 
