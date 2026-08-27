@@ -19,8 +19,8 @@ ALLIANCE_PACKAGE_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 sys.path.insert(0, str(ALLIANCE_PACKAGE_SRC))
 
 import agr_ai_curation_alliance.tools.literature_references as literature_references  # noqa: E402
-from agr_ai_curation_runtime import reference_resolution  # noqa: E402
-from agr_ai_curation_runtime.reference_resolution import (  # noqa: E402
+from agr_ai_curation_alliance.tools import reference_resolution  # noqa: E402
+from agr_ai_curation_alliance.tools.reference_resolution import (  # noqa: E402
     CurationReferenceResolution,
 )
 from agr_curation_api.exceptions import AGRAPIError  # noqa: E402

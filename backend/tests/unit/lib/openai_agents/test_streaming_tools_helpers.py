@@ -3116,7 +3116,7 @@ async def test_chat_gene_expression_dispatch_resolves_loaded_document_reference(
     monkeypatch,
     _repo_package_curation_registry,
 ):
-    from agr_ai_curation_runtime import reference_resolution
+    from agr_ai_curation_alliance.tools import reference_resolution
     from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 

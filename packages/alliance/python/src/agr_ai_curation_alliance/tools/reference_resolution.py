@@ -1,13 +1,12 @@
-"""Read-only durable reference resolution for package-owned literature tools."""
+"""Read-only durable reference resolution for Alliance literature tools."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from agr_ai_curation_runtime import get_curation_resolver
 from agr_curation_api.exceptions import AGRAPIError
-
-from .agr_curation import get_curation_resolver
 
 
 @dataclass(frozen=True)

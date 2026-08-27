@@ -4659,9 +4659,9 @@ async def run_specialist_with_events(
     evidence_workspace_token = set_active_evidence_records(live_evidence_records)
     trace_run = get_current_extraction_trace_run()
     parent_builder_workspace = _active_builder_workspace_or_none()
-    active_chat_document_id = (
+    active_document_id = (
         _active_chat_document_id(get_current_user_id())
-        if inline_chat_persistence and parent_builder_workspace is None
+        if parent_builder_workspace is None
         else None
     )
     builder_workspace = ExtractionBuilderWorkspace(
@@ -4669,7 +4669,7 @@ async def run_specialist_with_events(
         document_id=(
             parent_builder_workspace.document_id
             if parent_builder_workspace is not None
-            else active_chat_document_id
+            else active_document_id
         ),
         domain_pack_id=(
             parent_builder_workspace.domain_pack_id

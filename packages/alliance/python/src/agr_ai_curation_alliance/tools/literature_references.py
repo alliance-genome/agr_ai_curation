@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 from agents import function_tool
 from pydantic import BaseModel, Field
 
-from agr_ai_curation_runtime import resolve_curation_reference
+from .reference_resolution import resolve_curation_reference
 
 logger = logging.getLogger(__name__)
 

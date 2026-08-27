@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from agr_ai_curation_runtime import reference_resolution
+from agr_ai_curation_alliance.tools import reference_resolution
 from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack

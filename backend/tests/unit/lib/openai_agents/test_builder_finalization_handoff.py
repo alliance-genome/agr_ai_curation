@@ -8,6 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from src.api import chat_common
+from src.lib.curation_workspace import (
+    adapter_registry,
+    domain_envelope_normalization,
+    extraction_results,
+)
+from src.lib.domain_packs import validator_dispatch
 from src.lib.openai_agents import extraction_builder_workspace as builder
 from src.lib.openai_agents import streaming_tools
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
@@ -1674,19 +1680,100 @@ async def test_flow_path_skips_inline_chat_persistence_and_emits_event_without_i
 ):
     """Flow path (inline_chat_persistence=False): no CHAT row, event has no ids.
 
-    Regression guard for Follow-up 1: a flow-context specialist run must NOT call
-    the inline CHAT persist helper (it would write a shadow CHAT-source row in
-    addition to the flow's own FLOW-source row). The INTERNAL_EXTRACTION_RESULT
-    event is still emitted, but without CHAT persisted identifiers, restoring the
-    pre-branch flow behavior.
+    A flow-context specialist run must retain the loaded document for real validator
+    dispatch, but must NOT call the inline CHAT persist helper (it would write a
+    shadow CHAT-source row in addition to the flow's own FLOW-source row). The
+    INTERNAL_EXTRACTION_RESULT event is still emitted without CHAT identifiers.
     """
 
     captured_events: list[dict] = []
+    observed_dispatch: dict = {}
     _disable_package_tool_rebinding(monkeypatch)
     persist_calls = _spy_inline_persistence(monkeypatch)
 
-    async def _echo_validator_dispatch(serialized_payload, *_args, **_kwargs):
-        return serialized_payload
+    monkeypatch.setattr(streaming_tools, "get_current_user_id", lambda: "curator-1")
+    monkeypatch.setattr(
+        streaming_tools.document_state,
+        "get_document",
+        lambda user_id: (
+            {
+                "id": "flow-document-1",
+                "title": "Flow source paper",
+                "metadata": json.dumps(
+                    {
+                        "source_provenance": {
+                            "reference_curie": "AGRKB:101000001224735",
+                            "external_ids": {"pmid": "39550471"},
+                        }
+                    }
+                ),
+            }
+            if user_id == "curator-1"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        extraction_results,
+        "build_extraction_envelope_candidate",
+        lambda serialized_payload, **_kwargs: SimpleNamespace(
+            adapter_key="gene_expression",
+            agent_key="gene_expression_extraction",
+            candidate_count=1,
+            conversation_summary="Flow gene expression extraction",
+            payload_json=json.loads(serialized_payload),
+            metadata={},
+        ),
+    )
+
+    source_envelope = SimpleNamespace(
+        domain_pack_id="agr.alliance.gene_expression",
+        extracted_objects=[SimpleNamespace()],
+    )
+
+    def _normalize_envelope(record):
+        observed_dispatch["document_id"] = record.document_id
+        return source_envelope
+
+    monkeypatch.setattr(
+        domain_envelope_normalization,
+        "domain_envelope_from_extraction_result",
+        _normalize_envelope,
+    )
+    monkeypatch.setattr(
+        adapter_registry,
+        "resolve_curation_domain_pack_by_id",
+        lambda domain_pack_id: SimpleNamespace(pack_id=domain_pack_id),
+    )
+
+    validated_envelope = SimpleNamespace(
+        metadata={},
+        model_dump=lambda mode="json": _domain_envelope_from_builder_payload(
+            {
+                "domain_pack_id": "agr.alliance.gene_expression",
+                "relation": {"name": "is_expressed_in"},
+                "single_reference": {"reference_id": "PMID:39550471"},
+                "expression_annotation_subject": {"gene_symbol": "pef-1"},
+            },
+            envelope_id="flow-validated-envelope",
+        )
+    )
+
+    def _dispatch(envelope, domain_pack, **kwargs):
+        observed_dispatch["envelope"] = envelope
+        observed_dispatch["domain_pack"] = domain_pack
+        observed_dispatch["runtime_context"] = kwargs["runtime_context"]
+        return SimpleNamespace(
+            envelope=validated_envelope,
+            matched_bindings=(),
+            validator_results=(),
+            appended_findings=(),
+        )
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "dispatch_active_validator_bindings",
+        _dispatch,
+    )
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
@@ -1700,12 +1787,6 @@ async def test_flow_path_skips_inline_chat_persistence_and_emits_event_without_i
         "run_streamed",
         lambda *args, **kwargs: _BuilderFinalizingRunResult(),
     )
-    monkeypatch.setattr(
-        streaming_tools,
-        "_dispatch_domain_envelope_validators_for_chat",
-        _echo_validator_dispatch,
-    )
-
     agent = SimpleNamespace(
         name="Gene Expression Extractor",
         tools=[_builder_finalizer_tool()],
@@ -1725,6 +1806,10 @@ async def test_flow_path_skips_inline_chat_persistence_and_emits_event_without_i
 
     # No CHAT-source inline persistence happened on the flow path.
     assert persist_calls == []
+    assert observed_dispatch["document_id"] == "flow-document-1"
+    assert observed_dispatch["envelope"] is source_envelope
+    assert observed_dispatch["domain_pack"].pack_id == "agr.alliance.gene_expression"
+    assert observed_dispatch["runtime_context"].document_id == "flow-document-1"
 
     # The internal extraction event is still emitted so the supervisor gets the
     # canonical payload, but it carries no CHAT persisted identifiers.
