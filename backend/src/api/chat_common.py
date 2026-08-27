@@ -77,7 +77,7 @@ from ..lib.openai_agents.evidence_summary import (
     normalize_evidence_records,
 )
 from ..lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
-from ..lib.flows.executor import execute_flow
+from ..lib.flows.executor import PreferredFlowInspectionContext, execute_flow
 from ..lib.flows.outcome import FlowRunOutcome, flow_typed_output_transcript_values
 from ..lib.agent_studio.catalog_service import get_agent_by_id
 from ..lib.weaviate_client.documents import get_document
@@ -1306,6 +1306,7 @@ async def _run_resolved_chat_route(
     specialist_temperature: Optional[float],
     supervisor_reasoning: Optional[str],
     specialist_reasoning: Optional[str],
+    inspection_context: PreferredFlowInspectionContext | None = None,
 ):
     """Yield the shared chat event contract from the turn's pinned executor."""
 
@@ -1327,6 +1328,7 @@ async def _run_resolved_chat_route(
             flow_run_id=route.flow_run_id,
             chat_route_mode=route.mode,
             chat_route_target_id=route.target_id,
+            inspection_context=inspection_context,
         )
         try:
             async for event in flow_stream:
@@ -1697,6 +1699,76 @@ def _preferred_flow_replay_events(
         for event in raw_events
         if isinstance(event, dict) and isinstance(event.get("type"), str)
     ]
+
+
+def _canonical_preferred_flow_result_ref(value: Any) -> str | None:
+    """Return one canonical persisted extraction ref, rejecting other shapes."""
+
+    text = str(value or "").strip()
+    if not text.startswith("extraction-result:"):
+        return None
+    try:
+        result_id = UUID(text.removeprefix("extraction-result:"))
+    except ValueError:
+        return None
+    return f"extraction-result:{result_id}"
+
+
+def _preferred_flow_inspection_context(
+    *,
+    repository: ChatHistoryRepository,
+    session_id: str,
+    user_id: str,
+    flow_id: str,
+    document_id: str | None,
+) -> PreferredFlowInspectionContext | None:
+    """Derive the newest same-flow refs from server-owned assistant events."""
+
+    normalized_flow_id = str(UUID(flow_id))
+    normalized_document_id = str(document_id or "").strip() or None
+    messages = repository.list_recent_messages(
+        session_id=session_id,
+        user_auth_sub=user_id,
+        chat_kind=ASSISTANT_CHAT_KIND,
+    )
+    for message in reversed(messages):
+        if message.role != "assistant":
+            continue
+        for event in reversed(_preferred_flow_replay_events(message)):
+            if event.get("type") != "FLOW_FINISHED":
+                continue
+            if event.get("status") != "completed":
+                continue
+            try:
+                event_flow_id = str(UUID(str(event.get("flow_id") or "")))
+            except ValueError:
+                continue
+            if event_flow_id != normalized_flow_id:
+                continue
+            event_document_id = str(event.get("document_id") or "").strip() or None
+            if event_document_id != normalized_document_id:
+                return None
+
+            refs: list[str] = []
+            for value in event.get("extraction_result_refs") or []:
+                if not isinstance(value, Mapping):
+                    continue
+                result_ref = _canonical_preferred_flow_result_ref(
+                    value.get("result_ref")
+                )
+                if result_ref is not None and result_ref not in refs:
+                    refs.append(result_ref)
+            flow_run_id = str(event.get("flow_run_id") or "").strip()
+            if refs and flow_run_id:
+                return PreferredFlowInspectionContext(
+                    flow_id=normalized_flow_id,
+                    flow_run_id=flow_run_id,
+                    document_id=normalized_document_id,
+                    result_refs=tuple(refs),
+                )
+            if event.get("completion_mode") != "inspection_only":
+                return None
+    return None
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

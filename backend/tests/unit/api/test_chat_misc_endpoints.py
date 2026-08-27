@@ -1322,6 +1322,81 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
 
 
 @pytest.mark.asyncio
+async def test_chat_endpoint_releases_turn_claim_after_flow_context_failure(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="Paper Review")
+    repository = FakeChatHistoryRepository()
+    context_attempts = 0
+
+    def _list_recent_messages(**_kwargs):
+        nonlocal context_attempts
+        context_attempts += 1
+        if context_attempts == 1:
+            raise RuntimeError("sensitive repository failure")
+        return []
+
+    repository.list_recent_messages = _list_recent_messages
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
+        "_new_chat_route",
+        lambda **_kwargs: chat.ResolvedChatRoute(
+            mode="flow",
+            target_id=str(flow_id),
+            target_display_name="Paper Review",
+            flow_run_id="flow-run-context",
+        ),
+    )
+
+    async def _execute_flow(**_kwargs):
+        yield {"type": "CHAT_OUTPUT_READY", "details": {"output": "flow answer"}}
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "extraction_result_refs": []},
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _execute_flow)
+    db = SimpleNamespace(
+        get=lambda _model, _id: flow,
+        commit=lambda: None,
+        rollback=lambda: None,
+    )
+    request = chat.ChatMessage(
+        message="inspect the prior results",
+        session_id="session-flow-context",
+        turn_id="turn-flow-context",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            request,
+            {"sub": "user-1", "cognito:groups": []},
+            db=db,
+        )
+
+    claim_key = "non-stream-turn:session-flow-context:turn-flow-context"
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to process chat request"
+    assert "sensitive repository failure" not in str(exc.value.detail)
+    assert claim_key not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+    result = await chat.chat_endpoint(
+        request,
+        {"sub": "user-1", "cognito:groups": []},
+        db=db,
+    )
+
+    assert context_attempts == 2
+    assert result.response == "flow answer"
+    assert result.session_id == "session-flow-context"
+    assert claim_key not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+
+@pytest.mark.asyncio
 async def test_chat_endpoint_omits_unfinished_prior_user_turn_from_context_messages(monkeypatch):
     commits: list[str] = []
     captured_context_messages = []

@@ -15,6 +15,7 @@ from src.api import chat, chat_common, chat_stream
 from src.lib import http_errors
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.executable_runs import ExecutableRun
+from src.lib.flows.outcome import FlowRunOutcome
 from src.lib.observability import sentry
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from tests.chat_api_test_support import patch_chat_impl_for
@@ -104,7 +105,11 @@ def _stub_stream_turn_persistence(monkeypatch):
     chat.executable_run_manager._runs.clear()
     chat.executable_run_manager._active_session_run_ids.clear()
 
-    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: object())
+    _patch_chat_impl(
+        monkeypatch,
+        "_get_chat_history_repository",
+        lambda _db: SimpleNamespace(list_recent_messages=lambda **_kwargs: []),
+    )
     _patch_chat_impl(
         monkeypatch,
         "set_global_user_from_cognito",
@@ -236,8 +241,11 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     assert "session-chat-stream" not in chat._LOCAL_SESSION_OWNERS
 
 
-def test_chat_stream_endpoint_runs_selected_flow_with_unbounded_chat_message(monkeypatch):
+def test_chat_stream_endpoint_binds_prior_flow_refs_and_preserves_unbounded_message(
+    monkeypatch,
+):
     flow_id = uuid4()
+    result_id = uuid4()
     flow = SimpleNamespace(id=flow_id, name="Paper Review")
     message = "For MOD:619738, assess GO:0005515. " + ("x" * 2500)
     captured = {}
@@ -245,6 +253,39 @@ def test_chat_stream_endpoint_runs_selected_flow_with_unbounded_chat_message(mon
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    first_turn_outcome = FlowRunOutcome()
+    first_turn_outcome.observe(
+        {
+            "type": "FLOW_FINISHED",
+            "status": "completed",
+            "flow_id": str(flow_id),
+            "flow_run_id": "flow-run-prior",
+            "document_id": None,
+            "extraction_result_refs": [
+                {
+                    "result_ref": f"extraction-result:{result_id}",
+                    "extraction_result_id": str(result_id),
+                }
+            ],
+        }
+    )
+    prior_assistant = _assistant_record(
+        session_id="session-flow",
+        turn_id="turn-prior",
+        content="prior flow answer",
+        payload_json={
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: (
+                first_turn_outcome.events_for_persistence()
+            )
+        },
+    )
+    _patch_chat_impl(
+        monkeypatch,
+        "_get_chat_history_repository",
+        lambda _db: SimpleNamespace(
+            list_recent_messages=lambda **_kwargs: [prior_assistant]
+        ),
+    )
 
     async def _register(*_args, **_kwargs):
         return True
@@ -298,8 +339,140 @@ def test_chat_stream_endpoint_runs_selected_flow_with_unbounded_chat_message(mon
     events = asyncio.run(_consume_stream(response))
     assert captured["user_query"] == message
     assert captured["flow_run_id"] == "flow-run-1"
+    assert captured["inspection_context"] == chat_common.PreferredFlowInspectionContext(
+        flow_id=str(flow_id),
+        flow_run_id="flow-run-prior",
+        document_id=None,
+        result_refs=(f"extraction-result:{result_id}",),
+    )
     assert any(event["type"] == "CHAT_OUTPUT_READY" for event in events)
     assert events[-1]["type"] == "turn_completed"
+
+
+def test_chat_stream_endpoint_releases_claim_after_flow_context_failure(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="Paper Review")
+    context_attempts = 0
+    unregister_calls = []
+    reported_errors = []
+
+    def _report_runtime_exception(exc, **kwargs):
+        reported_errors.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(
+        http_errors,
+        "report_runtime_exception",
+        _report_runtime_exception,
+    )
+
+    def _list_recent_messages(**_kwargs):
+        nonlocal context_attempts
+        context_attempts += 1
+        if context_attempts == 1:
+            raise RuntimeError("sensitive repository failure")
+        return []
+
+    _patch_chat_impl(
+        monkeypatch,
+        "_get_chat_history_repository",
+        lambda _db: SimpleNamespace(list_recent_messages=_list_recent_messages),
+    )
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
+        "_prepare_chat_stream_turn",
+        lambda **_kwargs: chat.PreparedChatStreamTurn(
+            turn_id="turn-flow-context",
+            effective_user_message="inspect the prior results",
+            route=chat.ResolvedChatRoute(
+                mode="flow",
+                target_id=str(flow_id),
+                target_display_name="Paper Review",
+                flow_run_id="flow-run-context",
+            ),
+            user_turn_created=True,
+        ),
+    )
+
+    async def _register(*_args, **_kwargs):
+        return True
+
+    async def _unregister(*args, **kwargs):
+        unregister_calls.append((args, kwargs))
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    async def _not_cancelled(*_args, **_kwargs):
+        return False
+
+    async def _execute_flow(**_kwargs):
+        yield {"type": "CHAT_OUTPUT_READY", "details": {"output": "flow answer"}}
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "extraction_result_refs": []},
+        }
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _noop)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _not_cancelled)
+    _patch_chat_impl(monkeypatch, "execute_flow", _execute_flow)
+    db = SimpleNamespace(
+        get=lambda _model, _id: flow,
+        commit=lambda: None,
+        rollback=lambda: None,
+    )
+
+    with pytest.raises(chat.HTTPException) as exc:
+        asyncio.run(
+            chat.chat_stream_endpoint(
+                chat_message=chat.ChatMessage(
+                    message="inspect the prior results",
+                    session_id="session-flow-context",
+                    turn_id="turn-flow-context",
+                ),
+                user={"sub": "auth-sub", "cognito:groups": []},
+                db=db,
+            )
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to process chat request"
+    assert "sensitive repository failure" not in str(exc.value.detail)
+    assert "session-flow-context" not in chat._LOCAL_SESSION_OWNERS
+    assert len(reported_errors) == 1
+    reported_error = reported_errors[0][0]
+    assert isinstance(
+        reported_error,
+        chat_stream._PreferredFlowContextResolutionError,
+    )
+    assert "RuntimeError" in str(reported_error)
+    assert "sensitive repository failure" not in str(reported_error)
+    assert reported_error.__context__ is None
+    assert reported_error.__cause__ is None
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="inspect the prior results",
+                session_id="session-flow-context",
+                turn_id="turn-flow-context",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+            db=db,
+        )
+    )
+    events = asyncio.run(_consume_stream(response))
+
+    assert context_attempts == 2
+    assert events[-1]["type"] == "turn_completed"
+    assert len(unregister_calls) == 2
+    assert "session-flow-context" not in chat._LOCAL_SESSION_OWNERS
 
 
 def test_chat_stream_endpoint_keeps_sentry_transaction_open_for_stream(monkeypatch):

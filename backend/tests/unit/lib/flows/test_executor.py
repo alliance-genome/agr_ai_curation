@@ -744,6 +744,7 @@ def _make_flow_execution_state(*completed_steps, ordered_tool_names=None):
         "ordered_tool_names": ordered,
         "completed_steps": list(completed_steps),
         "evidence_registry": registry,
+        "inspected_result_refs": set(),
     }
 
 
@@ -5459,6 +5460,114 @@ class TestCreateFlowSupervisorNoTools:
         assert supervisor is not None
         assert mock_settings.call_args.kwargs["parallel_tool_calls"] is False
 
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor.build_model_settings")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.6-sol")
+    @patch("src.lib.flows.executor.get_agent_config")
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_preferred_followup_tool_accepts_only_bound_authorized_refs(
+        self,
+        mock_get_agent,
+        mock_streaming,
+        mock_config,
+        mock_model,
+        mock_settings,
+        monkeypatch,
+    ):
+        executor = _executor_module()
+        result_ref = "extraction-result:22222222-2222-2222-2222-222222222222"
+        inspection_calls = []
+
+        async def _inspect_results(**kwargs):
+            inspection_calls.append(kwargs)
+            return json.dumps({"status": "ok", "result_ref": kwargs["result_ref"]})
+
+        monkeypatch.setattr(executor, "inspect_results", _inspect_results)
+        mock_config.return_value = MagicMock(
+            model="gpt-5.6-sol", temperature=0.0, reasoning=None
+        )
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+        mock_settings.return_value = ModelSettings()
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+        context = executor.PreferredFlowInspectionContext(
+            flow_id=str(flow.id),
+            flow_run_id="prior-run",
+            document_id=None,
+            result_refs=(result_ref,),
+        )
+
+        supervisor = create_flow_supervisor(flow, inspection_context=context)
+        inspect_tool = next(tool for tool in supervisor.tools if tool.name == "inspect_results")
+        tool_ctx = SimpleNamespace(tool_name="inspect_results", run_config=None)
+        rejected = await inspect_tool.on_invoke_tool(
+            tool_ctx,
+            json.dumps(
+                {
+                    "action": "summary",
+                    "result_ref": (
+                        "extraction-result:33333333-3333-3333-3333-333333333333"
+                    ),
+                }
+            ),
+        )
+        accepted = await inspect_tool.on_invoke_tool(
+            tool_ctx,
+            json.dumps({"action": "summary", "result_ref": result_ref}),
+        )
+
+        assert json.loads(rejected)["status"] == "unauthorized_bound_ref"
+        assert json.loads(accepted)["status"] == "ok"
+        assert inspection_calls == [
+            {
+                "action": "summary",
+                "query": None,
+                "result_ref": result_ref,
+                "target": "this_chat",
+                "object_ref": None,
+                "field_path": None,
+                "limit": None,
+                "cursor": None,
+            }
+        ]
+        assert supervisor._flow_execution_state["inspected_result_refs"] == {
+            result_ref
+        }
+        assert result_ref in supervisor.instructions
+        assert "do not call any configured" in supervisor.instructions
+        assert "flow-step tool" in supervisor.instructions
+
+        async def _inaccessible_result(**_kwargs):
+            return json.dumps({"status": "no_context", "error_code": "no_context"})
+
+        supervisor._flow_execution_state["inspected_result_refs"].clear()
+        monkeypatch.setattr(executor, "inspect_results", _inaccessible_result)
+        inaccessible = await inspect_tool.on_invoke_tool(
+            tool_ctx,
+            json.dumps({"action": "summary", "result_ref": result_ref}),
+        )
+        assert json.loads(inaccessible)["status"] == "no_context"
+        assert supervisor._flow_execution_state["inspected_result_refs"] == set()
+
+        async def _empty_result(**kwargs):
+            collection_key = "results" if kwargs["action"] == "list" else "matches"
+            return json.dumps(
+                {"status": "ok", "total_count": 0, collection_key: []}
+            )
+
+        monkeypatch.setattr(executor, "inspect_results", _empty_result)
+        for action in ("list", "search"):
+            empty = await inspect_tool.on_invoke_tool(
+                tool_ctx,
+                json.dumps({"action": action, "result_ref": result_ref}),
+            )
+            assert json.loads(empty)["total_count"] == 0
+            assert supervisor._flow_execution_state["inspected_result_refs"] == set()
+
     @patch("src.lib.flows.executor.build_model_settings")
     @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.6-sol")
     @patch("src.lib.flows.executor.get_agent_config")
@@ -5671,6 +5780,305 @@ class TestExecuteFlowTermination:
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "failed"
         assert "step 2" in (flow_finished["data"]["failure_reason"] or "")
+
+    @pytest.mark.asyncio
+    async def test_inspection_only_followup_completes_without_specialist_redispatch(
+        self, monkeypatch
+    ):
+        executor = _executor_module()
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "disease_extractor", step_goal="Extract disease"),
+            _agent_node("n2", "phenotype_extractor", step_goal="Extract phenotype"),
+        ])
+        result_ref = "extraction-result:22222222-2222-2222-2222-222222222222"
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            ordered_tool_names=[
+                "ask_disease_extractor_specialist",
+                "ask_phenotype_extractor_specialist",
+            ]
+        )
+        supervisor._flow_execution_state["inspected_result_refs"] = {result_ref}
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "inspect the prior results",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_idempotent_extraction_results",
+            lambda *_args, **_kwargs: pytest.fail(
+                "inspection-only follow-ups must not persist new extraction artifacts"
+            ),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-2"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "inspect_results"},
+            }
+            yield {
+                "type": "RUN_FINISHED",
+                "data": {"response": "The prior result contains one disease."},
+            }
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+        context = executor.PreferredFlowInspectionContext(
+            flow_id=str(flow.id),
+            flow_run_id="prior-run",
+            document_id=None,
+            result_refs=(result_ref,),
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                user_query="What disease was found?",
+                chat_route_mode="flow",
+                chat_route_target_id=str(flow.id),
+                inspection_context=context,
+            )
+        ]
+
+        assert not any(
+            (event.get("details") or {}).get("toolName", "").startswith("ask_")
+            for event in events
+        )
+        chat_output = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
+        assert chat_output["details"]["inspection_only"] is True
+        assert chat_output["details"]["inspected_result_refs"] == [result_ref]
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["completion_mode"] == "inspection_only"
+        assert flow_finished["data"]["extraction_result_refs"] == []
+
+    @pytest.mark.asyncio
+    async def test_failed_inspection_does_not_bypass_required_steps(self, monkeypatch):
+        executor = _executor_module()
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "disease_extractor", step_goal="Extract disease"),
+        ])
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            ordered_tool_names=["ask_disease_extractor_specialist"]
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "inspect prior results",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-2"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "inspect_results"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "unsupported"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+        context = executor.PreferredFlowInspectionContext(
+            flow_id=str(flow.id),
+            flow_run_id="prior-run",
+            document_id=None,
+            result_refs=(
+                "extraction-result:22222222-2222-2222-2222-222222222222",
+            ),
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                chat_route_mode="flow",
+                chat_route_target_id=str(flow.id),
+                inspection_context=context,
+            )
+        ]
+
+        flow_error = next(e for e in events if e.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "incomplete_flow_steps"
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor.build_model_settings")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.6-sol")
+    @patch("src.lib.flows.executor.get_agent_config")
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_empty_bound_search_does_not_bypass_required_steps(
+        self,
+        mock_get_agent,
+        mock_streaming,
+        mock_config,
+        mock_model,
+        mock_settings,
+        monkeypatch,
+    ):
+        executor = _executor_module()
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+        result_ref = "extraction-result:22222222-2222-2222-2222-222222222222"
+        context = executor.PreferredFlowInspectionContext(
+            flow_id=str(flow.id),
+            flow_run_id="prior-run",
+            document_id=None,
+            result_refs=(result_ref,),
+        )
+
+        async def _empty_search(**_kwargs):
+            return json.dumps(
+                {"status": "ok", "total_count": 0, "matches": []}
+            )
+
+        monkeypatch.setattr(executor, "inspect_results", _empty_search)
+        mock_config.return_value = MagicMock(
+            model="gpt-5.6-sol", temperature=0.0, reasoning=None
+        )
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+        mock_settings.return_value = ModelSettings()
+        supervisor = create_flow_supervisor(flow, inspection_context=context)
+        inspect_tool = next(
+            tool for tool in supervisor.tools if tool.name == "inspect_results"
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "inspect prior results",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            tool_ctx = SimpleNamespace(tool_name="inspect_results", run_config=None)
+            response = await inspect_tool.on_invoke_tool(
+                tool_ctx,
+                json.dumps({"action": "search", "result_ref": result_ref}),
+            )
+            assert json.loads(response)["total_count"] == 0
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-2"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "inspect_results"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "no matches"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                chat_route_mode="flow",
+                chat_route_target_id=str(flow.id),
+                inspection_context=context,
+            )
+        ]
+
+        assert supervisor._flow_execution_state["inspected_result_refs"] == set()
+        flow_error = next(e for e in events if e.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "incomplete_flow_steps"
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert flow_finished["data"].get("completion_mode") != "inspection_only"
+
+    @pytest.mark.asyncio
+    async def test_attempted_specialist_prevents_inspection_only_completion(
+        self, monkeypatch
+    ):
+        executor = _executor_module()
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "disease_extractor", step_goal="Extract disease"),
+        ])
+        result_ref = "extraction-result:22222222-2222-2222-2222-222222222222"
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            ordered_tool_names=["ask_disease_extractor_specialist"]
+        )
+        supervisor._flow_execution_state["inspected_result_refs"] = {result_ref}
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "inspect prior results",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-2"}}
+            yield {
+                "type": "TOOL_START",
+                "details": {"toolName": "ask_disease_extractor_specialist"},
+            }
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "inspect_results"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "partial answer"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+        context = executor.PreferredFlowInspectionContext(
+            flow_id=str(flow.id),
+            flow_run_id="prior-run",
+            document_id=None,
+            result_refs=(result_ref,),
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                chat_route_mode="flow",
+                chat_route_target_id=str(flow.id),
+                inspection_context=context,
+            )
+        ]
+
+        assert not any(
+            (event.get("details") or {}).get("inspection_only") is True
+            for event in events
+        )
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
 
     @pytest.mark.asyncio
     async def test_converts_run_error_into_flow_error(self, monkeypatch):
@@ -7771,6 +8179,7 @@ class TestExecuteFlowTermination:
 
     @pytest.mark.asyncio
     async def test_persists_extraction_envelopes_after_success(self, monkeypatch):
+        executor = _executor_module()
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
@@ -7789,10 +8198,11 @@ class TestExecuteFlowTermination:
         supervisor = MagicMock(name="Flow Supervisor")
         supervisor._flow_unavailable_steps = []
         supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
+        supervisor_kwargs = {}
 
         monkeypatch.setattr(
             "src.lib.flows.executor.create_flow_supervisor",
-            lambda **_kwargs: supervisor,
+            lambda **kwargs: (supervisor_kwargs.update(kwargs), supervisor)[1],
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
@@ -7827,13 +8237,24 @@ class TestExecuteFlowTermination:
                 user_id="u1",
                 session_id="flow-session-1",
                 document_id="doc-1",
-                user_query="Extract findings",
+                user_query="Extract findings for a newly requested scope",
+                chat_route_mode="flow",
+                chat_route_target_id=str(flow.id),
+                inspection_context=executor.PreferredFlowInspectionContext(
+                    flow_id=str(flow.id),
+                    flow_run_id="prior-run",
+                    document_id="doc-1",
+                    result_refs=(
+                        "extraction-result:22222222-2222-2222-2222-222222222222",
+                    ),
+                ),
             )
         ]
 
         event_types = [event.get("type") for event in events]
         assert "CHAT_OUTPUT_READY" in event_types
         assert "FLOW_FINISHED" in event_types
+        assert supervisor_kwargs["inspection_context"] is not None
         assert len(persisted_requests) == 1
         persisted_request = persisted_requests[0]
         assert persisted_request.document_id == "doc-1"

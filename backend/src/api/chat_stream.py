@@ -21,6 +21,23 @@ from src.lib.observability.sentry import (
 _LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
 
 
+class _PreferredFlowContextResolutionError(RuntimeError):
+    """Sanitized preferred-flow history failure safe for logs and Sentry."""
+
+
+def _sanitized_preferred_flow_context_error(
+    exc: Exception,
+) -> _PreferredFlowContextResolutionError:
+    try:
+        raise _PreferredFlowContextResolutionError(
+            f"Preferred-flow follow-up context resolution failed ({type(exc).__name__})"
+        ) from None
+    except _PreferredFlowContextResolutionError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(
     chat_message: ChatMessage,
@@ -172,6 +189,28 @@ async def chat_endpoint(
     if resolved_route is None:
         raise RuntimeError("Prepared executable chat turn is missing its resolved route")
 
+    try:
+        inspection_context = (
+            _preferred_flow_inspection_context(
+                repository=repository,
+                session_id=session_id,
+                user_id=user_id,
+                flow_id=resolved_route.target_id or "",
+                document_id=document_id,
+            )
+            if resolved_route.mode == "flow"
+            else None
+        )
+    except Exception as exc:
+        await _release_non_stream_turn_claim()
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to process chat request",
+            log_message="Preferred-flow follow-up context resolution failed",
+            exc=_sanitized_preferred_flow_context_error(exc),
+        )
+
     tool_agent_map: Dict[str, str] = {}
     if resolved_route.mode == "automatic":
         try:
@@ -224,6 +263,7 @@ async def chat_endpoint(
                 specialist_temperature=chat_message.specialist_temperature,
                 supervisor_reasoning=chat_message.supervisor_reasoning,
                 specialist_reasoning=chat_message.specialist_reasoning,
+                inspection_context=inspection_context,
             ):
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
@@ -640,6 +680,28 @@ async def chat_stream_endpoint(
     if resolved_route is None:
         raise RuntimeError("Prepared executable chat turn is missing its resolved route")
 
+    try:
+        inspection_context = (
+            _preferred_flow_inspection_context(
+                repository=repository,
+                session_id=session_id,
+                user_id=user_id,
+                flow_id=resolved_route.target_id or "",
+                document_id=document_id,
+            )
+            if resolved_route.mode == "flow"
+            else None
+        )
+    except Exception as exc:
+        await stream_lifecycle.cleanup()
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to process chat request",
+            log_message="Preferred-flow follow-up context resolution failed",
+            exc=_sanitized_preferred_flow_context_error(exc),
+        )
+
     tool_agent_map: Dict[str, str] = {}
     if resolved_route.mode == "automatic":
         try:
@@ -703,6 +765,7 @@ async def chat_stream_endpoint(
                 specialist_temperature=chat_message.specialist_temperature,
                 supervisor_reasoning=chat_message.supervisor_reasoning,
                 specialist_reasoning=chat_message.specialist_reasoning,
+                inspection_context=inspection_context,
             ):
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
                     interrupted_message = "Run cancelled by user"
