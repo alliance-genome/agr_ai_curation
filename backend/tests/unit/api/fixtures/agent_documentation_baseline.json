@@ -1691,6 +1691,56 @@
     ],
     "summary": "Validates RGD GO paper-curation candidates against the approved experimental evidence policy."
   },
+  "rgd_go_paper_curator": {
+    "capabilities": [
+      {
+        "description": "Reads Results, Methods, figures, and tables for named rat gene products and produces review-only GO recommendations with exact document evidence.\n",
+        "example_query": "Review Cttn and discover any additional GO-curatable genes in this paper.",
+        "example_result": "Returns typed GOCuratableObject recommendations with gene-product identity, GO term, evidence/ECO, rationale, reference, With/From, and evidence anchors.\n",
+        "name": "Evidence-backed GO paper review"
+      },
+      {
+        "description": "Resolves RGD gene or mature-RNA identity and compares each proposal with current typed GO annotations while preserving ambiguity and source status.\n",
+        "example_query": "Check whether miR-124-3p has an unambiguous RGD product identity.",
+        "example_result": "Preserves all resolver candidates and a blocking unresolved state instead of guessing a precursor-gene CURIE.\n",
+        "name": "Identity and annotation comparison"
+      }
+    ],
+    "data_sources": [
+      {
+        "data_types": [
+          "Results",
+          "Methods",
+          "Figure legends",
+          "Tables"
+        ],
+        "description": "Verified PDF chunks and backend-owned evidence anchors from the active document.",
+        "name": "Active paper evidence",
+        "species_supported": [
+          "R. norvegicus (RGD)"
+        ]
+      },
+      {
+        "data_types": [
+          "Gene-product identity",
+          "Existing GO annotations",
+          "GO terms",
+          "GO hierarchy"
+        ],
+        "description": "Alliance gene-product resolution, GO Consortium existing annotations, and QuickGO term and hierarchy endpoints with retained provenance.\n",
+        "name": "Alliance and GO read-only sources",
+        "species_supported": [
+          "R. norvegicus (RGD)"
+        ]
+      }
+    ],
+    "limitations": [
+      "Introduction and Discussion are excluded as sole recommendation evidence.",
+      "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE.",
+      "Review-only output; GO submission and export are unsupported."
+    ],
+    "summary": "Authenticated RGD-only extraction specialist for evidence-backed GO recommendations from one active paper.\n"
+  },
   "subject_entity": {
     "capabilities": [
       {

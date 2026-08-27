@@ -88,6 +88,7 @@ agent_bundles:
     has_schema: true
   - name: rgd_go_evidence_policy
     has_schema: true
+  - name: rgd_go_paper_curator
   - name: json_formatter
   - name: ontology_term
     has_schema: true

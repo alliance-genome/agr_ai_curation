@@ -31,6 +31,12 @@ SHIPPED_TOOLS_PACKAGE_EXPORTS = (
     "go_api_call",
     "quickgo_api_call",
     "resolve_gene_product",
+    "stage_go_recommendation",
+    "patch_go_recommendation",
+    "discard_go_recommendation",
+    "list_staged_go_recommendations",
+    "find_staged_go_recommendations",
+    "finalize_go_extraction",
 )
 
 

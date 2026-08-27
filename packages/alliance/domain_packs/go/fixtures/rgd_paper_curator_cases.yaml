@@ -1,0 +1,64 @@
+fixture_set: rgd_go_paper_curator
+description: Prompt and builder cases for the restricted RGD GO paper specialist.
+grounding:
+  curation_database_checked: true
+  taxon_curie: NCBITaxon:10116
+  checked_symbols:
+    Cttn:
+      gene_curie: RGD:619839
+      gene_name: cortactin
+    Ago1:
+      gene_curie: RGD:1304619
+      gene_name: argonaute RISC component 1
+    Ago2:
+      gene_curie: RGD:621255
+      gene_name: argonaute RISC catalytic component 2
+cases:
+  - id: named_cttn
+    targets: [Cttn]
+    discover_additional_entities: false
+    expect:
+      required_identity_lookup: true
+      required_existing_annotation_lookup: true
+      retained_gene_curie: RGD:619839
+      verified_results_evidence_required: true
+  - id: mature_mir_124_3p_ambiguity
+    targets: [miR-124-3p]
+    discover_additional_entities: false
+    expect:
+      resolution_state: unresolved
+      gene_product_curie_absent: true
+      resolver_candidates_retained: true
+      blocker_required: true
+  - id: distinct_ago_products
+    targets: [Ago1, Ago2]
+    discover_additional_entities: false
+    expect:
+      distinct_candidates:
+        - RGD:1304619
+        - RGD:621255
+      no_identity_collapsing: true
+  - id: bounded_additional_entity
+    targets: [Cttn]
+    discover_additional_entities: true
+    expect:
+      named_target_first: true
+      additional_entity:
+        symbol: Ago2
+        gene_curie: RGD:621255
+      configured_bounds_honored: true
+      stop_after_complete_manifest: true
+  - id: evidence_code_abstention
+    targets: [Cttn]
+    evidence_policy_support: unavailable
+    expect:
+      recommendation_abstained: true
+      structured_blocker_required: true
+      invented_evidence_code_forbidden: true
+  - id: excluded_section_only
+    targets: [Cttn]
+    available_support_sections: [Introduction, Discussion]
+    expect:
+      recommendation_finalized: false
+      excluded_section_limitation_reported: true
+      broad_pdf_fallback_forbidden: true

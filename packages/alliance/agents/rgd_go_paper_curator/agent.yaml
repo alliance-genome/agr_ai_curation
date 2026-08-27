@@ -1,0 +1,79 @@
+agent_id: rgd_go_paper_curator
+
+name: "RGD GO Paper Curator"
+
+description: >
+  Reads one active paper for RGD GO curation, resolves rat gene-product identity,
+  compares current GO annotations, and returns evidence-backed review candidates.
+
+category: "Extraction"
+subcategory: "PDF Extraction"
+
+access:
+  allowed_group_ids: [RGD]
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use only for an authenticated RGD curator requesting new GO recommendations
+    from the active paper, including named targets and optional additional genes.
+  batchable: false
+
+tools:
+  - search_document
+  - read_chunk
+  - read_section
+  - read_subsection
+  - record_evidence
+  - list_recorded_evidence
+  - get_recorded_evidence
+  - attach_evidence_to_object
+  - detach_evidence_from_object
+  - discard_recorded_evidence
+  - update_recorded_evidence_metadata
+  - get_agent_contract
+  - agr_literature_reference_lookup
+  - quickgo_api_call
+  - stage_go_recommendation
+  - patch_go_recommendation
+  - discard_go_recommendation
+  - list_staged_go_recommendations
+  - find_staged_go_recommendations
+  - finalize_go_extraction
+
+group_tool_policy:
+  rules:
+    - tool_id: resolve_gene_product
+      allowed_group_ids: [RGD]
+      field_paths:
+        - gene_product
+    - tool_id: go_api_call
+      allowed_group_ids: [RGD]
+      field_paths:
+        - provider_context.existing_annotation_context
+
+output_schema: null
+
+model_config:
+  model: "${AGENT_GO_ANNOTATIONS_MODEL:-gpt-5.6-sol}"
+  temperature: 0.1
+  reasoning: "medium"
+
+requires_document: true
+required_params:
+  - document_id
+  - user_id
+
+batch_capabilities:
+  - pdf_extraction
+
+frontend:
+  icon: "🧬"
+  show_in_palette: true
+
+curation:
+  adapter_key: "go"
+  domain_pack_id: "agr.alliance.go"
+  launchable: true
+
+group_rules_enabled: false

@@ -1,0 +1,35 @@
+summary: >
+  Authenticated RGD-only extraction specialist for evidence-backed GO
+  recommendations from one active paper.
+capabilities:
+  - name: Evidence-backed GO paper review
+    description: >
+      Reads Results, Methods, figures, and tables for named rat gene products and
+      produces review-only GO recommendations with exact document evidence.
+    example_query: "Review Cttn and discover any additional GO-curatable genes in this paper."
+    example_result: >
+      Returns typed GOCuratableObject recommendations with gene-product identity,
+      GO term, evidence/ECO, rationale, reference, With/From, and evidence anchors.
+  - name: Identity and annotation comparison
+    description: >
+      Resolves RGD gene or mature-RNA identity and compares each proposal with
+      current typed GO annotations while preserving ambiguity and source status.
+    example_query: "Check whether miR-124-3p has an unambiguous RGD product identity."
+    example_result: >
+      Preserves all resolver candidates and a blocking unresolved state instead
+      of guessing a precursor-gene CURIE.
+data_sources:
+  - name: Active paper evidence
+    description: Verified PDF chunks and backend-owned evidence anchors from the active document.
+    species_supported: ["R. norvegicus (RGD)"]
+    data_types: ["Results", "Methods", "Figure legends", "Tables"]
+  - name: Alliance and GO read-only sources
+    description: >
+      Alliance gene-product resolution, GO Consortium existing annotations, and
+      QuickGO term and hierarchy endpoints with retained provenance.
+    species_supported: ["R. norvegicus (RGD)"]
+    data_types: ["Gene-product identity", "Existing GO annotations", "GO terms", "GO hierarchy"]
+limitations:
+  - Introduction and Discussion are excluded as sole recommendation evidence.
+  - Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE.
+  - Review-only output; GO submission and export are unsupported.

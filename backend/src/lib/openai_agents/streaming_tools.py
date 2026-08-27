@@ -87,7 +87,6 @@ from .extraction_trace_events import (
     write_stream_event,
 )
 from .resolver_call_ledger import (
-    RESOLVER_TOOL_NAME,
     ResolverCallLedger,
     reset_active_resolver_call_ledger,
     set_active_resolver_call_ledger,
@@ -5204,12 +5203,11 @@ async def run_specialist_with_events(
                         if evidence_record is not None:
                             live_evidence_records.append(evidence_record)
 
-                        if current_tool_name == RESOLVER_TOOL_NAME:
-                            resolver_call_ledger.record_tool_output(
-                                tool_call_id=str(completed_tool.get("tool_id") or "") or None,
-                                tool_name=current_tool_name,
-                                output=output,
-                            )
+                        resolver_call_ledger.record_tool_output(
+                            tool_call_id=str(completed_tool.get("tool_id") or "") or None,
+                            tool_name=current_tool_name,
+                            output=output,
+                        )
 
                         # Extract chunk provenance from PDF tool outputs for highlighting
                         if current_tool_name in ("search_document", "read_section"):

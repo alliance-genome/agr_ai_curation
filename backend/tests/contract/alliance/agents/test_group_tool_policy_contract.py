@@ -28,9 +28,7 @@ def test_package_agent_group_tool_policy_is_strict_and_field_scoped():
                     {
                         "tool_id": "zfin_genotype_context_helper",
                         "allowed_group_ids": ["ZFIN"],
-                        "field_paths": [
-                            "expression_experiment.specimen_genomic_model"
-                        ],
+                        "field_paths": ["expression_experiment.specimen_genomic_model"],
                     },
                     {
                         "tool_id": "restricted_context_helper",
@@ -87,4 +85,28 @@ def test_rgd_gene_product_resolver_uses_authenticated_group_tool_policy():
             "allowed_group_ids": ["RGD"],
             "field_paths": ["gene_id"],
         }
+    ]
+
+
+def test_rgd_go_paper_curator_scopes_identity_and_annotation_sources():
+    agents = load_agent_definitions(
+        REPO_ROOT / "packages" / "alliance" / "agents",
+        force_reload=True,
+    )
+    curator = agents["rgd_go_paper_curator"]
+
+    assert curator.access.allowed_group_ids == ["RGD"]
+    assert "resolve_gene_product" not in curator.tools
+    assert "go_api_call" not in curator.tools
+    assert [rule.to_dict() for rule in curator.group_tool_policy.rules] == [
+        {
+            "tool_id": "resolve_gene_product",
+            "allowed_group_ids": ["RGD"],
+            "field_paths": ["gene_product"],
+        },
+        {
+            "tool_id": "go_api_call",
+            "allowed_group_ids": ["RGD"],
+            "field_paths": ["provider_context.existing_annotation_context"],
+        },
     ]

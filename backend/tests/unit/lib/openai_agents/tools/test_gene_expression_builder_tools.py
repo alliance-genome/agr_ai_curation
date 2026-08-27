@@ -285,6 +285,55 @@ def test_resolver_call_ledger_records_only_valid_resolved_outputs(active_builder
     assert any(event["event_type"] == "resolver_call_ledger.recorded" for event in events)
 
 
+def test_resolver_call_ledger_retains_structured_authoritative_tool_outputs(
+    active_builder_context,
+):
+    _workspace, ledger, _events = active_builder_context
+    ledger.record_tool_output(
+        tool_call_id="call-quickgo",
+        tool_name="quickgo_api_call",
+        output={"results": [{"id": "GO:0005515", "name": "protein binding"}]},
+    )
+
+    entry = ledger.find_tool_output_containing(
+        tool_names={"quickgo_api_call"},
+        value={"id": "GO:0005515", "name": "protein binding"},
+    )
+
+    assert entry is not None
+    assert entry.tool_call_id == "call-quickgo"
+    assert ledger.get_tool_output("call-quickgo").contains("GO:0005515")
+
+
+def test_resolver_call_ledger_limits_missing_id_rejections_to_resolver_outputs(
+    active_builder_context,
+):
+    _workspace, ledger, events = active_builder_context
+    generic_output = {"content": "full document text must not enter rejection traces"}
+
+    assert (
+        ledger.record_tool_output(
+            tool_call_id=None,
+            tool_name="read_section",
+            output=generic_output,
+        )
+        is None
+    )
+    assert events == []
+
+    assert (
+        ledger.record_tool_output(
+            tool_call_id=None,
+            tool_name="resolve_domain_field_term",
+            output=_resolved_output(),
+        )
+        is None
+    )
+    assert len(events) == 1
+    assert events[0]["event_type"] == "resolver_call_ledger.rejected"
+    assert events[0]["validation"]["reason"] == "missing_tool_call_id"
+
+
 def test_stage_gene_expression_observation_copies_resolver_provenance(active_builder_context):
     workspace, ledger, events = active_builder_context
 

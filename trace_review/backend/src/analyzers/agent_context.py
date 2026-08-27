@@ -153,6 +153,8 @@ class AgentContextAnalyzer:
         if not instructions:
             # Try to identify from tools
             tool_names = [t.get("name", "") for t in tools]
+            if "stage_go_recommendation" in tool_names:
+                return "rgd_go_paper_curator"
             if any("ask_" in name for name in tool_names):
                 return "supervisor"
             if any("search_document" in name or "read_section" in name for name in tool_names):
@@ -162,6 +164,11 @@ class AgentContextAnalyzer:
         instructions_lower = instructions.lower()
 
         # Check for specific agent patterns
+        if (
+            "rgd go paper curator" in instructions_lower
+            or "stage_go_recommendation" in instructions_lower
+        ):
+            return "rgd_go_paper_curator"
         if "supervisor" in instructions_lower or "route" in instructions_lower:
             return "supervisor"
         if "pdf" in instructions_lower or "document" in instructions_lower:

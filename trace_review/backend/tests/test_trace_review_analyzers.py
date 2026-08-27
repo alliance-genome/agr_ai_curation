@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from src.analyzers.agent_context import AgentContextAnalyzer
 from src.analyzers.conversation import ConversationAnalyzer
 from src.analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from src.analyzers.pdf_citations import PDFCitationsAnalyzer
@@ -10,6 +11,25 @@ from src.utils.trace_output import extract_trace_response_text, is_trace_output_
 
 
 class TraceReviewAnalyzerTests(unittest.TestCase):
+    def test_rgd_go_paper_curator_precedes_generic_document_classification(self):
+        instructions = (
+            "You are the RGD GO Paper Curator. Read the active document and call "
+            "stage_go_recommendation for evidence-backed GO candidates."
+        )
+
+        self.assertEqual(
+            AgentContextAnalyzer._identify_agent_type(instructions, []),
+            "rgd_go_paper_curator",
+        )
+
+    def test_rgd_go_paper_curator_is_identified_from_tools_without_instructions(self):
+        tools = [{"name": "search_document"}, {"name": "stage_go_recommendation"}]
+
+        self.assertEqual(
+            AgentContextAnalyzer._identify_agent_type("", tools),
+            "rgd_go_paper_curator",
+        )
+
     def _make_trace(self, output):
         return {
             "id": "trace-1234",
