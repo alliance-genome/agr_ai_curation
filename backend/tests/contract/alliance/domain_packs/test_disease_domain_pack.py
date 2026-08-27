@@ -142,9 +142,9 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     object_metadata = disease_object.metadata
 
     assert metadata.pack_id == DISEASE_DOMAIN_PACK_ID
-    # FULL LinkML alignment (D1): the pack now also declares the concrete Gene/Allele/AGM subtypes
-    # the builder materializes by subject kind, plus the pending sub-object types. The abstract
-    # DiseaseAnnotation curatable_unit (with its legacy blocked-posture metadata) is retained.
+    # FULL LinkML alignment (D1): the pack declares the concrete Gene/Allele/AGM subtypes
+    # the builder materializes by subject kind. Abstract DiseaseAnnotation remains only as the
+    # conceptual parent and unknown-subject fallback.
     object_types = [item.object_type for item in metadata.object_definitions]
     assert DISEASE_OBJECT_TYPE in object_types
     assert {
@@ -153,25 +153,43 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "AGMDiseaseAnnotation",
     } <= set(object_types)
     assert disease_object.model_ref == DISEASE_MODEL_ID
-    assert disease_object.definition_state.value == "in_development"
+    assert metadata.status.value == "active"
+    assert disease_object.definition_state.value == "stable"
     assert object_metadata[OBJECT_ROLE_METADATA_KEY] == "curatable_unit"
     assert object_metadata["assertion_kind"] == "pending_disease_assertion"
+    assert "write_behavior" not in object_metadata
+    assert "export_behavior" not in object_metadata
+    assert "curatable_unit_object_type" not in metadata.metadata
 
-    write_behavior = object_metadata["write_behavior"]
-    assert write_behavior["status"] == "blocked"
-    assert write_behavior["blocked_by"] == "ALL-425"
-    assert "insert public.diseaseannotation" in write_behavior["blocked_operations"]
+    declared_curatable_types = {
+        item.metadata.get("curatable_unit_object_type")
+        for item in metadata.object_definitions
+        if item.metadata.get("curatable_unit_object_type") is not None
+    }
+    assert declared_curatable_types == {
+        "GeneDiseaseAnnotation",
+        "AlleleDiseaseAnnotation",
+        "AGMDiseaseAnnotation",
+    }
 
     definition_state_summary = object_metadata["definition_state_summary"]
-    assert "disease_annotation_object" in definition_state_summary["complete"]
-    # Experimental conditions are now fully wired (multivalued + active composite binding).
-    assert "condition_relations" in definition_state_summary["complete"]
-    assert "disease_annotation_subject" in definition_state_summary["blocked"]
-    assert "single_reference" in definition_state_summary["blocked"]
+    assert {
+        "disease_annotation_object",
+        "disease_annotation_subject",
+        "disease_relation_name",
+        "evidence_code_curies",
+        "condition_relations",
+        "data_provider",
+    } <= set(definition_state_summary["complete"])
+    assert "under_development" not in definition_state_summary
+    assert definition_state_summary["blocked"] == ["single_reference"]
 
     validators = metadata.metadata["validators"]
     assert tuple(validators) == DISEASE_VALIDATOR_STATES
     assert all(validators[state] for state in DISEASE_VALIDATOR_STATES)
+    assert [
+        validator["validator_id"] for validator in validators["under_development"]
+    ] == ["disease_reference_materialization"]
 
     validator_bindings = metadata.metadata["validator_bindings"]
     binding_items = [
@@ -504,9 +522,9 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields(monkeypa
 
     for field_path in ("data_provider", "data_provider.abbreviation"):
         field = fields_by_path[field_path]
-        assert field.definition_state.value == "in_development"
+        assert field.definition_state.value == "stable"
         assert field.metadata["validator_state"] == "active"
-        assert field.metadata["definition_state_category"] == "under_development"
+        assert field.metadata["definition_state_category"] == "complete"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
         assert binding["validator_agent"]["agent_id"] == "data_provider_validation"
 
