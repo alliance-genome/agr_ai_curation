@@ -174,6 +174,9 @@ function AgentDetailsPanel({
   const domainEnvelopeMetadata = agent
     ? agentMetadata[agent.agent_id]?.domain_envelope
     : undefined
+  const allowedGroupIds = agent
+    ? agentMetadata[agent.agent_id]?.allowed_group_ids || []
+    : []
 
   // Load combined prompt when needed
   useEffect(() => {
@@ -337,6 +340,18 @@ function AgentDetailsPanel({
             <Typography variant="body2" color="text.secondary">
               {documentation?.summary || agent.description}
             </Typography>
+            {allowedGroupIds.length > 0 && (
+              <Alert
+                severity="info"
+                icon={<LockOutlinedIcon fontSize="inherit" />}
+                sx={{ mt: 1.5 }}
+              >
+                Available to groups: {allowedGroupIds.join(', ')}.
+                {!agent.agent_id.startsWith('ca_')
+                  ? ' This package-owned system restriction is read-only.'
+                  : ' Sharing and group-specific instructions do not widen this access restriction.'}
+              </Alert>
+            )}
           </Box>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
             {canCloneToWorkshop && (

@@ -37,6 +37,7 @@ from .agent_studio_schemas import (
     CombinedPromptResponse,
     DirectSubmissionRequest,
     DirectSubmissionResponse,
+    GroupOption,
     ManualSuggestionRequest,
     ModelOption,
     ModelsResponse,
@@ -81,6 +82,7 @@ from src.lib.observability.background_tasks import (
     report_background_task_exception,
 )
 from src.lib.group_rules import get_groups_from_provider_groups
+from src.lib.config import list_groups
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.flow_edge_roles import agent_can_source_output_attachment
 from src.lib.config.schema_discovery import resolve_output_schema
@@ -482,7 +484,11 @@ async def get_agent_templates_endpoint(
                     output_schema_key=agent.output_schema_key,
                 )
                 for agent in rows
-            ]
+            ],
+            group_options=[
+                GroupOption(group_id=group.group_id, name=group.name)
+                for group in sorted(list_groups(), key=lambda item: item.name.casefold())
+            ],
         )
     except Exception as e:
         raise_sanitized_http_exception(

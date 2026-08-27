@@ -3,7 +3,7 @@ import { describe, beforeEach, expect, it, vi } from 'vitest'
 
 import PromptWorkshop from './PromptWorkshop'
 import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
-import type { PromptCatalog, CustomAgent, ModelOption, ToolLibraryItem, AgentTemplate } from '@/types/promptExplorer'
+import type { PromptCatalog, CustomAgent, ModelOption, ToolLibraryItem, AgentTemplate, GroupOption } from '@/types/promptExplorer'
 
 const serviceMocks = vi.hoisted(() => ({
   createCustomAgent: vi.fn(),
@@ -208,6 +208,8 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     description: 'desc',
     custom_prompt: 'Prompt',
     group_prompt_overrides: {},
+    allowed_group_ids: [],
+    inherited_allowed_group_ids: [],
     icon: '🔧',
     include_group_rules: true,
     model_id: 'gpt-5.6-terra',
@@ -388,6 +390,7 @@ describe('PromptWorkshop', () => {
       category: 'Validation',
       model_id: 'gpt-5.6-terra',
       tool_ids: ['search_document'],
+      allowed_group_ids: [],
       output_schema_key: undefined,
     },
   ]
@@ -401,6 +404,7 @@ describe('PromptWorkshop', () => {
       category: 'Validation',
       model_id: 'gpt-5.6-terra',
       tool_ids: ['search_document'],
+      allowed_group_ids: [],
       output_schema_key: undefined,
     },
     {
@@ -411,8 +415,16 @@ describe('PromptWorkshop', () => {
       category: 'Validation',
       model_id: 'gpt-5.6-terra',
       tool_ids: ['search_document'],
+      allowed_group_ids: [],
       output_schema_key: undefined,
     },
+  ]
+
+  const groupOptions: GroupOption[] = [
+    { group_id: 'GROUP_A', name: 'Group A' },
+    { group_id: 'GROUP_B', name: 'Group B' },
+    { group_id: 'GROUP_C', name: 'Group C' },
+    { group_id: 'GROUP_D', name: 'Group D' },
   ]
 
   beforeEach(() => {
@@ -441,7 +453,7 @@ describe('PromptWorkshop', () => {
     metadataMocks.refresh.mockResolvedValue(undefined)
     serviceMocks.fetchModelOptions.mockResolvedValue(modelOptions)
     serviceMocks.fetchToolLibrary.mockResolvedValue(toolLibrary)
-    serviceMocks.fetchAgentTemplates.mockResolvedValue(templates)
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates, group_options: groupOptions })
     serviceMocks.listToolIdeaRequests.mockResolvedValue({ tool_ideas: [], total: 0 })
     serviceMocks.listCustomAgentVersions.mockResolvedValue([])
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [], total: 0 })
@@ -483,8 +495,109 @@ describe('PromptWorkshop', () => {
     const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
     expect(payload.template_source).toBe('gene')
     expect(payload.model_id).toBe('gpt-5.6-terra')
+    expect(payload.allowed_group_ids).toEqual([])
     expect(payload).not.toHaveProperty('parent_agent_id')
   }, 15000) // Increased because full workshop bootstrap can exceed the default timeout under CI load.
+
+  it('uses canonical group options and warns before saving a restriction that excludes the owner', async () => {
+    serviceMocks.listCustomAgents
+      .mockResolvedValueOnce({ custom_agents: [], total: 0 })
+      .mockResolvedValueOnce({ custom_agents: [buildCustomAgent({ allowed_group_ids: ['GROUP_B'] })], total: 1 })
+
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+
+    const groupSelect = await screen.findByLabelText('Available to groups')
+    expect(screen.getByText(/Sharing determines which people or projects could otherwise see this agent/)).toBeInTheDocument()
+    fireEvent.mouseDown(groupSelect)
+    fireEvent.click(await screen.findByRole('option', { name: /Group B GROUP_B/ }))
+    fireEvent.keyDown(groupSelect, { key: 'Escape' })
+
+    fireEvent.click(screen.getByText('File'))
+    fireEvent.click(await screen.findByText('Save New Agent'))
+
+    const warningDialog = await screen.findByRole('dialog', { name: 'Save a restriction that excludes you?' })
+    expect(within(warningDialog).getByText(/your current groups are ZFIN/)).toBeInTheDocument()
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+
+    fireEvent.click(within(warningDialog).getByRole('button', { name: 'Save restriction' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.createCustomAgent.mock.calls[0][0].allowed_group_ids).toEqual(['GROUP_B'])
+  }, 15000)
+
+  it('hydrates and updates an existing group restriction', async () => {
+    const restrictedAgent = buildCustomAgent({ allowed_group_ids: ['GROUP_B'] })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [restrictedAgent], total: 1 })
+    serviceMocks.updateCustomAgent.mockResolvedValue(restrictedAgent)
+
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={restrictedAgent.id} />)
+
+    await waitForAgentName('My Agent')
+    expect(screen.getByLabelText('Available to groups')).toHaveTextContent('GROUP_B')
+
+    fireEvent.click(screen.getByText('File'))
+    fireEvent.click(await screen.findByText('Save Agent'))
+    const warningDialog = await screen.findByRole('dialog', { name: 'Save a restriction that excludes you?' })
+    fireEvent.click(within(warningDialog).getByRole('button', { name: 'Save restriction' }))
+
+    await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.updateCustomAgent.mock.calls[0][1].allowed_group_ids).toEqual(['GROUP_B'])
+  }, 15000)
+
+  it('keeps a package-owned template restriction as the clone access floor', async () => {
+    const restrictedTemplate: AgentTemplate = { ...templates[0], allowed_group_ids: ['GROUP_B'] }
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({
+      templates: [restrictedTemplate],
+      group_options: groupOptions,
+    })
+
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+
+    expect(await screen.findByText(/Package restriction \(read-only\): available to GROUP_B/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Available to groups')).toHaveTextContent('GROUP_B')
+    expect(screen.getByText(/inherits a GROUP_B access floor and may only be narrowed/)).toBeInTheDocument()
+
+    const groupSelect = screen.getByRole('combobox', { name: 'Available to groups' })
+    fireEvent.mouseDown(groupSelect)
+    expect(screen.queryByRole('option', { name: 'All groups' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /Group B GROUP_B/ }))
+    fireEvent.keyDown(groupSelect, { key: 'Escape' })
+    expect(groupSelect).toHaveTextContent('GROUP_B')
+  }, 15000)
+
+  it('uses a restricted custom clone persisted access floor when its system template is unrestricted', async () => {
+    const restrictedClone = buildCustomAgent({
+      allowed_group_ids: ['GROUP_B', 'GROUP_C'],
+      inherited_allowed_group_ids: ['GROUP_B', 'GROUP_C'],
+    })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [restrictedClone], total: 1 })
+    serviceMocks.updateCustomAgent.mockResolvedValue({
+      ...restrictedClone,
+      allowed_group_ids: ['GROUP_B'],
+    })
+
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={restrictedClone.id} />)
+
+    await waitForAgentName('My Agent')
+    const groupSelect = screen.getByRole('combobox', { name: 'Available to groups' })
+    expect(groupSelect).toHaveTextContent('GROUP_B, GROUP_C')
+    expect(screen.getByText(/inherits a GROUP_B, GROUP_C access floor and may only be narrowed/)).toBeInTheDocument()
+
+    fireEvent.mouseDown(groupSelect)
+    expect(screen.queryByRole('option', { name: 'All groups' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /GROUP_D/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /Group C GROUP_C/ }))
+    fireEvent.keyDown(groupSelect, { key: 'Escape' })
+    expect(groupSelect).toHaveTextContent('GROUP_B')
+    expect(groupSelect).not.toHaveTextContent('GROUP_C')
+
+    fireEvent.click(screen.getByText('File'))
+    fireEvent.click(await screen.findByText('Save Agent'))
+    const warningDialog = await screen.findByRole('dialog', { name: 'Save a restriction that excludes you?' })
+    fireEvent.click(within(warningDialog).getByRole('button', { name: 'Save restriction' }))
+
+    await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.updateCustomAgent.mock.calls[0][1].allowed_group_ids).toEqual(['GROUP_B'])
+  }, 15000)
 
   it('shows locked inherited layers separately from the editable main/base prompt', async () => {
     render(<PromptWorkshop catalog={buildCatalogWithPromptLayers()} />)
@@ -782,7 +895,7 @@ describe('PromptWorkshop', () => {
   it('refreshes once to resolve a cloned initial custom agent id created after initial load', async () => {
     const existing = buildCustomAgent({ id: 'aaaaaaaa-1111-1111-1111-111111111111', name: 'Existing Agent' })
     const cloned = buildCustomAgent({ id: 'bbbbbbbb-2222-2222-2222-222222222222', name: 'Cloned Agent' })
-    serviceMocks.fetchAgentTemplates.mockResolvedValue([])
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: [], group_options: groupOptions })
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [existing], total: 1 })
       .mockResolvedValueOnce({ custom_agents: [existing, cloned], total: 2 })
@@ -851,7 +964,7 @@ describe('PromptWorkshop', () => {
   it('preserves incoming prompt updates when workshop bootstrap finishes after approval', async () => {
     const modelOptionsDeferred = createDeferred<ModelOption[]>()
     const toolLibraryDeferred = createDeferred<ToolLibraryItem[]>()
-    const templatesDeferred = createDeferred<AgentTemplate[]>()
+    const templatesDeferred = createDeferred<{ templates: AgentTemplate[]; group_options: GroupOption[] }>()
     const customAgentsDeferred = createDeferred<{ custom_agents: CustomAgent[]; total: number }>()
 
     serviceMocks.fetchModelOptions.mockImplementation(() => modelOptionsDeferred.promise)
@@ -875,7 +988,7 @@ describe('PromptWorkshop', () => {
 
     modelOptionsDeferred.resolve(modelOptions)
     toolLibraryDeferred.resolve(toolLibrary)
-    templatesDeferred.resolve(templates)
+    templatesDeferred.resolve({ templates, group_options: groupOptions })
     customAgentsDeferred.resolve({ custom_agents: [], total: 0 })
 
     gotoSection('Prompt')
@@ -1035,7 +1148,7 @@ describe('PromptWorkshop', () => {
   }, 15000)
 
   it('shows only the selected template group options and resets invalid selections when switching templates', async () => {
-    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: multiTemplateOptions, group_options: groupOptions })
 
     render(<PromptWorkshop catalog={buildCatalogWithTemplateSpecificGroupRules()} />)
 
@@ -1062,7 +1175,7 @@ describe('PromptWorkshop', () => {
       name: 'Disease Agent',
       template_source: 'disease',
     })
-    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: multiTemplateOptions, group_options: groupOptions })
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existingCloneSource], total: 1 })
 
     render(<PromptWorkshop catalog={buildCatalogWithTemplateSpecificGroupRules()} />)
@@ -1091,7 +1204,7 @@ describe('PromptWorkshop', () => {
       name: 'Disease Override Agent',
       template_source: 'disease',
     })
-    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: multiTemplateOptions, group_options: groupOptions })
     serviceMocks.listCustomAgents.mockResolvedValue({
       custom_agents: [templateAlignedCloneSource, selectedExistingAgent],
       total: 2,
@@ -1124,7 +1237,7 @@ describe('PromptWorkshop', () => {
       name: 'Disease Agent',
       template_source: 'disease',
     })
-    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: multiTemplateOptions, group_options: groupOptions })
     serviceMocks.listCustomAgents.mockResolvedValue({
       custom_agents: [existingGeneAgent, diseaseCloneSource],
       total: 2,

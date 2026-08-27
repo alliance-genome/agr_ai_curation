@@ -22,6 +22,7 @@ import {
   InputAdornment,
   Tabs,
   Tab,
+  Chip,
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
@@ -422,6 +423,16 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
                             <Typography variant="body2" sx={{ fontSize: '0.75rem', flex: 1 }}>
                               {agent.agent_name}
                             </Typography>
+                            {(agentMetadata[agent.agent_id]?.allowed_group_ids?.length || 0) > 0 && (
+                              <Chip
+                                size="small"
+                                color="warning"
+                                variant="outlined"
+                                label={agentMetadata[agent.agent_id]?.allowed_group_ids?.join(', ')}
+                                aria-label={`${agent.agent_name} restricted to ${agentMetadata[agent.agent_id]?.allowed_group_ids?.join(', ')}`}
+                                sx={{ height: 18, fontSize: '0.6rem', mr: 0.5 }}
+                              />
+                            )}
                             <DragHandle>
                               <DragIndicatorIcon fontSize="small" sx={{ fontSize: '1rem' }} />
                             </DragHandle>

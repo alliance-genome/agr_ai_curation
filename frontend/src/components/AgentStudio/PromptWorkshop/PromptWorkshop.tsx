@@ -54,6 +54,7 @@ import type {
   ModelOption,
   ToolLibraryItem,
   AgentTemplate,
+  GroupOption,
   ToolIdeaRequest,
   ToolIdeaConversationEntry,
   WorkshopPromptUpdateRequest,
@@ -77,6 +78,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
 
 const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
+const ALL_GROUPS_VALUE = '__all_groups__'
 
 function areStringRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftKeys = Object.keys(left).sort()
@@ -373,6 +375,7 @@ function PromptWorkshop({
   const [debouncedGroupPromptOverrides, setDebouncedGroupPromptOverrides] = useState<Record<string, string>>({})
   const [includeGroupRules, setIncludeGroupRules] = useState(true)
   const [selectedVisibility, setSelectedVisibility] = useState<'private' | 'project'>('private')
+  const [selectedAllowedGroupIds, setSelectedAllowedGroupIds] = useState<string[]>([])
   const [selectedModelId, setSelectedModelId] = useState('')
   const [selectedModelReasoning, setSelectedModelReasoning] = useState('')
   const [selectedToolIds, setSelectedToolIds] = useState<string[]>([])
@@ -384,6 +387,7 @@ function PromptWorkshop({
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [toolLibrary, setToolLibrary] = useState<ToolLibraryItem[]>([])
   const [templateOptions, setTemplateOptions] = useState<AgentTemplate[]>([])
+  const [groupOptions, setGroupOptions] = useState<GroupOption[]>([])
   const [toolIdeaRequests, setToolIdeaRequests] = useState<ToolIdeaRequest[]>([])
   const [toolIdeasLoading, setToolIdeasLoading] = useState(false)
   const [toolIdeaDialogOpen, setToolIdeaDialogOpen] = useState(false)
@@ -401,6 +405,8 @@ function PromptWorkshop({
   const [saveAsDialogOpen, setSaveAsDialogOpen] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [selfExclusionDialogOpen, setSelfExclusionDialogOpen] = useState(false)
+  const [pendingSaveOptions, setPendingSaveOptions] = useState<{ forceCreate?: boolean; nameOverride?: string }>()
   const [pendingDeleteAgent, setPendingDeleteAgent] = useState<CustomAgent | null>(null)
   const appliedInitialCustomAgentId = useRef<string | null>(null)
   const refreshAttemptedForInitialCustomAgentId = useRef<string | null>(null)
@@ -477,6 +483,26 @@ function PromptWorkshop({
     ),
     [authUser?.groups, authUser?.providerGroups, availableGroupIds]
   )
+  const currentUserGroupIds = useMemo(
+    () => Array.from(new Set((authUser?.groups || []).map((group) => group.trim().toUpperCase()).filter(Boolean))),
+    [authUser?.groups]
+  )
+
+  const inheritedAllowedGroupIds = useMemo(() => {
+    if (selectedCustomAgent) {
+      return selectedCustomAgent.inherited_allowed_group_ids
+    }
+    if (gettingStartedMode === 'clone' && !selectedCustomAgent) {
+      return selectedCloneSource?.allowed_group_ids || []
+    }
+    return selectedTemplate?.allowed_group_ids || []
+  }, [gettingStartedMode, selectedCloneSource?.allowed_group_ids, selectedCustomAgent, selectedTemplate?.allowed_group_ids])
+
+  const selectableGroupOptions = useMemo(() => {
+    if (inheritedAllowedGroupIds.length === 0) return groupOptions
+    const inherited = new Set(inheritedAllowedGroupIds)
+    return groupOptions.filter((group) => inherited.has(group.group_id))
+  }, [groupOptions, inheritedAllowedGroupIds])
 
   const selectedGroupId = useMemo(() => groupId.trim().toUpperCase(), [groupId])
 
@@ -627,14 +653,15 @@ function PromptWorkshop({
     async function loadWorkshopOptions() {
       setWorkshopOptionsLoaded(false)
       try {
-        const [models, tools, templates] = await Promise.all([
+        const [models, tools, workshopMetadata] = await Promise.all([
           fetchModelOptions(),
           fetchToolLibrary(),
           fetchAgentTemplates(),
         ])
         setModelOptions(models)
         setToolLibrary(tools)
-        setTemplateOptions(templates)
+        setTemplateOptions(workshopMetadata.templates)
+        setGroupOptions(workshopMetadata.group_options)
         if (models.length === 0) {
           setError('No model options are configured. Add entries in config/models.yaml before creating agents.')
         }
@@ -774,6 +801,7 @@ function PromptWorkshop({
         setGroupPromptOverrides(selectedCloneSource.group_prompt_overrides || {})
         setDebouncedGroupPromptOverrides(selectedCloneSource.group_prompt_overrides || {})
         setIncludeGroupRules(selectedCloneSource.include_group_rules)
+        setSelectedAllowedGroupIds(selectedCloneSource.allowed_group_ids || [])
         setSelectedVisibility('private')
         const cloneModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCloneSource.model_id)
         setSelectedModelId(cloneModelId)
@@ -798,6 +826,7 @@ function PromptWorkshop({
         setGroupPromptOverrides({})
         setDebouncedGroupPromptOverrides({})
         setIncludeGroupRules(false)
+        setSelectedAllowedGroupIds([])
         setSelectedVisibility('private')
         setSelectedModelId(defaultModelId)
         setSelectedModelReasoning(resolveReasoningSelection(modelOptions, defaultModelId))
@@ -815,6 +844,7 @@ function PromptWorkshop({
       setGroupPromptOverrides({})
       setDebouncedGroupPromptOverrides({})
       setIncludeGroupRules(true)
+      setSelectedAllowedGroupIds(selectedTemplate?.allowed_group_ids || [])
       setSelectedVisibility('private')
       const templateModelId = resolveModelSelection(modelOptions, defaultModelId, selectedTemplate?.model_id)
       setSelectedModelId(templateModelId)
@@ -834,6 +864,7 @@ function PromptWorkshop({
     setGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
     setDebouncedGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
     setIncludeGroupRules(selectedCustomAgent.include_group_rules)
+    setSelectedAllowedGroupIds(selectedCustomAgent.allowed_group_ids || [])
     setSelectedVisibility(selectedCustomAgent.visibility === 'project' ? 'project' : 'private')
     const customModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCustomAgent.model_id)
     setSelectedModelId(customModelId)
@@ -918,6 +949,7 @@ function PromptWorkshop({
       ? customPrompt !== selectedCustomAgent.custom_prompt
         || !areStringRecordsEqual(groupPromptOverrides, normalizedSelectedGroupOverrides)
         || includeGroupRules !== selectedCustomAgent.include_group_rules
+        || !areStringArraysEqual(selectedAllowedGroupIds, selectedCustomAgent.allowed_group_ids || [])
         || selectedModelId !== selectedCustomAgent.model_id
         || (selectedModelReasoning || '') !== (selectedCustomAgent.model_reasoning || '')
         || !areStringArraysEqual(selectedToolIds, selectedCustomAgent.tool_ids || [])
@@ -951,6 +983,7 @@ function PromptWorkshop({
     selectedCustomAgent?.custom_prompt,
     selectedCustomAgent?.group_prompt_overrides,
     selectedCustomAgent?.include_group_rules,
+    selectedCustomAgent?.allowed_group_ids,
     selectedCustomAgent?.model_id,
     selectedCustomAgent?.model_reasoning,
     selectedCustomAgent?.tool_ids,
@@ -965,6 +998,7 @@ function PromptWorkshop({
     selectedGroupPromptForContext,
     debouncedGroupPromptOverrides,
     selectedToolIds,
+    selectedAllowedGroupIds,
     selectedModelId,
     selectedModelReasoning,
     outputSchemaKey,
@@ -1056,6 +1090,7 @@ function PromptWorkshop({
     }
     setSelectedCustomAgentId('')
     setSelectedVisibility('private')
+    setSelectedAllowedGroupIds([])
     setSaveNotes('')
     setStatus('Creating a new custom agent draft')
   }
@@ -1077,7 +1112,10 @@ function PromptWorkshop({
     await refreshAgentMetadata()
   }
 
-  const handleSave = async (options?: { forceCreate?: boolean; nameOverride?: string }) => {
+  const handleSave = async (
+    options?: { forceCreate?: boolean; nameOverride?: string },
+    selfExclusionConfirmed = false
+  ) => {
     const forceCreate = options?.forceCreate ?? false
     const nameToSave = (options?.nameOverride ?? name).trim()
 
@@ -1110,6 +1148,14 @@ function PromptWorkshop({
       )
       return
     }
+    const excludesCurrentUserGroups = selectedAllowedGroupIds.length > 0
+      && currentUserGroupIds.length > 0
+      && !currentUserGroupIds.some((groupId) => selectedAllowedGroupIds.includes(groupId))
+    if (excludesCurrentUserGroups && !selfExclusionConfirmed) {
+      setPendingSaveOptions(options)
+      setSelfExclusionDialogOpen(true)
+      return
+    }
 
     setSaving(true)
     setError(null)
@@ -1130,6 +1176,7 @@ function PromptWorkshop({
           output_schema_key: outputSchemaKey || undefined,
           icon: icon || undefined,
           notes: saveNotes.trim() || undefined,
+          allowed_group_ids: selectedAllowedGroupIds,
         })
         const currentVisibility = updated.visibility === 'project' ? 'project' : 'private'
         if (currentVisibility !== selectedVisibility) {
@@ -1154,6 +1201,7 @@ function PromptWorkshop({
           tool_ids: selectedToolIds,
           output_schema_key: outputSchemaKey || undefined,
           icon: icon || undefined,
+          allowed_group_ids: selectedAllowedGroupIds,
         })
         if (selectedVisibility === 'project') {
           created = await setCustomAgentVisibility(created.agent_id, 'project')
@@ -1587,27 +1635,35 @@ function PromptWorkshop({
               </Box>
 
               {gettingStartedMode === 'template' && (
-                <FormControl size="small" sx={{ maxWidth: 360 }}>
-                  <InputLabel>Template</InputLabel>
-                  <Select
-                    label="Template"
-                    value={parentAgentId}
-                    disabled={templateOptions.length === 0}
-                    onChange={(event) => setParentAgentId(event.target.value)}
-                  >
-                    {templateOptions.length === 0 ? (
-                      <MenuItem value="" disabled>
-                        No templates available
-                      </MenuItem>
-                    ) : (
-                      templateOptions.map((template) => (
-                        <MenuItem key={template.agent_id} value={template.agent_id}>
-                          {template.name}
+                <Stack spacing={1} sx={{ maxWidth: 520 }}>
+                  <FormControl size="small" sx={{ maxWidth: 360 }}>
+                    <InputLabel>Template</InputLabel>
+                    <Select
+                      label="Template"
+                      value={parentAgentId}
+                      disabled={templateOptions.length === 0}
+                      onChange={(event) => setParentAgentId(event.target.value)}
+                    >
+                      {templateOptions.length === 0 ? (
+                        <MenuItem value="" disabled>
+                          No templates available
                         </MenuItem>
-                      ))
-                    )}
-                  </Select>
-                </FormControl>
+                      ) : (
+                        templateOptions.map((template) => (
+                          <MenuItem key={template.agent_id} value={template.agent_id}>
+                            {template.name}
+                          </MenuItem>
+                        ))
+                      )}
+                    </Select>
+                  </FormControl>
+                  {selectedTemplate && selectedTemplate.allowed_group_ids.length > 0 && (
+                    <Alert severity="info" icon={<LockOutlinedIcon fontSize="inherit" />}>
+                      Package restriction (read-only): available to {selectedTemplate.allowed_group_ids.join(', ')}.
+                      A custom copy may keep or narrow this restriction, but cannot widen it.
+                    </Alert>
+                  )}
+                </Stack>
               )}
 
               {gettingStartedMode === 'clone' && (
@@ -1725,6 +1781,48 @@ function PromptWorkshop({
                   </Select>
                 </FormControl>
               </Box>
+
+              <FormControl size="small" fullWidth>
+                <InputLabel id="available-groups-label">Available to groups</InputLabel>
+                <Select
+                  labelId="available-groups-label"
+                  label="Available to groups"
+                  multiple
+                  value={selectedAllowedGroupIds}
+                  aria-describedby="available-groups-helper-text"
+                  onChange={(event) => {
+                    const value = event.target.value as string[]
+                    const nextValue = value.includes(ALL_GROUPS_VALUE) ? [] : value
+                    if (inheritedAllowedGroupIds.length > 0 && nextValue.length === 0) return
+                    setSelectedAllowedGroupIds(nextValue)
+                  }}
+                  renderValue={(selected) => {
+                    const groupIds = selected as string[]
+                    return groupIds.length === 0 ? 'All groups' : groupIds.join(', ')
+                  }}
+                >
+                  {inheritedAllowedGroupIds.length === 0 && (
+                    <MenuItem value={ALL_GROUPS_VALUE}>
+                      <Checkbox checked={selectedAllowedGroupIds.length === 0} />
+                      <ListItemText primary="All groups" />
+                    </MenuItem>
+                  )}
+                  {selectableGroupOptions.map((group) => (
+                    <MenuItem key={group.group_id} value={group.group_id}>
+                      <Checkbox checked={selectedAllowedGroupIds.includes(group.group_id)} />
+                      <ListItemText primary={group.name} secondary={group.group_id} />
+                    </MenuItem>
+                  ))}
+                </Select>
+                <FormHelperText id="available-groups-helper-text">
+                  Sharing determines which people or projects could otherwise see this agent. Allowed groups further
+                  restrict which authenticated curator groups may use it. Group-specific instructions only change
+                  behavior after access is granted.
+                  {inheritedAllowedGroupIds.length > 0
+                    ? ` This copy inherits a ${inheritedAllowedGroupIds.join(', ')} access floor and may only be narrowed.`
+                    : ''}
+                </FormHelperText>
+              </FormControl>
 
               {selectedModelOption && (
                 <Box
@@ -2589,6 +2687,37 @@ function PromptWorkshop({
               disabled={toolIdeaSubmitting}
             >
               {toolIdeaSubmitting ? 'Submitting...' : 'Submit'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog
+          open={selfExclusionDialogOpen}
+          onClose={() => setSelfExclusionDialogOpen(false)}
+          maxWidth="xs"
+          fullWidth
+        >
+          <DialogTitle>Save a restriction that excludes you?</DialogTitle>
+          <DialogContent>
+            <Alert severity="warning">
+              Available to groups is set to {selectedAllowedGroupIds.join(', ')}, but your current groups are
+              {' '}{currentUserGroupIds.join(', ')}. After saving, server authorization may prevent you from using
+              this agent.
+            </Alert>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setSelfExclusionDialogOpen(false)}>Go back</Button>
+            <Button
+              variant="contained"
+              color="warning"
+              onClick={() => {
+                setSelfExclusionDialogOpen(false)
+                const options = pendingSaveOptions
+                setPendingSaveOptions(undefined)
+                void handleSave(options, true)
+              }}
+            >
+              Save restriction
             </Button>
           </DialogActions>
         </Dialog>

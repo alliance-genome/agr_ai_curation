@@ -168,10 +168,18 @@ class AgentTemplateItem(BaseModel):
     output_schema_key: Optional[str] = None
 
 
+class GroupOption(BaseModel):
+    """Canonical curator group option for Agent Workshop access controls."""
+
+    group_id: str
+    name: str
+
+
 class AgentTemplatesResponse(BaseModel):
-    """Response for available system templates."""
+    """Response for available system templates and canonical group options."""
 
     templates: List[AgentTemplateItem]
+    group_options: List[GroupOption]
 
 
 class CloneAgentRequest(BaseModel):

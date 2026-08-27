@@ -7,11 +7,14 @@ import type { PromptInfo } from '@/types/promptExplorer'
 const serviceMocks = vi.hoisted(() => ({
   fetchCombinedPrompt: vi.fn(),
 }))
+const metadataMocks = vi.hoisted(() => ({
+  agents: {} as Record<string, unknown>,
+}))
 
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/contexts/AgentMetadataContext', () => ({
   useAgentMetadata: () => ({
-    agents: {},
+    agents: metadataMocks.agents,
     refresh: vi.fn(),
     isLoading: false,
     error: null,
@@ -91,6 +94,25 @@ function buildCleanCustomAgent(): PromptInfo {
 describe('AgentDetailsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    metadataMocks.agents = {}
+  })
+
+  it('presents package-owned group restrictions as read-only', () => {
+    const systemAgent = { ...buildCleanCustomAgent(), agent_id: 'gene', agent_name: 'Gene Specialist' }
+    metadataMocks.agents = {
+      gene: { allowed_group_ids: ['GROUP_A'] },
+    }
+
+    render(
+      <AgentDetailsPanel
+        agent={systemAgent}
+        selectedGroupId={null}
+        onGroupSelect={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText(/Available to groups: GROUP_A/)).toBeInTheDocument()
+    expect(screen.getByText(/package-owned system restriction is read-only/)).toBeInTheDocument()
   })
 
   it('shows a composed empty state when no agent is selected', () => {

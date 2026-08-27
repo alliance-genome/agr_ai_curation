@@ -100,8 +100,17 @@ def test_get_tool_library_endpoint_returns_curator_visible_policy_rows(monkeypat
     ]
 
 
-def test_get_agent_templates_endpoint_returns_system_templates():
+def test_get_agent_templates_endpoint_returns_system_templates_and_canonical_groups(monkeypatch):
     import src.api.agent_studio as api_module
+
+    monkeypatch.setattr(
+        api_module,
+        "list_groups",
+        lambda: [
+            SimpleNamespace(group_id="RGD", name="Rat Genome Database"),
+            SimpleNamespace(group_id="FB", name="FlyBase"),
+        ],
+    )
 
     class _Query:
         def filter(self, *_args, **_kwargs):
@@ -138,6 +147,10 @@ def test_get_agent_templates_endpoint_returns_system_templates():
     assert response.templates[0].agent_id == "gene"
     assert response.templates[0].model_id == "gpt-4o"
     assert response.templates[0].allowed_group_ids == []
+    assert [(group.group_id, group.name) for group in response.group_options] == [
+        ("FB", "FlyBase"),
+        ("RGD", "Rat Genome Database"),
+    ]
 
 
 def test_get_models_endpoint_returns_500_on_loader_error(monkeypatch):

@@ -188,6 +188,7 @@ class CustomAgentResponse(BaseModel):
     custom_prompt_warning: Optional[str] = None
     group_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     allowed_group_ids: List[str] = Field(default_factory=list)
+    inherited_allowed_group_ids: List[str] = Field(default_factory=list)
     icon: str
     include_group_rules: bool
     model_id: str
