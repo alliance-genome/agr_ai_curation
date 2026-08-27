@@ -123,6 +123,16 @@ class TestAgentStudioCatalogEndpoints:
         )
         service = SimpleNamespace(get_effective_prompt_bundle=lambda agent_id, group_id: bundle)
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_agent_by_key",
+            lambda _db, _agent_id, **_kwargs: SimpleNamespace(),
+        )
 
         success = asyncio.run(
             api_module.get_combined_prompt(
@@ -158,6 +168,7 @@ class TestAgentStudioCatalogEndpoints:
             instructions="Curator overlay",
             group_prompt_overrides={"WB": "Custom WB overlay"},
             group_rules_enabled=True,
+            allowed_group_ids=[],
         )
         observed = {}
 
@@ -240,6 +251,16 @@ class TestAgentStudioCatalogEndpoints:
             get_effective_prompt_bundle=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_agent_by_key",
+            lambda _db, _agent_id, **_kwargs: SimpleNamespace(),
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(

@@ -184,7 +184,7 @@ async def test_create_batch_rejects_inaccessible_flow_agents(monkeypatch):
         user_id=42,
         is_active=True,
         name="Restricted flow",
-        flow_definition={"nodes": [{"data": {"agent_id": "rgd-only"}}]},
+        flow_definition={"nodes": [{"data": {"agent_id": "restricted-agent"}}]},
     )
     flow_query = SimpleNamespace(
         filter=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: flow)
@@ -193,19 +193,19 @@ async def test_create_batch_rejects_inaccessible_flow_agents(monkeypatch):
     monkeypatch.setattr(
         batch_api,
         "get_groups_from_provider_groups",
-        lambda _groups: ["MGI"],
+        lambda _groups: ["group-a"],
     )
     monkeypatch.setattr(
         batch_api,
         "inaccessible_flow_agent_keys",
-        lambda *_args, **_kwargs: ["rgd-only"],
+        lambda *_args, **_kwargs: ["restricted-agent"],
     )
 
     with pytest.raises(HTTPException) as exc_info:
         await batch_api.create_batch(
             BatchCreateRequest(flow_id=flow_id, document_ids=[uuid4()]),
             BackgroundTasks(),
-            {"sub": "u-1", "cognito:groups": ["MGI"]},
+            {"sub": "u-1", "cognito:groups": ["provider-group-a"]},
             db,
         )
 

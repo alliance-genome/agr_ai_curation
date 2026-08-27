@@ -41,6 +41,7 @@ def test_submit_suggestion_direct_rejects_invalid_system_agent(monkeypatch):
         "get_prompt_catalog",
         lambda: SimpleNamespace(get_agent=lambda _agent_id: None),
     )
+    monkeypatch.setattr(api_module, "get_agent_by_key", lambda *_args, **_kwargs: None)
 
     request = api_module.DirectSubmissionRequest(
         context=api_module.ChatContext(selected_agent_id="missing_agent")
@@ -80,6 +81,11 @@ def test_submit_suggestion_direct_enqueues_background_job(monkeypatch):
         api_module,
         "get_prompt_catalog",
         lambda: SimpleNamespace(get_agent=lambda _agent_id: SimpleNamespace(agent_id=_agent_id)),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_agent_by_key",
+        lambda *_args, **_kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda _context: "system prompt")
 

@@ -86,9 +86,9 @@ def test_get_supervisor_tool_agent_map_filters_for_active_groups():
         "_get_supervisor_specialist_specs",
         return_value=MOCK_SUPERVISOR_SPECS,
     ) as get_specs:
-        tool_agent_map = supervisor.get_supervisor_tool_agent_map(["RGD"])
+        tool_agent_map = supervisor.get_supervisor_tool_agent_map(["group-a"])
 
-    get_specs.assert_called_once_with(["RGD"])
+    get_specs.assert_called_once_with(["group-a"])
     assert tool_agent_map == {
         "ask_gene_specialist": "gene",
         "ask_pdf_extraction_specialist": "pdf_extraction",

@@ -193,8 +193,11 @@ def test_chat_with_opus_sanitizes_invalid_request_errors(monkeypatch, caplog):
 def test_chat_with_opus_hides_group_restricted_workshop_agent_without_selected_id(
     monkeypatch,
 ):
+    from src.lib.config.groups_loader import get_valid_group_ids
+
     custom_agent_uuid = uuid4()
     db = SimpleNamespace(close=lambda: None)
+    allowed_group_id, active_group_id = get_valid_group_ids()[:2]
 
     def _fake_get_db():
         yield db
@@ -208,7 +211,14 @@ def test_chat_with_opus_hides_group_restricted_workshop_agent_without_selected_i
     monkeypatch.setattr(
         api_module,
         "get_custom_agent_visible_to_user",
-        lambda _db, _uuid, _user_id: SimpleNamespace(allowed_group_ids=["RGD"]),
+        lambda _db, _uuid, _user_id: SimpleNamespace(
+            allowed_group_ids=[allowed_group_id]
+        ),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_groups_from_provider_groups",
+        lambda _groups: [active_group_id],
     )
     monkeypatch.setattr(
         api_module,
@@ -230,7 +240,7 @@ def test_chat_with_opus_hides_group_restricted_workshop_agent_without_selected_i
         asyncio.run(
             api_module.chat_with_opus(
                 request=request,
-                user={"sub": "auth-sub", "cognito:groups": ["mgi-curators"]},
+                user={"sub": "auth-sub", "cognito:groups": ["provider-group-a"]},
             )
         )
 

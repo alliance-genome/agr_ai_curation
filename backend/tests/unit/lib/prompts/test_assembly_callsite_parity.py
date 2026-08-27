@@ -97,6 +97,16 @@ def test_catalog_preview_diagnostic_and_runtime_share_prompt_bundle(
 
     monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: prompt_parity_service)
     monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: prompt_parity_service)
+    monkeypatch.setattr(
+        api_module,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=7),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_agent_by_key",
+        lambda _db, _agent_id, **_kwargs: SimpleNamespace(),
+    )
 
     catalog_bundle = prompt_parity_service.get_effective_prompt_bundle(
         "demo_agent",
@@ -165,6 +175,7 @@ def test_custom_agent_preview_treats_instructions_as_base_override(
             template_source="demo_agent",
             group_rules_enabled=True,
             group_prompt_overrides={"WB": "Curator WB overlay"},
+            allowed_group_ids=[],
         ),
     )
 
