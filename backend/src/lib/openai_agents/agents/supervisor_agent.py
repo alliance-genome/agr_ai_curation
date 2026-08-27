@@ -667,6 +667,11 @@ _LEDGER_BUDGET_EXCEEDED_MESSAGE = (
     "You have made enough specialist lookups for this turn. Stop and summarize what "
     "you have for the user, including anything that could not be resolved."
 )
+_SPECIALIST_DEADLINE_MESSAGE = (
+    "The specialist reached its wall-clock deadline. Treat this request as "
+    "unresolved; do not retry this specialist or substitute a general PDF "
+    "extractor. Continue only separately requested domain work."
+)
 
 
 def _normalize_ledger_query(query: str) -> str:
@@ -918,7 +923,63 @@ async def _run_streaming_specialist_tool(
     # no-progress brake that flows get from strict step order. Flow supervisors
     # bypass create_supervisor_agent and so have no ledger here.
     if ledger is not None:
-        return await ledger.run_or_replay(tool_name, query, _runner_coro_factory)
+        from src.lib.observability.runtime import report_runtime_exception
+
+        from ..config import get_supervisor_specialist_deadline_seconds
+
+        async def _run_with_deadline() -> str:
+            deadline_seconds = get_supervisor_specialist_deadline_seconds()
+            try:
+                # asyncio.timeout cancels this task in place. That preserves the
+                # ContextVar handoff set by validated inline persistence while the
+                # specialist's cancellation/finally lifecycle drains before control
+                # returns here.
+                async with asyncio.timeout(deadline_seconds):
+                    return await _runner_coro_factory()
+            except TimeoutError as exc:
+                handoff = pop_last_supervisor_extraction_handoff()
+                if handoff is not None:
+                    ledger.record_extraction_handoff(tool_name, query, handoff)
+                report_runtime_exception(
+                    exc,
+                    component="supervisor_agent",
+                    operation="specialist_deadline_exceeded",
+                    context={
+                        "tool_name": tool_name,
+                        "deadline_seconds": deadline_seconds,
+                        "validated_result_available": handoff is not None,
+                    },
+                )
+                logger.warning(
+                    "Automatic chat specialist deadline exceeded",
+                    extra={
+                        "operation": "specialist_deadline_exceeded",
+                        "tool_name": tool_name,
+                        "deadline_seconds": deadline_seconds,
+                        "validated_result_available": handoff is not None,
+                    },
+                )
+                payload: Dict[str, Any] = {
+                    "status": "partial" if handoff is not None else "unresolved",
+                    "reason": "specialist_deadline_exceeded",
+                    "message": _SPECIALIST_DEADLINE_MESSAGE,
+                }
+                if handoff is not None:
+                    payload.update(
+                        {
+                            "result_ref": handoff.result_ref,
+                            "result_status": handoff.result_status,
+                            "validated_object_count": handoff.object_count,
+                            "message": (
+                                f"{_SPECIALIST_DEADLINE_MESSAGE} Only the already "
+                                f"validated structured result at {handoff.result_ref} "
+                                "may be reported; ignore incomplete model prose."
+                            ),
+                        }
+                    )
+                return json.dumps(payload, ensure_ascii=True)
+
+        return await ledger.run_or_replay(tool_name, query, _run_with_deadline)
 
     return await _runner_coro_factory()
 

@@ -90,6 +90,7 @@ def test_prompt_requires_grounding_sections_and_canonical_lifecycle():
     prompt = yaml.safe_load((AGENT_DIR / "prompt.yaml").read_text(encoding="utf-8"))[
         "content"
     ]
+    normalized_prompt = " ".join(prompt.split())
 
     for required in (
         "Results, Methods, figure legends, tables",
@@ -106,11 +107,29 @@ def test_prompt_requires_grounding_sections_and_canonical_lifecycle():
         "general-PDF fallback",
         "Never synthesize an RGD CURIE",
         "completed candidate manifest",
+        "GO:<digits>",
+        "RGD:<digits>",
+        "Reject blank, malformed, or unsupported-prefix",
+        "persisted `extraction-result:<uuid>`",
+        "active document and requested target scope are unchanged",
+        "disease extraction as a separate typed result and policy path",
     ):
-        assert required in prompt
+        assert required in normalized_prompt
 
     assert "stage_disease_observation" not in prompt
     assert "finalize_disease_extraction" not in prompt
+
+
+def test_supervisor_route_is_narrow_and_keeps_combined_domains_separate():
+    description = _agent().supervisor_routing.description
+
+    assert "authenticated RGD curators only" in description
+    assert "IPI/IEP" in description
+    assert "call the disease extractor separately" in description
+    assert "term definitions" in description
+    assert "prior-annotation-only" in description
+    assert "persisted extraction-result reference" in description
+    assert "Reject blank or unsupported CURIEs locally" in description
 
 
 def test_fixture_set_covers_named_ambiguity_discovery_and_abstention_cases():
@@ -124,6 +143,11 @@ def test_fixture_set_covers_named_ambiguity_discovery_and_abstention_cases():
         "bounded_additional_entity",
         "evidence_code_abstention",
         "excluded_section_only",
+        "trace_initial_ipi",
+        "trace_initial_iep_combined_disease",
+        "trace_follow_up_same_scope",
+        "trace_follow_up_changed_scope",
+        "malformed_curie_local_rejection",
     }
     assert fixture["grounding"]["checked_symbols"] == {
         "Cttn": {"gene_curie": "RGD:619839", "gene_name": "cortactin"},
@@ -141,3 +165,18 @@ def test_fixture_set_covers_named_ambiguity_discovery_and_abstention_cases():
         "invented_evidence_code_forbidden"
     ]
     assert cases["excluded_section_only"]["expect"]["recommendation_finalized"] is False
+    assert cases["trace_initial_ipi"]["expect"]["go_result_adapter_key"] == "go"
+    assert cases["trace_initial_iep_combined_disease"]["expect"][
+        "disease_specialist_dispatched_separately"
+    ]
+    assert cases["trace_follow_up_same_scope"]["expect"] == {
+        "inspect_prior_result": True,
+        "specialist_redispatch": False,
+        "broad_pdf_fallback_forbidden": True,
+    }
+    assert cases["trace_follow_up_changed_scope"]["expect"][
+        "specialist_redispatch_allowed"
+    ]
+    assert cases["malformed_curie_local_rejection"]["expect"][
+        "specialist_document_tools_called"
+    ] is False

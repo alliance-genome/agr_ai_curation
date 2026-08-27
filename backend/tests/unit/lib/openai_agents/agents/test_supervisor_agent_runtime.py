@@ -550,6 +550,45 @@ def test_get_supervisor_specialist_specs_builds_specs_and_skips_metadata_failure
     assert specs[0]["category"] == "Extraction"
 
 
+def test_rgd_go_specialist_is_discoverable_only_to_authenticated_rgd(monkeypatch):
+    rows = [
+        SimpleNamespace(
+            agent_key="rgd_go_paper_curator",
+            name="RGD GO Paper Curator",
+            description="RGD GO extraction",
+            supervisor_description="Use for paper-derived RGD GO recommendations",
+            supervisor_batchable=0,
+            supervisor_batching_entity=None,
+            allowed_group_ids=["RGD"],
+        ),
+        SimpleNamespace(
+            agent_key="disease_extractor",
+            name="Disease Extractor",
+            description="Disease extraction",
+            supervisor_description="Use for disease extraction",
+            supervisor_batchable=0,
+            supervisor_batching_entity=None,
+            allowed_group_ids=[],
+        ),
+    ]
+    session = _FakeSession(rows)
+    monkeypatch.setattr("src.models.sql.agent.Agent", _FakeAgentRecord)
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_metadata",
+        lambda _agent_key: {"requires_document": True, "category": "Extraction"},
+    )
+
+    rgd_specs = supervisor_agent._get_supervisor_specialist_specs(["RGD"])
+    non_rgd_specs = supervisor_agent._get_supervisor_specialist_specs(["MGI"])
+
+    assert [spec["agent_key"] for spec in rgd_specs] == [
+        "rgd_go_paper_curator",
+        "disease_extractor",
+    ]
+    assert [spec["agent_key"] for spec in non_rgd_specs] == ["disease_extractor"]
+
+
 def test_create_dynamic_specialist_tools_skips_document_required_tools_without_document(monkeypatch):
     monkeypatch.setattr(
         supervisor_agent,
