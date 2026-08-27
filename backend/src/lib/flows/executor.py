@@ -84,6 +84,7 @@ from src.lib.domain_packs.validator_dispatch import (
     ValidatorDispatchJob,
     ValidatorRuntimeContext,
     dispatch_validator_jobs,
+    group_dispatch_context,
     resolve_group_scoped_validator_matches,
     unresolved_validator_result_for_dispatch_problem,
     validator_request_payload_for_agent,
@@ -1362,15 +1363,7 @@ async def _collect_flow_validator_materialization_inputs(
         user_id=user_id,
         authenticated_groups=authenticated_groups,
     )
-    dispatch_context = {
-        "authenticated_groups": (
-            list(authenticated_groups) if authenticated_groups is not None else None
-        ),
-        "group_context_identity": json.dumps(
-            list(authenticated_groups) if authenticated_groups is not None else None,
-            separators=(",", ":"),
-        ),
-    }
+    dispatch_context = group_dispatch_context(authenticated_groups)
 
     for group in groups:
         state = str(group.get("state") or "")
@@ -1656,7 +1649,15 @@ def _authenticated_groups_from_agent_context(
     raw_groups = agent_context.get("authenticated_groups")
     if not isinstance(raw_groups, Sequence) or isinstance(raw_groups, (str, bytes)):
         return None
-    return tuple(str(group) for group in raw_groups)
+    return tuple(
+        sorted(
+            {
+                group.strip()
+                for group in raw_groups
+                if isinstance(group, str) and group.strip()
+            }
+        )
+    )
 
 
 def _validator_runtime_context_for_flow(

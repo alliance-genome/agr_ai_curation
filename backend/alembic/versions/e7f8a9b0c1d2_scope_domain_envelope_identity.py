@@ -386,9 +386,12 @@ def upgrade() -> None:
             )
         except ValidationError:
             # Earlier persisted envelopes used keys such as ``objects`` that are no
-            # longer accepted by the strict runtime model. Preserve and hash those
-            # payloads exactly instead of blocking a schema-only ownership upgrade.
-            hash_payload = envelope_payload
+            # longer accepted by the strict runtime model. Preserve those payloads
+            # instead of blocking a schema-only ownership upgrade.
+            hash_payload = dict(envelope_payload)
+        # Authenticated context is server-owned checkpoint state, not part of the
+        # extracted source payload identity used by runtime checkpointing.
+        hash_payload.pop("authenticated_context", None)
         connection.execute(
             sa.text(
                 """

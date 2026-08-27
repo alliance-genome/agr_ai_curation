@@ -35,6 +35,8 @@ from src.lib.curation_workspace.session_common import (
     _metadata_allows_curator_override,
     _normalize_uuid,
     _normalized_optional_string,
+    active_groups_from_actor_claims,
+    actor_user_id,
 )
 from src.lib.curation_workspace.session_queries import get_session_detail
 from src.lib.curation_workspace.session_serializers import (
@@ -2435,6 +2437,7 @@ def submission_preview(
     db: Session,
     session_id: str | UUID,
     request: CurationSubmissionPreviewRequest,
+    actor_claims: dict[str, Any],
 ) -> CurationSubmissionPreviewResponse:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -2452,6 +2455,8 @@ def submission_preview(
             candidate_ids=request.candidate_ids,
             force=False,
         ),
+        user_id=actor_user_id(actor_claims),
+        active_groups=active_groups_from_actor_claims(actor_claims),
     )
 
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)
@@ -2578,6 +2583,8 @@ def execute_submission(
             candidate_ids=request.candidate_ids,
             force=False,
         ),
+        user_id=actor_user_id(actor_claims),
+        active_groups=active_groups_from_actor_claims(actor_claims),
     )
 
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)
@@ -2720,6 +2727,8 @@ def retry_submission(
             candidate_ids=target_candidate_ids,
             force=False,
         ),
+        user_id=actor_user_id(actor_claims),
+        active_groups=active_groups_from_actor_claims(actor_claims),
     )
 
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)

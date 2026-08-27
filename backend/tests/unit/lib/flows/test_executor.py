@@ -3547,8 +3547,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
                                 "validator_binding_id": binding.binding_id,
                                 "target": match.target_details(),
                                 "dispatch_context": {
-                                    "authenticated_groups": ["ZFIN"],
-                                    "group_context_identity": '["ZFIN"]',
+                                    "authenticated_groups": ["MGI", "ZFIN"],
+                                    "group_context_identity": '["MGI","ZFIN"]',
                                 },
                             }
                         },
@@ -3592,7 +3592,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 flow=_make_flow([]),
                 agent_context={
                     "user_id": "curator-1",
-                    "authenticated_groups": ["ZFIN"],
+                    "authenticated_groups": ["ZFIN", " MGI ", "ZFIN"],
                 },
             )
         )
@@ -3603,7 +3603,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "group_scope_eligible",
             "already_validated",
         ]
-        assert metadata[0]["group_scope_audit"]["group_context_identity"] == '["ZFIN"]'
+        assert metadata[0]["group_scope_audit"]["group_context_identity"] == (
+            '["MGI","ZFIN"]'
+        )
 
     def test_automatic_validation_group_reuses_existing_unresolved_finding(
         self, monkeypatch

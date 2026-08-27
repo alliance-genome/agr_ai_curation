@@ -380,7 +380,7 @@ def dispatch_active_validator_bindings(
     )
     selector_findings: list[ValidationFinding] = list(eligibility_findings)
     jobs: list[ValidatorDispatchJob] = []
-    dispatch_context = _group_dispatch_context(authenticated_groups)
+    dispatch_context = group_dispatch_context(authenticated_groups)
     for match in eligible_matches:
         if not _binding_has_dispatch_contract(match.binding):
             LOGGER.info(
@@ -486,9 +486,11 @@ def _normalized_authenticated_groups(
     )
 
 
-def _group_dispatch_context(
+def group_dispatch_context(
     authenticated_groups: tuple[str, ...] | None,
 ) -> dict[str, Any]:
+    """Return the canonical persisted identity for authenticated groups."""
+
     return {
         "authenticated_groups": (
             list(authenticated_groups) if authenticated_groups is not None else None
@@ -630,7 +632,7 @@ def _binding_group_audit(
         ),
         "eligible": eligible,
         "eligibility_reason": reason,
-        "group_context_identity": _group_dispatch_context(authenticated_groups)[
+        "group_context_identity": group_dispatch_context(authenticated_groups)[
             "group_context_identity"
         ],
     }
@@ -683,7 +685,7 @@ def _group_scope_finding(
         details={
             **match.binding.identity_details(),
             "target": match.target_details(),
-            **_group_dispatch_context(authenticated_groups),
+            **group_dispatch_context(authenticated_groups),
             **dict(extra_details or {}),
         },
     )
@@ -3148,6 +3150,7 @@ __all__ = [
     "ValidatorRuntimeContext",
     "dispatch_active_validator_bindings",
     "dispatch_validator_jobs",
+    "group_dispatch_context",
     "preflight_unresolved_validator_result",
     "resolve_group_scoped_validator_matches",
     "run_package_scoped_validator_agent_batch",

@@ -771,14 +771,6 @@ def _validator_runtime_context_for_candidate(
     elif candidate.session is not None and candidate.session.document_id is not None:
         document_id = str(candidate.session.document_id)
 
-    resolved_user_id = user_id
-    if (
-        resolved_user_id is None
-        and candidate.session is not None
-        and candidate.session.created_by_id is not None
-    ):
-        resolved_user_id = str(candidate.session.created_by_id)
-
     persisted_groups: tuple[str, ...] | None = None
     if authenticated_groups is None and candidate.domain_envelope is not None:
         persisted_envelope = DomainEnvelope.model_validate(
@@ -789,11 +781,11 @@ def _validator_runtime_context_for_candidate(
                 persisted_envelope.authenticated_context.active_groups
             )
 
-    if not document_id or not resolved_user_id:
+    if not document_id or not user_id:
         return None
     return ValidatorRuntimeContext(
         document_id=document_id,
-        user_id=str(resolved_user_id),
+        user_id=str(user_id),
         authenticated_groups=(
             tuple(authenticated_groups)
             if authenticated_groups is not None

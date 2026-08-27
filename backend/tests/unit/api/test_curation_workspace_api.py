@@ -996,10 +996,11 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _submission_preview(db, session_id, request):
+    def _submission_preview(db, session_id, request, *, actor_claims):
         captured["db"] = db
         captured["session_id"] = session_id
         captured["request"] = request
+        captured["actor_claims"] = actor_claims
         return expected
 
     monkeypatch.setattr(module, "submission_preview", _submission_preview)
@@ -1016,7 +1017,7 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
     response = await module.post_submission_preview(
         session_id,
         request,
-        user={"sub": "user-1"},
+        user={"sub": "user-1", "cognito:groups": ["rgd-curators"]},
         db=db,
     )
 
@@ -1025,6 +1026,10 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
         "db": db,
         "session_id": session_id,
         "request": request,
+        "actor_claims": {
+            "sub": "user-1",
+            "cognito:groups": ["rgd-curators"],
+        },
     }
     db.commit.assert_called_once_with()
 

@@ -169,6 +169,24 @@ def db_session():
             column.server_default = server_default
 
 
+@pytest.fixture(autouse=True)
+def authenticated_submission_preview_actor(monkeypatch):
+    preview = module.submission_preview
+
+    def _authenticated_preview(db, session_id, request):
+        return preview(
+            db,
+            session_id,
+            request,
+            actor_claims={
+                "sub": "preview-curator",
+                "cognito:groups": ["zfin-curators"],
+            },
+        )
+
+    monkeypatch.setattr(module, "submission_preview", _authenticated_preview)
+
+
 def _now() -> datetime:
     return datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc)
 
@@ -2377,6 +2395,17 @@ def test_workspace_validation_passes_document_user_runtime_context(
     )
     session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
     assert session_row is not None
+    session_row.created_by_id = str(uuid4())
+    candidate_row = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    assert candidate_row is not None
+    assert (
+        validation_module._validator_runtime_context_for_candidate(
+            candidate_row,
+            user_id=None,
+            authenticated_groups=["ZFIN"],
+        )
+        is None
+    )
     captured_contexts = []
 
     monkeypatch.setattr(
@@ -2857,10 +2886,25 @@ def test_workspace_validation_skips_envelope_dispatch_for_non_envelope_candidate
     ].status is FieldValidationStatus.INVALID_FORMAT
 
 
-def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_session):
+def test_submission_preview_builds_preview_payload_and_candidate_readiness(
+    db_session,
+    monkeypatch,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    captured_context: dict[str, object] = {}
+    validate = submission_module.validate_session
+
+    def _validate_with_actor_context(db, session_id, request, **kwargs):
+        captured_context.update(kwargs)
+        return validate(db, session_id, request, **kwargs)
+
+    monkeypatch.setattr(
+        submission_module,
+        "validate_session",
+        _validate_with_actor_context,
     )
 
     response = module.submission_preview(
@@ -2893,6 +2937,10 @@ def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_se
     assert response.submission.payload.payload_json["candidates"][0]["candidate_id"] == (
         seeded["first_candidate_id"]
     )
+    assert captured_context == {
+        "user_id": "preview-curator",
+        "active_groups": ["ZFIN"],
+    }
     assert response.submission.payload.candidate_ids == [seeded["first_candidate_id"]]
     assert response.submission.payload.payload_text is None
 
@@ -5150,6 +5198,18 @@ def test_execute_submission_stages_submission_updates_session_and_logs_action(
     db_session.add(session_row)
     db_session.commit()
     commit_calls = 0
+    captured_context: dict[str, object] = {}
+    validate = submission_module.validate_session
+
+    def _validate_with_actor_context(db, session_id, request, **kwargs):
+        captured_context.update(kwargs)
+        return validate(db, session_id, request, **kwargs)
+
+    monkeypatch.setattr(
+        submission_module,
+        "validate_session",
+        _validate_with_actor_context,
+    )
 
     def _commit_spy():
         nonlocal commit_calls
@@ -5165,7 +5225,11 @@ def test_execute_submission_stages_submission_updates_session_and_logs_action(
             idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
-        actor_claims={"sub": "user-1", "email": "user-1@example.org"},
+        actor_claims={
+            "sub": "user-1",
+            "email": "user-1@example.org",
+            "cognito:groups": ["rgd-curators"],
+        },
     )
 
     assert response.submission.status == CurationSubmissionStatus.ACCEPTED
@@ -5187,6 +5251,10 @@ def test_execute_submission_stages_submission_updates_session_and_logs_action(
     assert response.action_log_entry.action_type == CurationActionType.SUBMISSION_EXECUTED
     assert response.action_log_entry.new_session_status == CurationSessionStatus.SUBMITTED
     assert response.action_log_entry.metadata["submitted_candidate_count"] == 1
+    assert captured_context == {
+        "user_id": "user-1",
+        "active_groups": ["RGD"],
+    }
     assert commit_calls == 2
 
     persisted_submission = db_session.scalars(
@@ -6110,6 +6178,18 @@ def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
     db_session.add(original_submission)
     db_session.commit()
     commit_calls = 0
+    captured_context: dict[str, object] = {}
+    validate = submission_module.validate_session
+
+    def _validate_with_actor_context(db, session_id, request, **kwargs):
+        captured_context.update(kwargs)
+        return validate(db, session_id, request, **kwargs)
+
+    monkeypatch.setattr(
+        submission_module,
+        "validate_session",
+        _validate_with_actor_context,
+    )
 
     def _commit_spy():
         nonlocal commit_calls
@@ -6125,7 +6205,11 @@ def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
             submission_id=str(original_submission.id),
             reason="Retry after transient downstream failure.",
         ),
-        actor_claims={"sub": "user-1", "email": "user-1@example.org"},
+        actor_claims={
+            "sub": "user-1",
+            "email": "user-1@example.org",
+            "cognito:groups": ["rgd-curators"],
+        },
     )
 
     assert response.submission.submission_id == str(original_submission.id)
@@ -6141,6 +6225,10 @@ def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
     assert response.action_log_entry.metadata["retry_reason"] == (
         "Retry after transient downstream failure."
     )
+    assert captured_context == {
+        "user_id": "user-1",
+        "active_groups": ["RGD"],
+    }
     assert commit_calls == 1
 
     persisted_submissions = db_session.scalars(

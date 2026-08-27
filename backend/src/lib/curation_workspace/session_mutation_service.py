@@ -24,7 +24,6 @@ from src.lib.domain_envelopes.persistence import (
     write_domain_envelope_checkpoint,
 )
 from src.lib.domain_packs.materialization import validation_finding_projection_id
-from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
@@ -39,6 +38,8 @@ from src.lib.curation_workspace.session_common import (
     _normalize_uuid,
     _normalized_optional_string,
     _normalized_required_string,
+    active_groups_from_actor_claims,
+    actor_user_id,
 )
 from src.lib.curation_workspace.session_persistence import (
     _apply_candidate_progress_counts,
@@ -661,8 +662,8 @@ def update_candidate_draft(
             validated_at=now,
             runtime_context=_validator_runtime_context_for_candidate(
                 candidate,
-                user_id=_actor_user_id(actor_claims),
-                authenticated_groups=_active_groups_from_actor_claims(actor_claims),
+                user_id=actor_user_id(actor_claims),
+                authenticated_groups=active_groups_from_actor_claims(actor_claims),
             ),
             field_keys=changed_field_keys,
         )
@@ -699,23 +700,6 @@ def update_candidate_draft(
         validation_snapshot=validation_snapshot,
         action_log_entry=_action_log_entry(action_log_row),
     )
-
-
-def _actor_user_id(actor_claims: Mapping[str, Any]) -> str | None:
-    value = actor_claims.get("sub") or actor_claims.get("uid")
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _active_groups_from_actor_claims(actor_claims: Mapping[str, Any]) -> list[str]:
-    raw_groups = actor_claims.get("groups")
-    if raw_groups is None:
-        raw_groups = actor_claims.get("cognito:groups", [])
-    if not isinstance(raw_groups, list):
-        raw_groups = [str(raw_groups)] if raw_groups else []
-    return get_groups_from_provider_groups(raw_groups)
 
 
 def _domain_envelope_candidate(candidate: CurationCandidate) -> bool:

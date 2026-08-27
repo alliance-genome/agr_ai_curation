@@ -832,7 +832,7 @@ async def post_submission_preview(
     set_global_user_from_cognito(db, user)
     return _run_curation_mutation(
         db,
-        lambda: submission_preview(db, session_id, request),
+        lambda: submission_preview(db, session_id, request, actor_claims=user),
     )
 
 
