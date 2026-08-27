@@ -1,0 +1,47 @@
+starter_request:
+  target_entities:
+    - Cttn
+    - MicroRNA-124-3p
+  include_other_genes: true
+  exclude_sections:
+    - Introduction
+    - Discussion
+  include_go: true
+  include_disease: true
+  require:
+    - evidence_code
+    - rationale
+    - evidence_location
+
+expected_review:
+  additional_genes:
+    - Pfn1
+  results:
+    - agent_key: rgd_go_paper_curator
+      result_ref: extraction-result:go-review-fixture
+      candidate:
+        target_entity: Cttn
+        evidence_code: IDA
+        rationale: Representative primary-result evidence for deterministic flow testing.
+        evidence_location: Results, Figure 2
+    - agent_key: disease_extractor
+      result_ref: extraction-result:disease-review-fixture
+      candidate:
+        target_entity: Cttn
+        rationale: Representative disease evidence for deterministic flow testing.
+        evidence_location: Results, Table 1
+  unresolved:
+    - entity: MicroRNA-124-3p
+      state: unresolved_identity
+      reason: Mature-RNA identity requires curator confirmation.
+
+follow_up:
+  request: What about GO:0005515 for Cttn in the prior review?
+  reuse_result_refs:
+    - extraction-result:go-review-fixture
+    - extraction-result:disease-review-fixture
+
+processing_receipt:
+  schema_version: 1
+  outcome: completed
+  total_stage: completed

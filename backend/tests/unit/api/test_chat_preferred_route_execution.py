@@ -275,17 +275,14 @@ async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, ag
 
 
 @pytest.mark.asyncio
-async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result_refs(monkeypatch):
+async def test_selected_rgd_flow_receives_current_message_and_surfaces_distinct_result_refs(
+    monkeypatch,
+):
     flow_id = uuid4()
-    flow = SimpleNamespace(id=flow_id, name="Paper Review")
+    flow = SimpleNamespace(id=flow_id, name="RGD GO and Disease Paper Review")
     captured: dict = {}
-    result_id = str(uuid4())
-    inspection_context = chat_common.PreferredFlowInspectionContext(
-        flow_id=str(flow_id),
-        flow_run_id="prior-flow-run",
-        document_id=None,
-        result_refs=(f"extraction-result:{result_id}",),
-    )
+    go_result_id = str(uuid4())
+    disease_result_id = str(uuid4())
 
     async def _execute_flow(**kwargs):
         captured.update(kwargs)
@@ -301,10 +298,15 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
                 "flow_run_id": kwargs["flow_run_id"],
                 "extraction_result_refs": [
                     {
-                        "extraction_result_id": result_id,
-                        "result_ref": f"extraction-result:{result_id}",
-                        "agent_key": "gene_validation",
-                    }
+                        "extraction_result_id": go_result_id,
+                        "result_ref": f"extraction-result:{go_result_id}",
+                        "agent_key": "rgd_go_paper_curator",
+                    },
+                    {
+                        "extraction_result_id": disease_result_id,
+                        "result_ref": f"extraction-result:{disease_result_id}",
+                        "agent_key": "disease_extractor",
+                    },
                 ],
             },
         }
@@ -317,7 +319,7 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
             route=ResolvedChatRoute(
                 mode="flow",
                 target_id=str(flow_id),
-                target_display_name="Paper Review",
+                target_display_name="RGD GO and Disease Paper Review",
                 flow_run_id="flow-run-1",
             ),
             db=SimpleNamespace(get=lambda _model, _id: flow),
@@ -328,26 +330,36 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
             turn_id="turn-1",
             document_id=None,
             document_name=None,
-            active_groups=["MOD"],
+            active_groups=["RGD"],
             supervisor_model=None,
             specialist_model=None,
             supervisor_temperature=None,
             specialist_temperature=None,
             supervisor_reasoning=None,
             specialist_reasoning=None,
-            inspection_context=inspection_context,
         )
     ]
     assert len(message) > 2000
     assert captured["user_query"] == message
     assert captured["flow_run_id"] == "flow-run-1"
-    assert captured["inspection_context"] == inspection_context
-    internal = next(
-        event
+    assert captured["inspection_context"] is None
+    internal_refs = [
+        event["details"]
         for event in events
         if event["type"] == chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
-    )
-    assert internal["details"]["extraction_result_id"] == result_id
+    ]
+    assert internal_refs == [
+        {
+            "extraction_result_id": go_result_id,
+            "result_ref": f"extraction-result:{go_result_id}",
+            "agent_key": "rgd_go_paper_curator",
+        },
+        {
+            "extraction_result_id": disease_result_id,
+            "result_ref": f"extraction-result:{disease_result_id}",
+            "agent_key": "disease_extractor",
+        },
+    ]
     terminal = next(
         event
         for event in events
@@ -365,6 +377,169 @@ async def test_selected_flow_receives_over_2000_char_message_and_surfaces_result
             "agents_used": [],
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_selected_rgd_flow_followup_inspects_prior_refs_without_redispatch(
+    monkeypatch,
+):
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="RGD GO and Disease Paper Review")
+    go_result_id = str(uuid4())
+    disease_result_id = str(uuid4())
+    calls: list[dict] = []
+    dispatched_tools: list[str] = []
+
+    async def _execute_flow(**kwargs):
+        calls.append(kwargs)
+        if kwargs["inspection_context"] is None:
+            dispatched_tools.extend(
+                ["rgd_go_paper_curator", "disease_extractor", "chat_output"]
+            )
+            yield {
+                "type": "CHAT_OUTPUT_READY",
+                "details": {"output": "separate GO and disease review"},
+            }
+            yield {
+                "type": "FLOW_FINISHED",
+                "data": {
+                    "status": "completed",
+                    "flow_id": str(flow_id),
+                    "flow_run_id": kwargs["flow_run_id"],
+                    "document_id": "doc-1",
+                    "extraction_result_refs": [
+                        {
+                            "extraction_result_id": go_result_id,
+                            "result_ref": f"extraction-result:{go_result_id}",
+                            "agent_key": "rgd_go_paper_curator",
+                        },
+                        {
+                            "extraction_result_id": disease_result_id,
+                            "result_ref": f"extraction-result:{disease_result_id}",
+                            "agent_key": "disease_extractor",
+                        },
+                    ],
+                },
+            }
+            return
+
+        dispatched_tools.append("inspect_results")
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "inspect_results"},
+        }
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {
+                "output": "GO:0005515 is supported by the prior Cttn evidence.",
+                "inspection_only": True,
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "completed",
+                "completion_mode": "inspection_only",
+                "flow_id": str(flow_id),
+                "flow_run_id": kwargs["flow_run_id"],
+                "document_id": "doc-1",
+                "extraction_result_refs": [],
+            },
+        }
+
+    async def _run_turn(*, message: str, run_id: str, inspection_context=None):
+        return [
+            event
+            async for event in chat_common._run_resolved_chat_route(
+                route=ResolvedChatRoute(
+                    mode="flow",
+                    target_id=str(flow_id),
+                    target_display_name=flow.name,
+                    flow_run_id=run_id,
+                ),
+                db=SimpleNamespace(get=lambda _model, _id: flow),
+                db_user_id=7,
+                context_messages=[{"role": "user", "content": message}],
+                user_id="auth-sub",
+                session_id="session-1",
+                turn_id=run_id,
+                document_id="doc-1",
+                document_name="paper.pdf",
+                active_groups=["RGD"],
+                supervisor_model=None,
+                specialist_model=None,
+                supervisor_temperature=None,
+                specialist_temperature=None,
+                supervisor_reasoning=None,
+                specialist_reasoning=None,
+                inspection_context=inspection_context,
+            )
+        ]
+
+    monkeypatch.setattr(chat_common, "execute_flow", _execute_flow)
+    first_events = await _run_turn(
+        message="Review Cttn and MicroRNA-124-3p for GO and disease.",
+        run_id="flow-run-1",
+    )
+    first_terminal = next(
+        event
+        for event in first_events
+        if event["type"] == chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE
+    )
+
+    class _Repository:
+        def list_recent_messages(self, **_kwargs):
+            return [
+                _assistant_record(
+                    turn_id="turn-1",
+                    terminal_events=first_terminal["internal"]["events"],
+                )
+            ]
+
+    inspection_context = chat_common._preferred_flow_inspection_context(
+        repository=_Repository(),  # type: ignore[arg-type]
+        session_id="session-1",
+        user_id="auth-sub",
+        flow_id=str(flow_id),
+        document_id="doc-1",
+    )
+    followup = "What about GO:0005515 for Cttn in the prior review?"
+    second_events = await _run_turn(
+        message=followup,
+        run_id="flow-run-2",
+        inspection_context=inspection_context,
+    )
+
+    assert inspection_context == chat_common.PreferredFlowInspectionContext(
+        flow_id=str(flow_id),
+        flow_run_id="flow-run-1",
+        document_id="doc-1",
+        result_refs=(
+            f"extraction-result:{go_result_id}",
+            f"extraction-result:{disease_result_id}",
+        ),
+    )
+    assert calls[1]["flow"] is flow
+    assert calls[1]["user_query"] == followup
+    assert calls[1]["inspection_context"] == inspection_context
+    assert dispatched_tools == [
+        "rgd_go_paper_curator",
+        "disease_extractor",
+        "chat_output",
+        "inspect_results",
+    ]
+    assert not any(
+        event["type"] == chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+        for event in second_events
+    )
+    second_terminal = next(
+        event
+        for event in second_events
+        if event["type"] == chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE
+    )
+    assert second_terminal["internal"]["events"][-1]["completion_mode"] == (
+        "inspection_only"
+    )
 
 
 def test_preferred_flow_file_output_is_persisted_for_durable_replay(monkeypatch):

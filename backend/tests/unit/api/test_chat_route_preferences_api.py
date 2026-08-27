@@ -127,7 +127,7 @@ async def test_picker_returns_only_service_authorized_summaries(
             ChatRouteTarget(
                 id=str(flow_id),
                 kind="flow",
-                display_name="My Flow",
+                display_name="RGD GO and Disease Paper Review",
                 description=None,
                 category=None,
                 available=True,
@@ -142,3 +142,5 @@ async def test_picker_returns_only_service_authorized_summaries(
 
     assert [target.id for target in result.targets] == [str(flow_id)]
     assert result.targets[0].kind == "flow"
+    assert result.targets[0].display_name == "RGD GO and Disease Paper Review"
+    assert result.targets[0].id != "RGD GO and Disease Paper Review"

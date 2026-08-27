@@ -73,7 +73,9 @@ def test_workflow_user_context_set_get_clear():
 def test_flow_context_set_get_clear():
     assert flow_tools.get_current_flow_context() is None
     flow_tools.set_current_flow_context({"flow_name": "My Flow", "nodes": []})
-    assert flow_tools.get_current_flow_context()["flow_name"] == "My Flow"
+    context = flow_tools.get_current_flow_context()
+    assert context is not None
+    assert context["flow_name"] == "My Flow"
 
 
 def test_flow_context_definition_is_v1_1_only():
@@ -757,7 +759,7 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
         assert validate(steps=templates[name]["steps"], name=name)["valid"] is True
 
 
-def test_all_ten_alliance_recipes_appear_when_required_agents_are_flow_eligible(
+def test_all_twelve_alliance_recipes_appear_when_required_agents_are_flow_eligible(
     monkeypatch,
 ):
     catalog = flow_tools.load_flow_recipe_catalog()
@@ -813,7 +815,120 @@ def test_all_ten_alliance_recipes_appear_when_required_agents_are_flow_eligible(
         "Allele/Variant Extraction",
         "Allele Annotation",
         "GO Annotation Pipeline",
+        "RGD GO and Disease Paper Review",
+        "RGD GO Paper Review",
     ]
+
+
+def test_rgd_recipe_discovery_instantiates_saved_flow_and_denies_non_rgd_creation(
+    monkeypatch,
+):
+    class _FakeFlow:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.is_active = True
+
+    class _FakeDB:
+        def __init__(self):
+            self.added: Any | None = None
+            self.closed = False
+
+        def add(self, flow):
+            self.added = flow
+
+        def commit(self):
+            return None
+
+        def refresh(self, _flow):
+            return None
+
+        def close(self):
+            self.closed = True
+
+    available_agent_ids = {
+        "rgd_go_paper_curator",
+        "disease_extractor",
+        "chat_output",
+    }
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", sorted(available_agent_ids))
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "rgd_go_paper_curator": {
+                "name": "RGD GO Paper Curator",
+                "description": "RGD-only GO paper review",
+                "category": "Extraction",
+                "allowed_group_ids": ["RGD"],
+            },
+            "disease_extractor": {
+                "name": "Disease Extraction Agent",
+                "description": "Disease paper review",
+                "category": "Extraction",
+            },
+            "chat_output": {
+                "name": "Chat Output Agent",
+                "description": "Display review results",
+                "category": "Output",
+            },
+        },
+    )
+
+    flow_tools.set_workflow_user_context(42, active_group_ids=["MGI"])
+    denied_templates = flow_tools._get_flow_templates_handler()()["templates"]
+    assert not any(template["name"].startswith("RGD ") for template in denied_templates)
+
+    flow_tools.set_workflow_user_context(42, active_group_ids=["RGD"])
+    templates = {
+        template["name"]: template
+        for template in flow_tools._get_flow_templates_handler()()["templates"]
+    }
+    assert set(templates) == {
+        "RGD GO and Disease Paper Review",
+        "RGD GO Paper Review",
+    }
+    combined = templates["RGD GO and Disease Paper Review"]
+
+    import src.models.sql as sql_module
+
+    db = _FakeDB()
+
+    def _get_db():
+        yield db
+
+    monkeypatch.setattr(sql_module, "get_db", _get_db)
+    monkeypatch.setattr(sql_module, "CurationFlow", _FakeFlow)
+    created = flow_tools._create_flow_handler()(
+        name=combined["name"],
+        description=combined["description"],
+        steps=combined["steps"],
+    )
+
+    assert created["success"] is True
+    saved_flow = db.added
+    assert saved_flow is not None
+    assert created["flow_id"] == str(saved_flow.id)
+    assert saved_flow.user_id == 42
+    assert saved_flow.is_active is True
+    assert saved_flow.name == "RGD GO and Disease Paper Review"
+    assert "recipe" not in saved_flow.flow_definition
+    assert [
+        node["data"]["agent_id"]
+        for node in saved_flow.flow_definition["nodes"]
+        if node["data"].get("agent_id") not in {None, "task_input"}
+    ] == ["rgd_go_paper_curator", "disease_extractor", "chat_output"]
+
+    flow_tools.set_workflow_user_context(42, active_group_ids=["MGI"])
+    rejected = flow_tools._create_flow_handler()(
+        name="Unavailable RGD Review",
+        description=combined["description"],
+        steps=combined["steps"],
+    )
+    assert rejected == {
+        "success": False,
+        "error": "Flow references unavailable agents",
+        "help": "Re-select agents from get_available_agents before saving.",
+    }
 
 
 def test_advertised_alliance_recipes_pass_the_public_validation_contract():
