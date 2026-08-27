@@ -167,7 +167,13 @@ export interface AgentTemplate {
   category?: string
   model_id: string
   tool_ids: string[]
+  allowed_group_ids: string[]
   output_schema_key?: string
+}
+
+export interface GroupOption {
+  group_id: string
+  name: string
 }
 
 export type ToolIdeaStatus = 'submitted' | 'reviewed' | 'in_progress' | 'completed' | 'declined'
@@ -208,6 +214,7 @@ export interface CustomAgent {
   custom_prompt_removed_layer_kinds?: string[]
   custom_prompt_warning?: string
   group_prompt_overrides: Record<string, string>
+  allowed_group_ids: string[]
   icon: string
   include_group_rules: boolean
   model_id: string
@@ -228,6 +235,7 @@ export interface CustomAgentVersion {
   version: number
   custom_prompt: string
   group_prompt_overrides: Record<string, string>
+  allowed_group_ids: string[]
   notes?: string
   created_at: string
 }

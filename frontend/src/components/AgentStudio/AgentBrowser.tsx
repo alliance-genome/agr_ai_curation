@@ -29,6 +29,7 @@ import {
   IconButton,
   TextField,
   InputAdornment,
+  Stack,
   Tabs,
   Tab,
 } from '@mui/material'
@@ -45,6 +46,7 @@ import ScienceIcon from '@mui/icons-material/Science'
 
 import AgentDetailsPanel from './AgentDetailsPanel'
 import type { PromptCatalog, PromptInfo } from '@/types/promptExplorer'
+import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 
 // Define the display order for subcategories (matching Flow Builder)
 // System is added for Supervisor (not shown in Flow Builder)
@@ -130,6 +132,7 @@ function AgentBrowser({
   onDiscussWithClaude,
   onCloneToWorkshop,
 }: AgentBrowserProps) {
+  const { agents: agentMetadata } = useAgentMetadata()
   const [expandedCategories, setExpandedCategories] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [browserFilter, setBrowserFilter] = useState<BrowserFilter>('all')
@@ -343,7 +346,21 @@ function AgentBrowser({
                         sx={{ pl: 4 }}
                       >
                         <ListItemText
-                          primary={agent.agent_name}
+                          primary={(
+                            <Stack direction="row" spacing={0.75} alignItems="center">
+                              <span>{agent.agent_name}</span>
+                              {(agentMetadata[agent.agent_id]?.allowed_group_ids?.length || 0) > 0 && (
+                                <Chip
+                                  size="small"
+                                  color="warning"
+                                  variant="outlined"
+                                  label={`Restricted: ${agentMetadata[agent.agent_id]?.allowed_group_ids?.join(', ')}`}
+                                  aria-label={`${agent.agent_name} restricted to ${agentMetadata[agent.agent_id]?.allowed_group_ids?.join(', ')}`}
+                                  sx={{ height: 18, fontSize: '0.65rem' }}
+                                />
+                              )}
+                            </Stack>
+                          )}
                           secondary={agent.has_group_rules ? 'Has group rules' : undefined}
                           primaryTypographyProps={{ variant: 'body2' }}
                           secondaryTypographyProps={{ variant: 'caption' }}

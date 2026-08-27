@@ -5,6 +5,7 @@ import {
   createAgentStudioSession,
   createFlow,
   createCustomAgent,
+  fetchAgentTemplates,
   fetchAgentStudioHistoryList,
   fetchAgentStudioSessionDetail,
   listFlows,
@@ -12,6 +13,7 @@ import {
   listToolIdeaRequests,
   setCustomAgentVisibility,
   submitToolIdeaRequest,
+  updateCustomAgent,
   updateFlow,
 } from './agentStudioService'
 
@@ -21,6 +23,24 @@ global.fetch = mockFetch
 describe('agentStudioService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('returns canonical group options with available workshop templates', async () => {
+    const responseBody = {
+      templates: [{
+        agent_id: 'gene',
+        name: 'Gene Specialist',
+        icon: 'G',
+        model_id: 'gpt-5.6-terra',
+        tool_ids: [],
+        allowed_group_ids: ['RGD'],
+      }],
+      group_options: [{ group_id: 'RGD', name: 'Rat Genome Database' }],
+    }
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => responseBody })
+
+    await expect(fetchAgentTemplates()).resolves.toEqual(responseBody)
+    expect(mockFetch).toHaveBeenCalledWith('/api/agent-studio/agents/templates')
   })
 
   it('createAgentStudioSession posts the agent_studio chat kind to the shared session endpoint', async () => {
@@ -162,6 +182,7 @@ describe('agentStudioService', () => {
       name: 'My Agent',
       custom_prompt: 'Prompt',
       model_id: 'gpt-4o',
+      allowed_group_ids: ['RGD'],
     })
 
     expect(mockFetch).toHaveBeenCalledWith(
@@ -174,6 +195,7 @@ describe('agentStudioService', () => {
     const fetchOptions = mockFetch.mock.calls[0][1]
     const parsedBody = JSON.parse(fetchOptions.body as string)
     expect(parsedBody.template_source).toBe('gene')
+    expect(parsedBody.allowed_group_ids).toEqual(['RGD'])
     expect(parsedBody).not.toHaveProperty('parent_agent_id')
   })
 
@@ -204,7 +226,7 @@ describe('agentStudioService', () => {
       }),
     })
 
-    await cloneAgentToWorkshop('ca_source', { name: 'Gene Copy' })
+    await cloneAgentToWorkshop('ca_source', { name: 'Gene Copy', allowed_group_ids: ['RGD'] })
 
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/agent-studio/agents/ca_source/clone',
@@ -214,7 +236,16 @@ describe('agentStudioService', () => {
       })
     )
     const fetchOptions = mockFetch.mock.calls[0][1]
-    expect(JSON.parse(fetchOptions.body as string)).toEqual({ name: 'Gene Copy' })
+    expect(JSON.parse(fetchOptions.body as string)).toEqual({ name: 'Gene Copy', allowed_group_ids: ['RGD'] })
+  })
+
+  it('updateCustomAgent sends allowed_group_ids', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) })
+
+    await updateCustomAgent('custom-id', { allowed_group_ids: ['RGD'] })
+
+    const fetchOptions = mockFetch.mock.calls[0][1]
+    expect(JSON.parse(fetchOptions.body as string)).toEqual({ allowed_group_ids: ['RGD'] })
   })
 
   it('setCustomAgentVisibility posts visibility payload', async () => {

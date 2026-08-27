@@ -18,6 +18,7 @@ import type {
   ModelOption,
   ToolLibraryItem,
   AgentTemplate,
+  GroupOption,
   ToolIdeaRequest,
   ToolIdeaConversationEntry,
 } from '@/types/promptExplorer'
@@ -172,6 +173,7 @@ export interface AgentMetadata {
   output_schema_key?: string | null
   is_active?: boolean
   visible?: boolean
+  allowed_group_ids?: string[]
   produces_flow_artifacts?: boolean
   supervisor_tool?: string
   validation_attachments?: ValidationAttachmentOption[]
@@ -286,6 +288,7 @@ export interface CreateCustomAgentRequest {
   tool_ids?: string[]
   output_schema_key?: string
   category?: string
+  allowed_group_ids?: string[]
 }
 
 export interface UpdateCustomAgentRequest {
@@ -302,10 +305,12 @@ export interface UpdateCustomAgentRequest {
   output_schema_key?: string
   allow_empty_tool_ids?: boolean
   notes?: string
+  allowed_group_ids?: string[]
 }
 
 export interface CloneAgentRequest {
   name?: string
+  allowed_group_ids?: string[]
 }
 
 export interface ShareCustomAgentRequest {
@@ -349,6 +354,7 @@ export interface ToolLibraryResponse {
 
 export interface AgentTemplatesResponse {
   templates: AgentTemplate[]
+  group_options: GroupOption[]
 }
 
 export interface ToolIdeasResponse {
@@ -374,13 +380,13 @@ export async function fetchToolLibrary(): Promise<ToolLibraryItem[]> {
   return data.tools
 }
 
-export async function fetchAgentTemplates(): Promise<AgentTemplate[]> {
+export async function fetchAgentTemplates(): Promise<AgentTemplatesResponse> {
   const response = await fetch(`${BASE_URL}/agents/templates`)
   if (!response.ok) {
     throw new Error(`Failed to fetch agent templates: ${response.status}`)
   }
   const data: AgentTemplatesResponse = await response.json()
-  return data.templates
+  return data
 }
 
 export async function submitToolIdeaRequest(
