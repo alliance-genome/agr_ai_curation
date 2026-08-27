@@ -1,0 +1,90 @@
+{
+  "fixture_metadata": {
+    "retrieved": "2026-08-27",
+    "query": "miR-124-3p",
+    "organism_taxon_id": "NCBITaxon:10116",
+    "provider_prefix": "RGD",
+    "mirbase_organism_prefix": "rno",
+    "notes": "Recorded source fragments demonstrate current identities and mappings. Candidate count is evidence, not resolver policy."
+  },
+  "rnacentral_search": {
+    "hitCount": 6,
+    "entries": [
+      {
+        "id": "URS000020BE6A_10116",
+        "source": "rnacentral",
+        "fields": {
+          "description": ["Rattus norvegicus (Norway rat) rno-miR-124-3p"],
+          "rna_type": ["miRNA"],
+          "expert_db": ["MIRBASE", "RefSeq", "PirBase"]
+        }
+      },
+      {
+        "id": "RNACRNOG49826723980.2",
+        "source": "rnacentral",
+        "fields": {
+          "description": ["Rattus norvegicus (Norway rat) rno-miR-124-3p"],
+          "rna_type": ["Gene"],
+          "expert_db": ["MIRBASE", "RefSeq"]
+        }
+      }
+    ]
+  },
+  "rnacentral_mature_xrefs": {
+    "count": 5,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "upi": "URS000020BE6A",
+        "database": "miRBase",
+        "is_active": true,
+        "taxid": 10116,
+        "accession": {
+          "external_id": "MIMAT0000828",
+          "optional_id": "rno-miR-124-3p",
+          "description": "Rattus norvegicus (Norway rat) rno-miR-124-3p",
+          "rna_type": "miRNA"
+        }
+      }
+    ]
+  },
+  "curation_db_candidates": [
+    {
+      "gene_id": "RGD:2325336",
+      "gene_symbol": "Mir124-1",
+      "gene_name": "microRNA 124-1",
+      "taxon_id": "NCBITaxon:10116",
+      "gene_type": "ncRNA_gene",
+      "rnacentral_ids": [
+        "RNAcentral:URS000020BE6A",
+        "RNAcentral:URS000075A939"
+      ],
+      "mirbase_hairpin_id": "miRBase:MI0000893"
+    },
+    {
+      "gene_id": "RGD:2325458",
+      "gene_symbol": "Mir124-3",
+      "gene_name": "microRNA 124-3",
+      "taxon_id": "NCBITaxon:10116",
+      "gene_type": "ncRNA_gene",
+      "rnacentral_ids": [
+        "RNAcentral:URS000020BE6A",
+        "RNAcentral:URS000075EDDE"
+      ],
+      "mirbase_hairpin_id": "miRBase:MI0000892"
+    },
+    {
+      "gene_id": "RGD:2325576",
+      "gene_symbol": "Mir124-2",
+      "gene_name": "microRNA 124-2",
+      "taxon_id": "NCBITaxon:10116",
+      "gene_type": "ncRNA_gene",
+      "rnacentral_ids": [
+        "RNAcentral:URS000020BE6A",
+        "RNAcentral:URS000075E86C"
+      ],
+      "mirbase_hairpin_id": "miRBase:MI0000894"
+    }
+  ]
+}

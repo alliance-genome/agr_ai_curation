@@ -40,6 +40,7 @@ def test_alliance_diagnostic_descriptions_preserve_service_call_guidance(monkeyp
     assert registry.has_tool("chebi_api_call")
     assert registry.has_tool("quickgo_api_call")
     assert registry.has_tool("go_api_call")
+    assert registry.has_tool("resolve_gene_product")
 
     tool_catalog = catalog_service.get_tool_registry()
     for tool_id in (
@@ -47,6 +48,7 @@ def test_alliance_diagnostic_descriptions_preserve_service_call_guidance(monkeyp
         "chebi_api_call",
         "quickgo_api_call",
         "go_api_call",
+        "resolve_gene_product",
     ):
         assert tool_catalog[tool_id]["agent_studio"]["diagnostic"]["enabled"] is True
 
@@ -71,3 +73,9 @@ def test_alliance_diagnostic_descriptions_preserve_service_call_guidance(monkeyp
     assert "RGD" in go_tool.description
     assert "unsupported_identifier" in go_tool.description
     assert "With/From" in go_tool.description
+
+    resolver_tool = registry.get_tool("resolve_gene_product")
+    assert resolver_tool is not None
+    assert "RNAcentral" in resolver_tool.description
+    assert "miRBase" in resolver_tool.description
+    assert "never" in resolver_tool.description

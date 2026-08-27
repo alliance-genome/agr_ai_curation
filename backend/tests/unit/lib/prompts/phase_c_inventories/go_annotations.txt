@@ -55,3 +55,12 @@ request the smallest identifier correction and do not invent a CURIE.
 do not try QuickGO or another source.
 return an empty annotation list and explain that the authoritative response contained no associations.
 report the source failure without fabricating or reusing annotation values.
+
+# GOA-13 authenticated RGD gene-product resolution and fixed organism context.
+For authenticated RGD work, `resolve_gene_product` may first ground a symbol, precursor locus, or mature RNA product to safe RGD gene candidates.
+`organism_taxon_id="NCBITaxon:10116"`, `provider_prefix="RGD"`, and `mirbase_organism_prefix="rno"`
+
+# GOA-14 ambiguity and synthetic-ID stop rules.
+preserve its candidates and provenance in the explanation, and do not call `go_api_call`.
+list every returned precursor candidate and do not choose one
+Never emit synthetic identifiers such as `RGD:miR-124`.

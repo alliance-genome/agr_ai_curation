@@ -843,6 +843,38 @@ def get_go_annotations_request_timeout_seconds() -> float:
     )
 
 
+def get_rna_gene_product_request_timeout_seconds() -> float:
+    """HTTP timeout for RNAcentral and miRBase identity lookups."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("RNA_GENE_PRODUCT_REQUEST_TIMEOUT_SECONDS", 10.0),
+    )
+
+
+def get_rna_gene_product_cache_ttl_seconds() -> float:
+    """Lifetime of process-local RNA gene-product resolution cache entries."""
+    return max(
+        0.0,
+        _get_env_float_with_fallback("RNA_GENE_PRODUCT_CACHE_TTL_SECONDS", 300.0),
+    )
+
+
+def get_rna_gene_product_cache_max_entries() -> int:
+    """Maximum process-local RNA gene-product resolution cache entries."""
+    return max(
+        1,
+        _get_env_int_with_fallback("RNA_GENE_PRODUCT_CACHE_MAX_ENTRIES", 256),
+    )
+
+
+def get_rna_gene_product_max_candidates() -> int:
+    """Maximum candidates fetched and returned by one gene-product resolution."""
+    return max(
+        1,
+        _get_env_int_with_fallback("RNA_GENE_PRODUCT_MAX_CANDIDATES", 25),
+    )
+
+
 def get_document_source_import_enabled() -> bool:
     """Feature flag for external document-source import."""
     return _get_env_bool("DOCUMENT_SOURCE_IMPORT_ENABLED", False)

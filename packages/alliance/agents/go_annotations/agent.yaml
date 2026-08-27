@@ -36,6 +36,13 @@ supervisor_routing:
 tools:
   - go_api_call
 
+group_tool_policy:
+  rules:
+    - tool_id: resolve_gene_product
+      allowed_group_ids: [RGD]
+      field_paths:
+        - gene_id
+
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------

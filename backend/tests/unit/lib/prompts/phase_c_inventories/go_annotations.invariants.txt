@@ -1,5 +1,6 @@
 # Phase C ordered workflow invariants for the typed existing-GO adapter.
 
+For an authenticated RGD request that provides a symbol or RNA product instead of a CURIE, call `resolve_gene_product` once with the exact mention
 Read the Alliance-format `gene_id` from the request.
 Call `go_api_call` once with that exact `gene_id`; never construct an API URL.
 Branch on the typed tool status: `ok`, `not_found`, `invalid_input`, `unsupported_identifier`, or `upstream_error`.
