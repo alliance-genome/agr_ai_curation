@@ -17,7 +17,7 @@ from src.services.chat_route_preference_service import (
 
 @pytest.fixture
 def authenticated_user(monkeypatch):
-    user = {"sub": "auth-user", "cognito:groups": ["rgd-curators"]}
+    user = {"sub": "auth-user", "cognito:groups": ["group-alpha-raw"]}
     monkeypatch.setattr(
         users,
         "set_global_user_from_cognito",
@@ -26,7 +26,7 @@ def authenticated_user(monkeypatch):
     monkeypatch.setattr(
         users,
         "get_groups_from_provider_groups",
-        lambda groups: ["RGD"],
+        lambda groups: ["group-alpha"],
     )
     return user
 
@@ -48,7 +48,7 @@ async def test_read_derives_user_and_groups_from_auth_context(
 
     assert result.mode.value == "automatic"
     assert result.status == "available"
-    assert captured == {"user_id": 37, "active_group_ids": ["RGD"]}
+    assert captured == {"user_id": 37, "active_group_ids": ["group-alpha"]}
 
 
 async def test_replace_returns_authorized_target(monkeypatch, authenticated_user):

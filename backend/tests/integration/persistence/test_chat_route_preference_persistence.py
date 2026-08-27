@@ -13,6 +13,7 @@ from alembic.config import Config  # pyright: ignore[reportMissingImports]
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from src.lib.config.groups_loader import get_valid_group_ids
 from src.models.sql.agent import Agent, Project, ProjectMember
 from src.models.sql.chat_route_preference import ChatRoutePreference
 from src.models.sql.curation_flow import CurationFlow
@@ -65,6 +66,9 @@ def _flow(user_id: int, name: str, agent_key: str, *, active: bool = True) -> Cu
 
 def test_preference_constraints_authorization_stale_reads_and_atomic_replacement():
     command.upgrade(Config(str(BACKEND_ROOT / "alembic.ini")), "head")
+    valid_group_ids = get_valid_group_ids()
+    assert len(valid_group_ids) >= 2
+    matching_group_id, nonmatching_group_id = valid_group_ids[:2]
     suffix = uuid4().hex
     db = SessionLocal()
     created_user_ids: list[int] = []
@@ -98,10 +102,10 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             f"project_{suffix}", visibility="project", project_id=project.id
         )
         matching_group = _agent(
-            f"matching_{suffix}", allowed_group_ids=["RGD"]
+            f"matching_{suffix}", allowed_group_ids=[matching_group_id]
         )
         nonmatching_group = _agent(
-            f"nonmatching_{suffix}", allowed_group_ids=["MGI"]
+            f"nonmatching_{suffix}", allowed_group_ids=[nonmatching_group_id]
         )
         agents = [
             system,
@@ -132,7 +136,7 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
         picker_ids = {
             target.id
             for target in list_chat_route_picker_targets(
-                db, user_id=owner.id, active_group_ids=["RGD"]
+                db, user_id=owner.id, active_group_ids=[matching_group_id]
             )
         }
         assert {
@@ -154,7 +158,7 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
         )
 
         assert get_chat_route_preference(
-            db, user_id=owner.id, active_group_ids=["RGD"]
+            db, user_id=owner.id, active_group_ids=[matching_group_id]
         ).mode == "automatic"
 
         agent_state = update_chat_route_preference(
@@ -163,7 +167,7 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             mode="agent",
             agent_key=system.agent_key,
             flow_id=None,
-            active_group_ids=["RGD"],
+            active_group_ids=[matching_group_id],
         )
         assert agent_state.available is True
         assert agent_state.agent_id == system.agent_key
@@ -173,7 +177,7 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             mode="agent",
             agent_key=system.agent_key,
             flow_id=None,
-            active_group_ids=["RGD"],
+            active_group_ids=[matching_group_id],
         )
         assert idempotent_state == agent_state
         assert (
@@ -195,7 +199,7 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
                     mode="agent",
                     agent_key=unavailable_agent_key,
                     flow_id=None,
-                    active_group_ids=["RGD"],
+                    active_group_ids=[matching_group_id],
                 )
 
         matching_state = update_chat_route_preference(
@@ -204,11 +208,11 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             mode="agent",
             agent_key=matching_group.agent_key,
             flow_id=None,
-            active_group_ids=["RGD"],
+            active_group_ids=[matching_group_id],
         )
         assert matching_state.available is True
         revoked_group_state = get_chat_route_preference(
-            db, user_id=owner.id, active_group_ids=["MGI"]
+            db, user_id=owner.id, active_group_ids=[nonmatching_group_id]
         )
         assert revoked_group_state.available is False
 
@@ -218,14 +222,14 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             mode="agent",
             agent_key=system.agent_key,
             flow_id=None,
-            active_group_ids=["RGD"],
+            active_group_ids=[matching_group_id],
         )
         assert agent_state.available is True
 
         system.is_active = False
         db.commit()
         stale_agent_state = get_chat_route_preference(
-            db, user_id=owner.id, active_group_ids=["RGD"]
+            db, user_id=owner.id, active_group_ids=[matching_group_id]
         )
         assert stale_agent_state.available is False
         assert stale_agent_state.target is not None
@@ -240,7 +244,7 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             mode="flow",
             agent_key=None,
             flow_id=active_flow.id,
-            active_group_ids=["RGD"],
+            active_group_ids=[matching_group_id],
         )
         assert flow_state.available is True
         row = db.get(ChatRoutePreference, owner.id)
@@ -261,7 +265,7 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
                     mode=mode,
                     agent_key=concurrent_agent_key if mode == "agent" else None,
                     flow_id=concurrent_flow_id if mode == "flow" else None,
-                    active_group_ids=["RGD"],
+                    active_group_ids=[matching_group_id],
                 )
             finally:
                 thread_db.close()
@@ -288,7 +292,7 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
                 mode="flow",
                 agent_key=None,
                 flow_id=active_flow.id,
-                active_group_ids=["RGD"],
+                active_group_ids=[matching_group_id],
             )
 
         flow_state = update_chat_route_preference(
@@ -297,13 +301,13 @@ def test_preference_constraints_authorization_stale_reads_and_atomic_replacement
             mode="flow",
             agent_key=None,
             flow_id=active_flow.id,
-            active_group_ids=["RGD"],
+            active_group_ids=[matching_group_id],
         )
         assert flow_state.available is True
         active_flow.is_active = False
         db.commit()
         stale_flow_state = get_chat_route_preference(
-            db, user_id=owner.id, active_group_ids=["RGD"]
+            db, user_id=owner.id, active_group_ids=[matching_group_id]
         )
         assert stale_flow_state.available is False
         assert stale_flow_state.flow_id == active_flow.id

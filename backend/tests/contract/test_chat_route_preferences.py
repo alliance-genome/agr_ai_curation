@@ -112,7 +112,7 @@ def test_put_rejects_caller_supplied_identity_or_group_claims(client):
     _override_user(authenticated=True)
     response = client.put(
         PREFERENCE_PATH,
-        json={"mode": "automatic", "user_id": 99, "groups": ["RGD"]},
+        json={"mode": "automatic", "user_id": 99, "groups": ["group-alpha"]},
     )
 
     assert response.status_code == 422

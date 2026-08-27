@@ -43,5 +43,5 @@ def test_request_contract_does_not_accept_identity_or_access_claims():
     assert set(fields) == {"mode", "agent_id", "flow_id"}
     with pytest.raises(ValidationError):
         ChatRoutePreferenceUpdate.model_validate(
-            {"mode": "automatic", "user_id": 12, "groups": ["RGD"]}
+            {"mode": "automatic", "user_id": 12, "groups": ["group-alpha"]}
         )
