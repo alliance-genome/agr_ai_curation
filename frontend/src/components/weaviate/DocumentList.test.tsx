@@ -1,5 +1,4 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import type { ReactNode } from 'react';
 import { render, screen, fireEvent, userEvent, waitFor, within } from '../../test/test-utils';
 import DocumentList from './DocumentList';
 import type { DocumentSummary } from '../../services/weaviate';
@@ -63,205 +62,6 @@ vi.mock('../../services/weaviate', async () => {
   };
 });
 
-vi.mock('@mui/x-data-grid', async () => {
-  const React = await vi.importActual<typeof import('react')>('react');
-
-  type MockGridRow = DocumentSummary & Record<string, unknown>;
-  interface MockGridColumn {
-    field: string;
-    headerName?: ReactNode;
-    minWidth?: number;
-    sortable?: boolean;
-    sortComparator?: (left: unknown, right: unknown) => number;
-    renderCell?: (params: {
-      row: MockGridRow;
-      value: unknown;
-      field: string;
-    }) => ReactNode;
-    valueFormatter?: (params: {
-      row: MockGridRow;
-      value: unknown;
-      field: string;
-    }) => ReactNode;
-  }
-
-  const DataGrid = ({
-    rows = [],
-    columns = [],
-    columnVisibilityModel = {},
-    checkboxSelection = false,
-    rowSelectionModel,
-    onRowSelectionModelChange,
-    sortModel = [],
-    onSortModelChange,
-    sortingMode = 'client',
-    paginationMode = 'client',
-    filterMode = 'client',
-    rowCount,
-    loading = false,
-    paginationModel,
-    onPaginationModelChange,
-    sortingOrder = ['asc', 'desc', null],
-    sx,
-  }: {
-    rows?: MockGridRow[];
-    columns?: MockGridColumn[];
-    columnVisibilityModel?: Record<string, boolean>;
-    checkboxSelection?: boolean;
-    rowSelectionModel?: string[];
-    onRowSelectionModelChange?: (ids: string[]) => void;
-    sortModel?: Array<{ field: string; sort?: 'asc' | 'desc' | null }>;
-    onSortModelChange?: (model: Array<{ field: string; sort?: 'asc' | 'desc' | null }>) => void;
-    sortingMode?: 'client' | 'server';
-    paginationMode?: 'client' | 'server';
-    filterMode?: 'client' | 'server';
-    rowCount?: number;
-    loading?: boolean;
-    paginationModel?: { page: number; pageSize: number };
-    onPaginationModelChange?: (model: { page: number; pageSize: number }) => void;
-    sortingOrder?: Array<'asc' | 'desc' | null>;
-    sx?: Record<string, unknown>;
-  }) => {
-    const [internalSelection, setInternalSelection] = React.useState<string[]>([]);
-    const selectedIds =
-      rowSelectionModel !== undefined ? rowSelectionModel.map(String) : internalSelection;
-    const activeSort = sortModel[0];
-    const visibleColumns = columns.filter(
-      (column) => columnVisibilityModel[column.field] !== false,
-    );
-    const sortedRows = React.useMemo(() => {
-      if (sortingMode === 'server' || !activeSort?.field || !activeSort.sort) {
-        return rows;
-      }
-
-      const sortedColumn = columns.find((column) => column.field === activeSort.field);
-      if (!sortedColumn) {
-        return rows;
-      }
-
-      const direction = activeSort.sort === 'asc' ? 1 : -1;
-      return [...rows].sort((left, right) => {
-        const leftValue = left[activeSort.field];
-        const rightValue = right[activeSort.field];
-        const comparison =
-          typeof sortedColumn.sortComparator === 'function'
-            ? sortedColumn.sortComparator(leftValue, rightValue)
-            : String(leftValue ?? '').localeCompare(String(rightValue ?? ''));
-
-        return comparison * direction;
-      });
-    }, [activeSort?.field, activeSort?.sort, columns, rows, sortingMode]);
-
-    const setSelection = (ids: string[]) => {
-      if (rowSelectionModel === undefined) {
-        setInternalSelection(ids);
-      }
-      onRowSelectionModelChange?.(ids);
-    };
-
-    const handleHeaderClick = (field: string) => {
-      const currentSort = activeSort?.field === field ? activeSort.sort : null;
-      const currentIndex = sortingOrder.findIndex((sort) => sort === currentSort);
-      const nextSort = sortingOrder[(currentIndex + 1) % sortingOrder.length];
-
-      onSortModelChange?.(nextSort ? [{ field, sort: nextSort }] : []);
-    };
-
-    return (
-      <div
-        className="MuiDataGrid-root"
-        role="grid"
-        data-sorting-mode={sortingMode}
-        data-pagination-mode={paginationMode}
-        data-filter-mode={filterMode}
-        data-row-count={String(rowCount ?? rows.length)}
-        data-loading={String(loading)}
-        data-page={String(paginationModel?.page ?? '')}
-        data-page-size={String(paginationModel?.pageSize ?? '')}
-        style={{
-          height: typeof sx?.height === 'string' ? sx.height : undefined,
-          minHeight: typeof sx?.minHeight === 'number' ? `${sx.minHeight}px` : undefined,
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => onPaginationModelChange?.({
-            page: (paginationModel?.page ?? 0) + 1,
-            pageSize: paginationModel?.pageSize ?? 20,
-          })}
-        >
-          Request next grid page
-        </button>
-        <table>
-          <thead>
-            <tr>
-              {checkboxSelection && (
-                <th className="MuiDataGrid-columnHeaderCheckbox">
-                  <input type="checkbox" />
-                </th>
-              )}
-              {visibleColumns.map((column) => (
-                <th
-                  key={column.field}
-                  style={{ minWidth: column.minWidth }}
-                  aria-sort={
-                    activeSort?.field === column.field && activeSort.sort
-                      ? activeSort.sort === 'asc'
-                        ? 'ascending'
-                        : 'descending'
-                      : undefined
-                  }
-                  onClick={() => column.sortable !== false && handleHeaderClick(column.field)}
-                >
-                  {column.headerName}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sortedRows.map((row) => (
-              <tr key={row.id} className="MuiDataGrid-row" style={{ cursor: 'pointer' }}>
-                {checkboxSelection && (
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.includes(String(row.id))}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        const id = String(row.id);
-                        if (checked) {
-                          setSelection([...selectedIds, id]);
-                        } else {
-                          setSelection(selectedIds.filter((selectedId) => selectedId !== id));
-                        }
-                      }}
-                    />
-                  </td>
-                )}
-                {visibleColumns.map((column) => {
-                  const rawValue = row[column.field];
-                  let content = rawValue as ReactNode;
-
-                  if (typeof column.renderCell === 'function') {
-                    content = column.renderCell({ row, value: rawValue, field: column.field });
-                  } else if (typeof column.valueFormatter === 'function') {
-                    content = column.valueFormatter({ row, value: rawValue, field: column.field });
-                  }
-
-                  return <td key={`${row.id}-${column.field}`}>{content}</td>;
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  };
-
-  return {
-    DataGrid,
-  };
-});
 
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async () => {
@@ -308,7 +108,7 @@ describe('DocumentList', () => {
 
     render(<DocumentList {...defaultProps} />);
 
-    expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: /^Title/ })).not.toBeInTheDocument();
     const headers = screen.getAllByRole('columnheader');
     expect(headers[0]).toHaveTextContent('Source');
   });
@@ -331,6 +131,72 @@ describe('DocumentList', () => {
     expect(screen.getAllByRole('columnheader')[0]).toHaveTextContent('Title');
   });
 
+  it('persists header drag ordering across remounts', () => {
+    const firstRender = render(<DocumentList {...defaultProps} />);
+    const filenameDragHandle = screen.getByLabelText('Drag Filename column');
+    const sourceHeader = screen.getByRole('columnheader', { name: /^Source/ });
+    const dataTransfer = {
+      effectAllowed: 'none',
+      setData: vi.fn(),
+      getData: vi.fn(() => 'filename'),
+    };
+
+    fireEvent.dragStart(filenameDragHandle, { dataTransfer });
+    fireEvent.dragOver(sourceHeader, { dataTransfer });
+    fireEvent.drop(sourceHeader, { dataTransfer });
+
+    expect(screen.getAllByRole('columnheader')[0]).toHaveTextContent('Title');
+    firstRender.unmount();
+    render(<DocumentList {...defaultProps} />);
+    expect(screen.getAllByRole('columnheader')[0]).toHaveTextContent('Title');
+  });
+
+  it('persists keyboard column resizing across remounts', () => {
+    const firstRender = render(<DocumentList {...defaultProps} />);
+    const resizeHandle = screen.getByRole('separator', { name: 'Resize Filename column' });
+    expect(resizeHandle).toHaveAttribute('aria-valuenow', '240');
+
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowRight' });
+
+    expect(screen.getByRole('separator', { name: 'Resize Filename column' }))
+      .toHaveAttribute('aria-valuenow', '250');
+    firstRender.unmount();
+    render(<DocumentList {...defaultProps} />);
+    expect(screen.getByRole('separator', { name: 'Resize Filename column' }))
+      .toHaveAttribute('aria-valuenow', '250');
+  });
+
+  it('keeps pointer resizing separate from native header dragging', async () => {
+    const firstRender = render(<DocumentList {...defaultProps} />);
+    const resizeHandle = screen.getByRole('separator', { name: 'Resize Filename column' });
+
+    expect(resizeHandle.closest('[draggable="true"]')).toBeNull();
+    fireEvent.mouseDown(resizeHandle, { clientX: 240, button: 0 });
+    fireEvent.mouseMove(document, { clientX: 280 });
+    fireEvent.mouseUp(document, { clientX: 280 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('separator', { name: 'Resize Filename column' }))
+        .toHaveAttribute('aria-valuenow', '280');
+    });
+    firstRender.unmount();
+    render(<DocumentList {...defaultProps} />);
+    expect(screen.getByRole('separator', { name: 'Resize Filename column' }))
+      .toHaveAttribute('aria-valuenow', '280');
+  });
+
+  it('persists compact row density across remounts', () => {
+    const firstRender = render(<DocumentList {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Compact row density' }));
+    expect(screen.getByRole('button', { name: 'Compact row density' })).toHaveAttribute('aria-pressed', 'true');
+
+    firstRender.unmount();
+    render(<DocumentList {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
+    expect(screen.getByRole('button', { name: 'Compact row density' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('does not toggle visibility when a disabled boundary control is clicked', () => {
     render(<DocumentList {...defaultProps} />);
     fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
@@ -345,7 +211,7 @@ describe('DocumentList', () => {
 
     expect(filenameCheckbox).toBeChecked();
     fireEvent.keyDown(screen.getByRole('presentation'), { key: 'Escape' });
-    expect(screen.getByRole('columnheader', { name: 'Filename' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /^Filename/ })).toBeInTheDocument();
   });
 
   it('keeps table preferences isolated by authenticated user', () => {
@@ -361,7 +227,7 @@ describe('DocumentList', () => {
 
     render(<DocumentList {...defaultProps} />);
 
-    expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /^Title/ })).toBeInTheDocument();
     expect(screen.getAllByRole('columnheader')[0]).toHaveTextContent('Filename');
   });
 
@@ -375,13 +241,13 @@ describe('DocumentList', () => {
     expect(resetButton).toBeEnabled();
     fireEvent.click(resetButton);
 
-    expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /^Title/ })).toBeInTheDocument();
     expect(resetButton).toBeDisabled();
     expect(localStorage.getItem(getDocumentTablePreferencesStorageKey('user-1'))).toBeNull();
 
     firstRender.unmount();
     render(<DocumentList {...defaultProps} />);
-    expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /^Title/ })).toBeInTheDocument();
   });
 
   it('renders document list with all documents', () => {
@@ -610,7 +476,7 @@ describe('DocumentList', () => {
       <DocumentList
         {...defaultProps}
         loading
-        totalCount={100}
+        totalCount={200}
         paginationModel={{ page: 2, pageSize: 50 }}
         onPaginationModelChange={onPaginationModelChange}
         sortModel={[{ field: 'filename', sort: 'asc' }]}
@@ -618,17 +484,17 @@ describe('DocumentList', () => {
       />
     );
 
-    const grid = container.querySelector('.MuiDataGrid-root');
+    const grid = container.querySelector('[data-testid="documents-table-root"]');
     expect(grid).toBeInTheDocument();
     expect(grid).toHaveAttribute('data-pagination-mode', 'server');
     expect(grid).toHaveAttribute('data-filter-mode', 'server');
     expect(grid).toHaveAttribute('data-sorting-mode', 'server');
-    expect(grid).toHaveAttribute('data-row-count', '100');
+    expect(grid).toHaveAttribute('data-row-count', '200');
     expect(grid).toHaveAttribute('data-loading', 'true');
     expect(grid).toHaveAttribute('data-page', '2');
     expect(grid).toHaveAttribute('data-page-size', '50');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Request next grid page' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
     expect(onPaginationModelChange).toHaveBeenCalledWith({ page: 3, pageSize: 50 });
 
     fireEvent.click(screen.getByText('Filename'));
@@ -657,7 +523,7 @@ describe('DocumentList', () => {
       }),
     ];
     const getRenderedFilenames = () =>
-      within(screen.getByRole('grid'))
+      within(screen.getByRole('table', { name: 'Documents table' }))
         .getAllByRole('row')
         .slice(1)
         .map((row) => within(row).getAllByRole('cell')[0].textContent);
@@ -704,7 +570,7 @@ describe('DocumentList', () => {
       }),
     ];
     const getRenderedFilenames = () =>
-      within(screen.getByRole('grid'))
+      within(screen.getByRole('table', { name: 'Documents table' }))
         .getAllByRole('row')
         .slice(1)
         .map((row) => within(row).getAllByRole('cell')[0].textContent);
@@ -782,7 +648,7 @@ describe('DocumentList', () => {
     render(<DocumentList {...defaultProps} documents={[]} totalCount={0} />);
 
     expect(screen.getByText('No documents yet. Upload a PDF to get started.')).toBeInTheDocument();
-    const grid = document.querySelector('.MuiDataGrid-root');
+    const grid = document.querySelector('[data-testid="documents-table-root"]');
     expect(grid).not.toBeInTheDocument();
   });
 
@@ -961,10 +827,10 @@ describe('DocumentList', () => {
   it('applies hover effects on rows', () => {
     const { container } = render(<DocumentList {...defaultProps} />);
 
-    const rows = container.querySelectorAll('.MuiDataGrid-row');
+    const rows = container.querySelectorAll('[data-testid="document-table-row"]');
     expect(rows.length).toBeGreaterThan(0);
 
-    // DataGrid row style should include pointer cursor
+    // The migration retains the existing row hover affordance.
     rows.forEach(row => {
       expect(row).toHaveStyle({ cursor: 'pointer' });
     });
@@ -995,11 +861,11 @@ describe('DocumentList', () => {
       );
 
       // Should not have checkbox column
-      const checkboxColumn = document.querySelector('.MuiDataGrid-columnHeaderCheckbox');
+      const checkboxColumn = screen.queryByRole('checkbox', { name: 'Select all documents on this page' });
       expect(checkboxColumn).not.toBeInTheDocument();
     });
 
-    it('calls onSelectionChange when rows are selected', async () => {
+    it('keeps callback-only selection uncontrolled and accumulates selected rows', async () => {
       const onSelectionChange = vi.fn();
       render(
         <DocumentList
@@ -1015,7 +881,14 @@ describe('DocumentList', () => {
       const firstRowCheckbox = checkboxes[1];
       fireEvent.click(firstRowCheckbox);
 
-      expect(onSelectionChange).toHaveBeenCalled();
+      expect(firstRowCheckbox).toBeChecked();
+      expect(onSelectionChange).toHaveBeenLastCalledWith(['1']);
+
+      const secondRowCheckbox = document.querySelectorAll('input[type="checkbox"]')[2];
+      fireEvent.click(secondRowCheckbox);
+
+      expect(secondRowCheckbox).toBeChecked();
+      expect(onSelectionChange).toHaveBeenLastCalledWith(['1', '2']);
     });
 
     it('supports controlled selection via selectedIds prop', () => {
@@ -1039,7 +912,7 @@ describe('DocumentList', () => {
       render(<DocumentList {...defaultProps} />);
 
       // Should not have checkbox column when not explicitly enabled
-      const checkboxColumn = document.querySelector('.MuiDataGrid-columnHeaderCheckbox');
+      const checkboxColumn = screen.queryByRole('checkbox', { name: 'Select all documents on this page' });
       expect(checkboxColumn).not.toBeInTheDocument();
     });
   });
@@ -1056,14 +929,14 @@ describe('DocumentList', () => {
       );
 
       // Component should render successfully
-      expect(container.querySelector('.MuiDataGrid-root')).toBeInTheDocument();
+      expect(container.querySelector('[data-testid="documents-table-root"]')).toBeInTheDocument();
     });
 
     it('renders without onTitleUpdate prop', () => {
       const { container } = render(<DocumentList {...defaultProps} />);
 
       // Component should render successfully without onTitleUpdate
-      expect(container.querySelector('.MuiDataGrid-root')).toBeInTheDocument();
+      expect(container.querySelector('[data-testid="documents-table-root"]')).toBeInTheDocument();
     });
   });
 });

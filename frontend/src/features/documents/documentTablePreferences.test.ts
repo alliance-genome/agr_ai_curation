@@ -24,12 +24,20 @@ describe('documentTablePreferences', () => {
         removedColumn: false,
       },
       columnOrder: ['title', 'removedColumn', 'title', 'filename'],
+      columnSizing: {
+        title: 220,
+        removedColumn: 400,
+        status: -1,
+      },
+      density: 'compact',
     }, COLUMN_FIELDS)
 
     expect(normalized).toEqual({
       version: 1,
       columnVisibilityModel: { title: false },
       columnOrder: ['title', 'filename', 'status'],
+      columnSizing: { title: 220 },
+      density: 'compact',
     })
   })
 
@@ -47,6 +55,27 @@ describe('documentTablePreferences', () => {
       version: 1,
       columnVisibilityModel: {},
       columnOrder: ['filename', 'title', 'status'],
+      columnSizing: {},
+      density: 'standard',
+    })
+  })
+
+  it('preserves ALL-371 version 1 preferences while defaulting newly added fields', () => {
+    localStorage.setItem(
+      getDocumentTablePreferencesStorageKey('curator-1'),
+      JSON.stringify({
+        version: 1,
+        columnVisibilityModel: { title: false },
+        columnOrder: ['status', 'filename', 'title'],
+      }),
+    )
+
+    expect(loadDocumentTablePreferences('curator-1', COLUMN_FIELDS)).toEqual({
+      version: 1,
+      columnVisibilityModel: { title: false },
+      columnOrder: ['status', 'filename', 'title'],
+      columnSizing: {},
+      density: 'standard',
     })
   })
 
@@ -55,9 +84,12 @@ describe('documentTablePreferences', () => {
       version: 1,
       columnVisibilityModel: { title: false, stale: false },
       columnOrder: ['status', 'stale', 'filename', 'title'],
+      columnSizing: { status: 180, stale: 900 },
+      density: 'compact',
     }, COLUMN_FIELDS)
 
     expect(saved.columnOrder).toEqual(['status', 'filename', 'title'])
+    expect(saved.columnSizing).toEqual({ status: 180 })
     expect(JSON.parse(
       localStorage.getItem(getDocumentTablePreferencesStorageKey('curator-1')) ?? '{}',
     )).toEqual(saved)

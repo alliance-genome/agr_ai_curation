@@ -35,7 +35,6 @@ function getModeTokens(mode: ThemeMode) {
       primary,
       backgroundDefault: '#f6f9fc',
       backgroundPaper: '#ffffff',
-      dataGridHeader: '#edf5fd',
       textPrimary: '#102033',
       textSecondary: 'rgba(16, 32, 51, 0.68)',
       divider: 'rgba(16, 32, 51, 0.12)',
@@ -51,7 +50,6 @@ function getModeTokens(mode: ThemeMode) {
     primary,
     backgroundDefault: '#0f1217',
     backgroundPaper: '#1b212b',
-    dataGridHeader: '#222a36',
     textPrimary: '#ffffff',
     textSecondary: 'rgba(255, 255, 255, 0.7)',
     divider: 'rgba(255, 255, 255, 0.16)',
@@ -109,32 +107,6 @@ function buildThemeOptions(mode: ThemeMode): ThemeOptions {
         styleOverrides: {
           body: {
             fontVariantNumeric: 'tabular-nums',
-          },
-        },
-      },
-      // @ts-expect-error MuiDataGrid types come from @mui/x-data-grid
-      MuiDataGrid: {
-        styleOverrides: {
-          root: {
-            backgroundColor: tokens.backgroundPaper,
-            color: tokens.textPrimary,
-            border: `1px solid ${tokens.divider}`,
-          },
-          cell: {
-            borderBottom: `1px solid ${tokens.divider}`,
-          },
-          columnHeaders: {
-            backgroundColor: tokens.dataGridHeader,
-            borderBottom: `1px solid ${tokens.divider}`,
-          },
-          footerContainer: {
-            borderTop: `1px solid ${tokens.divider}`,
-            backgroundColor: tokens.dataGridHeader,
-          },
-          row: {
-            '&:hover': {
-              backgroundColor: tokens.actionHover,
-            },
           },
         },
       },
