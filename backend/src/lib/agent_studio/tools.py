@@ -1381,6 +1381,14 @@ async def get_service_logs(
         }
     """
     try:
+        request_headers = _trace_review_request_headers()
+        if "Authorization" not in request_headers:
+            return {
+                "status": "error",
+                "data": None,
+                "error": "TRACE_REVIEW_INTERNAL_API_TOKEN is not configured",
+                "help": "Configure the internal service token before using service logs",
+            }
         allowed_levels = ", ".join(sorted(VALID_SERVICE_LOG_LEVELS))
         lines = max(1, min(lines, get_agent_studio_service_log_max_lines()))
         params: Dict[str, Any] = {
@@ -1440,7 +1448,7 @@ async def get_service_logs(
             response = await client.get(
                 f"http://localhost:8000/api/logs/{container}",
                 params=params,
-                headers=_trace_review_request_headers(),
+                headers=request_headers,
             )
 
             if response.status_code == 200:

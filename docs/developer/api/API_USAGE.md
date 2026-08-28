@@ -629,7 +629,7 @@ inspection API and are the preferred drill-down surface for Chat with Claude:
 
 | Endpoint | Use |
 |----------|-----|
-| `GET /api/claude/traces/search` | Find traces by `session_id`, `user_id`, trace name, `document_id`, `run_id`, `extraction_id`, or bounded timestamp window. |
+| `GET /api/claude/traces/search` | Find caller-owned traces by `session_id`, trace name, `document_id`, `run_id`, `extraction_id`, or bounded timestamp window. |
 | `GET /api/claude/traces/{trace_id}/diagnostic_report` | Concise extraction, builder, tool, validation, and domain-envelope diagnostics. |
 | `GET /api/claude/traces/{trace_id}/extraction_timeline` | Ordered extraction events and OpenAI/Agents SDK tool-call observations with filters. |
 | `GET /api/claude/traces/{trace_id}/evidence_revisions` | Diagnostics-only evidence quote/provenance revision history and validator scope refusals. |

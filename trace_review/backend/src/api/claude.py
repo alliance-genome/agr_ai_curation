@@ -104,6 +104,15 @@ async def _authorize_claude_trace_request(
 
     source = request.query_params.get("source", DEFAULT_SOURCE)
     extraction_error: Exception | None = None
+    cached_data = request.app.state.cache_manager.get(trace_id)
+    if cached_data is not None:
+        raw_trace = cached_data.get("raw_trace") or {}
+        owner = str(
+            raw_trace.get("userId") or raw_trace.get("user_id") or ""
+        ).strip()
+        if not owner or owner != caller_sub:
+            raise HTTPException(status_code=404, detail="Trace not found.")
+        return
     try:
         trace_data = TraceExtractor(
             source=_effective_source(source)
@@ -1137,7 +1146,6 @@ def _parse_optional_datetime(value: Optional[str], param_name: str) -> Optional[
 def _ensure_search_scope(
     *,
     session_id: Optional[str],
-    user_id: Optional[str],
     name: Optional[str],
     document_id: Optional[str],
     run_id: Optional[str],
@@ -1147,7 +1155,6 @@ def _ensure_search_scope(
 ) -> None:
     filters = {
         "session_id": session_id,
-        "user_id": user_id,
         "name": name,
         "document_id": document_id,
         "run_id": run_id,
@@ -1159,7 +1166,7 @@ def _ensure_search_scope(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Provide at least one bounded search key: session_id, user_id, name, "
+                "Provide at least one bounded search key: session_id, name, "
                 "document_id, run_id, extraction_id, from_timestamp, or to_timestamp."
             ),
         )
@@ -1432,7 +1439,6 @@ async def search_traces(
     user_id = _trusted_caller_sub(user)
     _ensure_search_scope(
         session_id=session_id,
-        user_id=None,
         name=name,
         document_id=document_id,
         run_id=run_id,

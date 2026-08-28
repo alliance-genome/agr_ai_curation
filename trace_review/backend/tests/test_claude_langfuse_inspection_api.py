@@ -13,6 +13,18 @@ from src.api import auth, claude
 from src.services.cache_manager import CacheManager
 
 
+def _authorization_request(trace_id: str = "trace-1") -> SimpleNamespace:
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(cache_manager=CacheManager(ttl_hours=1))
+        ),
+        path_params={"trace_id": trace_id},
+        query_params={"source": "local"},
+        state=SimpleNamespace(),
+        scope={},
+    )
+
+
 def _trace_data():
     repeated = {"question": "Which payload got large?"}
     return {
@@ -103,6 +115,7 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
             user={"sub": "user-1"},
         )
     assert exc_info.value.status_code == 400
+    assert "user_id" not in exc_info.value.detail
 
     extractor = extractor_cls.return_value
     extractor.list_traces.return_value = {
@@ -152,23 +165,13 @@ async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extra
     extractor_cls.return_value.extract_complete_trace.return_value = {
         "raw_trace": {"id": "trace-1", "userId": "curator-1"},
     }
-    owner_request = SimpleNamespace(
-        path_params={"trace_id": "trace-1"},
-        query_params={"source": "local"},
-        state=SimpleNamespace(),
-        scope={},
-    )
+    owner_request = _authorization_request()
     await claude._authorize_claude_trace_request(
         owner_request,
         user={"sub": "curator-1"},
     )
 
-    other_request = SimpleNamespace(
-        path_params={"trace_id": "trace-1"},
-        query_params={"source": "local"},
-        state=SimpleNamespace(),
-        scope={},
-    )
+    other_request = _authorization_request()
     with pytest.raises(HTTPException) as cross_user:
         await claude._authorize_claude_trace_request(
             other_request,
@@ -190,6 +193,38 @@ async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extra
 
 @pytest.mark.asyncio
 @patch("src.api.claude.TraceExtractor")
+async def test_exact_trace_authorization_uses_cached_owner_without_provider_lookup(
+    extractor_cls: Mock,
+):
+    owner_request = _authorization_request()
+    owner_request.app.state.cache_manager.set(
+        "trace-1",
+        {"raw_trace": {"id": "trace-1", "userId": "curator-1"}},
+    )
+
+    await claude._authorize_claude_trace_request(
+        owner_request,
+        user={"sub": "curator-1"},
+    )
+
+    other_request = _authorization_request()
+    other_request.app.state.cache_manager.set(
+        "trace-1",
+        {"raw_trace": {"id": "trace-1", "userId": "curator-1"}},
+    )
+    with pytest.raises(HTTPException) as cross_user:
+        await claude._authorize_claude_trace_request(
+            other_request,
+            user={"sub": "curator-2"},
+        )
+
+    assert cross_user.value.status_code == 404
+    assert cross_user.value.detail == "Trace not found."
+    extractor_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
 async def test_exact_trace_authorization_surfaces_sanitized_provider_failure(
     extractor_cls: Mock,
     caplog,
@@ -198,12 +233,7 @@ async def test_exact_trace_authorization_surfaces_sanitized_provider_failure(
     extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError(
         secret_detail
     )
-    request = SimpleNamespace(
-        path_params={"trace_id": "trace-1"},
-        query_params={"source": "local"},
-        state=SimpleNamespace(),
-        scope={},
-    )
+    request = _authorization_request()
 
     caplog.set_level(logging.ERROR, logger=claude.LOGGER.name)
     with pytest.raises(HTTPException) as exc_info:

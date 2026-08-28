@@ -810,7 +810,6 @@ async def get_trace_view(
     Must call /analyze first to populate cache
     """
     cache_manager = request.app.state.cache_manager
-    authenticated_user = user if isinstance(user, dict) else {}
 
     if view_name in {"extraction_timeline", "evidence_revisions"}:
         async def load_cached_data() -> Dict[str, Any]:
@@ -849,8 +848,8 @@ async def get_trace_view(
                     status_code=404,
                     detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
                 ),
-                caller_sub=str(authenticated_user.get("sub") or "").strip() or None,
-                caller_email=str(authenticated_user.get("email") or "").strip() or None,
+                caller_sub=str(user.get("sub") or "").strip() or None,
+                caller_email=str(user.get("email") or "").strip() or None,
             )
             if view_name == "evidence_revisions":
                 view_data = build_evidence_revisions(
