@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Mapping, Optional, cast
 from langfuse import Langfuse
 from ..analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from ..config import (
+    get_agent_studio_trace_search_max_limit,
     get_langfuse_observation_page_limit,
     get_langfuse_request_timeout_seconds,
     get_trace_source_runtime_config,
@@ -254,7 +255,10 @@ class TraceExtractor:
 
         safe_offset = max(0, offset)
         requested_end = safe_offset + max(1, limit)
-        source_page_limit = min(100, requested_end)
+        source_page_limit = min(
+            get_agent_studio_trace_search_max_limit(),
+            requested_end,
+        )
         source_exhausted = False
         while len(traces) < requested_end:
             response = self.client.api.trace.list(

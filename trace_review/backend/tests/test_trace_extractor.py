@@ -166,7 +166,8 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertIn('"value": "doc-1"', call.kwargs["filter"])
         self.assertIn('"key": "run_id"', call.kwargs["filter"])
 
-    def test_list_traces_offset_uses_stable_source_page_size(self):
+    @patch("src.services.trace_extractor.get_agent_studio_trace_search_max_limit", return_value=100)
+    def test_list_traces_offset_uses_stable_source_page_size(self, _search_max: Mock):
         extractor = self._make_extractor()
         extractor.client.api.trace.list.side_effect = [
             SimpleNamespace(

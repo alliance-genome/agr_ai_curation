@@ -185,12 +185,12 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
     )
     arguments = {
         "source": "local",
-        "session_id": "session-filter",
-        "user_id": "user-filter",
-        "name": "trace-filter",
-        "document_id": "document-filter",
-        "run_id": "run-filter",
-        "extraction_id": "extraction-filter",
+        "session_id": "session-" + "s" * 248,
+        "user_id": "user-" + "u" * 251,
+        "name": "trace-" + "n" * 250,
+        "document_id": "document-" + "d" * 247,
+        "run_id": "run-" + "r" * 252,
+        "extraction_id": "extraction-" + "e" * 245,
         "from_timestamp": "2026-06-01T00:00:00Z",
         "to_timestamp": "2026-06-30T00:00:00Z",
         "offset": 0,
@@ -229,6 +229,55 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
     ]
     assert response.data["pagination"]["complete"] is True
     assert response.data["total_items"] == record_count
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_search_traces_rejects_filter_that_cannot_fit_provider_wrapper(extractor_cls: Mock):
+    with pytest.raises(claude.HTTPException) as exc_info:
+        await claude.search_traces(
+            source="local",
+            session_id="s" * (claude.TRACE_SEARCH_FILTER_MAX_CHARS + 1),
+            user_id=None,
+            name=None,
+            document_id=None,
+            run_id=None,
+            extraction_id=None,
+            from_timestamp=None,
+            to_timestamp=None,
+            offset=0,
+            limit=1,
+            item_start=0,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "session_id" in str(exc_info.value.detail)
+    extractor_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_search_traces_rejects_encoded_filters_without_chunk_headroom(extractor_cls: Mock):
+    encoded_filter = "😀" * claude.TRACE_SEARCH_FILTER_MAX_CHARS
+    with pytest.raises(claude.HTTPException) as exc_info:
+        await claude.search_traces(
+            source="local",
+            session_id=encoded_filter,
+            user_id=encoded_filter,
+            name=encoded_filter,
+            document_id=encoded_filter,
+            run_id=encoded_filter,
+            extraction_id=encoded_filter,
+            from_timestamp=None,
+            to_timestamp=None,
+            offset=0,
+            limit=1,
+            item_start=0,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "provider-envelope room" in str(exc_info.value.detail)
+    extractor_cls.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -328,6 +328,7 @@ async def get_tool_calls_summary(
     trace_id: str,
     page: int = 1,
     page_size: Optional[int] = None,
+    item_offset: int = 0,
 ) -> Dict[str, Any]:
     """
     Get one bounded page of tool-call summaries without exact results.
@@ -387,6 +388,7 @@ async def get_tool_calls_summary(
                         page_size or get_agent_studio_trace_review_page_size(),
                         get_agent_studio_trace_review_page_size(),
                     )),
+                    "item_offset": max(0, item_offset),
                 },
                 headers=_trace_review_request_headers(),
             )
@@ -446,7 +448,8 @@ async def get_tool_calls_page(
     trace_id: str,
     page: int = 1,
     page_size: Optional[int] = None,
-    tool_name: Optional[str] = None
+    item_offset: int = 0,
+    tool_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Get paginated tool-call metadata and exact-field references.
@@ -488,6 +491,7 @@ async def get_tool_calls_page(
                 page_size or get_agent_studio_trace_review_page_size(),
                 get_agent_studio_trace_review_page_size(),
             )),
+            "item_offset": max(0, item_offset),
         }
         if tool_name:
             params["tool_name"] = tool_name

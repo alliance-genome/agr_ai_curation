@@ -210,7 +210,7 @@ async def test_analyzer_formats_have_unique_selectors_and_no_inline_exact_output
 
 async def _reconstruct_tool_field(
     analyzed: dict,
-    field: Literal["input", "tool_result", "thought", "metadata"],
+    field: Literal["input", "tool_result", "thought", "metadata", "domain_envelope"],
     call_id: str = "call-0",
 ) -> tuple[str, list[dict]]:
     chunks = []
@@ -238,6 +238,107 @@ async def _reconstruct_tool_field(
             }
             start = response.chunk["next_start"]
     return "".join(chunk["serialized"] for chunk in chunks), chunks
+
+
+@pytest.mark.asyncio
+async def test_call_scoped_domain_envelopes_reconstruct_the_selected_call_exactly():
+    analyzed = _large_analysis(call_count=2)
+    calls = analyzed["analysis"]["tool_calls"]["tool_calls"]
+    calls[0]["domain_envelope"] = {
+        "found": True,
+        "object_ids": [f"first-{index}" for index in range(40)],
+        "finding_ids": ["finding-first"],
+    }
+    calls[1]["domain_envelope"] = {
+        "found": True,
+        "object_ids": [f"second-{index}" for index in range(55)],
+        "finding_ids": ["finding-second"],
+    }
+
+    with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+        page = await claude.get_tool_calls_paginated(
+            TRACE_ID,
+            Mock(),
+            page=1,
+            page_size=2,
+            tool_name=None,
+            source="local",
+        )
+
+    by_call = {item["call_id"]: item for item in page.tool_calls}
+    for index, call in enumerate(calls):
+        call_id = f"call-{index}"
+        collection_ref = by_call[call_id]["domain_envelope"]["collections"]["object_ids"]
+        assert collection_ref["next_call"] == {
+            "trace_id": TRACE_ID,
+            "call_id": call_id,
+            "field": "domain_envelope",
+            "start": 0,
+            "max_chars": claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+        }
+        reconstructed, chunks = await _reconstruct_tool_field(
+            analyzed,
+            "domain_envelope",
+            call_id=call_id,
+        )
+        assert json.loads(reconstructed) == call["domain_envelope"]
+        assert all(chunk["field"] == "domain_envelope" for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_maximum_tool_call_pages_fit_and_replay_without_skipping():
+    analyzed = _large_analysis(call_count=claude.TRACE_REVIEW_PAGE_SIZE)
+    calls = analyzed["analysis"]["tool_calls"]["tool_calls"]
+    for index, call in enumerate(calls):
+        for key in ("id", "name", "time", "duration", "model", "url", "method", "status", "status_code"):
+            call[key] = f"{key}-{index}-" + key[0] * 500
+        call["thought"] = f"thought-{index}-" * 1_500
+        call["domain_envelope"] = {
+            "found": True,
+            "summary": {"object_count": 200, "finding_count": 200},
+            "object_ids": [f"object-{index}-{item}" for item in range(200)],
+            "finding_ids": [f"finding-{index}-{item}" for item in range(200)],
+        }
+
+    async def replay(endpoint, result_builder):
+        arguments = {"page": 1, "page_size": claude.TRACE_REVIEW_PAGE_SIZE, "item_offset": 0}
+        seen = []
+        with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+            while True:
+                response = await endpoint(TRACE_ID, Mock(), source="local", **arguments)
+                seen.extend(result_builder(response)[0])
+                provider_result = result_builder(response)[1]
+                assert len(json.dumps(provider_result, default=str)) <= 12_000
+                next_call = response.next_call if hasattr(response, "next_call") else response.data.next_call
+                if next_call is None:
+                    break
+                assert next_call.get("item_offset", 0) > arguments.get("item_offset", -1) or next_call["page"] > arguments["page"]
+                arguments = {
+                    "page": next_call["page"],
+                    "page_size": next_call["page_size"],
+                    "item_offset": next_call.get("item_offset", 0),
+                }
+        return seen
+
+    async def get_page(*args, **kwargs):
+        return await claude.get_tool_calls_paginated(*args, tool_name=None, **kwargs)
+
+    page_indexes = await replay(
+        get_page,
+        lambda response: (
+            [item["index"] for item in response.tool_calls],
+            {**response.model_dump(), "error": None},
+        ),
+    )
+    summary_indexes = await replay(
+        claude.get_tool_calls_summary,
+        lambda response: (
+            [item.index for item in response.data.tool_calls],
+            {**response.model_dump(), "error": None},
+        ),
+    )
+    assert page_indexes == list(range(len(calls)))
+    assert summary_indexes == list(range(len(calls)))
 
 
 @pytest.mark.asyncio

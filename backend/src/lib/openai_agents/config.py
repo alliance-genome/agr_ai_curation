@@ -1777,6 +1777,17 @@ def get_agent_studio_trace_search_max_limit() -> int:
     )
 
 
+def get_agent_studio_trace_search_filter_max_chars() -> int:
+    """Maximum exact characters accepted in one TraceReview search filter."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_TRACE_SEARCH_FILTER_MAX_CHARS",
+            256,
+        ),
+    )
+
+
 def get_agent_studio_service_log_default_lines() -> int:
     """Default logical log lines requested by Agent Studio."""
     return max(

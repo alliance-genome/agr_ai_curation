@@ -202,6 +202,14 @@ def get_agent_studio_trace_search_max_limit() -> int:
     )
 
 
+def get_agent_studio_trace_search_filter_max_chars() -> int:
+    """Return the maximum exact character count accepted for one search filter."""
+    return max(
+        1,
+        int(os.getenv("AGENT_STUDIO_TRACE_SEARCH_FILTER_MAX_CHARS", "256")),
+    )
+
+
 def get_trace_review_payload_preview_max_chars() -> int:
     """Return the maximum payload preview size used by inventories."""
     return max(1, int(os.getenv("TRACE_REVIEW_PAYLOAD_PREVIEW_MAX_CHARS", "500")))

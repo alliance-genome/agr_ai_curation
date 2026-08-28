@@ -2609,6 +2609,7 @@ async def _handle_tool_call(
                 "page_size",
                 get_agent_studio_trace_review_page_size(),
             ),
+            item_offset=tool_input.get("item_offset", 0),
         )
 
     elif tool_name == "get_tool_calls_page":
@@ -2632,7 +2633,8 @@ async def _handle_tool_call(
             trace_id=trace_id,
             page=page,
             page_size=page_size,
-            tool_name=tool_name_filter
+            item_offset=tool_input.get("item_offset", 0),
+            tool_name=tool_name_filter,
         )
 
     elif tool_name == "get_tool_call_detail":

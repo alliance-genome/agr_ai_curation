@@ -24,7 +24,9 @@ from src.lib.openai_agents.config import (
     get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
+    get_agent_studio_trace_review_summary_max_chars,
     get_agent_studio_trace_search_default_limit,
+    get_agent_studio_trace_search_filter_max_chars,
     get_agent_studio_trace_search_max_limit,
     get_domain_pack_validation_plan_default_limit,
     get_domain_pack_validation_plan_max_limit,
@@ -46,8 +48,10 @@ _DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT = min(
 _TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 _TRACE_REVIEW_AGGREGATE_PAGE_SIZE = get_agent_studio_trace_review_aggregate_page_size()
 _TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
+_TRACE_REVIEW_SUMMARY_MAX_CHARS = get_agent_studio_trace_review_summary_max_chars()
 _TRACE_SEARCH_DEFAULT_LIMIT = get_agent_studio_trace_search_default_limit()
 _TRACE_SEARCH_MAX_LIMIT = get_agent_studio_trace_search_max_limit()
+_TRACE_SEARCH_FILTER_MAX_CHARS = get_agent_studio_trace_search_filter_max_chars()
 _CHAT_RECALL_PAGE_SIZE = get_agent_studio_chat_recall_page_size()
 _CHAT_RECALL_CHUNK_MAX_CHARS = get_agent_studio_chat_recall_chunk_max_chars()
 _SERVICE_LOG_DEFAULT_LINES = get_agent_studio_service_log_default_lines()
@@ -466,6 +470,13 @@ GET_TOOL_CALLS_SUMMARY_TOOL = {
                 "minimum": 1,
                 "maximum": _TRACE_REVIEW_PAGE_SIZE,
             },
+            "item_offset": {
+                "type": "integer",
+                "description": "Continuation offset within the requested page.",
+                "default": 0,
+                "minimum": 0,
+                "maximum": _TRACE_REVIEW_PAGE_SIZE,
+            },
         },
         "required": ["trace_id"],
     },
@@ -494,8 +505,16 @@ GET_TOOL_CALLS_PAGE_TOOL = {
                 "minimum": 1,
                 "maximum": _TRACE_REVIEW_PAGE_SIZE,
             },
+            "item_offset": {
+                "type": "integer",
+                "description": "Continuation offset within the requested page.",
+                "default": 0,
+                "minimum": 0,
+                "maximum": _TRACE_REVIEW_PAGE_SIZE,
+            },
             "tool_name": {
                 "type": "string",
+                "maxLength": _TRACE_REVIEW_SUMMARY_MAX_CHARS,
                 "description": "Optional filter by tool name (e.g., 'search_document')",
             },
         },
@@ -505,7 +524,7 @@ GET_TOOL_CALLS_PAGE_TOOL = {
 
 GET_TOOL_CALL_DETAIL_TOOL = {
     "name": "get_tool_call_detail",
-    "description": "Get one exact input, tool_result, thought, or truncated metadata chunk for a selected tool call. Follow next_call until complete=true; concatenating serialized chunks reconstructs the hashed field exactly.",
+    "description": "Get one exact input, tool_result, thought, metadata, or call-scoped domain_envelope chunk for a selected tool call. Follow next_call until complete=true; concatenating serialized chunks reconstructs the hashed field exactly.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -519,7 +538,7 @@ GET_TOOL_CALL_DETAIL_TOOL = {
             },
             "field": {
                 "type": "string",
-                "enum": ["input", "tool_result", "thought", "metadata"],
+                "enum": ["input", "tool_result", "thought", "metadata", "domain_envelope"],
                 "description": "Exact field to retrieve independently.",
             },
             "start": {
@@ -598,14 +617,14 @@ SEARCH_TRACES_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "session_id": {"type": "string", "description": "Optional Langfuse session ID."},
-            "user_id": {"type": "string", "description": "Optional Langfuse user ID."},
-            "name": {"type": "string", "description": "Optional trace name filter."},
-            "document_id": {"type": "string", "description": "Optional trace metadata.document_id filter."},
-            "run_id": {"type": "string", "description": "Optional trace metadata.run_id filter."},
-            "extraction_id": {"type": "string", "description": "Optional trace metadata.extraction_id filter."},
-            "from_timestamp": {"type": "string", "description": "Optional ISO 8601 lower timestamp bound."},
-            "to_timestamp": {"type": "string", "description": "Optional ISO 8601 upper timestamp bound."},
+            "session_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional Langfuse session ID."},
+            "user_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional Langfuse user ID."},
+            "name": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional trace name filter."},
+            "document_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional trace metadata.document_id filter."},
+            "run_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional trace metadata.run_id filter."},
+            "extraction_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional trace metadata.extraction_id filter."},
+            "from_timestamp": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional ISO 8601 lower timestamp bound."},
+            "to_timestamp": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional ISO 8601 upper timestamp bound."},
             "offset": {
                 "type": "integer",
                 "description": "Stable result offset from pagination.next_call.",
