@@ -1,6 +1,7 @@
 """Unit tests for the Loki-backed logs API endpoint."""
 
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 
 import httpx
@@ -92,14 +93,15 @@ async def test_get_container_logs_queries_loki_with_default_lookback_and_service
     assert capture["params"]["limit"] == 120
     assert capture["params"]["direction"] == "backward"
     assert capture["params"]["start"] == logs_api.loki.normalize_time(
-        frozen_now - logs_api.DEFAULT_LOKI_LOOKBACK
+        frozen_now - timedelta(minutes=logs_api.DEFAULT_LOKI_LOOKBACK_MINUTES)
     )
     assert capture["params"]["end"] == logs_api.loki.normalize_time(frozen_now)
-    assert payload.model_dump() == {
-        "container": "backend",
-        "lines": 2,
-        "logs": "earlier line\nlater line\n",
-    }
+    assert payload.container == "backend"
+    assert payload.lines == 2
+    assert payload.logs == "earlier line\nlater line\n"
+    assert payload.summary["matching_lines_in_page"] == 2
+    assert payload.page["complete"] is True
+    assert payload.page["next_call"] is None
 
 
 @pytest.mark.asyncio
@@ -140,11 +142,10 @@ async def test_get_container_logs_passes_since_level_and_limit_to_loki(
         frozen_now - timedelta(minutes=15)
     )
     assert capture["params"]["end"] == logs_api.loki.normalize_time(frozen_now)
-    assert payload.model_dump() == {
-        "container": "backend",
-        "lines": 1,
-        "logs": "FATAL line\n",
-    }
+    assert payload.container == "backend"
+    assert payload.lines == 1
+    assert payload.logs == "FATAL line\n"
+    assert payload.filters == {"container": "backend", "level": "FATAL", "since": 15}
 
 
 @pytest.mark.asyncio
@@ -162,11 +163,116 @@ async def test_get_container_logs_returns_empty_payload_for_no_logs(
 
     assert capture["params"]["query"] == '{service="backend"}'
     assert capture["params"]["limit"] == 100
-    assert payload.model_dump() == {
+    assert payload.container == "backend"
+    assert payload.lines == 0
+    assert payload.logs == ""
+    assert payload.page["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_exact_char_cursor_reconstructs_oversized_line(monkeypatch):
+    oversized = "quoted \\\" log 😀 " * 1200
+
+    async def _fake_query_logs(*_args, **_kwargs):
+        return [f"1742903100000000000\0{oversized}"]
+
+    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    chunks = []
+    char_cursor = 0
+    while True:
+        payload = await logs_api.get_container_logs(
+            "backend",
+            lines=1,
+            since=15,
+            char_cursor=char_cursor,
+            max_chars=logs_api.MAX_LOG_CHARS,
+        )
+        chunks.append(payload.logs)
+        provider_result = {"status": "success", "data": payload.model_dump(), "error": None}
+        assert len(json.dumps(provider_result)) < 12_000
+        if payload.page["next_char_cursor"] is None:
+            break
+        next_call = payload.page["next_call"]
+        assert next_call["char_cursor"] > char_cursor
+        char_cursor = next_call["char_cursor"]
+
+    assert "".join(chunks) == oversized + "\n"
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_line_cursor_is_exact_and_non_overlapping(monkeypatch):
+    monkeypatch.setattr(logs_api, "MAX_LOG_LINES", 2)
+    query_ends = []
+    results = [
+        ["100\0older", "200\0newer"],
+        [],
+    ]
+
+    async def _fake_query_logs(*_args, **kwargs):
+        query_ends.append(kwargs["end"])
+        return results.pop(0)
+
+    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    first = await logs_api.get_container_logs("backend", lines=2, since=15)
+    next_call = first.page["next_call"]
+    assert next_call["line_cursor"] == "100"
+    assert next_call["line_cursor_offset"] == 1
+    assert next_call["char_cursor"] == 0
+
+    second = await logs_api.get_container_logs(
+        "backend",
+        lines=next_call["lines"],
+        since=next_call["since"],
+        line_cursor=next_call["line_cursor"],
+        line_cursor_offset=next_call["line_cursor_offset"],
+        char_cursor=next_call["char_cursor"],
+    )
+    assert query_ends[1] == "101"
+    assert second.page["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_continues_within_equal_timestamp_group(monkeypatch):
+    monkeypatch.setattr(logs_api, "MAX_LOG_LINES", 5)
+    entries = [
+        (90, "older"),
+        *((100, f"same-{index}") for index in range(6)),
+    ]
+    query_limits = []
+
+    async def _fake_query_logs(*_args, **kwargs):
+        query_limits.append(kwargs["limit"])
+        end = kwargs["end"]
+        end_ns = int(end) if isinstance(end, str) else 10**30
+        eligible = [entry for entry in entries if entry[0] < end_ns]
+        return [
+            f"{timestamp}\0{line}"
+            for timestamp, line in eligible[-kwargs["limit"]:]
+        ]
+
+    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    returned = []
+    next_call = {
         "container": "backend",
-        "lines": 0,
-        "logs": "",
+        "lines": 2,
+        "since": 15,
+        "line_cursor": None,
+        "line_cursor_offset": 0,
+        "char_cursor": 0,
     }
+
+    while True:
+        payload = await logs_api.get_container_logs(**next_call)
+        returned.extend(payload.logs.splitlines())
+        if payload.page["complete"]:
+            break
+        next_call = payload.page["next_call"]
+
+    assert returned == [
+        "same-4", "same-5", "same-2", "same-3", "same-0", "same-1", "older",
+    ]
+    assert len(returned) == len(set(returned)) == len(entries)
+    assert query_limits[:3] == [5, 5, 6]
 
 
 @pytest.mark.asyncio

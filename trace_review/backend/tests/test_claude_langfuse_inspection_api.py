@@ -140,19 +140,15 @@ async def test_claude_langfuse_reconstruction_is_event_paginated(extractor_cls: 
         source="local",
         limit=2,
         offset=1,
+        section="events",
     )
 
     assert response.status == "success"
-    assert response.data["event_count"] == 5
-    assert len(response.data["events"]) == 2
-    assert response.data["events"][0]["event_id"] == "agent-1"
-    assert response.data["pagination"] == {
-        "limit": 2,
-        "offset": 1,
-        "total_items": 5,
-        "has_next": True,
-        "next_offset": 3,
-    }
+    assert response.data["summary"]["event_count"] == 5
+    assert len(response.data["page"]["items"]) == 2
+    assert response.data["page"]["items"][0]["event_id"] == "agent-1"
+    assert response.data["page"]["complete"] is False
+    assert response.data["page"]["next_call"]["offset"] == 3
 
 
 @pytest.mark.asyncio
@@ -166,9 +162,10 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
         sort="chronological",
         limit=10,
         offset=0,
+        section="payloads",
     )
 
-    payload_ids = {payload["payload_id"] for payload in inventory.data["payloads"]}
+    payload_ids = {payload["payload_id"] for payload in inventory.data["page"]["items"]}
     assert "trace:856df16f1752cb53ee43dcb2f5ecfd16:input" in payload_ids
     assert "observation:agent-1:metadata.agent_config" in payload_ids
 
@@ -194,11 +191,12 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
 async def test_claude_langfuse_costs_and_duplicates(extractor_cls: Mock):
     extractor_cls.return_value.extract_complete_trace.return_value = _trace_data()
 
-    costs = await claude.get_langfuse_costs("856df16f1752cb53ee43dcb2f5ecfd16", source="local")
-    duplicates = await claude.get_langfuse_duplicates("856df16f1752cb53ee43dcb2f5ecfd16", source="local")
+    costs = await claude.get_langfuse_costs("856df16f1752cb53ee43dcb2f5ecfd16", source="local", section="observations")
+    duplicates = await claude.get_langfuse_duplicates("856df16f1752cb53ee43dcb2f5ecfd16", source="local", section="duplicate_groups")
 
-    assert costs.data["costs"]["totals"]["total_tokens"] == 15
-    assert duplicates.data["duplicates"]["duplicate_group_count"] == 1
+    assert costs.data["summary"]["totals"]["total_tokens"] == 15
+    assert duplicates.data["summary"]["duplicate_group_count"] == 1
+    assert duplicates.data["page"]["complete"] is True
 
 
 @pytest.mark.asyncio
@@ -212,7 +210,7 @@ async def test_claude_model_live_context_uses_preflight_and_generation_inputs(ex
     )
 
     assert response.status == "success"
-    model_live = response.data["model_live_context"]
+    model_live = response.data["summary"]
     assert model_live["observed_call_record_count"] == 2
     assert model_live["classification"]["preflight_event_count"] == 1
     assert model_live["classification"]["inferred_generation_count"] == 1
@@ -230,9 +228,5 @@ async def test_claude_model_live_context_uses_preflight_and_generation_inputs(ex
         "total_input_json_chars": 11,
         "total_estimated_input_tokens": 3,
     }
-    assert model_live["calls"][0]["classification_source"] == "inferred_generation_input"
-    assert model_live["calls"][0]["input_json_chars"] == 11
-    assert model_live["calls"][0]["estimated_input_tokens"] == 3
-    assert model_live["calls"][1]["classification_source"] == "provider_context_preflight"
-    assert model_live["calls"][1]["largest_paths"][0]["path"] == "requests"
-    assert response.data["observability_payloads"]["exact_payload_requires_explicit_lookup"] is True
+    assert response.data["page"] is None
+    assert model_live["observability_payloads"]["exact_payload_requires_explicit_lookup"] is True

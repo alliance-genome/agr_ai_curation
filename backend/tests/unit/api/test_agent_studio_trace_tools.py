@@ -183,7 +183,7 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
     assert payload_chunk_schema["default"] < api_module.get_agent_studio_provider_tool_result_inline_max_chars()
     assert (
         tools_by_name["get_trace_payloads"]["input_schema"]["properties"]["limit"]["maximum"]
-        == api_module.get_agent_studio_trace_review_page_size()
+        == api_module.get_agent_studio_trace_review_aggregate_page_size()
     )
     assert "extraction_timeline" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
     assert "evidence_revisions" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
@@ -201,6 +201,33 @@ def test_codebase_tools_are_agents_only():
     assert api_module._is_tool_allowed_for_context("read_source_file", flows_context) is False
 
 
+def test_every_registered_aggregate_trace_and_log_tool_exposes_bounded_continuation():
+    tools_by_name = {
+        tool["name"]: tool
+        for tool in api_module._get_all_opus_tools(_chat_context(active_tab="agents"))
+    }
+    aggregate_trace_tools = {
+        "get_extraction_diagnostic_report",
+        "get_extraction_timeline",
+        "get_evidence_revisions",
+        "get_trace_tree",
+        "get_trace_view",
+        "get_trace_model_live_context",
+        "get_trace_costs",
+        "get_trace_duplicates",
+        "get_trace_reconstruction",
+        "get_trace_payloads",
+    }
+    for tool_name in aggregate_trace_tools:
+        properties = tools_by_name[tool_name]["input_schema"]["properties"]
+        assert {"section", "offset", "limit", "item_start"} <= properties.keys()
+        assert properties["limit"]["maximum"] == api_module.get_agent_studio_trace_review_aggregate_page_size()
+
+    log_properties = tools_by_name["get_service_logs"]["input_schema"]["properties"]
+    assert {"line_cursor", "line_cursor_offset", "char_cursor"} <= log_properties.keys()
+    assert log_properties["lines"]["default"] == api_module.get_agent_studio_service_log_default_lines()
+
+
 @pytest.mark.asyncio
 async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
     from src.lib.agent_studio import tools as tools_module
@@ -212,7 +239,13 @@ async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
 
     result = await api_module._handle_tool_call(
         tool_name="get_service_logs",
-        tool_input={"container": "backend", "lines": 250, "level": "FATAL", "since": 30},
+        tool_input={
+            "container": "backend",
+            "lines": 250,
+            "level": "FATAL",
+            "since": 30,
+            "line_cursor_offset": 4,
+        },
         context=None,
         user_email="dev@example.org",
         user_auth_sub="auth-sub-1",
@@ -225,6 +258,9 @@ async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
         "lines": 250,
         "level": "FATAL",
         "since": 30,
+        "line_cursor": None,
+        "line_cursor_offset": 4,
+        "char_cursor": 0,
     }
 
 
@@ -250,10 +286,15 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
         captured["payload"] = kwargs
         return {"status": "ok", "tool": "payload"}
 
+    async def _fake_view(**kwargs):
+        captured["view"] = kwargs
+        return {"status": "ok", "tool": "view"}
+
     monkeypatch.setattr(tools_module, "get_extraction_diagnostic_report", _fake_report)
     monkeypatch.setattr(tools_module, "get_evidence_revisions", _fake_evidence_revisions)
     monkeypatch.setattr(tools_module, "get_trace_reconstruction", _fake_reconstruction)
     monkeypatch.setattr(tools_module, "get_trace_payload", _fake_payload)
+    monkeypatch.setattr(tools_module, "get_trace_view", _fake_view)
 
     report = await api_module._handle_tool_call(
         tool_name="get_extraction_diagnostic_report",
@@ -303,6 +344,10 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
         "tool_name": "record_evidence",
         "event_type": "evidence.summary",
         "candidate_id": "candidate-1",
+        "section": None,
+        "offset": 0,
+        "limit": None,
+        "item_start": 0,
     }
 
     reconstruction = await api_module._handle_tool_call(
@@ -318,6 +363,8 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
         "trace_id": "trace-1",
         "limit": 5,
         "offset": 10,
+        "section": None,
+        "item_start": 0,
     }
 
     payload = await api_module._handle_tool_call(
@@ -337,6 +384,31 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
     assert captured["payload"]["payload_id"] == "observation:obs-1:output"
     assert captured["payload"]["start"] == 12
     assert captured["payload"]["max_chars"] == 120
+
+    view = await api_module._handle_tool_call(
+        tool_name="get_trace_view",
+        tool_input={
+            "trace_id": "trace-1",
+            "view_name": "agent_configs",
+            "section": "agents",
+            "offset": 2,
+            "limit": 1,
+            "item_start": 9000,
+        },
+        context=None,
+        user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
+        messages=[],
+    )
+    assert view["tool"] == "view"
+    assert captured["view"] == {
+        "trace_id": "trace-1",
+        "view_name": "agent_configs",
+        "section": "agents",
+        "offset": 2,
+        "limit": 1,
+        "item_start": 9000,
+    }
 
 
 @pytest.mark.asyncio

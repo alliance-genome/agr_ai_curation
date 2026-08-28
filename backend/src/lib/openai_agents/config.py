@@ -1720,6 +1720,82 @@ def get_agent_studio_trace_review_page_size() -> int:
     )
 
 
+def get_agent_studio_trace_review_aggregate_page_size() -> int:
+    """Default/max items returned by one aggregate TraceReview page."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_TRACE_REVIEW_AGGREGATE_PAGE_SIZE",
+            5,
+        ),
+    )
+
+
+def get_agent_studio_service_log_default_lines() -> int:
+    """Default logical log lines requested by Agent Studio."""
+    return max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_SERVICE_LOG_DEFAULT_LINES", 20),
+    )
+
+
+def get_agent_studio_service_log_max_lines() -> int:
+    """Maximum logical log lines requested by Agent Studio."""
+    return max(
+        get_agent_studio_service_log_default_lines(),
+        _get_env_int_with_fallback("AGENT_STUDIO_SERVICE_LOG_MAX_LINES", 100),
+    )
+
+
+def get_agent_studio_service_log_source_query_max_lines() -> int:
+    """Maximum Loki source entries fetched to resolve one log cursor page."""
+    return max(
+        get_agent_studio_service_log_max_lines(),
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_SERVICE_LOG_SOURCE_QUERY_MAX_LINES",
+            2_000,
+        ),
+    )
+
+
+def get_agent_studio_service_log_page_max_chars() -> int:
+    """Maximum JSON-encoded log content characters returned in one page."""
+    return max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_SERVICE_LOG_PAGE_MAX_CHARS", 8_000),
+    )
+
+
+def get_agent_studio_service_log_timeout_seconds() -> float:
+    """Timeout for the internal Agent Studio service-log HTTP request."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("AGENT_STUDIO_SERVICE_LOG_TIMEOUT_SECONDS", 15.0),
+    )
+
+
+def get_agent_studio_service_log_default_lookback_minutes() -> int:
+    """Default Loki lookback used when Agent Studio omits ``since``."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_SERVICE_LOG_DEFAULT_LOOKBACK_MINUTES",
+            1_440,
+        ),
+    )
+
+
+def get_agent_studio_service_log_max_lookback_minutes() -> int:
+    """Maximum Loki lookback accepted from Agent Studio."""
+    return max(
+        get_agent_studio_service_log_default_lookback_minutes(),
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_SERVICE_LOG_MAX_LOOKBACK_MINUTES",
+            10_080,
+        ),
+    )
+
+
 def get_agent_studio_package_diagnostic_page_default_items() -> int:
     """Default structured items returned by one package diagnostic page."""
     return max(

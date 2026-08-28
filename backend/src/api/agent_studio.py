@@ -123,6 +123,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_opus_context_editing_keep_tool_uses,
     get_agent_studio_opus_context_editing_trigger_tokens,
     get_agent_studio_provider_tool_result_inline_max_chars,
+    get_agent_studio_service_log_default_lines,
+    get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_workshop_prompt_chunk_max_chars,
@@ -2703,6 +2705,10 @@ async def _handle_tool_call(
             tool_name=tool_input.get("tool_name"),
             event_type=tool_input.get("event_type"),
             candidate_id=tool_input.get("candidate_id"),
+            section=tool_input.get("section"),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_extraction_timeline":
@@ -2726,6 +2732,10 @@ async def _handle_tool_call(
             tool_name=tool_input.get("tool_name"),
             event_type=tool_input.get("event_type"),
             candidate_id=tool_input.get("candidate_id"),
+            section=tool_input.get("section"),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_evidence_revisions":
@@ -2747,6 +2757,10 @@ async def _handle_tool_call(
             tool_name=tool_input.get("tool_name"),
             event_type=tool_input.get("event_type"),
             candidate_id=tool_input.get("candidate_id"),
+            section=tool_input.get("section"),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_tree":
@@ -2759,7 +2773,13 @@ async def _handle_tool_call(
                 "error": "Missing required parameter: trace_id",
                 "help": "Call get_trace_summary first or use search_traces to find a trace"
             }
-        return await get_trace_tree(trace_id=trace_id)
+        return await get_trace_tree(
+            trace_id=trace_id,
+            section=tool_input.get("section"),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
+        )
 
     elif tool_name == "get_trace_reconstruction":
         trace_id = tool_input.get("trace_id")
@@ -2773,8 +2793,10 @@ async def _handle_tool_call(
             }
         return await get_trace_reconstruction(
             trace_id=trace_id,
-            limit=tool_input.get("limit", 100),
+            limit=tool_input.get("limit"),
             offset=tool_input.get("offset", 0),
+            section=tool_input.get("section"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_model_live_context":
@@ -2787,7 +2809,13 @@ async def _handle_tool_call(
                 "error": "Missing required parameter: trace_id",
                 "help": "Call get_trace_summary first or use search_traces to find a trace"
             }
-        return await get_trace_model_live_context(trace_id=trace_id)
+        return await get_trace_model_live_context(
+            trace_id=trace_id,
+            section=tool_input.get("section"),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
+        )
 
     elif tool_name == "get_trace_payloads":
         trace_id = tool_input.get("trace_id")
@@ -2804,9 +2832,11 @@ async def _handle_tool_call(
             sort=tool_input.get("sort", "largest"),
             limit=tool_input.get(
                 "limit",
-                get_agent_studio_trace_review_page_size(),
+                get_agent_studio_trace_review_aggregate_page_size(),
             ),
             offset=tool_input.get("offset", 0),
+            section=tool_input.get("section"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_payload":
@@ -2842,7 +2872,13 @@ async def _handle_tool_call(
                 "error": "Missing required parameter: trace_id",
                 "help": "Call get_trace_summary first or use search_traces to find a trace"
             }
-        return await get_trace_costs(trace_id=trace_id)
+        return await get_trace_costs(
+            trace_id=trace_id,
+            section=tool_input.get("section"),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
+        )
 
     elif tool_name == "get_trace_duplicates":
         trace_id = tool_input.get("trace_id")
@@ -2854,7 +2890,13 @@ async def _handle_tool_call(
                 "error": "Missing required parameter: trace_id",
                 "help": "Call get_trace_summary first or use search_traces to find a trace"
             }
-        return await get_trace_duplicates(trace_id=trace_id)
+        return await get_trace_duplicates(
+            trace_id=trace_id,
+            section=tool_input.get("section"),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
+        )
 
     elif tool_name == "get_trace_view":
         trace_id = tool_input.get("trace_id")
@@ -2872,7 +2914,14 @@ async def _handle_tool_call(
                 "error": f"Missing required parameters: {', '.join(missing)}",
                 "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, domain_envelope, extraction_timeline, evidence_revisions"
             }
-        return await get_trace_view(trace_id=trace_id, view_name=view_name)
+        return await get_trace_view(
+            trace_id=trace_id,
+            view_name=view_name,
+            section=tool_input.get("section"),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
+        )
 
     elif tool_name == "list_recent_chats":
         try:
@@ -3005,7 +3054,7 @@ async def _handle_tool_call(
 
     elif tool_name == "get_service_logs":
         container = tool_input.get("container", "backend")
-        lines = tool_input.get("lines", 2000)
+        lines = tool_input.get("lines", get_agent_studio_service_log_default_lines())
         level = tool_input.get("level")
         since = tool_input.get("since")
 
@@ -3014,6 +3063,9 @@ async def _handle_tool_call(
             lines=lines,
             level=level,
             since=since,
+            line_cursor=tool_input.get("line_cursor"),
+            line_cursor_offset=tool_input.get("line_cursor_offset", 0),
+            char_cursor=tool_input.get("char_cursor", 0),
         )
         return result
 

@@ -8,8 +8,9 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from ..config import get_trace_review_payload_preview_max_chars
 
-PAYLOAD_PREVIEW_CHARS = 500
+PAYLOAD_PREVIEW_CHARS = get_trace_review_payload_preview_max_chars()
 
 
 def _json_default(value: Any) -> str:
@@ -72,6 +73,17 @@ def _metadata(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _metadata_inventory(value: Any) -> Dict[str, Any]:
+    """Describe aggregate metadata without replaying payload-like values."""
+    metadata = _mapping_or_empty(value)
+    serialized = serialize_payload(metadata)
+    return {
+        "keys": sorted(str(key) for key in metadata),
+        "json_chars": len(serialized),
+        "sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+    }
 
 
 def _agent_name(observation: Mapping[str, Any], raw_trace: Mapping[str, Any]) -> Optional[str]:
@@ -433,7 +445,11 @@ def _payload_refs_for_source(
     return refs
 
 
-def build_trace_tree(trace_data: Mapping[str, Any]) -> Dict[str, Any]:
+def build_trace_tree(
+    trace_data: Mapping[str, Any],
+    *,
+    include_metadata_values: bool = True,
+) -> Dict[str, Any]:
     """Return a parent/child observation tree rooted at the Langfuse trace."""
     raw_trace = trace_data.get("raw_trace") or {}
     trace_id = _trace_id(trace_data)
@@ -445,10 +461,16 @@ def build_trace_tree(trace_data: Mapping[str, Any]) -> Dict[str, Any]:
         "timestamp": raw_trace.get("timestamp"),
         "session_id": raw_trace.get("sessionId") or raw_trace.get("session_id"),
         "user_id": raw_trace.get("userId") or raw_trace.get("user_id"),
-        "metadata": raw_trace.get("metadata") or {},
         "payloads": _payload_refs_for_source(payloads, scope="trace", source_id=trace_id),
         "children": [],
     }
+    root[
+        "metadata" if include_metadata_values else "metadata_inventory"
+    ] = (
+        raw_trace.get("metadata") or {}
+        if include_metadata_values
+        else _metadata_inventory(raw_trace.get("metadata"))
+    )
 
     nodes: Dict[str, Dict[str, Any]] = {}
     parent_lookup: Dict[str, Optional[str]] = {}
@@ -469,11 +491,17 @@ def build_trace_tree(trace_data: Mapping[str, Any]) -> Dict[str, Any]:
             "model": _model_name(observation),
             "level": observation.get("level"),
             "status_message": observation.get("statusMessage") or observation.get("status_message"),
-            "metadata": observation.get("metadata") or {},
             "usage_cost": usage_cost_summary(observation),
             "payloads": _payload_refs_for_source(payloads, scope="observation", source_id=obs_id),
             "children": [],
         }
+        node[
+            "metadata" if include_metadata_values else "metadata_inventory"
+        ] = (
+            observation.get("metadata") or {}
+            if include_metadata_values
+            else _metadata_inventory(observation.get("metadata"))
+        )
         nodes[obs_id] = node
         parent_lookup[obs_id] = _parent_observation_id(observation)
 
@@ -535,13 +563,17 @@ def build_ordered_reconstruction(
             "model": _model_name(observation),
             "level": observation.get("level"),
             "status_message": observation.get("statusMessage") or observation.get("status_message"),
-            "metadata": observation.get("metadata") or {},
             "usage_cost": usage_cost_summary(observation),
             "payloads": _payload_refs_for_source(payloads, scope="observation", source_id=obs_id),
         }
         if include_payload_values:
             event["input"] = observation.get("input")
             event["output"] = observation.get("output")
+            event["metadata"] = observation.get("metadata") or {}
+        else:
+            event["metadata_inventory"] = _metadata_inventory(
+                observation.get("metadata")
+            )
         events.append(event)
 
     if raw_trace.get("output") is not None:
@@ -562,7 +594,15 @@ def build_ordered_reconstruction(
             "timestamp": raw_trace.get("timestamp"),
             "session_id": raw_trace.get("sessionId") or raw_trace.get("session_id"),
             "user_id": raw_trace.get("userId") or raw_trace.get("user_id"),
-            "metadata": raw_trace.get("metadata") or {},
+            **(
+                {"metadata": raw_trace.get("metadata") or {}}
+                if include_payload_values
+                else {
+                    "metadata_inventory": _metadata_inventory(
+                        raw_trace.get("metadata")
+                    )
+                }
+            ),
         },
         "event_count": len(events),
         "events": events,

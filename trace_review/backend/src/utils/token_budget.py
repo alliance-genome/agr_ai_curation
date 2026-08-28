@@ -1,9 +1,8 @@
 """
-Token Budget Utilities for Claude-Specific Endpoints
+Provider Budget Utilities for Claude-Specific Endpoints
 
-Provides token estimation and budget checking for responses sent to Claude/Opus.
-Uses a simple character-based heuristic (4 chars ≈ 1 token) which is accurate
-enough for budget management without requiring external API calls.
+Measures serialized response characters against Agent Studio's provider boundary
+and retains token estimates as advisory metadata.
 """
 
 import json
@@ -11,16 +10,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from ..config import get_agent_studio_provider_tool_result_inline_max_chars
+
 
 # Configuration
-MAX_TOKENS_DEFAULT = 50000  # Default budget per response (leaves headroom in 200K window)
 CHARS_PER_TOKEN = 4  # Heuristic: 4 characters ≈ 1 token
 
 
 @dataclass
 class TokenBudgetResult:
-    """Result of a token budget check."""
+    """Result of a serialized provider-result budget check."""
     estimated_tokens: int
+    serialized_chars: int
+    max_serialized_chars: int
     within_budget: bool
     warning: Optional[str] = None
 
@@ -43,70 +45,60 @@ def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
 
 
-def estimate_tokens_for_data(data: Any) -> int:
+def check_budget(
+    data: Any,
+    max_chars: int | None = None,
+) -> TokenBudgetResult:
     """
-    Estimate token count for arbitrary data by serializing to JSON.
-
-    Args:
-        data: Any JSON-serializable data
-
-    Returns:
-        Estimated token count
-    """
-    if data is None:
-        return 0
-    if isinstance(data, str):
-        return estimate_tokens(data)
-    try:
-        serialized = json.dumps(data, default=str)
-        return estimate_tokens(serialized)
-    except (TypeError, ValueError):
-        # Fallback for non-serializable data
-        return estimate_tokens(str(data))
-
-
-def check_budget(data: Any, max_tokens: int = MAX_TOKENS_DEFAULT) -> TokenBudgetResult:
-    """
-    Check if data fits within token budget.
+    Check whether data fits within the serialized-character boundary.
 
     Args:
         data: Any JSON-serializable data to check
-        max_tokens: Maximum allowed tokens (default: 50,000)
+        max_chars: Maximum serialized response characters. Defaults to the
+            shared Agent Studio provider inline-result boundary.
 
     Returns:
         TokenBudgetResult with estimated tokens, budget status, and warning if exceeded
     """
-    estimated = estimate_tokens_for_data(data)
-    within_budget = estimated <= max_tokens
+    serialized = json.dumps(data, default=str)
+    serialized_chars = len(serialized)
+    resolved_max_chars = max_chars or get_agent_studio_provider_tool_result_inline_max_chars()
+    estimated = estimate_tokens(serialized)
+    within_budget = serialized_chars <= resolved_max_chars
 
     warning = None
     if not within_budget:
         warning = (
-            f"Response exceeds token budget ({estimated:,} tokens > {max_tokens:,}). "
-            "Consider using pagination or filtering for smaller responses."
+            "Response exceeds the Agent Studio serialized-character boundary "
+            f"({serialized_chars:,} chars > {resolved_max_chars:,}). "
+            "Use the response collection inventory and continuation arguments."
         )
 
     return TokenBudgetResult(
         estimated_tokens=estimated,
+        serialized_chars=serialized_chars,
+        max_serialized_chars=resolved_max_chars,
         within_budget=within_budget,
         warning=warning
     )
 
 
-def create_token_info_dict(data: Any, max_tokens: int = MAX_TOKENS_DEFAULT) -> Dict[str, Any]:
+def create_token_info_dict(data: Any, max_chars: int | None = None) -> Dict[str, Any]:
     """
     Create a token info dictionary suitable for API responses.
 
     Args:
         data: The response data to check
-        max_tokens: Maximum allowed tokens
+        max_chars: Maximum serialized response characters
 
     Returns:
         Dictionary with token info fields
     """
-    result = check_budget(data, max_tokens)
+    result = check_budget(data, max_chars)
     return {
         "estimated_tokens": result.estimated_tokens,
+        "serialized_chars": result.serialized_chars,
+        "max_serialized_chars": result.max_serialized_chars,
         "within_budget": result.within_budget,
         "warning": result.warning
     }

@@ -15,9 +15,17 @@ class TokenInfo(BaseModel):
         ...,
         description="Estimated token count for this response (4 chars ≈ 1 token)"
     )
+    serialized_chars: int = Field(
+        ...,
+        description="Serialized JSON characters in the response data",
+    )
+    max_serialized_chars: int = Field(
+        ...,
+        description="Agent Studio provider inline-result character boundary",
+    )
     within_budget: bool = Field(
         ...,
-        description="Whether response is within 50K token budget"
+        description="Whether response data is within the serialized-character boundary"
     )
     warning: Optional[str] = Field(
         default=None,

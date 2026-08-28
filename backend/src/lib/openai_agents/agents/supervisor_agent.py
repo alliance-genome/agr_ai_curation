@@ -1944,6 +1944,9 @@ def create_supervisor_agent(
             "For detail=\"conversation\", field is required: fetch user_query and "
             "assistant_response independently, passing start and max_chars from each "
             "next_call until complete=true. "
+            "For aggregate detail modes, request a collection section, then follow "
+            "its next_call by passing section, limit, and item_start unchanged and "
+            "its offset as cursor until complete=true. "
             "Do not use this for normal extraction-result browsing; use "
             "inspect_results for persisted extraction objects, evidence, fields, "
             "and validation."
@@ -1963,6 +1966,8 @@ def create_supervisor_agent(
         include_sibling_traces: bool = False,
         limit: int | None = None,
         cursor: str | None = None,
+        section: str | None = None,
+        item_start: int = 0,
     ) -> str:
         """Inspect bounded TraceReview detail for authorized main-chat traces."""
 
@@ -1980,6 +1985,8 @@ def create_supervisor_agent(
             include_sibling_traces=include_sibling_traces,
             limit=limit,
             cursor=cursor,
+            section=section,
+            item_start=item_start,
         )
 
     specialist_tools.append(inspect_chat_traces_tool)

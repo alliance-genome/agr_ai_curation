@@ -229,8 +229,8 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
 def test_agent_studio_system_prompt_uses_bounded_trace_review_contracts():
     source_path, prompt = _read_runtime_agent_studio_system_prompt()
 
-    assert "get_trace_reconstruction(trace_id, limit, offset)" in prompt, source_path
-    assert "get_trace_payloads(trace_id, sort, limit, offset)" in prompt, source_path
+    assert "get_trace_reconstruction(trace_id, section, limit, offset)" in prompt, source_path
+    assert "get_trace_payloads(trace_id, sort, section, limit, offset)" in prompt, source_path
     assert "get_tool_calls_summary(trace_id, page, page_size)" in prompt, source_path
     assert "get_trace_conversation(trace_id, field, start, max_chars)" in prompt, source_path
     assert "get_tool_call_detail(trace_id, call_id, field, start, max_chars)" in prompt, source_path

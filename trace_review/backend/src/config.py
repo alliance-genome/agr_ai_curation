@@ -181,6 +181,19 @@ def get_agent_studio_trace_review_page_size() -> int:
     return max(1, int(os.getenv("AGENT_STUDIO_TRACE_REVIEW_PAGE_SIZE", "10")))
 
 
+def get_agent_studio_trace_review_aggregate_page_size() -> int:
+    """Return the shared aggregate TraceReview page bound."""
+    return max(
+        1,
+        int(os.getenv("AGENT_STUDIO_TRACE_REVIEW_AGGREGATE_PAGE_SIZE", "5")),
+    )
+
+
+def get_trace_review_payload_preview_max_chars() -> int:
+    """Return the maximum payload preview size used by inventories."""
+    return max(1, int(os.getenv("TRACE_REVIEW_PAYLOAD_PREVIEW_MAX_CHARS", "500")))
+
+
 def get_agent_studio_trace_review_summary_max_chars() -> int:
     """Return the shared per-call summary character bound."""
     return max(
