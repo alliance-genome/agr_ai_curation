@@ -224,6 +224,11 @@ def test_installed_agent_studio_prompts_require_targeted_flow_verification():
         assert 'view="effective_prompt"' in prompt, relative_path
         assert "`compacted_tool_result`" in prompt, relative_path
         assert "every present `custom_instructions`" in prompt, relative_path
+        assert "returned `next_call` until `complete=true`" in prompt, relative_path
+        assert "`truncated=false` and no `next_cursor` remains" in prompt, relative_path
+        assert (
+            "`next_cursor` until `complete=true` for every required field" not in prompt
+        ), relative_path
         assert "`scheduled_validators`" in prompt, relative_path
         assert "method/PDF-level `get_tool_details(tool_id, agent_id)`" in prompt, relative_path
         assert "Output agents are attachment branches with ordered" in prompt, relative_path

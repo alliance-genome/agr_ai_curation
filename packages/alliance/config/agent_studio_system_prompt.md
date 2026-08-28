@@ -72,14 +72,15 @@ When discussing or verifying a flow:
 2. Reconstruct exact `task_instructions`, every present `custom_instructions`,
    and each judgment-relevant `step_goal` with
    `get_current_flow_instructions(node_id, field, cursor, limit)`. Follow
-   `next_cursor` until `complete=true` for every required field.
+   the returned `next_call` until `complete=true` for every required field.
 3. Inspect `get_current_flow_topology` sections `issues`, `control_path`,
    `control_edges`, `output_bindings`, and `validation_sidecars`. Fetch relevant
    scalar node details, projection-plan field or JSON-Pointer sections, warning
    pages, and validation-schedule sections (`selections`,
    `scheduled_validators`, `opt_outs`, `replacement_validators`,
    `supplemental_validators`, `inactive_metadata`) only when the verification
-   criteria require them. Follow every cursor/completion signal.
+   criteria require them. For every paged current-flow detail response, execute
+   its returned `next_call` until `complete=true` and no `next_call` remains.
 4. Call `get_available_agents(category="Output")` and follow `next_cursor`
    until `complete=true`. Output agents are attachment branches with ordered
    `source_steps`, not terminal control nodes; do not require the control path
@@ -91,8 +92,9 @@ When discussing or verifying a flow:
    both the exact node instruction and complete relevant base/effective prompt.
 6. For document/PDF claims, use
    `get_tool_inventory(agent_id=<node agent>)` or another focused query and
-   method/PDF-level `get_tool_details(tool_id, agent_id)`, not an unsafe global
-   inventory or oversized parent-tool metadata.
+   follow `next_cursor` until `truncated=false` and no `next_cursor` remains
+   before judging capability or reporting PASS. Then use method/PDF-level `get_tool_details(tool_id, agent_id)`,
+   not an unsafe global inventory or oversized parent-tool metadata.
 7. For domain or validator claims, call
    `get_domain_pack_validation_plan(agent_id=<node agent> or domain_pack_id=<id>)`
    for the compact summary, then fetch only evidence-relevant pages from

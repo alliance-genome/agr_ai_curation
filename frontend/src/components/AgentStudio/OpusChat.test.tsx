@@ -37,10 +37,12 @@ describe('OpusChat', () => {
     const prompt = (screen.getByPlaceholderText('Ask about flows...') as HTMLInputElement).value
     expect(prompt).toContain('get_current_flow() first')
     expect(prompt).toContain('get_current_flow_instructions')
+    expect(prompt).toContain('returned next_call until complete=true')
     expect(prompt).toContain('get_available_agents(category="Output")')
     expect(prompt).toContain('view="summary"')
     expect(prompt).toContain('scheduled_validators')
     expect(prompt).toContain('get_tool_inventory(agent_id=')
+    expect(prompt).toContain('truncated=false and no next_cursor remains')
     expect(prompt).toContain('get_domain_pack_validation_plan')
     expect(prompt).toContain('compacted_tool_result')
     expect(prompt).toContain('not terminal control nodes')
