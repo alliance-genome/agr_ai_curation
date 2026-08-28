@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from src.lib import http_errors
 from src.schemas.flows import (
     CreateFlowRequest,
+    FlowDefinition,
     FlowValidationAttachmentSelection,
     UpdateFlowRequest,
 )
@@ -37,6 +38,7 @@ def _available_flow_agent_policy(monkeypatch):
             "visibility": None,
             "produces_flow_artifacts": True,
             "supervisor": {},
+            "curation": {"domain_pack_id": "fixture.validation"},
         },
     )
 
@@ -200,6 +202,102 @@ async def test_get_flow_reports_missing_agent_reference_on_read(monkeypatch):
     assert "gene_expression" in response.validation_warnings[0].message
 
 
+@pytest.mark.parametrize("metadata_state", ["unavailable", "missing_domain_pack"])
+def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warning(
+    monkeypatch,
+    metadata_state,
+):
+    template_definition = _flow_definition()
+    template_definition["nodes"][1]["data"].update(
+        {
+            "agent_id": "gene_extractor",
+            "agent_display_name": "Gene Extractor",
+        }
+    )
+    template_definition["nodes"].append(
+        {
+            "id": "validator_1",
+            "type": "agent",
+            "position": {"x": 2, "y": 1},
+            "data": {
+                "agent_id": "custom_validator",
+                "agent_display_name": "Custom Validator",
+                "output_key": "custom_validator_output",
+            },
+        }
+    )
+    template_definition["edges"].append(
+        {
+            "id": "validation_edge_1",
+            "source": "agent_1",
+            "target": "validator_1",
+            "role": "validation_attachment",
+            "satisfies_binding_id": "custom.supplemental",
+        }
+    )
+    template_flow = flows.apply_flow_validation_attachment_defaults(
+        FlowDefinition.model_validate(template_definition)
+    )
+    inherited_attachments = [
+        attachment.model_dump()
+        for attachment in template_flow.nodes[1].data.validation_attachments
+    ]
+
+    custom_agent_id = "ca_00000000-0000-4000-8000-000000000002"
+    owned = _flow(name="Historical custom flow")
+    owned.flow_definition = template_flow.model_dump()
+    owned.flow_definition["nodes"][1]["data"].update(
+        {
+            "agent_id": custom_agent_id,
+            "agent_display_name": "Unavailable Custom Extraction Agent",
+        }
+    )
+    inherited_groups = owned.flow_definition["nodes"][1]["data"]["validation_groups"]
+    inherited_edges = owned.flow_definition["edges"]
+
+    def _custom_metadata(agent_id, **_kwargs):
+        if metadata_state == "unavailable":
+            raise ValueError("unavailable")
+        return {
+            "agent_id": agent_id,
+            "display_name": "Custom Extraction Agent",
+            "category": "Extraction",
+            "curation": None,
+        }
+
+    def _policy_entry(agent_id, **_kwargs):
+        if agent_id != custom_agent_id:
+            return {}
+        if metadata_state == "unavailable":
+            return None
+        return {"curation": None}
+
+    monkeypatch.setattr(
+        flows,
+        "get_active_visible_agent_metadata",
+        _custom_metadata,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        _policy_entry,
+    )
+
+    response = flows._flow_to_response(owned)
+
+    assert response.has_critical_issues is True
+    assert custom_agent_id in response.validation_warnings[0].message
+    if metadata_state == "missing_domain_pack":
+        assert "no longer declares validation attachments" in (
+            response.validation_warnings[0].message
+        )
+    attachments = response.flow_definition.nodes[1].data.validation_attachments
+    assert [attachment.model_dump() for attachment in attachments] == inherited_attachments
+    groups = response.flow_definition.nodes[1].data.validation_groups
+    assert [group.model_dump() for group in groups] == inherited_groups
+    assert [edge.model_dump() for edge in response.flow_definition.edges] == inherited_edges
+
+
 @pytest.mark.asyncio
 async def test_create_flow_success(monkeypatch):
     class _DB:
@@ -279,6 +377,88 @@ async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch)
         for attachment in attachments
     )
     assert states.issuperset({"active", "under_development"})
+
+
+@pytest.mark.asyncio
+async def test_create_flow_accepts_inherited_custom_agent_validation_attachments(
+    monkeypatch,
+):
+    class _DB:
+        def __init__(self):
+            self.added = None
+
+        def add(self, obj):
+            self.added = obj
+
+        def commit(self):
+            return None
+
+        def refresh(self, obj):
+            now = datetime.now(timezone.utc)
+            obj.id = uuid4()
+            obj.execution_count = 0
+            obj.created_at = now
+            obj.updated_at = now
+
+    template_definition = _flow_definition()
+    template_definition["nodes"][1]["data"].update(
+        {
+            "agent_id": "gene_extractor",
+            "agent_display_name": "Gene Extractor",
+        }
+    )
+    template_flow = flows.apply_flow_validation_attachment_defaults(
+        FlowDefinition.model_validate(template_definition)
+    )
+    inherited_attachments = [
+        attachment.model_dump()
+        for attachment in template_flow.nodes[1].data.validation_attachments
+    ]
+
+    custom_agent_id = "ca_00000000-0000-4000-8000-000000000001"
+    custom_definition = _flow_definition()
+    custom_definition["nodes"][1]["data"].update(
+        {
+            "agent_id": custom_agent_id,
+            "agent_display_name": "Custom Extraction Agent",
+            "validation_attachments": inherited_attachments,
+        }
+    )
+
+    monkeypatch.setattr(
+        flows,
+        "get_active_visible_agent_metadata",
+        lambda agent_id, **_kwargs: {
+            "agent_id": agent_id,
+            "curation": {
+                "adapter_key": "gene",
+                "domain_pack_id": "gene",
+                "launchable": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        flows,
+        "set_global_user_from_cognito",
+        lambda *_args, **_kwargs: SimpleNamespace(id=17),
+    )
+
+    db = _DB()
+    response = await flows.create_flow(
+        request=CreateFlowRequest(
+            name="Custom extraction flow",
+            description="Regression for inherited validation attachments",
+            flow_definition=custom_definition,
+        ),
+        user={"sub": "u1"},
+        db=db,
+    )
+
+    assert db.added is not None
+    persisted = db.added.flow_definition["nodes"][1]["data"]
+    assert persisted["agent_id"] == custom_agent_id
+    assert persisted["validation_attachments"] == inherited_attachments
+    assert response.flow_definition.nodes[1].data.validation_attachments
 
 
 @pytest.mark.asyncio
