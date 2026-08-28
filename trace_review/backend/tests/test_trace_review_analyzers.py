@@ -676,8 +676,9 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
             "candidate_count": 6,
             "ready_count": 0,
             "blocker_count": 18,
-            "domain_envelope_ids": ["env-1", "env-2"],
-            "envelope_revisions": {"env-1": 3, "env-2": 7},
+            "domain_envelope_count": 2,
+            "revision_set_sha256": "a" * 64,
+            "readiness_token": f"v1.*.{'b' * 64}",
             "readiness_status": "blocked",
             "section_counts": {"candidates": 6, "blockers": 18},
         }
@@ -707,6 +708,44 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(len(domain["blockers"]), 4)
         self.assertTrue(compact["has_blockers"])
         self.assertEqual(compact["readiness_statuses"], ["blocked"])
+
+    def test_domain_envelope_analyzer_reads_definition_state_from_bounded_manifests(self):
+        payload = {
+            "success": True,
+            "envelopes": [
+                {
+                    "envelope_id": "env-bounded",
+                    "domain_pack_id": "fixture.pack",
+                    "schema_ref": {
+                        "type": "dict",
+                        "sha256": "a" * 64,
+                        "definition_state": "in_development",
+                    },
+                }
+            ],
+            "items": [
+                {
+                    "envelope_id": "env-bounded",
+                    "object_id": "obj-bounded",
+                    "object_type": "gene",
+                    "schema_ref": {
+                        "type": "dict",
+                        "sha256": "b" * 64,
+                        "definition_state": "deprecated",
+                    },
+                }
+            ],
+        }
+
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload(payload)
+
+        self.assertGreaterEqual(domain["definition_state_counts"]["in_development"], 1)
+        self.assertGreaterEqual(domain["definition_state_counts"]["deprecated"], 1)
+        self.assertTrue(
+            {"domain_envelope.schema_ref", "domain_envelope.object.schema_ref"}.issubset(
+                {flag["source"] for flag in domain["definition_state_flags"]}
+            )
+        )
 
     def test_domain_envelope_analyzer_uses_authoritative_envelope_state_summary(self):
         summary = {

@@ -417,11 +417,18 @@ class DomainEnvelopeTraceAnalyzer:
             and _as_string(envelope.get("envelope_id")) is not None
             and isinstance(payload.get("section_counts"), Mapping)
         )
+        has_bounded_readiness_identity = (
+            isinstance(payload.get("domain_envelope_count"), int)
+            and not isinstance(payload.get("domain_envelope_count"), bool)
+            and _as_string(payload.get("revision_set_sha256")) is not None
+            and _as_string(payload.get("readiness_token")) is not None
+        )
         return (
             "blocker_count" in payload
             and (
                 isinstance(payload.get("domain_envelope_ids"), list)
                 or isinstance(payload.get("envelope_revisions"), Mapping)
+                or has_bounded_readiness_identity
                 or has_envelope_state_identity
             )
             and (

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 from collections import Counter
+import hashlib
 import json
 from typing import Any, Callable, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import String, cast, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy.orm import Session, load_only
 
 from src.lib.curation_workspace.models import (
     CurationCandidate,
@@ -40,12 +42,11 @@ from src.lib.flows.validation_attachments import (
 from src.lib.openai_agents.config import (
     get_domain_envelope_default_limit,
     get_domain_envelope_max_field_paths,
-    get_domain_envelope_max_json_chars,
     get_domain_envelope_max_limit,
     get_domain_envelope_max_lookup_attempts,
     get_domain_envelope_max_summary_json_chars,
-    get_domain_envelope_max_validator_lookup_attempts,
     get_domain_envelope_max_validator_summaries,
+    get_agent_studio_provider_tool_result_inline_max_chars,
     get_domain_pack_validation_plan_default_limit,
     get_domain_pack_validation_plan_max_limit,
     get_domain_runtime_inspection_default_limit,
@@ -54,9 +55,6 @@ from src.lib.openai_agents.config import (
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
-    FieldRef,
-    HistoryEvent,
-    ObjectRef,
     ValidationFindingStatus,
 )
 
@@ -67,16 +65,15 @@ SessionFactory = Callable[[], Session]
 # (DOMAIN_ENVELOPE_* group).
 _MAX_LIMIT = get_domain_envelope_max_limit()
 _DEFAULT_LIMIT = get_domain_envelope_default_limit()
-_MAX_JSON_CHARS = get_domain_envelope_max_json_chars()
 _MAX_LOOKUP_ATTEMPTS = get_domain_envelope_max_lookup_attempts()
 _MAX_VALIDATOR_SUMMARIES = get_domain_envelope_max_validator_summaries()
-_MAX_VALIDATOR_LOOKUP_ATTEMPTS = get_domain_envelope_max_validator_lookup_attempts()
 _MAX_SUMMARY_JSON_CHARS = get_domain_envelope_max_summary_json_chars()
 _MAX_FIELD_PATHS = get_domain_envelope_max_field_paths()
 _DOMAIN_PLAN_DEFAULT_LIMIT = get_domain_pack_validation_plan_default_limit()
 _DOMAIN_PLAN_MAX_LIMIT = get_domain_pack_validation_plan_max_limit()
 _RUNTIME_DEFAULT_LIMIT = get_domain_runtime_inspection_default_limit()
 _RUNTIME_MAX_LIMIT = get_domain_runtime_inspection_max_limit()
+_PROVIDER_INLINE_MAX_CHARS = get_agent_studio_provider_tool_result_inline_max_chars()
 
 _ENVELOPE_STATE_SECTIONS = (
     "objects",
@@ -150,6 +147,7 @@ def list_domain_envelopes(
     flow_run_id: str | None = None,
     domain_pack_id: str | None = None,
     limit: int | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     """List persisted domain envelopes visible to the current curator."""
 
@@ -163,7 +161,37 @@ def list_domain_envelopes(
         ):
             return _error(f"Curation review session {session_id} was not found.")
 
-        query = select(DomainEnvelopeModel).order_by(DomainEnvelopeModel.updated_at.desc())
+        normalized_user_auth_sub = _optional_text(user_auth_sub)
+        visible_session_conditions = [
+            and_(
+                CurationReviewSession.created_by_id.is_(None),
+                CurationReviewSession.assigned_curator_id.is_(None),
+            )
+        ]
+        if normalized_user_auth_sub is not None:
+            visible_session_conditions.extend(
+                (
+                    CurationReviewSession.created_by_id == normalized_user_auth_sub,
+                    CurationReviewSession.assigned_curator_id == normalized_user_auth_sub,
+                )
+            )
+        visible_session_ids = select(CurationReviewSession.id).where(
+            or_(*visible_session_conditions)
+        )
+        visible_candidate_envelopes = (
+            select(CurationCandidate.envelope_id)
+            .where(CurationCandidate.session_id.in_(visible_session_ids))
+            .where(CurationCandidate.envelope_id.is_not(None))
+        )
+        query = select(DomainEnvelopeModel).where(
+            or_(
+                DomainEnvelopeModel.session_id.in_(visible_session_ids),
+                and_(
+                    DomainEnvelopeModel.session_id.is_(None),
+                    DomainEnvelopeModel.envelope_id.in_(visible_candidate_envelopes),
+                ),
+            )
+        )
         if session_id:
             normalized_session_id = _uuid(session_id, "session_id")
             session_candidate_envelopes = (
@@ -184,22 +212,77 @@ def list_domain_envelopes(
         if domain_pack_id:
             query = query.where(DomainEnvelopeModel.domain_pack_key == domain_pack_id.strip())
 
-        rows = [
-            row
-            for row in db.scalars(query.limit(resolved_limit * 3)).all()
-            if _envelope_visible_to_user(db, row=row, user_auth_sub=user_auth_sub)
-        ][:resolved_limit]
+        total_count = int(
+            db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+        )
+        offset = _domain_plan_cursor(cursor, total_count=total_count)
+        candidate_rows = db.scalars(
+            query.order_by(
+                DomainEnvelopeModel.updated_at.desc(),
+                DomainEnvelopeModel.envelope_id.asc(),
+            )
+            .options(
+                load_only(
+                    DomainEnvelopeModel.envelope_id,
+                    DomainEnvelopeModel.revision,
+                    DomainEnvelopeModel.project_key,
+                    DomainEnvelopeModel.domain_pack_key,
+                    DomainEnvelopeModel.domain_pack_version,
+                    DomainEnvelopeModel.status,
+                    DomainEnvelopeModel.document_id,
+                    DomainEnvelopeModel.session_id,
+                    DomainEnvelopeModel.flow_run_id,
+                    DomainEnvelopeModel.schema_provider,
+                    DomainEnvelopeModel.schema_ref_json,
+                    DomainEnvelopeModel.updated_at,
+                    DomainEnvelopeModel.checkpointed_at,
+                )
+            )
+            .offset(offset)
+            .limit(resolved_limit)
+        ).all()
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "limit": resolved_limit,
-            "envelopes": [_envelope_row_summary(row) for row in rows],
-            "instruction": (
-                "Use these envelope_id values with get_domain_envelope_state for live "
-                "object, finding, history, projection, and lookup details."
-            ),
-        }
+        def build_result(rows: Sequence[DomainEnvelopeModel]) -> dict[str, Any]:
+            next_offset = offset + len(rows)
+            complete = next_offset >= total_count
+            filters = {
+                key: value
+                for key, value in {
+                    "session_id": session_id,
+                    "document_id": document_id,
+                    "flow_run_id": flow_run_id,
+                    "domain_pack_id": domain_pack_id,
+                }.items()
+                if value is not None
+            }
+            return {
+                "success": True,
+                "count": len(rows),
+                "returned_count": len(rows),
+                "total_count": total_count,
+                "limit": resolved_limit,
+                "envelopes": [_envelope_row_summary(row) for row in rows],
+                "complete": complete,
+                "next_cursor": None if complete else str(next_offset),
+                "next_request": (
+                    None
+                    if complete
+                    else {**filters, "limit": resolved_limit, "cursor": str(next_offset)}
+                ),
+                "instruction": (
+                    "Use these envelope_id values with get_domain_envelope_state for live "
+                    "object, finding, history, projection, and lookup details; follow "
+                    "next_request until complete."
+                ),
+            }
+
+        for row_count in range(len(candidate_rows), 0, -1):
+            result = build_result(candidate_rows[:row_count])
+            if _provider_chars(result) <= _PROVIDER_INLINE_MAX_CHARS:
+                return result
+        if not candidate_rows:
+            return build_result([])
+        return _error("Envelope list identity exceeds the provider inline result limit.")
     except ValueError as exc:
         return _error(str(exc))
     finally:
@@ -219,6 +302,9 @@ def get_domain_envelope_state(
     include_object_payload: bool = False,
     limit: int | None = None,
     cursor: str | None = None,
+    reference_locator: str | None = None,
+    reference_sha256: str | None = None,
+    char_cursor: int | None = None,
 ) -> dict[str, Any]:
     """Return a compact envelope summary or one revision-pinned detail page."""
 
@@ -233,6 +319,21 @@ def get_domain_envelope_state(
         requested_object_ref = _optional_text(object_id)
         normalized_field_path = _optional_text(field_path)
         envelope = DomainEnvelope.model_validate(row.envelope_json)
+        resolved_section = _optional_text(section) or "summary"
+        if resolved_section == "reference":
+            if revision is None:
+                raise ValueError("revision is required for reference chunks")
+            locator_text = _required_text(reference_locator, "reference_locator")
+            locator = _decode_reference_locator(locator_text)
+            value = _reference_value(db, row=row, locator=locator)
+            return _reference_chunk_result(
+                envelope_id=normalized_envelope_id,
+                revision=row.revision,
+                locator=locator_text,
+                expected_sha256=_required_text(reference_sha256, "reference_sha256"),
+                value=value,
+                char_cursor=char_cursor,
+            )
         object_id_by_ref = _object_id_by_ref(envelope)
         resolved_object_id = _resolved_object_id(
             requested_object_ref,
@@ -288,7 +389,9 @@ def get_domain_envelope_state(
             or 0
         )
         lookup_attempts = _lookup_attempt_summary(
-            envelope=envelope,
+            envelope_json=row.envelope_json,
+            envelope_id=row.envelope_id,
+            envelope_revision=row.revision,
             projection_rows=projection_rows,
             include_all=True,
         )
@@ -305,7 +408,6 @@ def get_domain_envelope_state(
             "validator_summaries": list(validator_summaries["summaries"]),
             "object_ref_index": _object_ref_index_payload(object_id_by_ref),
         }
-        resolved_section = _optional_text(section) or "summary"
         filters = {
             "object_id": resolved_object_id,
             "field_path": normalized_field_path,
@@ -432,7 +534,10 @@ def get_domain_envelope_state(
                 .limit(page_limit)
             ).all()
             page = _runtime_page_result(
-                page_items=[_history_row_payload(item) for item in history_rows],
+                page_items=[
+                    _history_row_payload(item, current_revision=row.revision)
+                    for item in history_rows
+                ],
                 section_total_count=history_total_count,
                 total_count=filtered_total_count,
                 page_limit=page_limit,
@@ -883,24 +988,33 @@ def _runtime_page_result(
     offset: int,
     next_request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    next_offset = offset + len(page_items)
-    complete = next_offset >= total_count
-    next_cursor = None if complete else str(next_offset)
-    return {
-        "section_total_count": section_total_count,
-        "total_count": total_count,
-        "returned_count": len(page_items),
-        "items": [dict(item) for item in page_items],
-        "complete": complete,
-        "truncated": not complete,
-        "next_cursor": next_cursor,
-        "limit": page_limit,
-        "next_request": (
-            None
-            if next_cursor is None
-            else {**dict(next_request), "limit": page_limit, "cursor": next_cursor}
-        ),
-    }
+    def build(selected_items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        next_offset = offset + len(selected_items)
+        complete = next_offset >= total_count
+        next_cursor = None if complete else str(next_offset)
+        return {
+            "section_total_count": section_total_count,
+            "total_count": total_count,
+            "returned_count": len(selected_items),
+            "items": [dict(item) for item in selected_items],
+            "complete": complete,
+            "truncated": not complete,
+            "next_cursor": next_cursor,
+            "limit": page_limit,
+            "next_request": (
+                None
+                if next_cursor is None
+                else {**dict(next_request), "limit": page_limit, "cursor": next_cursor}
+            ),
+        }
+
+    for item_count in range(len(page_items), 0, -1):
+        result = build(page_items[:item_count])
+        if _provider_chars(result) <= (_PROVIDER_INLINE_MAX_CHARS * 3) // 4:
+            return result
+    if not page_items:
+        return build([])
+    raise ValueError("One runtime record identity exceeds the provider inline result limit.")
 
 
 def _filter_runtime_items(
@@ -912,7 +1026,10 @@ def _filter_runtime_items(
         for filter_name, expected in filters.items():
             if filter_name == "query":
                 if expected.casefold() not in json.dumps(
-                    item,
+                    [
+                        {key: value for key, value in item.items() if key != "_filter_value"},
+                        item.get("_filter_value"),
+                    ],
                     sort_keys=True,
                     default=str,
                 ).casefold():
@@ -923,7 +1040,11 @@ def _filter_runtime_items(
                 return False
         return True
 
-    return [dict(item) for item in items if matches(item)]
+    return [
+        {key: value for key, value in item.items() if key != "_filter_value"}
+        for item in items
+        if matches(item)
+    ]
 
 
 def _require_current_revision(
@@ -995,6 +1116,73 @@ def _filter_domain_plan_items(
     return [dict(item) for item in items if matches(item)]
 
 
+def _readiness_scope_selector(
+    all_candidate_ids: Sequence[str],
+    selected_candidate_ids: Sequence[str],
+) -> str:
+    selected = set(selected_candidate_ids)
+    if selected == set(all_candidate_ids):
+        return "*"
+    bits = bytearray((len(all_candidate_ids) + 7) // 8)
+    for index, candidate_id in enumerate(all_candidate_ids):
+        if candidate_id in selected:
+            bits[index // 8] |= 1 << (index % 8)
+    return base64.urlsafe_b64encode(bytes(bits)).decode("ascii").rstrip("=") or "-"
+
+
+def _readiness_scope_from_token(
+    token: str,
+    all_candidate_ids: Sequence[str],
+) -> list[str]:
+    parts = _required_text(token, "readiness_token").split(".")
+    if len(parts) != 3 or parts[0] != "v1" or len(parts[2]) != 64:
+        raise ValueError("readiness_token is invalid")
+    selector = parts[1]
+    if selector == "*":
+        return list(all_candidate_ids)
+    try:
+        raw = b"" if selector == "-" else base64.urlsafe_b64decode(
+            selector + "=" * (-len(selector) % 4)
+        )
+    except (ValueError, TypeError) as exc:
+        raise ValueError("readiness_token is invalid") from exc
+    expected_bytes = (len(all_candidate_ids) + 7) // 8
+    if len(raw) != expected_bytes:
+        raise ValueError("Readiness candidate scope changed; request a fresh summary.")
+    return [
+        candidate_id
+        for index, candidate_id in enumerate(all_candidate_ids)
+        if raw[index // 8] & (1 << (index % 8))
+    ]
+
+
+def _readiness_token(
+    *,
+    session_id: str,
+    mode: str,
+    all_candidate_ids: Sequence[str],
+    selected_candidate_ids: Sequence[str],
+    envelope_revisions: Mapping[str, int],
+    expected_envelope_revisions: Mapping[str, int],
+) -> str:
+    selector = _readiness_scope_selector(all_candidate_ids, selected_candidate_ids)
+    digest = hashlib.sha256(
+        _canonical_json(
+            {
+                "session_id": session_id,
+                "mode": mode,
+                "all_candidate_ids": list(all_candidate_ids),
+                "selected_candidate_ids": list(selected_candidate_ids),
+                "envelope_revisions": dict(sorted(envelope_revisions.items())),
+                "expected_envelope_revisions": dict(
+                    sorted(expected_envelope_revisions.items())
+                ),
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"v1.{selector}.{digest}"
+
+
 def get_export_submission_readiness(
     *,
     session_factory: SessionFactory,
@@ -1012,6 +1200,7 @@ def get_export_submission_readiness(
     query: str | None = None,
     limit: int | None = None,
     cursor: str | None = None,
+    readiness_token: str | None = None,
 ) -> dict[str, Any]:
     """Summarize or page current readiness without executing submission."""
 
@@ -1027,12 +1216,26 @@ def get_export_submission_readiness(
 
         session_row = _load_session_for_validation(db, session_id=normalized_session_id)
         candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
-        target_candidate_ids = list(candidate_ids or candidate_map.keys())
-        unknown_candidate_ids = sorted(set(target_candidate_ids) - set(candidate_map))
-        if unknown_candidate_ids:
-            return _error(
-                "Unknown candidate(s) for session: " + ", ".join(unknown_candidate_ids)
+        all_candidate_ids = list(candidate_map)
+        if readiness_token is not None:
+            if candidate_ids is not None:
+                raise ValueError("readiness_token replaces candidate_ids")
+            target_candidate_ids = _readiness_scope_from_token(
+                readiness_token,
+                all_candidate_ids,
             )
+        else:
+            requested_candidate_ids = set(candidate_ids or all_candidate_ids)
+            unknown_candidate_ids = sorted(requested_candidate_ids - set(candidate_map))
+            if unknown_candidate_ids:
+                return _error(
+                    "Unknown candidate(s) for session: " + ", ".join(unknown_candidate_ids)
+                )
+            target_candidate_ids = [
+                candidate_id
+                for candidate_id in all_candidate_ids
+                if candidate_id in requested_candidate_ids
+            ]
 
         domain_context = _build_domain_envelope_submission_context(
             db=db,
@@ -1072,6 +1275,18 @@ def get_export_submission_readiness(
             **current_envelope_revisions,
             **dict(expected_envelope_revisions or {}),
         }
+        current_readiness_token = _readiness_token(
+            session_id=normalized_session_id,
+            mode=normalized_mode,
+            all_candidate_ids=all_candidate_ids,
+            selected_candidate_ids=target_candidate_ids,
+            envelope_revisions=envelope_revisions,
+            expected_envelope_revisions=dict(expected_envelope_revisions or {}),
+        )
+        if readiness_token is not None and readiness_token != current_readiness_token:
+            raise ValueError(
+                "Readiness revisions or candidate scope changed; request a fresh summary."
+            )
         identity = {
             "success": True,
             "session_id": normalized_session_id,
@@ -1080,8 +1295,11 @@ def get_export_submission_readiness(
             "candidate_count": len(readiness),
             "ready_count": sum(1 for item in readiness if item.get("ready") is True),
             "blocker_count": len(blockers),
-            "domain_envelope_ids": sorted(envelope_revisions),
-            "envelope_revisions": envelope_revisions,
+            "domain_envelope_count": len(envelope_revisions),
+            "revision_set_sha256": hashlib.sha256(
+                _canonical_json(dict(sorted(envelope_revisions.items()))).encode("utf-8")
+            ).hexdigest(),
+            "readiness_token": current_readiness_token,
         }
         if resolved_section == "summary":
             if any(value is not None for value in (limit, cursor)):
@@ -1100,17 +1318,25 @@ def get_export_submission_readiness(
                 },
                 "detail_requests": [
                     {
+                        "session_id": normalized_session_id,
                         "section": name,
-                        "candidate_ids": target_candidate_ids,
-                        "expected_envelope_revisions": envelope_revisions,
+                        "readiness_token": current_readiness_token,
+                        **(
+                            {
+                                "expected_envelope_revisions": dict(
+                                    expected_envelope_revisions
+                                )
+                            }
+                            if expected_envelope_revisions
+                            else {}
+                        ),
                         "supported_filters": list(_READINESS_FILTERS[name]),
                     }
                     for name in _READINESS_SECTIONS
                 ],
                 "instruction": (
                     "This is a read-only readiness summary. Request candidates or "
-                    "blockers and follow next_request until complete; keep expected "
-                    "envelope revisions unchanged while traversing pages."
+                    "blockers with readiness_token and follow next_request until complete."
                 ),
             }
         if resolved_section not in _READINESS_SECTIONS:
@@ -1148,8 +1374,16 @@ def get_export_submission_readiness(
                 cursor=cursor,
                 next_request={
                     "session_id": normalized_session_id,
-                    "candidate_ids": target_candidate_ids,
-                    "expected_envelope_revisions": envelope_revisions,
+                    "readiness_token": current_readiness_token,
+                    **(
+                        {
+                            "expected_envelope_revisions": dict(
+                                expected_envelope_revisions
+                            )
+                        }
+                        if expected_envelope_revisions
+                        else {}
+                    ),
                     "mode": normalized_mode,
                     "section": resolved_section,
                     **active_filters,
@@ -1349,7 +1583,261 @@ def _provider_refs(metadata: Mapping[str, Any]) -> dict[str, Any]:
     return dict(raw_provider_refs) if isinstance(raw_provider_refs, Mapping) else {}
 
 
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, default=str, sort_keys=True, separators=(",", ":"))
+
+
+def _provider_chars(value: Any) -> int:
+    return len(json.dumps(value, default=str))
+
+
+def _encode_reference_locator(locator: Mapping[str, str]) -> str:
+    encoded = base64.urlsafe_b64encode(_canonical_json(locator).encode("utf-8")).decode("ascii")
+    return encoded.rstrip("=")
+
+
+def _encode_reference_path(path: Sequence[str | int]) -> str:
+    return _canonical_json(list(path))
+
+
+def _reference_path_value(value: Any, encoded_path: str | None) -> Any:
+    if encoded_path is None:
+        return value
+    try:
+        path = json.loads(encoded_path)
+    except json.JSONDecodeError as exc:
+        raise ValueError("reference_locator path is invalid") from exc
+    if not isinstance(path, list) or not all(
+        isinstance(part, (str, int)) and not isinstance(part, bool) for part in path
+    ):
+        raise ValueError("reference_locator path is invalid")
+    current = value
+    for part in path:
+        if isinstance(part, str) and isinstance(current, Mapping) and part in current:
+            current = current[part]
+        elif isinstance(part, int) and isinstance(current, list) and 0 <= part < len(current):
+            current = current[part]
+        else:
+            raise ValueError("reference_locator no longer resolves in this envelope revision")
+    return current
+
+
+def _decode_reference_locator(value: str) -> dict[str, str]:
+    normalized = _required_text(value, "reference_locator")
+    try:
+        padding = "=" * (-len(normalized) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(normalized + padding))
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("reference_locator is invalid") from exc
+    if not isinstance(decoded, dict) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in decoded.items()
+    ):
+        raise ValueError("reference_locator is invalid")
+    return decoded
+
+
+def _reference_manifest(
+    value: Any,
+    *,
+    envelope_id: str,
+    revision: int,
+    locator: Mapping[str, str],
+) -> dict[str, Any]:
+    serialized = _canonical_json(value)
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    all_keys = sorted(str(key) for key in value) if isinstance(value, Mapping) else []
+    keys: list[str] = []
+    for key in all_keys:
+        candidate = [*keys, key]
+        if len(_canonical_json(candidate)) > max(1, _MAX_SUMMARY_JSON_CHARS // 8):
+            break
+        keys = candidate
+    return {
+        "type": type(value).__name__,
+        "keys": keys if isinstance(value, Mapping) else None,
+        "key_count": len(all_keys) if isinstance(value, Mapping) else None,
+        "keys_truncated": len(keys) < len(all_keys) if isinstance(value, Mapping) else None,
+        "length": len(value) if hasattr(value, "__len__") else None,
+        "json_chars": len(serialized),
+        "sha256": digest,
+        "detail_request": {
+            "envelope_id": envelope_id,
+            "revision": revision,
+            "section": "reference",
+            "reference_locator": _encode_reference_locator(locator),
+            "reference_sha256": digest,
+            "char_cursor": 0,
+        },
+    }
+
+
+def _projection_reference_manifest(
+    row: DomainEnvelopeProjectionIndex,
+    field: str,
+    value: Any,
+) -> dict[str, Any]:
+    return _reference_manifest(
+        value,
+        envelope_id=row.envelope_id,
+        revision=row.envelope_revision,
+        locator={
+            "kind": "projection",
+            "object_id": row.object_id,
+            "projection_type": row.projection_type,
+            "projection_key": row.projection_key,
+            "field": field,
+        },
+    )
+
+
+def _reference_value(
+    db: Session,
+    *,
+    row: DomainEnvelopeModel,
+    locator: Mapping[str, str],
+) -> Any:
+    kind = locator.get("kind")
+    field = locator.get("field")
+    if kind == "envelope" and field in {"schema_ref", "envelope"}:
+        value = row.schema_ref_json or {} if field == "schema_ref" else row.envelope_json
+        return _reference_path_value(value, locator.get("path"))
+    if kind == "object":
+        record = db.scalar(
+            select(DomainEnvelopeObject)
+            .where(DomainEnvelopeObject.envelope_id == row.envelope_id)
+            .where(DomainEnvelopeObject.envelope_revision == row.revision)
+            .where(DomainEnvelopeObject.object_id == locator.get("object_id"))
+        )
+        attributes = {
+            "schema_ref": "schema_ref_json",
+            "object_model_ref": "object_model_ref_json",
+            "model_field_ref": "model_field_ref_json",
+            "payload": "payload_json",
+            "payload_keys": "payload_json",
+            "field_paths": "payload_json",
+        }
+    elif kind == "finding":
+        record = db.scalar(
+            select(DomainValidationFinding)
+            .where(DomainValidationFinding.envelope_id == row.envelope_id)
+            .where(DomainValidationFinding.envelope_revision == row.revision)
+            .where(DomainValidationFinding.finding_id == locator.get("finding_id"))
+        )
+        attributes = {
+            "object_model_ref": "object_model_ref_json",
+            "model_field_ref": "model_field_ref_json",
+            "finding": "finding_json",
+        }
+    elif kind == "history":
+        record = db.scalar(
+            select(DomainEnvelopeHistory)
+            .where(DomainEnvelopeHistory.envelope_id == row.envelope_id)
+            .where(DomainEnvelopeHistory.envelope_revision <= row.revision)
+            .where(DomainEnvelopeHistory.event_id == locator.get("event_id"))
+        )
+        attributes = {"details": "event_json", "message": "event_json"}
+    elif kind == "projection":
+        record = db.scalar(
+            select(DomainEnvelopeProjectionIndex)
+            .where(DomainEnvelopeProjectionIndex.envelope_id == row.envelope_id)
+            .where(DomainEnvelopeProjectionIndex.envelope_revision == row.revision)
+            .where(DomainEnvelopeProjectionIndex.object_id == locator.get("object_id"))
+            .where(
+                DomainEnvelopeProjectionIndex.projection_type
+                == locator.get("projection_type")
+            )
+            .where(
+                DomainEnvelopeProjectionIndex.projection_key
+                == locator.get("projection_key")
+            )
+        )
+        attributes = {
+            "schema_ref": "schema_ref_json",
+            "object_model_ref": "object_model_ref_json",
+            "model_field_ref": "model_field_ref_json",
+            "projection": "projection_json",
+        }
+    else:
+        raise ValueError("reference_locator selects an unsupported reference")
+    if record is None or field not in attributes:
+        raise ValueError("reference_locator no longer resolves in this envelope revision")
+    value = getattr(record, attributes[field]) or {}
+    if kind == "history":
+        value = dict(value).get(field, {} if field == "details" else None)
+    if kind == "object" and field == "payload_keys":
+        value = sorted(str(key) for key in value)
+    elif kind == "object" and field == "field_paths":
+        value = _field_paths(dict(value))
+    return _reference_path_value(value, locator.get("path"))
+
+
+def _reference_chunk_result(
+    *,
+    envelope_id: str,
+    revision: int,
+    locator: str,
+    expected_sha256: str,
+    value: Any,
+    char_cursor: int | None,
+) -> dict[str, Any]:
+    serialized = _canonical_json(value)
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    if _required_text(expected_sha256, "reference_sha256") != digest:
+        raise ValueError("Reference hash changed; reload its revision-pinned manifest.")
+    start = 0 if char_cursor is None else char_cursor
+    if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+        raise ValueError("char_cursor must be a non-negative integer")
+    if start > len(serialized):
+        raise ValueError(f"char_cursor {start} exceeds reference length {len(serialized)}")
+
+    def build(end: int) -> dict[str, Any]:
+        complete = end >= len(serialized)
+        return {
+            "success": True,
+            "envelope_id": envelope_id,
+            "envelope_revision": revision,
+            "section": "reference",
+            "serialization": "canonical JSON (UTF-8, sorted keys, compact separators)",
+            "sha256": digest,
+            "total_chars": len(serialized),
+            "returned_range": {"start": start, "end": end},
+            "content": serialized[start:end],
+            "complete": complete,
+            "next_request": (
+                None
+                if complete
+                else {
+                    "envelope_id": envelope_id,
+                    "revision": revision,
+                    "section": "reference",
+                    "reference_locator": locator,
+                    "reference_sha256": digest,
+                    "char_cursor": end,
+                }
+            ),
+            "instruction": "Concatenate content in returned_range order and verify sha256.",
+        }
+
+    if start == len(serialized):
+        return build(start)
+    low = start + 1
+    high = len(serialized)
+    fitting: dict[str, Any] | None = None
+    while low <= high:
+        end = (low + high) // 2
+        candidate = build(end)
+        if _provider_chars(candidate) <= _PROVIDER_INLINE_MAX_CHARS:
+            fitting = candidate
+            low = end + 1
+        else:
+            high = end - 1
+    if fitting is None:
+        raise ValueError("Reference chunk identity exceeds the provider inline result limit.")
+    return fitting
+
+
 def _envelope_row_summary(row: DomainEnvelopeModel) -> dict[str, Any]:
+    schema_ref = dict(row.schema_ref_json or {})
     return {
         "envelope_id": row.envelope_id,
         "envelope_revision": row.revision,
@@ -1361,7 +1849,19 @@ def _envelope_row_summary(row: DomainEnvelopeModel) -> dict[str, Any]:
         "session_id": str(row.session_id) if row.session_id else None,
         "flow_run_id": row.flow_run_id,
         "schema_provider": row.schema_provider,
-        "schema_ref": dict(row.schema_ref_json or {}),
+        "schema_ref": {
+            **_reference_manifest(
+                schema_ref,
+                envelope_id=row.envelope_id,
+                revision=row.revision,
+                locator={"kind": "envelope", "field": "schema_ref"},
+            ),
+            **(
+                {"definition_state": schema_ref["definition_state"]}
+                if _optional_text(schema_ref.get("definition_state")) is not None
+                else {}
+            ),
+        },
         "updated_at": _iso(row.updated_at),
         "checkpointed_at": _iso(row.checkpointed_at),
     }
@@ -1373,6 +1873,7 @@ def _object_row_payload(
     include_payload: bool,
 ) -> dict[str, Any]:
     payload = dict(row.payload_json or {})
+    schema_ref = dict(row.schema_ref_json or {})
     result = {
         "envelope_id": row.envelope_id,
         "object_id": row.object_id,
@@ -1383,14 +1884,57 @@ def _object_row_payload(
         "status": _enum_value(row.status),
         "validation_state": row.validation_state,
         "schema_provider": row.schema_provider,
-        "schema_ref": dict(row.schema_ref_json or {}),
-        "object_model_ref": dict(row.object_model_ref_json or {}),
-        "model_field_ref": dict(row.model_field_ref_json or {}),
-        "field_paths": _field_paths(payload),
-        "payload_keys": sorted(payload.keys()),
+        "schema_ref": {
+            **_reference_manifest(
+                schema_ref,
+                envelope_id=row.envelope_id,
+                revision=row.envelope_revision,
+                locator={"kind": "object", "object_id": row.object_id, "field": "schema_ref"},
+            ),
+            **(
+                {"definition_state": schema_ref["definition_state"]}
+                if _optional_text(schema_ref.get("definition_state")) is not None
+                else {}
+            ),
+        },
+        "object_model_ref": _reference_manifest(
+            row.object_model_ref_json or {},
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "object", "object_id": row.object_id, "field": "object_model_ref"},
+        ),
+        "model_field_ref": _reference_manifest(
+            row.model_field_ref_json or {},
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "object", "object_id": row.object_id, "field": "model_field_ref"},
+        ),
+        "field_paths": _reference_manifest(
+            _field_paths(payload),
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "object", "object_id": row.object_id, "field": "field_paths"},
+        ),
+        "payload_keys": _reference_manifest(
+            sorted(str(key) for key in payload),
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "object", "object_id": row.object_id, "field": "payload_keys"},
+        ),
+        "_filter_value": {
+            "schema_ref": row.schema_ref_json,
+            "object_model_ref": row.object_model_ref_json,
+            "model_field_ref": row.model_field_ref_json,
+            "payload": payload,
+        },
     }
     if include_payload:
-        result["payload"] = _bounded_json(payload)
+        result["payload"] = _reference_manifest(
+            payload,
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "object", "object_id": row.object_id, "field": "payload"},
+        )
     return result
 
 
@@ -1405,13 +1949,37 @@ def _finding_row_payload(row: DomainValidationFinding) -> dict[str, Any]:
         "severity": _enum_value(row.severity),
         "status": _enum_value(row.status),
         "code": row.code,
-        "object_model_ref": dict(row.object_model_ref_json or {}),
-        "model_field_ref": dict(row.model_field_ref_json or {}),
-        "finding": _bounded_json(dict(row.finding_json or {})),
+        "object_model_ref": _reference_manifest(
+            row.object_model_ref_json or {},
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "finding", "finding_id": row.finding_id, "field": "object_model_ref"},
+        ),
+        "model_field_ref": _reference_manifest(
+            row.model_field_ref_json or {},
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "finding", "finding_id": row.finding_id, "field": "model_field_ref"},
+        ),
+        "finding": _reference_manifest(
+            row.finding_json or {},
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "finding", "finding_id": row.finding_id, "field": "finding"},
+        ),
+        "_filter_value": {
+            "object_model_ref": row.object_model_ref_json,
+            "model_field_ref": row.model_field_ref_json,
+            "finding": row.finding_json,
+        },
     }
 
 
-def _history_row_payload(row: DomainEnvelopeHistory) -> dict[str, Any]:
+def _history_row_payload(
+    row: DomainEnvelopeHistory,
+    *,
+    current_revision: int | None = None,
+) -> dict[str, Any]:
     event_json = dict(row.event_json or {})
     return {
         "envelope_id": row.envelope_id,
@@ -1424,8 +1992,18 @@ def _history_row_payload(row: DomainEnvelopeHistory) -> dict[str, Any]:
         "actor_id": row.actor_id,
         "object_id": row.object_id,
         "field_path": row.field_path,
-        "message": event_json.get("message"),
-        "details": _bounded_json(event_json.get("details", {})),
+        "message": _reference_manifest(
+            event_json.get("message"),
+            envelope_id=row.envelope_id,
+            revision=current_revision or row.envelope_revision,
+            locator={"kind": "history", "event_id": row.event_id, "field": "message"},
+        ),
+        "details": _reference_manifest(
+            event_json.get("details", {}),
+            envelope_id=row.envelope_id,
+            revision=current_revision or row.envelope_revision,
+            locator={"kind": "history", "event_id": row.event_id, "field": "details"},
+        ),
     }
 
 
@@ -1439,50 +2017,41 @@ def _projection_row_payload(row: DomainEnvelopeProjectionIndex) -> dict[str, Any
         "projection_key": row.projection_key,
         "projection_status": row.projection_status,
         "schema_provider": row.schema_provider,
-        "schema_ref": dict(row.schema_ref_json or {}),
-        "object_model_ref": dict(row.object_model_ref_json or {}),
-        "model_field_ref": dict(row.model_field_ref_json or {}),
-        "projection": _bounded_json(row.projection_json),
-    }
-
-
-def _object_ref_payload(ref: ObjectRef | None) -> dict[str, Any] | None:
-    if ref is None:
-        return None
-    return ref.model_dump(mode="json", exclude_none=True)
-
-
-def _field_ref_payload(ref: FieldRef | None) -> dict[str, Any] | None:
-    if ref is None:
-        return None
-    return ref.model_dump(mode="json", exclude_none=True)
-
-
-def _history_event_payload(event: HistoryEvent) -> dict[str, Any]:
-    return {
-        "event_id": event.event_id,
-        "event_type": event.event_type.value,
-        "timestamp": event.timestamp.isoformat(),
-        "actor_type": event.actor_type.value,
-        "actor_id": event.actor_id,
-        "message": event.message,
-        "object_ref": _object_ref_payload(event.object_ref),
-        "field_ref": _field_ref_payload(event.field_ref),
-        "details": _bounded_json(event.details),
+        "schema_ref": _projection_reference_manifest(row, "schema_ref", row.schema_ref_json or {}),
+        "object_model_ref": _projection_reference_manifest(
+            row, "object_model_ref", row.object_model_ref_json or {}
+        ),
+        "model_field_ref": _projection_reference_manifest(
+            row, "model_field_ref", row.model_field_ref_json or {}
+        ),
+        "projection": _projection_reference_manifest(row, "projection", row.projection_json),
+        "_filter_value": {
+            "schema_ref": row.schema_ref_json,
+            "object_model_ref": row.object_model_ref_json,
+            "model_field_ref": row.model_field_ref_json,
+            "projection": row.projection_json,
+        },
     }
 
 
 def _lookup_attempt_summary(
     *,
-    envelope: DomainEnvelope,
+    envelope_json: Mapping[str, Any],
+    envelope_id: str,
+    envelope_revision: int,
     projection_rows: Sequence[DomainEnvelopeProjectionIndex],
     include_all: bool = False,
 ) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     _collect_lookup_attempts(
-        envelope.model_dump(mode="json"),
+        envelope_json,
         path="envelope",
+        reference_locator={"kind": "envelope", "field": "envelope"},
+        reference_path=(),
+        envelope_id=envelope_id,
+        envelope_revision=envelope_revision,
         attempts=attempts,
+        include_filter_value=include_all,
         max_attempts=None if include_all else _MAX_LOOKUP_ATTEMPTS,
     )
     for row in projection_rows:
@@ -1492,7 +2061,18 @@ def _lookup_attempt_summary(
                 "projection:"
                 f"{row.object_id}:{row.projection_type}:{row.projection_key}"
             ),
+            reference_locator={
+                "kind": "projection",
+                "object_id": row.object_id,
+                "projection_type": row.projection_type,
+                "projection_key": row.projection_key,
+                "field": "projection",
+            },
+            reference_path=(),
+            envelope_id=row.envelope_id,
+            envelope_revision=row.envelope_revision,
             attempts=attempts,
+            include_filter_value=include_all,
             max_attempts=None if include_all else _MAX_LOOKUP_ATTEMPTS,
         )
 
@@ -1514,7 +2094,12 @@ def _collect_lookup_attempts(
     value: Any,
     *,
     path: str,
+    reference_locator: Mapping[str, str],
+    reference_path: Sequence[str | int],
+    envelope_id: str,
+    envelope_revision: int,
     attempts: list[dict[str, Any]],
+    include_filter_value: bool,
     depth: int = 0,
     max_attempts: int | None = _MAX_LOOKUP_ATTEMPTS,
 ) -> None:
@@ -1527,61 +2112,72 @@ def _collect_lookup_attempts(
         if isinstance(raw_attempts, list):
             for index, attempt in enumerate(raw_attempts):
                 if isinstance(attempt, Mapping):
-                    attempts.append(_lookup_attempt_payload(attempt, f"{path}.lookup_attempts[{index}]"))
+                    attempt_path = (*reference_path, "lookup_attempts", index)
+                    attempts.append(
+                        _lookup_attempt_payload(
+                            attempt,
+                            f"{path}.lookup_attempts[{index}]",
+                            envelope_id=envelope_id,
+                            envelope_revision=envelope_revision,
+                            reference_locator={
+                                **reference_locator,
+                                "path": _encode_reference_path(attempt_path),
+                            },
+                            include_filter_value=include_filter_value,
+                        )
+                    )
         for key, item in value.items():
             if key == "lookup_attempts":
                 continue
             _collect_lookup_attempts(
                 item,
                 path=f"{path}.{key}",
+                reference_locator=reference_locator,
+                reference_path=(*reference_path, key),
+                envelope_id=envelope_id,
+                envelope_revision=envelope_revision,
                 attempts=attempts,
+                include_filter_value=include_filter_value,
                 depth=depth + 1,
                 max_attempts=max_attempts,
             )
     elif isinstance(value, list):
-        selected = value if max_attempts is None else value[:25]
-        for index, item in enumerate(selected):
+        for index, item in enumerate(value):
             _collect_lookup_attempts(
                 item,
                 path=f"{path}[{index}]",
+                reference_locator=reference_locator,
+                reference_path=(*reference_path, index),
+                envelope_id=envelope_id,
+                envelope_revision=envelope_revision,
                 attempts=attempts,
+                include_filter_value=include_filter_value,
                 depth=depth + 1,
                 max_attempts=max_attempts,
             )
 
 
-def _lookup_attempt_payload(attempt: Mapping[str, Any], path: str) -> dict[str, Any]:
-    selected_keys = (
-        "source_tool",
-        "method",
-        "provider",
-        "attempted_query",
-        "query",
-        "target_projection",
-        "lookup_status",
-        "status",
-        "outcome",
-        "candidate_count",
-        "result_count",
-        "resolved_id",
-        "resolved_label",
-        "explanation",
-        "message",
-        "error",
-    )
-    payload = {
-        key: attempt[key]
-        for key in selected_keys
-        if key in attempt and attempt[key] not in (None, "")
+def _lookup_attempt_payload(
+    attempt: Mapping[str, Any],
+    path: str,
+    *,
+    envelope_id: str,
+    envelope_revision: int,
+    reference_locator: Mapping[str, str],
+    include_filter_value: bool,
+) -> dict[str, Any]:
+    status = _lookup_attempt_status({**attempt, "path": path})
+    return {
+        "path": path,
+        "status": status,
+        "evidence": _reference_manifest(
+            dict(attempt),
+            envelope_id=envelope_id,
+            revision=envelope_revision,
+            locator=reference_locator,
+        ),
+        **({"_filter_value": dict(attempt)} if include_filter_value else {}),
     }
-    payload["path"] = path
-    bounded = _bounded_json(payload)
-    if isinstance(bounded, dict) and bounded.get("_truncated"):
-        bounded["path"] = path
-        for status_key in ("lookup_status", "status"):
-            if status_key in payload:
-                bounded[status_key] = payload[status_key]
-    return bounded
 
 
 def _lookup_attempt_status(attempt: Mapping[str, Any]) -> str:
@@ -1601,7 +2197,13 @@ def _validator_summary_payload(
     summaries = [
         summary
         for row in finding_rows
-        if (summary := _validator_summary_for_finding(row)) is not None
+        if (
+            summary := _validator_summary_for_finding(
+                row,
+                include_filter_value=include_all,
+            )
+        )
+        is not None
     ]
     statuses = Counter(
         _optional_text(summary.get("result_status")) or "unknown"
@@ -1623,6 +2225,8 @@ def _validator_summary_payload(
 
 def _validator_summary_for_finding(
     row: DomainValidationFinding,
+    *,
+    include_filter_value: bool = False,
 ) -> dict[str, Any] | None:
     finding = _as_mapping(row.finding_json)
     details = _as_mapping(finding.get("details"))
@@ -1637,28 +2241,78 @@ def _validator_summary_for_finding(
         or validation_result.get("validator_binding_id")
         or validation_metadata.get("validator_binding_id")
     )
-    validator_agent = _as_mapping(
-        validation_request.get("validator_agent")
-        or validation_result.get("validator_agent")
-        or validation_metadata.get("validator_agent")
+    validator_agent_path, validator_agent = _first_finding_value(
+        finding,
+        (
+            ("details", "validation_request", "validator_agent"),
+            ("details", "validation_result", "validator_agent"),
+            ("details", "validation_metadata", "validator_agent"),
+        ),
     )
-    target = _as_mapping(
-        validation_request.get("target")
-        or validation_result.get("target")
-        or validation_metadata.get("target")
+    target_path, target = _first_finding_value(
+        finding,
+        (
+            ("details", "validation_request", "target"),
+            ("details", "validation_result", "target"),
+            ("details", "validation_metadata", "target"),
+        ),
     )
 
-    selected_inputs = _as_mapping(validation_request.get("selected_inputs"))
-    input_selectors = _as_mapping(validation_request.get("input_selectors"))
     expected_result_fields = _as_mapping(
         validation_request.get("expected_result_fields")
     )
     resolved_values = _as_mapping(validation_result.get("resolved_values"))
 
-    lookup_attempts = details.get("lookup_attempts")
-    if not isinstance(lookup_attempts, list):
-        lookup_attempts = validation_result.get("lookup_attempts")
-    compact_attempts = _validator_lookup_attempts(lookup_attempts)
+    lookup_attempts_path, lookup_attempts = _first_finding_value(
+        finding,
+        (
+            ("details", "lookup_attempts"),
+            ("details", "validation_result", "lookup_attempts"),
+        ),
+        expected_type=list,
+    )
+    materialization_paths = _materialization_paths(
+        expected_result_fields=expected_result_fields,
+        resolved_values=resolved_values,
+    )
+
+    def manifest(value: Any, path: Sequence[str | int] | None) -> dict[str, Any] | None:
+        if path is None:
+            return None
+        return _reference_manifest(
+            value,
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={
+                "kind": "finding",
+                "finding_id": row.finding_id,
+                "field": "finding",
+                "path": _encode_reference_path(path),
+            },
+        )
+
+    def manifest_at(path: Sequence[str | int]) -> dict[str, Any] | None:
+        try:
+            value = _reference_path_value(finding, _encode_reference_path(path))
+        except ValueError:
+            return None
+        return manifest(value, path)
+
+    curator_message_path, curator_message = _first_finding_value(
+        finding,
+        (
+            ("details", "validation_result", "curator_message"),
+            ("details", "curator_message"),
+        ),
+    )
+    explanation_path, explanation = _first_finding_value(
+        finding,
+        (("details", "validation_result", "explanation"),),
+    )
+    failure_path, failure_classification = _first_finding_value(
+        finding,
+        (("details", "failure_classification"),),
+    )
 
     return {
         "finding_id": row.finding_id,
@@ -1669,55 +2323,56 @@ def _validator_summary_for_finding(
         "finding_severity": _enum_value(row.severity),
         "finding_code": row.code,
         "validator_binding_id": binding_id,
-        "validator_agent": _bounded_summary_json(validator_agent),
-        "target": _bounded_summary_json(target),
-        "selected_inputs": _bounded_summary_json(selected_inputs),
-        "input_selectors": _bounded_summary_json(input_selectors),
-        "expected_result_fields": _bounded_summary_json(expected_result_fields),
+        "validator_agent": manifest(validator_agent, validator_agent_path),
+        "target": manifest(target, target_path),
+        "selected_inputs": manifest_at(
+            ("details", "validation_request", "selected_inputs")
+        ),
+        "input_selectors": manifest_at(
+            ("details", "validation_request", "input_selectors")
+        ),
+        "expected_result_fields": manifest_at(
+            ("details", "validation_request", "expected_result_fields")
+        ),
         "result_status": _optional_text(validation_result.get("status")),
-        "resolved_values": _bounded_summary_json(resolved_values),
-        "missing_expected_fields": _bounded_summary_json(
-            validation_result.get("missing_expected_fields") or []
+        "resolved_values": manifest_at(
+            ("details", "validation_result", "resolved_values")
         ),
-        "materialization_paths": _bounded_summary_json(
-            _materialization_paths(
-                expected_result_fields=expected_result_fields,
-                resolved_values=resolved_values,
-            )
+        "missing_expected_fields": manifest_at(
+            ("details", "validation_result", "missing_expected_fields")
         ),
-        "lookup_attempts": compact_attempts,
+        "materialization_path_count": len(materialization_paths),
+        "lookup_attempts": manifest(lookup_attempts, lookup_attempts_path),
         "lookup_attempt_count": len(lookup_attempts)
         if isinstance(lookup_attempts, list)
         else 0,
-        "lookup_attempts_truncated": (
-            isinstance(lookup_attempts, list)
-            and len(lookup_attempts) > _MAX_VALIDATOR_LOOKUP_ATTEMPTS
+        "curator_message": manifest(curator_message, curator_message_path),
+        "explanation": manifest(explanation, explanation_path),
+        "failure_classification": manifest(failure_classification, failure_path),
+        "verification_evidence": _reference_manifest(
+            finding,
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "finding", "finding_id": row.finding_id, "field": "finding"},
         ),
-        "curator_message": (
-            _optional_text(validation_result.get("curator_message"))
-            or _optional_text(details.get("curator_message"))
-        ),
-        "explanation": _optional_text(validation_result.get("explanation")),
-        "failure_classification": _optional_text(
-            details.get("failure_classification")
-        ),
+        **({"_filter_value": finding} if include_filter_value else {}),
     }
 
 
-def _validator_lookup_attempts(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    attempts = []
-    for index, attempt in enumerate(value[:_MAX_VALIDATOR_LOOKUP_ATTEMPTS]):
-        if not isinstance(attempt, Mapping):
+def _first_finding_value(
+    finding: Mapping[str, Any],
+    paths: Sequence[Sequence[str | int]],
+    *,
+    expected_type: type | None = None,
+) -> tuple[Sequence[str | int] | None, Any]:
+    for path in paths:
+        try:
+            value = _reference_path_value(finding, _encode_reference_path(path))
+        except ValueError:
             continue
-        attempts.append(
-            _lookup_attempt_payload(
-                attempt,
-                f"validation.lookup_attempts[{index}]",
-            )
-        )
-    return attempts
+        if value and (expected_type is None or isinstance(value, expected_type)):
+            return path, value
+    return None, [] if expected_type is list else {}
 
 
 def _materialization_paths(
@@ -1749,10 +2404,6 @@ def _summary_value_missing(value: Any) -> bool:
 
 def _as_mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _bounded_summary_json(value: Any) -> Any:
-    return _bounded_json(value, max_chars=_MAX_SUMMARY_JSON_CHARS)
 
 
 def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
@@ -1820,20 +2471,6 @@ def _field_paths(payload: Mapping[str, Any]) -> list[str]:
 
     _walk(payload, "")
     return paths
-
-
-def _bounded_json(value: Any, *, max_chars: int = _MAX_JSON_CHARS) -> Any:
-    try:
-        rendered = json.dumps(value, default=str, sort_keys=True)
-    except TypeError:
-        return str(value)
-    if len(rendered) <= max_chars:
-        return value
-    return {
-        "_truncated": True,
-        "approx_chars": len(rendered),
-        "preview_json": rendered[:max_chars],
-    }
 
 
 def _group_by_string_key(
