@@ -2962,9 +2962,10 @@ which agents are designed for specific purposes:
 - validation_agents: Agents that validate or look up structured entities
 
 Pass query to search agents by id, name, or description, category to keep one
-kind, and limit/cursor to page through large agent catalogs. Results report
-total_count and next_cursor so you can fetch the rest. Use category="Output"
-for a focused Output lookup; every category list describes only the current page.
+kind, and limit/cursor to page through large agent catalogs. Execute each returned
+next_call through ordinary pages and exact record chunks until complete=true and
+no next_call remains. Use category="Output" for a focused Output lookup; every
+category list describes only the current page.
 
 ALWAYS call this tool along with get_current_flow() when verifying a flow,
 so you can verify every configured Output attachment against the complete focused

@@ -178,6 +178,7 @@ def test_flow_context_requires_complete_targeted_verification_evidence(monkeypat
     assert '`compacted_tool_result`' in prompt
     assert "every present `custom_instructions`" in prompt
     assert "returned `next_call` until `complete=true`" in prompt
+    assert "`next_call` through ordinary pages and exact record chunks until" in prompt
     assert "`truncated=false` and no `next_cursor` remains" in prompt
     assert "`scheduled_validators`" in prompt
     assert "method/PDF-level `get_tool_details(tool_id, agent_id)`" in prompt

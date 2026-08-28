@@ -254,6 +254,10 @@ def test_installed_agent_studio_prompts_require_targeted_flow_verification():
         assert "`compacted_tool_result`" in prompt, relative_path
         assert "every present `custom_instructions`" in prompt, relative_path
         assert "returned `next_call` until `complete=true`" in prompt, relative_path
+        assert (
+            "`next_call` through ordinary pages and exact record chunks until"
+            in prompt
+        ), relative_path
         assert "`truncated=false` and no `next_cursor` remains" in prompt, relative_path
         assert (
             "`next_cursor` until `complete=true` for every required field" not in prompt

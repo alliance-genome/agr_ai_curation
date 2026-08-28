@@ -2024,16 +2024,34 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
         "category": "Extraction",
         "requires_document": False,
     }
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["escape_agent"])
+    normal_agents = {
+        "first_agent": {
+            "name": "First agent",
+            "description": "Fits before the oversized record",
+            "category": "Extraction",
+        },
+        "last_agent": {
+            "name": "Last agent",
+            "description": "Fits after the oversized record",
+            "category": "Extraction",
+        },
+    }
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["first_agent", "escape_agent", "last_agent"],
+    )
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
         {
+            "first_agent": normal_agents["first_agent"],
             "escape_agent": {
                 "name": expected["name"],
                 "description": description,
                 "category": "Extraction",
-            }
+            },
+            "last_agent": normal_agents["last_agent"],
         },
     )
     monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_RESULT_MAX_CHARS", 700)
@@ -2041,44 +2059,63 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "700")
     handler = flow_tools._get_available_agents_handler()
 
-    page = handler(limit=1)
+    page = handler(limit=2)
     page_serialized = api_module._provider_tool_result_content(
         tool_name="get_available_agents",
-        tool_input={"limit": 1},
+        tool_input={"limit": 2},
         tool_result=page,
         session_id="session-1",
         turn_id="turn-1",
     )
     assert len(page_serialized) <= 700
     assert json.loads(page_serialized).get("status") != "compacted_tool_result"
-    assert page["returned_count"] == 0
-    assert page["next_call"]["arguments"]["detail_index"] == 0
+    assert [
+        agent["agent_id"]
+        for agents in page["categories"].values()
+        for agent in agents
+    ] == ["first_agent"]
+    assert page["next_call"]["arguments"]["cursor"] == "1"
+
     chunks = []
-    next_call = page["next_call"]
     expected_hash = None
     previous_end = 0
-    while next_call is not None and "detail_index" in next_call["arguments"]:
-        detail = handler(**next_call["arguments"])
+    returned_agent_ids = ["first_agent"]
+    next_call = page["next_call"]
+    saw_detail = False
+    while next_call is not None:
+        arguments = next_call["arguments"]
+        result = handler(**arguments)
         serialized = api_module._provider_tool_result_content(
             tool_name="get_available_agents",
-            tool_input=next_call["arguments"],
-            tool_result=detail,
+            tool_input=arguments,
+            tool_result=result,
             session_id="session-1",
             turn_id="turn-1",
         )
         assert len(serialized) <= 700
         assert json.loads(serialized).get("status") != "compacted_tool_result"
-        assert detail["range"]["start"] == previous_end
-        assert detail["range"]["end"] > previous_end
-        previous_end = detail["range"]["end"]
-        chunks.append(detail["content"])
-        expected_hash = detail["sha256"]
-        next_call = detail["next_call"]
 
+        if result.get("detail_mode") == "agent_record":
+            saw_detail = True
+            assert result["detail_index"] == 1
+            assert result["range"]["start"] == previous_end
+            assert result["range"]["end"] > previous_end
+            previous_end = result["range"]["end"]
+            chunks.append(result["content"])
+            expected_hash = result["sha256"]
+        else:
+            returned_agent_ids.extend(
+                agent["agent_id"]
+                for agents in result["categories"].values()
+                for agent in agents
+            )
+        next_call = result["next_call"]
+
+    assert saw_detail is True
     reconstructed = "".join(chunks)
     assert hashlib.sha256(reconstructed.encode("utf-8")).hexdigest() == expected_hash
     assert json.loads(reconstructed) == expected
-    assert next_call is None
+    assert returned_agent_ids == ["first_agent", "last_agent"]
 
 
 def test_get_flow_templates_handler_filters_by_query(monkeypatch):
@@ -2396,5 +2433,8 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
     }.issubset(available_agents_properties)
     assert by_name["get_available_agents"]["handler"]()["limit"] == 13
     assert "complete focused\nOutput catalog" in available_agents_description
+    assert "next_call through ordinary pages and exact record chunks" in (
+        available_agents_description
+    )
     assert "terminal control nodes" in available_agents_description
     assert "flow ends with an appropriate output agent" not in available_agents_description
