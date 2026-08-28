@@ -28,6 +28,8 @@ from src.lib.openai_agents.config import (
     get_api_key,
     get_base_url,
     get_background_task_observability_value_max_chars,
+    get_domain_runtime_inspection_default_limit,
+    get_domain_runtime_inspection_max_limit,
     get_flow_supervisor_parallel_tool_calls_enabled,
     get_flow_definition_max_nodes,
     get_groq_tool_call_max_retries,
@@ -1031,6 +1033,22 @@ def test_inspect_results_display_limits_clamp_to_positive(monkeypatch):
     assert get_inspect_results_validation_detail_list_limit() == 1
     assert get_inspect_results_json_depth_limit() == 1
     assert get_inspect_results_json_object_item_limit() == 1
+
+
+def test_domain_runtime_inspection_page_limits_are_env_configured(monkeypatch):
+    monkeypatch.setenv("DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT", "5")
+    monkeypatch.setenv("DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT", "7")
+
+    assert get_domain_runtime_inspection_default_limit() == 5
+    assert get_domain_runtime_inspection_max_limit() == 7
+
+
+def test_domain_runtime_inspection_page_limits_clamp_to_positive(monkeypatch):
+    monkeypatch.setenv("DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT", "0")
+    monkeypatch.setenv("DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT", "-1")
+
+    assert get_domain_runtime_inspection_default_limit() == 1
+    assert get_domain_runtime_inspection_max_limit() == 1
 
 
 def test_get_api_key_uses_provider_env_mapping(monkeypatch):

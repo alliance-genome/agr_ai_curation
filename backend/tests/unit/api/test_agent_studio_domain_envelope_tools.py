@@ -28,9 +28,21 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert tools_by_name["get_domain_envelope_state"]["input_schema"]["required"] == [
         "envelope_id"
     ]
-    assert "validator request/result summaries" in (
+    assert "validator summaries" in (
         tools_by_name["get_domain_envelope_state"]["description"]
     )
+    assert tools_by_name["get_domain_envelope_state"]["input_schema"]["properties"][
+        "limit"
+    ]["maximum"] == 4
+    assert "history_limit" not in tools_by_name["get_domain_envelope_state"][
+        "input_schema"
+    ]["properties"]
+    assert tools_by_name["get_domain_envelope_review_rows"]["input_schema"][
+        "properties"
+    ]["section"]["enum"] == ["rows"]
+    assert tools_by_name["get_export_submission_readiness"]["input_schema"][
+        "properties"
+    ]["section"]["enum"] == ["candidates", "blockers"]
     assert tools_by_name["get_tool_details"]["input_schema"]["required"] == [
         "tool_id"
     ]
@@ -142,6 +154,117 @@ def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
         assert len(content) <= 12000
 
 
+def test_realistic_multi_record_runtime_pages_remain_provider_visible(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    fixtures = [
+        (
+            "get_domain_envelope_state",
+            {"envelope_id": "env-1", "revision": 7, "section": "validation_findings"},
+            {
+                "success": True,
+                "semantic_source": "domain_envelope.extracted_objects",
+                "envelope": {"envelope_id": "env-1", "envelope_revision": 7},
+                "section": "validation_findings",
+                "section_total_count": 12,
+                "total_count": 12,
+                "returned_count": 4,
+                "items": [
+                    {
+                        "envelope_id": "env-1",
+                        "envelope_revision": 7,
+                        "finding_id": f"finding-{index}",
+                        "object_id": f"obj-{index}",
+                        "field_path": "disease_annotation.disease_term_curie",
+                        "severity": "blocker",
+                        "status": "open",
+                        "code": "disease.ontology_lookup_required",
+                        "finding": {
+                            "message": "Resolve the disease ontology identifier before export.",
+                            "details": {"validator_binding_id": "disease.ontology_lookup"},
+                        },
+                    }
+                    for index in range(4)
+                ],
+                "complete": False,
+                "truncated": True,
+                "next_cursor": "4",
+                "next_request": {
+                    "envelope_id": "env-1",
+                    "revision": 7,
+                    "section": "validation_findings",
+                    "limit": 4,
+                    "cursor": "4",
+                },
+            },
+        ),
+        (
+            "get_domain_envelope_review_rows",
+            {"envelope_id": "env-1", "revision": 7, "section": "rows"},
+            {
+                "success": True,
+                "semantic_source": "domain_envelope.extracted_objects",
+                "envelope_id": "env-1",
+                "envelope_revision": 7,
+                "section": "rows",
+                "row_count": 12,
+                "returned_count": 4,
+                "items": [
+                    {
+                        "object_id": f"obj-{index}",
+                        "field_path": "disease_annotation.disease_term_curie",
+                        "display_label": f"Disease annotation {index}",
+                        "value": f"DOID:{index:07d}",
+                        "provenance": {"envelope_revision": 7, "object_index": index},
+                    }
+                    for index in range(4)
+                ],
+                "complete": False,
+                "truncated": True,
+                "next_cursor": "4",
+            },
+        ),
+        (
+            "get_export_submission_readiness",
+            {"session_id": "session-1", "section": "blockers"},
+            {
+                "success": True,
+                "session_id": "session-1",
+                "section": "blockers",
+                "candidate_count": 8,
+                "ready_count": 2,
+                "blocker_count": 16,
+                "envelope_revisions": {"env-1": 7, "env-2": 3},
+                "returned_count": 4,
+                "items": [
+                    {
+                        "candidate_id": f"candidate-{index}",
+                        "envelope_id": "env-1",
+                        "object_id": f"obj-{index}",
+                        "field_path": "disease_annotation.disease_term_curie",
+                        "code": "domain_envelope.validation_finding_open",
+                        "message": "Resolve the blocking ontology validation finding.",
+                    }
+                    for index in range(4)
+                ],
+                "complete": False,
+                "truncated": True,
+                "next_cursor": "4",
+            },
+        ),
+    ]
+
+    for tool_name, tool_input, result in fixtures:
+        content = api_module._provider_tool_result_content(
+            tool_name=tool_name,
+            tool_input=tool_input,
+            tool_result=result,
+            session_id="agent-studio-session-1",
+            turn_id="opus-turn-domain-runtime",
+        )
+        assert json.loads(content) == result
+        assert len(content) <= 12000
+
+
 def test_handle_tool_call_dispatches_domain_envelope_state_with_user_scope(monkeypatch):
     captured = {}
 
@@ -164,9 +287,13 @@ def test_handle_tool_call_dispatches_domain_envelope_state_with_user_scope(monke
             tool_name="get_domain_envelope_state",
             tool_input={
                 "envelope_id": "env-1",
+                "revision": 4,
+                "section": "validation_findings",
                 "object_id": "obj-1",
                 "field_path": "gene.symbol",
-                "history_limit": 5,
+                "query": "validator",
+                "limit": 3,
+                "cursor": "3",
             },
             context=ChatContext(active_tab="agents"),
             user_email="curator@example.org",
@@ -179,9 +306,59 @@ def test_handle_tool_call_dispatches_domain_envelope_state_with_user_scope(monke
     assert captured["session_factory"] is api_module.SessionLocal
     assert captured["user_auth_sub"] == "auth-sub-1"
     assert captured["envelope_id"] == "env-1"
+    assert captured["revision"] == 4
+    assert captured["section"] == "validation_findings"
     assert captured["object_id"] == "obj-1"
     assert captured["field_path"] == "gene.symbol"
-    assert captured["history_limit"] == 5
+    assert captured["query"] == "validator"
+    assert captured["limit"] == 3
+    assert captured["cursor"] == "3"
+
+
+def test_handle_tool_call_dispatches_review_row_page_inputs(monkeypatch):
+    captured = {}
+
+    def fake_get_domain_envelope_review_rows(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "section": kwargs["section"]}
+
+    monkeypatch.setattr(
+        api_module.agent_studio_domain_envelope_tools,
+        "get_domain_envelope_review_rows",
+        fake_get_domain_envelope_review_rows,
+    )
+
+    result = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name="get_domain_envelope_review_rows",
+            tool_input={
+                "envelope_id": "env-1",
+                "revision": 4,
+                "section": "rows",
+                "object_id": "obj-1",
+                "query": "disease",
+                "limit": 3,
+                "cursor": "3",
+            },
+            context=ChatContext(active_tab="agents"),
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
+            messages=[],
+        )
+    )
+
+    assert result == {"success": True, "section": "rows"}
+    assert captured == {
+        "session_factory": api_module.SessionLocal,
+        "user_auth_sub": "auth-sub-1",
+        "envelope_id": "env-1",
+        "revision": 4,
+        "section": "rows",
+        "object_id": "obj-1",
+        "query": "disease",
+        "limit": 3,
+        "cursor": "3",
+    }
 
 
 def test_handle_tool_call_dispatches_export_readiness_with_normalized_inputs(monkeypatch):
@@ -210,6 +387,11 @@ def test_handle_tool_call_dispatches_export_readiness_with_normalized_inputs(mon
                 "candidate_ids": ["candidate-1", "  ", "candidate-2"],
                 "expected_envelope_revisions": {"env-1": 3},
                 "mode": "submission",
+                "section": "blockers",
+                "candidate_id": "candidate-1",
+                "field_path": "gene.symbol",
+                "limit": 2,
+                "cursor": "2",
             },
             context=ChatContext(active_tab="agents"),
             user_email="curator@example.org",
@@ -225,6 +407,11 @@ def test_handle_tool_call_dispatches_export_readiness_with_normalized_inputs(mon
     assert captured["candidate_ids"] == ["candidate-1", "candidate-2"]
     assert captured["expected_envelope_revisions"] == {"env-1": 3}
     assert captured["mode"] == "submission"
+    assert captured["section"] == "blockers"
+    assert captured["candidate_id"] == "candidate-1"
+    assert captured["field_path"] == "gene.symbol"
+    assert captured["limit"] == 2
+    assert captured["cursor"] == "2"
 
 
 def test_handle_tool_call_rejects_invalid_export_readiness_revision_map():

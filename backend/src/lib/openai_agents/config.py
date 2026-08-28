@@ -2001,6 +2001,36 @@ def get_domain_pack_validation_plan_max_limit() -> int:
     )
 
 
+def get_domain_runtime_inspection_default_limit() -> int:
+    """Default detail page size for domain runtime inspection tools.
+
+    ``DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT`` defaults to 3 so realistic
+    envelope, review-row, and readiness pages remain provider-visible.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT",
+            3,
+        ),
+    )
+
+
+def get_domain_runtime_inspection_max_limit() -> int:
+    """Maximum detail page size for domain runtime inspection tools.
+
+    ``DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT`` defaults to 4 to bound aggregate
+    provider results even when individual domain records are verbose.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT",
+            4,
+        ),
+    )
+
+
 def get_domain_envelope_max_json_chars() -> int:
     """Char cap on bounded JSON returned by domain-envelope tools (DOMAIN_ENVELOPE_MAX_JSON_CHARS).
 
