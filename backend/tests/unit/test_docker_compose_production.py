@@ -25,6 +25,10 @@ DEV_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.yml"
 TEST_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.test.yml"
 ENV_TEMPLATE_PATH = WORKSPACE_ROOT / "scripts/install/lib/templates/env.standalone"
 ENV_EXAMPLE_PATH = WORKSPACE_ROOT / ".env.example"
+PROVIDER_BOUNDARY_ENV_PATH = (
+    WORKSPACE_ROOT
+    / "scripts/testing/fixtures/agent_studio_provider_boundary_env.txt"
+)
 FRONTEND_DOCKERFILE_PATH = WORKSPACE_ROOT / "frontend" / "Dockerfile"
 if not FRONTEND_DOCKERFILE_PATH.exists():
     FRONTEND_DOCKERFILE_PATH = Path("/app/frontend/Dockerfile")
@@ -70,6 +74,51 @@ def _bind_targets(service: dict) -> dict[str, str]:
         if isinstance(volume, dict) and volume.get("type") == "bind":
             bindings[str(volume["target"])] = str(volume["source"])
     return bindings
+
+
+def _load_env_assignments(path: Path) -> dict[str, str]:
+    assignments: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        assert key not in assignments, f"duplicate environment key in {path}: {key}"
+        assignments[key] = value
+    return assignments
+
+
+def _load_provider_boundary_env_contract() -> list[tuple[str, str, str, tuple[str, ...]]]:
+    records = []
+    for raw_line in PROVIDER_BOUNDARY_ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        category, key, default, services = line.split("|", 3)
+        records.append((category, key, default, tuple(services.split(","))))
+    return records
+
+
+def test_provider_boundary_operational_limits_have_deployment_parity():
+    compose = _load_compose()
+    env_example = _load_env_assignments(ENV_EXAMPLE_PATH)
+    standalone_env = _load_env_assignments(ENV_TEMPLATE_PATH)
+    contract = _load_provider_boundary_env_contract()
+
+    assert contract
+    assert len({key for _, key, _, _ in contract}) == len(contract)
+
+    for category, key, default, services in contract:
+        assert env_example.get(key) == default, f"{category}: .env.example drift for {key}"
+        assert standalone_env.get(key) == default, f"{category}: standalone drift for {key}"
+        for service_name in services:
+            actual = compose["services"][service_name]["environment"].get(key)
+            assert actual == f"${{{key}:-{default}}}", (
+                f"{category}: production {service_name} does not deliver {key} "
+                f"with default {default}"
+            )
 
 
 def test_backend_test_services_mount_repo_config_as_explicit_runtime_override():

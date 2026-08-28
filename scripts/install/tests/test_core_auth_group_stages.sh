@@ -6,6 +6,7 @@ core_config_script="${repo_root}/scripts/install/02_core_config.sh"
 auth_setup_script="${repo_root}/scripts/install/03_auth_setup.sh"
 group_setup_script="${repo_root}/scripts/install/04_group_setup.sh"
 orchestrator_script="${repo_root}/scripts/install/install.sh"
+provider_boundary_contract="${repo_root}/scripts/testing/fixtures/agent_studio_provider_boundary_env.txt"
 # shellcheck source=scripts/install/lib/common.sh
 source "${repo_root}/scripts/install/lib/common.sh"
 
@@ -55,6 +56,20 @@ assert_not_exists() {
     echo "Did not expect path to exist: $path" >&2
     exit 1
   fi
+}
+
+assert_provider_boundary_contract() {
+  local env_file="$1"
+
+  while IFS='|' read -r category key default services; do
+    if [[ -z "${category}" || "${category}" == \#* ]]; then
+      continue
+    fi
+    if ! grep -Fqx "${key}=${default}" "${env_file}"; then
+      echo "Generated provider-boundary env drift (${category}): expected ${key}=${default}" >&2
+      exit 1
+    fi
+  done <"${provider_boundary_contract}"
 }
 
 run_core_config() {
@@ -265,6 +280,7 @@ test_core_config_generates_env_and_backups() {
   assert_contains "^FILE_OUTPUT_STORAGE_HOST_DIR=${file_outputs_dir}$" "$env_file"
   assert_contains "^WEAVIATE_DATA_HOST_DIR=${weaviate_data_dir}$" "$env_file"
   assert_contains "^WEAVIATE_BACKUP_HOST_DIR=${weaviate_backup_dir}$" "$env_file"
+  assert_provider_boundary_contract "$env_file"
 
   [[ -d "$runtime_config_dir" ]] || {
     echo "Expected runtime config dir at ${runtime_config_dir}" >&2
