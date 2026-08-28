@@ -290,6 +290,26 @@ def test_domain_pack_validation_plan_filters_and_invalid_inputs():
     )["error"]
 
 
+def test_disease_field_pages_keep_verbose_policies_in_policy_section():
+    policy_page = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="field_policies",
+        limit=1,
+    )
+    policy = policy_page["items"][0]
+    field_page = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="fields",
+        object_type=policy["object_type"],
+        field_path=policy["field_path"],
+    )
+
+    assert field_page["returned_count"] == 1
+    assert "validation_policy" not in field_page["items"][0]
+    assert policy["object_type"] == field_page["items"][0]["object_type"]
+    assert policy["field_path"] == field_page["items"][0]["field_path"]
+
+
 @pytest.fixture
 def db_session_factory():
     engine = create_engine(

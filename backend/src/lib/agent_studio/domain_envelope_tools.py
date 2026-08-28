@@ -388,17 +388,6 @@ def get_domain_pack_validation_plan(
                 "required": field_definition.required,
                 "definition_state": field_definition.definition_state.value,
                 "provider_refs": _provider_refs(field_definition.metadata),
-                "validation_policy": (
-                    policy.identity_details()
-                    if (
-                        policy := registry.policy_for(
-                            object_definition.object_type,
-                            field_definition.field_path,
-                        )
-                    )
-                    is not None
-                    else None
-                ),
             }
             for object_definition in metadata.object_definitions
             for field_definition in object_definition.fields
