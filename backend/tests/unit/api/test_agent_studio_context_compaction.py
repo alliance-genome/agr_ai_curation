@@ -251,12 +251,11 @@ def test_large_tool_result_is_compacted_for_provider_continuation(monkeypatch):
         "session_id": "agent-studio-session-1",
         "turn_id": "opus-turn-4-abc123",
     }
-    assert compact["recall"]["next_call"]["input"]["payload_id"] == (
-        "observation:abc:output"
-    )
-    assert compact["recall"]["next_call"]["input"]["trace_id"] == (
-        "trace-1"
-    )
+    assert "next_call" not in compact["recall"]
+    assert compact["recall"]["trace_payloads"] == {
+        "tool": "get_trace_payload",
+        "payload_ids": ["observation:abc:output"],
+    }
 
 
 def test_small_tool_result_stays_inline_for_provider_continuation(monkeypatch):
@@ -557,7 +556,7 @@ def test_default_limit_oversized_input_and_result_keep_summary_and_identity(monk
     oversized_query = 'query "escaped\\value" 😀 ' * 2000
     oversized_preview = 'result "escaped\\value" 😀 ' * 2000
     tool_input = {"query": oversized_query, "page": 3}
-    tool_result = {"rows": [{"preview": oversized_preview, "record_id": "RGD:1"}]}
+    tool_result = {"rows": [{"preview": oversized_preview, "record_id": "record-1"}]}
 
     content = api_module._provider_tool_result_content(
         tool_name="search_records",
@@ -582,6 +581,43 @@ def test_default_limit_oversized_input_and_result_keep_summary_and_identity(monk
     )
     assert oversized_query not in content
     assert oversized_preview not in content
+
+
+def test_default_limit_lossy_non_scalar_input_stays_narrowing_guidance(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    candidate_ids = [f"candidate-{index}" for index in range(2000)]
+    expected_revisions = {
+        candidate_id: index
+        for index, candidate_id in enumerate(candidate_ids[:300])
+    }
+    tool_input = {
+        "session_id": "session-1",
+        "candidate_ids": candidate_ids,
+        "expected_envelope_revisions": expected_revisions,
+        "section": "candidates",
+    }
+    tool_result = {"candidates": [{"details": "oversized result" * 2000}]}
+
+    content = api_module._provider_tool_result_content(
+        tool_name="get_export_submission_readiness",
+        tool_input=tool_input,
+        tool_result=tool_result,
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-non-scalar-input",
+    )
+    compact = json.loads(content)
+
+    assert len(content) <= 12000
+    assert "next_call" not in compact["recall"]
+    assert compact["recall"]["narrow"]["input"] == {
+        "section": "candidates",
+        "session_id": "session-1",
+    }
+    assert compact["recall"]["narrow"]["supply_bounded"] == [
+        "candidate_ids",
+        "expected_envelope_revisions",
+    ]
+    assert candidate_ids[1000] not in content
 
 
 def test_default_limit_compaction_preserves_exact_small_input_and_payload_recall(
@@ -869,9 +905,12 @@ def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch)
     assert compact["status"] == "compacted_tool_result"
     assert len(tool_result_content) <= 500
     assert compact["recall"]["turn"]["turn_id"] == "opus-turn-4-abc123"
-    assert compact["recall"]["next_call"]["input"]["payload_id"] == (
-        "observation:abc:output"
-    )
+    assert "next_call" not in compact["recall"]
+    assert compact["recall"]["narrow"]["tool"] == "get_trace_payload"
+    assert compact["recall"]["narrow"]["supply_bounded"] == [
+        "trace_id",
+        "payload_id",
+    ]
     assert large_value not in tool_result_content
 
 
@@ -1132,7 +1171,12 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
     payload_result = asyncio.run(
         api_module._handle_tool_call(
             tool_name=compact["recall"]["narrow"]["tool"],
-            tool_input={**compact["recall"]["narrow"]["input"], "max_chars": 0},
+            tool_input={
+                **compact["recall"]["narrow"]["input"],
+                "trace_id": "trace-1",
+                "payload_id": "observation:abc:output",
+                "max_chars": 0,
+            },
             context=None,
             user_email="dev@example.org",
             user_auth_sub="auth-sub-1",
@@ -1142,9 +1186,11 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
 
     assert exact_payload_value not in json.dumps(compact, sort_keys=True)
     assert "next_call" not in compact["recall"]
-    assert compact["recall"]["narrow"]["input"]["payload_id"] == (
-        "observation:abc:output"
-    )
+    assert compact["recall"]["narrow"]["input"] == {"max_chars": 0}
+    assert compact["recall"]["narrow"]["supply_bounded"] == [
+        "trace_id",
+        "payload_id",
+    ]
     assert turn_result["success"] is True
     exact_turn_next_call = turn_result["messages"][0]["fields"]["content"]["next_call"]
     exact_turn_result = asyncio.run(

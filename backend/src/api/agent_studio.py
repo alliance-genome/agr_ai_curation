@@ -2009,17 +2009,8 @@ def _fit_provider_compact_payload(
 
             def update_narrowing_guidance() -> None:
                 omitted = omitted_input_fields()
-                guidance_fields = (
-                    omitted
-                    if required_inputs is None
-                    else [
-                        field
-                        for field in omitted
-                        if field in required_inputs or field.endswith("_id")
-                    ]
-                )
-                if guidance_fields:
-                    narrowing["supply_bounded"] = guidance_fields
+                if omitted:
+                    narrowing["supply_bounded"] = omitted
                 else:
                     narrowing.pop("supply_bounded", None)
 
@@ -2058,16 +2049,7 @@ def _fit_provider_compact_payload(
                         projected_input.pop(key)
                         update_narrowing_guidance()
 
-                omitted = omitted_input_fields()
-                required_or_identity_omitted = any(
-                    (
-                        required_inputs is not None
-                        and field in required_inputs
-                    )
-                    or field.endswith("_id")
-                    for field in omitted
-                )
-                if required_inputs is not None and not required_or_identity_omitted:
+                if not omitted_input_fields():
                     payload["recall"].pop("narrow")
                     payload["recall"]["next_call"] = {
                         "tool": tool_name,
