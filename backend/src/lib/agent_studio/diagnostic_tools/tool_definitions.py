@@ -24,6 +24,9 @@ from src.lib.openai_agents.bounded_list import (
     parse_offset_cursor,
     substring_match,
 )
+from src.lib.openai_agents.config import (
+    get_agent_studio_prompt_inspection_chunk_max_chars,
+)
 
 from .registry import DiagnosticToolRegistry
 
@@ -235,16 +238,26 @@ def _create_get_prompt_handler():
     def handler(
         agent_id: str,
         group_id: Optional[str] = None,
+        view: str = "summary",
+        layer_id: Optional[str] = None,
+        layer_index: Optional[int] = None,
+        cursor: int = 0,
+        max_chars: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
-        Get an agent's prompt from the catalog.
+        Inspect an agent's prompt summary or one bounded exact-text chunk.
 
         Args:
             agent_id: Installed agent identifier
             group_id: Optional installed group-rule identifier
+            view: Summary, effective prompt, or selected layer view
+            layer_id: Stable layer identifier for the layer view
+            layer_index: Ordered zero-based layer index for the layer view
+            cursor: Zero-based character offset for exact-text views
+            max_chars: Requested chunk size, capped by environment configuration
 
         Returns:
-            Dict with prompt content and metadata
+            Compact prompt manifest or bounded exact-text chunk
         """
         catalog = get_prompt_catalog()
         agent = catalog.get_agent(agent_id)
@@ -269,22 +282,151 @@ def _create_get_prompt_handler():
         has_group_rules = bool(
             group_id and any(layer.kind == "group_rules" for layer in bundle.layers)
         )
+        effective_prompt = bundle.render()
 
-        return {
+        layer_summaries = [
+            {
+                "index": index,
+                "id": layer.id,
+                "kind": layer.kind,
+                "title": layer.title,
+                "provenance": layer.provenance,
+                "editable": layer.editable,
+                "locked": layer.locked,
+                "source_ref": layer.source_ref,
+                "hash": layer.hash,
+                "total_length": len(layer.content),
+            }
+            for index, layer in enumerate(bundle.layers)
+        ]
+        summary = {
             "status": "ok",
+            "view": "summary",
             "agent_id": agent_id,
             "agent_name": agent.agent_name,
             "description": agent.description,
-            "prompt": bundle.render(),
-            "effective_prompt_hash": bundle.hash,
-            "layer_manifest": bundle.to_manifest(),
-            "layers": [layer.to_manifest() for layer in bundle.layers],
             "source_file": agent.source_file,
+            "effective_prompt_hash": bundle.hash,
+            "effective_prompt_total_length": len(effective_prompt),
             "has_group_rules": agent.has_group_rules,
+            "group_id_requested": group_id,
             "group_id_applied": group_id if has_group_rules else None,
-            "available_groups": list(agent.group_rules.keys()) if agent.group_rules else [],
-            "tools": agent.tools
+            "available_groups": sorted(agent.group_rules) if agent.group_rules else [],
+            "layers": layer_summaries,
         }
+
+        if view == "summary":
+            if any(value is not None for value in (layer_id, layer_index, max_chars)) or cursor:
+                return {
+                    "status": "error",
+                    "message": (
+                        "Summary view does not accept layer_id, layer_index, cursor, "
+                        "or max_chars"
+                    ),
+                }
+            return summary
+
+        if view not in {"effective_prompt", "layer"}:
+            return {
+                "status": "error",
+                "message": (
+                    f"Unsupported view '{view}'. Must be 'summary', "
+                    "'effective_prompt', or 'layer'."
+                ),
+            }
+        if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0:
+            return {
+                "status": "error",
+                "message": "cursor must be a non-negative integer character offset",
+            }
+        if max_chars is not None and (
+            not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1
+        ):
+            return {
+                "status": "error",
+                "message": "max_chars must be a positive integer",
+            }
+
+        target_text: str
+        target_hash: str
+        selected_layer: Dict[str, Any] | None = None
+        if view == "effective_prompt":
+            if layer_id is not None or layer_index is not None:
+                return {
+                    "status": "error",
+                    "message": "effective_prompt view does not accept layer_id or layer_index",
+                }
+            target_text = effective_prompt
+            target_hash = bundle.hash
+        else:
+            if (layer_id is None) == (layer_index is None):
+                return {
+                    "status": "error",
+                    "message": (
+                        "layer view requires exactly one of layer_id or layer_index"
+                    ),
+                }
+            selected_index: int | None = None
+            if layer_id is not None:
+                selected_index = next(
+                    (
+                        index
+                        for index, layer in enumerate(bundle.layers)
+                        if layer.id == layer_id
+                    ),
+                    None,
+                )
+                if selected_index is None:
+                    return {
+                        "status": "error",
+                        "message": f"Layer '{layer_id}' not found",
+                        "available_layers": layer_summaries,
+                    }
+            else:
+                if (
+                    not isinstance(layer_index, int)
+                    or isinstance(layer_index, bool)
+                    or layer_index < 0
+                    or layer_index >= len(bundle.layers)
+                ):
+                    return {
+                        "status": "error",
+                        "message": f"Layer index '{layer_index}' is out of range",
+                        "available_layers": layer_summaries,
+                    }
+                selected_index = layer_index
+            selected_prompt_layer = bundle.layers[selected_index]
+            selected_layer = layer_summaries[selected_index]
+            target_text = selected_prompt_layer.content
+            target_hash = selected_prompt_layer.hash
+
+        total_length = len(target_text)
+        if cursor > total_length:
+            return {
+                "status": "error",
+                "message": (
+                    f"cursor {cursor} exceeds target length {total_length}"
+                ),
+            }
+        chunk_cap = get_agent_studio_prompt_inspection_chunk_max_chars()
+        chunk_size = min(max_chars or chunk_cap, chunk_cap)
+        end = min(cursor + chunk_size, total_length)
+        complete = end == total_length
+        result = {
+            "status": "ok",
+            "view": view,
+            "agent_id": agent_id,
+            "group_id_applied": group_id if has_group_rules else None,
+            "hash": target_hash,
+            "total_length": total_length,
+            "returned_range": {"start": cursor, "end": end},
+            "content": target_text[cursor:end],
+            "complete": complete,
+            "next_cursor": None if complete else end,
+        }
+        if selected_layer is not None:
+            result["layer"] = selected_layer
+        return result
 
     return handler
 
@@ -294,10 +436,14 @@ def _get_prompt_diagnostic_contract() -> tuple[str, Dict[str, Any]]:
     from src.lib.agent_studio.catalog_service import get_prompt_catalog
     from src.lib.prompts.cache import is_initialized
 
-    description = """Get an installed agent's effective prompt from the shared prompt assembler.
+    chunk_cap = get_agent_studio_prompt_inspection_chunk_max_chars()
+    description = """Inspect an installed specialist or validator prompt from the shared prompt assembler.
 
-Use this to inspect the flat prompt, structured layers, layer manifest, and
-effective prompt hash for an installed specialist or validator."""
+Omit view for a compact content-free summary with the effective prompt hash,
+total length, selected group context, and ordered layer identities. Use
+view="effective_prompt" with cursor/max_chars to retrieve exact prompt chunks.
+Use view="layer" with exactly one stable layer_id or zero-based layer_index to
+retrieve exact layer chunks. Follow next_cursor until complete is true."""
     input_schema = {
         "type": "object",
         "properties": {
@@ -309,6 +455,37 @@ effective prompt hash for an installed specialist or validator."""
                 "type": "string",
                 "description": (
                     "Optional group-rule identifier from the installed prompt catalog."
+                ),
+            },
+            "view": {
+                "type": "string",
+                "enum": ["summary", "effective_prompt", "layer"],
+                "default": "summary",
+                "description": "Content-free summary or bounded exact-text target.",
+            },
+            "layer_id": {
+                "type": "string",
+                "description": "Stable layer id from the summary; valid only for layer view.",
+            },
+            "layer_index": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based layer index from the summary; valid only for layer view.",
+            },
+            "cursor": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "Character offset for effective_prompt or layer retrieval.",
+            },
+            "max_chars": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": chunk_cap,
+                "default": chunk_cap,
+                "description": (
+                    "Maximum exact characters to return; capped at the configured "
+                    f"limit of {chunk_cap}."
                 ),
             },
         },
