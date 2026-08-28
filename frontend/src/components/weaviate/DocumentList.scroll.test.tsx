@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Box } from '@mui/material';
-import { gridClasses } from '@mui/x-data-grid';
-import { fireEvent, render, screen, waitFor, within } from '../../test/test-utils';
+import { render, screen, within } from '../../test/test-utils';
 import DocumentList from './DocumentList';
 import type { DocumentSummary } from '../../services/weaviate';
 
@@ -44,10 +43,7 @@ vi.mock('../../services/weaviate', async () => {
   return {
     ...actual,
     usePdfExtractionHealth: () => ({
-      data: {
-        status: 'healthy',
-        last_checked: '2026-03-05T00:00:00Z',
-      },
+      data: { status: 'healthy', last_checked: '2026-03-05T00:00:00Z' },
       isLoading: false,
       isError: false,
       isFetching: false,
@@ -56,201 +52,23 @@ vi.mock('../../services/weaviate', async () => {
   };
 });
 
-const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  };
+  return { ...actual, useNavigate: () => vi.fn() };
 });
 
-type LayoutMocks = {
-  restore: () => void;
-};
-
-const rowHeight = 52;
 const totalRows = 48;
 
-function makeRect(width: number, height: number): DOMRect {
-  return {
-    x: 0,
-    y: 0,
-    top: 0,
-    left: 0,
-    bottom: height,
-    right: width,
-    width,
-    height,
-    toJSON: () => ({}),
-  } as DOMRect;
-}
-
-const gridClassSelector = (className: string): string => `.${className}`;
-
-const hasGridClass = (element: HTMLElement, className: string): boolean => element.classList.contains(className);
-
-function installMeasuredLayout(viewportHeight: number): LayoutMocks {
-  const tableHeight = viewportHeight === 620 ? 300 : 580;
-  const width = viewportHeight === 620 ? 1024 : 1280;
-  const scrollTops = new WeakMap<Element, number>();
-  const originalResizeObserver = globalThis.ResizeObserver;
-
-  const measureElement = (element: HTMLElement): { width: number; height: number } => {
-    if (element.dataset.testid === 'documents-scroll-test-shell') {
-      return { width, height: viewportHeight };
-    }
-
-    if (
-      element.dataset.testid === 'documents-table-scroll-region' ||
-      hasGridClass(element, gridClasses.root) ||
-      hasGridClass(element, gridClasses.main) ||
-      hasGridClass(element, gridClasses.virtualScroller)
-    ) {
-      return { width: width - 48, height: tableHeight };
-    }
-
-    if (hasGridClass(element, gridClasses.columnHeaders)) {
-      return { width: width - 48, height: 56 };
-    }
-
-    if (hasGridClass(element, gridClasses.footerContainer)) {
-      return { width: width - 48, height: 52 };
-    }
-
-    if (hasGridClass(element, gridClasses.row)) {
-      return { width: width - 48, height: rowHeight };
-    }
-
-    return { width: width - 48, height: Math.min(viewportHeight, 720) };
-  };
-
-  const getBoundingClientRectSpy = vi
-    .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
-    .mockImplementation(function getMeasuredRect(this: HTMLElement) {
-      const measured = measureElement(this);
-      return makeRect(measured.width, measured.height);
-    });
-
-  const clientHeightSpy = vi
-    .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
-    .mockImplementation(function getClientHeight(this: HTMLElement) {
-      return measureElement(this).height;
-    });
-
-  const clientWidthSpy = vi
-    .spyOn(HTMLElement.prototype, 'clientWidth', 'get')
-    .mockImplementation(function getClientWidth(this: HTMLElement) {
-      return measureElement(this).width;
-    });
-
-  const offsetHeightSpy = vi
-    .spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
-    .mockImplementation(function getOffsetHeight(this: HTMLElement) {
-      return measureElement(this).height;
-    });
-
-  const offsetWidthSpy = vi
-    .spyOn(HTMLElement.prototype, 'offsetWidth', 'get')
-    .mockImplementation(function getOffsetWidth(this: HTMLElement) {
-      return measureElement(this).width;
-    });
-
-  const scrollHeightSpy = vi
-    .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
-    .mockImplementation(function getScrollHeight(this: HTMLElement) {
-      if (hasGridClass(this, gridClasses.virtualScroller)) {
-        return totalRows * rowHeight;
-      }
-
-      return measureElement(this).height;
-    });
-
-  const scrollTopGetSpy = vi
-    .spyOn(HTMLElement.prototype, 'scrollTop', 'get')
-    .mockImplementation(function getScrollTop(this: HTMLElement) {
-      return scrollTops.get(this) ?? 0;
-    });
-
-  const scrollTopSetSpy = vi
-    .spyOn(HTMLElement.prototype, 'scrollTop', 'set')
-    .mockImplementation(function setScrollTop(this: HTMLElement, value: number) {
-      scrollTops.set(this, value);
-    });
-
-  class MeasuredResizeObserver implements ResizeObserver {
-    private callback: ResizeObserverCallback;
-
-    constructor(callback: ResizeObserverCallback) {
-      this.callback = callback;
-    }
-
-    disconnect(): void {}
-
-    observe(target: Element): void {
-      const measured = measureElement(target as HTMLElement);
-      const contentRect = makeRect(measured.width, measured.height);
-      const size = {
-        inlineSize: measured.width,
-        blockSize: measured.height,
-      } as ResizeObserverSize;
-      this.callback(
-        [
-          {
-            target,
-            contentRect,
-            borderBoxSize: [size],
-            contentBoxSize: [size],
-            devicePixelContentBoxSize: [size],
-          } as ResizeObserverEntry,
-        ],
-        this
-      );
-    }
-
-    takeRecords(): ResizeObserverEntry[] {
-      return [];
-    }
-
-    unobserve(_target: Element): void {}
-  }
-
-  globalThis.ResizeObserver = MeasuredResizeObserver as typeof ResizeObserver;
-
-  return {
-    restore: () => {
-      globalThis.ResizeObserver = originalResizeObserver;
-      getBoundingClientRectSpy.mockRestore();
-      clientHeightSpy.mockRestore();
-      clientWidthSpy.mockRestore();
-      offsetHeightSpy.mockRestore();
-      offsetWidthSpy.mockRestore();
-      scrollHeightSpy.mockRestore();
-      scrollTopGetSpy.mockRestore();
-      scrollTopSetSpy.mockRestore();
-    },
-  };
-}
-
-describe('DocumentList real DataGrid scroll behavior', () => {
-  let layoutMocks: LayoutMocks | null = null;
-
+describe('DocumentList TanStack table scroll behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    refetchHealthMock.mockReset();
-    openCurationWorkspaceMock.mockReset();
-  });
-
-  afterEach(() => {
-    layoutMocks?.restore();
-    layoutMocks = null;
+    localStorage.clear();
   });
 
   it.each([
     ['Safari laptop height', 620],
     ['desktop height', 900],
-  ])('keeps lower row actions reachable in a bounded DataGrid scroller at %s', async (_label, viewportHeight) => {
-    layoutMocks = installMeasuredLayout(viewportHeight);
+  ])('keeps lower row actions in the bounded vertical and horizontal scroller at %s', (_label, viewportHeight) => {
     const docs = Array.from({ length: totalRows }, (_, index) => {
       const rowNumber = index + 1;
       return createTestDocument({
@@ -279,7 +97,7 @@ describe('DocumentList real DataGrid scroll behavior', () => {
           onDelete={vi.fn()}
           onReembed={vi.fn()}
           onRefresh={vi.fn()}
-          checkboxSelection={true}
+          checkboxSelection
           filterBar={<Box>Filter bar visible</Box>}
         />
       </Box>
@@ -290,26 +108,11 @@ describe('DocumentList real DataGrid scroll behavior', () => {
 
     const scrollRegion = screen.getByTestId('documents-table-scroll-region');
     expect(scrollRegion).toHaveStyle({ overflow: 'hidden' });
+    const tableScroller = scrollRegion.querySelector('.MuiTableContainer-root');
+    expect(tableScroller).toHaveStyle({ overflow: 'auto' });
 
-    // MUI X 6 does not expose the virtual scroller as a slot prop, so this test
-    // uses MUI's exported class map as the stable hook for the real scroll node.
-    const virtualScroller = await waitFor(() => {
-      const element = scrollRegion.querySelector<HTMLElement>(gridClassSelector(gridClasses.virtualScroller));
-      expect(element).not.toBeNull();
-      expect(element!.clientHeight).toBeGreaterThan(0);
-      expect(element!.scrollHeight).toBeGreaterThan(element!.clientHeight);
-      return element!;
-    });
-
-    expect(screen.queryByText('doc-48.pdf')).not.toBeInTheDocument();
-
-    virtualScroller.scrollTop = virtualScroller.scrollHeight - virtualScroller.clientHeight;
-    fireEvent.scroll(virtualScroller);
-
-    const lowerRowCell = await screen.findByText('doc-48.pdf');
-    const lowerRow = lowerRowCell.closest('[role="row"]');
+    const lowerRow = screen.getByText('doc-48.pdf').closest('tr');
     expect(lowerRow).not.toBeNull();
     expect(within(lowerRow as HTMLElement).getByTestId('VisibilityIcon')).toBeInTheDocument();
-    expect(virtualScroller.scrollTop).toBeGreaterThan(0);
   });
 });
