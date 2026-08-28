@@ -1429,6 +1429,85 @@ def test_instruction_chunks_reconstruct_exact_text(monkeypatch):
     assert response["truncated"] is False
 
 
+def test_escape_heavy_flow_details_fit_provider_envelope_and_reconstruct(monkeypatch):
+    provider_limit = 700
+    monkeypatch.setenv(
+        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", str(provider_limit)
+    )
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "4000")
+    flow = _inspection_flow()
+    instruction = ('🧬é"\\\n\t\x01' * 600) + "tail"
+    projection_value = {
+        "escaped": instruction,
+        "nested": [{"control": "\b\f\r", "unicode": "値🧬" * 300}],
+    }
+    flow["nodes"][1]["data"]["custom_instructions"] = instruction
+    flow["nodes"][2]["data"]["projection_plan"]["escape_fixture"] = projection_value
+    flow_tools.set_current_flow_context(flow)
+
+    cases = (
+        (
+            "get_current_flow_instructions",
+            flow_tools._get_current_flow_instructions_handler(),
+            {"node_id": "extract", "field": "custom_instructions"},
+            instruction,
+        ),
+        (
+            "get_current_flow_projection_plan",
+            flow_tools._get_current_flow_projection_plan_handler(),
+            {"node_id": "csv", "field": "escape_fixture", "section": ""},
+            json.dumps(
+                projection_value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        ),
+    )
+
+    for tool_name, handler, initial_arguments, expected in cases:
+        arguments: dict[str, Any] = initial_arguments
+        chunks = []
+        previous_end = -1
+        while True:
+            result = handler(**arguments)
+            serialized = api_module._provider_tool_result_content(
+                tool_name=tool_name,
+                tool_input=arguments,
+                tool_result=result,
+                session_id="session-1",
+                turn_id="turn-1",
+            )
+            assert len(serialized) <= provider_limit
+            assert json.loads(serialized).get("status") != "compacted_tool_result"
+            assert result["end_char"] > previous_end
+            expected_start = previous_end if previous_end >= 0 else 0
+            assert result["start_char"] == expected_start
+            chunks.append(result["content"])
+            previous_end = result["end_char"]
+            if result["complete"]:
+                expected_hash = result["content_sha256"]
+                break
+            arguments = result["next_call"]["arguments"]
+
+        reconstructed = "".join(chunks)
+        assert reconstructed == expected
+        assert hashlib.sha256(reconstructed.encode("utf-8")).hexdigest() == expected_hash
+
+
+def test_flow_detail_reports_provider_safe_configuration_error(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "240")
+    flow_tools.set_current_flow_context(_inspection_flow())
+
+    result = flow_tools._get_current_flow_instructions_handler()(
+        node_id="extract", field="custom_instructions"
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "provider_limit_too_small"
+    assert len(json.dumps(result, default=str)) <= 240
+
+
 def test_projection_plan_inventory_and_chunks_are_bounded_and_reconstructable(
     monkeypatch,
 ):
@@ -1936,6 +2015,109 @@ def test_get_available_agents_handler_pages_with_cursor(monkeypatch):
     }
 
 
+def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch):
+    description = '🧬値"\\\n\t\x01' * 1_000
+    expected = {
+        "agent_id": "escape_agent",
+        "name": "Escape 🧬 agent",
+        "description": description,
+        "category": "Extraction",
+        "requires_document": False,
+    }
+    normal_agents = {
+        "first_agent": {
+            "name": "First agent",
+            "description": "Fits before the oversized record",
+            "category": "Extraction",
+        },
+        "last_agent": {
+            "name": "Last agent",
+            "description": "Fits after the oversized record",
+            "category": "Extraction",
+        },
+    }
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["first_agent", "escape_agent", "last_agent"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "first_agent": normal_agents["first_agent"],
+            "escape_agent": {
+                "name": expected["name"],
+                "description": description,
+                "category": "Extraction",
+            },
+            "last_agent": normal_agents["last_agent"],
+        },
+    )
+    monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_RESULT_MAX_CHARS", 700)
+    monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_CHUNK_MAX_CHARS", 4_000)
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "700")
+    handler = flow_tools._get_available_agents_handler()
+
+    page = handler(limit=2)
+    page_serialized = api_module._provider_tool_result_content(
+        tool_name="get_available_agents",
+        tool_input={"limit": 2},
+        tool_result=page,
+        session_id="session-1",
+        turn_id="turn-1",
+    )
+    assert len(page_serialized) <= 700
+    assert json.loads(page_serialized).get("status") != "compacted_tool_result"
+    assert [
+        agent["agent_id"]
+        for agents in page["categories"].values()
+        for agent in agents
+    ] == ["first_agent"]
+    assert page["next_call"]["arguments"]["cursor"] == "1"
+
+    chunks = []
+    expected_hash = None
+    previous_end = 0
+    returned_agent_ids = ["first_agent"]
+    next_call = page["next_call"]
+    saw_detail = False
+    while next_call is not None:
+        arguments = next_call["arguments"]
+        result = handler(**arguments)
+        serialized = api_module._provider_tool_result_content(
+            tool_name="get_available_agents",
+            tool_input=arguments,
+            tool_result=result,
+            session_id="session-1",
+            turn_id="turn-1",
+        )
+        assert len(serialized) <= 700
+        assert json.loads(serialized).get("status") != "compacted_tool_result"
+
+        if result.get("detail_mode") == "agent_record":
+            saw_detail = True
+            assert result["detail_index"] == 1
+            assert result["range"]["start"] == previous_end
+            assert result["range"]["end"] > previous_end
+            previous_end = result["range"]["end"]
+            chunks.append(result["content"])
+            expected_hash = result["sha256"]
+        else:
+            returned_agent_ids.extend(
+                agent["agent_id"]
+                for agents in result["categories"].values()
+                for agent in agents
+            )
+        next_call = result["next_call"]
+
+    assert saw_detail is True
+    reconstructed = "".join(chunks)
+    assert hashlib.sha256(reconstructed.encode("utf-8")).hexdigest() == expected_hash
+    assert json.loads(reconstructed) == expected
+    assert returned_agent_ids == ["first_agent", "last_agent"]
+
+
 def test_get_flow_templates_handler_filters_by_query(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
@@ -2212,6 +2394,8 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
     )
     monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_PAGE_LIMIT", "6")
     monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "900")
+    monkeypatch.setenv("TOOL_PAGE_DEFAULT_LIMIT", "17")
+    monkeypatch.setenv("TOOL_PAGE_MAX_LIMIT", "13")
 
     flow_tools.register_flow_tools()
 
@@ -2237,6 +2421,20 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
         "limit"
     ]["maximum"] == 900
     available_agents_description = by_name["get_available_agents"]["description"]
+    available_agents_properties = by_name["get_available_agents"]["input_schema"][
+        "properties"
+    ]
+    assert available_agents_properties["limit"]["default"] == 13
+    assert available_agents_properties["limit"]["maximum"] == 13
+    assert {
+        "detail_index",
+        "detail_cursor",
+        "detail_max_chars",
+    }.issubset(available_agents_properties)
+    assert by_name["get_available_agents"]["handler"]()["limit"] == 13
     assert "complete focused\nOutput catalog" in available_agents_description
+    assert "next_call through ordinary pages and exact record chunks" in (
+        available_agents_description
+    )
     assert "terminal control nodes" in available_agents_description
     assert "flow ends with an appropriate output agent" not in available_agents_description

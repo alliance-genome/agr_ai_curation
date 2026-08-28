@@ -44,10 +44,12 @@ When answering questions about a flow:
    `supplemental_validators`, `inactive_metadata`) only when the verification
    criteria require them. For every paged current-flow detail response, execute
    its returned `next_call` until `complete=true` and no `next_call` remains.
-4. Call `get_available_agents(category="Output")` and follow `next_cursor`
-   until `complete=true`. Output agents are attachment branches with ordered
-   `source_steps`, not terminal control nodes; do not require the control path
-   to end with an Output agent.
+4. Call `get_available_agents(category="Output")` and execute each returned
+   `next_call` through ordinary pages and exact record chunks until
+   `complete=true` and no `next_call` remains.
+   Output agents are attachment branches with ordered `source_steps`, not
+   terminal control nodes; do not require the control path to end with an
+   Output agent.
 5. Before judging a prompt, call
    `get_prompt(agent_id, group_id, view="summary")`, then reconstruct every
    required `view="effective_prompt"` or selected `view="layer"` text through

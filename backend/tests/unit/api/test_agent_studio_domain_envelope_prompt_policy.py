@@ -254,6 +254,10 @@ def test_installed_agent_studio_prompts_require_targeted_flow_verification():
         assert "`compacted_tool_result`" in prompt, relative_path
         assert "every present `custom_instructions`" in prompt, relative_path
         assert "returned `next_call` until `complete=true`" in prompt, relative_path
+        assert (
+            "`next_call` through ordinary pages and exact record chunks until"
+            in prompt
+        ), relative_path
         assert "`truncated=false` and no `next_cursor` remains" in prompt, relative_path
         assert (
             "`next_cursor` until `complete=true` for every required field" not in prompt
@@ -266,6 +270,21 @@ def test_installed_agent_studio_prompts_require_targeted_flow_verification():
             "get_domain_pack_validation_plan(agent_id, domain_pack_id, section, "
             "object_type, field_path, validator_id, binding_id, state, query, limit, cursor)"
         ) in prompt, relative_path
+
+
+def test_alliance_prompt_documents_catalog_and_tool_continuation_contracts():
+    prompt = _read_repo_text("packages/alliance/config/agent_studio_system_prompt.md")
+
+    assert (
+        "get_flow_templates(template_query, query, category, section, "
+        "template_cursor, cursor)"
+    ) in prompt
+    assert "call `validate_flow` before\n`create_flow`" in prompt
+    assert (
+        "get_tool_inventory(agent_id, category, include_method_tools, query, "
+        "limit, cursor)"
+    ) in prompt
+    assert "get_tool_details(tool_id, agent_id, section, cursor, max_chars)" in prompt
 
 
 def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():

@@ -502,23 +502,71 @@ def _create_get_prompt_handler():
             }
         chunk_cap = get_agent_studio_prompt_inspection_chunk_max_chars()
         chunk_size = min(max_chars or chunk_cap, chunk_cap)
-        end = min(cursor + chunk_size, total_length)
-        complete = end == total_length
-        result = {
-            "status": "ok",
-            "view": view,
-            "agent_id": agent_id,
-            "group_id_applied": group_id if has_group_rules else None,
-            "hash": target_hash,
-            "total_length": total_length,
-            "returned_range": {"start": cursor, "end": end},
-            "content": target_text[cursor:end],
-            "complete": complete,
-            "next_cursor": None if complete else end,
-        }
-        if selected_layer is not None:
-            result["layer"] = selected_layer
-        return result
+        requested_end = min(cursor + chunk_size, total_length)
+
+        def render(end: int) -> Dict[str, Any]:
+            complete = end == total_length
+            next_arguments: Dict[str, Any] = {
+                "agent_id": agent_id,
+                "view": view,
+                "cursor": end,
+                "max_chars": chunk_size,
+            }
+            if group_id is not None:
+                next_arguments["group_id"] = group_id
+            if layer_id is not None:
+                next_arguments["layer_id"] = layer_id
+            if layer_index is not None:
+                next_arguments["layer_index"] = layer_index
+            result = {
+                "status": "ok",
+                "view": view,
+                "agent_id": agent_id,
+                "group_id_applied": group_id if has_group_rules else None,
+                "encoding": "text",
+                "hash": target_hash,
+                "total_length": total_length,
+                "returned_range": {"start": cursor, "end": end},
+                "content": target_text[cursor:end],
+                "complete": complete,
+                "next_cursor": None if complete else end,
+                "next_call": (
+                    {"tool": "get_prompt", "arguments": next_arguments}
+                    if not complete
+                    else None
+                ),
+            }
+            if selected_layer is not None:
+                result["layer"] = selected_layer
+            return result
+
+        provider_limit = get_agent_studio_provider_tool_result_inline_max_chars()
+        fitting_end: int | None = None
+        if _serialized_chars(render(requested_end)) <= provider_limit:
+            fitting_end = requested_end
+        low = cursor + 1
+        high = requested_end - 1
+        if fitting_end is None:
+            while low <= high:
+                candidate_end = (low + high) // 2
+                if _serialized_chars(render(candidate_end)) <= provider_limit:
+                    fitting_end = candidate_end
+                    low = candidate_end + 1
+                else:
+                    high = candidate_end - 1
+        if fitting_end is None and requested_end == cursor:
+            if _serialized_chars(render(cursor)) <= provider_limit:
+                fitting_end = cursor
+        if fitting_end is None:
+            return {
+                "status": "error",
+                "error": "provider_limit_too_small",
+                "message": (
+                    "The configured provider result envelope cannot hold prompt "
+                    "detail metadata plus one exact character."
+                ),
+            }
+        return render(fitting_end)
 
     return handler
 
