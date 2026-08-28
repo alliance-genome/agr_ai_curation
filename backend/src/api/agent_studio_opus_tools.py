@@ -1186,7 +1186,8 @@ GET_EXPORT_SUBMISSION_READINESS_TOOL = {
                 "type": "string",
                 "description": (
                     "Bounded candidate-scope and revision identity from the summary or "
-                    "next_request; replaces repeated candidate/revision sets."
+                    "next_request; replaces repeated candidate sets. Replay "
+                    "expected_envelope_revisions when next_request includes it."
                 ),
             },
             "mode": {

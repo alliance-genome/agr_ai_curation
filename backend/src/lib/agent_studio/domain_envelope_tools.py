@@ -10,8 +10,8 @@ from typing import Any, Callable, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import String, cast, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy.orm import Session, load_only
 
 from src.lib.curation_workspace.models import (
     CurationCandidate,
@@ -161,9 +161,36 @@ def list_domain_envelopes(
         ):
             return _error(f"Curation review session {session_id} was not found.")
 
-        query = select(DomainEnvelopeModel).order_by(
-            DomainEnvelopeModel.updated_at.desc(),
-            DomainEnvelopeModel.envelope_id.asc(),
+        normalized_user_auth_sub = _optional_text(user_auth_sub)
+        visible_session_conditions = [
+            and_(
+                CurationReviewSession.created_by_id.is_(None),
+                CurationReviewSession.assigned_curator_id.is_(None),
+            )
+        ]
+        if normalized_user_auth_sub is not None:
+            visible_session_conditions.extend(
+                (
+                    CurationReviewSession.created_by_id == normalized_user_auth_sub,
+                    CurationReviewSession.assigned_curator_id == normalized_user_auth_sub,
+                )
+            )
+        visible_session_ids = select(CurationReviewSession.id).where(
+            or_(*visible_session_conditions)
+        )
+        visible_candidate_envelopes = (
+            select(CurationCandidate.envelope_id)
+            .where(CurationCandidate.session_id.in_(visible_session_ids))
+            .where(CurationCandidate.envelope_id.is_not(None))
+        )
+        query = select(DomainEnvelopeModel).where(
+            or_(
+                DomainEnvelopeModel.session_id.in_(visible_session_ids),
+                and_(
+                    DomainEnvelopeModel.session_id.is_(None),
+                    DomainEnvelopeModel.envelope_id.in_(visible_candidate_envelopes),
+                ),
+            )
         )
         if session_id:
             normalized_session_id = _uuid(session_id, "session_id")
@@ -185,17 +212,39 @@ def list_domain_envelopes(
         if domain_pack_id:
             query = query.where(DomainEnvelopeModel.domain_pack_key == domain_pack_id.strip())
 
-        visible_rows = [
-            row
-            for row in db.scalars(query).all()
-            if _envelope_visible_to_user(db, row=row, user_auth_sub=user_auth_sub)
-        ]
-        offset = _domain_plan_cursor(cursor, total_count=len(visible_rows))
-        candidate_rows = visible_rows[offset : offset + resolved_limit]
+        total_count = int(
+            db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+        )
+        offset = _domain_plan_cursor(cursor, total_count=total_count)
+        candidate_rows = db.scalars(
+            query.order_by(
+                DomainEnvelopeModel.updated_at.desc(),
+                DomainEnvelopeModel.envelope_id.asc(),
+            )
+            .options(
+                load_only(
+                    DomainEnvelopeModel.envelope_id,
+                    DomainEnvelopeModel.revision,
+                    DomainEnvelopeModel.project_key,
+                    DomainEnvelopeModel.domain_pack_key,
+                    DomainEnvelopeModel.domain_pack_version,
+                    DomainEnvelopeModel.status,
+                    DomainEnvelopeModel.document_id,
+                    DomainEnvelopeModel.session_id,
+                    DomainEnvelopeModel.flow_run_id,
+                    DomainEnvelopeModel.schema_provider,
+                    DomainEnvelopeModel.schema_ref_json,
+                    DomainEnvelopeModel.updated_at,
+                    DomainEnvelopeModel.checkpointed_at,
+                )
+            )
+            .offset(offset)
+            .limit(resolved_limit)
+        ).all()
 
         def build_result(rows: Sequence[DomainEnvelopeModel]) -> dict[str, Any]:
             next_offset = offset + len(rows)
-            complete = next_offset >= len(visible_rows)
+            complete = next_offset >= total_count
             filters = {
                 key: value
                 for key, value in {
@@ -210,7 +259,7 @@ def list_domain_envelopes(
                 "success": True,
                 "count": len(rows),
                 "returned_count": len(rows),
-                "total_count": len(visible_rows),
+                "total_count": total_count,
                 "limit": resolved_limit,
                 "envelopes": [_envelope_row_summary(row) for row in rows],
                 "complete": complete,
@@ -977,7 +1026,10 @@ def _filter_runtime_items(
         for filter_name, expected in filters.items():
             if filter_name == "query":
                 if expected.casefold() not in json.dumps(
-                    item.get("_filter_value", item),
+                    [
+                        {key: value for key, value in item.items() if key != "_filter_value"},
+                        item.get("_filter_value"),
+                    ],
                     sort_keys=True,
                     default=str,
                 ).casefold():
@@ -1111,6 +1163,7 @@ def _readiness_token(
     all_candidate_ids: Sequence[str],
     selected_candidate_ids: Sequence[str],
     envelope_revisions: Mapping[str, int],
+    expected_envelope_revisions: Mapping[str, int],
 ) -> str:
     selector = _readiness_scope_selector(all_candidate_ids, selected_candidate_ids)
     digest = hashlib.sha256(
@@ -1121,6 +1174,9 @@ def _readiness_token(
                 "all_candidate_ids": list(all_candidate_ids),
                 "selected_candidate_ids": list(selected_candidate_ids),
                 "envelope_revisions": dict(sorted(envelope_revisions.items())),
+                "expected_envelope_revisions": dict(
+                    sorted(expected_envelope_revisions.items())
+                ),
             }
         ).encode("utf-8")
     ).hexdigest()
@@ -1162,10 +1218,8 @@ def get_export_submission_readiness(
         candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
         all_candidate_ids = list(candidate_map)
         if readiness_token is not None:
-            if candidate_ids is not None or expected_envelope_revisions is not None:
-                raise ValueError(
-                    "readiness_token replaces candidate_ids and expected_envelope_revisions"
-                )
+            if candidate_ids is not None:
+                raise ValueError("readiness_token replaces candidate_ids")
             target_candidate_ids = _readiness_scope_from_token(
                 readiness_token,
                 all_candidate_ids,
@@ -1227,6 +1281,7 @@ def get_export_submission_readiness(
             all_candidate_ids=all_candidate_ids,
             selected_candidate_ids=target_candidate_ids,
             envelope_revisions=envelope_revisions,
+            expected_envelope_revisions=dict(expected_envelope_revisions or {}),
         )
         if readiness_token is not None and readiness_token != current_readiness_token:
             raise ValueError(
@@ -1266,6 +1321,15 @@ def get_export_submission_readiness(
                         "session_id": normalized_session_id,
                         "section": name,
                         "readiness_token": current_readiness_token,
+                        **(
+                            {
+                                "expected_envelope_revisions": dict(
+                                    expected_envelope_revisions
+                                )
+                            }
+                            if expected_envelope_revisions
+                            else {}
+                        ),
                         "supported_filters": list(_READINESS_FILTERS[name]),
                     }
                     for name in _READINESS_SECTIONS
@@ -1311,6 +1375,15 @@ def get_export_submission_readiness(
                 next_request={
                     "session_id": normalized_session_id,
                     "readiness_token": current_readiness_token,
+                    **(
+                        {
+                            "expected_envelope_revisions": dict(
+                                expected_envelope_revisions
+                            )
+                        }
+                        if expected_envelope_revisions
+                        else {}
+                    ),
                     "mode": normalized_mode,
                     "section": resolved_section,
                     **active_filters,
@@ -1764,6 +1837,7 @@ def _reference_chunk_result(
 
 
 def _envelope_row_summary(row: DomainEnvelopeModel) -> dict[str, Any]:
+    schema_ref = dict(row.schema_ref_json or {})
     return {
         "envelope_id": row.envelope_id,
         "envelope_revision": row.revision,
@@ -1775,12 +1849,19 @@ def _envelope_row_summary(row: DomainEnvelopeModel) -> dict[str, Any]:
         "session_id": str(row.session_id) if row.session_id else None,
         "flow_run_id": row.flow_run_id,
         "schema_provider": row.schema_provider,
-        "schema_ref": _reference_manifest(
-            row.schema_ref_json or {},
-            envelope_id=row.envelope_id,
-            revision=row.revision,
-            locator={"kind": "envelope", "field": "schema_ref"},
-        ),
+        "schema_ref": {
+            **_reference_manifest(
+                schema_ref,
+                envelope_id=row.envelope_id,
+                revision=row.revision,
+                locator={"kind": "envelope", "field": "schema_ref"},
+            ),
+            **(
+                {"definition_state": schema_ref["definition_state"]}
+                if _optional_text(schema_ref.get("definition_state")) is not None
+                else {}
+            ),
+        },
         "updated_at": _iso(row.updated_at),
         "checkpointed_at": _iso(row.checkpointed_at),
     }
@@ -1792,6 +1873,7 @@ def _object_row_payload(
     include_payload: bool,
 ) -> dict[str, Any]:
     payload = dict(row.payload_json or {})
+    schema_ref = dict(row.schema_ref_json or {})
     result = {
         "envelope_id": row.envelope_id,
         "object_id": row.object_id,
@@ -1802,12 +1884,19 @@ def _object_row_payload(
         "status": _enum_value(row.status),
         "validation_state": row.validation_state,
         "schema_provider": row.schema_provider,
-        "schema_ref": _reference_manifest(
-            row.schema_ref_json or {},
-            envelope_id=row.envelope_id,
-            revision=row.envelope_revision,
-            locator={"kind": "object", "object_id": row.object_id, "field": "schema_ref"},
-        ),
+        "schema_ref": {
+            **_reference_manifest(
+                schema_ref,
+                envelope_id=row.envelope_id,
+                revision=row.envelope_revision,
+                locator={"kind": "object", "object_id": row.object_id, "field": "schema_ref"},
+            ),
+            **(
+                {"definition_state": schema_ref["definition_state"]}
+                if _optional_text(schema_ref.get("definition_state")) is not None
+                else {}
+            ),
+        },
         "object_model_ref": _reference_manifest(
             row.object_model_ref_json or {},
             envelope_id=row.envelope_id,
