@@ -40,6 +40,7 @@ def test_recorded_quickgo_contract_does_not_claim_direct_rgd_support():
 
 def test_recorded_rgd_contract_preserves_with_from_and_provenance(monkeypatch):
     monkeypatch.delenv("GO_ANNOTATIONS_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("GO_ANNOTATIONS_PAGE_MAX_RESULTS", raising=False)
     payload = json.loads(RGD_FIXTURE.read_text(encoding="utf-8"))
     calls: list[tuple[str, dict[str, object]]] = []
 
@@ -54,7 +55,7 @@ def test_recorded_rgd_contract_preserves_with_from_and_provenance(monkeypatch):
     assert result.gene_symbol == "Sox9"
     assert calls == [
         (
-            "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?rows=-1",
+            "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?start=0&rows=500",
             {"headers": {"Accept": "application/json"}, "timeout": 30.0},
         )
     ]
@@ -73,6 +74,46 @@ def test_recorded_rgd_contract_preserves_with_from_and_provenance(monkeypatch):
     assert first.provenance.source_record_id == payload["associations"][0]["id"]
     assert result.annotations[2].go_id == "GO:0000976"
     assert result.annotations[2].aspect == "MF"
+    assert result.returned_count == 3
+    assert result.source_complete is True
+    assert result.next_source_cursor is None
+
+
+def test_source_pagination_is_bounded_explicit_and_recoverable(monkeypatch):
+    monkeypatch.setenv("GO_ANNOTATIONS_PAGE_MAX_RESULTS", "2")
+    payload = json.loads(RGD_FIXTURE.read_text(encoding="utf-8"))
+    calls = []
+
+    def requester(url: str, **_kwargs):
+        calls.append(url)
+        if "start=2" in url:
+            return _Response(200, {"associations": [payload["associations"][2]]})
+        return _Response(200, {"associations": payload["associations"]})
+
+    first = lookup_existing_go_annotations(
+        "RGD:620474",
+        source_limit=20,
+        requester=requester,
+    )
+    second = lookup_existing_go_annotations(
+        "RGD:620474",
+        source_cursor=first.next_source_cursor,
+        source_limit=20,
+        requester=requester,
+    )
+
+    assert calls == [
+        "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?start=0&rows=2",
+        "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?start=2&rows=2",
+    ]
+    assert first.returned_count == 2
+    assert first.source_limit_capped is True
+    assert first.source_response_truncated is True
+    assert first.source_complete is False
+    assert first.next_source_cursor == 2
+    assert second.returned_count == 1
+    assert second.source_complete is True
+    assert second.next_source_cursor is None
 
 
 def test_relation_qualifier_and_negation_are_retained_without_source_parsing():

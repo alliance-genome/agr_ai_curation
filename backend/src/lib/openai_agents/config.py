@@ -1628,6 +1628,17 @@ def get_agent_studio_trace_review_page_size() -> int:
     )
 
 
+def get_agent_studio_package_diagnostic_page_default_items() -> int:
+    """Default structured items returned by one package diagnostic page."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_PACKAGE_DIAGNOSTIC_PAGE_DEFAULT_ITEMS",
+            10,
+        ),
+    )
+
+
 def get_agent_studio_trace_review_summary_max_chars() -> int:
     """Max characters in each TraceReview call input/result summary.
 
@@ -1638,6 +1649,17 @@ def get_agent_studio_trace_review_summary_max_chars() -> int:
         _get_env_int_with_fallback(
             "AGENT_STUDIO_TRACE_REVIEW_SUMMARY_MAX_CHARS",
             200,
+        ),
+    )
+
+
+def get_agent_studio_package_diagnostic_page_max_items() -> int:
+    """Maximum structured items requested from one package diagnostic page."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_PACKAGE_DIAGNOSTIC_PAGE_MAX_ITEMS",
+            25,
         ),
     )
 
@@ -1657,6 +1679,56 @@ def get_agent_studio_trace_review_chunk_max_chars() -> int:
         ),
     )
 
+
+def get_agent_studio_package_diagnostic_result_max_chars() -> int:
+    """Maximum serialized characters targeted by package diagnostic summaries/pages."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS",
+            8_000,
+        ),
+    )
+
+
+def get_agent_studio_package_diagnostic_chunk_max_chars() -> int:
+    """Maximum exact characters returned by one package diagnostic detail chunk."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_PACKAGE_DIAGNOSTIC_CHUNK_MAX_CHARS",
+            6_000,
+        ),
+    )
+
+
+def get_agent_studio_package_diagnostic_scalar_preview_max_chars() -> int:
+    """Maximum inline preview characters for an oversized diagnostic scalar."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_PACKAGE_DIAGNOSTIC_SCALAR_PREVIEW_MAX_CHARS",
+            256,
+        ),
+    )
+
+
+def get_agr_default_limit() -> int:
+    """Default Alliance curation query result count used by package code."""
+    return max(1, _get_env_int_with_fallback("AGR_DEFAULT_LIMIT", 100))
+
+
+def get_agr_hard_max() -> int:
+    """Maximum Alliance curation query result count used by package code."""
+    return max(1, _get_env_int_with_fallback("AGR_HARD_MAX", 500))
+
+
+def get_go_annotations_page_max_results() -> int:
+    """Maximum GO Consortium annotations fetched in one package source page."""
+    return max(
+        1,
+        _get_env_int_with_fallback("GO_ANNOTATIONS_PAGE_MAX_RESULTS", 500),
+    )
 
 def get_flow_definition_max_nodes() -> int:
     """Max canonical flow nodes, including the required task-input node."""

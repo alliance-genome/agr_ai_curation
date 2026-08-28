@@ -424,6 +424,9 @@ tools:
           enabled: true
           category: api
           tags: [gene, allele, ontology, alliance]
+          result_contract:
+            kind: structured
+            page_paths: [data, lookup_attempts, candidate_matches, result_projections]
           hint: >-
             For PDF evidence and document-tool advice, inspect the live runtime catalog with
             `get_tool_inventory` and `get_tool_details` instead of relying on remembered tool schemas.
@@ -2449,6 +2452,9 @@ tools:
           description: Execute read-only SQL SELECT queries against the Alliance Curation Database to inspect its schema and records.
           category: database
           tags: [sql, curation, diagnostic, alliance]
+          result_contract:
+            kind: sql_rows
+            page_paths: [rows]
           input_schema:
             type: object
             properties:
@@ -2502,6 +2508,9 @@ tools:
             ChEBI IDs are numeric (for example, 17234 for D-glucose). Cite as CHEBI:17234.
           category: api
           tags: [chemical, ontology, chebi, rest]
+          result_contract:
+            kind: raw
+            page_paths: []
           input_schema:
             type: object
             properties:
@@ -2655,6 +2664,9 @@ tools:
             GO IDs use format GO:0003677. The three aspects are molecular_function, biological_process, and cellular_component.
           category: api
           tags: [go, ontology, quickgo, rest]
+          result_contract:
+            kind: raw
+            page_paths: []
           input_schema:
             type: object
             properties:
@@ -2689,6 +2701,14 @@ tools:
           type: string
           required: true
           description: Supported Alliance gene CURIE, such as RGD:620474 or WB:WBGene00000898.
+        - name: source_cursor
+          type: integer
+          required: false
+          description: Zero-based GO Consortium source offset for recoverable pagination.
+        - name: source_limit
+          type: integer
+          required: false
+          description: Requested source page size, capped by GO_ANNOTATIONS_PAGE_MAX_RESULTS.
       agent_studio:
         prompt_description: Fetch typed existing GO annotations and complete source provenance for one validated Alliance gene CURIE.
         diagnostic:
@@ -2699,8 +2719,8 @@ tools:
             Base URL: https://api.geneontology.org/api
 
             The adapter accepts a gene_id rather than a URL, validates the CURIE
-            before network dispatch, and makes one request to:
-            - GET /bioentity/gene/{gene_id}/function?rows=-1
+            before network dispatch, and pages the source through:
+            - GET /bioentity/gene/{gene_id}/function?start={source_cursor}&rows={source_limit}
 
             Supported namespaces: FB, HGNC, MGI, RGD, SGD, WB, and ZFIN.
 
@@ -2710,12 +2730,23 @@ tools:
             qualifier, negation, provider, product type, and source provenance.
           category: api
           tags: [go, annotations, gene, provenance, typed]
+          result_contract:
+            kind: structured
+            page_paths: [annotations]
           input_schema:
             type: object
             properties:
               gene_id:
                 type: string
                 description: Supported Alliance gene CURIE.
+              source_cursor:
+                type: integer
+                minimum: 0
+                description: Zero-based source offset from next_source_cursor.
+              source_limit:
+                type: integer
+                minimum: 1
+                description: Source page size capped by GO_ANNOTATIONS_PAGE_MAX_RESULTS.
             required: [gene_id]
   - tool_id: resolve_gene_product
     binding_kind: static
@@ -2764,6 +2795,9 @@ tools:
             resolved_gene_id or candidate_mappings[].gene_id.
           category: database
           tags: [gene, rna, mirna, rgd, rnacentral, mirbase, provenance, typed]
+          result_contract:
+            kind: structured
+            page_paths: [product_candidates, candidate_mappings, provenance]
           input_schema:
             type: object
             properties:

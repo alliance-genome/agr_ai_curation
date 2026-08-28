@@ -69,8 +69,6 @@ from agr_ai_curation_alliance.domain_packs.paths import get_alliance_domain_pack
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LIMIT = int(os.getenv("AGR_DEFAULT_LIMIT", "100"))
-HARD_MAX = int(os.getenv("AGR_HARD_MAX", "500"))
 BULK_SYMBOL_SOFT_CAP_ENV = "AGR_BULK_SYMBOL_SOFT_CAP"
 BULK_SYMBOL_SOFT_CAP_DEFAULT = 40
 _ALLELE_FUZZY_SIMILARITY_THRESHOLD = float(
@@ -860,26 +858,38 @@ def _lookup_response(
 def _normalize_limit(limit: Optional[int]) -> Tuple[int, List[str]]:
     """Normalize limit with defaults and caps."""
     warnings = []
+    default_limit = _positive_env_int("AGR_DEFAULT_LIMIT", 100)
+    hard_max = _positive_env_int("AGR_HARD_MAX", 500)
 
     if limit is None:
-        limit = DEFAULT_LIMIT
-        warnings.append(f"default_limit_applied:{DEFAULT_LIMIT}")
+        limit = default_limit
+        warnings.append(f"default_limit_applied:{default_limit}")
 
     try:
         limit_int = int(limit)
     except (TypeError, ValueError):
-        warnings.append(f"invalid_limit_defaulted:{DEFAULT_LIMIT}")
-        limit_int = DEFAULT_LIMIT
+        warnings.append(f"invalid_limit_defaulted:{default_limit}")
+        limit_int = default_limit
 
     if limit_int <= 0:
-        warnings.append(f"non_positive_limit_defaulted:{DEFAULT_LIMIT}")
-        limit_int = DEFAULT_LIMIT
+        warnings.append(f"non_positive_limit_defaulted:{default_limit}")
+        limit_int = default_limit
 
-    if limit_int > HARD_MAX:
-        warnings.append(f"limit_capped_at:{HARD_MAX}")
-        limit_int = HARD_MAX
+    if limit_int > hard_max:
+        warnings.append(f"limit_capped_at:{hard_max}")
+        limit_int = hard_max
 
     return limit_int, warnings
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using %s", name, raw, default)
+        value = default
+    return max(1, value)
 
 
 def _bulk_symbol_soft_cap() -> int:
