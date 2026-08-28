@@ -1643,6 +1643,46 @@ def get_agent_studio_prompt_inspection_chunk_max_chars() -> int:
     )
 
 
+def get_agent_studio_tool_inventory_default_items() -> int:
+    """Default summaries returned by one Agent Studio tool inventory page."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_INVENTORY_DEFAULT_ITEMS", 20))
+
+
+def get_agent_studio_tool_inventory_max_items() -> int:
+    """Maximum summaries accepted by one Agent Studio tool inventory call."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_INVENTORY_MAX_ITEMS", 50))
+
+
+def get_agent_studio_tool_inventory_summary_max_chars() -> int:
+    """Maximum description characters retained in one inventory summary."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_INVENTORY_SUMMARY_MAX_CHARS", 300))
+
+
+def get_agent_studio_tool_inventory_result_max_chars() -> int:
+    """Maximum serialized characters targeted by one inventory page."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS", 8_000))
+
+
+def get_agent_studio_tool_details_result_max_chars() -> int:
+    """Maximum serialized characters for one inline tool-details result."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_DETAILS_RESULT_MAX_CHARS", 8_000))
+
+
+def get_agent_studio_tool_details_chunk_max_chars() -> int:
+    """Maximum exact source characters requested from one metadata chunk."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_DETAILS_CHUNK_MAX_CHARS", 6_000))
+
+
+def get_agent_studio_flow_template_default_items() -> int:
+    """Default compatible templates returned by one independent page."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_TEMPLATE_DEFAULT_ITEMS", 5))
+
+
+def get_agent_studio_flow_template_max_items() -> int:
+    """Maximum compatible templates accepted by one page request."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_TEMPLATE_MAX_ITEMS", 20))
+
+
 def get_agent_studio_trace_review_page_size() -> int:
     """Max/default page size for exact TraceReview call listings.
 
@@ -1874,6 +1914,16 @@ def get_codebase_read_max_lines() -> int:
     Bounds a single read-only file read. Default 400.
     """
     return max(1, _get_env_int_with_fallback("CODEBASE_READ_MAX_LINES", 400))
+
+
+def get_codebase_result_max_chars() -> int:
+    """Maximum serialized characters returned by one code inspection call."""
+    return max(1, _get_env_int_with_fallback("CODEBASE_RESULT_MAX_CHARS", 8_000))
+
+
+def get_codebase_long_line_chunk_max_chars() -> int:
+    """Maximum exact source characters requested from one long-line chunk."""
+    return max(1, _get_env_int_with_fallback("CODEBASE_LONG_LINE_CHUNK_MAX_CHARS", 6_000))
 
 
 def get_codebase_search_max_results() -> int:

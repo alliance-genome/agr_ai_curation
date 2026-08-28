@@ -51,6 +51,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_inspection_chunk_max_chars,
     get_agent_studio_flow_inspection_page_limit,
     get_agent_studio_flow_step_goal_max_chars,
+    get_agent_studio_flow_template_default_items,
+    get_agent_studio_flow_template_max_items,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 
@@ -62,6 +64,9 @@ from .flow_agent_policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FLOW_TEMPLATE_DEFAULT_ITEMS = get_agent_studio_flow_template_default_items()
+_FLOW_TEMPLATE_MAX_ITEMS = get_agent_studio_flow_template_max_items()
 
 if TYPE_CHECKING:
     from src.schemas.flows import FlowDefinition
@@ -1161,6 +1166,10 @@ def _get_flow_templates_handler():
         category: Optional[str] = None,
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
+        template_query: Optional[str] = None,
+        template_limit: Optional[int] = None,
+        template_cursor: Optional[str] = None,
+        section: Literal["both", "templates", "agents"] = "both",
     ) -> Dict[str, Any]:
         """Get flow templates and available agents.
 
@@ -1176,6 +1185,8 @@ def _get_flow_templates_handler():
             Dict with templates list, a bounded available_agents page, and the
             standard total_count/returned_count/truncated/next_cursor keys.
         """
+        if section not in {"both", "templates", "agents"}:
+            raise ValueError("section must be 'both', 'templates', or 'agents'")
         normalized_category = str(category).strip() if category else None
 
         accessible_agent_ids = _accessible_flow_agent_ids()
@@ -1203,11 +1214,15 @@ def _get_flow_templates_handler():
             )
         ]
 
-        available_agent_ids = {agent["agent_id"] for agent in matched_agents}
-        templates = _filter_flow_templates(
-            available_agent_ids,
+        installed_agent_ids = {agent["agent_id"] for agent in all_agents}
+        compatible_templates = _filter_flow_templates(
+            installed_agent_ids,
             active_group_ids=get_current_active_group_ids(),
         )
+        matched_templates = [template for template in compatible_templates if substring_match(
+            template_query, template.get("name"), template.get("description"),
+            *(step.get("agent_id") for step in template.get("steps", []) if isinstance(step, dict)),
+        )]
 
         total_count = len(matched_agents)
         bounded_limit = normalize_page_limit(limit)
@@ -1217,6 +1232,15 @@ def _get_flow_templates_handler():
             limit=bounded_limit,
             cursor=offset,
         )
+        bounded_template_limit = normalize_page_limit(
+            template_limit, default=_FLOW_TEMPLATE_DEFAULT_ITEMS, maximum=_FLOW_TEMPLATE_MAX_ITEMS)
+        template_offset = parse_offset_cursor(template_cursor)
+        template_page, templates_truncated, template_next_cursor = offset_page(
+            matched_templates, limit=bounded_template_limit, cursor=template_offset)
+        if section == "agents":
+            template_page, templates_truncated, template_next_cursor = [], False, None
+        elif section == "templates":
+            page, truncated, next_cursor = [], False, None
 
         searched = bool(str(query or "").strip() or normalized_category)
         if total_count == 0 and not searched:
@@ -1231,19 +1255,36 @@ def _get_flow_templates_handler():
             )
         else:
             message = (
-                f"Found {len(templates)} compatible templates and {total_count} matching agents "
-                f"(showing {len(page)}). "
+                f"Found {len(matched_templates)} compatible templates and {total_count} matching agents "
+                f"(showing {len(template_page)} templates and {len(page)} agents). "
                 "Use validate_flow to check a custom workflow, or create_flow to save one."
             )
 
         return {
-            "templates": templates,
+            "templates": template_page,
+            "template_total_count": len(matched_templates),
+            "template_returned_count": len(template_page),
+            "templates_truncated": templates_truncated,
+            "template_next_cursor": template_next_cursor,
+            "template_query": str(template_query or "").strip() or None,
+            "template_limit": bounded_template_limit,
+            "template_next_call": ({"tool": "get_flow_templates", "arguments": {
+                **({"template_query": str(template_query).strip()} if str(template_query or "").strip() else {}),
+                "template_limit": bounded_template_limit, "template_cursor": template_next_cursor,
+                "limit": bounded_limit, "section": "templates",
+            }} if template_next_cursor is not None else None),
             "available_agents": page,
             "total_count": total_count,
             "returned_count": len(page),
             "truncated": truncated,
             "next_cursor": next_cursor,
             "complete": not truncated,
+            "agent_next_call": ({"tool": "get_flow_templates", "arguments": {
+                **({"query": str(query).strip()} if str(query or "").strip() else {}),
+                **({"category": normalized_category} if normalized_category else {}),
+                "limit": bounded_limit, "cursor": next_cursor,
+                "template_limit": bounded_template_limit, "section": "agents",
+            }} if next_cursor is not None else None),
             "next_call": (
                 {
                     "tool": "get_flow_templates",
@@ -1260,6 +1301,7 @@ def _get_flow_templates_handler():
                         ),
                         "limit": bounded_limit,
                         "cursor": next_cursor,
+                        "section": "agents",
                     },
                 }
                 if next_cursor is not None
@@ -2253,13 +2295,14 @@ ALWAYS use this before create_flow to catch issues early.""",
         name="get_flow_templates",
         description="""Get list of common flow patterns and examples.
 
-Use this tool to show the user example workflows they can use as
-starting points. Returns template flows for common curation tasks
-and a searchable, paged list of available agents with their descriptions.
+Use this tool to show the user example workflows they can use as starting
+points. Templates and agents have independent filters, totals, cursors, and
+continuation calls so paging one collection does not repeat the other.
 
 Pass query to search agents by id, name, or description, category to keep
 one kind (Extraction, Validation, Output), and limit/cursor to page through
-large agent catalogs.
+large agent catalogs. Use template_query and template_limit/template_cursor to
+search and page compatible templates independently.
 
 Use this as a starting point when helping users design flows.""",
         input_schema={
@@ -2283,6 +2326,13 @@ Use this as a starting point when helping users design flows.""",
                     "type": "string",
                     "description": "Page marker returned as next_cursor by a previous call. Omit to start from the first page.",
                 },
+                "template_query": {"type": "string", "description": "Optional words to match against template name, description, or step agent IDs."},
+                "template_limit": {"type": "integer", "minimum": 1, "maximum": _FLOW_TEMPLATE_MAX_ITEMS,
+                                   "default": _FLOW_TEMPLATE_DEFAULT_ITEMS,
+                                   "description": "How many compatible templates to return independently."},
+                "template_cursor": {"type": "string", "description": "Independent marker returned as template_next_cursor."},
+                "section": {"type": "string", "enum": ["both", "templates", "agents"], "default": "both",
+                            "description": "Return both first pages or only one collection; continuations select one collection."},
             },
         },
         handler=_get_flow_templates_handler(),

@@ -6,12 +6,15 @@ import os
 import shutil
 import subprocess
 import json
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from src.lib.openai_agents.config import (
     get_codebase_file_list_max_results,
+    get_codebase_long_line_chunk_max_chars,
     get_codebase_read_max_lines,
+    get_codebase_result_max_chars,
     get_codebase_search_max_results,
     get_codebase_search_timeout_seconds,
 )
@@ -25,6 +28,37 @@ _MAX_READ_LINES = get_codebase_read_max_lines()
 _MAX_SEARCH_RESULTS = get_codebase_search_max_results()
 _MAX_FILE_LIST_RESULTS = get_codebase_file_list_max_results()
 _RG_SUBPROCESS_TIMEOUT_SECONDS = get_codebase_search_timeout_seconds()
+_RESULT_MAX_CHARS = get_codebase_result_max_chars()
+_LONG_LINE_CHUNK_MAX_CHARS = get_codebase_long_line_chunk_max_chars()
+
+
+def _serialized_chars(value: Dict[str, Any]) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
+def _parse_search_cursor(cursor: Optional[str]) -> tuple[int, int]:
+    if cursor is None or not str(cursor).strip():
+        return 0, 0
+    parts = str(cursor).split(":", 1)
+    try:
+        match_index = int(parts[0])
+        line_char = int(parts[1]) if len(parts) == 2 else 0
+    except ValueError as exc:
+        raise ValueError("cursor must be a search_codebase next_cursor") from exc
+    if match_index < 0 or line_char < 0:
+        raise ValueError("cursor must be a search_codebase next_cursor")
+    return match_index, line_char
+
+
+def _line_record(match: Dict[str, Any], start: int, end: int) -> Dict[str, Any]:
+    text = str(match["line_text"])
+    return {
+        "path": match["path"], "line_number": match["line_number"],
+        "line_text": text[start:end],
+        "line_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "line_total_chars": len(text), "line_char_start": start,
+        "line_char_end": end, "line_truncated": end < len(text),
+    }
 
 
 def get_codebase_root() -> Path:
@@ -153,6 +187,7 @@ def search_codebase(
     path_glob: Optional[str] = None,
     per_file_matches: int = 1,
     limit: int = 20,
+    cursor: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search the runtime repository by filename or file content."""
     if not isinstance(query, str) or not query.strip():
@@ -178,30 +213,85 @@ def search_codebase(
             per_file_matches=per_file_matches,
         )
 
-    results: List[Dict[str, Any]] = []
-    truncated = False
+    max_catalog_results = _MAX_SEARCH_RESULTS if search_mode == "content" else _MAX_FILE_LIST_RESULTS
+    matches: List[Dict[str, Any]] = []
     for match in iterator:
-        if len(results) >= limit:
-            truncated = True
+        if len(matches) >= max_catalog_results:
             break
-        results.append(match)
+        matches.append(match)
 
-    return {
-        "status": "ok",
-        "search_mode": search_mode,
-        "query": query.strip(),
-        "path_glob": path_glob,
-        "repo_root": str(root),
-        "results": results,
-        "result_count": len(results),
-        "truncated": truncated,
-    }
+    match_index, line_char_start = _parse_search_cursor(cursor)
+    if match_index > len(matches) or (match_index == len(matches) and line_char_start):
+        raise ValueError("cursor is beyond the bounded search result set")
+    results: List[Dict[str, Any]] = []
+
+    def response(next_cursor: Optional[str]) -> Dict[str, Any]:
+        next_call = None
+        if next_cursor is not None:
+            next_call = {"tool": "search_codebase", "arguments": {
+                "query": query.strip(), "search_mode": search_mode,
+                **({"path_glob": path_glob} if path_glob else {}),
+                "per_file_matches": per_file_matches, "limit": limit, "cursor": next_cursor,
+            }}
+        return {"status": "ok", "search_mode": search_mode, "query": query.strip(),
+                "path_glob": path_glob, "repo_root": str(root), "results": results,
+                "result_count": len(results), "result_set_count": len(matches),
+                "truncated": next_cursor is not None, "next_cursor": next_cursor,
+                "next_call": next_call}
+
+    current_index = match_index
+    while current_index < len(matches) and len(results) < limit:
+        match = matches[current_index]
+        if search_mode == "files":
+            results.append(dict(match))
+            next_cursor = str(current_index + 1) if current_index + 1 < len(matches) else None
+            if _serialized_chars(response(next_cursor)) > _RESULT_MAX_CHARS:
+                results.pop()
+                if results:
+                    return response(str(current_index))
+                return {"status": "error", "error": "metadata_too_large",
+                        "message": "One code-search path plus continuation metadata exceeds CODEBASE_RESULT_MAX_CHARS."}
+            current_index += 1
+            continue
+
+        text = str(match["line_text"])
+        start = line_char_start if current_index == match_index else 0
+        if start > len(text):
+            raise ValueError("cursor line character offset is beyond the matched line")
+        results.append(_line_record(match, start, len(text)))
+        next_cursor = str(current_index + 1) if current_index + 1 < len(matches) else None
+        if _serialized_chars(response(next_cursor)) <= _RESULT_MAX_CHARS:
+            current_index += 1
+            line_char_start = 0
+            continue
+        results.pop()
+        low, high, fitting_end = start + 1, min(len(text), start + _LONG_LINE_CHUNK_MAX_CHARS), None
+        while low <= high:
+            end = (low + high) // 2
+            results.append(_line_record(match, start, end))
+            candidate_cursor = f"{current_index}:{end}" if end < len(text) else next_cursor
+            fits = _serialized_chars(response(candidate_cursor)) <= _RESULT_MAX_CHARS
+            results.pop()
+            if fits:
+                fitting_end, low = end, end + 1
+            else:
+                high = end - 1
+        if fitting_end is None:
+            if results:
+                return response(str(current_index))
+            return {"status": "error", "error": "metadata_too_large",
+                    "message": "Code-search provenance metadata exceeds CODEBASE_RESULT_MAX_CHARS before one source character can be returned."}
+        results.append(_line_record(match, start, fitting_end))
+        continuation = f"{current_index}:{fitting_end}" if fitting_end < len(text) else next_cursor
+        return response(continuation)
+    return response(str(current_index) if current_index < len(matches) else None)
 
 
 def read_source_file(
     path: str,
     start_line: int = 1,
     end_line: Optional[int] = None,
+    line_char_start: int = 0,
 ) -> Dict[str, Any]:
     """Read a repository file with line-numbered output."""
     target = _resolve_repo_path(path)
@@ -214,9 +304,8 @@ def read_source_file(
         raise ValueError("start_line must be >= 1")
     if end_line is not None and end_line < start_line:
         raise ValueError("end_line must be >= start_line")
-
-    requested_end = end_line or (start_line + _MAX_READ_LINES - 1)
-    actual_end = min(requested_end, start_line + _MAX_READ_LINES - 1)
+    if line_char_start < 0:
+        raise ValueError("line_char_start must be >= 0")
 
     try:
         raw_text = target.read_text(encoding="utf-8")
@@ -224,19 +313,64 @@ def read_source_file(
         raise ValueError(f"file is not valid UTF-8 text: {path}") from exc
 
     lines = raw_text.splitlines()
-    selection = lines[start_line - 1:actual_end]
-    numbered_lines = [
-        {"line_number": start_line + offset, "text": line}
-        for offset, line in enumerate(selection)
-    ]
+    if start_line > len(lines) + 1:
+        raise ValueError("start_line is beyond the end of the file")
+    requested_end = min(end_line or len(lines), len(lines))
+    page_end = min(requested_end, start_line + _MAX_READ_LINES - 1)
+    numbered_lines: List[Dict[str, Any]] = []
+    relative_path = _relative_repo_path(target)
 
-    return {
-        "status": "ok",
-        "path": _relative_repo_path(target),
-        "repo_root": str(get_codebase_root()),
-        "start_line": start_line,
-        "end_line": actual_end,
-        "total_lines": len(lines),
-        "truncated": actual_end < requested_end,
-        "lines": numbered_lines,
-    }
+    def response(next_line: Optional[int], next_char: int = 0) -> Dict[str, Any]:
+        next_call = None
+        if next_line is not None:
+            next_call = {"tool": "read_source_file", "arguments": {
+                "path": relative_path, "start_line": next_line,
+                **({"end_line": end_line} if end_line is not None else {}),
+                **({"line_char_start": next_char} if next_char else {}),
+            }}
+        return {"status": "ok", "path": relative_path, "repo_root": str(get_codebase_root()),
+                "start_line": start_line,
+                "end_line": numbered_lines[-1]["line_number"] if numbered_lines else start_line - 1,
+                "total_lines": len(lines), "lines": numbered_lines,
+                "truncated": next_line is not None, "next_call": next_call}
+
+    line_number = start_line
+    while line_number <= page_end:
+        text = lines[line_number - 1]
+        start = line_char_start if line_number == start_line else 0
+        if start > len(text):
+            raise ValueError("line_char_start is beyond the selected source line")
+        full_record = {"line_number": line_number, "text": text[start:],
+                       "line_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                       "line_total_chars": len(text), "line_char_start": start,
+                       "line_char_end": len(text), "line_truncated": False}
+        numbered_lines.append(full_record)
+        next_line = line_number + 1 if line_number < requested_end else None
+        if _serialized_chars(response(next_line)) <= _RESULT_MAX_CHARS:
+            line_number += 1
+            continue
+        numbered_lines.pop()
+        low, high, fitting_end = start + 1, min(len(text), start + _LONG_LINE_CHUNK_MAX_CHARS), None
+        while low <= high:
+            chunk_end = (low + high) // 2
+            numbered_lines.append({**full_record, "text": text[start:chunk_end],
+                                   "line_char_end": chunk_end, "line_truncated": chunk_end < len(text)})
+            continuation_line = line_number if chunk_end < len(text) else next_line
+            continuation_char = chunk_end if chunk_end < len(text) else 0
+            fits = _serialized_chars(response(continuation_line, continuation_char)) <= _RESULT_MAX_CHARS
+            numbered_lines.pop()
+            if fits:
+                fitting_end, low = chunk_end, chunk_end + 1
+            else:
+                high = chunk_end - 1
+        if fitting_end is None:
+            if numbered_lines:
+                return response(line_number, start)
+            return {"status": "error", "error": "metadata_too_large",
+                    "message": "Source provenance metadata exceeds CODEBASE_RESULT_MAX_CHARS before one source character can be returned."}
+        numbered_lines.append({**full_record, "text": text[start:fitting_end],
+                               "line_char_end": fitting_end, "line_truncated": fitting_end < len(text)})
+        if fitting_end < len(text):
+            return response(line_number, fitting_end)
+        return response(next_line)
+    return response(page_end + 1 if page_end < requested_end else None)

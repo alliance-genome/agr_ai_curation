@@ -1,6 +1,8 @@
 """Tests for Agent Studio read-only codebase inspection helpers."""
 
 import subprocess
+import hashlib
+import json
 
 import pytest
 
@@ -24,10 +26,8 @@ def test_read_source_file_reads_requested_line_range(tmp_path, monkeypatch):
     assert result["path"] == "backend/src/demo.py"
     assert result["start_line"] == 2
     assert result["end_line"] == 3
-    assert result["lines"] == [
-        {"line_number": 2, "text": "two"},
-        {"line_number": 3, "text": "three"},
-    ]
+    assert [(line["line_number"], line["text"]) for line in result["lines"]] == [(2, "two"), (3, "three")]
+    assert all(line["line_truncated"] is False for line in result["lines"])
 
 
 def test_read_source_file_rejects_path_traversal(tmp_path, monkeypatch):
@@ -182,3 +182,48 @@ def test_search_codebase_raises_clear_error_when_rg_times_out(tmp_path, monkeypa
             search_mode="files",
             limit=10,
         )
+
+
+def test_search_codebase_recovers_one_minified_match_in_bounded_exact_chunks(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    long_line = 'const payload = "' + ('x\\"' * 4_000) + '";'
+    rg_payload = {"type": "match", "data": {"path": {"text": str(repo_root / "bundle.js")},
+                  "lines": {"text": long_line + "\n"}, "line_number": 1}}
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools, "_RESULT_MAX_CHARS", 1_200)
+    monkeypatch.setattr(codebase_tools, "_LONG_LINE_CHUNK_MAX_CHARS", 900)
+    monkeypatch.setattr(codebase_tools.shutil, "which", lambda _name: "/usr/bin/rg")
+    monkeypatch.setattr(codebase_tools.subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args=args[0], returncode=0,
+                                                   stdout=json.dumps(rg_payload) + "\n", stderr=""))
+    chunks, cursor = [], None
+    while True:
+        result = codebase_tools.search_codebase(query="payload", limit=1, cursor=cursor)
+        assert len(json.dumps(result, ensure_ascii=False, sort_keys=True)) <= 1_200
+        chunks.append(result["results"][0]["line_text"])
+        assert result["results"][0]["line_sha256"] == hashlib.sha256(long_line.encode()).hexdigest()
+        if not result["truncated"]:
+            break
+        cursor = result["next_cursor"]
+    assert "".join(chunks) == long_line
+
+
+def test_read_source_file_recovers_minified_line_with_executable_continuations(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    long_line = "{" + ('\"key\":\"value\",' * 2_000) + "}"
+    (repo_root / "minified.json").write_text(long_line + "\nnext\n", encoding="utf-8")
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools, "_RESULT_MAX_CHARS", 1_100)
+    monkeypatch.setattr(codebase_tools, "_LONG_LINE_CHUNK_MAX_CHARS", 800)
+    chunks = []
+    arguments = {"path": "minified.json", "start_line": 1, "end_line": 1}
+    while True:
+        result = codebase_tools.read_source_file(**arguments)
+        assert len(json.dumps(result, ensure_ascii=False, sort_keys=True)) <= 1_100
+        chunks.extend(line["text"] for line in result["lines"])
+        if not result["truncated"]:
+            break
+        arguments = result["next_call"]["arguments"]
+    assert "".join(chunks) == long_line

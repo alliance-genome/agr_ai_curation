@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 import src.lib.agent_studio.catalog_service as catalog_service
 import src.lib.agent_studio.flow_tools as flow_tools
+from src.api import agent_studio as api_module
 from src.lib.agent_access import is_resource_access_allowed
 from src.lib.agent_studio.models import FlowContextDefinition
 from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
@@ -1972,6 +1973,34 @@ def test_get_flow_templates_handler_pages_available_agents(monkeypatch):
     assert second["returned_count"] == 1
     assert second["truncated"] is False
     assert second["next_cursor"] is None
+
+
+def test_get_flow_templates_pages_templates_independently_without_agent_repetition(monkeypatch):
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS",
+                        ["gene_extractor", "gene_validation", "disease_extractor"])
+    monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
+    templates = [{"name": f"Gene template {index}",
+                  "description": f"Example {index} " + ("bounded recipe " * 30),
+                  "steps": [{"agent_id": "gene_extractor"}, {"agent_id": "gene_validation"}]}
+                 for index in range(37)]
+    monkeypatch.setattr(flow_tools, "_filter_flow_templates", lambda *args, **kwargs: templates)
+    handler = flow_tools._get_flow_templates_handler()
+    first = handler(limit=1, template_limit=2, template_query="gene")
+    content = api_module._provider_tool_result_content(
+        tool_name="get_flow_templates",
+        tool_input={"limit": 1, "template_limit": 2, "template_query": "gene"},
+        tool_result=first, session_id="session-1", turn_id="turn-1")
+    assert json.loads(content).get("status") != "compacted_tool_result"
+    assert first["returned_count"] == 1
+    assert first["template_returned_count"] == 2
+    assert first["template_total_count"] == 37
+    assert first["template_next_call"]["arguments"]["section"] == "templates"
+    assert first["agent_next_call"]["arguments"]["section"] == "agents"
+    agent_page = handler(**first["agent_next_call"]["arguments"])
+    assert agent_page["templates"] == []
+    template_page = handler(**first["template_next_call"]["arguments"])
+    assert template_page["available_agents"] == []
+    assert template_page["templates"][0]["name"] == "Gene template 2"
 
 
 def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeypatch):
