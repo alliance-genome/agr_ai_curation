@@ -7,6 +7,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -157,6 +158,125 @@ def test_layer_chunks_support_stable_id_and_index(prompt_handler):
     assert by_id["hash"] == by_index["hash"] == expected_layer.hash
     assert by_id["layer"]["id"] == expected_layer.id
     assert "content" not in by_id["layer"]
+
+
+def test_escape_heavy_effective_and_group_layer_chunks_fit_provider_envelope(
+    monkeypatch,
+):
+    from src.api import agent_studio as api_module
+    from src.lib.agent_studio import catalog_service
+
+    base_content = 'Base 🧬値"\\\n\t\x01' * 500
+    group_content = 'Group ñ🧬"\\\r\b' * 500
+    layers = (
+        PromptLayer(
+            id="escape_agent:base_prompt",
+            kind="base_prompt",
+            title="Base",
+            content=base_content,
+            provenance="prompt_template:system",
+            editable=True,
+            locked=False,
+            source_ref="base",
+            hash=_hash(base_content),
+        ),
+        PromptLayer(
+            id="escape_agent:group_rules:test_group",
+            kind="group_rules",
+            title="Group",
+            content=group_content,
+            provenance="prompt_template:group_rules",
+            editable=True,
+            locked=False,
+            source_ref="group",
+            hash=_hash(group_content),
+        ),
+    )
+    provisional = PromptLayerBundle(agent_id="escape_agent", layers=layers, hash="")
+    bundle = PromptLayerBundle(
+        agent_id="escape_agent",
+        layers=layers,
+        hash=_hash(provisional.render()),
+    )
+    agent = SimpleNamespace(
+        agent_name="Escape Agent",
+        description="Escape fixture",
+        source_file="escape/prompt.yaml",
+        has_group_rules=True,
+        group_rules={"test_group": SimpleNamespace()},
+    )
+    service = SimpleNamespace(
+        get_agent=lambda agent_id: agent if agent_id == "escape_agent" else None,
+        get_effective_prompt_bundle=lambda agent_id, group_id=None: (
+            bundle
+            if agent_id == "escape_agent" and group_id == "test_group"
+            else None
+        ),
+        catalog=SimpleNamespace(categories=[]),
+    )
+    monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: service)
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1000")
+    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "8000")
+    handler = tool_definitions._create_get_prompt_handler()
+
+    for initial_arguments, expected, expected_hash in (
+        (
+            {
+                "agent_id": "escape_agent",
+                "group_id": "test_group",
+                "view": "effective_prompt",
+            },
+            bundle.render(),
+            bundle.hash,
+        ),
+        (
+            {
+                "agent_id": "escape_agent",
+                "group_id": "test_group",
+                "view": "layer",
+                "layer_id": layers[1].id,
+            },
+            group_content,
+            layers[1].hash,
+        ),
+    ):
+        arguments: dict[str, Any] = initial_arguments
+        chunks = []
+        previous_end = 0
+        while True:
+            result = handler(**arguments)
+            serialized = api_module._provider_tool_result_content(
+                tool_name="get_prompt",
+                tool_input=arguments,
+                tool_result=result,
+                session_id="session-1",
+                turn_id="turn-1",
+            )
+            assert len(serialized) <= 1_000
+            assert json.loads(serialized).get("status") != "compacted_tool_result"
+            assert result["returned_range"]["start"] == previous_end
+            assert result["returned_range"]["end"] > previous_end
+            previous_end = result["returned_range"]["end"]
+            chunks.append(result["content"])
+            assert result["hash"] == expected_hash
+            if result["complete"]:
+                assert result["next_call"] is None
+                break
+            arguments = result["next_call"]["arguments"]
+
+        assert "".join(chunks) == expected
+
+
+def test_prompt_detail_reports_provider_safe_configuration_error(
+    monkeypatch, prompt_handler
+):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "240")
+
+    result = prompt_handler(agent_id="demo_agent", view="effective_prompt")
+
+    assert result["status"] == "error"
+    assert result["error"] == "provider_limit_too_small"
+    assert len(json.dumps(result, default=str)) <= 240
 
 
 @pytest.mark.parametrize(

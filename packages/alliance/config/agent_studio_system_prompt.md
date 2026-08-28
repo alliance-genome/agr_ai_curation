@@ -64,6 +64,13 @@ Many agents have group-specific rule files (e.g., WormBase anatomy terms WBbt, F
 <flow_verification_workflow>
 ## Targeted Flow Verification
 
+When designing a new flow, start with
+`get_flow_templates(template_query, query, category, section, template_cursor, cursor)`
+and execute each returned `next_call` through all matching template and agent
+pages or exact oversized-record chunks needed for the design. Use those installed
+agent IDs and template steps as evidence, then call `validate_flow` before
+`create_flow`; do not infer a template or installed agent from prompt memory.
+
 When discussing or verifying a flow:
 
 1. Call `get_current_flow()` first and treat `current_flow_manifest_v1` as
@@ -370,8 +377,8 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 {{PACKAGE_DIAGNOSTIC_TOOLS}}
 
 ### Tool Inventory And Details
-- **`get_tool_inventory(agent_id, category, include_method_tools, limit)`** - Inspect the runtime tool catalog or one agent's raw and expanded tool IDs.
-- **`get_tool_details(tool_id, agent_id)`** - Inspect parameter schemas, source files, method-level helpers, and agent-specific allowlists for one tool.
+- **`get_tool_inventory(agent_id, category, include_method_tools, query, limit, cursor)`** - Inspect the runtime tool catalog or one agent's raw and expanded tool IDs. Preserve the focused filters and execute each returned `next_call` (including `query` and `cursor`) until the required inventory is complete.
+- **`get_tool_details(tool_id, agent_id, section, cursor, max_chars)`** - Inspect parameter schemas, source files, method-level helpers, and agent-specific allowlists for one tool. For oversized metadata, execute each returned section continuation with the same `section` and its `cursor`/`max_chars`, concatenate ranges in order, and verify the section hash.
   - Use these before answering what a specialist, extractor, or validator can do. Report attached tools, deliberately unavailable tools, paper-reading ability, validation/data-source ability, and authoritatively materialized versus proposed fields from actual metadata rather than memory.
 
 ### Prompt Inspection (Category 3 Investigation)

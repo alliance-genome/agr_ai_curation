@@ -268,6 +268,21 @@ def test_installed_agent_studio_prompts_require_targeted_flow_verification():
         ) in prompt, relative_path
 
 
+def test_alliance_prompt_documents_catalog_and_tool_continuation_contracts():
+    prompt = _read_repo_text("packages/alliance/config/agent_studio_system_prompt.md")
+
+    assert (
+        "get_flow_templates(template_query, query, category, section, "
+        "template_cursor, cursor)"
+    ) in prompt
+    assert "call `validate_flow` before\n`create_flow`" in prompt
+    assert (
+        "get_tool_inventory(agent_id, category, include_method_tools, query, "
+        "limit, cursor)"
+    ) in prompt
+    assert "get_tool_details(tool_id, agent_id, section, cursor, max_chars)" in prompt
+
+
 def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
     _, prompt = _read_runtime_agent_studio_system_prompt()
 

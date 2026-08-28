@@ -56,6 +56,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_template_default_items,
     get_agent_studio_flow_template_max_items,
     get_agent_studio_provider_tool_result_inline_max_chars,
+    get_tool_page_default_limit,
+    get_tool_page_max_limit,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 
@@ -1578,6 +1580,9 @@ def _get_available_agents_handler():
         category: Optional[str] = None,
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
+        detail_index: Optional[int] = None,
+        detail_cursor: Optional[int] = None,
+        detail_max_chars: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Get available agents, searchable and grouped by category.
 
@@ -1623,98 +1628,207 @@ def _get_available_agents_handler():
             )
 
         total_agents = len(matched)
-        bounded_limit = normalize_page_limit(limit)
+        page_maximum = get_tool_page_max_limit()
+        page_default = min(get_tool_page_default_limit(), page_maximum)
+        bounded_limit = normalize_page_limit(
+            limit,
+            default=page_default,
+            maximum=page_maximum,
+        )
         offset = parse_offset_cursor(cursor)
+
+        normalized_query = str(query or "").strip() or None
+
+        def filters() -> Dict[str, Any]:
+            return {
+                **({"query": normalized_query} if normalized_query else {}),
+                **({"category": normalized_category} if normalized_category else {}),
+                "limit": bounded_limit,
+            }
+
+        if detail_index is not None:
+            if detail_index < 0 or detail_index >= len(matched):
+                raise ValueError("detail_index is outside the selected agent catalog")
+            record_json = _flow_catalog_json(matched[detail_index])
+            record_hash = hashlib.sha256(record_json.encode("utf-8")).hexdigest()
+            start = parse_offset_cursor(detail_cursor)
+            if start > len(record_json):
+                raise ValueError("detail_cursor is beyond the selected agent record")
+            requested_chars = normalize_page_limit(
+                detail_max_chars,
+                default=_FLOW_CATALOG_CHUNK_MAX_CHARS,
+                maximum=_FLOW_CATALOG_CHUNK_MAX_CHARS,
+            )
+
+            def build_detail(end: int) -> Dict[str, Any]:
+                record_complete = end >= len(record_json)
+                if not record_complete:
+                    next_call = {
+                        "tool": "get_available_agents",
+                        "arguments": {
+                            **filters(),
+                            "detail_index": detail_index,
+                            "detail_cursor": end,
+                            "detail_max_chars": requested_chars,
+                        },
+                    }
+                elif detail_index + 1 < len(matched):
+                    next_call = {
+                        "tool": "get_available_agents",
+                        "arguments": {
+                            **filters(),
+                            "cursor": str(detail_index + 1),
+                        },
+                    }
+                else:
+                    next_call = None
+                return {
+                    "success": True,
+                    "detail_mode": "agent_record",
+                    "detail_index": detail_index,
+                    "encoding": "canonical_json",
+                    "sha256": record_hash,
+                    "total_chars": len(record_json),
+                    "range": {"start": start, "end": end},
+                    "content": record_json[start:end],
+                    "complete": record_complete,
+                    "next_cursor": None if record_complete else end,
+                    "next_call": next_call,
+                    "instruction": (
+                        "Concatenate content in range order and verify sha256. "
+                        "Follow next_call to continue this record or resume the catalog."
+                    ),
+                }
+
+            requested_end = min(len(record_json), start + requested_chars)
+            fitting_end: Optional[int] = None
+            if (
+                _flow_catalog_provider_chars(build_detail(requested_end))
+                <= _FLOW_CATALOG_RESULT_MAX_CHARS
+            ):
+                fitting_end = requested_end
+            low = start + 1
+            high = requested_end - 1
+            if fitting_end is None:
+                while low <= high:
+                    candidate_end = (low + high) // 2
+                    if (
+                        _flow_catalog_provider_chars(build_detail(candidate_end))
+                        <= _FLOW_CATALOG_RESULT_MAX_CHARS
+                    ):
+                        fitting_end = candidate_end
+                        low = candidate_end + 1
+                    else:
+                        high = candidate_end - 1
+            if fitting_end is None:
+                return {
+                    "success": False,
+                    "error": "provider_limit_too_small",
+                    "message": (
+                        "The configured provider result envelope cannot hold agent "
+                        "record metadata plus one exact character."
+                    ),
+                }
+            return build_detail(fitting_end)
+
         page, truncated, next_cursor = offset_page(
             matched,
             limit=bounded_limit,
             cursor=offset,
         )
 
-        # Group only the returned page so callers see exactly what this page holds.
-        categories: Dict[str, List[Dict[str, Any]]] = {}
-        output_agents: List[str] = []
-        extraction_agents: List[str] = []
-        validation_agents: List[str] = []
-        for agent_info in page:
-            agent_category = agent_info["category"]
-            categories.setdefault(agent_category, []).append(
-                {
-                    "agent_id": agent_info["agent_id"],
-                    "name": agent_info["name"],
-                    "description": agent_info["description"],
-                    "requires_document": agent_info["requires_document"],
-                }
-            )
-            if agent_category == "Output":
-                output_agents.append(agent_info["agent_id"])
-            elif agent_category == "Extraction":
-                extraction_agents.append(agent_info["agent_id"])
-            elif agent_category == "Validation":
-                validation_agents.append(agent_info["agent_id"])
-
         searched = bool(str(query or "").strip() or normalized_category)
-        if total_agents == 0 and not searched:
-            message = (
-                "No flow-capable agents are currently installed. "
-                "Install additional agent packages to unlock flow verification helpers."
-            )
-        elif total_agents == 0:
-            message = (
-                "No flow-capable agents matched. "
-                "Broaden the search or install additional agent packages."
-            )
-        elif output_agents:
-            message = (
-                f"Found {total_agents} matching agents (showing {len(page)}). "
-                f"Output agents on this page ({len(output_agents)}): {', '.join(output_agents)}. "
-                "Attach each Output agent to one or more earlier Extraction or typed "
-                "Validation steps using ordered source_steps; "
-                "it is an output branch, not a control-path step."
-            )
-        else:
-            message = (
-                f"Found {total_agents} matching agents (showing {len(page)}). "
-                "No output agents are on this page."
-            )
 
-        return {
-            "categories": categories,
-            "output_agents": output_agents,
-            "extraction_agents": extraction_agents,
-            "validation_agents": validation_agents,
-            "total_agents": total_agents,
-            "returned_count": len(page),
-            "total_count": total_agents,
-            "truncated": truncated,
-            "next_cursor": next_cursor,
-            "complete": not truncated,
-            "next_call": (
-                {
+        def build_response() -> Dict[str, Any]:
+            categories: Dict[str, List[Dict[str, Any]]] = {}
+            output_agents: List[str] = []
+            extraction_agents: List[str] = []
+            validation_agents: List[str] = []
+            for agent_info in page:
+                agent_category = agent_info["category"]
+                categories.setdefault(agent_category, []).append(
+                    {
+                        "agent_id": agent_info["agent_id"],
+                        "name": agent_info["name"],
+                        "description": agent_info["description"],
+                        "requires_document": agent_info["requires_document"],
+                    }
+                )
+                if agent_category == "Output":
+                    output_agents.append(agent_info["agent_id"])
+                elif agent_category == "Extraction":
+                    extraction_agents.append(agent_info["agent_id"])
+                elif agent_category == "Validation":
+                    validation_agents.append(agent_info["agent_id"])
+
+            actual_next_cursor = (
+                str(offset + len(page)) if offset + len(page) < total_agents else None
+            )
+            if total_agents == 0 and not searched:
+                message = (
+                    "No flow-capable agents are currently installed. "
+                    "Install additional agent packages to unlock flow verification helpers."
+                )
+            elif total_agents == 0:
+                message = (
+                    "No flow-capable agents matched. "
+                    "Broaden the search or install additional agent packages."
+                )
+            elif output_agents:
+                message = (
+                    f"Found {total_agents} matching agents (showing {len(page)}). "
+                    f"Output agents on this page ({len(output_agents)}): {', '.join(output_agents)}. "
+                    "Attach each Output agent to one or more earlier Extraction or typed "
+                    "Validation steps using ordered source_steps; "
+                    "it is an output branch, not a control-path step."
+                )
+            else:
+                message = (
+                    f"Found {total_agents} matching agents (showing {len(page)}). "
+                    "No output agents are on this page."
+                )
+
+            if actual_next_cursor is None:
+                next_call = None
+            elif page:
+                next_call = {
                     "tool": "get_available_agents",
-                    "arguments": {
-                        **(
-                            {"query": str(query).strip()}
-                            if str(query or "").strip()
-                            else {}
-                        ),
-                        **(
-                            {"category": normalized_category}
-                            if normalized_category
-                            else {}
-                        ),
-                        "limit": bounded_limit,
-                        "cursor": next_cursor,
-                    },
+                    "arguments": {**filters(), "cursor": actual_next_cursor},
                 }
-                if next_cursor is not None
-                else None
-            ),
-            "limit": bounded_limit,
-            "query": str(query or "").strip() or None,
-            "category": normalized_category,
-            "message": message,
-        }
+            else:
+                next_call = {
+                    "tool": "get_available_agents",
+                    "arguments": {**filters(), "detail_index": offset},
+                }
+            return {
+                "categories": categories,
+                "output_agents": output_agents,
+                "extraction_agents": extraction_agents,
+                "validation_agents": validation_agents,
+                "total_agents": total_agents,
+                "returned_count": len(page),
+                "total_count": total_agents,
+                "truncated": actual_next_cursor is not None,
+                "next_cursor": actual_next_cursor,
+                "complete": actual_next_cursor is None,
+                "next_call": next_call,
+                "limit": bounded_limit,
+                "query": normalized_query,
+                "category": normalized_category,
+                "message": message,
+            }
+
+        response = build_response()
+        while page and _flow_catalog_provider_chars(response) > _FLOW_CATALOG_RESULT_MAX_CHARS:
+            page.pop()
+            response = build_response()
+        if _flow_catalog_provider_chars(response) > _FLOW_CATALOG_RESULT_MAX_CHARS:
+            return {
+                "success": False,
+                "error": "provider_limit_too_small",
+                "message": "The configured provider result envelope cannot hold agent catalog metadata.",
+            }
+        return response
 
     return handler
 
@@ -2181,28 +2295,67 @@ def _exact_chunk_response(
     text: str,
     limit: Optional[int],
     cursor: Optional[str],
+    response_metadata: Mapping[str, Any],
 ) -> Dict[str, Any]:
     bounded_limit = _inspection_chunk_limit(limit)
     start = parse_offset_cursor(cursor)
-    end = min(len(text), start + bounded_limit)
-    truncated = end < len(text)
-    next_call = None
-    if truncated:
-        next_call = {
-            "tool": tool,
-            "arguments": {**arguments, "limit": bounded_limit, "cursor": str(end)},
+    if start > len(text):
+        raise ValueError("cursor is beyond the selected content")
+    requested_end = min(len(text), start + bounded_limit)
+
+    def render(end: int) -> Dict[str, Any]:
+        truncated = end < len(text)
+        return {
+            **response_metadata,
+            "content": text[start:end],
+            "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "total_chars": len(text),
+            "start_char": start,
+            "end_char": end,
+            "limit": bounded_limit,
+            "complete": not truncated,
+            "truncated": truncated,
+            "next_call": (
+                {
+                    "tool": tool,
+                    "arguments": {
+                        **arguments,
+                        "limit": bounded_limit,
+                        "cursor": str(end),
+                    },
+                }
+                if truncated
+                else None
+            ),
         }
-    return {
-        "content": text[start:end],
-        "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "total_chars": len(text),
-        "start_char": start,
-        "end_char": end,
-        "limit": bounded_limit,
-        "complete": not truncated,
-        "truncated": truncated,
-        "next_call": next_call,
-    }
+
+    provider_limit = get_agent_studio_provider_tool_result_inline_max_chars()
+    fitting_end: Optional[int] = None
+    if _flow_catalog_provider_chars(render(requested_end)) <= provider_limit:
+        fitting_end = requested_end
+    low = start + 1
+    high = requested_end - 1
+    if fitting_end is None:
+        while low <= high:
+            candidate_end = (low + high) // 2
+            if _flow_catalog_provider_chars(render(candidate_end)) <= provider_limit:
+                fitting_end = candidate_end
+                low = candidate_end + 1
+            else:
+                high = candidate_end - 1
+    if fitting_end is None and requested_end == start:
+        if _flow_catalog_provider_chars(render(start)) <= provider_limit:
+            fitting_end = start
+    if fitting_end is None:
+        return {
+            "success": False,
+            "error": "provider_limit_too_small",
+            "message": (
+                "The configured provider result envelope cannot hold flow detail "
+                "metadata plus one exact character."
+            ),
+        }
+    return render(fitting_end)
 
 
 def _get_current_flow_instructions_handler():
@@ -2225,18 +2378,18 @@ def _get_current_flow_instructions_handler():
             value = ""
         if not isinstance(value, str):
             return _flow_detail_error(f"Node field '{field}' is not text")
-        return {
-            "success": True,
-            "node_id": str(node_id),
-            "field": field,
-            **_exact_chunk_response(
-                tool="get_current_flow_instructions",
-                arguments={"node_id": str(node_id), "field": field},
-                text=value,
-                limit=limit,
-                cursor=cursor,
-            ),
-        }
+        return _exact_chunk_response(
+            tool="get_current_flow_instructions",
+            arguments={"node_id": str(node_id), "field": field},
+            text=value,
+            limit=limit,
+            cursor=cursor,
+            response_metadata={
+                "success": True,
+                "node_id": str(node_id),
+                "field": field,
+            },
+        )
 
     return handler
 
@@ -2329,20 +2482,20 @@ def _get_current_flow_projection_plan_handler():
             separators=(",", ":"),
             sort_keys=True,
         )
-        return {
-            "success": True,
-            "node_id": str(node_id),
-            "field": field,
-            "section": section,
-            "encoding": "canonical_json",
-            **_exact_chunk_response(
-                tool="get_current_flow_projection_plan",
-                arguments={"node_id": str(node_id), "field": field, "section": section},
-                text=canonical_json,
-                limit=limit,
-                cursor=cursor,
-            ),
-        }
+        return _exact_chunk_response(
+            tool="get_current_flow_projection_plan",
+            arguments={"node_id": str(node_id), "field": field, "section": section},
+            text=canonical_json,
+            limit=limit,
+            cursor=cursor,
+            response_metadata={
+                "success": True,
+                "node_id": str(node_id),
+                "field": field,
+                "section": section,
+                "encoding": "canonical_json",
+            },
+        )
 
     return handler
 
@@ -2792,6 +2945,10 @@ Do not infer omitted details; use the returned bounded detail calls.""",
     # -------------------------------------------------------------------------
     # get_available_agents - Return agent metadata for verification
     # -------------------------------------------------------------------------
+    available_agent_page_max = get_tool_page_max_limit()
+    available_agent_page_default = min(
+        get_tool_page_default_limit(), available_agent_page_max
+    )
     registry.register(
         name="get_available_agents",
         description="""Get available agents organized by category with descriptions.
@@ -2825,13 +2982,35 @@ Output catalog without treating attachment branches as terminal control nodes.""
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "How many agents to return in this page (default: 20, max: 50).",
+                    "description": (
+                        "How many agents to return in this page "
+                        f"(default: {available_agent_page_default}, "
+                        f"max: {available_agent_page_max})."
+                    ),
                     "minimum": 1,
-                    "maximum": 50,
+                    "maximum": available_agent_page_max,
+                    "default": available_agent_page_default,
                 },
                 "cursor": {
                     "type": "string",
                     "description": "Page marker returned as next_cursor by a previous call. Omit to start from the first page.",
+                },
+                "detail_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Stable filtered-agent index copied from an oversized-record continuation.",
+                },
+                "detail_cursor": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Exact canonical-JSON character offset returned by a detail chunk.",
+                },
+                "detail_max_chars": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _FLOW_CATALOG_CHUNK_MAX_CHARS,
+                    "default": _FLOW_CATALOG_CHUNK_MAX_CHARS,
+                    "description": "Requested exact agent-record characters, capped by runtime configuration.",
                 },
             },
         },
@@ -2841,7 +3020,7 @@ Output catalog without treating attachment branches as terminal control nodes.""
     )
     logger.debug("Registered: get_available_agents")
 
-    logger.info('Registered 5 flow tools (category: flows)')
+    logger.info('Registered 11 flow tools (category: flows)')
 
 
 # Export public API
