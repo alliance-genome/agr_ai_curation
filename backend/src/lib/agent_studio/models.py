@@ -316,7 +316,10 @@ class ToolCallInfo(BaseModel):
     input: Dict = Field(default_factory=dict, description="Tool input parameters")
     output_preview: Optional[str] = Field(None, description="Truncated output preview")
     duration_ms: Optional[int] = Field(None, description="Duration in milliseconds")
-    status: str = Field("completed", description="Status: 'completed', 'error'")
+    status: str = Field(
+        "completed",
+        description="Status: 'completed', 'error', or neutral 'N/A'",
+    )
 
 
 class RoutingDecision(BaseModel):

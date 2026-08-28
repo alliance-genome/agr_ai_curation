@@ -1,6 +1,8 @@
 """Unit tests for FeedbackService orchestration logic."""
 
 from datetime import datetime, timedelta
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 import importlib
@@ -10,6 +12,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 # Import sql.database first to avoid the package init circular path when importing service directly.
 import src.models.sql.database  # noqa: F401
+
+
+_TRACE_REVIEW_FIXTURE = (
+    Path(__file__).parents[3] / "fixtures" / "trace_review" / "missing_tool_call_status.json"
+)
+
+
+def _trace_review_export_fixture():
+    return json.loads(_TRACE_REVIEW_FIXTURE.read_text(encoding="utf-8"))
 
 
 def _feedback_service_module():
@@ -435,6 +446,45 @@ def test_process_feedback_report_persists_redacted_trace_snapshot(monkeypatch):
     assert "prompt_preview" not in trace_snapshot["prompts_executed"][0]
     assert "input" not in trace_snapshot["tool_calls"][0]
     assert "output_preview" not in trace_snapshot["tool_calls"][0]
+
+
+def test_process_feedback_report_accepts_trace_review_missing_tool_status_fixture(
+    monkeypatch,
+):
+    trace_context_service = importlib.import_module(
+        "src.lib.agent_studio.trace_context_service"
+    )
+    trace_context = trace_context_service._trace_context_from_trace_review_export(
+        "trace-1",
+        _trace_review_export_fixture(),
+    )
+
+    async def _get_trace_context(_trace_id):
+        return trace_context
+
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    monkeypatch.setattr(
+        "src.lib.feedback.service.get_trace_context_for_explorer",
+        _get_trace_context,
+    )
+    service = _feedback_service_module().FeedbackService(db=db)
+    service.notifier = MagicMock()
+
+    service.process_feedback_report(report.id)
+
+    assert report.trace_data["capture_status"] == "success"
+    trace_snapshot = report.trace_data["traces"][0]
+    assert trace_snapshot["capture_status"] == "success"
+    assert trace_snapshot["tool_calls"] == [
+        {
+            "name": "inspect_results",
+            "duration_ms": 25,
+            "status": "N/A",
+        }
+    ]
 
 
 def test_process_feedback_report_persists_trace_capture_failure_metadata(monkeypatch):

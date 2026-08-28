@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+import json
+from pathlib import Path
 import sys
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -15,6 +18,15 @@ from src.lib.agent_studio.trace_agent_metadata import (
     normalize_trace_agent_id,
     trace_agent_display_name,
 )
+
+
+_TRACE_REVIEW_FIXTURE = (
+    Path(__file__).parents[3] / "fixtures" / "trace_review" / "missing_tool_call_status.json"
+)
+
+
+def _trace_review_export_fixture():
+    return json.loads(_TRACE_REVIEW_FIXTURE.read_text(encoding="utf-8"))
 
 
 def _obs(**kwargs):
@@ -187,6 +199,60 @@ async def test_get_trace_context_for_explorer_uses_configured_trace_review_expor
     assert context.prompts_executed[0].group_applied == "MGI"
     assert context.tool_calls[0].name == "agr_curation_query"
     assert context.tool_calls[0].duration_ms == 250
+
+
+def test_trace_review_export_normalizes_only_missing_tool_call_status():
+    missing_status_payload = _trace_review_export_fixture()
+    missing_status_context = trace_context_service._trace_context_from_trace_review_export(
+        "trace-missing-status",
+        missing_status_payload,
+    )
+    assert missing_status_context.tool_calls[0].status == "N/A"
+
+    null_status_payload = deepcopy(missing_status_payload)
+    null_status_payload["analysis"]["tool_calls"]["tool_calls"][0]["status"] = None
+    null_status_context = trace_context_service._trace_context_from_trace_review_export(
+        "trace-null-status",
+        null_status_payload,
+    )
+    assert null_status_context.tool_calls[0].status == "N/A"
+
+    supplied_status_payload = deepcopy(missing_status_payload)
+    supplied_status_payload["analysis"]["tool_calls"]["tool_calls"][0]["status"] = "ok"
+    supplied_status_context = trace_context_service._trace_context_from_trace_review_export(
+        "trace-supplied-status",
+        supplied_status_payload,
+    )
+    assert supplied_status_context.tool_calls[0].status == "ok"
+
+
+def test_trace_review_export_keeps_tool_call_name_required():
+    payload = _trace_review_export_fixture()
+    del payload["analysis"]["tool_calls"]["tool_calls"][0]["name"]
+
+    with pytest.raises(
+        trace_context_service.TraceReviewExportError,
+        match="missing string field: name",
+    ):
+        trace_context_service._trace_context_from_trace_review_export(
+            "trace-missing-name",
+            payload,
+        )
+
+
+@pytest.mark.parametrize("invalid_status", ["", 0])
+def test_trace_review_export_rejects_invalid_supplied_tool_call_status(invalid_status):
+    payload = _trace_review_export_fixture()
+    payload["analysis"]["tool_calls"]["tool_calls"][0]["status"] = invalid_status
+
+    with pytest.raises(
+        trace_context_service.TraceReviewExportError,
+        match="missing string field: status",
+    ):
+        trace_context_service._trace_context_from_trace_review_export(
+            "trace-invalid-status",
+            payload,
+        )
 
 
 @pytest.mark.asyncio

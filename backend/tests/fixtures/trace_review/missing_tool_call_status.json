@@ -1,0 +1,34 @@
+{
+  "raw_trace": {
+    "sessionId": "session-1",
+    "metadata": {}
+  },
+  "observations": [],
+  "analysis": {
+    "summary": {
+      "timestamp": "2026-08-28T12:00:00Z",
+      "duration_seconds": 0.5,
+      "total_tokens": 12
+    },
+    "conversation": {
+      "user_input": "Sanitized fixture question",
+      "assistant_response": "Sanitized fixture answer"
+    },
+    "tool_calls": {
+      "total_count": 1,
+      "unique_tools": [
+        "inspect_results"
+      ],
+      "duplicates": {},
+      "tool_calls": [
+        {
+          "name": "inspect_results",
+          "duration": "25ms",
+          "input": {
+            "detail": "summary"
+          }
+        }
+      ]
+    }
+  }
+}
