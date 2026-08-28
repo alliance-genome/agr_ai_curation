@@ -128,9 +128,14 @@ def test_catalog_preview_diagnostic_and_runtime_share_prompt_bundle(
             db=SimpleNamespace(),
         )
     )
-    diagnostic = tool_definitions._create_get_prompt_handler()(
+    diagnostic_summary = tool_definitions._create_get_prompt_handler()(
         agent_id="demo_agent",
         group_id="WB",
+    )
+    diagnostic_detail = tool_definitions._create_get_prompt_handler()(
+        agent_id="demo_agent",
+        group_id="WB",
+        view="effective_prompt",
     )
     runtime_bundle = catalog_service._build_runtime_instructions(
         SimpleNamespace(
@@ -144,17 +149,21 @@ def test_catalog_preview_diagnostic_and_runtime_share_prompt_bundle(
 
     assert combined.combined_prompt == catalog_bundle.render()
     assert preview.prompt == catalog_bundle.render()
-    assert diagnostic["prompt"] == catalog_bundle.render()
+    assert diagnostic_detail["content"] == catalog_bundle.render()
     assert runtime_bundle.render() == catalog_bundle.render()
 
     assert combined.effective_prompt_hash == catalog_bundle.hash
     assert preview.effective_prompt_hash == catalog_bundle.hash
-    assert diagnostic["effective_prompt_hash"] == catalog_bundle.hash
+    assert diagnostic_summary["effective_prompt_hash"] == catalog_bundle.hash
+    assert diagnostic_detail["hash"] == catalog_bundle.hash
     assert runtime_bundle.hash == catalog_bundle.hash
 
     assert combined.layer_manifest == catalog_bundle.to_manifest()
     assert preview.layer_manifest == catalog_bundle.to_manifest()
-    assert diagnostic["layer_manifest"] == catalog_bundle.to_manifest()
+    assert [layer["id"] for layer in diagnostic_summary["layers"]] == [
+        layer.id for layer in catalog_bundle.layers
+    ]
+    assert all("content" not in layer for layer in diagnostic_summary["layers"])
     assert runtime_bundle.to_manifest() == catalog_bundle.to_manifest()
 
 

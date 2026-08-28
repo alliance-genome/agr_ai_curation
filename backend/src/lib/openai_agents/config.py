@@ -1567,6 +1567,22 @@ def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
     )
 
 
+def get_agent_studio_prompt_inspection_chunk_max_chars() -> int:
+    """Max prompt characters returned by one get_prompt detail call.
+
+    The default leaves room for deterministic chunk metadata and JSON escaping
+    beneath the provider's default 12,000-character inline-result boundary.
+    Default 8000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS",
+            8_000,
+        ),
+    )
+
+
 def get_flow_definition_max_nodes() -> int:
     """Max canonical flow nodes, including the required task-input node."""
     configured = _get_env_int_with_fallback(
