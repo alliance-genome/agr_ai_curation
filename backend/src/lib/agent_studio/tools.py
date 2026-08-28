@@ -43,6 +43,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
+    get_agent_studio_trace_search_default_limit,
+    get_agent_studio_trace_search_max_limit,
     get_agent_studio_trace_tool_timeout_seconds,
 )
 
@@ -125,7 +127,7 @@ def validate_view(view: str) -> None:
         "summary", "tool_calls", "conversation", "pdf_citations",
         "token_analysis", "agent_context", "trace_summary",
         "document_hierarchy", "agent_configs", "group_context",
-        "domain_envelope", "extraction_timeline", "evidence_revisions"
+        "tool_calls", "domain_envelope", "extraction_timeline", "evidence_revisions"
     ]
     if view not in valid_views:
         raise ValueError(f"Invalid view '{view}'. Must be one of: {', '.join(valid_views)}")
@@ -241,7 +243,12 @@ async def get_trace_summary(trace_id: str) -> Dict[str, Any]:
                 "total_cost": float,
                 "total_tokens": int,
                 "tool_call_count": int,
-                "unique_tools": [str],
+                "unique_tools": {
+                    "total_items": int,
+                    "preview": [str],
+                    "complete": bool,
+                    "next_call": {...} | None,
+                },
                 "has_errors": bool,
                 "context_overflow_detected": bool,
                 "timestamp": str
@@ -338,7 +345,12 @@ async def get_tool_calls_summary(
             "status": "success" | "error",
             "data": {
                 "total_count": int,
-                "unique_tools": [str],
+                "unique_tools": {
+                    "total_items": int,
+                    "preview": [str],
+                    "complete": bool,
+                    "next_call": {...} | None,
+                },
                 "tool_calls": [
                     {
                         "index": int,
@@ -565,15 +577,15 @@ async def get_tool_call_detail(
     """
     Get one exact field chunk for a single tool call.
 
-    Select input or tool_result independently, then follow next_call until the
-    response reports complete=true.
+    Select input, tool_result, thought, or truncated metadata independently,
+    then follow next_call until the response reports complete=true.
 
     Args:
         trace_id: Langfuse trace ID
         call_id: Either the OpenAI call_id (e.g., "call_oVv6...") or the
                  Langfuse observation id (e.g., "5d8254fb..."). Both work.
                  Prefer call_id when available (from tool_calls_summary).
-        field: Exact field to retrieve: input or tool_result.
+        field: Exact field to retrieve: input, tool_result, thought, or metadata.
         start: Start character in the serialized exact field.
         max_chars: Requested exact characters, capped by configuration.
 
@@ -814,7 +826,7 @@ async def get_trace_view(
         valid_views = [
             "token_analysis", "agent_context", "pdf_citations",
             "document_hierarchy", "agent_configs", "group_context",
-            "trace_summary", "domain_envelope", "extraction_timeline", "evidence_revisions"
+            "trace_summary", "tool_calls", "domain_envelope", "extraction_timeline", "evidence_revisions"
         ]
         if view_name not in valid_views:
             return {
@@ -912,7 +924,9 @@ async def search_traces(
     extraction_id: Optional[str] = None,
     from_timestamp: Optional[str] = None,
     to_timestamp: Optional[str] = None,
-    limit: int = 25,
+    offset: int = 0,
+    limit: Optional[int] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """Search Langfuse traces by bounded session, user, metadata, name, or time filters."""
     if not any([session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp]):
@@ -935,7 +949,12 @@ async def search_traces(
             "extraction_id": extraction_id,
             "from_timestamp": from_timestamp,
             "to_timestamp": to_timestamp,
-            "limit": max(1, min(limit, 100)),
+            "offset": max(0, offset),
+            "limit": max(1, min(
+                limit or get_agent_studio_trace_search_default_limit(),
+                get_agent_studio_trace_search_max_limit(),
+            )),
+            "item_start": max(0, item_start),
         },
     )
 

@@ -37,6 +37,8 @@ from ..config import (
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
+    get_agent_studio_trace_search_default_limit,
+    get_agent_studio_trace_search_max_limit,
 )
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
@@ -81,10 +83,25 @@ TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
 TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS = (
     get_agent_studio_provider_tool_result_inline_max_chars()
 )
+TRACE_SEARCH_DEFAULT_LIMIT = get_agent_studio_trace_search_default_limit()
+TRACE_SEARCH_MAX_LIMIT = get_agent_studio_trace_search_max_limit()
 
 
 # Default source for trace extraction (EC2 Langfuse)
 DEFAULT_SOURCE = "local"
+TOOL_CALL_METADATA_KEYS = (
+    "id",
+    "call_id",
+    "name",
+    "time",
+    "duration",
+    "model",
+    "url",
+    "method",
+    "status",
+    "status_code",
+    "tool_result_length",
+)
 
 
 def _effective_source(source: str) -> str:
@@ -123,6 +140,9 @@ def _tool_call_selector(tool_call: Mapping[str, Any], index: int) -> str:
     for key in ("call_id", "id"):
         value = str(tool_call.get(key) or "").strip()
         if value and value.upper() != "N/A":
+            if len(value) > TRACE_REVIEW_SUMMARY_MAX_CHARS:
+                digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+                return f"sha256:{digest}"
             return value
     return f"index:{index}"
 
@@ -131,6 +151,10 @@ def _tool_call_exact_value(tool_call: Mapping[str, Any], field: str) -> Any:
     """Project analyzer formats onto canonical exact input/result fields."""
     if field == "input":
         return tool_call.get("input")
+    if field == "thought":
+        return tool_call.get("thought")
+    if field == "metadata":
+        return {key: tool_call.get(key) for key in TOOL_CALL_METADATA_KEYS}
     tool_result = tool_call.get("tool_result")
     if tool_result is not None or "call_id" in tool_call:
         return tool_result
@@ -241,6 +265,134 @@ def _exact_text_chunk(
 def _bounded_summary(value: Any) -> str:
     text = str(value or "")
     return _json_bounded_prefix(text, TRACE_REVIEW_SUMMARY_MAX_CHARS)
+
+
+def _nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _collection_projection(
+    values: Any,
+    *,
+    next_call: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Describe an omitted collection and expose its lossless aggregate page."""
+    items = _aggregate_items(values)
+    return {
+        "total_items": len(items),
+        "complete": len(items) == 0,
+        "next_call": None if not items else dict(next_call),
+    }
+
+
+def _domain_envelope_projection(
+    value: Any,
+    *,
+    trace_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Return fixed-shape domain signals without copying analyzer collections."""
+    if not isinstance(value, Mapping):
+        return None
+    raw_summary = value.get("summary")
+    summary: Mapping[str, Any] = raw_summary if isinstance(raw_summary, Mapping) else {}
+    collection_names = (
+        "envelope_ids",
+        "object_ids",
+        "pending_ref_ids",
+        "finding_ids",
+        "field_paths",
+        "readiness_statuses",
+        "validator_group_scope_audits",
+    )
+    return {
+        "found": bool(value.get("found")),
+        "summary": {
+            key: _nonnegative_int(summary.get(key))
+            for key in (
+                "envelope_count",
+                "object_count",
+                "finding_count",
+                "blocker_count",
+                "pending_ref_count",
+            )
+            if key in summary
+        },
+        "has_blockers": bool(value.get("has_blockers") or summary.get("blocker_count")),
+        "has_definition_state_flags": bool(value.get("has_definition_state_flags")),
+        "collections": {
+            name: _collection_projection(
+                value.get(name, []),
+                next_call={
+                    "trace_id": trace_id,
+                    "view_name": "domain_envelope",
+                    "section": name,
+                    "offset": 0,
+                    "limit": TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+                },
+            )
+            for name in collection_names
+        },
+    }
+
+
+def _unique_tools_projection(values: Any, *, trace_id: str) -> Dict[str, Any]:
+    tools = sorted(str(value) for value in values or [])
+    return {
+        "total_items": len(tools),
+        "preview": [_bounded_summary(value) for value in tools[:TRACE_REVIEW_AGGREGATE_PAGE_SIZE]],
+        "complete": len(tools) <= TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+        "next_call": (
+            None
+            if not tools
+            else {
+                "trace_id": trace_id,
+                "view_name": "tool_calls",
+                "section": "unique_tools",
+                "offset": 0,
+                "limit": TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+            }
+        ),
+    }
+
+
+def _tool_call_metadata_projection(
+    tool_call: Mapping[str, Any],
+    *,
+    index: int,
+    trace_id: str,
+) -> Dict[str, Any]:
+    """Allowlist bounded metadata shared by page and exact-detail envelopes."""
+    selector = _tool_call_selector(tool_call, index)
+    metadata = {
+        "index": index,
+        "call_id": selector,
+        "id": _bounded_summary(tool_call.get("id")),
+        "name": _bounded_summary(tool_call.get("name")),
+        "time": _bounded_summary(tool_call.get("time")),
+        "duration": _bounded_summary(tool_call.get("duration")),
+        "model": _bounded_summary(tool_call.get("model")),
+        "url": _bounded_summary(tool_call.get("url")),
+        "method": _bounded_summary(tool_call.get("method")),
+        "status": _bounded_summary(tool_call.get("status")),
+        "status_code": _bounded_summary(tool_call.get("status_code")),
+        "tool_result_length": _nonnegative_int(tool_call.get("tool_result_length")),
+        "domain_envelope": _domain_envelope_projection(
+            tool_call.get("domain_envelope"),
+            trace_id=trace_id,
+        ),
+    }
+    return metadata
+
+
+def _tool_call_metadata_requires_exact(tool_call: Mapping[str, Any]) -> bool:
+    return any(
+        _bounded_summary(tool_call.get(key)) != str(tool_call.get(key) or "")
+        for key in TOOL_CALL_METADATA_KEYS
+        if key != "tool_result_length"
+    )
 
 
 def _aggregate_items(value: Any) -> List[Any]:
@@ -703,6 +855,142 @@ def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _search_response_data(
+    *,
+    source: str,
+    traces: List[Dict[str, Any]],
+    query: Mapping[str, Any],
+    offset: int,
+    limit: int,
+    total_items: Optional[int],
+    source_exhausted: bool,
+    item_start: int,
+) -> Dict[str, Any]:
+    """Fit a stable search page, including exact chunks for one oversized record."""
+    references = [_listed_trace_reference(trace) for trace in traces]
+    filters = {
+        key: value
+        for key, value in query.items()
+        if key not in {"offset", "limit"} and value is not None
+    }
+    safe_offset = max(0, offset)
+    safe_item_start = max(0, item_start)
+    authoritative_total = max(0, total_items) if total_items is not None else None
+
+    def next_arguments(next_offset: int, next_item_start: int = 0) -> Dict[str, Any]:
+        return {
+            **filters,
+            "offset": next_offset,
+            "limit": limit,
+            **({"item_start": next_item_start} if next_item_start else {}),
+        }
+
+    def is_complete(next_offset: int) -> bool:
+        if authoritative_total is not None:
+            return next_offset >= authoritative_total
+        return source_exhausted and next_offset >= safe_offset + len(references)
+
+    base = {
+        "source": source,
+        "query": filters,
+        "total_items": authoritative_total,
+        "total_is_authoritative": authoritative_total is not None,
+    }
+
+    def build_page(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        next_offset = safe_offset + len(items)
+        complete = is_complete(next_offset)
+        return {
+            **base,
+            "trace_count": len(items),
+            "traces": items,
+            "pagination": {
+                "offset": safe_offset,
+                "limit": limit,
+                "returned_items": len(items),
+                "complete": complete,
+                "truncated": not complete,
+                "next_offset": None if complete else next_offset,
+                "next_call": None if complete else next_arguments(next_offset),
+            },
+        }
+
+    selected: List[Dict[str, Any]] = []
+    for reference in references:
+        if safe_item_start:
+            break
+        candidate = build_page([*selected, reference])
+        if len(json.dumps(_aggregate_provider_result(candidate), default=str)) > (
+            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        ):
+            break
+        selected.append(reference)
+
+    if selected or not references:
+        return build_page(selected)
+
+    serialized = json.dumps(
+        references[0],
+        default=str,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    safe_item_start = min(safe_item_start, len(serialized))
+    item_sha256 = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def build_chunk(end: int) -> Dict[str, Any]:
+        item_complete = end >= len(serialized)
+        next_offset = safe_offset + (1 if item_complete else 0)
+        complete = item_complete and is_complete(next_offset)
+        return {
+            **base,
+            "trace_count": 0,
+            "traces": [],
+            "pagination": {
+                "offset": safe_offset,
+                "limit": limit,
+                "returned_items": 0,
+                "complete": complete,
+                "truncated": not complete,
+                "next_offset": None if complete else next_offset,
+                "next_call": (
+                    None
+                    if complete
+                    else next_arguments(next_offset, 0 if item_complete else end)
+                ),
+            },
+            "trace_chunk": {
+                "item_offset": safe_offset,
+                "encoding": "json",
+                "sha256": item_sha256,
+                "start": safe_item_start,
+                "end": end,
+                "total_chars": len(serialized),
+                "complete": item_complete,
+                "content": serialized[safe_item_start:end],
+            },
+        }
+
+    low, high = safe_item_start + 1, len(serialized)
+    fitting_chunk = None
+    while low <= high:
+        candidate_end = (low + high) // 2
+        candidate = build_chunk(candidate_end)
+        if len(json.dumps(_aggregate_provider_result(candidate), default=str)) <= (
+            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        ):
+            fitting_chunk = candidate
+            low = candidate_end + 1
+        else:
+            high = candidate_end - 1
+    if fitting_chunk is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provider boundary is too small for one TraceReview search character",
+        )
+    return fitting_chunk
+
+
 def _parse_optional_datetime(value: Optional[str], param_name: str) -> Optional[datetime]:
     if not value:
         return None
@@ -946,7 +1234,17 @@ async def search_traces(
     extraction_id: Optional[str] = Query(default=None, description="Trace metadata.extraction_id filter"),
     from_timestamp: Optional[str] = Query(default=None, description="ISO timestamp lower bound"),
     to_timestamp: Optional[str] = Query(default=None, description="ISO timestamp upper bound"),
-    limit: int = Query(default=25, ge=1, le=100, description="Maximum traces to return"),
+    offset: Annotated[int, Query(ge=0, description="Stable result offset from next_call")] = 0,
+    limit: int = Query(
+        default=TRACE_SEARCH_DEFAULT_LIMIT,
+        ge=1,
+        le=TRACE_SEARCH_MAX_LIMIT,
+        description="Maximum source matches requested before provider-envelope fitting",
+    ),
+    item_start: Annotated[
+        int,
+        Query(ge=0, description="Exact JSON cursor for an oversized record"),
+    ] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     _ensure_search_scope(
@@ -971,6 +1269,7 @@ async def search_traces(
             extraction_id=extraction_id,
             from_timestamp=_parse_optional_datetime(from_timestamp, "from_timestamp"),
             to_timestamp=_parse_optional_datetime(to_timestamp, "to_timestamp"),
+            offset=offset,
             limit=limit,
         )
     except ValueError as exc:
@@ -981,14 +1280,17 @@ async def search_traces(
             detail=f"Unable to search Langfuse traces ({source}): {str(exc)}",
         ) from exc
 
-    response_data = {
-        "source": source,
-        "trace_count": len(listing["traces"]),
-        "query": listing["query"],
-        "langfuse_meta": listing["meta"],
-        "traces": [_listed_trace_reference(trace) for trace in listing["traces"]],
-    }
-    token_info = create_token_info_dict(response_data)
+    response_data = _search_response_data(
+        source=source,
+        traces=listing["traces"],
+        query=listing["query"],
+        offset=offset,
+        limit=limit,
+        total_items=listing.get("total_items"),
+        source_exhausted=bool(listing.get("source_exhausted")),
+        item_start=item_start,
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
         data=response_data,
@@ -1424,16 +1726,22 @@ async def get_trace_summary(
     response_data = {
         "trace_id": summary.get("trace_id", trace_id),
         "trace_id_short": summary.get("trace_id_short", trace_id[:8]),
-        "trace_name": summary.get("trace_name"),
+        "trace_name": _bounded_summary(summary.get("trace_name")),
         "duration_seconds": summary.get("duration_seconds"),
         "total_cost": summary.get("total_cost"),
         "total_tokens": summary.get("total_tokens"),
         "tool_call_count": tool_calls_data.get("total_count", 0),
-        "unique_tools": tool_calls_data.get("unique_tools", []),
+        "unique_tools": _unique_tools_projection(
+            tool_calls_data.get("unique_tools", []),
+            trace_id=trace_id,
+        ),
         "has_errors": trace_summary.get("has_errors", False),
         "context_overflow_detected": trace_summary.get("context_overflow_detected", False),
-        "timestamp": summary.get("timestamp"),
-        "domain_envelope": summary["domain_envelope"],
+        "timestamp": _bounded_summary(summary.get("timestamp")),
+        "domain_envelope": _domain_envelope_projection(
+            summary.get("domain_envelope"),
+            trace_id=trace_id,
+        ),
     }
 
     token_info = create_token_info_dict(response_data)
@@ -1501,20 +1809,26 @@ async def get_tool_calls_summary(
         summaries.append(ToolCallSummaryItem(
             index=i,
             call_id=selector,
-            name=lightweight["name"],
-            time=lightweight["time"],
-            duration=lightweight["duration"],
-            status=lightweight["status"],
+            name=_bounded_summary(lightweight["name"]),
+            time=_bounded_summary(lightweight["time"]),
+            duration=_bounded_summary(lightweight["duration"]),
+            status=_bounded_summary(lightweight["status"]),
             input_summary=_bounded_summary(lightweight["input_summary"]),
             result_summary=_bounded_summary(lightweight["result_summary"]),
-            domain_envelope=lightweight.get("domain_envelope"),
+            domain_envelope=_domain_envelope_projection(
+                lightweight.get("domain_envelope"),
+                trace_id=trace_id,
+            ),
         ))
 
     duplicates = tool_calls_data.get("duplicates", {})
 
     response_data = ToolCallsSummaryData(
         total_count=tool_calls_data.get("total_count", 0),
-        unique_tools=tool_calls_data.get("unique_tools", []),
+        unique_tools=_unique_tools_projection(
+            tool_calls_data.get("unique_tools", []),
+            trace_id=trace_id,
+        ),
         tool_calls=summaries,
         pagination=PaginationInfo(
             page=page,
@@ -1613,7 +1927,12 @@ async def get_tool_calls_paginated(
     for index, tool_call in indexed_tool_calls[start_idx:end_idx]:
         selector = _tool_call_selector(tool_call, index)
         exact_fields = []
-        for field in ("input", "tool_result"):
+        fields = ["input", "tool_result"]
+        if tool_call.get("thought") not in {None, "", "N/A"}:
+            fields.append("thought")
+        if _tool_call_metadata_requires_exact(tool_call):
+            fields.append("metadata")
+        for field in fields:
             field_id = f"tool_call:{selector}:{field}"
             exact_fields.append({
                 **_exact_text_metadata(
@@ -1630,13 +1949,11 @@ async def get_tool_calls_paginated(
                 },
             })
         page_tool_calls.append({
-            **{
-                key: value
-                for key, value in tool_call.items()
-                if key not in {"input", "output", "tool_result"}
-            },
-            "index": index,
-            "call_id": selector,
+            **_tool_call_metadata_projection(
+                tool_call,
+                index=index,
+                trace_id=trace_id,
+            ),
             "exact_fields": exact_fields,
         })
 
@@ -1695,7 +2012,10 @@ async def get_tool_call_detail(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     call_id: Annotated[str, Path(description="Tool call_id or observation id")],
     request: Request,
-    field: Annotated[Literal["input", "tool_result"], Query(description="Exact field to retrieve")],
+    field: Annotated[
+        Literal["input", "tool_result", "thought", "metadata"],
+        Query(description="Exact field to retrieve"),
+    ],
     start: Annotated[int, Query(ge=0, description="Start character")] = 0,
     max_chars: Annotated[
         int,
@@ -1729,12 +2049,11 @@ async def get_tool_call_detail(
         )
 
     selector = _tool_call_selector(tool_call, tool_call_index)
-    tool_call_metadata = {
-        key: value
-        for key, value in tool_call.items()
-        if key not in {"input", "output", "tool_result"}
-    }
-    tool_call_metadata.update({"index": tool_call_index, "call_id": selector})
+    tool_call_metadata = _tool_call_metadata_projection(
+        tool_call,
+        index=tool_call_index,
+        trace_id=trace_id,
+    )
 
     def build_tool_call_provider_result(chunk: Dict[str, Any]) -> Mapping[str, Any]:
         token_info = create_token_info_dict({"tool_call": tool_call_metadata, "chunk": chunk})
@@ -2152,7 +2471,7 @@ async def get_evidence_revisions(
 
     Available views: token_analysis, agent_context, pdf_citations,
     document_hierarchy, agent_configs, group_context, trace_summary,
-    domain_envelope, extraction_timeline, evidence_revisions
+    tool_calls, domain_envelope, extraction_timeline, evidence_revisions
 
     Token cost: varies by view (check token_info in response).
     """
@@ -2170,7 +2489,7 @@ async def get_trace_view(
 ) -> ClaudeTraceResponse:
     """Get specific trace view with token metadata."""
     valid_views = [
-        "token_analysis", "agent_context", "pdf_citations",
+        "token_analysis", "agent_context", "pdf_citations", "tool_calls",
         "document_hierarchy", "agent_configs", "group_context", "trace_summary",
         "domain_envelope", "extraction_timeline", "evidence_revisions",
     ]

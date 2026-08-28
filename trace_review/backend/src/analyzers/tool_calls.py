@@ -822,7 +822,7 @@ class ToolCallAnalyzer:
         tool_calls.sort(key=lambda x: str(x["time"] or ""))
 
         # Get unique tool names
-        unique_tools = list(set(call["name"] for call in tool_calls if call["name"]))
+        unique_tools = sorted(set(call["name"] for call in tool_calls if call["name"]))
 
         # Extract tool outputs from function_call_output entries
         tool_outputs = ToolCallAnalyzer._extract_tool_outputs(observations)

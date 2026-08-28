@@ -59,7 +59,10 @@ class TraceSummaryData(BaseModel):
     total_cost: Optional[float] = None
     total_tokens: Optional[int] = None
     tool_call_count: int = 0
-    unique_tools: List[str] = []
+    unique_tools: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Bounded unique-tool inventory with exact aggregate continuation",
+    )
     has_errors: bool = False
     context_overflow_detected: bool = False
     timestamp: Optional[str] = None
@@ -88,7 +91,10 @@ class ToolCallSummaryItem(BaseModel):
 class ToolCallsSummaryData(BaseModel):
     """One bounded page of tool-call summaries without full results."""
     total_count: int = Field(..., description="Total number of tool calls")
-    unique_tools: List[str] = Field(..., description="List of unique tool names used")
+    unique_tools: Dict[str, Any] = Field(
+        ...,
+        description="Bounded unique-tool inventory with exact aggregate continuation",
+    )
     tool_calls: List[ToolCallSummaryItem] = Field(..., description="Lightweight call summaries")
     pagination: PaginationInfo
     next_call: Optional[Dict[str, Any]] = Field(

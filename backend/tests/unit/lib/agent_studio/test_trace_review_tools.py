@@ -108,6 +108,7 @@ def test_validate_helpers():
 
     tools.validate_view("summary")
     tools.validate_view("domain_envelope")
+    tools.validate_view("tool_calls")
     tools.validate_view("extraction_timeline")
     tools.validate_view("evidence_revisions")
     with pytest.raises(ValueError):
@@ -284,7 +285,12 @@ async def test_search_traces_requires_filter_and_calls_claude_search(monkeypatch
         capture=capture,
     )
 
-    result = await tools.search_traces(session_id="session-1", limit=999)
+    result = await tools.search_traces(
+        session_id="session-1",
+        offset=7,
+        limit=999,
+        item_start=9,
+    )
 
     assert result["status"] == "success"
     assert result["data"]["trace_count"] == 1
@@ -292,6 +298,8 @@ async def test_search_traces_requires_filter_and_calls_claude_search(monkeypatch
     assert capture["params"]["source"] == tools.get_trace_source()
     assert capture["params"]["session_id"] == "session-1"
     assert capture["params"]["limit"] == 100
+    assert capture["params"]["offset"] == 7
+    assert capture["params"]["item_start"] == 9
 
 
 @pytest.mark.asyncio

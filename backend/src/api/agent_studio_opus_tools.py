@@ -24,6 +24,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
+    get_agent_studio_trace_search_default_limit,
+    get_agent_studio_trace_search_max_limit,
     get_domain_pack_validation_plan_default_limit,
     get_domain_pack_validation_plan_max_limit,
     get_domain_runtime_inspection_default_limit,
@@ -44,6 +46,8 @@ _DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT = min(
 _TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 _TRACE_REVIEW_AGGREGATE_PAGE_SIZE = get_agent_studio_trace_review_aggregate_page_size()
 _TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
+_TRACE_SEARCH_DEFAULT_LIMIT = get_agent_studio_trace_search_default_limit()
+_TRACE_SEARCH_MAX_LIMIT = get_agent_studio_trace_search_max_limit()
 _CHAT_RECALL_PAGE_SIZE = get_agent_studio_chat_recall_page_size()
 _CHAT_RECALL_CHUNK_MAX_CHARS = get_agent_studio_chat_recall_chunk_max_chars()
 _SERVICE_LOG_DEFAULT_LINES = get_agent_studio_service_log_default_lines()
@@ -426,7 +430,7 @@ GET_CHAT_TURN_TOOL = {
 
 GET_TRACE_SUMMARY_TOOL = {
     "name": "get_trace_summary",
-    "description": "Get lightweight trace summary (~500 tokens). ALWAYS CALL THIS FIRST when analyzing a trace. Returns: trace name, duration, cost, token counts, tool call count, unique tools, error status, context overflow detection.",
+    "description": "Get a bounded lightweight trace summary. ALWAYS CALL THIS FIRST when analyzing a trace. Omitted domain-envelope and unique-tool collections include exact aggregate continuations.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -501,7 +505,7 @@ GET_TOOL_CALLS_PAGE_TOOL = {
 
 GET_TOOL_CALL_DETAIL_TOOL = {
     "name": "get_tool_call_detail",
-    "description": "Get one exact input or tool_result chunk for a selected tool call. Follow next_call until complete=true; concatenating serialized chunks reconstructs the hashed field exactly.",
+    "description": "Get one exact input, tool_result, thought, or truncated metadata chunk for a selected tool call. Follow next_call until complete=true; concatenating serialized chunks reconstructs the hashed field exactly.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -515,7 +519,7 @@ GET_TOOL_CALL_DETAIL_TOOL = {
             },
             "field": {
                 "type": "string",
-                "enum": ["input", "tool_result"],
+                "enum": ["input", "tool_result", "thought", "metadata"],
                 "description": "Exact field to retrieve independently.",
             },
             "start": {
@@ -569,7 +573,7 @@ GET_TRACE_CONVERSATION_TOOL = {
 
 GET_TRACE_VIEW_TOOL = {
     "name": "get_trace_view",
-    "description": "Get a specific analysis view with token metadata. Use for specialized views not covered by the primary tools. Available views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, domain_envelope, extraction_timeline, evidence_revisions.",
+    "description": "Get a specific analysis view with token metadata. Use its collection inventory and continuations for omitted summary evidence.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -579,7 +583,7 @@ GET_TRACE_VIEW_TOOL = {
             },
             "view_name": {
                 "type": "string",
-                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "trace_summary", "domain_envelope", "extraction_timeline", "evidence_revisions"],
+                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "trace_summary", "tool_calls", "domain_envelope", "extraction_timeline", "evidence_revisions"],
                 "description": "Which view to fetch",
             },
             **_AGGREGATE_PAGE_PROPERTIES,
@@ -602,12 +606,24 @@ SEARCH_TRACES_TOOL = {
             "extraction_id": {"type": "string", "description": "Optional trace metadata.extraction_id filter."},
             "from_timestamp": {"type": "string", "description": "Optional ISO 8601 lower timestamp bound."},
             "to_timestamp": {"type": "string", "description": "Optional ISO 8601 upper timestamp bound."},
+            "offset": {
+                "type": "integer",
+                "description": "Stable result offset from pagination.next_call.",
+                "default": 0,
+                "minimum": 0,
+            },
             "limit": {
                 "type": "integer",
-                "description": "Maximum traces to return (default: 25, max: 100).",
-                "default": 25,
+                "description": "Maximum source matches requested before provider-envelope fitting.",
+                "default": _TRACE_SEARCH_DEFAULT_LIMIT,
                 "minimum": 1,
-                "maximum": 100,
+                "maximum": _TRACE_SEARCH_MAX_LIMIT,
+            },
+            "item_start": {
+                "type": "integer",
+                "description": "Exact JSON character cursor from pagination.next_call for one oversized trace reference.",
+                "default": 0,
+                "minimum": 0,
             },
         },
         "required": [],

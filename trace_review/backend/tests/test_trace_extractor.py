@@ -166,6 +166,32 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertIn('"value": "doc-1"', call.kwargs["filter"])
         self.assertIn('"key": "run_id"', call.kwargs["filter"])
 
+    def test_list_traces_offset_uses_stable_source_page_size(self):
+        extractor = self._make_extractor()
+        extractor.client.api.trace.list.side_effect = [
+            SimpleNamespace(
+                data=[{"id": f"trace-{index}"} for index in range(100)],
+                meta={"page": 1, "totalPages": 2, "totalItems": 150},
+            ),
+            SimpleNamespace(
+                data=[{"id": f"trace-{index}"} for index in range(100, 150)],
+                meta={"page": 2, "totalPages": 2, "totalItems": 150},
+            ),
+        ]
+
+        result = extractor.list_traces(offset=110, limit=10)
+
+        self.assertEqual(
+            [trace["id"] for trace in result["traces"]],
+            [f"trace-{index}" for index in range(110, 120)],
+        )
+        self.assertEqual(result["total_items"], 150)
+        self.assertTrue(result["source_exhausted"])
+        self.assertEqual(
+            [call.kwargs["limit"] for call in extractor.client.api.trace.list.call_args_list],
+            [100, 100],
+        )
+
     def test_get_observations_rejects_repeated_cursor(self):
         extractor = self._make_extractor()
         extractor.client.api.observations.get_many.side_effect = [

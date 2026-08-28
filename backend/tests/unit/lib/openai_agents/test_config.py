@@ -32,6 +32,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
+    get_agent_studio_trace_search_default_limit,
+    get_agent_studio_trace_search_max_limit,
     get_agent_studio_workshop_context_group_prompt_max_chars,
     get_agent_studio_workshop_context_prompt_max_chars,
     get_api_key,
@@ -201,6 +203,18 @@ def test_character_and_page_limits_use_env_with_invalid_fallback(
 
     monkeypatch.setenv(environment_name, "0")
     assert getter() == 1
+
+
+def test_trace_search_limits_are_configurable_and_max_covers_default(monkeypatch):
+    monkeypatch.delenv("AGENT_STUDIO_TRACE_SEARCH_DEFAULT_LIMIT", raising=False)
+    monkeypatch.delenv("AGENT_STUDIO_TRACE_SEARCH_MAX_LIMIT", raising=False)
+    assert get_agent_studio_trace_search_default_limit() == 25
+    assert get_agent_studio_trace_search_max_limit() == 100
+
+    monkeypatch.setenv("AGENT_STUDIO_TRACE_SEARCH_DEFAULT_LIMIT", "40")
+    monkeypatch.setenv("AGENT_STUDIO_TRACE_SEARCH_MAX_LIMIT", "10")
+    assert get_agent_studio_trace_search_default_limit() == 40
+    assert get_agent_studio_trace_search_max_limit() == 40
 
 
 def test_service_log_maxima_are_configurable_and_not_below_defaults(monkeypatch):
