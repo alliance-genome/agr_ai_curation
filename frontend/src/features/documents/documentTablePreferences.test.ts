@@ -30,6 +30,8 @@ describe('documentTablePreferences', () => {
       version: 1,
       columnVisibilityModel: { title: false },
       columnOrder: ['title', 'filename', 'status'],
+      columnWidths: {},
+      density: 'standard',
     })
   })
 
@@ -47,6 +49,8 @@ describe('documentTablePreferences', () => {
       version: 1,
       columnVisibilityModel: {},
       columnOrder: ['filename', 'title', 'status'],
+      columnWidths: {},
+      density: 'standard',
     })
   })
 
@@ -55,15 +59,45 @@ describe('documentTablePreferences', () => {
       version: 1,
       columnVisibilityModel: { title: false, stale: false },
       columnOrder: ['status', 'stale', 'filename', 'title'],
+      columnWidths: { title: 240, stale: 100 },
+      density: 'compact',
     }, COLUMN_FIELDS)
 
     expect(saved.columnOrder).toEqual(['status', 'filename', 'title'])
+    expect(saved.columnWidths).toEqual({ title: 240 })
     expect(JSON.parse(
       localStorage.getItem(getDocumentTablePreferencesStorageKey('curator-1')) ?? '{}',
     )).toEqual(saved)
   })
 
-  it('reorders by the drag index delta so injected grid columns do not skew the result', () => {
+  it('keeps ALL-371 visibility and order preferences while adding layout defaults', () => {
+    expect(normalizeDocumentTablePreferences({
+      version: 1,
+      columnVisibilityModel: { title: false },
+      columnOrder: ['status', 'filename', 'title'],
+    }, COLUMN_FIELDS)).toEqual({
+      version: 1,
+      columnVisibilityModel: { title: false },
+      columnOrder: ['status', 'filename', 'title'],
+      columnWidths: {},
+      density: 'standard',
+    })
+  })
+
+  it('drops malformed widths and density values', () => {
+    expect(normalizeDocumentTablePreferences({
+      version: 1,
+      columnVisibilityModel: {},
+      columnOrder: COLUMN_FIELDS,
+      columnWidths: { filename: 220, title: -1, status: 'wide' },
+      density: 'dense',
+    }, COLUMN_FIELDS)).toMatchObject({
+      columnWidths: { filename: 220 },
+      density: 'standard',
+    })
+  })
+
+  it('reorders by the drag index delta so selection controls do not skew the result', () => {
     expect(reorderDocumentTableColumns(COLUMN_FIELDS, 'status', 3, 1)).toEqual([
       'status',
       'filename',
