@@ -553,7 +553,7 @@ describe('PromptWorkshop', () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
 
     expect(await screen.findByText(/Package restriction \(read-only\): available to GROUP_B/)).toBeInTheDocument()
-    expect(screen.getByLabelText('Available to groups')).toHaveTextContent('GROUP_B')
+    await waitFor(() => expect(screen.getByLabelText('Available to groups')).toHaveTextContent('GROUP_B'))
     expect(screen.getByText(/inherits a GROUP_B access floor and may only be narrowed/)).toBeInTheDocument()
 
     const groupSelect = screen.getByRole('combobox', { name: 'Available to groups' })
