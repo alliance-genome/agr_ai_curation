@@ -277,7 +277,9 @@ def test_gene_expression_export_adapter_projects_fixture_to_schema_pinned_target
         "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
     }
     annotation = payload["gene_expression_annotations"][0]
-    assert annotation["source_payload"]["relation"] == {"name": "is_expressed_in"}
+    assert annotation["semantic_snapshot"]["payload"]["relation"] == {
+        "name": "is_expressed_in"
+    }
     assert annotation["target_rows"]["geneexpressionannotation"]["lookups"][
         "evidenceitem_id"
     ]["match"] == {"id": 203506}

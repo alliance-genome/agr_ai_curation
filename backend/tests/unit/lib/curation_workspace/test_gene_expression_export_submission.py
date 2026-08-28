@@ -59,14 +59,25 @@ CURATOR_GUIDANCE_FIXTURE_PATH = (
 )
 
 
-def _payload_context(candidate: dict) -> dict:
+def _payload_context(
+    candidate: dict,
+    *,
+    validation_findings: list[dict] | None = None,
+    envelope_metadata: dict | None = None,
+) -> dict:
     return {
         "session_id": "session-gene-expression",
         "candidate_ids": [candidate["candidate_id"]],
         "candidate_count": 1,
         "candidates": [],
         "domain_envelope_candidates": [candidate],
-        "domain_envelopes": [],
+        "domain_envelopes": [
+            {
+                "envelope_id": candidate["envelope_id"],
+                "validation_findings": list(validation_findings or []),
+                "metadata": dict(envelope_metadata or {}),
+            }
+        ],
         "readiness_blockers": [],
         "warnings": [],
     }
@@ -371,10 +382,41 @@ def test_gene_expression_export_preserves_detection_reagent_without_inventing_jo
         {"conditions": [{"condition_free_text": "heat shock"}]}
     ]
 
+    completed_no_match = {
+        "finding_id": "detection-reagent-no-match",
+        "status": "open",
+        "code": "detection_reagent_validation.unresolved",
+        "field_ref": {
+            "field_path": "expression_experiment.detection_reagents[1]",
+        },
+        "details": {
+            "validation_status": "unresolved",
+            "lookup_attempts": [{"outcome": "not_found"}],
+        },
+    }
+    unrelated_finding = {
+        "finding_id": "other-object-finding",
+        "object_ref": {"object_id": "another-gene-expression-annotation"},
+        "status": "open",
+    }
+    evidence_record = {
+        "evidence_record_id": "evidence-detection-reagent-1",
+        "verified_quote": "Tg(kdrl:EGFP) was detected in vascular endothelium.",
+        "page": 7,
+    }
     payload = GeneExpressionExportAdapter().build_submission_payload(
         mode=SubmissionMode.EXPORT,
         target_key=GENE_EXPRESSION_TARGET_KEY,
-        payload_context=_payload_context(candidate),
+        payload_context=_payload_context(
+            candidate,
+            validation_findings=[completed_no_match, unrelated_finding],
+            envelope_metadata={
+                "extraction_metadata": {
+                    "evidence_records": [evidence_record],
+                    "provenance": {"document_id": "document-123"},
+                }
+            },
+        ),
     )
 
     assert payload.payload_json is not None
@@ -404,6 +446,30 @@ def test_gene_expression_export_preserves_detection_reagent_without_inventing_jo
     assert "geneexpressionexperiment_detectionreagents" not in experiment_row.get(
         "relationships", {}
     )
+    annotation = payload.payload_json["gene_expression_annotations"][0]
+    assert annotation["semantic_snapshot"] == {
+        "snapshot_version": "0.9.0",
+        "readiness": "semantic_envelope_ready",
+        "payload": candidate["payload"],
+        "evidence": {
+            "evidence_record_ids": candidate["object"]["evidence_record_ids"],
+            "records": [evidence_record],
+            "provenance": {"document_id": "document-123"},
+        },
+        "validation_findings": [completed_no_match],
+    }
+    assert annotation["deferred_persistence_slots"] == [
+        {
+            "field_path": "expression_experiment.detection_reagents",
+            "reason_code": "persistence_projection_unsupported",
+            "target": "agr_curation",
+            "message": (
+                "The model-facing detection-reagent collection has no approved "
+                "agr_curation persistence relationship."
+            ),
+        }
+    ]
+    assert "source_payload" not in annotation
 
 
 def test_gene_expression_export_maps_curator_guidance_mixed_site_and_context_warnings():

@@ -39,7 +39,8 @@ from .conversion import REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS
 
 GENE_EXPRESSION_ADAPTER_KEY = "gene_expression"
 GENE_EXPRESSION_TARGET_KEY = "alliance.gene_expression.curation_db"
-GENE_EXPRESSION_EXPORT_SCHEMA_VERSION = 1
+GENE_EXPRESSION_EXPORT_SCHEMA_VERSION = 2
+GENE_EXPRESSION_SEMANTIC_SNAPSHOT_VERSION = "0.9.0"
 GENE_EXPRESSION_LINKML_CLASSES = (
     "GeneExpressionAnnotation",
     "GeneExpressionExperiment",
@@ -193,8 +194,16 @@ def build_gene_expression_export_payload(
     if blockers:
         raise GeneExpressionExportValidationError(blockers)
 
+    envelope_snapshots = {
+        str(snapshot["envelope_id"]): snapshot
+        for snapshot in export_context.domain_envelopes
+        if isinstance(snapshot, Mapping) and snapshot.get("envelope_id") is not None
+    }
     annotations = [
-        _gene_expression_annotation_payload(candidate)
+        _gene_expression_annotation_payload(
+            candidate,
+            envelope_snapshot=envelope_snapshots.get(str(candidate["envelope_id"])),
+        )
         for candidate in export_context.domain_envelope_candidates
     ]
     readiness_blockers = [
@@ -323,7 +332,11 @@ def gene_expression_export_blockers(
     return tuple(blockers)
 
 
-def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[str, Any]:
+def _gene_expression_annotation_payload(
+    candidate: Mapping[str, Any],
+    *,
+    envelope_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = _mapping(candidate["payload"])
     expression_experiment = _mapping(payload["expression_experiment"])
     expression_pattern = _mapping(payload["expression_pattern"])
@@ -337,6 +350,10 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
     experiment_reference = _mapping(expression_experiment["single_reference"])
     entity_assayed = _mapping(expression_experiment["entity_assayed"])
     export_warnings = _audit_only_context_warnings(payload)
+    validation_findings = _candidate_validation_findings(
+        candidate,
+        envelope_snapshot,
+    )
 
     temporal_target = {
         "table": "temporalcontext",
@@ -499,7 +516,14 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                 "model_ref": GENE_EXPRESSION_MODEL_ID,
                 "schema_ref": dict(_mapping(candidate["schema_ref"])),
             },
-            "source_payload": payload,
+            "semantic_snapshot": {
+                "snapshot_version": GENE_EXPRESSION_SEMANTIC_SNAPSHOT_VERSION,
+                "readiness": "semantic_envelope_ready",
+                "payload": payload,
+                "evidence": _semantic_evidence(candidate, envelope_snapshot),
+                "validation_findings": validation_findings,
+            },
+            "deferred_persistence_slots": _deferred_persistence_slots(payload),
             "target_rows": target_rows,
             "evidence": {
                 "single_reference": {
@@ -536,6 +560,68 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
             "export_diagnostics": {
                 "warnings": export_warnings,
             },
+        }
+    )
+
+
+def _deferred_persistence_slots(payload: Mapping[str, Any]) -> list[dict[str, str]]:
+    expression_experiment = _mapping(payload.get("expression_experiment"))
+    if not expression_experiment.get("detection_reagents"):
+        return []
+    return [
+        {
+            "field_path": "expression_experiment.detection_reagents",
+            "reason_code": "persistence_projection_unsupported",
+            "target": "agr_curation",
+            "message": (
+                "The model-facing detection-reagent collection has no approved "
+                "agr_curation persistence relationship."
+            ),
+        }
+    ]
+
+
+def _candidate_validation_findings(
+    candidate: Mapping[str, Any],
+    envelope_snapshot: Mapping[str, Any] | None,
+) -> list[Any]:
+    if envelope_snapshot is None:
+        return []
+    candidate_object_id = str(candidate["object_id"])
+    findings: list[Any] = []
+    for finding in envelope_snapshot.get("validation_findings", ()):
+        if not isinstance(finding, Mapping):
+            continue
+        field_ref = _mapping(finding.get("field_ref"))
+        object_ref = _mapping(field_ref.get("object_ref")) or _mapping(
+            finding.get("object_ref")
+        )
+        referenced_object_id = object_ref.get("object_id") or object_ref.get(
+            "pending_ref_id"
+        )
+        if (
+            referenced_object_id is None
+            or str(referenced_object_id) == candidate_object_id
+        ):
+            findings.append(finding)
+    return findings
+
+
+def _semantic_evidence(
+    candidate: Mapping[str, Any],
+    envelope_snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    snapshot_metadata = _mapping(
+        envelope_snapshot.get("metadata") if envelope_snapshot is not None else None
+    )
+    extraction_metadata = _mapping(snapshot_metadata.get("extraction_metadata"))
+    return _drop_empty(
+        {
+            "evidence_record_ids": list(
+                _mapping(candidate.get("object")).get("evidence_record_ids", ())
+            ),
+            "records": list(extraction_metadata.get("evidence_records", ())),
+            "provenance": dict(_mapping(extraction_metadata.get("provenance"))),
         }
     )
 

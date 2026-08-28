@@ -1335,7 +1335,9 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     assert annotation["envelope"]["schema_ref"]["schema_id"] == (
         "alliance.linkml.GeneExpressionAnnotation"
     )
-    assert annotation["source_payload"]["where_expressed_statement"] == repaired_statement
+    assert annotation["semantic_snapshot"]["payload"][
+        "where_expressed_statement"
+    ] == repaired_statement
     assert submission["submission_state"]["write_mode"] == "read_only_handoff"
     assert submission["submission_state"]["envelope_revisions"] == [
         {"envelope_id": envelope_id, "envelope_revision": exported_envelope_revision}
