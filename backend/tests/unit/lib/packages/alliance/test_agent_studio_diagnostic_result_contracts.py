@@ -281,10 +281,83 @@ def test_structured_summary_drops_previews_to_stay_within_provider_budget(
         for index in range(4)
     )
     assert all(
-        summary["fields"][f"scalar_{index}"]["detail_path"] == f"scalar_{index}"
+        summary["fields"][f"scalar_{index}"]["detail_path"]
+        == f"@field.{index}.value"
         for index in range(4)
     )
     _provider_visible("agr_curation_query", summary)
+
+
+def test_many_field_summary_metadata_is_bounded_and_exactly_recoverable(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "1400")
+    oversized_name = "field.name." + "n" * 2000
+    result = {
+        "status": "ok",
+        oversized_name: "oversized-name-value-" + "v" * 500,
+        **{f"scalar_{index:03d}": f"value-{index}-" + "x" * 500 for index in range(100)},
+    }
+    handler = result_contracts.create_bounded_result_handler(
+        lambda: result,
+        {"kind": "structured", "page_paths": []},
+    )
+
+    recovered = {}
+    cursor = 0
+    while True:
+        summary = handler(result_view="summary", result_cursor=cursor)
+        assert len(json.dumps(summary, default=str)) <= 1400
+        _provider_visible("agr_curation_query", summary)
+        assert summary["returned_field_count"] > 0
+
+        for name, descriptor in summary["fields"].items():
+            if name.startswith("@field."):
+                metadata_chunks = []
+                detail_cursor = 0
+                while True:
+                    detail = handler(
+                        result_view="detail",
+                        detail_path=descriptor["metadata_detail_path"],
+                        detail_cursor=detail_cursor,
+                    )
+                    assert len(json.dumps(detail, default=str)) <= 1400
+                    metadata_chunks.append(detail["content"])
+                    if detail["complete"]:
+                        break
+                    detail_cursor = detail["next_cursor"]
+                metadata_content = "".join(metadata_chunks)
+                assert hashlib.sha256(metadata_content.encode()).hexdigest() == descriptor[
+                    "metadata_sha256"
+                ]
+                metadata = json.loads(metadata_content)
+                name = metadata["name"]
+                descriptor = {"detail_path": metadata["value_detail_path"]}
+
+            if isinstance(descriptor, dict) and "detail_path" in descriptor:
+                value_chunks = []
+                detail_cursor = 0
+                while True:
+                    detail = handler(
+                        result_view="detail",
+                        detail_path=descriptor["detail_path"],
+                        detail_cursor=detail_cursor,
+                    )
+                    assert len(json.dumps(detail, default=str)) <= 1400
+                    value_chunks.append(detail["content"])
+                    if detail["complete"]:
+                        break
+                    detail_cursor = detail["next_cursor"]
+                recovered[name] = "".join(value_chunks)
+            else:
+                recovered[name] = descriptor
+
+        if summary["fields_complete"]:
+            break
+        assert summary["next_field_cursor"] > cursor
+        cursor = summary["next_field_cursor"]
+
+    assert recovered == result
 
 
 def test_sql_diagnostic_counts_pages_and_chunks_without_full_materialization(monkeypatch):
@@ -462,14 +535,14 @@ def test_registered_schemas_advertise_bounded_continuation(monkeypatch):
         properties = tool.input_schema["properties"]
         if tool_id in {"chebi_api_call", "quickgo_api_call"}:
             assert properties["result_view"]["enum"] == ["summary", "detail"]
-            assert "result_limit" not in properties
         else:
             assert properties["result_view"]["enum"] == [
                 "summary",
                 "page",
                 "detail",
             ]
-            assert properties["result_limit"]["maximum"] == 25
+        assert properties["result_limit"]["maximum"] == 25
+        assert properties["result_cursor"]["minimum"] == 0
         assert properties["detail_max_chars"]["maximum"] == 1000
         assert "Result contract:" in tool.description
 

@@ -89,6 +89,39 @@ def _resolve_path(result: Any, path: str) -> Any:
     return current
 
 
+def _field_metadata(name: Any, value: Any, *, index: int) -> dict[str, Any]:
+    content = value if isinstance(value, str) else _canonical_json(value)
+    metadata = {
+        "name": str(name),
+        "value_detail_path": f"@field.{index}.value",
+        "value_type": type(value).__name__,
+        "value_total_chars": len(content),
+        "value_sha256": _hash(content),
+    }
+    if isinstance(value, (list, dict)):
+        metadata["value_count"] = len(value)
+    return metadata
+
+
+def _resolve_detail_path(result: Mapping[str, Any], path: str) -> Any:
+    parts = path.split(".")
+    if (
+        len(parts) == 3
+        and parts[0] == "@field"
+        and parts[1].isdigit()
+        and parts[2] in {"metadata", "value"}
+    ):
+        fields = sorted(result.items(), key=lambda item: str(item[0]))
+        index = int(parts[1])
+        if index >= len(fields):
+            raise ValueError(f"result path '{path}' field index {index} is out of range")
+        name, value = fields[index]
+        if parts[2] == "value":
+            return value
+        return _field_metadata(name, value, index=index)
+    return _resolve_path(result, path)
+
+
 def _detail_descriptor(
     value: Any,
     path: str,
@@ -109,38 +142,56 @@ def _detail_descriptor(
     return descriptor
 
 
-def _summary(result: Mapping[str, Any], *, page_paths: set[str]) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
+def _field_descriptor(
+    value: Any,
+    *,
+    path: str,
+    detail_path: str,
+    page_paths: set[str],
+) -> Any:
+    if isinstance(value, list):
+        return {
+            "type": "list",
+            "count": len(value),
+            "page_path": path if path in page_paths else None,
+            "detail_path": detail_path,
+            "sha256": _hash(_canonical_json(value)),
+        }
+    if isinstance(value, dict):
+        return {
+            "type": "object",
+            "key_count": len(value),
+            **_detail_descriptor(value, detail_path),
+        }
+    if (
+        isinstance(value, str)
+        and len(value)
+        > get_agent_studio_package_diagnostic_scalar_preview_max_chars()
+    ):
+        descriptor = _detail_descriptor(value, detail_path, include_preview=True)
+        if _provider_json_chars(descriptor) > _result_max_chars():
+            return _detail_descriptor(value, detail_path)
+        return descriptor
+    return value
+
+
+def _summary(
+    result: Mapping[str, Any],
+    *,
+    page_paths: set[str],
+    cursor: int,
+    limit: int,
+) -> dict[str, Any]:
+    field_items = sorted(result.items(), key=lambda item: str(item[0]))
+    if cursor > len(field_items):
+        raise ValueError(
+            f"result_cursor {cursor} is outside the 0..{len(field_items)} range"
+        )
     available_page_paths: list[str] = []
     for key, value in result.items():
         path = str(key)
-        if isinstance(value, list):
-            if path in page_paths:
-                available_page_paths.append(path)
-            fields[key] = {
-                "type": "list",
-                "count": len(value),
-                "page_path": path if path in page_paths else None,
-                "detail_path": path,
-                "sha256": _hash(_canonical_json(value)),
-            }
-        elif isinstance(value, dict):
-            fields[key] = {
-                "type": "object",
-                "key_count": len(value),
-                **_detail_descriptor(value, path),
-            }
-        elif (
-            isinstance(value, str)
-            and len(value)
-            > get_agent_studio_package_diagnostic_scalar_preview_max_chars()
-        ):
-            descriptor = _detail_descriptor(value, path, include_preview=True)
-            if _provider_json_chars(descriptor) > _result_max_chars():
-                descriptor = _detail_descriptor(value, path)
-            fields[key] = descriptor
-        else:
-            fields[key] = value
+        if isinstance(value, list) and path in page_paths:
+            available_page_paths.append(path)
 
     canonical = _canonical_json(result)
     summary = {
@@ -148,22 +199,78 @@ def _summary(result: Mapping[str, Any], *, page_paths: set[str]) -> dict[str, An
         "result_view": "summary",
         "result_sha256": _hash(canonical),
         "result_total_chars": len(canonical),
-        "fields": fields,
+        "fields": {},
+        "field_count": len(field_items),
+        "field_cursor": cursor,
+        "returned_field_count": 0,
+        "next_field_cursor": None,
+        "fields_complete": False,
+        "fields_truncated": True,
         "available_page_paths": sorted(available_page_paths),
         "continuation": (
             "Use result_view='page' for listed page paths or result_view='detail' "
-            "with detail_path for exact content."
+            "with detail_path for exact content. Continue field metadata with "
+            "result_view='summary' and next_field_cursor."
             if available_page_paths
-            else "Use result_view='detail' with detail_path for exact content."
+            else (
+                "Use result_view='detail' with detail_path for exact content. "
+                "Continue field metadata with result_view='summary' and "
+                "next_field_cursor."
+            )
         ),
     }
-    if _provider_json_chars(summary) > _result_max_chars():
-        for key, value in list(fields.items()):
-            if not isinstance(value, dict) or "preview" not in value:
-                continue
-            fields[key] = _detail_descriptor(result[key], str(key))
-            if _provider_json_chars(summary) <= _result_max_chars():
-                break
+    result_max = _result_max_chars()
+    stop = min(len(field_items), cursor + limit)
+    next_cursor = cursor
+    for index in range(cursor, stop):
+        key, value = field_items[index]
+        path = str(key)
+        detail_path = f"@field.{index}.value"
+        descriptor = _field_descriptor(
+            value,
+            path=path,
+            detail_path=detail_path,
+            page_paths=page_paths,
+        )
+        summary["fields"][path] = descriptor
+        if _provider_json_chars(summary) > result_max:
+            for prior_index in range(cursor, index + 1):
+                prior_key, prior_value = field_items[prior_index]
+                prior_path = str(prior_key)
+                prior_descriptor = summary["fields"].get(prior_path)
+                if not isinstance(prior_descriptor, dict) or "preview" not in prior_descriptor:
+                    continue
+                summary["fields"][prior_path] = _detail_descriptor(
+                    prior_value, f"@field.{prior_index}.value"
+                )
+                if _provider_json_chars(summary) <= result_max:
+                    break
+        if _provider_json_chars(summary) > result_max:
+            summary["fields"].pop(path)
+            metadata = _canonical_json(_field_metadata(key, value, index=index))
+            summary["fields"][f"@field.{index}"] = {
+                "metadata_detail_path": f"@field.{index}.metadata",
+                "metadata_total_chars": len(metadata),
+                "metadata_sha256": _hash(metadata),
+            }
+        if _provider_json_chars(summary) > result_max:
+            summary["fields"].pop(f"@field.{index}", None)
+            break
+        next_cursor = index + 1
+
+    returned = next_cursor - cursor
+    summary.update(
+        returned_field_count=returned,
+        next_field_cursor=next_cursor if next_cursor < len(field_items) else None,
+        fields_complete=next_cursor >= len(field_items),
+        fields_truncated=next_cursor < len(field_items),
+    )
+    if returned == 0 and cursor < len(field_items):
+        raise ValueError(
+            "provider inline limit is too small for diagnostic summary metadata"
+        )
+    if _provider_json_chars(summary) > result_max:
+        raise ValueError("diagnostic summary exceeds the provider inline limit")
     return summary
 
 
@@ -236,7 +343,7 @@ def _detail(
     max_chars: int,
     output_path: str | None = None,
 ) -> dict[str, Any]:
-    value = _resolve_path(result, path)
+    value = _resolve_detail_path(result, path)
     is_text = isinstance(value, str)
     content = value if is_text else _canonical_json(value)
     if cursor < 0 or cursor > len(content):
@@ -307,7 +414,14 @@ def _render_result(
     view = controls.get("result_view", "summary")
     page_paths = set(contract.get("page_paths") or [])
     if view == "summary":
-        return _summary(result, page_paths=page_paths)
+        return _summary(
+            result,
+            page_paths=page_paths,
+            cursor=_normalized_cursor(
+                controls.get("result_cursor", 0), name="result_cursor"
+            ),
+            limit=_normalized_limit(controls.get("result_limit")),
+        )
     if view == "page":
         path = controls.get("result_path")
         if not isinstance(path, str) or not path:
@@ -526,24 +640,26 @@ def diagnostic_input_schema(
             "detail_max_chars": {"type": "integer", "minimum": 1, "maximum": chunk_max},
         }
     )
+    properties.update(
+        {
+            "result_cursor": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Field cursor for summary metadata or item cursor for a structured page.",
+            },
+            "result_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": page_max,
+            },
+        }
+    )
     if page_paths:
-        properties.update(
-            {
-                "result_path": {
-                    "type": "string",
-                    "enum": page_paths,
-                    "description": (
-                        "Structured list path to page when result_view is page."
-                    ),
-                },
-                "result_cursor": {"type": "integer", "minimum": 0},
-                "result_limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": page_max,
-                },
-            }
-        )
+        properties["result_path"] = {
+            "type": "string",
+            "enum": page_paths,
+            "description": "Structured list path to page when result_view is page.",
+        }
     return schema
 
 
