@@ -17,7 +17,11 @@ User Context:
     See set_workflow_user_context() and get_current_user_id().
 """
 
+import hashlib
+import json
 import logging
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 from uuid import uuid4
@@ -44,12 +48,14 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_max_steps,
     get_agent_studio_flow_name_max_chars,
     get_agent_studio_flow_output_filename_template_max_chars,
+    get_agent_studio_flow_inspection_chunk_max_chars,
+    get_agent_studio_flow_inspection_page_limit,
     get_agent_studio_flow_step_goal_max_chars,
 )
+from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 
 from .catalog_service import AGENT_REGISTRY
 from .diagnostic_tools import get_diagnostic_tools_registry
-from .domain_envelope_tools import current_flow_domain_envelope_analysis
 from .flow_agent_policy import (
     agent_allows_ordinary_flow_step,
     attachment_only_validator_reason,
@@ -1243,6 +1249,28 @@ def _get_flow_templates_handler():
             "returned_count": len(page),
             "truncated": truncated,
             "next_cursor": next_cursor,
+            "complete": not truncated,
+            "next_call": (
+                {
+                    "tool": "get_flow_templates",
+                    "arguments": {
+                        **(
+                            {"query": str(query).strip()}
+                            if str(query or "").strip()
+                            else {}
+                        ),
+                        **(
+                            {"category": normalized_category}
+                            if normalized_category
+                            else {}
+                        ),
+                        "limit": bounded_limit,
+                        "cursor": next_cursor,
+                    },
+                }
+                if next_cursor is not None
+                else None
+            ),
             "limit": bounded_limit,
             "query": str(query or "").strip() or None,
             "category": normalized_category,
@@ -1373,6 +1401,28 @@ def _get_available_agents_handler():
             "total_count": total_agents,
             "truncated": truncated,
             "next_cursor": next_cursor,
+            "complete": not truncated,
+            "next_call": (
+                {
+                    "tool": "get_available_agents",
+                    "arguments": {
+                        **(
+                            {"query": str(query).strip()}
+                            if str(query or "").strip()
+                            else {}
+                        ),
+                        **(
+                            {"category": normalized_category}
+                            if normalized_category
+                            else {}
+                        ),
+                        "limit": bounded_limit,
+                        "cursor": next_cursor,
+                    },
+                }
+                if next_cursor is not None
+                else None
+            ),
             "limit": bounded_limit,
             "query": str(query or "").strip() or None,
             "category": normalized_category,
@@ -1382,403 +1432,706 @@ def _get_available_agents_handler():
     return handler
 
 
-def _get_current_flow_handler():
-    """Create handler for the get_current_flow tool.
+_FLOW_INSTRUCTION_FIELDS = frozenset(
+    {"task_instructions", "custom_instructions", "step_goal"}
+)
+_FLOW_SCHEDULE_SECTIONS = (
+    "selections",
+    "scheduled_validators",
+    "opt_outs",
+    "replacement_validators",
+    "supplemental_validators",
+    "inactive_metadata",
+)
 
-    Returns the current flow being edited in the UI in execution order.
-    The execution order is determined by traversing edges from the entry node,
-    NOT by the order nodes were placed on the canvas.
-    """
-    def handler() -> Dict[str, Any]:
-        """Get the current flow being edited in the UI.
 
-        Returns the flow definition with nodes listed in EXECUTION ORDER
-        (following edges from entry node), not canvas placement order.
+def _inspection_limit(limit: Optional[int]) -> int:
+    maximum = get_agent_studio_flow_inspection_page_limit()
+    return normalize_page_limit(limit, default=maximum, maximum=maximum)
 
-        Returns:
-            Dict with flow details in execution order, or error if no flow context
-        """
-        flow_context = get_current_flow_context()
 
-        if not flow_context:
-            return {
-                "success": False,
-                "error": "No flow is currently being edited",
-                "help": "The user must be on the Flows tab with a flow open to use this tool"
-            }
+def _inspection_chunk_limit(limit: Optional[int]) -> int:
+    maximum = get_agent_studio_flow_inspection_chunk_max_chars()
+    return normalize_page_limit(limit, default=maximum, maximum=maximum)
 
-        flow_name = flow_context.get("flow_name", "Untitled Flow")
-        nodes = flow_context.get("nodes", [])
-        edges = flow_context.get("edges", [])
-        if not nodes:
-            domain_envelope_analysis = current_flow_domain_envelope_analysis(
-                flow_context=flow_context,
-                agent_registry=AGENT_REGISTRY,
-            )
-            return {
-                "success": True,
-                "flow_name": flow_name,
-                "step_count": 0,
-                "message": "Flow is empty - no steps have been added yet",
-                "steps": [],
-                "domain_envelope_analysis": domain_envelope_analysis,
-                "execution_order_markdown": f"# {flow_name}\n\nThis flow has no steps yet."
-            }
 
-        # Project the same control topology used by save, batch, and runtime.
-        node_by_id = {n.get("id"): n for n in nodes}
-        projection = project_executable_flow_graph(flow_context, raise_on_invalid=False)
-        output_attachment_by_node_id = {
-            attachment.output_node_id: attachment
-            for attachment in projection.output_attachments
+def _flow_node_data(node: Mapping[str, Any]) -> Mapping[str, Any]:
+    data = node.get("data")
+    return data if isinstance(data, Mapping) else node
+
+
+def _flow_node_type(node: Mapping[str, Any]) -> str:
+    return str(node.get("type") or node.get("node_type") or "agent")
+
+
+def _current_flow_state() -> tuple[
+    Dict[str, Any],
+    list[Mapping[str, Any]],
+    dict[str, Mapping[str, Any]],
+    Any,
+] | None:
+    flow_context = get_current_flow_context()
+    if not flow_context:
+        return None
+    nodes = [node for node in flow_context.get("nodes", []) if isinstance(node, Mapping)]
+    node_by_id = {
+        str(node.get("id")): node
+        for node in nodes
+        if node.get("id") not in (None, "")
+    }
+    projection = project_executable_flow_graph(flow_context, raise_on_invalid=False)
+    return flow_context, nodes, node_by_id, projection
+
+
+def _attachment_only_finding(node: Mapping[str, Any]) -> Dict[str, Any] | None:
+    data = _flow_node_data(node)
+    agent_id = str(data.get("agent_id") or "unknown")
+    entry = AGENT_REGISTRY.get(agent_id)
+    if not isinstance(entry, dict) or agent_allows_ordinary_flow_step(agent_id, entry):
+        return None
+    agent_name = str(entry.get("name") or data.get("agent_display_name") or agent_id)
+    return {
+        "severity": "CRITICAL",
+        "code": "attachment_only_validator_step",
+        "node_ids": [str(node.get("id"))],
+        "message": attachment_only_validator_reason(agent_name),
+    }
+
+
+def _current_flow_findings(
+    nodes: Sequence[Mapping[str, Any]],
+    node_by_id: Mapping[str, Mapping[str, Any]],
+    projection: Any,
+) -> list[Dict[str, Any]]:
+    findings: list[Dict[str, Any]] = [
+        {
+            "severity": "CRITICAL",
+            "code": issue.code,
+            "node_ids": list(issue.node_ids),
+            "edge_ids": list(issue.edge_ids),
+            "message": issue.message,
         }
-        execution_order = [
-            node_by_id[node_id]
-            for node_id in projection.ordered_executable_node_ids
-            if node_id in node_by_id
-        ]
-        disconnected_ids = {
+        for issue in projection.issues
+    ]
+
+    task_nodes = [
+        node
+        for node in nodes
+        if _flow_node_type(node) == "task_input"
+        or _flow_node_data(node).get("agent_id") == "task_input"
+    ]
+    if not task_nodes:
+        findings.append(
+            {
+                "severity": "CRITICAL",
+                "code": "missing_task_input",
+                "node_ids": [],
+                "message": "Flow has no task_input node.",
+            }
+        )
+    else:
+        for task_node in task_nodes:
+            instructions = _flow_node_data(task_node).get("task_instructions")
+            if not isinstance(instructions, str) or not instructions.strip():
+                findings.append(
+                    {
+                        "severity": "CRITICAL",
+                        "code": "empty_task_input",
+                        "node_ids": [str(task_node.get("id"))],
+                        "message": "task_input node has empty task_instructions.",
+                    }
+                )
+
+    output_keys: dict[str, list[str]] = {}
+    for node in nodes:
+        output_key = _flow_node_data(node).get("output_key")
+        if isinstance(output_key, str) and output_key:
+            output_keys.setdefault(output_key, []).append(str(node.get("id")))
+    for output_key, node_ids in sorted(output_keys.items()):
+        if len(node_ids) > 1:
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "code": "duplicate_output_key",
+                    "node_ids": node_ids,
+                    "output_key": output_key,
+                    "duplicate_count": len(node_ids),
+                    "message": f"output_key '{output_key}' is used by {len(node_ids)} nodes.",
+                }
+            )
+
+    for node_id in projection.control_node_ids:
+        node = node_by_id.get(node_id)
+        if node is None:
+            continue
+        data = _flow_node_data(node)
+        if (
+            _flow_node_type(node) in {"task_input", "output"}
+            or data.get("agent_id") in {"task_input", "supervisor"}
+        ):
+            continue
+        finding = _attachment_only_finding(node)
+        if finding is not None:
+            findings.append(finding)
+
+    return findings
+
+
+def _domain_pack_link(node: Mapping[str, Any]) -> str | None:
+    agent_id = str(_flow_node_data(node).get("agent_id") or "")
+    entry = AGENT_REGISTRY.get(agent_id)
+    curation = entry.get("curation") if isinstance(entry, Mapping) else None
+    domain_pack_id = curation.get("domain_pack_id") if isinstance(curation, Mapping) else None
+    return str(domain_pack_id) if domain_pack_id else None
+
+
+def _build_current_flow_manifest() -> Dict[str, Any]:
+    state = _current_flow_state()
+    if state is None:
+        return {
+            "success": False,
+            "error": "No flow is currently being edited",
+            "help": "The user must be on the Flows tab with a flow open to use this tool",
+            "complete": True,
+            "truncated": False,
+            "next_call": None,
+        }
+    flow_context, nodes, node_by_id, projection = state
+    findings = _current_flow_findings(nodes, node_by_id, projection)
+    critical_findings = [item for item in findings if item["severity"] == "CRITICAL"]
+    high_findings = [item for item in findings if item["severity"] == "HIGH"]
+    output_node_ids = list(
+        dict.fromkeys(
+            [
+                str(node.get("id"))
+                for node in nodes
+                if _flow_node_type(node) == "output"
+            ]
+            + [attachment.output_node_id for attachment in projection.output_attachments]
+        )
+    )
+    validation_sidecar_node_ids = list(
+        dict.fromkeys(sidecar.validator_node_id for sidecar in projection.validation_sidecars)
+    )
+    task_input_node_ids = [
+        str(node.get("id"))
+        for node in nodes
+        if _flow_node_type(node) == "task_input"
+        or _flow_node_data(node).get("agent_id") == "task_input"
+    ]
+    executable_agent_node_ids = [
+        node_id
+        for node_id in projection.ordered_control_node_ids
+        if node_id not in task_input_node_ids
+        and node_id not in output_node_ids
+        and node_id not in validation_sidecar_node_ids
+    ]
+    disconnected_node_ids = list(
+        dict.fromkeys(
             node_id
             for issue in projection.issues
             if issue.code == "disconnected"
             for node_id in issue.node_ids
+        )
+    )
+    compact_nodes = []
+    for node in nodes:
+        data = _flow_node_data(node)
+        compact = {
+            "node_id": str(node.get("id")),
+            "node_type": _flow_node_type(node),
+            "agent_id": data.get("agent_id"),
         }
-        disconnected = [
-            node_by_id[node_id]
-            for node_id in projection.control_node_ids
-            if node_id in disconnected_ids and node_id in node_by_id
-        ]
+        domain_pack_id = _domain_pack_link(node)
+        if domain_pack_id:
+            compact["domain_pack_id"] = domain_pack_id
+        compact_nodes.append(compact)
 
-        # Build the response
-        steps = []
-        validation_warnings = [
-            {
-                "type": "CRITICAL",
-                "node_id": issue.node_ids[0] if issue.node_ids else None,
-                "code": issue.code,
-                "message": issue.message,
-            }
-            for issue in projection.issues
-        ]
-        markdown_lines = [
-            f"# {flow_name}",
-            "",
-            f"**{len(execution_order)} executable steps in execution order:**",
-            "",
-        ]
-        task_input_node = next(
-            (
-                node
-                for node in nodes
-                if node.get("type") == "task_input"
-                or node.get("data", node).get("agent_id") == "task_input"
-            ),
-            None,
-        )
-        if task_input_node is not None:
-            task_data = task_input_node.get("data", task_input_node)
-            task_instructions = task_data.get("task_instructions")
-            if task_instructions and task_instructions.strip():
-                markdown_lines.extend(
-                    [
-                        "**Task Input:** " + _truncate_preview(task_instructions, 300),
-                        "",
-                    ]
-                )
-            else:
-                validation_warnings.append({
-                    "type": "CRITICAL",
-                    "node_id": task_input_node.get("id"),
-                    "message": "task_input node has EMPTY task_instructions (this is required content)",
-                })
-                markdown_lines.extend(["**Task Input:** ⚠️ EMPTY (required)", ""])
+    return {
+        "success": True,
+        "contract": "current_flow_manifest_v1",
+        "flow_name": flow_context.get("flow_name", "Untitled Flow"),
+        "version": flow_context.get("version", "1.1"),
+        "topology_valid": projection.valid,
+        "has_critical_issues": bool(critical_findings),
+        "critical_issue_count": len(critical_findings),
+        "high_issue_count": len(high_findings),
+        "findings": findings,
+        "counts": {
+            "all_nodes": len(nodes),
+            "control_nodes": len(projection.control_node_ids),
+            "ordered_control_nodes": len(projection.ordered_control_node_ids),
+            "executable_agents": len(executable_agent_node_ids),
+            "output_nodes": len(output_node_ids),
+            "validation_sidecars": len(validation_sidecar_node_ids),
+            "disconnected_nodes": len(disconnected_node_ids),
+        },
+        "ordered_control_node_ids": list(projection.ordered_control_node_ids),
+        "executable_agent_node_ids": executable_agent_node_ids,
+        "output_node_ids": output_node_ids,
+        "validation_sidecar_node_ids": validation_sidecar_node_ids,
+        "disconnected_node_ids": disconnected_node_ids,
+        "task_input": {
+            "node_ids": task_input_node_ids,
+            "present": bool(task_input_node_ids),
+            "empty": any(item["code"] == "empty_task_input" for item in findings),
+        },
+        "nodes": compact_nodes,
+        "detail_calls": {
+            "topology": {"tool": "get_current_flow_topology", "section": "issues"},
+            "node": {"tool": "get_current_flow_node", "node_id": "<node_id>"},
+            "instructions": {
+                "tool": "get_current_flow_instructions",
+                "node_id": "<node_id>",
+                "field": "task_instructions|custom_instructions|step_goal",
+            },
+            "projection_plan": {
+                "tool": "get_current_flow_projection_plan",
+                "node_id": "<node_id>",
+            },
+            "warnings": {"tool": "get_current_flow_validation_warnings"},
+            "validation_schedule": {
+                "tool": "get_current_flow_validation_schedule",
+                "node_id": "<node_id>",
+                "section": "selections",
+            },
+        },
+        "complete": True,
+        "truncated": False,
+        "next_call": None,
+    }
 
-        def _attachment_only_warning_for_node(node: Dict[str, Any]) -> Optional[str]:
-            node_data = node.get("data", node)
-            agent_id = node_data.get("agent_id", "unknown")
-            entry = AGENT_REGISTRY.get(agent_id)
-            if not isinstance(entry, dict):
-                return None
-            if agent_allows_ordinary_flow_step(agent_id, entry):
-                return None
-            agent_name = str(
-                entry.get("name")
-                or node_data.get("agent_display_name")
-                or agent_id
-            )
-            return attachment_only_validator_reason(agent_name)
 
-        def _output_source_details(output_attachment) -> list[Dict[str, Any]]:
-            details: list[Dict[str, Any]] = []
-            for source in output_attachment.sources:
-                source_node = node_by_id.get(source.source_node_id, {})
-                source_data = source_node.get("data", source_node)
-                details.append(
-                    {
-                        **source.to_dict(),
-                        "source_agent_id": source_data.get("agent_id"),
-                        "source_agent_display_name": source_data.get(
-                            "agent_display_name",
-                            source.source_node_id,
-                        ),
-                    }
-                )
-            return details
+def _get_current_flow_handler():
+    """Create the minimal current-flow verification-manifest handler."""
 
-        for i, node in enumerate(execution_order, 1):
-            node_data = node.get("data", node)  # Handle both nested and flat structures
-            node_type = node.get("type", "agent")
-            agent_id = node_data.get("agent_id", "unknown")
-            display_name = node_data.get("agent_display_name", agent_id)
-            custom_instructions = node_data.get("custom_instructions")
-            task_instructions = node_data.get("task_instructions")
-            output_filename_template = node_data.get("output_filename_template")
-            include_evidence = node_data.get("include_evidence")
-            projection_plan = node_data.get("projection_plan")
-            output_key = node_data.get("output_key", f"step_{i}_output")
-            validation_attachments = node_data.get("validation_attachments") or []
-            output_attachment = output_attachment_by_node_id.get(str(node.get("id") or ""))
+    def handler() -> Dict[str, Any]:
+        return _build_current_flow_manifest()
 
-            # Check if this is a task_input node
-            is_task_input = node_type == "task_input" or agent_id == "task_input"
-            flow_step_policy_warning = (
-                None if is_task_input else _attachment_only_warning_for_node(node)
-            )
+    return handler
 
-            step_info = {
-                "step": i,
-                "node_id": node.get("id"),
-                "node_type": node_type,
-                "agent_id": agent_id,
-                "agent_display_name": display_name,
-                "output_key": output_key
-            }
-            # For task_input nodes, ALWAYS include task_instructions (even if empty)
-            # This allows Claude to detect empty task_instructions as a verification error
-            if is_task_input:
-                step_info["task_instructions"] = task_instructions or ""  # Empty string if None/empty
-                is_empty = not task_instructions or not task_instructions.strip()
-                step_info["task_instructions_is_empty"] = is_empty
-                if is_empty:
-                    validation_warnings.append({
-                        "type": "CRITICAL",
-                        "node_id": node.get("id"),
-                        "message": "task_input node has EMPTY task_instructions (this is required content)"
-                    })
-            if custom_instructions:
-                step_info["custom_instructions"] = custom_instructions
-            if output_filename_template:
-                step_info["output_filename_template"] = output_filename_template
-            if include_evidence is not None:
-                step_info["include_evidence"] = bool(include_evidence)
-            if isinstance(projection_plan, dict):
-                step_info["projection_plan"] = projection_plan
-            if validation_attachments:
-                step_info["validation_attachments"] = validation_attachments
-            if output_attachment is not None:
-                step_info["output_attachment"] = {
-                    "output_node_id": output_attachment.output_node_id,
-                    "sources": _output_source_details(output_attachment),
+
+def _flow_detail_error(error: str, *, help_text: str | None = None) -> Dict[str, Any]:
+    response: Dict[str, Any] = {
+        "success": False,
+        "error": error,
+        "complete": True,
+        "truncated": False,
+        "next_call": None,
+    }
+    if help_text:
+        response["help"] = help_text
+    return response
+
+
+def _current_node(node_id: str) -> tuple[Mapping[str, Any], Any] | None:
+    state = _current_flow_state()
+    if state is None:
+        return None
+    node = state[2].get(str(node_id))
+    if node is None:
+        return None
+    return node, state
+
+
+def _paged_flow_response(
+    *,
+    tool: str,
+    section: str,
+    items: Sequence[Any],
+    limit: Optional[int],
+    cursor: Optional[str],
+    next_arguments: Mapping[str, Any] | None = None,
+    include_section_argument: bool = True,
+) -> Dict[str, Any]:
+    bounded_limit = _inspection_limit(limit)
+    page, truncated, next_cursor = offset_page(
+        list(items),
+        limit=bounded_limit,
+        cursor=parse_offset_cursor(cursor),
+    )
+    arguments = dict(next_arguments or {})
+    arguments["limit"] = bounded_limit
+    if include_section_argument:
+        arguments["section"] = section
+    next_call = None
+    if next_cursor is not None:
+        arguments["cursor"] = next_cursor
+        next_call = {"tool": tool, "arguments": arguments}
+    return {
+        "success": True,
+        "section": section,
+        "items": page,
+        "total_count": len(items),
+        "returned_count": len(page),
+        "cursor": str(parse_offset_cursor(cursor)),
+        "limit": bounded_limit,
+        "complete": not truncated,
+        "truncated": truncated,
+        "next_call": next_call,
+    }
+
+
+def _get_current_flow_topology_handler():
+    def handler(
+        section: str,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = _current_flow_state()
+        if state is None:
+            return _flow_detail_error("No flow is currently being edited")
+        flow_context, _nodes, node_by_id, projection = state
+        edges = [edge for edge in flow_context.get("edges", []) if isinstance(edge, Mapping)]
+        sections: dict[str, list[Any]] = {
+            "issues": [issue.to_dict() for issue in projection.issues],
+            "control_path": [
+                {
+                    "position": position,
+                    "node_id": node_id,
+                    "agent_id": _flow_node_data(node_by_id.get(node_id, {})).get("agent_id"),
                 }
-            if flow_step_policy_warning:
-                step_info["flow_step_policy_warning"] = flow_step_policy_warning
-                validation_warnings.append({
-                    "type": "CRITICAL",
-                    "node_id": node.get("id"),
-                    "message": flow_step_policy_warning,
-                })
-
-            steps.append(step_info)
-
-            # Build markdown representation
-            markdown_lines.append(f"## Step {i}: {display_name}")
-            markdown_lines.append(f"- **Type:** `{node_type}`")
-            markdown_lines.append(f"- **Agent:** `{agent_id}`")
-            if is_task_input:
-                markdown_lines.append("- **Input:** Flow entry point")
-                if task_instructions and task_instructions.strip():
-                    truncated = _truncate_preview(task_instructions, 300)
-                    markdown_lines.append(f"- **Task Instructions:** {truncated}")
-                else:
-                    # Explicitly flag empty task_instructions as a warning
-                    markdown_lines.append("- **Task Instructions:** ⚠️ EMPTY (this is required content)")
-            else:
-                markdown_lines.append("- **Input:** Flow task and loaded document context")
-                if flow_step_policy_warning:
-                    markdown_lines.append(
-                        f"- **Flow Placement:** CRITICAL - {flow_step_policy_warning}"
-                    )
-                if custom_instructions:
-                    markdown_lines.append(
-                        f"- **Custom Instructions:** {_truncate_preview(custom_instructions, 200)}"
-                    )
-                if output_filename_template:
-                    markdown_lines.append(
-                        "- **Output Filename Template:** "
-                        f"{_truncate_preview(output_filename_template, 100)}"
-                    )
-                if output_attachment is not None:
-                    source_labels = [
-                        f"{source['source_agent_display_name']} "
-                        f"(`{source['source_node_id']}`)"
-                        for source in _output_source_details(output_attachment)
-                    ]
-                    markdown_lines.append(
-                        "- **Formatter Binding:** Projects the ordered results from "
-                        + ", ".join(source_labels)
-                    )
-                if validation_attachments:
-                    active_enabled = [
-                        attachment
-                        for attachment in validation_attachments
-                        if attachment.get("state") == "active" and attachment.get("enabled")
-                    ]
-                    opted_out = [
-                        attachment
-                        for attachment in validation_attachments
-                        if attachment.get("state") == "active"
-                        and not attachment.get("enabled")
-                    ]
-                    under_development_metadata = [
-                        attachment
-                        for attachment in validation_attachments
-                        if attachment.get("state") == "under_development"
-                    ]
-                    markdown_lines.append(
-                        "- **Validation Attachments:** "
-                        f"{len(active_enabled)} active scheduled"
-                        + (f", {len(opted_out)} opted out" if opted_out else "")
-                        + (
-                            f", {len(under_development_metadata)} under-development metadata"
-                            if under_development_metadata
-                            else ""
-                        )
-                    )
-            markdown_lines.append(f"- **Output Key:** `{output_key}`")
-            markdown_lines.append("")
-
-        topology_issues = list(projection.issues)
-        if topology_issues:
-            markdown_lines.append("---")
-            markdown_lines.append("🚫 **Invalid executable flow topology:**")
-            for issue in topology_issues:
-                markdown_lines.append(f"- `[{issue.code}]` {issue.message}")
-            markdown_lines.append("")
-
-        # Add disconnected nodes warning if any
-        if disconnected:
-            markdown_lines.append("---")
-            markdown_lines.append(f"⚠️ **Warning:** {len(disconnected)} disconnected node(s) not in execution path:")
-            for node in disconnected:
-                node_data = node.get("data", node)
-                markdown_lines.append(f"- {node_data.get('agent_display_name', node_data.get('agent_id', 'unknown'))}")
-                flow_step_policy_warning = _attachment_only_warning_for_node(node)
-                if flow_step_policy_warning:
-                    markdown_lines.append(f"  - CRITICAL: {flow_step_policy_warning}")
-            markdown_lines.append("")
-
-        # Add edge information
-        if edges:
-            markdown_lines.append("---")
-            markdown_lines.append("**Connections:**")
-            for edge in edges:
-                source_node = node_by_id.get(edge.get("source"), {})
-                target_node = node_by_id.get(edge.get("target"), {})
-                source_name = source_node.get("data", source_node).get("agent_display_name", edge.get("source"))
-                target_name = target_node.get("data", target_node).get("agent_display_name", edge.get("target"))
-                edge_role = edge.get("role") or "control_flow"
-                markdown_lines.append(
-                    f"- {source_name} → {target_name} (`{edge_role}`)"
-                )
-
-        if projection.output_attachments:
-            markdown_lines.append("")
-            markdown_lines.append("**Formatter output branches:**")
-            for attachment in projection.output_attachments:
-                output_node = node_by_id.get(attachment.output_node_id, {})
-                output_data = output_node.get("data", output_node)
-                source_names = [
-                    source["source_agent_display_name"]
-                    for source in _output_source_details(attachment)
-                ]
-                markdown_lines.append(
-                    "- "
-                    f"{output_data.get('agent_display_name', attachment.output_node_id)} "
-                    "creates its own artifact from the ordered results of "
-                    + ", ".join(source_names)
-                    + "."
-                )
-            markdown_lines.append(
-                "Multiple formatter branches create multiple independent chat/file "
-                "outputs; control-flow steps may continue after a branch."
+                for position, node_id in enumerate(projection.ordered_control_node_ids)
+            ],
+            "control_edges": [
+                {
+                    "edge_id": edge.get("id"),
+                    "source_node_id": edge.get("source"),
+                    "target_node_id": edge.get("target"),
+                }
+                for edge in edges
+                if (edge.get("role") or "control_flow") == "control_flow"
+            ],
+            "output_bindings": [
+                {
+                    "output_node_id": attachment.output_node_id,
+                    "output_agent_id": _flow_node_data(
+                        node_by_id.get(attachment.output_node_id, {})
+                    ).get("agent_id"),
+                    "sources": [
+                        {
+                            **source.to_dict(),
+                            "source_agent_id": _flow_node_data(
+                                node_by_id.get(source.source_node_id, {})
+                            ).get("agent_id"),
+                        }
+                        for source in attachment.sources
+                    ],
+                }
+                for attachment in projection.output_attachments
+            ],
+            "validation_sidecars": [
+                sidecar.to_dict() for sidecar in projection.validation_sidecars
+            ],
+        }
+        if section not in sections:
+            return _flow_detail_error(
+                f"Unknown topology section '{section}'",
+                help_text=f"Use one of: {', '.join(sections)}",
             )
-
-        domain_envelope_analysis = current_flow_domain_envelope_analysis(
-            flow_context=flow_context,
-            agent_registry=AGENT_REGISTRY,
+        response = _paged_flow_response(
+            tool="get_current_flow_topology",
+            section=section,
+            items=sections[section],
+            limit=limit,
+            cursor=cursor,
         )
-        if domain_envelope_analysis["envelope_node_count"]:
-            markdown_lines.append("---")
-            markdown_lines.append("**Domain Envelope Metadata:**")
-            for envelope_node in domain_envelope_analysis["nodes"]:
-                scheduled_count = len(
-                    envelope_node.get("validation_schedule", {}).get("scheduled_validators", [])
-                )
-                opt_out_count = len(
-                    envelope_node.get("validation_schedule", {}).get("opt_outs", [])
-                )
-                inactive_count = len(
-                    envelope_node.get("validation_schedule", {}).get("inactive_metadata", [])
-                )
-                replacement_count = len(
-                    envelope_node.get("validation_schedule", {}).get("replacement_validators", [])
-                )
-                supplemental_count = len(
-                    envelope_node.get("validation_schedule", {}).get("supplemental_validators", [])
-                )
-                markdown_lines.append(
-                    "- "
-                    f"{envelope_node.get('agent_display_name') or envelope_node.get('agent_id')} "
-                    f"produces `{envelope_node.get('domain_pack_id')}` envelope objects "
-                    f"({scheduled_count} scheduled validators"
-                    + (f", {opt_out_count} policy opt-outs" if opt_out_count else "")
-                    + (f", {replacement_count} replacement validators" if replacement_count else "")
-                    + (f", {supplemental_count} supplemental validators" if supplemental_count else "")
-                    + (f", {inactive_count} under-development metadata" if inactive_count else "")
-                    + ")"
-                )
-            markdown_lines.append("")
+        response["topology_valid"] = projection.valid
+        return response
 
-        # Count critical issues for easy detection
-        critical_count = sum(1 for w in validation_warnings if w.get("type") == "CRITICAL")
+    return handler
 
+
+def _get_current_flow_node_handler():
+    def handler(node_id: str) -> Dict[str, Any]:
+        resolved = _current_node(node_id)
+        if resolved is None:
+            return _flow_detail_error(
+                f"Current flow has no node_id '{node_id}'",
+                help_text="Call get_current_flow for stable node IDs.",
+            )
+        node, _state = resolved
+        data = _flow_node_data(node)
+        excluded = {
+            *_FLOW_INSTRUCTION_FIELDS,
+            "projection_plan",
+            "validation_attachments",
+            "validation_groups",
+        }
+        scalar_configuration = {
+            key: value
+            for key, value in sorted(data.items())
+            if key not in excluded
+            and (value is None or isinstance(value, (str, int, float, bool)))
+        }
         return {
             "success": True,
-            "flow_name": flow_name,
-            "step_count": len(execution_order),
-            "disconnected_count": len(disconnected),
-            "validation_warnings": validation_warnings,
-            "has_critical_issues": critical_count > 0,
-            "critical_issue_count": critical_count,
-            "domain_envelope_analysis": domain_envelope_analysis,
-            "executable_graph": projection.to_dict(),
-            "steps": steps,
-            "edges": [
-                {
-                    "id": e.get("id"),
-                    "source": e.get("source"),
-                    "target": e.get("target"),
-                    "role": e.get("role") or "control_flow",
-                    "satisfies_binding_id": e.get("satisfies_binding_id"),
-                    "replaces_attachment_id": e.get("replaces_attachment_id"),
-                }
-                for e in edges
-            ],
-            "execution_order_markdown": "\n".join(markdown_lines),
-            "message": f"Flow '{flow_name}' has {len(execution_order)} steps in execution order" +
-                      (f" ({len(disconnected)} disconnected)" if disconnected else "") +
-                      (f" ⚠️ {critical_count} CRITICAL issue(s) found" if critical_count > 0 else "")
+            "node_id": str(node_id),
+            "node_type": _flow_node_type(node),
+            "scalar_configuration": scalar_configuration,
+            "detail_availability": {
+                field: isinstance(data.get(field), str)
+                for field in sorted(_FLOW_INSTRUCTION_FIELDS)
+            }
+            | {
+                "projection_plan": isinstance(data.get("projection_plan"), Mapping),
+                "validation_schedule": bool(
+                    data.get("validation_attachments") or data.get("validation_groups")
+                ),
+            },
+            "complete": True,
+            "truncated": False,
+            "next_call": None,
         }
+
+    return handler
+
+
+def _exact_chunk_response(
+    *,
+    tool: str,
+    arguments: Mapping[str, Any],
+    text: str,
+    limit: Optional[int],
+    cursor: Optional[str],
+) -> Dict[str, Any]:
+    bounded_limit = _inspection_chunk_limit(limit)
+    start = parse_offset_cursor(cursor)
+    end = min(len(text), start + bounded_limit)
+    truncated = end < len(text)
+    next_call = None
+    if truncated:
+        next_call = {
+            "tool": tool,
+            "arguments": {**arguments, "limit": bounded_limit, "cursor": str(end)},
+        }
+    return {
+        "content": text[start:end],
+        "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "total_chars": len(text),
+        "start_char": start,
+        "end_char": end,
+        "limit": bounded_limit,
+        "complete": not truncated,
+        "truncated": truncated,
+        "next_call": next_call,
+    }
+
+
+def _get_current_flow_instructions_handler():
+    def handler(
+        node_id: str,
+        field: str,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if field not in _FLOW_INSTRUCTION_FIELDS:
+            return _flow_detail_error(
+                f"Unknown instruction field '{field}'",
+                help_text="Use task_instructions, custom_instructions, or step_goal.",
+            )
+        resolved = _current_node(node_id)
+        if resolved is None:
+            return _flow_detail_error(f"Current flow has no node_id '{node_id}'")
+        value = _flow_node_data(resolved[0]).get(field)
+        if value is None:
+            value = ""
+        if not isinstance(value, str):
+            return _flow_detail_error(f"Node field '{field}' is not text")
+        return {
+            "success": True,
+            "node_id": str(node_id),
+            "field": field,
+            **_exact_chunk_response(
+                tool="get_current_flow_instructions",
+                arguments={"node_id": str(node_id), "field": field},
+                text=value,
+                limit=limit,
+                cursor=cursor,
+            ),
+        }
+
+    return handler
+
+
+def _json_pointer_value(value: Any, pointer: str) -> tuple[bool, Any]:
+    if pointer in ("", "/"):
+        return True, value
+    if not pointer.startswith("/"):
+        return False, None
+    current = value
+    for raw_token in pointer[1:].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, Mapping) and token in current:
+            current = current[token]
+        elif isinstance(current, Sequence) and not isinstance(current, (str, bytes)):
+            try:
+                current = current[int(token)]
+            except (ValueError, IndexError):
+                return False, None
+        else:
+            return False, None
+    return True, current
+
+
+def _get_current_flow_projection_plan_handler():
+    def handler(
+        node_id: str,
+        field: Optional[str] = None,
+        section: str = "",
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        resolved = _current_node(node_id)
+        if resolved is None:
+            return _flow_detail_error(f"Current flow has no node_id '{node_id}'")
+        plan = _flow_node_data(resolved[0]).get("projection_plan")
+        if not isinstance(plan, Mapping):
+            return _flow_detail_error(f"Node '{node_id}' has no projection_plan")
+        fields = sorted(str(key) for key in plan)
+        if field is None:
+            summaries = [
+                {"field": key, "value_type": type(plan[key]).__name__}
+                for key in fields
+            ]
+            response = _paged_flow_response(
+                tool="get_current_flow_projection_plan",
+                section="fields",
+                items=summaries,
+                limit=limit,
+                cursor=cursor,
+                next_arguments={"node_id": str(node_id)},
+            )
+            response["node_id"] = str(node_id)
+            return response
+        if field not in plan:
+            return _flow_detail_error(
+                f"projection_plan has no field '{field}'",
+                help_text=f"Available fields: {', '.join(fields)}",
+            )
+        found, selected = _json_pointer_value(plan[field], section)
+        if not found:
+            return _flow_detail_error(
+                f"projection_plan field '{field}' has no JSON Pointer section '{section}'"
+            )
+        canonical_json = json.dumps(
+            selected,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return {
+            "success": True,
+            "node_id": str(node_id),
+            "field": field,
+            "section": section,
+            "encoding": "canonical_json",
+            **_exact_chunk_response(
+                tool="get_current_flow_projection_plan",
+                arguments={"node_id": str(node_id), "field": field, "section": section},
+                text=canonical_json,
+                limit=limit,
+                cursor=cursor,
+            ),
+        }
+
+    return handler
+
+
+def _get_current_flow_validation_warnings_handler():
+    def handler(
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = _current_flow_state()
+        if state is None:
+            return _flow_detail_error("No flow is currently being edited")
+        findings = _current_flow_findings(state[1], state[2], state[3])
+        response = _paged_flow_response(
+            tool="get_current_flow_validation_warnings",
+            section="findings",
+            items=findings,
+            limit=limit,
+            cursor=cursor,
+            include_section_argument=False,
+        )
+        response["severity_counts"] = dict(Counter(item["severity"] for item in findings))
+        return response
+
+    return handler
+
+
+def _get_current_flow_validation_schedule_handler():
+    def handler(
+        node_id: str,
+        section: str,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if section not in _FLOW_SCHEDULE_SECTIONS:
+            return _flow_detail_error(
+                f"Unknown validation schedule section '{section}'",
+                help_text=f"Use one of: {', '.join(_FLOW_SCHEDULE_SECTIONS)}",
+            )
+        resolved = _current_node(node_id)
+        if resolved is None:
+            return _flow_detail_error(f"Current flow has no node_id '{node_id}'")
+        data = _flow_node_data(resolved[0])
+        schedule = validation_schedule_from_node_data(data)
+        selection_keys = (
+            "attachment_id",
+            "domain_pack_id",
+            "domain_pack_version",
+            "validator_id",
+            "validator_binding_id",
+            "validation_kind",
+            "tool_name",
+            "tool_method",
+            "validator_package_id",
+            "validator_agent_id",
+            "state",
+            "scope",
+            "object_type",
+            "object_role",
+            "field_path",
+            "required",
+            "blocking",
+            "export_blocking",
+            "default_enabled",
+            "allow_opt_out",
+            "enabled",
+            "blocked_by",
+        )
+        selections = [
+            {
+                key: attachment[key]
+                for key in selection_keys
+                if key in attachment and attachment[key] not in (None, "")
+            }
+            for attachment in (data.get("validation_attachments") or [])
+            if isinstance(attachment, Mapping)
+        ]
+        sections = {
+            "selections": selections,
+            "scheduled_validators": schedule["scheduled_validators"],
+            "opt_outs": schedule["opt_outs"],
+            "replacement_validators": schedule["replacement_validators"],
+            "supplemental_validators": schedule["supplemental_validators"],
+            "inactive_metadata": schedule["inactive_metadata"],
+        }
+        response = _paged_flow_response(
+            tool="get_current_flow_validation_schedule",
+            section=section,
+            items=sections[section],
+            limit=limit,
+            cursor=cursor,
+            next_arguments={"node_id": str(node_id)},
+        )
+        response["node_id"] = str(node_id)
+        response["section_counts"] = {
+            name: len(items) for name, items in sections.items()
+        }
+        return response
 
     return handler
 
@@ -1927,22 +2280,22 @@ Use this as a starting point when helping users design flows.""",
     # -------------------------------------------------------------------------
     registry.register(
         name="get_current_flow",
-        description="""Get the current flow being edited in the Flow Builder UI.
+        description="""Get the minimal verification manifest for the current Flow Builder flow.
 
 ALWAYS call this tool when you need to analyze, verify, or discuss the user's
-current flow. This tool returns the flow definition in EXECUTION ORDER
-(following edges from the entry node), not canvas placement order.
+current flow. The manifest reports canonical control-path, executable-agent,
+Output attachment, and validation-sidecar identities separately. It includes
+all CRITICAL/HIGH findings but intentionally omits large configuration values.
 
 Returns:
-- flow_name: Name of the flow
-- step_count: Number of steps in execution order
-- steps: Array of steps with agent_id, display_name, custom_instructions, etc.
-- edges: Connections between steps
-- execution_order_markdown: Human-readable markdown representation
-- disconnected_count: Number of nodes not connected to the main flow (warnings)
+- ordered_control_node_ids: Control path including task input and excluding attachments
+- executable_agent_node_ids: Ordinary control-path agents, excluding task input
+- output_node_ids and validation_sidecar_node_ids: Attachment identities
+- findings and has_critical_issues: Authoritative first-call verification status
+- detail_calls: Valid targeted calls for every omitted detail
 
 Use this tool BEFORE attempting to validate or provide feedback on a flow.
-The tool ensures you see the flow exactly as it will execute.""",
+Do not infer omitted details; use the returned bounded detail calls.""",
         input_schema={
             "type": "object",
             "properties": {},
@@ -1953,6 +2306,149 @@ The tool ensures you see the flow exactly as it will execute.""",
         tags=["flow", "inspection", "current"]
     )
     logger.debug("Registered: get_current_flow")
+
+    page_max = get_agent_studio_flow_inspection_page_limit()
+    chunk_max = get_agent_studio_flow_inspection_chunk_max_chars()
+    page_properties = {
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": page_max,
+            "description": f"Maximum entries to return (default/max: {page_max}).",
+        },
+        "cursor": {
+            "type": "string",
+            "description": "next_call cursor from the previous response.",
+        },
+    }
+    chunk_properties = {
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": chunk_max,
+            "description": f"Maximum exact characters to return (default/max: {chunk_max}).",
+        },
+        "cursor": {
+            "type": "string",
+            "description": "next_call character cursor from the previous response.",
+        },
+    }
+
+    registry.register(
+        name="get_current_flow_topology",
+        description=(
+            "Inspect one bounded canonical current-flow topology section. Use issues, "
+            "control_path, control_edges, output_bindings, or validation_sidecars."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "section": {
+                    "type": "string",
+                    "enum": [
+                        "issues",
+                        "control_path",
+                        "control_edges",
+                        "output_bindings",
+                        "validation_sidecars",
+                    ],
+                },
+                **page_properties,
+            },
+            "required": ["section"],
+        },
+        handler=_get_current_flow_topology_handler(),
+        category="flows",
+        tags=["flow", "inspection", "topology"],
+    )
+    registry.register(
+        name="get_current_flow_node",
+        description="Get one current-flow node's bounded scalar configuration by stable node_id.",
+        input_schema={
+            "type": "object",
+            "properties": {"node_id": {"type": "string"}},
+            "required": ["node_id"],
+        },
+        handler=_get_current_flow_node_handler(),
+        category="flows",
+        tags=["flow", "inspection", "node"],
+    )
+    registry.register(
+        name="get_current_flow_instructions",
+        description=(
+            "Retrieve exact bounded task_instructions, custom_instructions, or step_goal "
+            "text for one stable node_id. Follow next_call to reconstruct long text."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string"},
+                "field": {
+                    "type": "string",
+                    "enum": sorted(_FLOW_INSTRUCTION_FIELDS),
+                },
+                **chunk_properties,
+            },
+            "required": ["node_id", "field"],
+        },
+        handler=_get_current_flow_instructions_handler(),
+        category="flows",
+        tags=["flow", "inspection", "instructions"],
+    )
+    registry.register(
+        name="get_current_flow_projection_plan",
+        description=(
+            "List projection_plan fields or retrieve one explicit field/JSON-Pointer "
+            "section as exact bounded canonical JSON. Follow next_call to reconstruct it."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string"},
+                "field": {"type": "string"},
+                "section": {
+                    "type": "string",
+                    "description": "JSON Pointer rooted at field; blank selects the whole field.",
+                },
+                **chunk_properties,
+            },
+            "required": ["node_id"],
+        },
+        handler=_get_current_flow_projection_plan_handler(),
+        category="flows",
+        tags=["flow", "inspection", "projection"],
+    )
+    registry.register(
+        name="get_current_flow_validation_warnings",
+        description="Page through exact current-flow CRITICAL and HIGH verification findings.",
+        input_schema={"type": "object", "properties": page_properties},
+        handler=_get_current_flow_validation_warnings_handler(),
+        category="flows",
+        tags=["flow", "inspection", "validation"],
+    )
+    registry.register(
+        name="get_current_flow_validation_schedule",
+        description=(
+            "Inspect one node's bounded validator selections, scheduled defaults, opt-outs, "
+            "replacements, supplemental validators, or inactive metadata."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string"},
+                "section": {
+                    "type": "string",
+                    "enum": list(_FLOW_SCHEDULE_SECTIONS),
+                },
+                **page_properties,
+            },
+            "required": ["node_id", "section"],
+        },
+        handler=_get_current_flow_validation_schedule_handler(),
+        category="flows",
+        tags=["flow", "inspection", "validation"],
+    )
+    logger.debug("Registered bounded current-flow detail tools")
 
     # -------------------------------------------------------------------------
     # get_available_agents - Return agent metadata for verification
@@ -1965,13 +2461,14 @@ Use this tool to understand agent types and purposes when verifying or analyzing
 Returns agents grouped by category (Extraction, Validation, Output) and identifies
 which agents are designed for specific purposes:
 
-- output_agents: Agents attached as output branches to one Extraction step
+- output_agents: Output-category agents present on this returned page only
 - extraction_agents: Agents that extract structured data from documents
 - validation_agents: Agents that validate or look up structured entities
 
 Pass query to search agents by id, name, or description, category to keep one
 kind, and limit/cursor to page through large agent catalogs. Results report
-total_count and next_cursor so you can fetch the rest.
+total_count and next_cursor so you can fetch the rest. Use category="Output"
+for a focused Output lookup; every category list describes only the current page.
 
 ALWAYS call this tool along with get_current_flow() when verifying a flow,
 so you can check if the flow ends with an appropriate output agent.""",

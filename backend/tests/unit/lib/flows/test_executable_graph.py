@@ -224,10 +224,17 @@ def test_multi_sidecar_projection_is_identical_across_consumers(monkeypatch):
 
     flow_tools.set_current_flow_context({"flow_name": "Parity", **saved})
     inspected = flow_tools._get_current_flow_handler()()
-    assert inspected["executable_graph"] == projection.to_dict()
-    assert [step["node_id"] for step in inspected["steps"]] == ["extract", "output"]
-    assert [step["step"] for step in inspected["steps"]] == [1, 2]
-    assert [sidecar["binding_id"] for sidecar in inspected["executable_graph"]["validation_sidecars"]] == [
+    assert inspected["ordered_control_node_ids"] == ["task", "extract"]
+    assert inspected["executable_agent_node_ids"] == ["extract"]
+    assert inspected["output_node_ids"] == ["output"]
+    assert inspected["validation_sidecar_node_ids"] == [
+        "validator_symbol",
+        "validator_identifier",
+    ]
+    sidecars = flow_tools._get_current_flow_topology_handler()(
+        section="validation_sidecars"
+    )
+    assert [sidecar["binding_id"] for sidecar in sidecars["items"]] == [
         "symbol",
         "identifier",
     ]
@@ -623,8 +630,9 @@ def test_unavailable_step_fixture_has_consistent_save_load_runtime_and_batch_dia
 
     flow_tools.set_current_flow_context({"flow_name": "Unavailable", **flow})
     inspected = flow_tools._get_current_flow_handler()()
-    assert [step["node_id"] for step in inspected["steps"]] == ["missing"]
-    assert inspected["executable_graph"] == projection.to_dict()
+    assert inspected["ordered_control_node_ids"] == ["task", "missing"]
+    assert inspected["executable_agent_node_ids"] == ["missing"]
+    assert inspected["topology_valid"] is projection.valid
 
     monkeypatch.setattr(batch_validation, "AGENT_REGISTRY", {})
     batch_result = batch_validation.validate_flow_for_batch(flow)

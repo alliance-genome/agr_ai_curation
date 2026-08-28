@@ -199,12 +199,15 @@ class FlowNodeContext(BaseModel):
     agent_id: str
     agent_display_name: str
     task_instructions: Optional[str] = None  # For task_input nodes
+    step_goal: Optional[str] = None
     custom_instructions: Optional[str] = None
+    prompt_version: Optional[int] = None
     include_evidence: Optional[bool] = None
     output_filename_template: Optional[str] = None
     projection_plan: Optional[Dict[str, object]] = None
     output_key: str
     validation_attachments: List[Dict[str, object]] = Field(default_factory=list)
+    validation_groups: List[Dict[str, object]] = Field(default_factory=list)
 
 
 class FlowEdgeContext(BaseModel):

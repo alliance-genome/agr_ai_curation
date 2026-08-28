@@ -273,6 +273,129 @@ describe('FlowBuilder', () => {
     agentMetadataMocks.agents = {}
   })
 
+  it('reports step_goal prompt_version and validation_groups in FlowState', async () => {
+    const onFlowChange = vi.fn()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({
+      flow_definition: {
+        version: '1.1',
+        entry_node_id: 'node_0',
+        nodes: [
+          {
+            id: 'node_0',
+            type: 'task_input',
+            position: { x: 0, y: 0 },
+            data: {
+              agent_id: 'task_input',
+              agent_display_name: 'Task',
+              task_instructions: 'Extract genes',
+              output_key: 'task_input',
+            },
+          },
+          {
+            id: 'node_1',
+            type: 'agent',
+            position: { x: 200, y: 0 },
+            data: {
+              agent_id: 'gene_extractor',
+              agent_display_name: 'Gene Extractor',
+              step_goal: 'Extract gene identifiers',
+              prompt_version: 13,
+              output_key: 'genes',
+              validation_attachments: [{
+                attachment_id: 'gene:identity',
+                domain_pack_id: 'gene',
+                validator_id: 'gene-validator',
+                validator_binding_id: 'identity',
+                label: 'Gene identity validation',
+                state: 'active',
+                scope: 'field',
+                required: true,
+                blocking: false,
+                default_enabled: true,
+                allow_opt_out: true,
+                enabled: true,
+              }],
+              validation_groups: [
+                {
+                  group_id: 'replacement',
+                  state: 'replaced',
+                  attachment_id: 'gene:identity',
+                  binding_id: 'identity',
+                  validator_node_id: 'custom-validator',
+                  required: true,
+                  blocking: false,
+                  allow_opt_out: true,
+                },
+                {
+                  group_id: 'supplemental',
+                  state: 'supplemental',
+                  validator_node_id: 'supplemental-validator',
+                  required: false,
+                  blocking: false,
+                  allow_opt_out: false,
+                },
+              ],
+            },
+          },
+          {
+            id: 'custom-validator',
+            type: 'agent',
+            position: { x: 400, y: 0 },
+            data: {
+              agent_id: 'custom_validator',
+              agent_display_name: 'Replacement',
+              output_key: 'replacement',
+            },
+          },
+          {
+            id: 'supplemental-validator',
+            type: 'agent',
+            position: { x: 400, y: 100 },
+            data: {
+              agent_id: 'supplemental_validator',
+              agent_display_name: 'Supplemental',
+              output_key: 'supplemental',
+            },
+          },
+        ],
+        edges: [
+          { id: 'edge_1', source: 'node_0', target: 'node_1' },
+          {
+            id: 'validation_1',
+            source: 'node_1',
+            target: 'custom-validator',
+            role: 'validation_attachment',
+            satisfies_binding_id: 'identity',
+          },
+          {
+            id: 'validation_2',
+            source: 'node_1',
+            target: 'supplemental-validator',
+            role: 'validation_attachment',
+            satisfies_binding_id: 'supplemental-binding',
+          },
+        ],
+      },
+    }))
+
+    const { rerender } = render(<FlowBuilder onFlowChange={onFlowChange} />)
+    await screen.findByText('1 step')
+    rerender(<FlowBuilder flowId="flow-1" onFlowChange={onFlowChange} />)
+
+    await waitFor(() => {
+      const latest = onFlowChange.mock.calls.at(-1)?.[0]
+      const node = latest?.nodes.find((candidate: { id: string }) => candidate.id === 'node_1')
+      expect(node).toEqual(expect.objectContaining({
+        step_goal: 'Extract gene identifiers',
+        prompt_version: 13,
+        validation_groups: expect.arrayContaining([
+          expect.objectContaining({ state: 'replaced' }),
+          expect.objectContaining({ state: 'supplemental' }),
+        ]),
+      }))
+    })
+  })
+
   it('shows file action icon shortcuts wired to existing file actions', async () => {
     const user = userEvent.setup()
 

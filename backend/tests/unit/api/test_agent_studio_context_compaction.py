@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 import src.api.agent_studio as api_module
+import src.lib.agent_studio.flow_tools as flow_tools
 from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
     ChatMessageRecord,
@@ -272,6 +273,129 @@ def test_small_tool_result_stays_inline_for_provider_continuation(monkeypatch):
     )
 
     assert json.loads(content) == tool_result
+
+
+def test_current_flow_manifest_and_bounded_details_stay_under_provider_cap(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "1000")
+    flow_tools.set_current_flow_context(
+        {
+            "flow_name": "Disease Extraction and Export",
+            "version": "1.1",
+            "entry_node_id": "task",
+            "nodes": [
+                {
+                    "id": "task",
+                    "type": "task_input",
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Task",
+                        "task_instructions": "Extract disease mentions. " * 100,
+                        "output_key": "task_input",
+                    },
+                },
+                {
+                    "id": "disease",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "disease_extractor",
+                        "agent_display_name": "Disease Extractor",
+                        "step_goal": "Extract normalized disease identifiers.",
+                        "custom_instructions": "Preserve evidence. " * 100,
+                        "prompt_version": 4,
+                        "output_key": "diseases",
+                        "validation_attachments": [
+                            {
+                                "attachment_id": "disease-ontology",
+                                "validator_id": "disease-validator",
+                                "validator_binding_id": "disease-binding",
+                                "state": "active",
+                                "enabled": True,
+                                "default_enabled": True,
+                            }
+                        ],
+                        "validation_groups": [],
+                    },
+                },
+                {
+                    "id": "csv",
+                    "type": "output",
+                    "data": {
+                        "agent_id": "csv_formatter",
+                        "agent_display_name": "CSV",
+                        "output_key": "csv",
+                        "projection_plan": {
+                            "columns": [
+                                {"field": f"disease.field_{index}", "label": f"Field {index}"}
+                                for index in range(50)
+                            ],
+                            "format": "csv",
+                        },
+                    },
+                },
+            ],
+            "edges": [
+                {"id": "c1", "source": "task", "target": "disease"},
+                {
+                    "id": "o1",
+                    "source": "disease",
+                    "target": "csv",
+                    "role": "output_attachment",
+                },
+            ],
+        }
+    )
+
+    results = [
+        ("get_current_flow", {}, flow_tools._get_current_flow_handler()()),
+        (
+            "get_current_flow_topology",
+            {"section": "output_bindings"},
+            flow_tools._get_current_flow_topology_handler()(section="output_bindings"),
+        ),
+        (
+            "get_current_flow_node",
+            {"node_id": "disease"},
+            flow_tools._get_current_flow_node_handler()(node_id="disease"),
+        ),
+        (
+            "get_current_flow_instructions",
+            {"node_id": "task", "field": "task_instructions"},
+            flow_tools._get_current_flow_instructions_handler()(
+                node_id="task", field="task_instructions"
+            ),
+        ),
+        (
+            "get_current_flow_projection_plan",
+            {"node_id": "csv", "field": "columns"},
+            flow_tools._get_current_flow_projection_plan_handler()(
+                node_id="csv", field="columns"
+            ),
+        ),
+        (
+            "get_current_flow_validation_warnings",
+            {},
+            flow_tools._get_current_flow_validation_warnings_handler()(),
+        ),
+        (
+            "get_current_flow_validation_schedule",
+            {"node_id": "disease", "section": "selections"},
+            flow_tools._get_current_flow_validation_schedule_handler()(
+                node_id="disease", section="selections"
+            ),
+        ),
+    ]
+
+    for tool_name, tool_input, result in results:
+        content = api_module._provider_tool_result_content(
+            tool_name=tool_name,
+            tool_input=tool_input,
+            tool_result=result,
+            session_id="agent-studio-session-flow",
+            turn_id="flow-turn",
+        )
+        assert len(content) < 12000
+        assert json.loads(content).get("status") != "compacted_tool_result"
 
 
 def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch):

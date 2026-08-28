@@ -227,7 +227,9 @@ export interface FlowState {
     agent_id: string
     agent_display_name: string
     task_instructions?: string
+    step_goal?: string
     custom_instructions?: string
+    prompt_version?: number
     include_evidence?: boolean
     output_filename_template?: string
     projection_plan?: Record<string, unknown>

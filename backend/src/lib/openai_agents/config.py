@@ -1650,6 +1650,30 @@ def get_agent_studio_flow_output_filename_template_max_chars() -> int:
     )
 
 
+def get_agent_studio_flow_inspection_page_limit() -> int:
+    """Maximum entries returned by one current-flow inspection page."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_FLOW_INSPECTION_PAGE_LIMIT",
+            20,
+        ),
+    )
+
+
+def get_agent_studio_flow_inspection_chunk_max_chars() -> int:
+    """Maximum exact text characters returned by one flow detail call."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS",
+            4000,
+        ),
+    )
+
+
 def get_trace_review_export_timeout_seconds() -> float:
     """HTTP timeout for the TraceReview export call (TRACE_REVIEW_EXPORT_TIMEOUT_SECONDS).
 

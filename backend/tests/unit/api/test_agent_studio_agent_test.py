@@ -783,8 +783,16 @@ class TestAgentWorkshopSystemPrompt:
         tools = api_module._get_all_opus_tools(ChatContext(active_tab="agent_workshop"))
         tool_names = {tool.get("name") for tool in tools}
 
-        assert "get_current_flow" not in tool_names
-        assert "get_available_agents" not in tool_names
+        assert {
+            "get_current_flow",
+            "get_current_flow_topology",
+            "get_current_flow_node",
+            "get_current_flow_instructions",
+            "get_current_flow_projection_plan",
+            "get_current_flow_validation_warnings",
+            "get_current_flow_validation_schedule",
+            "get_available_agents",
+        }.isdisjoint(tool_names)
 
     def test_get_all_opus_tools_includes_flow_tools_on_flows_tab(self):
         from src.api import agent_studio as api_module
@@ -793,8 +801,16 @@ class TestAgentWorkshopSystemPrompt:
         tools = api_module._get_all_opus_tools(ChatContext(active_tab="flows"))
         tool_names = {tool.get("name") for tool in tools}
 
-        assert "get_current_flow" in tool_names
-        assert "get_available_agents" in tool_names
+        assert {
+            "get_current_flow",
+            "get_current_flow_topology",
+            "get_current_flow_node",
+            "get_current_flow_instructions",
+            "get_current_flow_projection_plan",
+            "get_current_flow_validation_warnings",
+            "get_current_flow_validation_schedule",
+            "get_available_agents",
+        } <= tool_names
 
     def test_handle_update_workshop_prompt_tool_returns_proposal_with_approval_gate(self):
         from src.api import agent_studio as api_module
