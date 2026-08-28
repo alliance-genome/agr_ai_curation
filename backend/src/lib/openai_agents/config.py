@@ -1556,15 +1556,18 @@ def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
 
     Larger Agent Studio tool results are replaced with compact provider-only
     summaries and recall instructions while the frontend still receives the full
-    result event. Default 12000.
+    result event. The minimum 24 characters holds the smallest explicit JSON
+    configuration error. Default 12000.
     """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
-            12_000,
-        ),
+    configured_max_chars = _get_env_int_with_fallback(
+        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
+        12_000,
     )
+    if configured_max_chars < 24:
+        raise ValueError(
+            "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS must be at least 24"
+        )
+    return configured_max_chars
 
 
 def get_agent_studio_chat_history_page_size() -> int:

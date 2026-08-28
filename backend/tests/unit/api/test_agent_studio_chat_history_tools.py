@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -683,17 +684,21 @@ def test_handle_tool_call_get_chat_turn_chunks_large_exact_fields_with_replayabl
 
 
 def test_handle_tool_call_get_chat_turn_same_turn_returns_only_persisted_rows(monkeypatch):
-    compact = api_module._provider_tool_result_recall_hints(
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
+    content = api_module._provider_tool_result_content(
         tool_name="get_trace_payload",
         tool_input={"trace_id": "trace-1", "payload_id": "payload-1"},
-        tool_result={"status": "success", "data": {"value": "large value"}},
+        tool_result={
+            "status": "success",
+            "data": {"value": "large value" * 1000},
+        },
         session_id="agent-studio-session-1",
         turn_id="opus-turn-current",
     )
-    purpose = compact["chat_turn"]["purpose"]
-    assert "completed prior turn" in purpose
-    assert "raw tool results exist only in this provider tool continuation" in purpose
-    assert "only after the assistant turn completes and is persisted" in purpose
+    compact = json.loads(content)
+    turn_recall = compact["recall"]["turn"]
+    assert len(content) <= 500
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
 
     class _FakeRepository:
         def __init__(self, _db):
@@ -725,8 +730,8 @@ def test_handle_tool_call_get_chat_turn_same_turn_returns_only_persisted_rows(mo
 
     result = asyncio.run(
         api_module._handle_tool_call(
-            tool_name=compact["chat_turn"]["tool"],
-            tool_input=compact["chat_turn"],
+            tool_name=turn_recall["tool"],
+            tool_input=turn_recall,
             context=None,
             user_email="dev@example.org",
             user_auth_sub="auth-sub-turn",

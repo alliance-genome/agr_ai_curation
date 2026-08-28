@@ -1866,76 +1866,234 @@ def _collect_provider_payload_refs(
                 return
 
 
-def _workshop_proposal_retention_guidance(apply_mode: Any) -> tuple[str, str]:
+def _workshop_proposal_retention_guidance(apply_mode: Any) -> str:
     if apply_mode == "replace":
         return (
             "The full proposal was streamed to the curator approval UI. "
             "The exact proposed text remains in this call's retained tool input; "
-            "do not repeat it in another tool call unless the curator requests changes.",
-            "The exact authored proposal remains in the originating retained "
-            "tool input; it is not duplicated in provider tool results or recall hints.",
+            "do not repeat it in another tool call unless the curator requests changes."
         )
     if apply_mode == "targeted_edit":
         return (
             "The full resulting proposal was streamed to the curator approval UI. "
             "Only the authored targeted edits remain in this call's retained tool input; "
             "after approval, use refresh_workshop_prompt chunks to read the exact resulting "
-            "text when needed.",
-            "Only the authored targeted edits remain in the originating retained tool input; "
-            "the exact resulting proposal is not duplicated in provider tool results or "
-            "recall hints and can be read through refresh_workshop_prompt after approval.",
+            "text when needed."
         )
     raise ValueError(f"Unsupported Workshop proposal apply mode: {apply_mode!r}")
 
 
-def _provider_tool_result_recall_hints(
+def _provider_content_identity(serialized: str) -> Dict[str, Any]:
+    """Return stable identity for provider content omitted by compaction."""
+
+    return {
+        "json_chars": len(serialized),
+        "sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+    }
+
+
+def _provider_tool_input_selectors(tool_input: Any) -> Dict[str, Any]:
+    """Keep shallow scalar selectors that can support a narrower repeat call."""
+
+    safe_input = _json_safe(tool_input)
+    if not isinstance(safe_input, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in sorted(safe_input.items(), key=lambda item: str(item[0]))
+        if value is None or isinstance(value, (bool, int, float, str))
+    }
+
+
+def _provider_cap_error_content(inline_max_chars: int) -> str:
+    """Return the smallest explicit JSON error that fits an unusable cap."""
+
+    error_payloads: tuple[Any, ...] = (
+        {
+            "error": "provider_tool_result_cap_too_small",
+            "configured_max_chars": inline_max_chars,
+        },
+        "provider_tool_result_cap_too_small",
+        "provider_cap_too_small",
+    )
+    for payload in error_payloads:
+        serialized = _serialize_provider_tool_result(payload)
+        if len(serialized) <= inline_max_chars:
+            return serialized
+    raise ValueError(
+        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS is too small to "
+        "hold a provider-safe JSON error"
+    )
+
+
+def _fit_provider_compact_payload(
     *,
     tool_name: str,
     tool_input: Any,
     tool_result: Any,
     session_id: str,
     turn_id: str,
-) -> Dict[str, Any]:
-    payload_refs: set[str] = set()
-    _collect_provider_payload_refs(tool_result, payload_refs)
-    hints: Dict[str, Any] = {
-        "chat_turn": {
-            "tool": "get_chat_turn",
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "purpose": (
-                "Reload a completed prior turn from durable persistence. During the "
-                "current in-flight turn, raw tool results exist only in this provider "
-                "tool continuation; they become recallable here only after the assistant "
-                "turn completes and is persisted."
-            ),
+    inline_max_chars: int,
+) -> str:
+    """Fit one complete compact envelope using deterministic degradation."""
+
+    safe_input = _json_safe(tool_input)
+    input_content = _serialize_provider_tool_result(safe_input)
+    result_content = _serialize_provider_tool_result(tool_result)
+    payload: Dict[str, Any] = {
+        "status": "compacted_tool_result",
+        "tool": {
+            "name": tool_name,
+            "input": _provider_content_identity(input_content),
+            "result": _provider_content_identity(result_content),
+        },
+        "recall": {
+            "turn": {
+                "tool": "get_chat_turn",
+                "session_id": session_id,
+                "turn_id": turn_id,
+            },
         },
     }
+
+    def serialize_if_fits(candidate: Dict[str, Any]) -> str | None:
+        serialized = _serialize_provider_tool_result(candidate)
+        return serialized if len(serialized) <= inline_max_chars else None
+
+    if serialize_if_fits(payload) is None:
+        return _provider_cap_error_content(inline_max_chars)
+
     if tool_name == "update_workshop_prompt_draft":
-        _, recall_purpose = _workshop_proposal_retention_guidance(
-            tool_result.get("apply_mode") if isinstance(tool_result, dict) else None
-        )
-        hints["retained_proposal_input"] = {
-            "purpose": recall_purpose,
+        payload["recall"]["retained_proposal_input"] = {
+            "apply_mode": (
+                tool_result.get("apply_mode")
+                if isinstance(tool_result, dict)
+                else None
+            ),
+            "next_tool": "refresh_workshop_prompt",
         }
+        if serialize_if_fits(payload) is None:
+            payload["recall"].pop("retained_proposal_input")
     else:
-        hints["repeat_or_narrow_tool"] = {
-            "tool": tool_name,
-            "input": _json_safe(tool_input),
-            "purpose": "Rerun the same lookup, or rerun it with narrower pagination/chunk parameters, when exact current-turn details are needed.",
-        }
+        exact_call = {"tool": tool_name, "input": safe_input}
+        payload["recall"]["next_call"] = exact_call
+        if serialize_if_fits(payload) is None:
+            payload["recall"].pop("next_call")
+            selectors = _provider_tool_input_selectors(safe_input)
+            required_inputs = opus_tools.get_builtin_tool_required_inputs(tool_name)
+            projected_input: Dict[str, Any] = {}
+            narrowing: Dict[str, Any] = {
+                "tool": tool_name,
+                "input": projected_input,
+            }
+
+            def omitted_input_fields() -> list[str]:
+                if not isinstance(safe_input, dict):
+                    return []
+                omitted_required = (
+                    [
+                        field
+                        for field in required_inputs
+                        if field not in projected_input
+                    ]
+                    if required_inputs is not None
+                    else []
+                )
+                omitted_other = sorted(
+                    str(field)
+                    for field in safe_input
+                    if str(field) not in projected_input
+                    and str(field) not in omitted_required
+                )
+                return omitted_required + omitted_other
+
+            def update_narrowing_guidance() -> None:
+                omitted = omitted_input_fields()
+                if omitted:
+                    narrowing["supply_bounded"] = omitted
+                else:
+                    narrowing.pop("supply_bounded", None)
+
+            update_narrowing_guidance()
+            payload["recall"]["narrow"] = narrowing
+            if serialize_if_fits(payload) is None:
+                payload["recall"].pop("narrow")
+            else:
+
+                def selector_priority(item: tuple[str, Any]) -> tuple[int, int, int, str]:
+                    key, value = item
+                    required_priority = (
+                        0
+                        if required_inputs is not None and key in required_inputs
+                        else 1
+                    )
+                    if key == "payload_id":
+                        identity_priority = 0
+                    elif key == "trace_id":
+                        identity_priority = 1
+                    elif key.endswith("_id"):
+                        identity_priority = 2
+                    else:
+                        identity_priority = 3
+                    return (
+                        required_priority,
+                        identity_priority,
+                        len(_serialize_provider_tool_result(value)),
+                        key,
+                    )
+
+                for key, value in sorted(selectors.items(), key=selector_priority):
+                    projected_input[key] = value
+                    update_narrowing_guidance()
+                    if serialize_if_fits(payload) is None:
+                        projected_input.pop(key)
+                        update_narrowing_guidance()
+
+                if not omitted_input_fields():
+                    payload["recall"].pop("narrow")
+                    payload["recall"]["next_call"] = {
+                        "tool": tool_name,
+                        "input": projected_input,
+                    }
+                    if serialize_if_fits(payload) is None:
+                        payload["recall"].pop("next_call")
+                        payload["recall"]["narrow"] = narrowing
+
+    payload_refs: set[str] = set()
+    _collect_provider_payload_refs(tool_result, payload_refs)
     if payload_refs:
-        hints["trace_payloads"] = {
+        payload_recall = {
             "tool": "get_trace_payload",
-            "payload_ids": sorted(payload_refs),
-            "purpose": "Fetch exact TraceReview payload chunks by payload_id instead of replaying large payloads in live context.",
+            "payload_ids": [],
         }
-    elif tool_name in {"get_trace_payloads", "get_trace_reconstruction", "get_trace_tree"}:
-        hints["trace_payloads"] = {
-            "tool": "get_trace_payloads",
-            "purpose": "List exact TraceReview payload ids, then call get_trace_payload for the specific chunk needed.",
-        }
-    return hints
+        payload["recall"]["trace_payloads"] = payload_recall
+        for payload_id in sorted(payload_refs):
+            payload_recall["payload_ids"].append(payload_id)
+            if serialize_if_fits(payload) is None:
+                payload_recall["payload_ids"].pop()
+                break
+        if not payload_recall["payload_ids"]:
+            payload["recall"].pop("trace_payloads")
+
+    optional_fields = (
+        (
+            "summary",
+            _summarize_provider_tool_result_value(_json_safe(tool_result)),
+        ),
+        (
+            "instruction",
+            "Use the exact next call, bounded narrowing guidance, or durable turn recall before relying on omitted details.",
+        ),
+    )
+    for key, value in optional_fields:
+        payload[key] = value
+        if serialize_if_fits(payload) is None:
+            payload.pop(key)
+
+    serialized = _serialize_provider_tool_result(payload)
+    if len(serialized) > inline_max_chars:
+        raise AssertionError("provider compact payload exceeded its configured cap")
+    return serialized
 
 
 def _provider_tool_result_content(
@@ -1959,9 +2117,7 @@ def _provider_tool_result_content(
         # calls retain updated_prompt; targeted edits retain only their edits.
         # Do not replay derived prompt text; the full result remains authoritative
         # for the UI.
-        instruction, _ = _workshop_proposal_retention_guidance(
-            tool_result.get("apply_mode")
-        )
+        instruction = _workshop_proposal_retention_guidance(tool_result.get("apply_mode"))
         provider_tool_result = {
             "contract_version": "workshop_prompt_proposal_ack.v1",
             "success": True,
@@ -1983,35 +2139,26 @@ def _provider_tool_result_content(
     if len(raw_content) <= inline_max_chars:
         return raw_content
 
-    compact_payload = {
-        "status": "compacted_tool_result",
-        "tool_name": tool_name,
-        "tool_result_compacted": True,
-        "raw_result_json_chars": len(raw_content),
-        "provider_inline_max_chars": inline_max_chars,
-        "summary": _summarize_provider_tool_result_value(
-            _json_safe(provider_tool_result)
-        ),
-        "recall": _provider_tool_result_recall_hints(
-            tool_name=tool_name,
-            tool_input=tool_input,
-            tool_result=_json_safe(tool_result),
-            session_id=session_id,
-            turn_id=turn_id,
-        ),
-        "instruction": (
-            "The full tool result was streamed to the UI but omitted from live "
-            "provider continuation context. Use the recall tools above or rerun "
-            "the exact lookup with narrower arguments before relying on omitted details."
-        ),
-    }
-    return json.dumps(compact_payload, default=str)
+    return _fit_provider_compact_payload(
+        tool_name=tool_name,
+        tool_input=tool_input,
+        tool_result=_json_safe(tool_result),
+        session_id=session_id,
+        turn_id=turn_id,
+        inline_max_chars=inline_max_chars,
+    )
 
 
 def _serialize_provider_tool_result(tool_result: Any) -> str:
     """Serialize tool results exactly as the provider continuation will receive them."""
 
-    return json.dumps(tool_result, default=str)
+    return json.dumps(
+        tool_result,
+        default=str,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _resolve_saved_workshop_agent(

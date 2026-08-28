@@ -22,6 +22,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_name_max_chars,
     get_agent_studio_flow_output_filename_template_max_chars,
     get_agent_studio_flow_step_goal_max_chars,
+    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_service_log_default_lookback_minutes,
     get_agent_studio_service_log_max_lines,
@@ -361,6 +362,21 @@ def test_agent_studio_chat_recall_limits_are_environment_configurable(monkeypatc
     monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", "0")
     assert get_agent_studio_chat_recall_page_size() == 1
     assert get_agent_studio_chat_recall_chunk_max_chars() == 1
+
+
+def test_agent_studio_provider_tool_result_cap_rejects_unsupported_values(monkeypatch):
+    monkeypatch.delenv(
+        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
+        raising=False,
+    )
+    assert get_agent_studio_provider_tool_result_inline_max_chars() == 12_000
+
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "24")
+    assert get_agent_studio_provider_tool_result_inline_max_chars() == 24
+
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "23")
+    with pytest.raises(ValueError, match="must be at least 24"):
+        get_agent_studio_provider_tool_result_inline_max_chars()
 
 
 def test_agent_studio_workshop_context_prompt_limits_are_environment_configurable(
