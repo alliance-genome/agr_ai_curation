@@ -86,8 +86,13 @@ def test_source_pagination_is_bounded_explicit_and_recoverable(monkeypatch):
 
     def requester(url: str, **_kwargs):
         calls.append(url)
+        if "start=4" in url:
+            return _Response(200, {"associations": []})
         if "start=2" in url:
-            return _Response(200, {"associations": [payload["associations"][2]]})
+            return _Response(
+                200,
+                {"associations": [payload["associations"][2], payload["associations"][0]]},
+            )
         return _Response(200, {"associations": payload["associations"]})
 
     first = lookup_existing_go_annotations(
@@ -101,19 +106,31 @@ def test_source_pagination_is_bounded_explicit_and_recoverable(monkeypatch):
         source_limit=20,
         requester=requester,
     )
+    terminal = lookup_existing_go_annotations(
+        "RGD:620474",
+        source_cursor=second.next_source_cursor,
+        source_limit=20,
+        requester=requester,
+    )
 
     assert calls == [
         "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?start=0&rows=2",
         "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?start=2&rows=2",
+        "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function?start=4&rows=2",
     ]
     assert first.returned_count == 2
     assert first.source_limit_capped is True
     assert first.source_response_truncated is True
     assert first.source_complete is False
     assert first.next_source_cursor == 2
-    assert second.returned_count == 1
-    assert second.source_complete is True
-    assert second.next_source_cursor is None
+    assert second.returned_count == 2
+    assert second.source_complete is False
+    assert second.next_source_cursor == 4
+    assert terminal.status == "ok"
+    assert terminal.returned_count == 0
+    assert terminal.annotations == []
+    assert terminal.source_complete is True
+    assert terminal.next_source_cursor is None
 
 
 def test_relation_qualifier_and_negation_are_retained_without_source_parsing():

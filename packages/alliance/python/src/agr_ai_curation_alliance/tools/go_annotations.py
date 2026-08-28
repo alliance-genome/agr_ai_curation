@@ -335,7 +335,7 @@ def lookup_existing_go_annotations(
         ]
         if not normalized:
             return ExistingGOAnnotationsResult(
-                status="not_found",
+                status="ok" if source_cursor > 0 else "not_found",
                 gene_id=validated,
                 source_url=source_url,
                 source_cursor=source_cursor,

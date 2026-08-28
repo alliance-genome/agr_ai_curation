@@ -159,7 +159,7 @@ def _summary(result: Mapping[str, Any], *, page_paths: set[str]) -> dict[str, An
     }
     if _provider_json_chars(summary) > _result_max_chars():
         for key, value in list(fields.items()):
-            if not isinstance(value, dict) or "detail_path" in value:
+            if not isinstance(value, dict) or "preview" not in value:
                 continue
             fields[key] = _detail_descriptor(result[key], str(key))
             if _provider_json_chars(summary) <= _result_max_chars():

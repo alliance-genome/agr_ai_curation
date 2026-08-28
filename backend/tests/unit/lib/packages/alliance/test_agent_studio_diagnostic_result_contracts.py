@@ -260,6 +260,33 @@ def test_structured_pages_budget_escaped_items_for_provider(payload):
     _provider_visible("agr_curation_query", page)
 
 
+def test_structured_summary_drops_previews_to_stay_within_provider_budget(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "1400")
+    result = {
+        "status": "ok",
+        **{f"scalar_{index}": f"value-{index}-" + "x" * 500 for index in range(4)},
+    }
+    handler = result_contracts.create_bounded_result_handler(
+        lambda: result,
+        {"kind": "structured", "page_paths": []},
+    )
+
+    summary = handler()
+
+    assert len(json.dumps(summary, default=str)) <= 1400
+    assert any(
+        "preview" not in summary["fields"][f"scalar_{index}"]
+        for index in range(4)
+    )
+    assert all(
+        summary["fields"][f"scalar_{index}"]["detail_path"] == f"scalar_{index}"
+        for index in range(4)
+    )
+    _provider_visible("agr_curation_query", summary)
+
+
 def test_sql_diagnostic_counts_pages_and_chunks_without_full_materialization(monkeypatch):
     engine = sa.create_engine("sqlite://")
     with engine.begin() as connection:
@@ -465,9 +492,6 @@ def test_package_diagnostic_limits_share_documented_environment(monkeypatch):
     assert config.get_agent_studio_package_diagnostic_result_max_chars() == 2222
     assert config.get_agent_studio_package_diagnostic_chunk_max_chars() == 1111
     assert config.get_agent_studio_package_diagnostic_scalar_preview_max_chars() == 33
-    assert config.get_agr_default_limit() == 6
-    assert config.get_agr_hard_max() == 9
     assert agr_curation._normalize_limit(None) == (6, ["default_limit_applied:6"])
     assert agr_curation._normalize_limit(20) == (9, ["limit_capped_at:9"])
-    assert config.get_go_annotations_page_max_results() == 12
     assert go_annotations._page_max_results() == 12

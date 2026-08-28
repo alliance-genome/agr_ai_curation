@@ -1713,23 +1713,6 @@ def get_agent_studio_package_diagnostic_scalar_preview_max_chars() -> int:
     )
 
 
-def get_agr_default_limit() -> int:
-    """Default Alliance curation query result count used by package code."""
-    return max(1, _get_env_int_with_fallback("AGR_DEFAULT_LIMIT", 100))
-
-
-def get_agr_hard_max() -> int:
-    """Maximum Alliance curation query result count used by package code."""
-    return max(1, _get_env_int_with_fallback("AGR_HARD_MAX", 500))
-
-
-def get_go_annotations_page_max_results() -> int:
-    """Maximum GO Consortium annotations fetched in one package source page."""
-    return max(
-        1,
-        _get_env_int_with_fallback("GO_ANNOTATIONS_PAGE_MAX_RESULTS", 500),
-    )
-
 def get_flow_definition_max_nodes() -> int:
     """Max canonical flow nodes, including the required task-input node."""
     configured = _get_env_int_with_fallback(
