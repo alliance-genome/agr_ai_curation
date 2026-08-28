@@ -1954,17 +1954,39 @@ def _get_current_flow_instructions_handler():
     return handler
 
 
+def _decode_json_pointer_token(raw_token: str) -> tuple[bool, str]:
+    token_parts: list[str] = []
+    index = 0
+    while index < len(raw_token):
+        if raw_token[index] != "~":
+            token_parts.append(raw_token[index])
+            index += 1
+            continue
+        if index + 1 >= len(raw_token) or raw_token[index + 1] not in ("0", "1"):
+            return False, ""
+        token_parts.append("~" if raw_token[index + 1] == "0" else "/")
+        index += 2
+    return True, "".join(token_parts)
+
+
 def _json_pointer_value(value: Any, pointer: str) -> tuple[bool, Any]:
-    if pointer in ("", "/"):
+    if pointer == "":
         return True, value
     if not pointer.startswith("/"):
         return False, None
     current = value
     for raw_token in pointer[1:].split("/"):
-        token = raw_token.replace("~1", "/").replace("~0", "~")
+        valid_token, token = _decode_json_pointer_token(raw_token)
+        if not valid_token:
+            return False, None
         if isinstance(current, Mapping) and token in current:
             current = current[token]
         elif isinstance(current, Sequence) and not isinstance(current, (str, bytes)):
+            if token != "0" and not (
+                token.startswith(tuple("123456789"))
+                and all("0" <= character <= "9" for character in token[1:])
+            ):
+                return False, None
             try:
                 current = current[int(token)]
             except (ValueError, IndexError):

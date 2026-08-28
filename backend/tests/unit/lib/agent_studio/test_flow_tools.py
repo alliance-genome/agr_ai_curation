@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 import pytest
@@ -1451,6 +1452,48 @@ def test_projection_plan_inventory_and_chunks_are_bounded_and_reconstructable(
     assert "".join(chunks) == '[{"field":"gene.symbol"},{"field":"gene.id"}]'
     assert response["encoding"] == "canonical_json"
     assert response["complete"] is True
+
+
+def test_projection_plan_sections_follow_json_pointer_semantics():
+    flow = _inspection_flow()
+    flow["nodes"][2]["data"]["projection_plan"]["details"] = {
+        "": "empty-key",
+        "a/b": {"til~de": "escaped-key"},
+        "rows": [{"name": "first"}, {"name": "second"}],
+    }
+    flow_tools.set_current_flow_context(flow)
+    handler = flow_tools._get_current_flow_projection_plan_handler()
+
+    root = handler(node_id="csv", field="details", section="")
+    assert root["success"] is True
+    assert json.loads(root["content"])["rows"][1]["name"] == "second"
+
+    empty_key = handler(node_id="csv", field="details", section="/")
+    assert empty_key["success"] is True
+    assert empty_key["content"] == '"empty-key"'
+
+    nested_array = handler(
+        node_id="csv", field="details", section="/rows/1/name"
+    )
+    assert nested_array["success"] is True
+    assert nested_array["content"] == '"second"'
+
+    escaped_keys = handler(
+        node_id="csv", field="details", section="/a~1b/til~0de"
+    )
+    assert escaped_keys["success"] is True
+    assert escaped_keys["content"] == '"escaped-key"'
+
+    for invalid_index in ("-1", "+1", "01", "1.0", "-", "2"):
+        invalid = handler(
+            node_id="csv",
+            field="details",
+            section=f"/rows/{invalid_index}",
+        )
+        assert invalid["success"] is False
+
+    invalid_escape = handler(node_id="csv", field="details", section="/a~2b")
+    assert invalid_escape["success"] is False
 
 
 def test_validation_schedule_details_preserve_defaults_opt_outs_and_sidecars():
