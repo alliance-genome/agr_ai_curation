@@ -562,6 +562,7 @@ def test_get_feedback_trace_artifacts_returns_internal_trace_data(monkeypatch):
         session_id="session-123",
         trace_ids=["trace-1"],
         trace_data={"schema_version": 1, "traces": [{"trace_id": "trace-1"}]},
+        curator_id="curator@example.org",
     )
 
     class _Query:
@@ -577,13 +578,38 @@ def test_get_feedback_trace_artifacts_returns_internal_trace_data(monkeypatch):
 
     response = feedback_api.get_feedback_trace_artifacts(
         feedback_id="feedback-123",
-        request=SimpleNamespace(headers={"authorization": "Bearer service-token"}),
+        request=SimpleNamespace(headers={
+            "authorization": "Bearer service-token",
+            "x-agr-trusted-caller-sub": "curator-sub-1",
+            "x-agr-trusted-caller-email": "curator@example.org",
+        }),
         db=_Db(),
     )
 
     assert response["feedback_id"] == "feedback-123"
     assert response["trace_ids"] == ["trace-1"]
     assert response["trace_data"]["traces"][0]["trace_id"] == "trace-1"
+
+
+def test_get_feedback_trace_artifacts_hides_another_curators_report(monkeypatch):
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
+    report = SimpleNamespace(curator_id="owner@example.org")
+    query = SimpleNamespace(filter=lambda *_args: SimpleNamespace(first=lambda: report))
+    db = SimpleNamespace(query=lambda *_args: query)
+
+    with pytest.raises(feedback_api.HTTPException) as exc:
+        feedback_api.get_feedback_trace_artifacts(
+            feedback_id="feedback-123",
+            request=SimpleNamespace(headers={
+                "authorization": "Bearer service-token",
+                "x-agr-trusted-caller-sub": "other-sub",
+                "x-agr-trusted-caller-email": "other@example.org",
+            }),
+            db=db,
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Feedback report not found"
 
 
 def test_get_feedback_trace_artifacts_rejects_invalid_internal_token(monkeypatch):

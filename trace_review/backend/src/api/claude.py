@@ -18,9 +18,13 @@ import logging
 import math
 from datetime import datetime
 from typing import Annotated, Callable, Dict, Any, Optional, List, Mapping, Literal
-from fastapi import APIRouter, HTTPException, Request, Query, Path
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, Path
 
-from ..services.trace_extractor import TraceExtractor
+from ..services.trace_extractor import TraceExtractor, TraceNotFoundError
+from ..services.feedback_artifacts import (
+    feedback_artifacts_contain_trace,
+    fetch_feedback_trace_artifacts,
+)
 from ..services.langfuse_run_reconstruction import (
     build_cost_summary,
     build_duplicate_report,
@@ -74,7 +78,102 @@ from .auth import get_auth_dependency
 from .domain_envelope_responses import domain_envelope_response_views
 
 
-router = APIRouter()
+def _trusted_caller_sub(user: Mapping[str, Any]) -> str:
+    """Resolve the owner identity from authenticated, non-model-controlled claims."""
+    claim = (
+        user.get("trusted_caller_sub")
+        if user.get("token_use") == "internal_service"
+        else user.get("sub")
+    )
+    caller_sub = str(claim or "").strip()
+    if not caller_sub:
+        raise HTTPException(status_code=401, detail="Trusted caller identity is required.")
+    return caller_sub
+
+
+async def _authorize_claude_trace_request(
+    request: Request,
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> None:
+    """Enforce owner-only access for every exact trace route on this router."""
+    caller_sub = _trusted_caller_sub(user)
+    request.state.trace_caller_sub = caller_sub
+    trace_id = str(request.path_params.get("trace_id") or "").strip()
+    if not trace_id:
+        return
+
+    source = request.query_params.get("source", DEFAULT_SOURCE)
+    extraction_error: Exception | None = None
+    cached_data = request.app.state.cache_manager.get(trace_id)
+    if cached_data is not None:
+        raw_trace = cached_data.get("raw_trace") or {}
+        owner = str(
+            raw_trace.get("userId") or raw_trace.get("user_id") or ""
+        ).strip()
+        if not owner or owner != caller_sub:
+            raise HTTPException(status_code=404, detail="Trace not found.")
+        return
+    try:
+        trace_data = TraceExtractor(
+            source=_effective_source(source)
+        ).extract_complete_trace(trace_id)
+    except Exception as exc:
+        extraction_error = exc
+    else:
+        raw_trace = trace_data.get("raw_trace") or {}
+        owner = str(raw_trace.get("userId") or raw_trace.get("user_id") or "").strip()
+        if not owner or owner != caller_sub:
+            raise HTTPException(status_code=404, detail="Trace not found.")
+        request.state.authorized_trace_extraction = {
+            "trace_id": trace_id,
+            "source": _effective_source(source),
+            "trace_data": trace_data,
+        }
+        return
+
+    route_name = str(getattr(request.scope.get("route"), "name", ""))
+    feedback_id = request.query_params.get("feedback_id")
+    feedback_routes = {
+        "get_extraction_timeline",
+        "get_extraction_diagnostic_report",
+        "get_evidence_revisions",
+    }
+    if feedback_id and route_name in feedback_routes:
+        artifacts = fetch_feedback_trace_artifacts(
+            feedback_id,
+            caller_sub=caller_sub,
+            caller_email=str(
+                user.get("trusted_caller_email") or user.get("email") or ""
+            ).strip() or None,
+        )
+        if feedback_artifacts_contain_trace(artifacts, trace_id):
+            request.state.authorized_feedback_artifacts = artifacts
+            return
+        artifact_status = str((artifacts or {}).get("status") or "")
+        if artifact_status in {"not_configured", "unavailable"}:
+            LOGGER.error(
+                "Feedback artifact authorization lookup failed: status=%s",
+                artifact_status,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Trace provider is temporarily unavailable.",
+            ) from None
+
+    if isinstance(extraction_error, TraceNotFoundError):
+        raise HTTPException(status_code=404, detail="Trace not found.") from extraction_error
+
+    LOGGER.error(
+        "Trace authorization provider lookup failed: error_type=%s",
+        type(extraction_error).__name__,
+    )
+    raise HTTPException(
+        status_code=503,
+        detail="Trace provider is temporarily unavailable.",
+    ) from None
+
+
+router = APIRouter(dependencies=[Depends(_authorize_claude_trace_request)])
 LOGGER = logging.getLogger(__name__)
 TRANSIENT_CACHE_TTL_SECONDS = 15
 TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
@@ -892,7 +991,6 @@ def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
         "trace_name": trace.get("name"),
         "timestamp": trace.get("timestamp"),
         "session_id": trace.get("sessionId"),
-        "user_id": trace.get("userId"),
         "environment": trace.get("environment"),
         "tags": trace.get("tags", []),
         "latency": trace.get("latency"),
@@ -1053,7 +1151,6 @@ def _parse_optional_datetime(value: Optional[str], param_name: str) -> Optional[
 def _ensure_search_scope(
     *,
     session_id: Optional[str],
-    user_id: Optional[str],
     name: Optional[str],
     document_id: Optional[str],
     run_id: Optional[str],
@@ -1063,7 +1160,6 @@ def _ensure_search_scope(
 ) -> None:
     filters = {
         "session_id": session_id,
-        "user_id": user_id,
         "name": name,
         "document_id": document_id,
         "run_id": run_id,
@@ -1075,7 +1171,7 @@ def _ensure_search_scope(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Provide at least one bounded search key: session_id, user_id, name, "
+                "Provide at least one bounded search key: session_id, name, "
                 "document_id, run_id, extraction_id, from_timestamp, or to_timestamp."
             ),
         )
@@ -1270,6 +1366,7 @@ def _sibling_trace_ids(
     source: str,
     session_id: Optional[str],
     include_sibling_traces: bool,
+    caller_sub: str,
 ) -> List[str]:
     if not include_sibling_traces or not session_id:
         return []
@@ -1278,13 +1375,32 @@ def _sibling_trace_ids(
     return [
         listed_trace["id"]
         for listed_trace in session_listing.get("traces", [])
-        if listed_trace.get("id") and listed_trace.get("id") != trace_id
+        if listed_trace.get("id")
+        and listed_trace.get("id") != trace_id
+        and str(listed_trace.get("userId") or "").strip() == caller_sub
     ]
 
 
-def _extract_langfuse_trace(trace_id: str, source: str) -> Dict[str, Any]:
+def _extract_langfuse_trace(
+    request: Request,
+    trace_id: str,
+    source: str,
+) -> Dict[str, Any]:
+    authorized_extraction = getattr(
+        request.state,
+        "authorized_trace_extraction",
+        None,
+    )
+    effective_source = _effective_source(source)
+    if (
+        authorized_extraction
+        and authorized_extraction.get("trace_id") == trace_id
+        and authorized_extraction.get("source") == effective_source
+    ):
+        return authorized_extraction["trace_data"]
+
     try:
-        extractor = TraceExtractor(source=_effective_source(source))
+        extractor = TraceExtractor(source=effective_source)
         return extractor.extract_complete_trace(trace_id)
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -1315,7 +1431,7 @@ def _offset_pagination(*, limit: int, offset: int, total_items: int) -> Dict[str
     response_model=ClaudeTraceResponse,
     summary="Search Langfuse traces",
     description="""
-    Search Langfuse traces by session, user, trace name, indexed metadata IDs,
+    Search the authenticated curator's Langfuse traces by session, trace name, indexed metadata IDs,
     or bounded timestamp window. Use this when a curator gives a session,
     document, run, or extraction ID instead of a trace ID.
     """
@@ -1323,7 +1439,6 @@ def _offset_pagination(*, limit: int, offset: int, total_items: int) -> Dict[str
 async def search_traces(
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source: local, remote, or auto"),
     session_id: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Langfuse session ID"),
-    user_id: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Langfuse user ID"),
     name: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Trace name filter"),
     document_id: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Trace metadata.document_id filter"),
     run_id: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Trace metadata.run_id filter"),
@@ -1343,9 +1458,9 @@ async def search_traces(
     ] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
+    user_id = _trusted_caller_sub(user)
     _ensure_search_scope(
         session_id=session_id,
-        user_id=user_id,
         name=name,
         document_id=document_id,
         run_id=run_id,
@@ -1357,7 +1472,6 @@ async def search_traces(
         source=source,
         query={
             "session_id": session_id,
-            "user_id": user_id,
             "name": name,
             "document_id": document_id,
             "run_id": run_id,
@@ -1393,7 +1507,11 @@ async def search_traces(
     response_data = _search_response_data(
         source=source,
         traces=listing["traces"],
-        query=listing["query"],
+        query={
+            key: value
+            for key, value in listing["query"].items()
+            if key != "user_id"
+        },
         offset=offset,
         limit=limit,
         total_items=listing.get("total_items"),
@@ -1421,6 +1539,7 @@ async def search_traces(
 )
 async def get_langfuse_tree(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
     offset: Annotated[int, Query(ge=0, description="Section item offset")] = 0,
@@ -1428,7 +1547,7 @@ async def get_langfuse_tree(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     tree = build_trace_tree(trace_data, include_metadata_values=False)
     nodes = _flatten_trace_tree(tree)
     response_data = _aggregate_response_data(
@@ -1467,6 +1586,7 @@ async def get_langfuse_tree(
 )
 async def get_langfuse_reconstruction(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     limit: int = Query(default=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, description="Maximum events to return"),
     offset: Annotated[int, Query(ge=0, description="Event offset")] = 0,
@@ -1474,7 +1594,7 @@ async def get_langfuse_reconstruction(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     reconstruction = build_ordered_reconstruction(
         trace_data,
         include_payload_values=False,
@@ -1516,6 +1636,7 @@ async def get_langfuse_reconstruction(
 )
 async def get_langfuse_payloads(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     sort: str = Query(default="largest", description="Sort order: largest or chronological"),
     limit: Annotated[
@@ -1529,7 +1650,7 @@ async def get_langfuse_payloads(
 ) -> ClaudeTraceResponse:
     if sort not in {"largest", "chronological"}:
         raise HTTPException(status_code=400, detail="sort must be 'largest' or 'chronological'")
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     payloads = build_payload_inventory(trace_data, include_values=False)
     for payload in payloads:
         preview = _bounded_summary(payload.get("preview"))
@@ -1573,6 +1694,7 @@ async def get_langfuse_payloads(
 )
 async def get_langfuse_payload(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     payload_id: Optional[str] = Query(default=None, description="Payload ID returned by langfuse_payloads"),
     scope: Optional[str] = Query(default=None, description="Payload scope: trace or observation"),
@@ -1594,7 +1716,7 @@ async def get_langfuse_payload(
         if scope and scope not in {"trace", "observation"}:
             raise HTTPException(status_code=400, detail="scope must be 'trace' or 'observation'")
 
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     payload = find_payload(
         trace_data,
         payload_id=payload_id,
@@ -1668,6 +1790,7 @@ async def get_langfuse_payload(
 )
 async def get_model_live_context(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
     offset: Annotated[int, Query(ge=0, description="Section item offset")] = 0,
@@ -1675,7 +1798,7 @@ async def get_model_live_context(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     model_live_context = _build_model_live_context(trace_data)
     calls = model_live_context.pop("calls", [])
     response_data = _aggregate_response_data(
@@ -1715,6 +1838,7 @@ async def get_model_live_context(
 )
 async def get_langfuse_costs(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     section: Annotated[Optional[str], Query(description="Cost collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -1722,7 +1846,7 @@ async def get_langfuse_costs(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     costs = build_cost_summary(trace_data)
     response_data = _aggregate_response_data(
         source=source,
@@ -1753,6 +1877,7 @@ async def get_langfuse_costs(
 )
 async def get_langfuse_duplicates(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     section: Annotated[Optional[str], Query(description="Duplicate collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -1760,7 +1885,7 @@ async def get_langfuse_duplicates(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     duplicates = build_duplicate_report(trace_data)
     duplicate_groups = []
     duplicate_payloads = []
@@ -2417,6 +2542,7 @@ async def get_extraction_timeline(
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
+            caller_sub=_trusted_caller_sub(user),
         ),
         load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
             sibling_trace_id,
@@ -2425,6 +2551,11 @@ async def get_extraction_timeline(
             refresh=refresh,
         ),
         fallback_exceptions=(HTTPException,),
+        caller_sub=_trusted_caller_sub(user),
+        caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
+        authorized_feedback_artifacts=getattr(
+            getattr(request, "state", None), "authorized_feedback_artifacts", None
+        ),
     )
     timeline = build_extraction_timeline(
         trace_id=trace_id,
@@ -2519,6 +2650,7 @@ async def get_extraction_diagnostic_report(
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
+            caller_sub=_trusted_caller_sub(user),
         ),
         load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
             sibling_trace_id,
@@ -2527,6 +2659,11 @@ async def get_extraction_diagnostic_report(
             refresh=refresh,
         ),
         fallback_exceptions=(HTTPException,),
+        caller_sub=_trusted_caller_sub(user),
+        caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
+        authorized_feedback_artifacts=getattr(
+            getattr(request, "state", None), "authorized_feedback_artifacts", None
+        ),
     )
     timeline = build_extraction_timeline(
         trace_id=trace_id,
@@ -2620,6 +2757,7 @@ async def get_evidence_revisions(
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
+            caller_sub=_trusted_caller_sub(user),
         ),
         load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
             sibling_trace_id,
@@ -2628,6 +2766,11 @@ async def get_evidence_revisions(
             refresh=refresh,
         ),
         fallback_exceptions=(HTTPException,),
+        caller_sub=_trusted_caller_sub(user),
+        caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
+        authorized_feedback_artifacts=getattr(
+            getattr(request, "state", None), "authorized_feedback_artifacts", None
+        ),
     )
     evidence_revisions = build_evidence_revisions(
         trace_id=trace_id,

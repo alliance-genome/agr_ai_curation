@@ -624,12 +624,11 @@ GET_TRACE_VIEW_TOOL = {
 
 SEARCH_TRACES_TOOL = {
     "name": "search_traces",
-    "description": "Search Langfuse traces by session_id, user_id, trace name, document_id, run_id, extraction_id, or bounded timestamp window. Use this when the curator has a session/document/run ID but not a specific trace ID.",
+    "description": "Search the authenticated curator's Langfuse traces by session_id, trace name, document_id, run_id, extraction_id, or bounded timestamp window. Use this when the curator has a session/document/run ID but not a specific trace ID.",
     "input_schema": {
         "type": "object",
         "properties": {
             "session_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional Langfuse session ID."},
-            "user_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional Langfuse user ID."},
             "name": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional trace name filter."},
             "document_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional trace metadata.document_id filter."},
             "run_id": {"type": "string", "maxLength": _TRACE_SEARCH_FILTER_MAX_CHARS, "description": "Optional trace metadata.run_id filter."},

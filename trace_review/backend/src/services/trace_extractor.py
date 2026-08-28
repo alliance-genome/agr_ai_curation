@@ -22,6 +22,10 @@ SESSION_OBSERVATION_FIELDS = "core,basic,time,trace_context"
 SESSION_TRACE_LIST_LIMIT = 100
 
 
+class TraceNotFoundError(RuntimeError):
+    """Raised when Langfuse has no observations for an exact trace ID."""
+
+
 class TraceExtractor:
     """Service for extracting trace data from Langfuse"""
 
@@ -176,7 +180,9 @@ class TraceExtractor:
     ) -> Dict[str, Any]:
         """Build trace context from the v2 root observation without a legacy read."""
         if not observations:
-            raise RuntimeError(f"Langfuse returned no v2 observations for trace {trace_id}")
+            raise TraceNotFoundError(
+                f"Langfuse returned no v2 observations for trace {trace_id}"
+            )
 
         ordered = sorted(
             observations,

@@ -189,6 +189,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             request,
             source="auto",
             refresh=True,
+            user={"sub": "user-1", "email": "curator@example.org"},
         )
 
         extractor_cls.assert_called_with(source="local")
@@ -262,6 +263,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             tool_name=None,
             event_type=None,
             candidate_id=None,
+            user={"sub": "user-1", "email": "curator@example.org"},
         )
 
         self.assertEqual(response["view"], "evidence_revisions")
@@ -313,6 +315,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             tool_name=None,
             event_type=None,
             candidate_id=None,
+            user={"sub": "user-1", "email": "curator@example.org"},
         )
 
         self.assertEqual(response["view"], "extraction_timeline")
@@ -384,6 +387,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
                     tool_name=None,
                     event_type=None,
                     candidate_id=None,
+                    user={"sub": "user-1", "email": "curator@example.org"},
                 )
 
         self.assertEqual(response["view"], "extraction_timeline")
@@ -431,6 +435,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             tool_name=None,
             event_type=None,
             candidate_id=None,
+            user={"sub": "user-1", "email": "curator@example.org"},
         )
 
         extractor_cls.assert_called_once_with(source="local")
@@ -521,6 +526,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             event_type=None,
             candidate_id=None,
             section="evidence_records",
+            user={"sub": "user-1", "email": "curator@example.org"},
         )
 
         extractor_cls.assert_called_with(source="local")
@@ -723,6 +729,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             event_type=None,
             candidate_id=None,
             section="timeline",
+            user={"sub": "user-1", "email": "curator@example.org"},
         )
 
         self.assertEqual(response.status, "success")

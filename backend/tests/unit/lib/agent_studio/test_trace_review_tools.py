@@ -87,6 +87,10 @@ async def test_trace_review_requests_forward_internal_bearer(
 ):
     capture = {}
     monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "shared-service-token")
+    tools.set_trusted_trace_caller(
+        caller_sub="curator-sub-1",
+        caller_email="curator@example.org",
+    )
     _patch_async_client(
         monkeypatch,
         response=_FakeResponse(200, {"data": {}, "token_info": {}}),
@@ -96,7 +100,9 @@ async def test_trace_review_requests_forward_internal_bearer(
     await request_factory()
 
     assert capture["headers"] == {
-        "Authorization": "Bearer shared-service-token"
+        "Authorization": "Bearer shared-service-token",
+        "X-AGR-Trusted-Caller-Sub": "curator-sub-1",
+        "X-AGR-Trusted-Caller-Email": "curator@example.org",
     }
 
 
@@ -447,6 +453,7 @@ async def test_get_trace_costs_and_duplicates(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_service_logs_success_and_error_branches(monkeypatch):
     capture = {}
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
     _patch_async_client(
         monkeypatch,
         response=_FakeResponse(200, {"container": "backend", "lines": 5, "logs": "line1\nline2"}),
@@ -491,7 +498,22 @@ async def test_get_service_logs_success_and_error_branches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_service_logs_requires_internal_token(monkeypatch):
+    monkeypatch.delenv("TRACE_REVIEW_INTERNAL_API_TOKEN", raising=False)
+
+    result = await tools.get_service_logs(container="backend", lines=50)
+
+    assert result == {
+        "status": "error",
+        "data": None,
+        "error": "TRACE_REVIEW_INTERNAL_API_TOKEN is not configured",
+        "help": "Configure the internal service token before using service logs",
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_service_logs_rejects_non_integer_since(monkeypatch):
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
     _patch_async_client(
         monkeypatch,
         response=_FakeResponse(200, {"container": "backend", "lines": 5, "logs": "line1\nline2"}),

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from types import SimpleNamespace
 from typing import Literal
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -10,6 +11,10 @@ from src.services.langfuse_run_reconstruction import serialize_payload
 
 
 TRACE_ID = "856df16f1752cb53ee43dcb2f5ecfd16"
+
+
+def _handler_request() -> SimpleNamespace:
+    return SimpleNamespace(state=SimpleNamespace())
 
 
 def _conversation_provider_result(chunk: dict) -> dict:
@@ -667,6 +672,7 @@ async def test_payload_inventory_page_and_exact_payload_chunks_stay_bounded_and_
         extractor_cls.return_value.extract_complete_trace.return_value = trace_data
         inventory = await claude.get_langfuse_payloads(
             TRACE_ID,
+            request=_handler_request(),
             source="local",
             sort="chronological",
             limit=claude.TRACE_REVIEW_PAGE_SIZE,
@@ -687,6 +693,7 @@ async def test_payload_inventory_page_and_exact_payload_chunks_stay_bounded_and_
         while True:
             response = await claude.get_langfuse_payload(
                 TRACE_ID,
+                request=_handler_request(),
                 source="local",
                 payload_id=payload_id,
                 scope=None,

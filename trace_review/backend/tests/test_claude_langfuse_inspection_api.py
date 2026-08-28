@@ -1,10 +1,32 @@
 import json
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
 
-from src.api import claude
+from src.api import auth, claude
+from src.services.cache_manager import CacheManager
+
+
+def _authorization_request(trace_id: str = "trace-1") -> SimpleNamespace:
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(cache_manager=CacheManager(ttl_hours=1))
+        ),
+        path_params={"trace_id": trace_id},
+        query_params={"source": "local"},
+        state=SimpleNamespace(),
+        scope={},
+    )
+
+
+def _handler_request() -> SimpleNamespace:
+    return SimpleNamespace(state=SimpleNamespace())
 
 
 def _trace_data():
@@ -85,7 +107,6 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
         await claude.search_traces(
             source="local",
             session_id=None,
-            user_id=None,
             name=None,
             document_id=None,
             run_id=None,
@@ -95,8 +116,10 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
             offset=0,
             limit=25,
             item_start=0,
+            user={"sub": "user-1"},
         )
     assert exc_info.value.status_code == 400
+    assert "user_id" not in exc_info.value.detail
 
     extractor = extractor_cls.return_value
     extractor.list_traces.return_value = {
@@ -119,7 +142,6 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
     response = await claude.search_traces(
         source="local",
         session_id="session-1",
-        user_id=None,
         name=None,
         document_id=None,
         run_id=None,
@@ -129,12 +151,296 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
         offset=0,
         limit=25,
         item_start=0,
+        user={"sub": "user-1"},
     )
 
     assert response.status == "success"
     assert response.data["trace_count"] == 1
     assert response.data["traces"][0]["trace_id_short"] == "856df16f"
     extractor.list_traces.assert_called_once()
+    assert extractor.list_traces.call_args.kwargs["user_id"] == "user-1"
+    assert "user_id" not in response.data["traces"][0]
+    assert "user_id" not in json.dumps(response.data)
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extractor_cls: Mock):
+    extractor_cls.return_value.extract_complete_trace.return_value = {
+        "raw_trace": {"id": "trace-1", "userId": "curator-1"},
+    }
+    owner_request = _authorization_request()
+    await claude._authorize_claude_trace_request(
+        owner_request,
+        user={"sub": "curator-1"},
+    )
+
+    other_request = _authorization_request()
+    with pytest.raises(HTTPException) as cross_user:
+        await claude._authorize_claude_trace_request(
+            other_request,
+            user={"sub": "curator-2"},
+        )
+
+    extractor_cls.return_value.extract_complete_trace.side_effect = claude.TraceNotFoundError(
+        "missing"
+    )
+    with pytest.raises(HTTPException) as missing:
+        await claude._authorize_claude_trace_request(
+            other_request,
+            user={"sub": "curator-2"},
+        )
+
+    assert cross_user.value.status_code == missing.value.status_code == 404
+    assert cross_user.value.detail == missing.value.detail == "Trace not found."
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_exact_trace_authorization_uses_cached_owner_without_provider_lookup(
+    extractor_cls: Mock,
+):
+    owner_request = _authorization_request()
+    owner_request.app.state.cache_manager.set(
+        "trace-1",
+        {"raw_trace": {"id": "trace-1", "userId": "curator-1"}},
+    )
+
+    await claude._authorize_claude_trace_request(
+        owner_request,
+        user={"sub": "curator-1"},
+    )
+
+    other_request = _authorization_request()
+    other_request.app.state.cache_manager.set(
+        "trace-1",
+        {"raw_trace": {"id": "trace-1", "userId": "curator-1"}},
+    )
+    with pytest.raises(HTTPException) as cross_user:
+        await claude._authorize_claude_trace_request(
+            other_request,
+            user={"sub": "curator-2"},
+        )
+
+    assert cross_user.value.status_code == 404
+    assert cross_user.value.detail == "Trace not found."
+    extractor_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_langfuse_http_route_reuses_authorized_cache_miss_extraction(
+    extractor_cls: Mock,
+):
+    trace_data = _trace_data()
+    trace_id = trace_data["raw_trace"]["id"]
+    extractor_cls.return_value.extract_complete_trace.return_value = trace_data
+
+    async with _claude_http_client("user-1") as client:
+        response = await client.get(
+            f"/api/claude/traces/{trace_id}/langfuse_tree",
+            params={"source": "local"},
+        )
+
+    assert response.status_code == 200
+    extractor_cls.return_value.extract_complete_trace.assert_called_once_with(trace_id)
+
+
+@pytest.mark.parametrize(
+    ("authorized_trace_id", "authorized_source"),
+    [("other-trace", "local"), ("trace-1", "remote")],
+)
+@patch("src.api.claude.TraceExtractor")
+def test_langfuse_extraction_does_not_reuse_mismatched_request_state(
+    extractor_cls: Mock,
+    authorized_trace_id: str,
+    authorized_source: str,
+):
+    request = _handler_request()
+    request.state.authorized_trace_extraction = {
+        "trace_id": authorized_trace_id,
+        "source": authorized_source,
+        "trace_data": {"marker": "stale"},
+    }
+    fresh_trace_data = {"marker": "fresh"}
+    extractor_cls.return_value.extract_complete_trace.return_value = fresh_trace_data
+
+    result = claude._extract_langfuse_trace(request, "trace-1", "local")
+
+    assert result is fresh_trace_data
+    extractor_cls.return_value.extract_complete_trace.assert_called_once_with("trace-1")
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_exact_trace_authorization_surfaces_sanitized_provider_failure(
+    extractor_cls: Mock,
+    caplog,
+):
+    secret_detail = "provider failed with secret-token-value"
+    extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError(
+        secret_detail
+    )
+    request = _authorization_request()
+
+    caplog.set_level(logging.ERROR, logger=claude.LOGGER.name)
+    with pytest.raises(HTTPException) as exc_info:
+        await claude._authorize_claude_trace_request(
+            request,
+            user={"sub": "curator-1"},
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Trace provider is temporarily unavailable."
+    assert "RuntimeError" in caplog.text
+    assert secret_detail not in caplog.text
+
+
+@asynccontextmanager
+async def _claude_http_client(user_sub: str) -> AsyncIterator[AsyncClient]:
+    app = FastAPI()
+    app.state.cache_manager = CacheManager(ttl_hours=1)
+    app.include_router(claude.router, prefix="/api/claude/traces")
+
+    async def _authenticated_user():
+        return {"sub": user_sub, "email": f"{user_sub}@example.org"}
+
+    app.dependency_overrides[auth._get_user_from_cookie_impl] = _authenticated_user
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        yield client
+
+
+@patch("src.api.claude.fetch_feedback_trace_artifacts")
+@patch("src.api.claude.TraceExtractor")
+@pytest.mark.asyncio
+async def test_feedback_backed_trace_http_authorization_allows_owner_when_live_trace_missing(
+    extractor_cls: Mock,
+    fetch_artifacts: Mock,
+):
+    extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError(
+        "Langfuse unavailable"
+    )
+    fetch_artifacts.return_value = {
+        "status": "available",
+        "trace_ids": ["trace-owner"],
+        "trace_data": {
+            "traces": [
+                {"trace_id": "trace-owner", "tool_calls": []},
+            ]
+        },
+    }
+
+    async with _claude_http_client("curator-1") as client:
+        response = await client.get(
+            "/api/claude/traces/trace-owner/extraction_timeline",
+            params={"source": "local", "feedback_id": "feedback-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    fetch_artifacts.assert_called_once_with(
+        "feedback-1",
+        caller_sub="curator-1",
+        caller_email="curator-1@example.org",
+    )
+
+
+@pytest.mark.parametrize(
+    "artifacts",
+    [
+        {"status": "not_found", "trace_data": None},
+        {
+            "status": "available",
+            "trace_ids": ["different-trace"],
+            "trace_data": {"traces": [{"trace_id": "different-trace"}]},
+        },
+    ],
+)
+@patch("src.api.claude.fetch_feedback_trace_artifacts")
+@patch("src.api.claude.TraceExtractor")
+@pytest.mark.asyncio
+async def test_feedback_backed_trace_http_authorization_hides_absent_or_cross_owner_artifact(
+    extractor_cls: Mock,
+    fetch_artifacts: Mock,
+    artifacts: dict,
+):
+    extractor_cls.return_value.extract_complete_trace.side_effect = (
+        claude.TraceNotFoundError("missing")
+    )
+    fetch_artifacts.return_value = artifacts
+
+    async with _claude_http_client("curator-2") as client:
+        response = await client.get(
+            "/api/claude/traces/trace-owner/extraction_timeline",
+            params={"source": "local", "feedback_id": "feedback-1"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Trace not found."}
+
+
+@patch("src.api.claude.fetch_feedback_trace_artifacts")
+@patch("src.api.claude.TraceExtractor")
+@pytest.mark.asyncio
+async def test_feedback_backed_trace_http_authorization_surfaces_artifact_provider_failure(
+    extractor_cls: Mock,
+    fetch_artifacts: Mock,
+):
+    extractor_cls.return_value.extract_complete_trace.side_effect = (
+        claude.TraceNotFoundError("missing")
+    )
+    fetch_artifacts.return_value = {
+        "status": "unavailable",
+        "trace_data": None,
+    }
+
+    async with _claude_http_client("curator-1") as client:
+        response = await client.get(
+            "/api/claude/traces/trace-owner/extraction_timeline",
+            params={"source": "local", "feedback_id": "feedback-1"},
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Trace provider is temporarily unavailable."
+    }
+
+
+@patch("src.api.claude.fetch_feedback_trace_artifacts")
+@patch("src.api.claude.TraceExtractor")
+@pytest.mark.asyncio
+async def test_feedback_id_cannot_bypass_non_feedback_exact_route_authorization(
+    extractor_cls: Mock,
+    fetch_artifacts: Mock,
+):
+    extractor_cls.return_value.extract_complete_trace.side_effect = (
+        claude.TraceNotFoundError("missing")
+    )
+
+    async with _claude_http_client("curator-1") as client:
+        response = await client.get(
+            "/api/claude/traces/trace-owner/summary",
+            params={"source": "local", "feedback_id": "feedback-1"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Trace not found."}
+    fetch_artifacts.assert_not_called()
+
+
+def test_every_exact_claude_route_inherits_central_trace_authorization():
+    exact_routes = [
+        route
+        for route in claude.router.routes
+        if "{trace_id}" in getattr(route, "path", "")
+    ]
+    assert exact_routes
+    for route in exact_routes:
+        dependencies = [dependency.call for dependency in route.dependant.dependencies]
+        assert claude._authorize_claude_trace_request in dependencies
 
 
 def _large_search_references(count: int, *, oversized: bool = False) -> list[dict]:
@@ -186,7 +492,6 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
     arguments = {
         "source": "local",
         "session_id": "session-" + "s" * 248,
-        "user_id": "user-" + "u" * 251,
         "name": "trace-" + "n" * 250,
         "document_id": "document-" + "d" * 247,
         "run_id": "run-" + "r" * 252,
@@ -196,6 +501,7 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
         "offset": 0,
         "limit": record_count,
         "item_start": 0,
+        "user": {"sub": "user-1"},
     }
     reconstructed = []
     while True:
@@ -213,7 +519,7 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
         if next_call is None:
             break
         for key in (
-            "session_id", "user_id", "name", "document_id", "run_id",
+            "session_id", "name", "document_id", "run_id",
             "extraction_id", "from_timestamp", "to_timestamp",
         ):
             expected = (
@@ -222,7 +528,7 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
                 else arguments[key]
             )
             assert next_call[key] == expected
-        arguments = {"source": "local", **next_call}
+        arguments = {"source": "local", "user": {"sub": "user-1"}, **next_call}
 
     assert [record["trace_id"] for record in reconstructed] == [
         record["id"] for record in records
@@ -238,7 +544,6 @@ async def test_search_traces_rejects_filter_that_cannot_fit_provider_wrapper(ext
         await claude.search_traces(
             source="local",
             session_id="s" * (claude.TRACE_SEARCH_FILTER_MAX_CHARS + 1),
-            user_id=None,
             name=None,
             document_id=None,
             run_id=None,
@@ -248,6 +553,7 @@ async def test_search_traces_rejects_filter_that_cannot_fit_provider_wrapper(ext
             offset=0,
             limit=1,
             item_start=0,
+            user={"sub": "user-1"},
         )
 
     assert exc_info.value.status_code == 400
@@ -263,7 +569,6 @@ async def test_search_traces_rejects_encoded_filters_without_chunk_headroom(extr
         await claude.search_traces(
             source="local",
             session_id=encoded_filter,
-            user_id=encoded_filter,
             name=encoded_filter,
             document_id=encoded_filter,
             run_id=encoded_filter,
@@ -273,6 +578,7 @@ async def test_search_traces_rejects_encoded_filters_without_chunk_headroom(extr
             offset=0,
             limit=1,
             item_start=0,
+            user={"sub": "user-1"},
         )
 
     assert exc_info.value.status_code == 400
@@ -290,7 +596,6 @@ async def test_search_traces_oversized_reference_reconstructs_with_forward_progr
     arguments = {
         "source": "local",
         "session_id": "session-filter",
-        "user_id": None,
         "name": None,
         "document_id": None,
         "run_id": None,
@@ -300,6 +605,7 @@ async def test_search_traces_oversized_reference_reconstructs_with_forward_progr
         "offset": 0,
         "limit": 1,
         "item_start": 0,
+        "user": {"sub": "user-1"},
     }
     content = []
     starts = []
@@ -321,13 +627,13 @@ async def test_search_traces_oversized_reference_reconstructs_with_forward_progr
         arguments = {
             "source": "local",
             "session_id": None,
-            "user_id": None,
             "name": None,
             "document_id": None,
             "run_id": None,
             "extraction_id": None,
             "from_timestamp": None,
             "to_timestamp": None,
+            "user": {"sub": "user-1"},
             **next_call,
         }
 
@@ -349,6 +655,7 @@ async def test_claude_langfuse_reconstruction_is_event_paginated(extractor_cls: 
 
     response = await claude.get_langfuse_reconstruction(
         "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
         source="local",
         limit=2,
         offset=1,
@@ -370,6 +677,7 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
 
     inventory = await claude.get_langfuse_payloads(
         "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
         source="local",
         sort="chronological",
         limit=10,
@@ -383,6 +691,7 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
 
     exact = await claude.get_langfuse_payload(
         "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
         source="local",
         payload_id="observation:agent-1:metadata.agent_config",
         scope=None,
@@ -403,8 +712,18 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
 async def test_claude_langfuse_costs_and_duplicates(extractor_cls: Mock):
     extractor_cls.return_value.extract_complete_trace.return_value = _trace_data()
 
-    costs = await claude.get_langfuse_costs("856df16f1752cb53ee43dcb2f5ecfd16", source="local", section="observations")
-    duplicates = await claude.get_langfuse_duplicates("856df16f1752cb53ee43dcb2f5ecfd16", source="local", section="duplicate_groups")
+    costs = await claude.get_langfuse_costs(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
+        source="local",
+        section="observations",
+    )
+    duplicates = await claude.get_langfuse_duplicates(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
+        source="local",
+        section="duplicate_groups",
+    )
 
     assert costs.data["summary"]["totals"]["total_tokens"] == 15
     assert duplicates.data["summary"]["duplicate_group_count"] == 1
@@ -418,6 +737,7 @@ async def test_claude_model_live_context_uses_preflight_and_generation_inputs(ex
 
     response = await claude.get_model_live_context(
         "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
         source="local",
     )
 

@@ -41,7 +41,7 @@ def _install_langfuse(monkeypatch, trace_obj=None, observations=None, raise_on_i
                 ),
             )
 
-    module.Langfuse = _Langfuse
+    setattr(module, "Langfuse", _Langfuse)
     monkeypatch.setitem(sys.modules, "langfuse", module)
 
 
@@ -135,7 +135,7 @@ async def test_handle_tool_call_search_traces_forwards_continuation(monkeypatch)
     monkeypatch.setattr(tools_module, "search_traces", _fake_search)
     tool_input = {
         "session_id": "session-1",
-        "user_id": "user-1",
+        "user_id": "attacker-controlled-user",
         "name": "trace-name",
         "document_id": "doc-1",
         "run_id": "run-1",
@@ -155,7 +155,13 @@ async def test_handle_tool_call_search_traces_forwards_continuation(monkeypatch)
         messages=[],
     )
 
-    assert result == {"status": "ok", "kwargs": tool_input}
+    expected = {key: value for key, value in tool_input.items() if key != "user_id"}
+    assert result == {"status": "ok", "kwargs": expected}
+
+
+def test_search_traces_schema_does_not_expose_user_scope():
+    properties = api_module.SEARCH_TRACES_TOOL["input_schema"]["properties"]
+    assert "user_id" not in properties
 
 
 def test_get_service_logs_tool_schema_matches_logs_api_contract():

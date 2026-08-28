@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import requests
 
@@ -15,6 +15,35 @@ SERVICE_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
 REQUEST_TIMEOUT_SECONDS = 10
 
 
+def feedback_artifacts_contain_trace(
+    artifacts: Mapping[str, Any] | None,
+    trace_id: str,
+) -> bool:
+    """Return whether an owner-authorized feedback response contains a trace ID."""
+    if not isinstance(artifacts, Mapping):
+        return False
+    normalized_trace_id = str(trace_id or "").strip()
+    if not normalized_trace_id:
+        return False
+
+    trace_ids = artifacts.get("trace_ids")
+    if isinstance(trace_ids, list) and normalized_trace_id in {
+        str(item or "").strip() for item in trace_ids
+    }:
+        return True
+
+    trace_data = artifacts.get("trace_data")
+    traces = trace_data.get("traces") if isinstance(trace_data, Mapping) else None
+    if not isinstance(traces, list):
+        return False
+    return any(
+        isinstance(trace, Mapping)
+        and str(trace.get("trace_id") or trace.get("id") or "").strip()
+        == normalized_trace_id
+        for trace in traces
+    )
+
+
 def _backend_url() -> str | None:
     configured = os.getenv(BACKEND_URL_ENV, "").strip()
     if not configured:
@@ -22,7 +51,12 @@ def _backend_url() -> str | None:
     return configured.rstrip("/")
 
 
-def fetch_feedback_trace_artifacts(feedback_id: str | None) -> Dict[str, Any] | None:
+def fetch_feedback_trace_artifacts(
+    feedback_id: str | None,
+    *,
+    caller_sub: str | None = None,
+    caller_email: str | None = None,
+) -> Dict[str, Any] | None:
     """Return stored feedback trace artifacts when TraceReview is configured to fetch them."""
 
     if not feedback_id:
@@ -39,9 +73,14 @@ def fetch_feedback_trace_artifacts(feedback_id: str | None) -> Dict[str, Any] | 
 
     endpoint = f"{backend_url}/api/feedback/{feedback_id}/trace-artifacts"
     try:
+        headers = {"Authorization": f"Bearer {token}"}
+        if caller_sub:
+            headers["X-AGR-Trusted-Caller-Sub"] = caller_sub
+        if caller_email:
+            headers["X-AGR-Trusted-Caller-Email"] = caller_email
         response = requests.get(
             endpoint,
-            headers={"Authorization": f"Bearer {token}"},
+            headers=headers,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:

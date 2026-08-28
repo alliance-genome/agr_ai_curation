@@ -848,6 +848,8 @@ async def get_trace_view(
                     status_code=404,
                     detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
                 ),
+                caller_sub=str(user.get("sub") or "").strip() or None,
+                caller_email=str(user.get("email") or "").strip() or None,
             )
             if view_name == "evidence_revisions":
                 view_data = build_evidence_revisions(

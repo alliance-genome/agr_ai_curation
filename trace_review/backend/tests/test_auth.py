@@ -10,7 +10,11 @@ from src.api import auth
 class TraceReviewAuthTests(unittest.IsolatedAsyncioTestCase):
     async def test_internal_service_bearer_token_authenticates_before_cognito(self):
         request = SimpleNamespace(
-            headers={"authorization": "Bearer shared-service-token"},
+            headers={
+                "authorization": "Bearer shared-service-token",
+                "x-agr-trusted-caller-sub": "curator-sub-1",
+                "x-agr-trusted-caller-email": "curator@example.org",
+            },
             cookies={},
         )
 
@@ -23,6 +27,8 @@ class TraceReviewAuthTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(user["sub"], "trace-review-internal-service")
         self.assertEqual(user["token_use"], "internal_service")
+        self.assertEqual(user["trusted_caller_sub"], "curator-sub-1")
+        self.assertEqual(user["trusted_caller_email"], "curator@example.org")
 
     async def test_invalid_internal_service_bearer_token_is_rejected(self):
         request = SimpleNamespace(
