@@ -43,18 +43,18 @@ def _bundle(*, group_id: str | None = None) -> PromptLayerBundle:
             hash=_hash("Exact editable base prompt"),
         ),
     ]
-    if group_id == "WB":
+    if group_id == "test_group":
         layers.append(
             PromptLayer(
-                id="demo_agent:group_rules:WB",
+                id="demo_agent:group_rules:test_group",
                 kind="group_rules",
-                title="WB rules",
-                content="Exact WB group rules",
+                title="Test group rules",
+                content="Exact test group rules",
                 provenance="prompt_template:group_rules",
                 editable=True,
                 locked=False,
                 source_ref="prompt_templates:group-id:version:1",
-                hash=_hash("Exact WB group rules"),
+                hash=_hash("Exact test group rules"),
             )
         )
     bundle = PromptLayerBundle(agent_id="demo_agent", layers=tuple(layers), hash="")
@@ -74,7 +74,7 @@ def prompt_handler(monkeypatch):
         description="Demo prompt",
         source_file="packages/demo/agents/demo_agent/prompt.yaml",
         has_group_rules=True,
-        group_rules={"WB": SimpleNamespace()},
+        group_rules={"test_group": SimpleNamespace()},
     )
     service = SimpleNamespace(
         get_agent=lambda agent_id: agent if agent_id == "demo_agent" else None,
@@ -110,15 +110,15 @@ def test_default_prompt_view_is_content_free_manifest(prompt_handler):
 
 def test_effective_prompt_chunks_reconstruct_exact_group_render(monkeypatch, prompt_handler):
     monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "7")
-    expected = _bundle(group_id="WB")
-    summary = prompt_handler(agent_id="demo_agent", group_id="WB")
+    expected = _bundle(group_id="test_group")
+    summary = prompt_handler(agent_id="demo_agent", group_id="test_group")
     chunks = []
     cursor = 0
 
     while True:
         result = prompt_handler(
             agent_id="demo_agent",
-            group_id="WB",
+            group_id="test_group",
             view="effective_prompt",
             cursor=cursor,
             max_chars=100,
@@ -132,8 +132,8 @@ def test_effective_prompt_chunks_reconstruct_exact_group_render(monkeypatch, pro
             break
         cursor = result["next_cursor"]
 
-    assert summary["group_id_applied"] == "WB"
-    assert "Exact WB group rules" in "".join(chunks)
+    assert summary["group_id_applied"] == "test_group"
+    assert "Exact test group rules" in "".join(chunks)
     assert "".join(chunks) == expected.render()
 
 
@@ -251,11 +251,11 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
             created_by="test@example.org",
             source_file=str(agent_dir / "prompt.yaml"),
         ),
-        "disease_extractor:group_rules:FB": PromptTemplate(
+        "disease_extractor:group_rules:test_group": PromptTemplate(
             id=uuid.uuid4(),
             agent_name="disease_extractor",
             prompt_type="group_rules",
-            group_id="FB",
+            group_id="test_group",
             content=group_content,
             version=1,
             is_active=True,
@@ -265,18 +265,22 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
         ),
     }
     monkeypatch.setattr(assembly, "get_all_active_prompts", lambda: prompt_cache)
-    bundle = assembly.build_agent_prompt_layers("disease_extractor", group_id="FB")
+    bundle = assembly.build_agent_prompt_layers(
+        "disease_extractor", group_id="test_group"
+    )
     agent = SimpleNamespace(
         agent_name=definition.name,
         description=definition.description,
         source_file=str(agent_dir / "prompt.yaml"),
         has_group_rules=True,
-        group_rules={"FB": SimpleNamespace()},
+        group_rules={"test_group": SimpleNamespace()},
     )
     service = SimpleNamespace(
         get_agent=lambda agent_id: agent if agent_id == "disease_extractor" else None,
         get_effective_prompt_bundle=lambda agent_id, group_id=None: (
-            bundle if agent_id == "disease_extractor" and group_id == "FB" else None
+            bundle
+            if agent_id == "disease_extractor" and group_id == "test_group"
+            else None
         ),
         catalog=SimpleNamespace(categories=[]),
     )
@@ -285,13 +289,15 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
     monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "8000")
     prompt_handler = tool_definitions._create_get_prompt_handler()
 
-    prompt_summary = prompt_handler(agent_id="disease_extractor", group_id="FB")
+    prompt_summary = prompt_handler(
+        agent_id="disease_extractor", group_id="test_group"
+    )
     prompt_detail_results = []
     cursor = 0
     while True:
         chunk = prompt_handler(
             agent_id="disease_extractor",
-            group_id="FB",
+            group_id="test_group",
             view="effective_prompt",
             cursor=cursor,
         )
@@ -307,7 +313,7 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
         while True:
             chunk = prompt_handler(
                 agent_id="disease_extractor",
-                group_id="FB",
+                group_id="test_group",
                 view="layer",
                 layer_id=layer.id,
                 cursor=cursor,
