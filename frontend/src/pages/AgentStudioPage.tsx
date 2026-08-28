@@ -20,6 +20,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import ScienceIcon from '@mui/icons-material/Science'
 
 import OpusChat from '@/components/AgentStudio/OpusChat'
+import { buildFlowVerificationPrompt } from '@/components/AgentStudio/flowVerificationPrompt'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
 import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
 import PromptWorkshop from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
@@ -403,37 +404,10 @@ function AgentStudioPage() {
   // Handle verify request - sends a message to Claude to validate the flow
   // Include timestamp to ensure each click triggers a new request
   const handleVerifyRequest = useCallback(() => {
-    // Build a verification message for Claude
-    const message = `Verify this curation flow "${flowState?.flowName || 'Untitled'}".
-
-REQUIRED: Call these tools first:
-1. get_current_flow() - get flow definition with task_instructions and custom_instructions
-2. get_available_agents() - get agent categories and output_agents list
-3. get_prompt(), get_tool_inventory(), and get_tool_details() as needed before judging custom instructions, document tools, PDF evidence behavior, or validator/domain-pack claims
-
-CRITICAL ERRORS (must fail verification):
-- task_input node has EMPTY task_instructions (this is required content)
-- Disconnected nodes (won't execute)
-- Cycles (infinite loops)
-- Input sources referencing non-existent outputs
-
-HIGH PRIORITY ISSUES:
-- Flow doesn't end with an output-category agent
-- Duplicate output_key values
-
-SUGGESTIONS (only if evidence-based):
-- ONLY suggest alternative agents if the curator's task_instructions or custom_instructions explicitly mention something that a different agent handles better
-- Example: If instructions say "extract gene expression patterns" but gene_expression agent is missing, suggest it
-- Do NOT make speculative suggestions without evidence from the instructions
-- If instructions are empty, there is nothing to suggest
-
-OUTPUT:
-### FLOW VERIFICATION: [PASS/FAIL]
-**Critical:** [list or "None"]
-**High:** [list or "None"]
-**Suggestions:** [evidence-based only, or "None"]
-
-[Request ID: ${Date.now()}]`
+    const message = buildFlowVerificationPrompt(
+      `this curation flow "${flowState?.flowName || 'Untitled'}"`,
+      Date.now(),
+    )
 
     setVerifyMessage(message)
   }, [flowState?.flowName])

@@ -700,7 +700,18 @@ This tool returns the `current_flow_manifest_v1` contract:
 
 Use the targeted tools named in `detail_calls` to retrieve omitted details; do not infer or reconstruct the removed aggregate response.
 
-**NEVER** reference flow structure, automatic validation choices, domain-envelope-producing nodes, or PDF evidence/tool contracts without calling the relevant inspection tools first. If the returned domain-pack or validator metadata is not enough for the curator's question, call `get_domain_pack_validation_plan`. Use `get_prompt`, `get_tool_inventory`, and `get_tool_details` before judging agent custom instructions, attached document tools, or PDF evidence schemas. Do not recommend standalone flow steps for validators that are absent from `get_available_agents`; those validators are attachment-only and run through validation attachments/default runtime dispatch.
+For verification, follow this targeted evidence protocol:
+1. Treat the first manifest as authoritative. FAIL if `has_critical_issues=true` or any `findings` entry has severity `CRITICAL`.
+2. Reconstruct exact `task_instructions`, every present `custom_instructions`, and each judgment-relevant `step_goal` with `get_current_flow_instructions(node_id, field, cursor, limit)`. Execute the returned `next_call` until `complete=true` for every required field.
+3. Inspect the `get_current_flow_topology` sections `issues`, `control_path`, `control_edges`, `output_bindings`, and `validation_sidecars`. Fetch relevant `get_current_flow_node` scalar details, `get_current_flow_projection_plan` field or JSON-Pointer sections, `get_current_flow_validation_warnings` pages, and `get_current_flow_validation_schedule` sections (`selections`, `scheduled_validators`, `opt_outs`, `replacement_validators`, `supplemental_validators`, `inactive_metadata`) only when the verification criteria require them. For every paged current-flow detail response, execute its returned `next_call` until `complete=true` and no `next_call` remains.
+4. Call `get_available_agents(category="Output")` and follow `next_cursor` until `complete=true`; an unfiltered page cannot prove the Output boundary. Output agents are attachment branches with ordered `source_steps`, not terminal control nodes, so do not require the control path to end with an Output agent.
+5. Before judging a prompt, call `get_prompt(agent_id, group_id, view="summary")`, then reconstruct every required `view="effective_prompt"` or selected `view="layer"` text through `next_cursor` until `complete=true`. A custom-instruction judgment requires both the exact node `custom_instructions` and the complete relevant base/effective prompt.
+6. For document/PDF capability claims, use `get_tool_inventory(agent_id=<node agent>)` or another focused query and follow `next_cursor` until `truncated=false` and no `next_cursor` remains before judging capability or reporting PASS. Then use method/PDF-level `get_tool_details(tool_id, agent_id)`; never use the unsafe global inventory or oversized parent-tool metadata.
+7. For domain or validator claims, call `get_domain_pack_validation_plan(agent_id=<node agent> or domain_pack_id=<id>)` for its compact summary, then retrieve only evidence-relevant section pages from `object_definitions`, `fields`, `validators`, `validator_bindings`, `field_policies`, or `validation_attachments` until complete.
+
+**PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or any required response is `compacted_tool_result`. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
+
+Do not recommend standalone flow steps for validators that are absent from `get_available_agents`; those validators are attachment-only and run through validation attachments/default runtime dispatch.
 </critical_instruction>
 
 <responsibilities>
@@ -717,8 +728,9 @@ Use the targeted tools named in `detail_calls` to retrieve omitted details; do n
 2. **All Nodes Connected** - Disconnected nodes = steps that won't execute
 3. **Logical Step Order** - Each agent appears in the right sequence for the curator's task
 4. **Custom Instructions Redundancy** - For EACH node with custom instructions:
-   - Call `get_prompt(agent_id)` to fetch the base prompt
-   - Compare custom instructions to base prompt content
+   - Retrieve its exact `custom_instructions` through completion
+   - Retrieve the prompt summary and complete relevant base/effective text through completion
+   - Compare the exact custom instructions to that exact prompt content
    - Flag any duplication (phrases, instructions, or concepts already in base)
 5. **Missing Agents** - Any important processing steps absent?
 6. **Redundant Steps** - Any agents called unnecessarily?
@@ -726,7 +738,7 @@ Use the targeted tools named in `detail_calls` to retrieve omitted details; do n
 8. **Automatic Validation Semantics** - Which validators are active and default-enabled for runtime dispatch, which under-development bindings are explanatory metadata only, and which validator findings affect review/export readiness?
 9. **Curator Validation Choices** - Which active defaults were skipped or replaced by flow configuration, which replacement or supplemental validators the flow added, and how those choices affect review/export readiness?
 
-**CRITICAL for item 4:** You MUST actually call `get_prompt` for each agent with custom instructions to perform the comparison. Do NOT skip this step or guess based on agent name alone.
+**CRITICAL for item 4:** You MUST actually complete the targeted instruction and prompt calls for each agent with custom instructions. Do NOT skip this step or guess based on agent name alone.
 **CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
 **CRITICAL for validator flow placement:** Use `get_available_agents` for ordinary flow-step choices. If a validator is not returned there, treat it as attachment-only: explain or configure it through validation attachments/default validation instead of adding it as a standalone step.
 **CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_chunk` -> `record_evidence(span_ids=[...])` workflow and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
