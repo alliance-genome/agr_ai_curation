@@ -673,10 +673,10 @@ Response:
 
 ### 2. Get Tool Calls Summary (~100 tokens per call)
 
-Lightweight list of ALL tool calls with summaries (no full results). Use to see what tools were called before drilling into details.
+One bounded page of tool-call summaries (no full results). Follow the returned `next_call` to page through remaining calls before drilling into exact fields.
 
 ```bash
-curl -s http://localhost:8001/api/claude/traces/{trace_id}/tool_calls/summary | jq
+curl -s "http://localhost:8001/api/claude/traces/{trace_id}/tool_calls/summary?page=1&page_size=10" | jq
 ```
 
 Response:
@@ -698,6 +698,15 @@ Response:
         "result_summary": "Section found with 2341 characters"
       }
     ],
+    "pagination": {
+      "page": 1,
+      "page_size": 10,
+      "total_items": 23,
+      "total_pages": 3,
+      "has_next": true,
+      "has_prev": false
+    },
+    "next_call": { "trace_id": "d3b0a19f2c2df7b2b31dfb7cded3acbd", "page": 2, "page_size": 10 },
     "has_duplicates": true,
     "duplicate_count": 3
   },
@@ -705,9 +714,9 @@ Response:
 }
 ```
 
-### 3. Get Tool Calls (Paginated, ~1-5K tokens per page)
+### 3. Get Tool Calls (Paginated metadata)
 
-Full tool call details with pagination and optional filtering by tool name.
+Tool-call metadata and exact-field references with pagination and optional filtering by tool name. Input and result values are retrieved independently with the detail endpoint.
 
 ```bash
 # Get page 1 with 10 items
@@ -719,14 +728,23 @@ curl -s "http://localhost:8001/api/claude/traces/{trace_id}/tool_calls?tool_name
 
 Query parameters:
 - `page` (default: 1): Page number (1-indexed)
-- `page_size` (default: 10, max: 20): Items per page
+- `page_size` (default and max: configured TraceReview page size): Items per page
 - `tool_name` (optional): Filter by tool name
 
 Response includes pagination info:
 ```json
 {
   "status": "success",
-  "tool_calls": [ { /* full tool call with input and result */ } ],
+  "tool_calls": [
+    {
+      "call_id": "call_O3pBietwjqBaDwsUhF21LdtJ",
+      "name": "read_section",
+      "exact_fields": [
+        { "field": "input", "field_id": "tool_call:call_O3pBietwjqBaDwsUhF21LdtJ:input", "sha256": "<sha256>", "next_call": { "trace_id": "<trace_id>", "call_id": "call_O3pBietwjqBaDwsUhF21LdtJ", "field": "input", "start": 0, "max_chars": 8000 } },
+        { "field": "tool_result", "field_id": "tool_call:call_O3pBietwjqBaDwsUhF21LdtJ:tool_result", "sha256": "<sha256>", "next_call": { "trace_id": "<trace_id>", "call_id": "call_O3pBietwjqBaDwsUhF21LdtJ", "field": "tool_result", "start": 0, "max_chars": 8000 } }
+      ]
+    }
+  ],
   "pagination": {
     "page": 1,
     "page_size": 10,
@@ -735,17 +753,18 @@ Response includes pagination info:
     "has_next": true,
     "has_prev": false
   },
+  "next_call": { "trace_id": "<trace_id>", "page": 2, "page_size": 10 },
   "filter_applied": null,
   "token_info": { "estimated_tokens": 4500, "within_budget": true, "warning": null }
 }
 ```
 
-### 4. Get Single Tool Call Detail (~1-5K tokens)
+### 4. Get Single Tool Call Exact Field
 
-Full details for a specific tool call by `call_id`.
+One exact `input` or `tool_result` field chunk for a specific `call_id`. Follow `next_call` until `complete` is `true`.
 
 ```bash
-curl -s http://localhost:8001/api/claude/traces/{trace_id}/tool_calls/{call_id} | jq
+curl -s "http://localhost:8001/api/claude/traces/{trace_id}/tool_calls/{call_id}?field=input" | jq
 ```
 
 Response:
@@ -758,23 +777,28 @@ Response:
     "time": "2025-01-24T14:00:08.802000Z",
     "duration": "2.29s",
     "model": "gpt-4o-mini-2024-07-18",
-    "status": "completed",
-    "input": { "section_name": "Experimental Section" },
-    "tool_result": {
-      "summary": "Section found with 2341 characters",
-      "parsed": { /* full parsed result */ }
-    }
+    "status": "completed"
   },
-  "token_info": { "estimated_tokens": 3200, "within_budget": true, "warning": null }
+  "chunk": {
+    "field_id": "tool_call:call_O3pBietwjqBaDwsUhF21LdtJ:input",
+    "field": "input",
+    "sha256": "<sha256-of-complete-serialized-field>",
+    "start": 0,
+    "end": 40,
+    "complete": true,
+    "next_call": null,
+    "serialized": "{\"section_name\": \"Experimental Section\"}"
+  },
+  "token_info": { "estimated_tokens": 180, "within_budget": true, "warning": null }
 }
 ```
 
-### 5. Get Conversation (~1-10K tokens)
+### 5. Get Conversation Exact Field
 
-User's query and assistant's final response.
+One exact user-query or assistant-response field chunk. Request each field independently and follow `next_call` until `complete` is `true`.
 
 ```bash
-curl -s http://localhost:8001/api/claude/traces/{trace_id}/conversation | jq
+curl -s "http://localhost:8001/api/claude/traces/{trace_id}/conversation?field=user_query" | jq
 ```
 
 Response:
@@ -782,11 +806,24 @@ Response:
 {
   "status": "success",
   "data": {
-    "user_query": "What alleles are mentioned in the paper?",
-    "assistant_response": "Based on the paper, I found the following alleles...",
-    "response_length": 1523
+    "field": "user_query",
+    "chunk": {
+      "field_id": "conversation:user_query",
+      "field": "user_query",
+      "sha256": "<sha256-of-complete-serialized-field>",
+      "total_char_count": 40,
+      "byte_count": 40,
+      "start": 0,
+      "end": 40,
+      "returned_char_count": 40,
+      "complete": true,
+      "next_start": null,
+      "next_call": null,
+      "serialized": "What alleles are mentioned in the paper?"
+    },
+    "domain_envelope": null
   },
-  "token_info": { "estimated_tokens": 1800, "within_budget": true, "warning": null }
+  "token_info": { "estimated_tokens": 112, "within_budget": true, "warning": null }
 }
 ```
 
@@ -819,11 +856,12 @@ curl -s http://localhost:8001/api/claude/traces/$TRACE_ID/diagnostic_report | jq
 curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/langfuse_reconstruction?limit=100" | jq '.data'
 
 # 5. Find and fetch exact payloads when needed
-curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/langfuse_payloads?sort=largest&limit=25" | jq '.data.payloads[] | {payload_id, byte_count, name, field}'
-curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/langfuse_payload?payload_id=<payload_id>&max_chars=12000" | jq '.data.payload'
+curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/langfuse_payloads?sort=largest&limit=10" | jq '.data.payloads[] | {payload_id, byte_count, name, field}'
+curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/langfuse_payload?payload_id=<payload_id>&max_chars=8000" | jq '.data.payload'
 
-# 6. Get conversation if analyzing response quality
-curl -s http://localhost:8001/api/claude/traces/$TRACE_ID/conversation | jq '.data'
+# 6. Get each conversation field if analyzing response quality
+curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/conversation?field=user_query" | jq '.data'
+curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/conversation?field=assistant_response" | jq '.data'
 ```
 
 ---
@@ -877,10 +915,10 @@ Opus has access to these token-aware tools during analysis:
 | `get_trace_payload` | chunked | Exact prompt/model/tool payload chunks |
 | `get_trace_costs` | varies | Token/cost accounting by agent/model/kind |
 | `get_trace_duplicates` | compact/varies | Duplicate payload fingerprints |
-| `get_tool_calls_summary` | ~100/call | List all calls without full results |
-| `get_tool_calls_page` | ~1-5K | Paginated full details with filtering |
-| `get_tool_call_detail` | ~1-5K | Single call full detail |
-| `get_trace_conversation` | ~1-10K | User query + assistant response |
+| `get_tool_calls_summary` | ~100/call | One bounded page of summaries without exact results |
+| `get_tool_calls_page` | bounded/varies | Paginated metadata and exact-field references |
+| `get_tool_call_detail` | chunked | One exact input or result field chunk |
+| `get_trace_conversation` | chunked | One exact user-query or assistant-response field chunk |
 | `get_trace_view` | varies | Access other analysis views |
 | `get_service_logs` | varies | Retrieve Loki-backed service logs |
 | `submit_anthropic_suggestion` | N/A | Submit system prompt improvements |

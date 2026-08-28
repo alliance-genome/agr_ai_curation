@@ -6,11 +6,10 @@ Uses a simple character-based heuristic (4 chars ≈ 1 token) which is accurate
 enough for budget management without requiring external API calls.
 """
 
-import copy
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional, List, Dict
+from typing import Any, Dict, Optional
 
 
 # Configuration
@@ -113,96 +112,6 @@ def create_token_info_dict(data: Any, max_tokens: int = MAX_TOKENS_DEFAULT) -> D
     }
 
 
-def truncate_tool_call_results(
-    tool_calls: List[Dict],
-    max_tokens: int = MAX_TOKENS_DEFAULT
-) -> List[Dict]:
-    """
-    Truncate tool call results to fit within budget.
-
-    Truncation priority (preserves most important data):
-    1. Remove tool_result.raw (often 50-100KB)
-    2. Truncate tool_result.parsed.hits to first 3 items
-    3. Truncate tool_result.parsed.data to first 3 items
-    4. Truncate content fields to 500 chars
-    5. NEVER remove: name, input, call_id, status, tool_result.summary
-
-    Args:
-        tool_calls: List of tool call dictionaries
-        max_tokens: Maximum token budget
-
-    Returns:
-        Truncated tool calls list
-    """
-    if not tool_calls:
-        return tool_calls
-
-    # Check if already within budget
-    if check_budget(tool_calls, max_tokens).within_budget:
-        return tool_calls
-
-    # Deep copy to avoid modifying original
-    truncated = copy.deepcopy(tool_calls)
-
-    # Step 1: Remove raw results (biggest savings)
-    for tc in truncated:
-        if isinstance(tc.get("tool_result"), dict):
-            tc["tool_result"].pop("raw", None)
-
-    if check_budget(truncated, max_tokens).within_budget:
-        return truncated
-
-    # Step 2: Truncate parsed hits/data arrays
-    for tc in truncated:
-        tool_result = tc.get("tool_result")
-        if isinstance(tool_result, dict):
-            parsed = tool_result.get("parsed")
-            if isinstance(parsed, dict):
-                # Truncate hits to first 3
-                if "hits" in parsed and isinstance(parsed["hits"], list):
-                    if len(parsed["hits"]) > 3:
-                        parsed["hits"] = parsed["hits"][:3]
-                        parsed["hits_truncated"] = True
-
-                # Truncate data to first 3
-                if "data" in parsed and isinstance(parsed["data"], list):
-                    if len(parsed["data"]) > 3:
-                        parsed["data"] = parsed["data"][:3]
-                        parsed["data_truncated"] = True
-
-                # Truncate section content
-                if "section" in parsed and isinstance(parsed["section"], dict):
-                    section = parsed["section"]
-                    if "full_content" in section and len(str(section["full_content"])) > 500:
-                        section["full_content"] = str(section["full_content"])[:500] + "...[truncated]"
-                    if "content_preview" in section and len(str(section["content_preview"])) > 300:
-                        section["content_preview"] = str(section["content_preview"])[:300] + "...[truncated]"
-
-                # Truncate subsection content
-                if "subsection" in parsed and isinstance(parsed["subsection"], dict):
-                    subsection = parsed["subsection"]
-                    if "full_content" in subsection and len(str(subsection["full_content"])) > 500:
-                        subsection["full_content"] = str(subsection["full_content"])[:500] + "...[truncated]"
-
-    if check_budget(truncated, max_tokens).within_budget:
-        return truncated
-
-    # Step 3: Truncate individual hit/data item content
-    for tc in truncated:
-        tool_result = tc.get("tool_result")
-        if isinstance(tool_result, dict):
-            parsed = tool_result.get("parsed")
-            if isinstance(parsed, dict):
-                # Truncate content in hits
-                if "hits" in parsed and isinstance(parsed["hits"], list):
-                    for hit in parsed["hits"]:
-                        if isinstance(hit, dict) and "content" in hit:
-                            if len(str(hit["content"])) > 200:
-                                hit["content"] = str(hit["content"])[:200] + "...[truncated]"
-
-    return truncated
-
-
 def create_lightweight_tool_call_summary(tool_call: Dict) -> Dict:
     """
     Create a lightweight summary of a tool call for listing.
@@ -226,7 +135,7 @@ def create_lightweight_tool_call_summary(tool_call: Dict) -> Dict:
         text = str(value)
         return text if text else default
 
-    summary = {
+    summary: Dict[str, Any] = {
         "call_id": display_value(tool_call.get("call_id"), "N/A"),
         "name": display_value(tool_call.get("name"), "unknown"),
         "time": display_value(time_value, "N/A"),
