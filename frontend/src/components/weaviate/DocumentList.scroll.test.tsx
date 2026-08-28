@@ -24,6 +24,10 @@ vi.mock('../../lib/globalNotifications', () => ({
   emitGlobalToast: vi.fn(),
 }));
 
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ user: { uid: 'scroll-test-user' } }),
+}));
+
 vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
   const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
     '@/features/curation/navigation/openCurationWorkspace'

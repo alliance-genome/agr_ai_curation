@@ -11,6 +11,10 @@ import type { DocumentSummary } from '../../services/weaviate';
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ user: { uid: 'workflow-test-user' } }),
+}));
+
 const createDocumentSummary = (
   overrides: Partial<DocumentSummary> = {},
 ): DocumentSummary => ({
