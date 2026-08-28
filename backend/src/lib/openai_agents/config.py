@@ -2250,18 +2250,10 @@ def get_domain_runtime_inspection_max_limit() -> int:
     )
 
 
-def get_domain_envelope_max_json_chars() -> int:
-    """Char cap on bounded JSON returned by domain-envelope tools (DOMAIN_ENVELOPE_MAX_JSON_CHARS).
-
-    Truncates large JSON payloads surfaced to the model. Default 20000.
-    """
-    return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_JSON_CHARS", 20_000))
-
-
 def get_domain_envelope_max_summary_json_chars() -> int:
     """Char cap on bounded summary JSON in domain-envelope tools (DOMAIN_ENVELOPE_MAX_SUMMARY_JSON_CHARS).
 
-    Truncates the compact summary JSON. Default 4000.
+    Bounds reference-manifest key inventories. Default 4000.
     """
     return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_SUMMARY_JSON_CHARS", 4_000))
 
@@ -2273,17 +2265,6 @@ def get_domain_envelope_max_lookup_attempts() -> int:
     Default 25.
     """
     return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_LOOKUP_ATTEMPTS", 25))
-
-
-def get_domain_envelope_max_validator_lookup_attempts() -> int:
-    """Max validator lookup attempts retained in domain-envelope tools (DOMAIN_ENVELOPE_MAX_VALIDATOR_LOOKUP_ATTEMPTS).
-
-    Bounds validator lookup attempts surfaced before truncation. Default 10.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_VALIDATOR_LOOKUP_ATTEMPTS", 10),
-    )
 
 
 def get_domain_envelope_max_validator_summaries() -> int:

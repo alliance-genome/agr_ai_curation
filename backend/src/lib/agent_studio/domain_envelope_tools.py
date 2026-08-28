@@ -42,11 +42,9 @@ from src.lib.flows.validation_attachments import (
 from src.lib.openai_agents.config import (
     get_domain_envelope_default_limit,
     get_domain_envelope_max_field_paths,
-    get_domain_envelope_max_json_chars,
     get_domain_envelope_max_limit,
     get_domain_envelope_max_lookup_attempts,
     get_domain_envelope_max_summary_json_chars,
-    get_domain_envelope_max_validator_lookup_attempts,
     get_domain_envelope_max_validator_summaries,
     get_agent_studio_provider_tool_result_inline_max_chars,
     get_domain_pack_validation_plan_default_limit,
@@ -57,9 +55,6 @@ from src.lib.openai_agents.config import (
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
-    FieldRef,
-    HistoryEvent,
-    ObjectRef,
     ValidationFindingStatus,
 )
 
@@ -70,10 +65,8 @@ SessionFactory = Callable[[], Session]
 # (DOMAIN_ENVELOPE_* group).
 _MAX_LIMIT = get_domain_envelope_max_limit()
 _DEFAULT_LIMIT = get_domain_envelope_default_limit()
-_MAX_JSON_CHARS = get_domain_envelope_max_json_chars()
 _MAX_LOOKUP_ATTEMPTS = get_domain_envelope_max_lookup_attempts()
 _MAX_VALIDATOR_SUMMARIES = get_domain_envelope_max_validator_summaries()
-_MAX_VALIDATOR_LOOKUP_ATTEMPTS = get_domain_envelope_max_validator_lookup_attempts()
 _MAX_SUMMARY_JSON_CHARS = get_domain_envelope_max_summary_json_chars()
 _MAX_FIELD_PATHS = get_domain_envelope_max_field_paths()
 _DOMAIN_PLAN_DEFAULT_LIMIT = get_domain_pack_validation_plan_default_limit()
@@ -347,7 +340,9 @@ def get_domain_envelope_state(
             or 0
         )
         lookup_attempts = _lookup_attempt_summary(
-            envelope=envelope,
+            envelope_json=row.envelope_json,
+            envelope_id=row.envelope_id,
+            envelope_revision=row.revision,
             projection_rows=projection_rows,
             include_all=True,
         )
@@ -982,7 +977,7 @@ def _filter_runtime_items(
         for filter_name, expected in filters.items():
             if filter_name == "query":
                 if expected.casefold() not in json.dumps(
-                    item,
+                    item.get("_filter_value", item),
                     sort_keys=True,
                     default=str,
                 ).casefold():
@@ -993,7 +988,11 @@ def _filter_runtime_items(
                 return False
         return True
 
-    return [dict(item) for item in items if matches(item)]
+    return [
+        {key: value for key, value in item.items() if key != "_filter_value"}
+        for item in items
+        if matches(item)
+    ]
 
 
 def _require_current_revision(
@@ -1524,6 +1523,32 @@ def _encode_reference_locator(locator: Mapping[str, str]) -> str:
     return encoded.rstrip("=")
 
 
+def _encode_reference_path(path: Sequence[str | int]) -> str:
+    return _canonical_json(list(path))
+
+
+def _reference_path_value(value: Any, encoded_path: str | None) -> Any:
+    if encoded_path is None:
+        return value
+    try:
+        path = json.loads(encoded_path)
+    except json.JSONDecodeError as exc:
+        raise ValueError("reference_locator path is invalid") from exc
+    if not isinstance(path, list) or not all(
+        isinstance(part, (str, int)) and not isinstance(part, bool) for part in path
+    ):
+        raise ValueError("reference_locator path is invalid")
+    current = value
+    for part in path:
+        if isinstance(part, str) and isinstance(current, Mapping) and part in current:
+            current = current[part]
+        elif isinstance(part, int) and isinstance(current, list) and 0 <= part < len(current):
+            current = current[part]
+        else:
+            raise ValueError("reference_locator no longer resolves in this envelope revision")
+    return current
+
+
 def _decode_reference_locator(value: str) -> dict[str, str]:
     normalized = _required_text(value, "reference_locator")
     try:
@@ -1600,8 +1625,9 @@ def _reference_value(
 ) -> Any:
     kind = locator.get("kind")
     field = locator.get("field")
-    if kind == "envelope" and field == "schema_ref":
-        return row.schema_ref_json or {}
+    if kind == "envelope" and field in {"schema_ref", "envelope"}:
+        value = row.schema_ref_json or {} if field == "schema_ref" else row.envelope_json
+        return _reference_path_value(value, locator.get("path"))
     if kind == "object":
         record = db.scalar(
             select(DomainEnvelopeObject)
@@ -1614,6 +1640,8 @@ def _reference_value(
             "object_model_ref": "object_model_ref_json",
             "model_field_ref": "model_field_ref_json",
             "payload": "payload_json",
+            "payload_keys": "payload_json",
+            "field_paths": "payload_json",
         }
     elif kind == "finding":
         record = db.scalar(
@@ -1634,7 +1662,7 @@ def _reference_value(
             .where(DomainEnvelopeHistory.envelope_revision <= row.revision)
             .where(DomainEnvelopeHistory.event_id == locator.get("event_id"))
         )
-        attributes = {"details": "event_json"}
+        attributes = {"details": "event_json", "message": "event_json"}
     elif kind == "projection":
         record = db.scalar(
             select(DomainEnvelopeProjectionIndex)
@@ -1662,8 +1690,12 @@ def _reference_value(
         raise ValueError("reference_locator no longer resolves in this envelope revision")
     value = getattr(record, attributes[field]) or {}
     if kind == "history":
-        return dict(value).get("details", {})
-    return value
+        value = dict(value).get(field, {} if field == "details" else None)
+    if kind == "object" and field == "payload_keys":
+        value = sorted(str(key) for key in value)
+    elif kind == "object" and field == "field_paths":
+        value = _field_paths(dict(value))
+    return _reference_path_value(value, locator.get("path"))
 
 
 def _reference_chunk_result(
@@ -1788,8 +1820,24 @@ def _object_row_payload(
             revision=row.envelope_revision,
             locator={"kind": "object", "object_id": row.object_id, "field": "model_field_ref"},
         ),
-        "field_paths": _field_paths(payload),
-        "payload_keys": sorted(payload.keys()),
+        "field_paths": _reference_manifest(
+            _field_paths(payload),
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "object", "object_id": row.object_id, "field": "field_paths"},
+        ),
+        "payload_keys": _reference_manifest(
+            sorted(str(key) for key in payload),
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "object", "object_id": row.object_id, "field": "payload_keys"},
+        ),
+        "_filter_value": {
+            "schema_ref": row.schema_ref_json,
+            "object_model_ref": row.object_model_ref_json,
+            "model_field_ref": row.model_field_ref_json,
+            "payload": payload,
+        },
     }
     if include_payload:
         result["payload"] = _reference_manifest(
@@ -1830,6 +1878,11 @@ def _finding_row_payload(row: DomainValidationFinding) -> dict[str, Any]:
             revision=row.envelope_revision,
             locator={"kind": "finding", "finding_id": row.finding_id, "field": "finding"},
         ),
+        "_filter_value": {
+            "object_model_ref": row.object_model_ref_json,
+            "model_field_ref": row.model_field_ref_json,
+            "finding": row.finding_json,
+        },
     }
 
 
@@ -1850,7 +1903,12 @@ def _history_row_payload(
         "actor_id": row.actor_id,
         "object_id": row.object_id,
         "field_path": row.field_path,
-        "message": event_json.get("message"),
+        "message": _reference_manifest(
+            event_json.get("message"),
+            envelope_id=row.envelope_id,
+            revision=current_revision or row.envelope_revision,
+            locator={"kind": "history", "event_id": row.event_id, "field": "message"},
+        ),
         "details": _reference_manifest(
             event_json.get("details", {}),
             envelope_id=row.envelope_id,
@@ -1878,46 +1936,33 @@ def _projection_row_payload(row: DomainEnvelopeProjectionIndex) -> dict[str, Any
             row, "model_field_ref", row.model_field_ref_json or {}
         ),
         "projection": _projection_reference_manifest(row, "projection", row.projection_json),
-    }
-
-
-def _object_ref_payload(ref: ObjectRef | None) -> dict[str, Any] | None:
-    if ref is None:
-        return None
-    return ref.model_dump(mode="json", exclude_none=True)
-
-
-def _field_ref_payload(ref: FieldRef | None) -> dict[str, Any] | None:
-    if ref is None:
-        return None
-    return ref.model_dump(mode="json", exclude_none=True)
-
-
-def _history_event_payload(event: HistoryEvent) -> dict[str, Any]:
-    return {
-        "event_id": event.event_id,
-        "event_type": event.event_type.value,
-        "timestamp": event.timestamp.isoformat(),
-        "actor_type": event.actor_type.value,
-        "actor_id": event.actor_id,
-        "message": event.message,
-        "object_ref": _object_ref_payload(event.object_ref),
-        "field_ref": _field_ref_payload(event.field_ref),
-        "details": _bounded_json(event.details),
+        "_filter_value": {
+            "schema_ref": row.schema_ref_json,
+            "object_model_ref": row.object_model_ref_json,
+            "model_field_ref": row.model_field_ref_json,
+            "projection": row.projection_json,
+        },
     }
 
 
 def _lookup_attempt_summary(
     *,
-    envelope: DomainEnvelope,
+    envelope_json: Mapping[str, Any],
+    envelope_id: str,
+    envelope_revision: int,
     projection_rows: Sequence[DomainEnvelopeProjectionIndex],
     include_all: bool = False,
 ) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     _collect_lookup_attempts(
-        envelope.model_dump(mode="json"),
+        envelope_json,
         path="envelope",
+        reference_locator={"kind": "envelope", "field": "envelope"},
+        reference_path=(),
+        envelope_id=envelope_id,
+        envelope_revision=envelope_revision,
         attempts=attempts,
+        include_filter_value=include_all,
         max_attempts=None if include_all else _MAX_LOOKUP_ATTEMPTS,
     )
     for row in projection_rows:
@@ -1927,7 +1972,18 @@ def _lookup_attempt_summary(
                 "projection:"
                 f"{row.object_id}:{row.projection_type}:{row.projection_key}"
             ),
+            reference_locator={
+                "kind": "projection",
+                "object_id": row.object_id,
+                "projection_type": row.projection_type,
+                "projection_key": row.projection_key,
+                "field": "projection",
+            },
+            reference_path=(),
+            envelope_id=row.envelope_id,
+            envelope_revision=row.envelope_revision,
             attempts=attempts,
+            include_filter_value=include_all,
             max_attempts=None if include_all else _MAX_LOOKUP_ATTEMPTS,
         )
 
@@ -1949,7 +2005,12 @@ def _collect_lookup_attempts(
     value: Any,
     *,
     path: str,
+    reference_locator: Mapping[str, str],
+    reference_path: Sequence[str | int],
+    envelope_id: str,
+    envelope_revision: int,
     attempts: list[dict[str, Any]],
+    include_filter_value: bool,
     depth: int = 0,
     max_attempts: int | None = _MAX_LOOKUP_ATTEMPTS,
 ) -> None:
@@ -1962,14 +2023,32 @@ def _collect_lookup_attempts(
         if isinstance(raw_attempts, list):
             for index, attempt in enumerate(raw_attempts):
                 if isinstance(attempt, Mapping):
-                    attempts.append(_lookup_attempt_payload(attempt, f"{path}.lookup_attempts[{index}]"))
+                    attempt_path = (*reference_path, "lookup_attempts", index)
+                    attempts.append(
+                        _lookup_attempt_payload(
+                            attempt,
+                            f"{path}.lookup_attempts[{index}]",
+                            envelope_id=envelope_id,
+                            envelope_revision=envelope_revision,
+                            reference_locator={
+                                **reference_locator,
+                                "path": _encode_reference_path(attempt_path),
+                            },
+                            include_filter_value=include_filter_value,
+                        )
+                    )
         for key, item in value.items():
             if key == "lookup_attempts":
                 continue
             _collect_lookup_attempts(
                 item,
                 path=f"{path}.{key}",
+                reference_locator=reference_locator,
+                reference_path=(*reference_path, key),
+                envelope_id=envelope_id,
+                envelope_revision=envelope_revision,
                 attempts=attempts,
+                include_filter_value=include_filter_value,
                 depth=depth + 1,
                 max_attempts=max_attempts,
             )
@@ -1978,44 +2057,38 @@ def _collect_lookup_attempts(
             _collect_lookup_attempts(
                 item,
                 path=f"{path}[{index}]",
+                reference_locator=reference_locator,
+                reference_path=(*reference_path, index),
+                envelope_id=envelope_id,
+                envelope_revision=envelope_revision,
                 attempts=attempts,
+                include_filter_value=include_filter_value,
                 depth=depth + 1,
                 max_attempts=max_attempts,
             )
 
 
-def _lookup_attempt_payload(attempt: Mapping[str, Any], path: str) -> dict[str, Any]:
-    selected_keys = (
-        "source_tool",
-        "method",
-        "provider",
-        "attempted_query",
-        "query",
-        "target_projection",
-        "lookup_status",
-        "status",
-        "outcome",
-        "candidate_count",
-        "result_count",
-        "resolved_id",
-        "resolved_label",
-        "explanation",
-        "message",
-        "error",
-    )
-    payload = {
-        key: attempt[key]
-        for key in selected_keys
-        if key in attempt and attempt[key] not in (None, "")
+def _lookup_attempt_payload(
+    attempt: Mapping[str, Any],
+    path: str,
+    *,
+    envelope_id: str,
+    envelope_revision: int,
+    reference_locator: Mapping[str, str],
+    include_filter_value: bool,
+) -> dict[str, Any]:
+    status = _lookup_attempt_status({**attempt, "path": path})
+    return {
+        "path": path,
+        "status": status,
+        "evidence": _reference_manifest(
+            dict(attempt),
+            envelope_id=envelope_id,
+            revision=envelope_revision,
+            locator=reference_locator,
+        ),
+        **({"_filter_value": dict(attempt)} if include_filter_value else {}),
     }
-    payload["path"] = path
-    bounded = _bounded_json(payload)
-    if isinstance(bounded, dict) and bounded.get("_truncated"):
-        bounded["path"] = path
-        for status_key in ("lookup_status", "status"):
-            if status_key in payload:
-                bounded[status_key] = payload[status_key]
-    return bounded
 
 
 def _lookup_attempt_status(attempt: Mapping[str, Any]) -> str:
@@ -2035,7 +2108,13 @@ def _validator_summary_payload(
     summaries = [
         summary
         for row in finding_rows
-        if (summary := _validator_summary_for_finding(row)) is not None
+        if (
+            summary := _validator_summary_for_finding(
+                row,
+                include_filter_value=include_all,
+            )
+        )
+        is not None
     ]
     statuses = Counter(
         _optional_text(summary.get("result_status")) or "unknown"
@@ -2057,6 +2136,8 @@ def _validator_summary_payload(
 
 def _validator_summary_for_finding(
     row: DomainValidationFinding,
+    *,
+    include_filter_value: bool = False,
 ) -> dict[str, Any] | None:
     finding = _as_mapping(row.finding_json)
     details = _as_mapping(finding.get("details"))
@@ -2071,28 +2152,78 @@ def _validator_summary_for_finding(
         or validation_result.get("validator_binding_id")
         or validation_metadata.get("validator_binding_id")
     )
-    validator_agent = _as_mapping(
-        validation_request.get("validator_agent")
-        or validation_result.get("validator_agent")
-        or validation_metadata.get("validator_agent")
+    validator_agent_path, validator_agent = _first_finding_value(
+        finding,
+        (
+            ("details", "validation_request", "validator_agent"),
+            ("details", "validation_result", "validator_agent"),
+            ("details", "validation_metadata", "validator_agent"),
+        ),
     )
-    target = _as_mapping(
-        validation_request.get("target")
-        or validation_result.get("target")
-        or validation_metadata.get("target")
+    target_path, target = _first_finding_value(
+        finding,
+        (
+            ("details", "validation_request", "target"),
+            ("details", "validation_result", "target"),
+            ("details", "validation_metadata", "target"),
+        ),
     )
 
-    selected_inputs = _as_mapping(validation_request.get("selected_inputs"))
-    input_selectors = _as_mapping(validation_request.get("input_selectors"))
     expected_result_fields = _as_mapping(
         validation_request.get("expected_result_fields")
     )
     resolved_values = _as_mapping(validation_result.get("resolved_values"))
 
-    lookup_attempts = details.get("lookup_attempts")
-    if not isinstance(lookup_attempts, list):
-        lookup_attempts = validation_result.get("lookup_attempts")
-    compact_attempts = _validator_lookup_attempts(lookup_attempts)
+    lookup_attempts_path, lookup_attempts = _first_finding_value(
+        finding,
+        (
+            ("details", "lookup_attempts"),
+            ("details", "validation_result", "lookup_attempts"),
+        ),
+        expected_type=list,
+    )
+    materialization_paths = _materialization_paths(
+        expected_result_fields=expected_result_fields,
+        resolved_values=resolved_values,
+    )
+
+    def manifest(value: Any, path: Sequence[str | int] | None) -> dict[str, Any] | None:
+        if path is None:
+            return None
+        return _reference_manifest(
+            value,
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={
+                "kind": "finding",
+                "finding_id": row.finding_id,
+                "field": "finding",
+                "path": _encode_reference_path(path),
+            },
+        )
+
+    def manifest_at(path: Sequence[str | int]) -> dict[str, Any] | None:
+        try:
+            value = _reference_path_value(finding, _encode_reference_path(path))
+        except ValueError:
+            return None
+        return manifest(value, path)
+
+    curator_message_path, curator_message = _first_finding_value(
+        finding,
+        (
+            ("details", "validation_result", "curator_message"),
+            ("details", "curator_message"),
+        ),
+    )
+    explanation_path, explanation = _first_finding_value(
+        finding,
+        (("details", "validation_result", "explanation"),),
+    )
+    failure_path, failure_classification = _first_finding_value(
+        finding,
+        (("details", "failure_classification"),),
+    )
 
     return {
         "finding_id": row.finding_id,
@@ -2103,55 +2234,56 @@ def _validator_summary_for_finding(
         "finding_severity": _enum_value(row.severity),
         "finding_code": row.code,
         "validator_binding_id": binding_id,
-        "validator_agent": _bounded_summary_json(validator_agent),
-        "target": _bounded_summary_json(target),
-        "selected_inputs": _bounded_summary_json(selected_inputs),
-        "input_selectors": _bounded_summary_json(input_selectors),
-        "expected_result_fields": _bounded_summary_json(expected_result_fields),
+        "validator_agent": manifest(validator_agent, validator_agent_path),
+        "target": manifest(target, target_path),
+        "selected_inputs": manifest_at(
+            ("details", "validation_request", "selected_inputs")
+        ),
+        "input_selectors": manifest_at(
+            ("details", "validation_request", "input_selectors")
+        ),
+        "expected_result_fields": manifest_at(
+            ("details", "validation_request", "expected_result_fields")
+        ),
         "result_status": _optional_text(validation_result.get("status")),
-        "resolved_values": _bounded_summary_json(resolved_values),
-        "missing_expected_fields": _bounded_summary_json(
-            validation_result.get("missing_expected_fields") or []
+        "resolved_values": manifest_at(
+            ("details", "validation_result", "resolved_values")
         ),
-        "materialization_paths": _bounded_summary_json(
-            _materialization_paths(
-                expected_result_fields=expected_result_fields,
-                resolved_values=resolved_values,
-            )
+        "missing_expected_fields": manifest_at(
+            ("details", "validation_result", "missing_expected_fields")
         ),
-        "lookup_attempts": compact_attempts,
+        "materialization_path_count": len(materialization_paths),
+        "lookup_attempts": manifest(lookup_attempts, lookup_attempts_path),
         "lookup_attempt_count": len(lookup_attempts)
         if isinstance(lookup_attempts, list)
         else 0,
-        "lookup_attempts_truncated": (
-            isinstance(lookup_attempts, list)
-            and len(lookup_attempts) > _MAX_VALIDATOR_LOOKUP_ATTEMPTS
+        "curator_message": manifest(curator_message, curator_message_path),
+        "explanation": manifest(explanation, explanation_path),
+        "failure_classification": manifest(failure_classification, failure_path),
+        "verification_evidence": _reference_manifest(
+            finding,
+            envelope_id=row.envelope_id,
+            revision=row.envelope_revision,
+            locator={"kind": "finding", "finding_id": row.finding_id, "field": "finding"},
         ),
-        "curator_message": (
-            _optional_text(validation_result.get("curator_message"))
-            or _optional_text(details.get("curator_message"))
-        ),
-        "explanation": _optional_text(validation_result.get("explanation")),
-        "failure_classification": _optional_text(
-            details.get("failure_classification")
-        ),
+        **({"_filter_value": finding} if include_filter_value else {}),
     }
 
 
-def _validator_lookup_attempts(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    attempts = []
-    for index, attempt in enumerate(value[:_MAX_VALIDATOR_LOOKUP_ATTEMPTS]):
-        if not isinstance(attempt, Mapping):
+def _first_finding_value(
+    finding: Mapping[str, Any],
+    paths: Sequence[Sequence[str | int]],
+    *,
+    expected_type: type | None = None,
+) -> tuple[Sequence[str | int] | None, Any]:
+    for path in paths:
+        try:
+            value = _reference_path_value(finding, _encode_reference_path(path))
+        except ValueError:
             continue
-        attempts.append(
-            _lookup_attempt_payload(
-                attempt,
-                f"validation.lookup_attempts[{index}]",
-            )
-        )
-    return attempts
+        if value and (expected_type is None or isinstance(value, expected_type)):
+            return path, value
+    return None, [] if expected_type is list else {}
 
 
 def _materialization_paths(
@@ -2183,10 +2315,6 @@ def _summary_value_missing(value: Any) -> bool:
 
 def _as_mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _bounded_summary_json(value: Any) -> Any:
-    return _bounded_json(value, max_chars=_MAX_SUMMARY_JSON_CHARS)
 
 
 def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
@@ -2254,20 +2382,6 @@ def _field_paths(payload: Mapping[str, Any]) -> list[str]:
 
     _walk(payload, "")
     return paths
-
-
-def _bounded_json(value: Any, *, max_chars: int = _MAX_JSON_CHARS) -> Any:
-    try:
-        rendered = json.dumps(value, default=str, sort_keys=True)
-    except TypeError:
-        return str(value)
-    if len(rendered) <= max_chars:
-        return value
-    return {
-        "_truncated": True,
-        "approx_chars": len(rendered),
-        "preview_json": rendered[:max_chars],
-    }
 
 
 def _group_by_string_key(

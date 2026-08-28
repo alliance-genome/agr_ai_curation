@@ -676,8 +676,9 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
             "candidate_count": 6,
             "ready_count": 0,
             "blocker_count": 18,
-            "domain_envelope_ids": ["env-1", "env-2"],
-            "envelope_revisions": {"env-1": 3, "env-2": 7},
+            "domain_envelope_count": 2,
+            "revision_set_sha256": "a" * 64,
+            "readiness_token": f"v1.*.{'b' * 64}",
             "readiness_status": "blocked",
             "section_counts": {"candidates": 6, "blockers": 18},
         }

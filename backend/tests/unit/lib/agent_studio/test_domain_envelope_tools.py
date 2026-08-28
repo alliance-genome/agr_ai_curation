@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -1093,6 +1093,123 @@ def test_large_persisted_references_are_manifested_and_exactly_chunked(
         assert hashlib.sha256(expected_json.encode()).hexdigest() == manifest["sha256"]
 
 
+def test_single_oversized_object_lookup_and_validator_values_are_exactly_chunked(
+    db_session_factory,
+):
+    payload: dict[str, Any] = {
+        f"payload_key_{index:04d}": index for index in range(2_000)
+    }
+    lookup_attempt = {
+        "outcome": "failure",
+        "query": {"symbol": "oversized-lookup-filter"},
+        "message": "l" * 13_500,
+    }
+    payload["lookup_attempts"] = [lookup_attempt]
+    explanation = "v" * 21_000
+
+    seed_db = db_session_factory()
+    try:
+        document = _persist_document(seed_db, suffix="oversized-record")
+        review_session = _persist_review_session(
+            seed_db,
+            document_id=document.id,
+            curator_id="curator-1",
+        )
+        _persist_large_runtime_state(
+            seed_db,
+            envelope_id="env-oversized-record",
+            document_id=document.id,
+            session_id=review_session.id,
+        )
+        envelope_row = seed_db.get(DomainEnvelopeModel, "env-oversized-record")
+        envelope_json = dict(envelope_row.envelope_json)
+        extracted_objects = list(envelope_json["extracted_objects"])
+        extracted_objects[0] = {**extracted_objects[0], "payload": payload}
+        envelope_row.envelope_json = {
+            **envelope_json,
+            "extracted_objects": extracted_objects,
+        }
+        object_row = seed_db.scalar(
+            select(DomainEnvelopeObject)
+            .where(DomainEnvelopeObject.envelope_id == "env-oversized-record")
+            .where(DomainEnvelopeObject.object_index == 0)
+        )
+        object_row.payload_json = payload
+        finding_row = seed_db.scalar(
+            select(DomainValidationFinding)
+            .where(DomainValidationFinding.envelope_id == "env-oversized-record")
+            .where(DomainValidationFinding.finding_index == 0)
+        )
+        finding_json = dict(finding_row.finding_json)
+        details = dict(finding_json["details"])
+        details["validation_result"] = {
+            **dict(details["validation_result"]),
+            "explanation": explanation,
+            "lookup_attempts": [lookup_attempt],
+        }
+        finding_row.finding_json = {**finding_json, "details": details}
+        seed_db.commit()
+    finally:
+        seed_db.close()
+
+    def reconstruct(manifest):
+        request = dict(manifest["detail_request"])
+        chunks = []
+        while True:
+            chunk = domain_tools.get_domain_envelope_state(
+                session_factory=db_session_factory,
+                user_auth_sub="curator-1",
+                **request,
+            )
+            assert chunk["success"] is True
+            assert len(json.dumps(chunk)) <= domain_tools._PROVIDER_INLINE_MAX_CHARS
+            chunks.append(chunk["content"])
+            if chunk["complete"]:
+                return "".join(chunks)
+            request = chunk["next_request"]
+
+    object_page = domain_tools.get_domain_envelope_state(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-oversized-record",
+        revision=2,
+        section="objects",
+        limit=1,
+    )
+    lookup_page = domain_tools.get_domain_envelope_state(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-oversized-record",
+        revision=2,
+        section="lookup_attempts",
+        query="oversized-lookup-filter",
+        limit=1,
+    )
+    validator_page = domain_tools.get_domain_envelope_state(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-oversized-record",
+        revision=2,
+        section="validator_summaries",
+        object_id="obj-0",
+        limit=1,
+    )
+
+    for response in (object_page, lookup_page, validator_page):
+        assert response["success"] is True
+        assert response["returned_count"] == 1
+        assert len(json.dumps(response, default=str)) <= domain_tools._PROVIDER_INLINE_MAX_CHARS
+
+    expected_keys = domain_tools._canonical_json(sorted(payload))
+    assert reconstruct(object_page["items"][0]["payload_keys"]) == expected_keys
+    assert reconstruct(lookup_page["items"][0]["evidence"]) == (
+        domain_tools._canonical_json(lookup_attempt)
+    )
+    assert reconstruct(validator_page["items"][0]["explanation"]) == (
+        domain_tools._canonical_json(explanation)
+    )
+
+
 def test_large_review_rows_are_summary_first_and_completely_paged(
     db_session_factory,
     monkeypatch,
@@ -1204,6 +1321,8 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
         ],
     )
     projection_row = SimpleNamespace(
+        envelope_id="env-lookup",
+        envelope_revision=1,
         object_id="obj-1",
         projection_type="review_row",
         projection_key="gene:unc-54",
@@ -1220,13 +1339,24 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
     )
 
     summary = domain_tools._lookup_attempt_summary(
-        envelope=envelope,
+        envelope_json=envelope.model_dump(mode="json"),
+        envelope_id=envelope.envelope_id,
+        envelope_revision=1,
         projection_rows=[cast(DomainEnvelopeProjectionIndex, projection_row)],
     )
 
     assert summary["attempt_count"] == 3
     assert summary["by_status"] == {"success": 2, "transient_error": 1}
-    assert summary["attempts"][0]["lookup_status"] == "transient_error"
+    assert summary["attempts"][0]["status"] == "transient_error"
+    assert summary["attempts"][0]["evidence"]["sha256"] == hashlib.sha256(
+        domain_tools._canonical_json(
+            {
+                "lookup_status": "transient_error",
+                "attempted_query": {"symbol": "unc-54"},
+                "error": {"type": "TimeoutError"},
+            }
+        ).encode("utf-8")
+    ).hexdigest()
     assert "audit trail" in summary["interpretation"]
     assert "final outcome" in summary["interpretation"]
 
@@ -1256,14 +1386,16 @@ def test_lookup_attempt_summary_accepts_validator_result_outcome_attempts():
     )
 
     summary = domain_tools._lookup_attempt_summary(
-        envelope=envelope,
+        envelope_json=envelope.model_dump(mode="json"),
+        envelope_id=envelope.envelope_id,
+        envelope_revision=1,
         projection_rows=[],
     )
 
     assert summary["attempt_count"] == 1
     assert summary["by_status"] == {"success": 1}
-    assert summary["attempts"][0]["outcome"] == "success"
-    assert summary["attempts"][0]["result_count"] == 1
+    assert summary["attempts"][0]["status"] == "success"
+    assert summary["attempts"][0]["evidence"]["type"] == "dict"
 
 
 def test_lookup_attempt_traversal_observes_lists_beyond_twenty_five_entries():
@@ -1289,7 +1421,9 @@ def test_lookup_attempt_traversal_observes_lists_beyond_twenty_five_entries():
     )
 
     summary = domain_tools._lookup_attempt_summary(
-        envelope=envelope,
+        envelope_json=envelope.model_dump(mode="json"),
+        envelope_id=envelope.envelope_id,
+        envelope_revision=1,
         projection_rows=[],
     )
 
@@ -1325,13 +1459,17 @@ def test_lookup_attempt_summary_rejects_attempts_without_status():
         ),
     ):
         domain_tools._lookup_attempt_summary(
-            envelope=envelope,
+            envelope_json=envelope.model_dump(mode="json"),
+            envelope_id=envelope.envelope_id,
+            envelope_revision=1,
             projection_rows=[],
         )
 
 
 def test_validator_summary_payload_exposes_request_result_and_materialization_paths():
     row = SimpleNamespace(
+        envelope_id="env-validator-summary",
+        envelope_revision=4,
         finding_id="finding-1",
         finding_index=0,
         object_id="obj-1",
@@ -1403,32 +1541,15 @@ def test_validator_summary_payload_exposes_request_result_and_materialization_pa
     assert payload["by_result_status"] == {"resolved": 1}
     summary = payload["summaries"][0]
     assert summary["validator_binding_id"] == "alliance_gene_reference_lookup"
-    assert summary["validator_agent"]["agent_id"] == "gene_validation"
-    assert summary["selected_inputs"] == {
-        "mention": "unc-54",
-        "taxon_hint": "NCBITaxon:6239",
-    }
-    assert summary["expected_result_fields"] == {
-        "curie": "primary_external_id",
-        "symbol": "gene_symbol",
-    }
-    assert summary["resolved_values"]["curie"] == "WB:WBGene00006763"
-    assert summary["lookup_attempts"][0]["outcome"] == "success"
-    assert summary["lookup_attempts"][0]["query"] == {"gene_symbol": "unc-54"}
-    assert summary["materialization_paths"] == [
-        {
-            "result_field": "curie",
-            "field_path": "primary_external_id",
-            "resolved": True,
-            "resolved_value": "WB:WBGene00006763",
-        },
-        {
-            "result_field": "symbol",
-            "field_path": "gene_symbol",
-            "resolved": True,
-            "resolved_value": "unc-54",
-        },
-    ]
+    assert summary["validator_agent"]["key_count"] == 2
+    assert summary["selected_inputs"]["key_count"] == 2
+    assert summary["expected_result_fields"]["key_count"] == 2
+    assert summary["resolved_values"]["key_count"] == 2
+    assert summary["lookup_attempts"]["length"] == 1
+    assert summary["materialization_path_count"] == 2
+    assert summary["verification_evidence"]["sha256"] == hashlib.sha256(
+        domain_tools._canonical_json(row.finding_json).encode("utf-8")
+    ).hexdigest()
 
 
 def test_group_by_string_key_rejects_missing_grouping_key():
