@@ -201,6 +201,7 @@ async def test_get_container_logs_exact_char_cursor_reconstructs_oversized_line(
 
 @pytest.mark.asyncio
 async def test_get_container_logs_line_cursor_is_exact_and_non_overlapping(monkeypatch):
+    monkeypatch.setattr(logs_api, "MAX_LOG_LINES", 2)
     query_ends = []
     results = [
         ["100\0older", "200\0newer"],
@@ -214,7 +215,8 @@ async def test_get_container_logs_line_cursor_is_exact_and_non_overlapping(monke
     monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
     first = await logs_api.get_container_logs("backend", lines=2, since=15)
     next_call = first.page["next_call"]
-    assert next_call["line_cursor"] == "99"
+    assert next_call["line_cursor"] == "100"
+    assert next_call["line_cursor_offset"] == 1
     assert next_call["char_cursor"] == 0
 
     second = await logs_api.get_container_logs(
@@ -222,10 +224,50 @@ async def test_get_container_logs_line_cursor_is_exact_and_non_overlapping(monke
         lines=next_call["lines"],
         since=next_call["since"],
         line_cursor=next_call["line_cursor"],
+        line_cursor_offset=next_call["line_cursor_offset"],
         char_cursor=next_call["char_cursor"],
     )
-    assert query_ends[1] == "99"
+    assert query_ends[1] == "100"
     assert second.page["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_continues_within_equal_timestamp_group(monkeypatch):
+    monkeypatch.setattr(logs_api, "MAX_LOG_LINES", 5)
+    entries = [
+        (90, "older"),
+        *((100, f"same-{index}") for index in range(5)),
+    ]
+
+    async def _fake_query_logs(*_args, **kwargs):
+        end = kwargs["end"]
+        end_ns = int(end) if isinstance(end, str) else 10**30
+        eligible = [entry for entry in entries if entry[0] <= end_ns]
+        return [
+            f"{timestamp}\0{line}"
+            for timestamp, line in eligible[-kwargs["limit"]:]
+        ]
+
+    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    returned = []
+    next_call = {
+        "container": "backend",
+        "lines": 2,
+        "since": 15,
+        "line_cursor": None,
+        "line_cursor_offset": 0,
+        "char_cursor": 0,
+    }
+
+    while True:
+        payload = await logs_api.get_container_logs(**next_call)
+        returned.extend(payload.logs.splitlines())
+        if payload.page["complete"]:
+            break
+        next_call = payload.page["next_call"]
+
+    assert returned == ["same-3", "same-4", "same-1", "same-2", "same-0", "older"]
+    assert len(returned) == len(set(returned)) == len(entries)
 
 
 @pytest.mark.asyncio

@@ -577,6 +577,12 @@ GET_TRACE_VIEW_TOOL = {
                 "description": "Which view to fetch",
             },
             **_AGGREGATE_PAGE_PROPERTIES,
+            "item_start": {
+                "type": "integer",
+                "description": "Exact JSON character cursor from page.next_call for one oversized item.",
+                "default": 0,
+                "minimum": 0,
+            },
         },
         "required": ["trace_id", "view_name"],
     },
@@ -844,6 +850,12 @@ GET_SERVICE_LOGS_TOOL = {
             "line_cursor": {
                 "type": "string",
                 "description": "Unix-nanosecond line cursor from page.next_call.",
+            },
+            "line_cursor_offset": {
+                "type": "integer",
+                "description": "Within-timestamp line offset from page.next_call.",
+                "default": 0,
+                "minimum": 0,
             },
             "char_cursor": {
                 "type": "integer",

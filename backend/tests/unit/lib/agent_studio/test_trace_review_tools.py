@@ -261,12 +261,14 @@ async def test_get_trace_view_requests_canonical_group_context_path(monkeypatch)
     result = await tools.get_trace_view(
         "856df16f1752cb53ee43dcb2f5ecfd16",
         "group_context",
+        item_start=321,
     )
 
     assert result["status"] == "success"
     assert capture["url"].endswith(
         "/856df16f1752cb53ee43dcb2f5ecfd16/views/group_context"
     )
+    assert capture["params"]["item_start"] == 321
 
 
 @pytest.mark.asyncio
@@ -440,6 +442,7 @@ async def test_get_service_logs_success_and_error_branches(monkeypatch):
         lines=50,
         level="fatal",
         since=15,
+        line_cursor_offset=3,
     )
     assert success["status"] == "success"
     assert success["data"] == {
@@ -450,6 +453,7 @@ async def test_get_service_logs_success_and_error_branches(monkeypatch):
     }
     assert capture["params"]["lines"] == 50
     assert capture["params"]["char_cursor"] == 0
+    assert capture["params"]["line_cursor_offset"] == 3
     assert capture["params"]["max_chars"] == tools.get_agent_studio_service_log_page_max_chars()
     assert capture["params"]["level"] == "FATAL"
     assert capture["params"]["since"] == 15

@@ -603,7 +603,7 @@ Provider-boundary-aware endpoints designed for Claude/Opus workflow analysis. Al
 - Aggregate results fit `AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS` after serializing the complete provider-visible response.
 - Token estimation remains advisory at roughly 4 characters per token.
 - Every response includes `token_info.serialized_chars`, `max_serialized_chars`, `estimated_tokens`, and `within_budget`.
-- Aggregate calls return an authoritative summary and collection inventory first. Request one named section and follow `next_call` until `complete=true`.
+- Aggregate calls return an authoritative summary and collection inventory first. Request one named section and follow `next_call` until `complete=true`; an oversized item is returned as lossless JSON `item_chunk` pages with an `item_start` cursor.
 
 ### Response Schema
 
@@ -924,7 +924,7 @@ Opus has access to these token-aware tools during analysis:
 | `get_tool_call_detail` | chunked | One exact input or result field chunk |
 | `get_trace_conversation` | chunked | One exact user-query or assistant-response field chunk |
 | `get_trace_view` | bounded | Summary/inventory, then one paged specialized-view section |
-| `get_service_logs` | bounded | Log-page summary plus exact line and character continuation |
+| `get_service_logs` | bounded | Log-page summary plus inclusive timestamp/offset and exact character continuation |
 | `submit_anthropic_suggestion` | N/A | Submit system prompt improvements |
 
 ### Context Overflow Handling

@@ -351,10 +351,10 @@ Include `token_info` in responses for budget management:
 - **`get_trace_conversation(trace_id, field, start, max_chars)`** - One exact `user_query` or `assistant_response` chunk. Follow `next_call` until `complete=true`.
 - **`get_tool_calls_page(trace_id, page, page_size, tool_name)`** - Paginated call metadata and exact-field references.
 - **`get_tool_call_detail(trace_id, call_id, field, start, max_chars)`** - One exact `input` or `tool_result` chunk. Follow `next_call` until `complete=true`.
-- **`get_trace_view(trace_id, view_name, section, offset, limit)`** - Specialized summary/inventory views. Request one inventory-named section and follow `next_call`.
+- **`get_trace_view(trace_id, view_name, section, offset, limit, item_start)`** - Specialized summary/inventory views. Request one inventory-named section and follow `next_call`. When `item_chunk` is present, concatenate its JSON `content` in `start` order and verify `sha256` before decoding the item.
 
 ### System Tools
-- **`get_service_logs(container, lines, level, since, line_cursor, char_cursor)`** - Summary-first Loki log pages. Use only for failed calls or reported errors. Preserve narrowing filters and follow `next_call`; the exact character cursor reconstructs an oversized line without exceeding the provider boundary.
+- **`get_service_logs(container, lines, level, since, line_cursor, line_cursor_offset, char_cursor)`** - Summary-first Loki log pages. Use only for failed calls or reported errors. Preserve narrowing filters and follow `next_call`; the timestamp offset retains equal-timestamp entries and the exact character cursor reconstructs an oversized line without exceeding the provider boundary.
 
 ### Domain Envelope Tools
 

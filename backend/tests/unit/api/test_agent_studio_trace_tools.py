@@ -224,7 +224,8 @@ def test_every_registered_aggregate_trace_and_log_tool_exposes_bounded_continuat
         assert properties["limit"]["maximum"] == api_module.get_agent_studio_trace_review_aggregate_page_size()
 
     log_properties = tools_by_name["get_service_logs"]["input_schema"]["properties"]
-    assert {"line_cursor", "char_cursor"} <= log_properties.keys()
+    assert {"line_cursor", "line_cursor_offset", "char_cursor"} <= log_properties.keys()
+    assert "item_start" in tools_by_name["get_trace_view"]["input_schema"]["properties"]
     assert log_properties["lines"]["default"] == api_module.get_agent_studio_service_log_default_lines()
 
 
@@ -239,7 +240,13 @@ async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
 
     result = await api_module._handle_tool_call(
         tool_name="get_service_logs",
-        tool_input={"container": "backend", "lines": 250, "level": "FATAL", "since": 30},
+        tool_input={
+            "container": "backend",
+            "lines": 250,
+            "level": "FATAL",
+            "since": 30,
+            "line_cursor_offset": 4,
+        },
         context=None,
         user_email="dev@example.org",
         user_auth_sub="auth-sub-1",
@@ -253,6 +260,7 @@ async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
         "level": "FATAL",
         "since": 30,
         "line_cursor": None,
+        "line_cursor_offset": 4,
         "char_cursor": 0,
     }
 
@@ -279,10 +287,15 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
         captured["payload"] = kwargs
         return {"status": "ok", "tool": "payload"}
 
+    async def _fake_view(**kwargs):
+        captured["view"] = kwargs
+        return {"status": "ok", "tool": "view"}
+
     monkeypatch.setattr(tools_module, "get_extraction_diagnostic_report", _fake_report)
     monkeypatch.setattr(tools_module, "get_evidence_revisions", _fake_evidence_revisions)
     monkeypatch.setattr(tools_module, "get_trace_reconstruction", _fake_reconstruction)
     monkeypatch.setattr(tools_module, "get_trace_payload", _fake_payload)
+    monkeypatch.setattr(tools_module, "get_trace_view", _fake_view)
 
     report = await api_module._handle_tool_call(
         tool_name="get_extraction_diagnostic_report",
@@ -370,6 +383,31 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
     assert captured["payload"]["payload_id"] == "observation:obs-1:output"
     assert captured["payload"]["start"] == 12
     assert captured["payload"]["max_chars"] == 120
+
+    view = await api_module._handle_tool_call(
+        tool_name="get_trace_view",
+        tool_input={
+            "trace_id": "trace-1",
+            "view_name": "agent_configs",
+            "section": "agents",
+            "offset": 2,
+            "limit": 1,
+            "item_start": 9000,
+        },
+        context=None,
+        user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
+        messages=[],
+    )
+    assert view["tool"] == "view"
+    assert captured["view"] == {
+        "trace_id": "trace-1",
+        "view_name": "agent_configs",
+        "section": "agents",
+        "offset": 2,
+        "limit": 1,
+        "item_start": 9000,
+    }
 
 
 @pytest.mark.asyncio

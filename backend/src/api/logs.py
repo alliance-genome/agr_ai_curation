@@ -221,6 +221,10 @@ async def get_container_logs(
         str | None,
         Query(description="Unix-nanosecond upper-bound cursor from page.next_call"),
     ] = None,
+    line_cursor_offset: Annotated[
+        int,
+        Query(ge=0, description="Within-timestamp line offset from page.next_call"),
+    ] = 0,
     char_cursor: Annotated[int, Query(ge=0, description="Exact character offset within this line page")] = 0,
     max_chars: Annotated[
         int,
@@ -236,6 +240,7 @@ async def get_container_logs(
         level: Optional log level filter
         since: Optional time filter in minutes ago
         line_cursor: Exact Unix-nanosecond cursor returned by a prior page
+        line_cursor_offset: Number of already returned lines at line_cursor
         char_cursor: Exact character cursor within the selected line page
 
     Returns:
@@ -261,6 +266,9 @@ async def get_container_logs(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     lookback_minutes = since or DEFAULT_LOKI_LOOKBACK_MINUTES
+    # Keep the queried set stable while smaller provider pages advance within one
+    # timestamp group. Direct unit calls may exceed the route-enforced maximum.
+    query_limit = max(lines, MAX_LOG_LINES)
     query_start = (
         query_now - timedelta(minutes=lookback_minutes)
     )
@@ -272,7 +280,7 @@ async def get_container_logs(
             service=service_label,
             start=query_start,
             end=query_end,
-            limit=lines,
+            limit=query_limit,
             level=normalized_level,
         )
 
@@ -280,14 +288,27 @@ async def get_container_logs(
             _raise_loki_query_error(container=container, result=result)
 
         timestamped_lines = _decode_timestamped_lines(result)
-        selected = timestamped_lines[-lines:]
+        eligible = timestamped_lines
+        if line_cursor_offset:
+            cursor_indices = [
+                index
+                for index, (timestamp, _) in enumerate(eligible)
+                if timestamp == query_end_ns
+            ]
+            skipped_indices = set(cursor_indices[-line_cursor_offset:])
+            eligible = [
+                entry
+                for index, entry in enumerate(eligible)
+                if index not in skipped_indices
+            ]
+        selected = eligible[-lines:]
         rendered = _join_log_lines([line for _, line in selected])
         safe_char_cursor = min(char_cursor, len(rendered))
         logs_text = _json_bounded_log_prefix(rendered[safe_char_cursor:], max_chars)
         next_char_cursor = safe_char_cursor + len(logs_text)
         character_complete = next_char_cursor >= len(rendered)
         oldest_timestamp = selected[0][0] if selected else None
-        line_complete = len(timestamped_lines) < lines or not selected
+        line_complete = len(timestamped_lines) < query_limit and len(eligible) <= lines
         complete = character_complete and line_complete
         next_call = None
         if not character_complete:
@@ -297,15 +318,30 @@ async def get_container_logs(
                 "level": normalized_level,
                 "since": lookback_minutes,
                 "line_cursor": str(query_end_ns),
+                "line_cursor_offset": line_cursor_offset,
                 "char_cursor": next_char_cursor,
             }
-        elif not line_complete and oldest_timestamp is not None:
+        elif not line_complete:
+            if oldest_timestamp is not None:
+                oldest_count = sum(
+                    timestamp == oldest_timestamp for timestamp, _ in selected
+                )
+                next_offset = (
+                    line_cursor_offset + oldest_count
+                    if oldest_timestamp == query_end_ns
+                    else oldest_count
+                )
+                next_line_cursor = oldest_timestamp
+            else:
+                next_offset = 0
+                next_line_cursor = max(0, query_end_ns - 1)
             next_call = {
                 "container": container,
                 "lines": lines,
                 "level": normalized_level,
                 "since": lookback_minutes,
-                "line_cursor": str(max(0, oldest_timestamp - 1)),
+                "line_cursor": str(next_line_cursor),
+                "line_cursor_offset": next_offset,
                 "char_cursor": 0,
             }
 
@@ -326,6 +362,7 @@ async def get_container_logs(
             },
             page={
                 "line_cursor": str(query_end_ns),
+                "line_cursor_offset": line_cursor_offset,
                 "char_cursor": safe_char_cursor,
                 "next_char_cursor": None if character_complete else next_char_cursor,
                 "complete": complete,

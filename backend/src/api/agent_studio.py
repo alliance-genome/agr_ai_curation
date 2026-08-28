@@ -2911,6 +2911,7 @@ async def _handle_tool_call(
             section=tool_input.get("section"),
             offset=tool_input.get("offset", 0),
             limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "list_recent_chats":
@@ -3054,6 +3055,7 @@ async def _handle_tool_call(
             level=level,
             since=since,
             line_cursor=tool_input.get("line_cursor"),
+            line_cursor_offset=tool_input.get("line_cursor_offset", 0),
             char_cursor=tool_input.get("char_cursor", 0),
         )
         return result

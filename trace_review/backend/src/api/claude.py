@@ -307,6 +307,7 @@ def _aggregate_response_data(
     offset: int,
     limit: int,
     next_call_base: Mapping[str, Any],
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """Return a summary-first aggregate page that fits the provider envelope."""
     inventory_limit = min(max(1, limit), TRACE_REVIEW_AGGREGATE_PAGE_SIZE)
@@ -360,6 +361,7 @@ def _aggregate_response_data(
     items = _aggregate_items(collections[section])
     safe_offset = max(0, offset)
     safe_limit = inventory_limit
+    safe_item_start = max(0, item_start)
     selected: List[Any] = []
 
     def build_page(page_items: List[Any]) -> Dict[str, Any]:
@@ -391,6 +393,8 @@ def _aggregate_response_data(
         }
 
     for item in items[safe_offset:safe_offset + safe_limit]:
+        if safe_item_start:
+            break
         candidate = build_page([*selected, item])
         if len(json.dumps(_aggregate_provider_result(candidate), default=str)) > (
             TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
@@ -400,13 +404,79 @@ def _aggregate_response_data(
 
     page_data = build_page(selected)
     if safe_offset < len(items) and not selected:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"One lossless item in aggregate section '{section}' exceeds the "
-                "provider inline tool-result limit; apply a narrower trace filter"
-            ),
+        serialized_item = json.dumps(
+            items[safe_offset],
+            default=str,
+            sort_keys=True,
+            separators=(",", ":"),
         )
+        item_total_chars = len(serialized_item)
+        safe_item_start = min(safe_item_start, item_total_chars)
+        item_sha256 = hashlib.sha256(serialized_item.encode("utf-8")).hexdigest()
+
+        def build_item_chunk(end: int) -> Dict[str, Any]:
+            item_complete = end >= item_total_chars
+            aggregate_complete = item_complete and safe_offset + 1 >= len(items)
+            next_offset = safe_offset + (1 if item_complete else 0)
+            next_call = None
+            if not aggregate_complete:
+                next_call = {
+                    **next_call_base,
+                    "section": section,
+                    "offset": next_offset,
+                    "limit": safe_limit,
+                    "item_start": 0 if item_complete else end,
+                }
+            return {
+                **base,
+                "page": {
+                    "section": section,
+                    "offset": safe_offset,
+                    "limit": safe_limit,
+                    "total_items": len(items),
+                    "returned_items": 0,
+                    "complete": aggregate_complete,
+                    "truncated": not aggregate_complete,
+                    "next_offset": None if aggregate_complete else next_offset,
+                    "next_call": next_call,
+                    "items": [],
+                    "item_chunk": {
+                        "item_offset": safe_offset,
+                        "encoding": "json",
+                        "sha256": item_sha256,
+                        "start": safe_item_start,
+                        "end": end,
+                        "total_chars": item_total_chars,
+                        "complete": item_complete,
+                        "content": serialized_item[safe_item_start:end],
+                    },
+                },
+            }
+
+        low, high = safe_item_start, item_total_chars
+        fitting_chunk = None
+        while low <= high:
+            candidate_end = (low + high) // 2
+            candidate = build_item_chunk(candidate_end)
+            if len(json.dumps(_aggregate_provider_result(candidate), default=str)) <= (
+                TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+            ):
+                fitting_chunk = candidate
+                low = candidate_end + 1
+            else:
+                high = candidate_end - 1
+        if (
+            fitting_chunk is None
+            or fitting_chunk["page"]["item_chunk"]["end"] <= safe_item_start
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The provider inline tool-result limit is too small to return "
+                    "one aggregate item character with its identity metadata"
+                ),
+            )
+        return fitting_chunk
     return page_data
 
 
@@ -2077,6 +2147,7 @@ async def get_trace_view(
     section: Annotated[Optional[str], Query(description="View section to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     """Get specific trace view with token metadata."""
@@ -2130,6 +2201,7 @@ async def get_trace_view(
             offset=offset,
             limit=limit,
             next_call_base={"trace_id": trace_id, "view_name": view_name},
+            item_start=item_start,
         )
         token_info = _aggregate_token_info(response_data)
         return ClaudeTraceResponse(
@@ -2164,6 +2236,7 @@ async def get_trace_view(
         offset=offset,
         limit=limit,
         next_call_base={"trace_id": trace_id, "view_name": view_name},
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
 

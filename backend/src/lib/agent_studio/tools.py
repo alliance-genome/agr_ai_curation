@@ -787,6 +787,7 @@ async def get_trace_view(
     section: Optional[str] = None,
     offset: int = 0,
     limit: Optional[int] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """
     Get a specific analysis view with token metadata.
@@ -797,6 +798,7 @@ async def get_trace_view(
         trace_id: Langfuse trace ID
         view_name: One of: token_analysis, agent_context, pdf_citations,
                    document_hierarchy, agent_configs, group_context, trace_summary
+        item_start: Exact JSON character cursor for one oversized aggregate item
 
     Returns:
         {
@@ -837,6 +839,7 @@ async def get_trace_view(
                         max(1, limit or get_agent_studio_trace_review_aggregate_page_size()),
                         get_agent_studio_trace_review_aggregate_page_size(),
                     ),
+                    "item_start": max(0, item_start),
                 },
                 headers=_trace_review_request_headers(),
             )
@@ -1278,6 +1281,7 @@ async def get_service_logs(
     level: Optional[str] = None,
     since: Optional[int] = None,
     line_cursor: Optional[str] = None,
+    line_cursor_offset: int = 0,
     char_cursor: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -1295,6 +1299,7 @@ async def get_service_logs(
         level: Optional log level filter (DEBUG, INFO, WARN, ERROR, FATAL)
         since: Optional time filter in minutes ago
         line_cursor: Exact Unix-nanosecond line cursor returned by the prior page
+        line_cursor_offset: Within-timestamp line offset returned by the prior page
         char_cursor: Exact character cursor within the selected line page
 
     Returns:
@@ -1317,6 +1322,7 @@ async def get_service_logs(
             "lines": lines,
             "max_chars": get_agent_studio_service_log_page_max_chars(),
             "char_cursor": max(0, char_cursor),
+            "line_cursor_offset": max(0, line_cursor_offset),
         }
         if line_cursor:
             params["line_cursor"] = line_cursor
