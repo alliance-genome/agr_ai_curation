@@ -8,7 +8,7 @@ from typing import Any, Callable, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
@@ -261,10 +261,13 @@ def get_domain_envelope_state(
                 DomainEnvelopeProjectionIndex.projection_key.asc(),
             )
         )
+        history_conditions = (
+            DomainEnvelopeHistory.envelope_id == normalized_envelope_id,
+            DomainEnvelopeHistory.envelope_revision <= row.revision,
+        )
         history_query = (
             select(DomainEnvelopeHistory)
-            .where(DomainEnvelopeHistory.envelope_id == normalized_envelope_id)
-            .where(DomainEnvelopeHistory.envelope_revision <= row.revision)
+            .where(*history_conditions)
             .order_by(
                 DomainEnvelopeHistory.occurred_at.desc(),
                 DomainEnvelopeHistory.envelope_revision.desc(),
@@ -276,7 +279,14 @@ def get_domain_envelope_state(
         object_rows = db.scalars(object_query).all()
         finding_rows = db.scalars(finding_query).all()
         projection_rows = db.scalars(projection_query).all()
-        history_rows = list(reversed(db.scalars(history_query).all()))
+        history_total_count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(DomainEnvelopeHistory)
+                .where(*history_conditions)
+            )
+            or 0
+        )
         lookup_attempts = _lookup_attempt_summary(
             envelope=envelope,
             projection_rows=projection_rows,
@@ -290,7 +300,7 @@ def get_domain_envelope_state(
             ],
             "validation_findings": [_finding_row_payload(item) for item in finding_rows],
             "projections": [_projection_row_payload(item) for item in projection_rows],
-            "history": [_history_row_payload(item) for item in history_rows],
+            "history": [],
             "lookup_attempts": list(lookup_attempts["attempts"]),
             "validator_summaries": list(validator_summaries["summaries"]),
             "object_ref_index": _object_ref_index_payload(object_id_by_ref),
@@ -315,15 +325,15 @@ def get_domain_envelope_state(
             "readiness_status": "blocked" if blocker_count else envelope.status.value,
             "blocker_count": blocker_count,
         }
+        section_counts = {name: len(items) for name, items in section_items.items()}
+        section_counts["history"] = history_total_count
         if resolved_section == "summary":
             if any(value is not None for value in (limit, cursor)):
                 raise ValueError("section is required when limit or cursor is provided")
             return {
                 **identity,
                 **authoritative_status,
-                "section_counts": {
-                    name: len(items) for name, items in section_items.items()
-                },
+                "section_counts": section_counts,
                 "lookup_status_counts": lookup_attempts["by_status"],
                 "validator_status_counts": validator_summaries["by_result_status"],
                 "detail_requests": [
@@ -357,6 +367,87 @@ def get_domain_envelope_state(
                 f"section {resolved_section} does not support filter(s): "
                 + ", ".join(unsupported)
             )
+        next_request = {
+            "envelope_id": normalized_envelope_id,
+            "revision": row.revision,
+            "section": resolved_section,
+            **active_filters,
+            **(
+                {"include_object_payload": True}
+                if resolved_section == "objects" and include_object_payload
+                else {}
+            ),
+        }
+        if resolved_section == "history":
+            filtered_history_conditions = list(history_conditions)
+            if resolved_object_id is not None:
+                filtered_history_conditions.append(
+                    DomainEnvelopeHistory.object_id == resolved_object_id
+                )
+            if normalized_field_path is not None:
+                filtered_history_conditions.append(
+                    DomainEnvelopeHistory.field_path == normalized_field_path
+                )
+            normalized_query = _optional_text(query)
+            if normalized_query is not None:
+                escaped_query = (
+                    normalized_query.replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                search_pattern = f"%{escaped_query}%"
+                filtered_history_conditions.append(
+                    or_(
+                        *(
+                            cast(column, String).ilike(search_pattern, escape="\\")
+                            for column in (
+                                DomainEnvelopeHistory.envelope_id,
+                                DomainEnvelopeHistory.event_id,
+                                DomainEnvelopeHistory.envelope_revision,
+                                DomainEnvelopeHistory.event_index,
+                                DomainEnvelopeHistory.event_type,
+                                DomainEnvelopeHistory.occurred_at,
+                                DomainEnvelopeHistory.actor_type,
+                                DomainEnvelopeHistory.actor_id,
+                                DomainEnvelopeHistory.object_id,
+                                DomainEnvelopeHistory.field_path,
+                                DomainEnvelopeHistory.event_json,
+                            )
+                        )
+                    )
+                )
+            filtered_total_count = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(DomainEnvelopeHistory)
+                    .where(*filtered_history_conditions)
+                )
+                or 0
+            )
+            page_limit = _runtime_limit(limit)
+            offset = _domain_plan_cursor(cursor, total_count=filtered_total_count)
+            history_rows = db.scalars(
+                history_query.where(*filtered_history_conditions[len(history_conditions) :])
+                .offset(offset)
+                .limit(page_limit)
+            ).all()
+            page = _runtime_page_result(
+                page_items=[_history_row_payload(item) for item in history_rows],
+                section_total_count=history_total_count,
+                total_count=filtered_total_count,
+                page_limit=page_limit,
+                offset=offset,
+                next_request=next_request,
+            )
+            return {
+                **identity,
+                **authoritative_status,
+                **page,
+                "instruction": (
+                    "Treat identifiers and provenance in this revision-pinned page as "
+                    "source-of-truth references; follow next_request until complete."
+                ),
+            }
         filtered_items = _filter_runtime_items(
             section_items[resolved_section],
             filters=active_filters,
@@ -369,17 +460,7 @@ def get_domain_envelope_state(
                 section_total_count=len(section_items[resolved_section]),
                 limit=limit,
                 cursor=cursor,
-                next_request={
-                    "envelope_id": normalized_envelope_id,
-                    "revision": row.revision,
-                    "section": resolved_section,
-                    **active_filters,
-                    **(
-                        {"include_object_payload": True}
-                        if resolved_section == "objects" and include_object_payload
-                        else {}
-                    ),
-                },
+                next_request=next_request,
             ),
             "instruction": (
                 "Treat identifiers and provenance in this revision-pinned page as "
@@ -763,12 +844,13 @@ def _domain_plan_cursor(value: str | None, *, total_count: int) -> int:
 
 
 def _runtime_limit(value: int | None) -> int:
-    resolved = _RUNTIME_DEFAULT_LIMIT if value is None else value
-    if isinstance(resolved, bool) or not isinstance(resolved, int):
+    if value is None:
+        return min(_RUNTIME_DEFAULT_LIMIT, _RUNTIME_MAX_LIMIT)
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("limit must be an integer")
-    if resolved < 1:
-        raise ValueError("limit must be greater than zero")
-    return min(resolved, _RUNTIME_MAX_LIMIT)
+    if value < 1 or value > _RUNTIME_MAX_LIMIT:
+        raise ValueError(f"limit must be between 1 and {_RUNTIME_MAX_LIMIT}")
+    return value
 
 
 def _runtime_page(
@@ -782,14 +864,33 @@ def _runtime_page(
     page_limit = _runtime_limit(limit)
     offset = _domain_plan_cursor(cursor, total_count=len(items))
     page_items = [dict(item) for item in items[offset : offset + page_limit]]
+    return _runtime_page_result(
+        page_items=page_items,
+        section_total_count=section_total_count,
+        total_count=len(items),
+        page_limit=page_limit,
+        offset=offset,
+        next_request=next_request,
+    )
+
+
+def _runtime_page_result(
+    *,
+    page_items: Sequence[Mapping[str, Any]],
+    section_total_count: int,
+    total_count: int,
+    page_limit: int,
+    offset: int,
+    next_request: Mapping[str, Any],
+) -> dict[str, Any]:
     next_offset = offset + len(page_items)
-    complete = next_offset >= len(items)
+    complete = next_offset >= total_count
     next_cursor = None if complete else str(next_offset)
     return {
         "section_total_count": section_total_count,
-        "total_count": len(items),
+        "total_count": total_count,
         "returned_count": len(page_items),
-        "items": page_items,
+        "items": [dict(item) for item in page_items],
         "complete": complete,
         "truncated": not complete,
         "next_cursor": next_cursor,
@@ -986,11 +1087,12 @@ def get_export_submission_readiness(
             if any(value is not None for value in (limit, cursor)):
                 raise ValueError("section is required when limit or cursor is provided")
             ready_count = identity["ready_count"]
+            ready = bool(readiness) and ready_count == len(readiness)
             return {
                 **identity,
-                "ready": ready_count == len(readiness),
+                "ready": ready,
                 "readiness_status": (
-                    "ready" if ready_count == len(readiness) else "blocked"
+                    "ready" if ready else "no_candidates" if not readiness else "blocked"
                 ),
                 "section_counts": {
                     "candidates": len(candidate_items),

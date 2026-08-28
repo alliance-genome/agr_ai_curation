@@ -708,6 +708,33 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertTrue(compact["has_blockers"])
         self.assertEqual(compact["readiness_statuses"], ["blocked"])
 
+    def test_domain_envelope_analyzer_uses_authoritative_envelope_state_summary(self):
+        summary = {
+            "success": True,
+            "semantic_source": "domain_envelope.extracted_objects",
+            "section": "summary",
+            "envelope": {
+                "envelope_id": "env-state",
+                "envelope_revision": 9,
+            },
+            "readiness_status": "blocked",
+            "blocker_count": 11,
+            "section_counts": {
+                "objects": 3,
+                "validation_findings": 11,
+                "history": 20,
+            },
+        }
+
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload(summary)
+        compact = DomainEnvelopeTraceAnalyzer.compact(domain)
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-state"])
+        self.assertEqual(domain["readiness_statuses"], ["blocked"])
+        self.assertEqual(domain["summary"]["blocker_count"], 11)
+        self.assertTrue(compact["has_blockers"])
+
     def test_cache_policy_only_caches_finished_trace_outputs(self):
         self.assertTrue(is_trace_output_cacheable({"response": "final answer"}))
         self.assertTrue(is_trace_output_cacheable({"error": "boom"}))

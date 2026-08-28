@@ -411,11 +411,18 @@ class DomainEnvelopeTraceAnalyzer:
 
     @staticmethod
     def _looks_like_readiness_inspection(payload: Mapping[str, Any]) -> bool:
+        envelope = payload.get("envelope")
+        has_envelope_state_identity = (
+            isinstance(envelope, Mapping)
+            and _as_string(envelope.get("envelope_id")) is not None
+            and isinstance(payload.get("section_counts"), Mapping)
+        )
         return (
             "blocker_count" in payload
             and (
                 isinstance(payload.get("domain_envelope_ids"), list)
                 or isinstance(payload.get("envelope_revisions"), Mapping)
+                or has_envelope_state_identity
             )
             and (
                 "candidate_count" in payload
@@ -439,6 +446,14 @@ class DomainEnvelopeTraceAnalyzer:
         if isinstance(envelope_revisions, Mapping):
             for envelope_id in envelope_revisions:
                 cls._add_unique(accumulator, "envelope_ids", _as_string(envelope_id))
+
+        envelope = payload.get("envelope")
+        if isinstance(envelope, Mapping):
+            cls._add_unique(
+                accumulator,
+                "envelope_ids",
+                _as_string(envelope.get("envelope_id")),
+            )
 
         readiness_status = _state_value(payload.get("readiness_status"))
         cls._add_unique(accumulator, "readiness_statuses", readiness_status)

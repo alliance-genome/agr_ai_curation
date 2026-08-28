@@ -883,7 +883,7 @@ def test_large_runtime_state_is_summary_first_and_completely_revision_paged(
         assert len(items) == expected_count
         if section == "history":
             assert [item["event_index"] for item in items] == list(
-                range(LARGE_RUNTIME_ITEM_COUNT)
+                reversed(range(LARGE_RUNTIME_ITEM_COUNT))
             )
 
     filtered = domain_tools.get_domain_envelope_state(
@@ -897,6 +897,19 @@ def test_large_runtime_state_is_summary_first_and_completely_revision_paged(
     assert filtered["section_total_count"] == LARGE_RUNTIME_ITEM_COUNT
     assert filtered["total_count"] == 1
     assert filtered["items"][0]["finding_id"] == "finding-3"
+
+    filtered_history = domain_tools.get_domain_envelope_state(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-runtime",
+        revision=2,
+        section="history",
+        object_id="obj-3",
+        query="Added finding 3.",
+    )
+    assert filtered_history["section_total_count"] == LARGE_RUNTIME_ITEM_COUNT
+    assert filtered_history["total_count"] == 1
+    assert filtered_history["items"][0]["event_id"] == "event-3"
 
     update_db = db_session_factory()
     try:
@@ -1315,6 +1328,49 @@ def test_export_submission_readiness_returns_read_only_blockers(monkeypatch):
     assert blocker_page["items"][0]["envelope_id"] == "env-1"
     assert blocker_page["items"][0]["candidate_id"] == "candidate-1"
     assert "read-only readiness explanation" in blocker_page["instruction"]
+
+
+def test_export_submission_readiness_is_not_ready_without_candidates(monkeypatch):
+    class FakeDb:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        domain_tools,
+        "_session_visible_to_user",
+        lambda _db, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        domain_tools,
+        "_load_session_for_validation",
+        lambda _db, *, session_id: SimpleNamespace(candidates=[]),
+    )
+    monkeypatch.setattr(
+        domain_tools,
+        "_build_domain_envelope_submission_context",
+        lambda **_kwargs: SimpleNamespace(envelope_snapshots={}),
+    )
+
+    result = domain_tools.get_export_submission_readiness(
+        session_factory=FakeDb,
+        user_auth_sub="curator-1",
+        session_id="session-empty",
+    )
+
+    assert result["success"] is True
+    assert result["candidate_count"] == 0
+    assert result["ready_count"] == 0
+    assert result["blocker_count"] == 0
+    assert result["ready"] is False
+    assert result["readiness_status"] == "no_candidates"
+
+
+def test_runtime_limit_rejects_explicit_values_above_configured_maximum():
+    with pytest.raises(
+        ValueError,
+        match=rf"limit must be between 1 and {domain_tools._RUNTIME_MAX_LIMIT}",
+    ):
+        domain_tools._runtime_limit(domain_tools._RUNTIME_MAX_LIMIT + 1)
 
 
 def test_large_readiness_is_authoritative_then_pages_candidates_and_blockers(monkeypatch):

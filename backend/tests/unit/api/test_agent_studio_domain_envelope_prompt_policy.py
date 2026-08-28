@@ -170,10 +170,26 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "domain_envelope.objects" not in prompt, source_path
     assert "call the relevant tools" in prompt
     assert "get_domain_envelope_state" in prompt
+    assert (
+        "get_domain_envelope_state(envelope_id, revision, section, object_id, "
+        "field_path, query, include_object_payload, limit, cursor)"
+    ) in prompt, source_path
     assert "bounded validator request/result summaries" in prompt
     assert "materialization paths" in prompt
     assert "get_domain_pack_validation_plan" in prompt
     assert "get_export_submission_readiness" in prompt
+    assert (
+        "get_domain_envelope_review_rows(envelope_id, revision, section, object_id, "
+        "query, limit, cursor)"
+    ) in prompt, source_path
+    assert (
+        "get_export_submission_readiness(session_id, candidate_ids, "
+        "expected_envelope_revisions, mode, section, candidate_id, envelope_id, "
+        "object_id, field_path, code, query, limit, cursor)"
+    ) in prompt, source_path
+    assert "Omit `section` for a compact runtime summary" in prompt, source_path
+    assert "follow `next_request` until complete" in prompt, source_path
+    assert "history_limit" not in prompt, source_path
     assert "get_tool_inventory" in prompt
     assert "get_tool_details" in prompt
     assert "`lookup_attempts` is an audit trail" in prompt
