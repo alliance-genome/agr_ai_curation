@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, func, update
 from sqlalchemy.exc import IntegrityError
 
 from src.lib.chat_history_repository import (
@@ -14,7 +14,10 @@ from src.lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
+    ChatSessionCursor,
+    decode_chat_session_cursor,
     decode_chat_message_cursor,
+    encode_chat_session_cursor,
     encode_chat_message_cursor,
 )
 from src.models.sql.chat_message import ChatMessage
@@ -367,6 +370,100 @@ def test_list_sessions_uses_recent_activity_keyset_pagination(db_session):
         f"{SESSION_PREFIX}oldest"
     ]
     assert second_page.next_cursor is None
+
+
+def test_ranked_search_uses_stable_cursor_and_preserves_visibility_filters(db_session):
+    repository = ChatHistoryRepository(db_session)
+    expected_ids = []
+    for index in range(5):
+        session_id = f"{SESSION_PREFIX}ranked-{index}"
+        expected_ids.append(session_id)
+        _create_session(
+            repository,
+            session_id=session_id,
+            user_auth_sub=USER_A,
+            title="kinase topic",
+            created_at=_ts(15 - index),
+        )
+        _append_message(
+            repository,
+            session_id=session_id,
+            user_auth_sub=USER_A,
+            role="user",
+            content="kinase evidence",
+            turn_id=f"ranked-turn-{index}",
+            created_at=_ts(15 - index, 5),
+        )
+    _create_session(
+        repository,
+        session_id=f"{SESSION_PREFIX}ranked-other-user",
+        user_auth_sub=USER_B,
+        title="kinase topic",
+        created_at=_ts(16),
+    )
+    _append_message(
+        repository,
+        session_id=f"{SESSION_PREFIX}ranked-other-user",
+        user_auth_sub=USER_B,
+        role="user",
+        content="kinase evidence",
+        turn_id="ranked-turn-other-user",
+        created_at=_ts(16, 5),
+    )
+    _create_session(
+        repository,
+        session_id=f"{SESSION_PREFIX}ranked-other-kind",
+        user_auth_sub=USER_A,
+        chat_kind=AGENT_STUDIO_CHAT_KIND,
+        title="kinase topic",
+        created_at=_ts(16),
+    )
+    _append_message(
+        repository,
+        session_id=f"{SESSION_PREFIX}ranked-other-kind",
+        user_auth_sub=USER_A,
+        chat_kind=AGENT_STUDIO_CHAT_KIND,
+        role="user",
+        content="kinase evidence",
+        turn_id="ranked-turn-other-kind",
+        created_at=_ts(16, 5),
+    )
+    db_session.execute(
+        update(ChatSession)
+        .where(ChatSession.session_id.like(f"{SESSION_PREFIX}ranked-%"))
+        .values(search_vector=func.to_tsvector("english", "kinase topic"))
+    )
+    db_session.commit()
+
+    returned_ids = []
+    cursor = None
+    while True:
+        page = repository.search_sessions_ranked(
+            user_auth_sub=USER_A,
+            chat_kind=ASSISTANT_CHAT_KIND,
+            query="kinase",
+            limit=2,
+            cursor=cursor,
+        )
+        returned_ids.extend(item.session_id for item in page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+        assert cursor.relevance is not None
+
+    assert returned_ids == expected_ids
+    assert len(returned_ids) == len(set(returned_ids))
+
+
+def test_session_cursor_round_trip_preserves_rank_and_position():
+    cursor = ChatSessionCursor(
+        recent_activity_at=_ts(12, 30),
+        session_id=f"{SESSION_PREFIX}cursor",
+        relevance=0.375,
+        position=7,
+    )
+
+    assert decode_chat_session_cursor(encode_chat_session_cursor(cursor)) == cursor
 
 
 def test_count_and_document_filters_respect_user_scope(db_session):

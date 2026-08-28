@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
+
+import pytest
 
 import src.api.agent_studio as api_module
 from src.lib.agent_studio.models import ChatContext
@@ -16,6 +18,7 @@ from src.lib.chat_history_repository import (
     ChatMessageCursor,
     ChatMessagePage,
     ChatMessageRecord,
+    ChatSessionCursor,
     ChatSessionDetail,
     ChatSessionPage,
     ChatSessionRecord,
@@ -81,6 +84,7 @@ def test_chat_history_tools_are_registered_for_opus():
         AGENT_STUDIO_CHAT_KIND,
         ALL_CHAT_KINDS_SENTINEL,
     ]
+    assert "cursor" in list_schema["properties"]
 
     search_schema = tools_by_name["search_chat_history"]["input_schema"]
     assert search_schema["required"] == ["query", "chat_kind"]
@@ -89,6 +93,7 @@ def test_chat_history_tools_are_registered_for_opus():
         AGENT_STUDIO_CHAT_KIND,
         ALL_CHAT_KINDS_SENTINEL,
     ]
+    assert "cursor" in search_schema["properties"]
 
     conversation_schema = tools_by_name["get_chat_conversation"]["input_schema"]
     assert conversation_schema["required"] == ["session_id"]
@@ -144,6 +149,10 @@ def test_handle_tool_call_list_recent_chats_forwards_user_auth_sub(monkeypatch):
     assert result["success"] is True
     assert result["total_sessions"] == 1
     assert result["sessions"][0]["session_id"] == "session-1"
+    assert result["sessions"][0]["title"] == "title-session-1"
+    assert "generated_title" not in result["sessions"][0]
+    assert "effective_title" not in result["sessions"][0]
+    assert result["complete"] is True
     assert captured["count_kwargs"] == {
         "user_auth_sub": "auth-sub-123",
         "chat_kind": "all",
@@ -152,6 +161,7 @@ def test_handle_tool_call_list_recent_chats_forwards_user_auth_sub(monkeypatch):
         "user_auth_sub": "auth-sub-123",
         "chat_kind": "all",
         "limit": 3,
+        "cursor": None,
     }
 
 
@@ -202,7 +212,203 @@ def test_handle_tool_call_search_chat_history_uses_ranked_repository_search(monk
         "chat_kind": "all",
         "query": "tp53 OR dna",
         "limit": 2,
+        "cursor": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "query"),
+    [
+        ("list_recent_chats", None),
+        ("search_chat_history", "maximum title"),
+    ],
+)
+def test_chat_session_tools_bound_maximum_titles_and_replay_all_pages(
+    monkeypatch,
+    tool_name,
+    query,
+):
+    base_timestamp = datetime(2026, 4, 23, 3, 15, tzinfo=timezone.utc)
+    sessions = [
+        ChatSessionRecord(
+            session_id=f"session-{index:02d}",
+            user_auth_sub="auth-sub-max-title",
+            title='"' * 255,
+            generated_title="g" * 255,
+            active_document_id=None,
+            created_at=base_timestamp - timedelta(minutes=index),
+            updated_at=base_timestamp - timedelta(minutes=index),
+            last_message_at=base_timestamp - timedelta(minutes=index),
+            deleted_at=None,
+            chat_kind=AGENT_STUDIO_CHAT_KIND,
+        )
+        for index in range(25)
+    ]
+
+    class _FakeRepository:
+        def __init__(self, _db):
+            pass
+
+        def count_sessions(self, **kwargs):
+            assert kwargs["user_auth_sub"] == "auth-sub-max-title"
+            assert kwargs["chat_kind"] == AGENT_STUDIO_CHAT_KIND
+            assert kwargs.get("query") == query
+            return len(sessions)
+
+        @staticmethod
+        def _page(*, limit, cursor, ranked):
+            start = 0
+            if cursor is not None:
+                start = next(
+                    index + 1
+                    for index, session in enumerate(sessions)
+                    if session.session_id == cursor.session_id
+                )
+            items = sessions[start : start + limit]
+            item_cursors = [
+                ChatSessionCursor(
+                    recent_activity_at=item.recent_activity_at,
+                    session_id=item.session_id,
+                    relevance=1.0 if ranked else None,
+                )
+                for item in items
+            ]
+            has_more = start + len(items) < len(sessions)
+            return ChatSessionPage(
+                items=items,
+                next_cursor=item_cursors[-1] if has_more and item_cursors else None,
+                item_cursors=item_cursors if ranked else None,
+            )
+
+        def list_sessions(self, **kwargs):
+            assert kwargs["chat_kind"] == AGENT_STUDIO_CHAT_KIND
+            return self._page(
+                limit=kwargs["limit"],
+                cursor=kwargs["cursor"],
+                ranked=False,
+            )
+
+        def search_sessions_ranked(self, **kwargs):
+            assert kwargs["chat_kind"] == AGENT_STUDIO_CHAT_KIND
+            assert kwargs["query"] == query
+            return self._page(
+                limit=kwargs["limit"],
+                cursor=kwargs["cursor"],
+                ranked=True,
+            )
+
+        def get_session_detail(self, **kwargs):
+            session = next(
+                item for item in sessions if item.session_id == kwargs["session_id"]
+            )
+            return ChatSessionDetail(
+                session=session,
+                messages=[],
+                next_message_cursor=None,
+            )
+
+        def count_messages(self, **kwargs):
+            return 0
+
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
+
+    tool_input = {
+        "chat_kind": AGENT_STUDIO_CHAT_KIND,
+        "limit": 25,
+    }
+    if query is not None:
+        tool_input["query"] = query
+
+    returned_ids = []
+    returned_ranges = []
+    result = None
+    next_call = {"tool": tool_name, "arguments": tool_input}
+    while next_call is not None:
+        current_call = next_call
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name=current_call["tool"],
+                tool_input=current_call["arguments"],
+                context=None,
+                user_email="dev@example.org",
+                user_auth_sub="auth-sub-max-title",
+                messages=[],
+            )
+        )
+        assert result["success"] is True
+        assert len(api_module._serialize_provider_tool_result(result)) <= 12000
+        provider_content = api_module._provider_tool_result_content(
+            tool_name=current_call["tool"],
+            tool_input=current_call["arguments"],
+            tool_result=result,
+            session_id="agent-studio-session",
+            turn_id="turn-max-title",
+        )
+        assert api_module.json.loads(provider_content) == result
+        assert "compacted_tool_result" not in provider_content
+        assert result["total_sessions"] == 25
+        assert all("generated_title" not in item for item in result["sessions"])
+        assert all("effective_title" not in item for item in result["sessions"])
+        assert all(item["title"] == '"' * 255 for item in result["sessions"])
+        returned_ids.extend(item["session_id"] for item in result["sessions"])
+        returned_ranges.append(result["returned_range"])
+        next_call = result["next_call"]
+        if next_call is not None:
+            assert next_call["arguments"]["chat_kind"] == AGENT_STUDIO_CHAT_KIND
+            assert next_call["arguments"].get("query") == query
+            assert next_call["arguments"]["limit"] == 25
+
+    assert returned_ids == [session.session_id for session in sessions]
+    assert returned_ranges[0]["start"] == 0
+    assert returned_ranges[-1]["end"] == 25
+    assert all(
+        current["end"] == following["start"]
+        for current, following in zip(returned_ranges, returned_ranges[1:])
+    )
+    assert len(returned_ranges) > 1
+    assert result is not None
+    assert result["complete"] is True
+
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1800")
+    narrow_ids = []
+    narrow_page_sizes = []
+    next_call = {"tool": tool_name, "arguments": tool_input}
+    while next_call is not None:
+        narrow_result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name=next_call["tool"],
+                tool_input=next_call["arguments"],
+                context=None,
+                user_email="dev@example.org",
+                user_auth_sub="auth-sub-max-title",
+                messages=[],
+            )
+        )
+        assert narrow_result["success"] is True
+        assert len(api_module._serialize_provider_tool_result(narrow_result)) <= 1800
+        assert narrow_result["sessions"]
+        narrow_page_sizes.append(len(narrow_result["sessions"]))
+        narrow_ids.extend(item["session_id"] for item in narrow_result["sessions"])
+        next_call = narrow_result["next_call"]
+    assert narrow_ids == [session.session_id for session in sessions]
+    assert 1 in narrow_page_sizes
+
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    detail = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name="get_chat_conversation",
+            tool_input={"session_id": sessions[0].session_id},
+            context=None,
+            user_email="dev@example.org",
+            user_auth_sub="auth-sub-max-title",
+            messages=[],
+        )
+    )
+    assert detail["session"]["title"] == '"' * 255
+    assert detail["session"]["generated_title"] == "g" * 255
+    assert "effective_title" not in detail["session"]
 
 
 def test_handle_tool_call_search_chat_history_requires_query():
@@ -219,6 +425,14 @@ def test_handle_tool_call_search_chat_history_requires_query():
 
     assert result["success"] is False
     assert result["error"] == "Missing required parameter: query"
+
+
+def test_chat_history_limit_uses_environment_bounded_default(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_CHAT_HISTORY_PAGE_SIZE", "5")
+
+    assert api_module._resolve_chat_history_limit({}) == 5
+    with pytest.raises(ValueError, match="from 1 to 5"):
+        api_module._resolve_chat_history_limit({"limit": 6})
 
 
 def test_handle_tool_call_get_chat_conversation_rejects_malformed_cursor():

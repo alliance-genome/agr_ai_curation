@@ -6,12 +6,13 @@ import base64
 import binascii
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import REAL, and_, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -59,6 +60,8 @@ class ChatSessionCursor:
 
     recent_activity_at: datetime
     session_id: str
+    relevance: float | None = None
+    position: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,7 @@ class ChatSessionPage:
 
     items: list[ChatSessionRecord]
     next_cursor: ChatSessionCursor | None
+    item_cursors: list[ChatSessionCursor] | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +148,66 @@ class AppendMessageResult:
 
 class ChatHistorySessionNotFoundError(LookupError):
     """Raised when a session is missing, deleted, or not visible to the caller."""
+
+
+def encode_chat_session_cursor(cursor: ChatSessionCursor | None) -> str | None:
+    """Encode a repository session cursor as a stable URL-safe token."""
+
+    if cursor is None:
+        return None
+    payload: dict[str, Any] = {
+        "recent_activity_at": cursor.recent_activity_at.isoformat(),
+        "session_id": cursor.session_id,
+    }
+    if cursor.relevance is not None:
+        payload["relevance"] = cursor.relevance
+    if cursor.position:
+        payload["position"] = cursor.position
+    raw_payload = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw_payload).decode("ascii").rstrip("=")
+
+
+def decode_chat_session_cursor(cursor: str | None) -> ChatSessionCursor | None:
+    """Decode a repository session cursor or reject malformed input."""
+
+    if cursor is None:
+        return None
+    normalized_cursor = cursor.strip()
+    if not normalized_cursor:
+        raise ValueError("session cursor cannot be blank")
+
+    padding = "=" * (-len(normalized_cursor) % 4)
+    try:
+        decoded_bytes = base64.urlsafe_b64decode(f"{normalized_cursor}{padding}")
+        payload = json.loads(decoded_bytes.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid session cursor")
+        recent_activity_at = str(payload.get("recent_activity_at", "")).strip()
+        session_id = str(payload.get("session_id", "")).strip()
+        relevance_value = payload.get("relevance")
+        position_value = payload.get("position", 0)
+        if not recent_activity_at or not session_id:
+            raise ValueError("Invalid session cursor")
+        if relevance_value is not None and (
+            isinstance(relevance_value, bool)
+            or not isinstance(relevance_value, (int, float))
+            or not math.isfinite(float(relevance_value))
+        ):
+            raise ValueError("Invalid session cursor")
+        if (
+            isinstance(position_value, bool)
+            or not isinstance(position_value, int)
+            or position_value < 0
+        ):
+            raise ValueError("Invalid session cursor")
+        return ChatSessionCursor(
+            recent_activity_at=datetime.fromisoformat(recent_activity_at),
+            session_id=session_id,
+            relevance=float(relevance_value) if relevance_value is not None else None,
+            position=position_value,
+        )
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise ValueError("Invalid session cursor") from exc
 
 
 def encode_chat_message_cursor(cursor: ChatMessageCursor | None) -> str | None:
@@ -472,6 +536,7 @@ class ChatHistoryRepository:
         chat_kind: str,
         query: str,
         limit: int = 20,
+        cursor: ChatSessionCursor | None = None,
         active_document_id: UUID | None = None,
     ) -> ChatSessionPage:
         """Search active sessions ordered by full-text relevance, then recent activity."""
@@ -509,17 +574,49 @@ class ChatHistoryRepository:
                 ChatSessionModel.active_document_id == active_document_id,
             )
 
-        sessions = self._db.scalars(
-            stmt.order_by(
+        if cursor is not None:
+            if cursor.relevance is None:
+                raise ValueError("ranked search cursor is missing relevance")
+            cursor_relevance = cast(cursor.relevance, REAL)
+            stmt = stmt.where(
+                or_(
+                    relevance_rank < cursor_relevance,
+                    and_(
+                        relevance_rank == cursor_relevance,
+                        recent_activity < cursor.recent_activity_at,
+                    ),
+                    and_(
+                        relevance_rank == cursor_relevance,
+                        recent_activity == cursor.recent_activity_at,
+                        ChatSessionModel.session_id < cursor.session_id,
+                    ),
+                )
+            )
+
+        rows = self._db.execute(
+            stmt.add_columns(relevance_rank.label("relevance_rank")).order_by(
                 relevance_rank.desc(),
                 recent_activity.desc(),
                 ChatSessionModel.session_id.desc(),
-            ).limit(page_size)
+            ).limit(page_size + 1)
         ).all()
 
+        has_more = len(rows) > page_size
+        page_rows = rows[:page_size]
+        items = [_session_record(row[0]) for row in page_rows]
+        item_cursors = [
+            ChatSessionCursor(
+                recent_activity_at=item.recent_activity_at,
+                session_id=item.session_id,
+                relevance=float(row.relevance_rank),
+            )
+            for item, row in zip(items, page_rows)
+        ]
+
         return ChatSessionPage(
-            items=[_session_record(session) for session in sessions],
-            next_cursor=None,
+            items=items,
+            next_cursor=item_cursors[-1] if has_more and item_cursors else None,
+            item_cursors=item_cursors,
         )
 
     def count_sessions(
@@ -1334,7 +1431,9 @@ __all__ = [
     "ChatSessionDetail",
     "ChatSessionPage",
     "ChatSessionRecord",
+    "decode_chat_session_cursor",
     "decode_chat_message_cursor",
+    "encode_chat_session_cursor",
     "encode_chat_message_cursor",
     "VALID_CHAT_KINDS",
 ]

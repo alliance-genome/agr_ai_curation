@@ -3,7 +3,7 @@
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List
 from uuid import UUID
 
@@ -17,8 +17,11 @@ from src.lib.chat_history_repository import (
     ChatHistorySessionNotFoundError,
     ChatMessageCursor,
     ChatMessageRecord,
+    ChatSessionCursor,
     ChatSessionRecord,
+    decode_chat_session_cursor,
     decode_chat_message_cursor,
+    encode_chat_session_cursor,
     encode_chat_message_cursor,
 )
 from src.lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
@@ -57,11 +60,22 @@ def serialize_chat_history_session(record: ChatSessionRecord) -> Dict[str, Any]:
         "chat_kind": record.chat_kind,
         "title": record.title,
         "generated_title": record.generated_title,
-        "effective_title": record.effective_title,
         "active_document_id": str(record.active_document_id) if record.active_document_id else None,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
         "last_message_at": record.last_message_at.isoformat() if record.last_message_at else None,
+        "recent_activity_at": record.recent_activity_at.isoformat(),
+    }
+
+
+def serialize_chat_history_session_summary(record: ChatSessionRecord) -> Dict[str, Any]:
+    """Serialize the compact provider-facing projection for a session page."""
+
+    return {
+        "session_id": record.session_id,
+        "chat_kind": record.chat_kind,
+        "title": record.effective_title,
+        "active_document_id": str(record.active_document_id) if record.active_document_id else None,
         "recent_activity_at": record.recent_activity_at.isoformat(),
     }
 
@@ -158,10 +172,15 @@ def require_tool_string(tool_input: dict[str, Any], field_name: str) -> str:
     return raw_value.strip()
 
 
-def resolve_chat_history_limit(tool_input: dict[str, Any]) -> int:
-    raw_limit = tool_input.get("limit", 10)
-    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
-        raise ValueError("limit must be an integer")
+def resolve_chat_history_limit(tool_input: dict[str, Any], *, max_limit: int) -> int:
+    raw_limit = tool_input.get("limit", min(10, max_limit))
+    if (
+        isinstance(raw_limit, bool)
+        or not isinstance(raw_limit, int)
+        or raw_limit < 1
+        or raw_limit > max_limit
+    ):
+        raise ValueError(f"limit must be an integer from 1 to {max_limit}")
     return raw_limit
 
 
@@ -177,6 +196,127 @@ def with_chat_history_repository(
         return callback(repository)
     finally:
         chat_history_db.close()
+
+
+def get_chat_session_page_payload(
+    *,
+    repository: ChatHistoryRepository,
+    user_auth_sub: str,
+    chat_kind: str,
+    cursor: str | None,
+    limit: int,
+    provider_inline_max_chars: int,
+    query: str | None = None,
+    serialize_session: Callable[[ChatSessionRecord], Dict[str, Any]] = (
+        serialize_chat_history_session_summary
+    ),
+) -> Dict[str, Any]:
+    """Return a keyset-paged session list fitted to the provider-visible JSON."""
+
+    session_cursor = decode_chat_session_cursor(cursor)
+    if query is None:
+        if session_cursor is not None and session_cursor.relevance is not None:
+            raise ValueError("recent chat cursor cannot be used for ranked search")
+        page = repository.list_sessions(
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+            limit=limit,
+            cursor=session_cursor,
+        )
+        tool_name = "list_recent_chats"
+    else:
+        page = repository.search_sessions_ranked(
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+            query=query,
+            limit=limit,
+            cursor=session_cursor,
+        )
+        tool_name = "search_chat_history"
+
+    count_arguments: Dict[str, Any] = {
+        "user_auth_sub": user_auth_sub,
+        "chat_kind": chat_kind,
+    }
+    if query is not None:
+        count_arguments["query"] = query
+    total_sessions = repository.count_sessions(
+        **count_arguments,
+    )
+    range_start = session_cursor.position if session_cursor is not None else 0
+
+    def cursor_after(item_count: int) -> ChatSessionCursor | None:
+        if item_count < len(page.items):
+            if page.item_cursors is not None:
+                base_cursor = page.item_cursors[item_count - 1]
+            else:
+                item = page.items[item_count - 1]
+                base_cursor = ChatSessionCursor(
+                    recent_activity_at=item.recent_activity_at,
+                    session_id=item.session_id,
+                )
+        else:
+            base_cursor = page.next_cursor
+        if base_cursor is None:
+            return None
+        return replace(base_cursor, position=range_start + item_count)
+
+    def build_result(
+        page_items: list[ChatSessionRecord],
+        next_cursor_value: ChatSessionCursor | None,
+    ) -> Dict[str, Any]:
+        encoded_next_cursor = encode_chat_session_cursor(next_cursor_value)
+        complete = encoded_next_cursor is None
+        arguments: Dict[str, Any] = {
+            "chat_kind": chat_kind,
+            "limit": limit,
+            "cursor": encoded_next_cursor,
+        }
+        if query is not None:
+            arguments["query"] = query
+        return {
+            "success": True,
+            "contract_version": "chat_session_page.v1",
+            "view": "ranked_search_page" if query is not None else "recent_session_page",
+            **({"query": query} if query is not None else {}),
+            "chat_kind": chat_kind,
+            "limit": limit,
+            "total_sessions": total_sessions,
+            "returned_range": {
+                "start": range_start,
+                "end": range_start + len(page_items),
+            },
+            "sessions": [serialize_session(item) for item in page_items],
+            "complete": complete,
+            "next_call": (
+                None
+                if complete
+                else {
+                    "tool": tool_name,
+                    "arguments": arguments,
+                }
+            ),
+            "instruction": (
+                "Follow next_call until complete=true. Call get_chat_conversation "
+                "with a session_id for exact persisted title fields and transcript metadata."
+            ),
+        }
+
+    for item_count in range(len(page.items), -1, -1):
+        if item_count == 0 and page.items:
+            break
+        candidate = build_result(page.items[:item_count], cursor_after(item_count))
+        if _provider_result_chars(candidate) <= provider_inline_max_chars:
+            return candidate
+
+    return {
+        "success": False,
+        "error": (
+            "The provider inline tool-result limit is too small to return one "
+            "chat session with its stable identity and effective title."
+        ),
+        "provider_inline_max_chars": provider_inline_max_chars,
+    }
 
 
 def get_chat_conversation_payload(
