@@ -1567,6 +1567,20 @@ def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
     )
 
 
+def get_agent_studio_chat_history_page_size() -> int:
+    """Maximum sessions requested by one Agent Studio list/search call.
+
+    Provider-envelope fitting may return fewer rows with a continuation. Default 25.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_CHAT_HISTORY_PAGE_SIZE",
+            25,
+        ),
+    )
+
+
 def get_agent_studio_chat_recall_page_size() -> int:
     """Maximum durable chat rows returned by one Agent Studio recall page.
 

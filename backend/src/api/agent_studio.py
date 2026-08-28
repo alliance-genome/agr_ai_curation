@@ -118,6 +118,7 @@ from src.lib.agent_studio.tool_idea_service import (
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
 from src.lib.openai_agents.config import get_domain_reference_max_values
 from src.lib.openai_agents.config import (
+    get_agent_studio_chat_history_page_size,
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
     get_agent_studio_opus_context_editing_keep_tool_uses,
@@ -2931,24 +2932,17 @@ async def _handle_tool_call(
         try:
             chat_kind = _require_tool_string(tool_input, "chat_kind")
             limit = _resolve_chat_history_limit(tool_input)
+            cursor = tool_input.get("cursor")
+            if cursor is not None and not isinstance(cursor, str):
+                raise ValueError("cursor must be a string")
             return _with_chat_history_repository(
-                lambda repository: {
-                    "success": True,
-                    "chat_kind": chat_kind,
-                    "limit": limit,
-                    "total_sessions": repository.count_sessions(
-                        user_auth_sub=user_auth_sub,
-                        chat_kind=chat_kind,
-                    ),
-                    "sessions": [
-                        _serialize_chat_history_session(session)
-                        for session in repository.list_sessions(
-                            user_auth_sub=user_auth_sub,
-                            chat_kind=chat_kind,
-                            limit=limit,
-                        ).items
-                    ],
-                }
+                lambda repository: _get_chat_session_page_payload(
+                    repository=repository,
+                    user_auth_sub=user_auth_sub,
+                    chat_kind=chat_kind,
+                    cursor=cursor,
+                    limit=limit,
+                )
             )
         except ValueError as exc:
             return {
@@ -2961,27 +2955,18 @@ async def _handle_tool_call(
             query = _require_tool_string(tool_input, "query")
             chat_kind = _require_tool_string(tool_input, "chat_kind")
             limit = _resolve_chat_history_limit(tool_input)
+            cursor = tool_input.get("cursor")
+            if cursor is not None and not isinstance(cursor, str):
+                raise ValueError("cursor must be a string")
             return _with_chat_history_repository(
-                lambda repository: {
-                    "success": True,
-                    "query": query,
-                    "chat_kind": chat_kind,
-                    "limit": limit,
-                    "total_sessions": repository.count_sessions(
-                        user_auth_sub=user_auth_sub,
-                        chat_kind=chat_kind,
-                        query=query,
-                    ),
-                    "sessions": [
-                        _serialize_chat_history_session(session)
-                        for session in repository.search_sessions_ranked(
-                            user_auth_sub=user_auth_sub,
-                            chat_kind=chat_kind,
-                            query=query,
-                            limit=limit,
-                        ).items
-                    ],
-                }
+                lambda repository: _get_chat_session_page_payload(
+                    repository=repository,
+                    user_auth_sub=user_auth_sub,
+                    chat_kind=chat_kind,
+                    cursor=cursor,
+                    limit=limit,
+                    query=query,
+                )
             )
         except ValueError as exc:
             return {
@@ -3456,7 +3441,10 @@ def _require_tool_string(tool_input: dict[str, Any], field_name: str) -> str:
 
 
 def _resolve_chat_history_limit(tool_input: dict[str, Any]) -> int:
-    return agent_studio_chat_session.resolve_chat_history_limit(tool_input)
+    return agent_studio_chat_session.resolve_chat_history_limit(
+        tool_input,
+        max_limit=get_agent_studio_chat_history_page_size(),
+    )
 
 
 def _optional_tool_string_list(value: Any, field_name: str) -> List[str] | None:
@@ -3514,6 +3502,26 @@ def _get_chat_conversation_payload(
         limit=limit,
         provider_inline_max_chars=get_agent_studio_provider_tool_result_inline_max_chars(),
         serialize_session=_serialize_chat_history_session,
+    )
+
+
+def _get_chat_session_page_payload(
+    *,
+    repository: ChatHistoryRepository,
+    user_auth_sub: str,
+    chat_kind: str,
+    cursor: str | None,
+    limit: int,
+    query: str | None = None,
+) -> Dict[str, Any]:
+    return agent_studio_chat_session.get_chat_session_page_payload(
+        repository=repository,
+        user_auth_sub=user_auth_sub,
+        chat_kind=chat_kind,
+        cursor=cursor,
+        limit=limit,
+        query=query,
+        provider_inline_max_chars=get_agent_studio_provider_tool_result_inline_max_chars(),
     )
 
 

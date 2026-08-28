@@ -10,8 +10,6 @@ Architecture:
 - Specialists: PDF, Disease Ontology, Gene Curation, Chemical Ontology
 """
 
-import base64
-import binascii
 import json
 import logging
 import asyncio
@@ -39,7 +37,9 @@ from ..lib.chat_history_repository import (
     ChatSessionCursor,
     ChatSessionRecord,
     VALID_CHAT_KINDS,
+    decode_chat_session_cursor,
     decode_chat_message_cursor,
+    encode_chat_session_cursor,
     encode_chat_message_cursor,
 )
 from ..lib.chat_state import document_state
@@ -704,52 +704,16 @@ def _parse_document_filter(document_id: Optional[str]) -> UUID | None:
         raise HTTPException(status_code=400, detail="document_id must be a valid UUID") from exc
 
 
-def _encode_cursor(payload: Dict[str, str]) -> str:
-    """Encode a pagination cursor into a URL-safe opaque token."""
-
-    raw_payload = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return base64.urlsafe_b64encode(raw_payload).decode("ascii").rstrip("=")
-
-
-def _decode_cursor(cursor: Optional[str], *, kind: str) -> Dict[str, str] | None:
-    """Decode a pagination cursor or raise 400 when malformed."""
-
-    if cursor is None:
-        return None
-
-    normalized_cursor = cursor.strip()
-    if not normalized_cursor:
-        raise HTTPException(status_code=400, detail=f"{kind} cursor cannot be blank")
-
-    padding = "=" * (-len(normalized_cursor) % 4)
-    try:
-        decoded_bytes = base64.urlsafe_b64decode(f"{normalized_cursor}{padding}")
-        payload = json.loads(decoded_bytes.decode("utf-8"))
-    except (ValueError, binascii.Error) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid {kind} cursor") from exc
-
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail=f"Invalid {kind} cursor")
-    return {str(key): str(value) for key, value in payload.items()}
-
-
 def _decode_session_cursor(cursor: Optional[str]) -> ChatSessionCursor | None:
     """Decode an opaque history cursor into the repository representation."""
 
-    payload = _decode_cursor(cursor, kind="session")
-    if payload is None:
+    if cursor is None:
         return None
-
-    session_id = payload.get("session_id", "").strip()
-    recent_activity_at = payload.get("recent_activity_at", "").strip()
-    if not session_id or not recent_activity_at:
-        raise HTTPException(status_code=400, detail="Invalid session cursor")
+    if not cursor.strip():
+        raise HTTPException(status_code=400, detail="session cursor cannot be blank")
 
     try:
-        return ChatSessionCursor(
-            session_id=session_id,
-            recent_activity_at=datetime.fromisoformat(recent_activity_at),
-        )
+        return decode_chat_session_cursor(cursor)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid session cursor") from exc
 
@@ -757,15 +721,7 @@ def _decode_session_cursor(cursor: Optional[str]) -> ChatSessionCursor | None:
 def _encode_session_cursor(cursor: ChatSessionCursor | None) -> str | None:
     """Encode one repository session cursor for API responses."""
 
-    if cursor is None:
-        return None
-
-    return _encode_cursor(
-        {
-            "recent_activity_at": cursor.recent_activity_at.isoformat(),
-            "session_id": cursor.session_id,
-        }
-    )
+    return encode_chat_session_cursor(cursor)
 
 
 def _decode_message_cursor(cursor: Optional[str]) -> ChatMessageCursor | None:

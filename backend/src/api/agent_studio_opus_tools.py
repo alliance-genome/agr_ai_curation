@@ -16,6 +16,7 @@ from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
 )
 from src.lib.openai_agents.config import (
+    get_agent_studio_chat_history_page_size,
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
     get_agent_studio_service_log_default_lines,
@@ -54,6 +55,7 @@ _TRACE_SEARCH_MAX_LIMIT = get_agent_studio_trace_search_max_limit()
 _TRACE_SEARCH_FILTER_MAX_CHARS = get_agent_studio_trace_search_filter_max_chars()
 _CHAT_RECALL_PAGE_SIZE = get_agent_studio_chat_recall_page_size()
 _CHAT_RECALL_CHUNK_MAX_CHARS = get_agent_studio_chat_recall_chunk_max_chars()
+_CHAT_HISTORY_PAGE_SIZE = get_agent_studio_chat_history_page_size()
 _SERVICE_LOG_DEFAULT_LINES = get_agent_studio_service_log_default_lines()
 _SERVICE_LOG_MAX_LINES = get_agent_studio_service_log_max_lines()
 _SERVICE_LOG_MAX_LOOKBACK_MINUTES = get_agent_studio_service_log_max_lookback_minutes()
@@ -277,7 +279,7 @@ LIST_RECENT_CHATS_TOOL = {
     "description": (
         "List the authenticated user's most recent durable chat sessions across "
         "assistant_chat, agent_studio, or both. Use this when the user asks for "
-        "their last few chats or recent sessions."
+        "their last few chats or recent sessions. Follow next_call until complete=true."
     ),
     "input_schema": {
         "type": "object",
@@ -292,10 +294,14 @@ LIST_RECENT_CHATS_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum number of recent sessions to return (default: 10, max: 25).",
-                "default": 10,
+                "description": "Maximum sessions requested before provider-envelope fitting.",
+                "default": min(10, _CHAT_HISTORY_PAGE_SIZE),
                 "minimum": 1,
-                "maximum": 25,
+                "maximum": _CHAT_HISTORY_PAGE_SIZE,
+            },
+            "cursor": {
+                "type": "string",
+                "description": "Opaque stable session cursor from the previous response's next_call.",
             },
         },
         "required": ["chat_kind"],
@@ -308,7 +314,8 @@ SEARCH_CHAT_HISTORY_TOOL = {
         "Search the authenticated user's durable chat history by keyword across "
         "session titles and transcript content. Use this when the user refers to "
         "a past conversation topic, phrase, gene, session theme, or content from "
-        "the current session that may have been compacted out of live context."
+        "the current session that may have been compacted out of live context. "
+        "Follow next_call until complete=true."
     ),
     "input_schema": {
         "type": "object",
@@ -327,10 +334,14 @@ SEARCH_CHAT_HISTORY_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum number of matching sessions to return (default: 10, max: 25).",
-                "default": 10,
+                "description": "Maximum matches requested before provider-envelope fitting.",
+                "default": min(10, _CHAT_HISTORY_PAGE_SIZE),
                 "minimum": 1,
-                "maximum": 25,
+                "maximum": _CHAT_HISTORY_PAGE_SIZE,
+            },
+            "cursor": {
+                "type": "string",
+                "description": "Opaque ranked-search cursor from the previous response's next_call.",
             },
         },
         "required": ["query", "chat_kind"],
