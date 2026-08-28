@@ -1997,11 +1997,15 @@ def test_get_flow_templates_pages_templates_independently_without_agent_repetiti
     assert first["template_total_count"] == 37
     assert first["template_next_call"]["arguments"]["section"] == "templates"
     assert first["agent_next_call"]["arguments"]["section"] == "agents"
+    assert first["complete"] is False
+    assert first["next_call"] == first["agent_next_call"]
     agent_page = handler(**first["agent_next_call"]["arguments"])
     assert agent_page["templates"] == []
     template_page = handler(**first["template_next_call"]["arguments"])
     assert template_page["available_agents"] == []
     assert template_page["templates"][0]["name"] == "Gene template 2"
+    assert template_page["complete"] is False
+    assert template_page["next_call"] == template_page["template_next_call"]
 
 
 def test_get_flow_templates_recovers_oversized_unicode_records_without_provider_compaction(

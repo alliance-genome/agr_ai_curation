@@ -1129,8 +1129,10 @@ Typical workflow:
 3. read_source_file(path="backend/src/api/agent_studio.py", start_line=1400, end_line=1505)
 
 Every page bounds the complete serialized result. Follow next_call for more
-matches or exact chunks of one oversized/minified matching line. The tool only
-reads files from the current repository checkout and never executes code.""",
+matches or exact chunks of one oversized/minified matching line. When
+result_set_truncated is true, narrow query or path_glob because the bounded
+search catalog contains additional matches. The tool only reads files from the
+current repository checkout and never executes code.""",
         input_schema={
             "type": "object",
             "properties": {

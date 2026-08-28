@@ -220,8 +220,10 @@ def search_codebase(
 
     max_catalog_results = _MAX_SEARCH_RESULTS if search_mode == "content" else _MAX_FILE_LIST_RESULTS
     matches: List[Dict[str, Any]] = []
+    result_set_truncated = False
     for match in iterator:
         if len(matches) >= max_catalog_results:
+            result_set_truncated = True
             break
         matches.append(match)
 
@@ -241,6 +243,8 @@ def search_codebase(
         return {"status": "ok", "search_mode": search_mode, "query": query.strip(),
                 "path_glob": path_glob, "repo_root": str(root), "results": results,
                 "result_count": len(results), "result_set_count": len(matches),
+                "result_set_truncated": result_set_truncated,
+                "complete": next_cursor is None and not result_set_truncated,
                 "truncated": next_cursor is not None, "next_cursor": next_cursor,
                 "next_call": next_call}
 

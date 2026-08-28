@@ -153,6 +153,34 @@ def test_search_codebase_content_mode_normalizes_relative_rg_paths(tmp_path, mon
     assert result["results"][0]["line_number"] == 2
 
 
+def test_search_codebase_reports_bounded_result_set_is_incomplete(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools, "_MAX_SEARCH_RESULTS", 2)
+    monkeypatch.setattr(
+        codebase_tools,
+        "_iter_content_matches",
+        lambda **_kwargs: iter(
+            {
+                "path": f"backend/src/file_{index}.py",
+                "line_number": index + 1,
+                "line_text": f"match {index}",
+            }
+            for index in range(3)
+        ),
+    )
+
+    result = codebase_tools.search_codebase(query="match", limit=2)
+
+    assert result["result_set_count"] == 2
+    assert result["result_set_truncated"] is True
+    assert result["complete"] is False
+    assert result["truncated"] is False
+    assert result["next_cursor"] is None
+    assert result["next_call"] is None
+
+
 def test_search_codebase_requires_rg(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

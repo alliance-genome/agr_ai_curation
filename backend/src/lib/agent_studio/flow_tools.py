@@ -1471,9 +1471,11 @@ def _get_flow_templates_handler():
                 "returned_count": len(page),
                 "truncated": actual_agent_next is not None,
                 "next_cursor": actual_agent_next,
-                "complete": actual_agent_next is None,
+                "complete": (
+                    actual_agent_next is None and actual_template_next is None
+                ),
                 "agent_next_call": agent_call,
-                "next_call": agent_call,
+                "next_call": agent_call or template_call,
                 "limit": bounded_limit,
                 "query": normalized_query,
                 "category": normalized_category,
