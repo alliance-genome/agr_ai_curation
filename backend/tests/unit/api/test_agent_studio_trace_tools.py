@@ -220,12 +220,11 @@ def test_every_registered_aggregate_trace_and_log_tool_exposes_bounded_continuat
     }
     for tool_name in aggregate_trace_tools:
         properties = tools_by_name[tool_name]["input_schema"]["properties"]
-        assert {"section", "offset", "limit"} <= properties.keys()
+        assert {"section", "offset", "limit", "item_start"} <= properties.keys()
         assert properties["limit"]["maximum"] == api_module.get_agent_studio_trace_review_aggregate_page_size()
 
     log_properties = tools_by_name["get_service_logs"]["input_schema"]["properties"]
     assert {"line_cursor", "line_cursor_offset", "char_cursor"} <= log_properties.keys()
-    assert "item_start" in tools_by_name["get_trace_view"]["input_schema"]["properties"]
     assert log_properties["lines"]["default"] == api_module.get_agent_studio_service_log_default_lines()
 
 
@@ -348,6 +347,7 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
         "section": None,
         "offset": 0,
         "limit": None,
+        "item_start": 0,
     }
 
     reconstruction = await api_module._handle_tool_call(
@@ -364,6 +364,7 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
         "limit": 5,
         "offset": 10,
         "section": None,
+        "item_start": 0,
     }
 
     payload = await api_module._handle_tool_call(

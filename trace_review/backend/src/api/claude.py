@@ -1013,6 +1013,7 @@ async def get_langfuse_tree(
     section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
     offset: Annotated[int, Query(ge=0, description="Section item offset")] = 0,
     limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
@@ -1033,6 +1034,7 @@ async def get_langfuse_tree(
         offset=offset,
         limit=limit,
         next_call_base={"trace_id": trace_id},
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
@@ -1057,6 +1059,7 @@ async def get_langfuse_reconstruction(
     limit: int = Query(default=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, description="Maximum events to return"),
     offset: Annotated[int, Query(ge=0, description="Event offset")] = 0,
     section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
@@ -1079,6 +1082,7 @@ async def get_langfuse_reconstruction(
         offset=offset,
         limit=limit,
         next_call_base={"trace_id": trace_id},
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
@@ -1108,6 +1112,7 @@ async def get_langfuse_payloads(
     ] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0, description="Pagination offset")] = 0,
     section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     if sort not in {"largest", "chronological"}:
@@ -1134,6 +1139,7 @@ async def get_langfuse_payloads(
         offset=offset,
         limit=limit,
         next_call_base={"trace_id": trace_id, "sort": sort},
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
@@ -1254,6 +1260,7 @@ async def get_model_live_context(
     section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
     offset: Annotated[int, Query(ge=0, description="Section item offset")] = 0,
     limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
@@ -1278,6 +1285,7 @@ async def get_model_live_context(
         offset=offset,
         limit=limit,
         next_call_base={"trace_id": trace_id},
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
@@ -1299,6 +1307,7 @@ async def get_langfuse_costs(
     section: Annotated[Optional[str], Query(description="Cost collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
@@ -1314,6 +1323,7 @@ async def get_langfuse_costs(
         offset=offset,
         limit=limit,
         next_call_base={"trace_id": trace_id},
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
@@ -1335,6 +1345,7 @@ async def get_langfuse_duplicates(
     section: Annotated[Optional[str], Query(description="Duplicate collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
@@ -1368,6 +1379,7 @@ async def get_langfuse_duplicates(
         offset=offset,
         limit=limit,
         next_call_base={"trace_id": trace_id},
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
@@ -1857,6 +1869,7 @@ async def get_extraction_timeline(
     section: Annotated[Optional[str], Query(description="Timeline collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     context = await load_extraction_timeline_context(
@@ -1923,6 +1936,7 @@ async def get_extraction_timeline(
             "event_type": event_type,
             "candidate_id": candidate_id,
         },
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
@@ -1957,6 +1971,7 @@ async def get_extraction_diagnostic_report(
     section: Annotated[Optional[str], Query(description="Report collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     context = await load_extraction_timeline_context(
@@ -2023,6 +2038,7 @@ async def get_extraction_diagnostic_report(
             "event_type": event_type,
             "candidate_id": candidate_id,
         },
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
@@ -2056,6 +2072,7 @@ async def get_evidence_revisions(
     section: Annotated[Optional[str], Query(description="Evidence collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     context = await load_extraction_timeline_context(
@@ -2112,6 +2129,7 @@ async def get_evidence_revisions(
             "event_type": event_type,
             "candidate_id": candidate_id,
         },
+        item_start=item_start,
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(

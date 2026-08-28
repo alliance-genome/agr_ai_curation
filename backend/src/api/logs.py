@@ -21,6 +21,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_service_log_max_lines,
     get_agent_studio_service_log_max_lookback_minutes,
     get_agent_studio_service_log_page_max_chars,
+    get_agent_studio_service_log_source_query_max_lines,
 )
 
 
@@ -71,6 +72,7 @@ ALLOWED_LOG_LEVELS = frozenset(loki.LOG_LEVEL_LABEL_PATTERNS)
 DEFAULT_LOG_LINES = get_agent_studio_service_log_default_lines()
 MAX_LOG_LINES = get_agent_studio_service_log_max_lines()
 MAX_LOG_CHARS = get_agent_studio_service_log_page_max_chars()
+MAX_LOG_SOURCE_QUERY_LINES = get_agent_studio_service_log_source_query_max_lines()
 DEFAULT_LOKI_LOOKBACK_MINUTES = get_agent_studio_service_log_default_lookback_minutes()
 MAX_LOKI_LOOKBACK_MINUTES = get_agent_studio_service_log_max_lookback_minutes()
 
@@ -266,9 +268,22 @@ async def get_container_logs(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     lookback_minutes = since or DEFAULT_LOKI_LOOKBACK_MINUTES
-    # Keep the queried set stable while smaller provider pages advance within one
-    # timestamp group. Direct unit calls may exceed the route-enforced maximum.
-    query_limit = max(lines, MAX_LOG_LINES)
+    # Expand the source window as the cursor advances so an equal-timestamp
+    # group larger than the first fetch remains losslessly addressable.
+    requested_query_limit = max(
+        lines,
+        MAX_LOG_LINES,
+        line_cursor_offset + lines,
+    )
+    if requested_query_limit > MAX_LOG_SOURCE_QUERY_LINES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Log cursor exceeds the configured source query limit; narrow "
+                "the time, level, or service filter"
+            ),
+        )
+    query_limit = requested_query_limit
     query_start = (
         query_now - timedelta(minutes=lookback_minutes)
     )

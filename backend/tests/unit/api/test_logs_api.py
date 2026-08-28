@@ -236,10 +236,12 @@ async def test_get_container_logs_continues_within_equal_timestamp_group(monkeyp
     monkeypatch.setattr(logs_api, "MAX_LOG_LINES", 5)
     entries = [
         (90, "older"),
-        *((100, f"same-{index}") for index in range(5)),
+        *((100, f"same-{index}") for index in range(6)),
     ]
+    query_limits = []
 
     async def _fake_query_logs(*_args, **kwargs):
+        query_limits.append(kwargs["limit"])
         end = kwargs["end"]
         end_ns = int(end) if isinstance(end, str) else 10**30
         eligible = [entry for entry in entries if entry[0] <= end_ns]
@@ -266,8 +268,11 @@ async def test_get_container_logs_continues_within_equal_timestamp_group(monkeyp
             break
         next_call = payload.page["next_call"]
 
-    assert returned == ["same-3", "same-4", "same-1", "same-2", "same-0", "older"]
+    assert returned == [
+        "same-4", "same-5", "same-2", "same-3", "same-0", "same-1", "older",
+    ]
     assert len(returned) == len(set(returned)) == len(entries)
+    assert query_limits[:3] == [5, 5, 6]
 
 
 @pytest.mark.asyncio

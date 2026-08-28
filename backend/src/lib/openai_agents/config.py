@@ -1685,6 +1685,17 @@ def get_agent_studio_service_log_max_lines() -> int:
     )
 
 
+def get_agent_studio_service_log_source_query_max_lines() -> int:
+    """Maximum Loki source entries fetched to resolve one log cursor page."""
+    return max(
+        get_agent_studio_service_log_max_lines(),
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_SERVICE_LOG_SOURCE_QUERY_MAX_LINES",
+            2_000,
+        ),
+    )
+
+
 def get_agent_studio_service_log_page_max_chars() -> int:
     """Maximum JSON-encoded log content characters returned in one page."""
     return max(

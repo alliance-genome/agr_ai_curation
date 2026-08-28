@@ -2708,6 +2708,7 @@ async def _handle_tool_call(
             section=tool_input.get("section"),
             offset=tool_input.get("offset", 0),
             limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_extraction_timeline":
@@ -2734,6 +2735,7 @@ async def _handle_tool_call(
             section=tool_input.get("section"),
             offset=tool_input.get("offset", 0),
             limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_evidence_revisions":
@@ -2758,6 +2760,7 @@ async def _handle_tool_call(
             section=tool_input.get("section"),
             offset=tool_input.get("offset", 0),
             limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_tree":
@@ -2775,6 +2778,7 @@ async def _handle_tool_call(
             section=tool_input.get("section"),
             offset=tool_input.get("offset", 0),
             limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_reconstruction":
@@ -2792,6 +2796,7 @@ async def _handle_tool_call(
             limit=tool_input.get("limit"),
             offset=tool_input.get("offset", 0),
             section=tool_input.get("section"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_model_live_context":
@@ -2809,6 +2814,7 @@ async def _handle_tool_call(
             section=tool_input.get("section"),
             offset=tool_input.get("offset", 0),
             limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_payloads":
@@ -2830,6 +2836,7 @@ async def _handle_tool_call(
             ),
             offset=tool_input.get("offset", 0),
             section=tool_input.get("section"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_payload":
@@ -2870,6 +2877,7 @@ async def _handle_tool_call(
             section=tool_input.get("section"),
             offset=tool_input.get("offset", 0),
             limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_duplicates":
@@ -2887,6 +2895,7 @@ async def _handle_tool_call(
             section=tool_input.get("section"),
             offset=tool_input.get("offset", 0),
             limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     elif tool_name == "get_trace_view":

@@ -223,3 +223,49 @@ async def test_evidence_revisions_view_has_bounded_inventory_and_filter_metadata
     assert response.data["filters"]["tool_name"] == "record_evidence"
     assert response.data["page"] is None
     assert _provider_chars(response) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+
+
+@pytest.mark.asyncio
+async def test_evidence_revisions_replays_oversized_item_next_call_verbatim():
+    oversized_item = {
+        "evidence_record_id": "e-oversized",
+        "revision_detail": "lossless revision detail " * 1_000,
+    }
+    evidence = {
+        "schema_version": "evidence_revisions.v1",
+        "summary": {"evidence_record_count": 1, "scope_refusal_count": 0},
+        "evidence_records": [oversized_item],
+        "scope_refusals": [],
+        "query": {},
+    }
+    chunks = []
+    call = {
+        "trace_id": TRACE_ID,
+        "section": "evidence_records",
+        "offset": 0,
+        "limit": claude.TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    }
+
+    with (
+        patch(
+            "src.api.claude.load_extraction_timeline_context",
+            new=AsyncMock(return_value=SimpleNamespace()),
+        ),
+        patch("src.api.claude.build_evidence_revisions", return_value=evidence),
+    ):
+        while True:
+            response = await claude.get_evidence_revisions(
+                request=Mock(),
+                source="local",
+                **call,
+            )
+            assert _provider_chars(response) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+            chunk = response.data["page"]["item_chunk"]
+            chunks.append(chunk["content"])
+            if response.data["page"]["complete"]:
+                break
+            call = response.data["page"]["next_call"]
+
+    serialized = "".join(chunks)
+    assert json.loads(serialized) == oversized_item
+    assert hashlib.sha256(serialized.encode("utf-8")).hexdigest() == chunk["sha256"]

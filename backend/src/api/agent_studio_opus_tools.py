@@ -68,6 +68,12 @@ _AGGREGATE_PAGE_PROPERTIES = {
         "minimum": 1,
         "maximum": _TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     },
+    "item_start": {
+        "type": "integer",
+        "description": "Exact JSON character cursor from page.next_call for one oversized item.",
+        "default": 0,
+        "minimum": 0,
+    },
 }
 
 # Convert tool definition to Anthropic format
@@ -577,12 +583,6 @@ GET_TRACE_VIEW_TOOL = {
                 "description": "Which view to fetch",
             },
             **_AGGREGATE_PAGE_PROPERTIES,
-            "item_start": {
-                "type": "integer",
-                "description": "Exact JSON character cursor from page.next_call for one oversized item.",
-                "default": 0,
-                "minimum": 0,
-            },
         },
         "required": ["trace_id", "view_name"],
     },
@@ -700,6 +700,7 @@ GET_TRACE_RECONSTRUCTION_TOOL = {
                 "default": 0,
                 "minimum": 0,
             },
+            "item_start": _AGGREGATE_PAGE_PROPERTIES["item_start"],
         },
         "required": ["trace_id"],
     },
@@ -736,6 +737,7 @@ GET_TRACE_PAYLOADS_TOOL = {
                 "default": 0,
                 "minimum": 0,
             },
+            "item_start": _AGGREGATE_PAGE_PROPERTIES["item_start"],
         },
         "required": ["trace_id"],
     },

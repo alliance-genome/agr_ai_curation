@@ -954,6 +954,7 @@ async def get_extraction_diagnostic_report(
     section: Optional[str] = None,
     offset: int = 0,
     limit: Optional[int] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """Get concise extraction, builder, tool, and validation diagnostics for a trace."""
     try:
@@ -982,6 +983,7 @@ async def get_extraction_diagnostic_report(
             "section": section,
             "offset": max(0, offset),
             "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
+            "item_start": max(0, item_start),
         },
     )
 
@@ -1000,6 +1002,7 @@ async def get_extraction_timeline(
     section: Optional[str] = None,
     offset: int = 0,
     limit: Optional[int] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """Get ordered extraction events and OpenAI/Agents SDK tool-call observations."""
     try:
@@ -1028,6 +1031,7 @@ async def get_extraction_timeline(
             "section": section,
             "offset": max(0, offset),
             "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
+            "item_start": max(0, item_start),
         },
     )
 
@@ -1044,6 +1048,7 @@ async def get_evidence_revisions(
     section: Optional[str] = None,
     offset: int = 0,
     limit: Optional[int] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """Get diagnostics-only evidence source updates and scope refusals."""
     try:
@@ -1070,6 +1075,7 @@ async def get_evidence_revisions(
             "section": section,
             "offset": max(0, offset),
             "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
+            "item_start": max(0, item_start),
         },
     )
 
@@ -1079,6 +1085,7 @@ async def get_trace_tree(
     section: Optional[str] = None,
     offset: int = 0,
     limit: Optional[int] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """Get the Langfuse parent/child observation tree with payload references."""
     try:
@@ -1097,6 +1104,7 @@ async def get_trace_tree(
             "section": section,
             "offset": max(0, offset),
             "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
+            "item_start": max(0, item_start),
         },
     )
 
@@ -1106,6 +1114,7 @@ async def get_trace_reconstruction(
     limit: Optional[int] = None,
     offset: int = 0,
     section: Optional[str] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """Get chronological Langfuse reconstruction events with payload references."""
     try:
@@ -1124,6 +1133,7 @@ async def get_trace_reconstruction(
             "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
             "offset": max(0, offset),
             "section": section,
+            "item_start": max(0, item_start),
         },
         # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
         timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),
@@ -1136,6 +1146,7 @@ async def get_trace_payloads(
     limit: Optional[int] = None,
     offset: int = 0,
     section: Optional[str] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """List Langfuse trace payload summaries with sizes, hashes, and previews."""
     try:
@@ -1166,6 +1177,7 @@ async def get_trace_payloads(
             )),
             "offset": max(0, offset),
             "section": section,
+            "item_start": max(0, item_start),
         },
         # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
         timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),
@@ -1177,6 +1189,7 @@ async def get_trace_model_live_context(
     section: Optional[str] = None,
     offset: int = 0,
     limit: Optional[int] = None,
+    item_start: int = 0,
 ) -> Dict[str, Any]:
     """Get bounded provider-call input size classification for a trace."""
     try:
@@ -1191,7 +1204,7 @@ async def get_trace_model_live_context(
         }
     return await _get_claude_endpoint(
         f"/{trace_id}/model_live_context",
-        params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size())},
+        params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()), "item_start": max(0, item_start)},
     )
 
 
@@ -1241,7 +1254,7 @@ async def get_trace_payload(
     )
 
 
-async def get_trace_costs(trace_id: str, section: Optional[str] = None, offset: int = 0, limit: Optional[int] = None) -> Dict[str, Any]:
+async def get_trace_costs(trace_id: str, section: Optional[str] = None, offset: int = 0, limit: Optional[int] = None, item_start: int = 0) -> Dict[str, Any]:
     """Get Langfuse token and cost accounting for the trace."""
     try:
         validate_trace_id(trace_id)
@@ -1253,10 +1266,10 @@ async def get_trace_costs(trace_id: str, section: Optional[str] = None, offset: 
             "error": str(e),
             "help": "Check trace_id format",
         }
-    return await _get_claude_endpoint(f"/{trace_id}/langfuse_costs", params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size())})
+    return await _get_claude_endpoint(f"/{trace_id}/langfuse_costs", params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()), "item_start": max(0, item_start)})
 
 
-async def get_trace_duplicates(trace_id: str, section: Optional[str] = None, offset: int = 0, limit: Optional[int] = None) -> Dict[str, Any]:
+async def get_trace_duplicates(trace_id: str, section: Optional[str] = None, offset: int = 0, limit: Optional[int] = None, item_start: int = 0) -> Dict[str, Any]:
     """Get duplicate payload fingerprints across trace and observation payloads."""
     try:
         validate_trace_id(trace_id)
@@ -1268,7 +1281,7 @@ async def get_trace_duplicates(trace_id: str, section: Optional[str] = None, off
             "error": str(e),
             "help": "Check trace_id format",
         }
-    return await _get_claude_endpoint(f"/{trace_id}/langfuse_duplicates", params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size())})
+    return await _get_claude_endpoint(f"/{trace_id}/langfuse_duplicates", params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()), "item_start": max(0, item_start)})
 
 
 # ============================================================================
