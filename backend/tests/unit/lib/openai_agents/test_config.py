@@ -22,6 +22,13 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_name_max_chars,
     get_agent_studio_flow_output_filename_template_max_chars,
     get_agent_studio_flow_step_goal_max_chars,
+    get_agent_studio_service_log_default_lines,
+    get_agent_studio_service_log_default_lookback_minutes,
+    get_agent_studio_service_log_max_lines,
+    get_agent_studio_service_log_max_lookback_minutes,
+    get_agent_studio_service_log_page_max_chars,
+    get_agent_studio_service_log_timeout_seconds,
+    get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
@@ -52,6 +59,7 @@ from src.lib.openai_agents.config import (
     get_sentry_log_event_level,
     get_supervisor_specialist_deadline_seconds,
     get_tool_failure_alert_summary_max_chars,
+    get_trace_review_payload_preview_max_chars,
     get_weaviate_search_hybrid_alpha,
     get_weaviate_search_initial_limit,
     get_weaviate_search_mmr_enabled,
@@ -144,6 +152,31 @@ def test_weaviate_search_defaults_are_bounded_and_configurable(monkeypatch):
             10,
         ),
         (
+            "AGENT_STUDIO_TRACE_REVIEW_AGGREGATE_PAGE_SIZE",
+            get_agent_studio_trace_review_aggregate_page_size,
+            5,
+        ),
+        (
+            "AGENT_STUDIO_SERVICE_LOG_DEFAULT_LINES",
+            get_agent_studio_service_log_default_lines,
+            20,
+        ),
+        (
+            "AGENT_STUDIO_SERVICE_LOG_PAGE_MAX_CHARS",
+            get_agent_studio_service_log_page_max_chars,
+            8_000,
+        ),
+        (
+            "TRACE_REVIEW_PAYLOAD_PREVIEW_MAX_CHARS",
+            get_trace_review_payload_preview_max_chars,
+            500,
+        ),
+        (
+            "AGENT_STUDIO_SERVICE_LOG_DEFAULT_LOOKBACK_MINUTES",
+            get_agent_studio_service_log_default_lookback_minutes,
+            1_440,
+        ),
+        (
             "AGENT_STUDIO_TRACE_REVIEW_SUMMARY_MAX_CHARS",
             get_agent_studio_trace_review_summary_max_chars,
             200,
@@ -172,6 +205,29 @@ def test_character_and_page_limits_use_env_with_invalid_fallback(
 
     monkeypatch.setenv(environment_name, "0")
     assert getter() == 1
+
+
+def test_service_log_maxima_are_configurable_and_not_below_defaults(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_DEFAULT_LINES", "20")
+    monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_MAX_LINES", "10")
+    monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_DEFAULT_LOOKBACK_MINUTES", "1440")
+    monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_MAX_LOOKBACK_MINUTES", "60")
+    assert get_agent_studio_service_log_max_lines() == 20
+    assert get_agent_studio_service_log_max_lookback_minutes() == 1440
+
+    monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_MAX_LINES", "75")
+    monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_MAX_LOOKBACK_MINUTES", "2880")
+    assert get_agent_studio_service_log_max_lines() == 75
+    assert get_agent_studio_service_log_max_lookback_minutes() == 2880
+
+
+def test_service_log_timeout_is_configurable_and_positive(monkeypatch):
+    monkeypatch.delenv("AGENT_STUDIO_SERVICE_LOG_TIMEOUT_SECONDS", raising=False)
+    assert get_agent_studio_service_log_timeout_seconds() == 15.0
+    monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_TIMEOUT_SECONDS", "2.5")
+    assert get_agent_studio_service_log_timeout_seconds() == 2.5
+    monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_TIMEOUT_SECONDS", "0")
+    assert get_agent_studio_service_log_timeout_seconds() == 0.1
 
 
 @pytest.mark.parametrize(

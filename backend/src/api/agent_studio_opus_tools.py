@@ -18,6 +18,10 @@ from src.lib.chat_history_repository import (
 from src.lib.openai_agents.config import (
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
+    get_agent_studio_service_log_default_lines,
+    get_agent_studio_service_log_max_lines,
+    get_agent_studio_service_log_max_lookback_minutes,
+    get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_domain_pack_validation_plan_default_limit,
@@ -38,9 +42,33 @@ _DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT = min(
     _DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT,
 )
 _TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
+_TRACE_REVIEW_AGGREGATE_PAGE_SIZE = get_agent_studio_trace_review_aggregate_page_size()
 _TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
 _CHAT_RECALL_PAGE_SIZE = get_agent_studio_chat_recall_page_size()
 _CHAT_RECALL_CHUNK_MAX_CHARS = get_agent_studio_chat_recall_chunk_max_chars()
+_SERVICE_LOG_DEFAULT_LINES = get_agent_studio_service_log_default_lines()
+_SERVICE_LOG_MAX_LINES = get_agent_studio_service_log_max_lines()
+_SERVICE_LOG_MAX_LOOKBACK_MINUTES = get_agent_studio_service_log_max_lookback_minutes()
+
+_AGGREGATE_PAGE_PROPERTIES = {
+    "section": {
+        "type": "string",
+        "description": "Collection section named by the summary inventory. Omit for summary-only output.",
+    },
+    "offset": {
+        "type": "integer",
+        "description": "Section item offset.",
+        "default": 0,
+        "minimum": 0,
+    },
+    "limit": {
+        "type": "integer",
+        "description": "Maximum lossless section items (environment-bounded).",
+        "default": _TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+        "minimum": 1,
+        "maximum": _TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    },
+}
 
 # Convert tool definition to Anthropic format
 ANTHROPIC_SUGGESTION_TOOL = {
@@ -548,6 +576,7 @@ GET_TRACE_VIEW_TOOL = {
                 "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "trace_summary", "domain_envelope", "extraction_timeline", "evidence_revisions"],
                 "description": "Which view to fetch",
             },
+            **_AGGREGATE_PAGE_PROPERTIES,
         },
         "required": ["trace_id", "view_name"],
     },
@@ -595,6 +624,7 @@ GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL = {
             "tool_name": {"type": "string", "description": "Optional tool-name filter."},
             "event_type": {"type": "string", "description": "Optional extraction event type filter."},
             "candidate_id": {"type": "string", "description": "Optional candidate/object ID filter."},
+            **_AGGREGATE_PAGE_PROPERTIES,
         },
         "required": ["trace_id"],
     },
@@ -620,6 +650,7 @@ GET_EVIDENCE_REVISIONS_TOOL = {
             "tool_name": {"type": "string", "description": "Optional tool-name filter."},
             "event_type": {"type": "string", "description": "Optional extraction event type filter."},
             "candidate_id": {"type": "string", "description": "Optional candidate/object ID filter."},
+            **_AGGREGATE_PAGE_PROPERTIES,
         },
         "required": ["trace_id"],
     },
@@ -632,6 +663,7 @@ GET_TRACE_TREE_TOOL = {
         "type": "object",
         "properties": {
             "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            **_AGGREGATE_PAGE_PROPERTIES,
         },
         "required": ["trace_id"],
     },
@@ -644,12 +676,17 @@ GET_TRACE_RECONSTRUCTION_TOOL = {
         "type": "object",
         "properties": {
             "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            "section": {
+                "type": "string",
+                "enum": ["events"],
+                "description": "Request `events`; omit for summary-only output.",
+            },
             "limit": {
                 "type": "integer",
-                "description": "Maximum events to return (default: 100, max: 500).",
-                "default": 100,
+                "description": "Maximum events to return (environment-bounded).",
+                "default": _TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
                 "minimum": 1,
-                "maximum": 500,
+                "maximum": _TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
             },
             "offset": {
                 "type": "integer",
@@ -669,6 +706,11 @@ GET_TRACE_PAYLOADS_TOOL = {
         "type": "object",
         "properties": {
             "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            "section": {
+                "type": "string",
+                "enum": ["payloads"],
+                "description": "Request `payloads`; omit for summary-only output.",
+            },
             "sort": {
                 "type": "string",
                 "enum": ["largest", "chronological"],
@@ -678,9 +720,9 @@ GET_TRACE_PAYLOADS_TOOL = {
             "limit": {
                 "type": "integer",
                 "description": "Maximum payload summaries to return (environment-bounded).",
-                "default": _TRACE_REVIEW_PAGE_SIZE,
+                "default": _TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
                 "minimum": 1,
-                "maximum": _TRACE_REVIEW_PAGE_SIZE,
+                "maximum": _TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
             },
             "offset": {
                 "type": "integer",
@@ -704,6 +746,7 @@ GET_TRACE_MODEL_LIVE_CONTEXT_TOOL = {
         "type": "object",
         "properties": {
             "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            **_AGGREGATE_PAGE_PROPERTIES,
         },
         "required": ["trace_id"],
     },
@@ -749,6 +792,7 @@ GET_TRACE_COSTS_TOOL = {
         "type": "object",
         "properties": {
             "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            **_AGGREGATE_PAGE_PROPERTIES,
         },
         "required": ["trace_id"],
     },
@@ -761,6 +805,7 @@ GET_TRACE_DUPLICATES_TOOL = {
         "type": "object",
         "properties": {
             "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            **_AGGREGATE_PAGE_PROPERTIES,
         },
         "required": ["trace_id"],
     },
@@ -780,10 +825,10 @@ GET_SERVICE_LOGS_TOOL = {
             },
             "lines": {
                 "type": "integer",
-                "description": "Number of recent log lines (default: 2000, min: 100, max: 5000)",
-                "default": 2000,
-                "minimum": 100,
-                "maximum": 5000,
+                "description": "Number of recent logical log lines (environment-bounded).",
+                "default": _SERVICE_LOG_DEFAULT_LINES,
+                "minimum": 1,
+                "maximum": _SERVICE_LOG_MAX_LINES,
             },
             "level": {
                 "type": "string",
@@ -794,6 +839,17 @@ GET_SERVICE_LOGS_TOOL = {
                 "type": "integer",
                 "description": "Optional time filter in minutes ago (for example: 15 for the last 15 minutes)",
                 "minimum": 1,
+                "maximum": _SERVICE_LOG_MAX_LOOKBACK_MINUTES,
+            },
+            "line_cursor": {
+                "type": "string",
+                "description": "Unix-nanosecond line cursor from page.next_call.",
+            },
+            "char_cursor": {
+                "type": "integer",
+                "description": "Exact character cursor from page.next_call for an oversized line page.",
+                "default": 0,
+                "minimum": 0,
             },
         },
         "required": [],

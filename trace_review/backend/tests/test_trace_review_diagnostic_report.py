@@ -61,10 +61,12 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             "group_context",
             self._make_request(),
             source="auto",
+            section="active_groups",
         )
 
         self.assertEqual(response.status, "success")
-        self.assertEqual(response.data, group_context)
+        self.assertEqual(response.data["page"]["items"], ["WB"])
+        self.assertEqual(response.data["collections"][0]["section"], "active_groups")
 
     def test_diagnostic_report_summarizes_reasoning_validation_and_timeline(self):
         timeline = {
@@ -518,14 +520,15 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             tool_name=None,
             event_type=None,
             candidate_id=None,
+            section="evidence_records",
         )
 
         extractor_cls.assert_called_with(source="local")
         self.assertEqual(response.status, "success")
-        self.assertEqual(response.data["schema_version"], "evidence_revisions.v1")
+        self.assertEqual(response.data["summary"]["schema_version"], "evidence_revisions.v1")
         self.assertEqual(response.data["summary"]["revision_count"], 1)
         self.assertEqual(
-            response.data["evidence_records"][0]["revisions"][0]["before_quote_preview"],
+            response.data["page"]["items"][0]["revisions"][0]["before_quote_preview"],
             "Earlier broad quote.",
         )
         self.assertNotIn("evidence_revision_history", json.dumps(response.data))
@@ -600,10 +603,11 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             "evidence_revisions",
             request,
             source="auto",
+            section="evidence_records",
         )
 
         self.assertEqual(response.status, "success")
-        self.assertEqual(response.data["schema_version"], "evidence_revisions.v1")
+        self.assertEqual(response.data["summary"]["schema_version"], "evidence_revisions.v1")
         self.assertEqual(response.data["summary"]["revision_count"], 1)
         self.assertNotIn("evidence_revision_history", json.dumps(response.data))
 
@@ -718,11 +722,13 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             tool_name=None,
             event_type=None,
             candidate_id=None,
+            section="timeline",
         )
 
         self.assertEqual(response.status, "success")
-        self.assertEqual(response.data["feedback_artifact_event_count"], 2)
-        self.assertEqual(response.data["query"]["feedback_artifact_status"], "available")
-        self.assertEqual(response.data["sibling_trace_ids"], ["trace-sibling-456"])
-        self.assertEqual(response.data["timeline"][0]["tool_name"], "resolve_domain_field_term")
-        self.assertEqual(response.data["timeline"][1]["tool_name"], "validate_gene_expression_candidate")
+        self.assertEqual(response.data["summary"]["feedback_artifact_event_count"], 2)
+        self.assertEqual(response.data["filters"]["feedback_artifact_status"], "available")
+        sibling_inventory = next(item for item in response.data["collections"] if item["section"] == "sibling_trace_ids")
+        self.assertEqual(sibling_inventory["total_items"], 1)
+        self.assertEqual(response.data["page"]["items"][0]["tool_name"], "resolve_domain_field_term")
+        self.assertEqual(response.data["page"]["items"][1]["tool_name"], "validate_gene_expression_candidate")

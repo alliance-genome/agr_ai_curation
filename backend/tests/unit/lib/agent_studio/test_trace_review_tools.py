@@ -360,7 +360,7 @@ async def test_get_trace_reconstruction_clamps_pagination(monkeypatch):
     assert result["status"] == "success"
     assert capture["url"].endswith("/langfuse_reconstruction")
     assert "include_payloads" not in capture["params"]
-    assert capture["params"]["limit"] == 500
+    assert capture["params"]["limit"] == tools.get_agent_studio_trace_review_aggregate_page_size()
     assert capture["params"]["offset"] == 0
 
 
@@ -382,7 +382,7 @@ async def test_get_trace_payloads_and_payload_build_expected_requests(monkeypatc
     assert payloads["status"] == "success"
     assert capture["url"].endswith("/langfuse_payloads")
     assert capture["params"]["sort"] == "chronological"
-    assert capture["params"]["limit"] == tools.get_agent_studio_trace_review_page_size()
+    assert capture["params"]["limit"] == tools.get_agent_studio_trace_review_aggregate_page_size()
     assert capture["params"]["offset"] == 3
 
     capture = {}
@@ -444,11 +444,13 @@ async def test_get_service_logs_success_and_error_branches(monkeypatch):
     assert success["status"] == "success"
     assert success["data"] == {
         "container": "backend",
-        "lines_requested": 100,  # clamped minimum
+        "lines_requested": 50,
         "lines": 5,
         "logs": "line1\nline2",
     }
-    assert capture["params"]["lines"] == 100
+    assert capture["params"]["lines"] == 50
+    assert capture["params"]["char_cursor"] == 0
+    assert capture["params"]["max_chars"] == tools.get_agent_studio_service_log_page_max_chars()
     assert capture["params"]["level"] == "FATAL"
     assert capture["params"]["since"] == 15
 

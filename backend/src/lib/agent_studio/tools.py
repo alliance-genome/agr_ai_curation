@@ -35,6 +35,12 @@ from typing import Dict, Any, Optional
 from src.lib.loki_client import LOG_LEVEL_LABEL_PATTERNS
 from src.lib.openai_agents.config import (
     get_agent_studio_endpoint_timeout_seconds,
+    get_agent_studio_service_log_default_lines,
+    get_agent_studio_service_log_max_lines,
+    get_agent_studio_service_log_max_lookback_minutes,
+    get_agent_studio_service_log_page_max_chars,
+    get_agent_studio_service_log_timeout_seconds,
+    get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_tool_timeout_seconds,
@@ -251,7 +257,7 @@ async def get_trace_summary(trace_id: str) -> Dict[str, Any]:
     try:
         validate_trace_id(trace_id)
         url = f"{_get_claude_api_url()}/{trace_id}/summary"
-        timeout = httpx.Timeout(30.0)
+        timeout = httpx.Timeout(get_agent_studio_endpoint_timeout_seconds())
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
@@ -775,7 +781,13 @@ async def get_trace_conversation(
         }
 
 
-async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
+async def get_trace_view(
+    trace_id: str,
+    view_name: str,
+    section: Optional[str] = None,
+    offset: int = 0,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
     """
     Get a specific analysis view with token metadata.
 
@@ -812,12 +824,20 @@ async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
             }
 
         url = f"{_get_claude_api_url()}/{trace_id}/views/{view_name}"
-        timeout = httpx.Timeout(30.0)
+        timeout = httpx.Timeout(get_agent_studio_endpoint_timeout_seconds())
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
                 url,
-                params={"source": get_trace_source()},
+                params={
+                    "source": get_trace_source(),
+                    "section": section,
+                    "offset": max(0, offset),
+                    "limit": min(
+                        max(1, limit or get_agent_studio_trace_review_aggregate_page_size()),
+                        get_agent_studio_trace_review_aggregate_page_size(),
+                    ),
+                },
                 headers=_trace_review_request_headers(),
             )
 
@@ -928,6 +948,9 @@ async def get_extraction_diagnostic_report(
     tool_name: Optional[str] = None,
     event_type: Optional[str] = None,
     candidate_id: Optional[str] = None,
+    section: Optional[str] = None,
+    offset: int = 0,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Get concise extraction, builder, tool, and validation diagnostics for a trace."""
     try:
@@ -953,6 +976,9 @@ async def get_extraction_diagnostic_report(
             "tool_name": tool_name,
             "event_type": event_type,
             "candidate_id": candidate_id,
+            "section": section,
+            "offset": max(0, offset),
+            "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
         },
     )
 
@@ -968,6 +994,9 @@ async def get_extraction_timeline(
     tool_name: Optional[str] = None,
     event_type: Optional[str] = None,
     candidate_id: Optional[str] = None,
+    section: Optional[str] = None,
+    offset: int = 0,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Get ordered extraction events and OpenAI/Agents SDK tool-call observations."""
     try:
@@ -993,6 +1022,9 @@ async def get_extraction_timeline(
             "tool_name": tool_name,
             "event_type": event_type,
             "candidate_id": candidate_id,
+            "section": section,
+            "offset": max(0, offset),
+            "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
         },
     )
 
@@ -1006,6 +1038,9 @@ async def get_evidence_revisions(
     tool_name: Optional[str] = None,
     event_type: Optional[str] = None,
     candidate_id: Optional[str] = None,
+    section: Optional[str] = None,
+    offset: int = 0,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Get diagnostics-only evidence source updates and scope refusals."""
     try:
@@ -1029,11 +1064,19 @@ async def get_evidence_revisions(
             "tool_name": tool_name,
             "event_type": event_type,
             "candidate_id": candidate_id,
+            "section": section,
+            "offset": max(0, offset),
+            "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
         },
     )
 
 
-async def get_trace_tree(trace_id: str) -> Dict[str, Any]:
+async def get_trace_tree(
+    trace_id: str,
+    section: Optional[str] = None,
+    offset: int = 0,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
     """Get the Langfuse parent/child observation tree with payload references."""
     try:
         validate_trace_id(trace_id)
@@ -1045,13 +1088,21 @@ async def get_trace_tree(trace_id: str) -> Dict[str, Any]:
             "error": str(e),
             "help": "Check trace_id format",
         }
-    return await _get_claude_endpoint(f"/{trace_id}/langfuse_tree")
+    return await _get_claude_endpoint(
+        f"/{trace_id}/langfuse_tree",
+        params={
+            "section": section,
+            "offset": max(0, offset),
+            "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
+        },
+    )
 
 
 async def get_trace_reconstruction(
     trace_id: str,
-    limit: int = 100,
+    limit: Optional[int] = None,
     offset: int = 0,
+    section: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Get chronological Langfuse reconstruction events with payload references."""
     try:
@@ -1067,8 +1118,9 @@ async def get_trace_reconstruction(
     return await _get_claude_endpoint(
         f"/{trace_id}/langfuse_reconstruction",
         params={
-            "limit": max(1, min(limit, 500)),
+            "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size()),
             "offset": max(0, offset),
+            "section": section,
         },
         # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
         timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),
@@ -1080,6 +1132,7 @@ async def get_trace_payloads(
     sort: str = "largest",
     limit: Optional[int] = None,
     offset: int = 0,
+    section: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List Langfuse trace payload summaries with sizes, hashes, and previews."""
     try:
@@ -1105,17 +1158,23 @@ async def get_trace_payloads(
         params={
             "sort": sort,
             "limit": max(1, min(
-                limit or get_agent_studio_trace_review_page_size(),
-                get_agent_studio_trace_review_page_size(),
+                limit or get_agent_studio_trace_review_aggregate_page_size(),
+                get_agent_studio_trace_review_aggregate_page_size(),
             )),
             "offset": max(0, offset),
+            "section": section,
         },
         # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
         timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),
     )
 
 
-async def get_trace_model_live_context(trace_id: str) -> Dict[str, Any]:
+async def get_trace_model_live_context(
+    trace_id: str,
+    section: Optional[str] = None,
+    offset: int = 0,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
     """Get bounded provider-call input size classification for a trace."""
     try:
         validate_trace_id(trace_id)
@@ -1127,7 +1186,10 @@ async def get_trace_model_live_context(trace_id: str) -> Dict[str, Any]:
             "error": str(e),
             "help": "Check trace_id format",
         }
-    return await _get_claude_endpoint(f"/{trace_id}/model_live_context")
+    return await _get_claude_endpoint(
+        f"/{trace_id}/model_live_context",
+        params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size())},
+    )
 
 
 async def get_trace_payload(
@@ -1176,7 +1238,7 @@ async def get_trace_payload(
     )
 
 
-async def get_trace_costs(trace_id: str) -> Dict[str, Any]:
+async def get_trace_costs(trace_id: str, section: Optional[str] = None, offset: int = 0, limit: Optional[int] = None) -> Dict[str, Any]:
     """Get Langfuse token and cost accounting for the trace."""
     try:
         validate_trace_id(trace_id)
@@ -1188,10 +1250,10 @@ async def get_trace_costs(trace_id: str) -> Dict[str, Any]:
             "error": str(e),
             "help": "Check trace_id format",
         }
-    return await _get_claude_endpoint(f"/{trace_id}/langfuse_costs")
+    return await _get_claude_endpoint(f"/{trace_id}/langfuse_costs", params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size())})
 
 
-async def get_trace_duplicates(trace_id: str) -> Dict[str, Any]:
+async def get_trace_duplicates(trace_id: str, section: Optional[str] = None, offset: int = 0, limit: Optional[int] = None) -> Dict[str, Any]:
     """Get duplicate payload fingerprints across trace and observation payloads."""
     try:
         validate_trace_id(trace_id)
@@ -1203,7 +1265,7 @@ async def get_trace_duplicates(trace_id: str) -> Dict[str, Any]:
             "error": str(e),
             "help": "Check trace_id format",
         }
-    return await _get_claude_endpoint(f"/{trace_id}/langfuse_duplicates")
+    return await _get_claude_endpoint(f"/{trace_id}/langfuse_duplicates", params={"section": section, "offset": max(0, offset), "limit": min(max(1, limit or get_agent_studio_trace_review_aggregate_page_size()), get_agent_studio_trace_review_aggregate_page_size())})
 
 
 # ============================================================================
@@ -1212,9 +1274,11 @@ async def get_trace_duplicates(trace_id: str) -> Dict[str, Any]:
 
 async def get_service_logs(
     container: str = "backend",
-    lines: int = 2000,
+    lines: int = get_agent_studio_service_log_default_lines(),
     level: Optional[str] = None,
     since: Optional[int] = None,
+    line_cursor: Optional[str] = None,
+    char_cursor: int = 0,
 ) -> Dict[str, Any]:
     """
     Retrieve Loki-backed service logs for troubleshooting.
@@ -1227,9 +1291,11 @@ async def get_service_logs(
             Valid options mirror `/api/logs/{container}` (backend, frontend,
             weaviate, postgres, langfuse, redis, clickhouse, minio,
             trace_review_backend)
-        lines: Number of recent log lines (default: 2000, min: 100, max: 5000)
+        lines: Number of recent logical log lines (environment-bounded)
         level: Optional log level filter (DEBUG, INFO, WARN, ERROR, FATAL)
         since: Optional time filter in minutes ago
+        line_cursor: Exact Unix-nanosecond line cursor returned by the prior page
+        char_cursor: Exact character cursor within the selected line page
 
     Returns:
         {
@@ -1246,9 +1312,14 @@ async def get_service_logs(
     """
     try:
         allowed_levels = ", ".join(sorted(VALID_SERVICE_LOG_LEVELS))
-        # Clamp lines to safe range
-        lines = max(100, min(lines, 5000))
-        params: Dict[str, Any] = {"lines": lines}
+        lines = max(1, min(lines, get_agent_studio_service_log_max_lines()))
+        params: Dict[str, Any] = {
+            "lines": lines,
+            "max_chars": get_agent_studio_service_log_page_max_chars(),
+            "char_cursor": max(0, char_cursor),
+        }
+        if line_cursor:
+            params["line_cursor"] = line_cursor
 
         if level is not None:
             if not isinstance(level, str):
@@ -1290,10 +1361,11 @@ async def get_service_logs(
                     "error": "Time filter must be at least 1 minute",
                     "help": "Use a positive integer such as 15 for the last 15 minutes"
                 }
-            params["since"] = since
+            params["since"] = min(since, get_agent_studio_service_log_max_lookback_minutes())
 
         # Call internal logs API endpoint
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+        timeout_seconds = get_agent_studio_service_log_timeout_seconds()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
             response = await client.get(
                 f"http://localhost:8000/api/logs/{container}",
                 params=params
@@ -1306,8 +1378,7 @@ async def get_service_logs(
                     "data": {
                         "container": data["container"],
                         "lines_requested": lines,
-                        "lines": data["lines"],
-                        "logs": data["logs"]
+                        **data,
                     },
                     "error": None
                 }
@@ -1332,7 +1403,7 @@ async def get_service_logs(
         return {
             "status": "error",
             "data": None,
-            "error": "Timeout retrieving logs (15s exceeded)",
+            "error": f"Timeout retrieving logs ({get_agent_studio_service_log_timeout_seconds():g}s exceeded)",
             "help": "The logs API may be under load or the query window may be too large"
         }
     except httpx.ConnectError:

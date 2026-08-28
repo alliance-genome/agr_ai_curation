@@ -596,14 +596,14 @@ does not grant access.
 
 **Base URL**: `http://localhost:8001/api/claude/traces` (TraceReview service on port 8001)
 
-Token-aware endpoints designed for Claude/Opus workflow analysis. All responses include `token_info` metadata to help Claude manage its 200K context budget. These endpoints are used by the Workflow Analysis feature.
+Provider-boundary-aware endpoints designed for Claude/Opus workflow analysis. All responses include serialized-character metadata plus an advisory token estimate. These endpoints are used by the Workflow Analysis feature.
 
-### Token Budget Strategy
+### Provider Result Budget Strategy
 
-- **50K token budget** per response (leaves headroom in 200K window)
-- Token estimation: 4 characters ≈ 1 token
-- Every response includes `token_info.estimated_tokens` and `token_info.within_budget`
-- If `within_budget` is false, use pagination or filtering to reduce data size
+- Aggregate results fit `AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS` after serializing the complete provider-visible response.
+- Token estimation remains advisory at roughly 4 characters per token.
+- Every response includes `token_info.serialized_chars`, `max_serialized_chars`, `estimated_tokens`, and `within_budget`.
+- Aggregate calls return an authoritative summary and collection inventory first. Request one named section and follow `next_call` until `complete=true`.
 
 ### Response Schema
 
@@ -614,6 +614,8 @@ All endpoints return:
   "data": { ... },
   "token_info": {
     "estimated_tokens": 523,
+    "serialized_chars": 2092,
+    "max_serialized_chars": 12000,
     "within_budget": true,
     "warning": null
   }
@@ -907,20 +909,22 @@ Opus has access to these token-aware tools during analysis:
 |------|------------|-------------|
 | `search_traces` | varies | Find traces by session/document/run/extraction/name/time |
 | `get_trace_summary` | ~500 | Lightweight overview (ALWAYS called first) |
-| `get_extraction_diagnostic_report` | compact/varies | Extraction, builder, validator, domain-envelope diagnostics |
-| `get_extraction_timeline` | varies | Ordered extraction events and tool observations |
-| `get_evidence_revisions` | compact/varies | Evidence quote/provenance source updates and validator scope refusals |
-| `get_trace_reconstruction` | varies | Chronological Langfuse model/tool/event reconstruction |
-| `get_trace_payloads` | compact/varies | Payload inventory with IDs, sizes, hashes, previews |
+| `get_extraction_diagnostic_report` | bounded | Summary/inventory, then one paged report section |
+| `get_extraction_timeline` | bounded | Summary/inventory, then paged ordered events |
+| `get_evidence_revisions` | bounded | Summary/inventory, then paged evidence records or scope refusals |
+| `get_trace_tree` | bounded | Tree summary, then paged nodes with stable parent/child IDs |
+| `get_trace_reconstruction` | bounded | Summary, then paged chronological payload-reference events |
+| `get_trace_payloads` | bounded | Summary, then paged payload IDs, sizes, hashes, and previews |
 | `get_trace_payload` | chunked | Exact prompt/model/tool payload chunks |
-| `get_trace_costs` | varies | Token/cost accounting by agent/model/kind |
-| `get_trace_duplicates` | compact/varies | Duplicate payload fingerprints |
+| `get_trace_model_live_context` | bounded | Provider-input totals, then paged observed-call records |
+| `get_trace_costs` | bounded | Totals, then one paged agent/model/kind/observation collection |
+| `get_trace_duplicates` | bounded | Counts, then paged duplicate groups or payload references |
 | `get_tool_calls_summary` | ~100/call | One bounded page of summaries without exact results |
 | `get_tool_calls_page` | bounded/varies | Paginated metadata and exact-field references |
 | `get_tool_call_detail` | chunked | One exact input or result field chunk |
 | `get_trace_conversation` | chunked | One exact user-query or assistant-response field chunk |
-| `get_trace_view` | varies | Access other analysis views |
-| `get_service_logs` | varies | Retrieve Loki-backed service logs |
+| `get_trace_view` | bounded | Summary/inventory, then one paged specialized-view section |
+| `get_service_logs` | bounded | Log-page summary plus exact line and character continuation |
 | `submit_anthropic_suggestion` | N/A | Submit system prompt improvements |
 
 ### Context Overflow Handling

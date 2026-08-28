@@ -423,12 +423,13 @@ async def test_payload_inventory_page_and_exact_payload_chunks_stay_bounded_and_
             sort="chronological",
             limit=claude.TRACE_REVIEW_PAGE_SIZE,
             offset=0,
+            section="payloads",
         )
 
-        payloads = inventory.data["payloads"]
-        assert len(payloads) == claude.TRACE_REVIEW_PAGE_SIZE
+        payloads = inventory.data["page"]["items"]
+        assert len(payloads) == claude.TRACE_REVIEW_AGGREGATE_PAGE_SIZE
         assert all("value" not in payload and "serialized" not in payload for payload in payloads)
-        assert inventory.data["pagination"]["next_offset"] == claude.TRACE_REVIEW_PAGE_SIZE
+        assert inventory.data["page"]["next_offset"] == claude.TRACE_REVIEW_AGGREGATE_PAGE_SIZE
         assert len(json.dumps(inventory.model_dump())) < 12_000
 
         payload_id = f"trace:{TRACE_ID}:output"

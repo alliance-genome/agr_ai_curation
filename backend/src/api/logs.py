@@ -6,6 +6,7 @@ Used by Agent Studio's get_service_logs tool.
 """
 
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 from typing import Annotated, Any, NoReturn
 
@@ -14,6 +15,13 @@ from pydantic import BaseModel
 
 from src.lib import loki_client as loki
 from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.openai_agents.config import (
+    get_agent_studio_service_log_default_lines,
+    get_agent_studio_service_log_default_lookback_minutes,
+    get_agent_studio_service_log_max_lines,
+    get_agent_studio_service_log_max_lookback_minutes,
+    get_agent_studio_service_log_page_max_chars,
+)
 
 
 router = APIRouter()
@@ -26,6 +34,9 @@ class LogsResponse(BaseModel):
     container: str
     lines: int
     logs: str
+    summary: dict[str, Any]
+    filters: dict[str, Any]
+    page: dict[str, Any]
 
 
 class _LokiQueryError(RuntimeError):
@@ -57,8 +68,11 @@ ALLOWED_CONTAINERS = {
 # Loki uses the Compose service name as the `service` label for these logs.
 CONTAINER_TO_SERVICE_LABEL = {container: container for container in ALLOWED_CONTAINERS}
 ALLOWED_LOG_LEVELS = frozenset(loki.LOG_LEVEL_LABEL_PATTERNS)
-# Keep the default bounded so an omitted `since` does not trigger an epoch-wide Loki scan.
-DEFAULT_LOKI_LOOKBACK = timedelta(hours=24)
+DEFAULT_LOG_LINES = get_agent_studio_service_log_default_lines()
+MAX_LOG_LINES = get_agent_studio_service_log_max_lines()
+MAX_LOG_CHARS = get_agent_studio_service_log_page_max_chars()
+DEFAULT_LOKI_LOOKBACK_MINUTES = get_agent_studio_service_log_default_lookback_minutes()
+MAX_LOKI_LOOKBACK_MINUTES = get_agent_studio_service_log_max_lookback_minutes()
 
 
 def _normalize_log_level(level: str | None) -> str | None:
@@ -98,10 +112,37 @@ def _tail_rendered_logs(log_entries: list[str], *, line_limit: int) -> tuple[str
 
 
 def _extract_chronological_lines(payload: dict[str, Any]) -> list[str]:
-    """Flatten Loki results into chronological log lines for API consumers."""
+    """Flatten Loki results into timestamp-addressable chronological entries."""
     entries = loki.extract_timestamped_entries(payload)
     entries.sort(key=lambda item: (item[0], item[1]))
-    return [line for _, _, line in entries]
+    return [f"{timestamp}\0{line}" for timestamp, _, line in entries]
+
+
+def _decode_timestamped_lines(entries: list[str]) -> list[tuple[int, str]]:
+    decoded: list[tuple[int, str]] = []
+    for entry in entries:
+        timestamp, separator, line = entry.partition("\0")
+        if not separator:
+            raise ValueError("Loki timestamped entry is missing its internal separator")
+        decoded.append((int(timestamp), line))
+    return decoded
+
+
+def _json_bounded_log_prefix(value: str, max_json_chars: int) -> str:
+    """Return the longest prefix fitting the JSON-encoded content budget."""
+    def encoded_chars(candidate: str) -> int:
+        return max(0, len(json.dumps(candidate)) - 2)
+
+    if encoded_chars(value) <= max_json_chars:
+        return value
+    low, high = 0, len(value)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if encoded_chars(value[:midpoint]) <= max_json_chars:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return value[:max(1, low)]
 
 
 def _format_loki_error(result: loki.LokiQueryError) -> str:
@@ -133,7 +174,7 @@ async def _query_logs(
     *,
     service: str,
     start: datetime,
-    end: datetime,
+    end: loki.TimeInput,
     limit: int,
     level: str | None,
 ) -> loki.LokiQueryResult:
@@ -157,11 +198,11 @@ async def get_container_logs(
     lines: Annotated[
         int,
         Query(
-            ge=100,
-            le=5000,
+            ge=1,
+            le=MAX_LOG_LINES,
             description="Number of log lines to retrieve",
         ),
-    ] = 2000,
+    ] = DEFAULT_LOG_LINES,
     level: Annotated[
         str | None,
         Query(
@@ -172,18 +213,30 @@ async def get_container_logs(
         int | None,
         Query(
             ge=1,
+            le=MAX_LOKI_LOOKBACK_MINUTES,
             description="Optional time filter in minutes ago",
         ),
     ] = None,
+    line_cursor: Annotated[
+        str | None,
+        Query(description="Unix-nanosecond upper-bound cursor from page.next_call"),
+    ] = None,
+    char_cursor: Annotated[int, Query(ge=0, description="Exact character offset within this line page")] = 0,
+    max_chars: Annotated[
+        int,
+        Query(ge=1, le=MAX_LOG_CHARS, description="Maximum JSON-encoded log content characters"),
+    ] = MAX_LOG_CHARS,
 ) -> LogsResponse:
     """
     Get service logs from Loki.
 
     Args:
         container: Service/container name (must be in whitelist)
-        lines: Number of lines to retrieve (100-5000)
+        lines: Environment-bounded number of logical log lines to retrieve
         level: Optional log level filter
         since: Optional time filter in minutes ago
+        line_cursor: Exact Unix-nanosecond cursor returned by a prior page
+        char_cursor: Exact character cursor within the selected line page
 
     Returns:
         LogsResponse with container name, line count, and logs
@@ -201,11 +254,15 @@ async def get_container_logs(
 
     normalized_level = _normalize_log_level(level)
     service_label = CONTAINER_TO_SERVICE_LABEL[container]
-    query_end = datetime.now(timezone.utc)
+    query_now = datetime.now(timezone.utc)
+    query_end: loki.TimeInput = line_cursor or query_now
+    try:
+        query_end_ns = int(loki.normalize_time(query_end) or "0")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    lookback_minutes = since or DEFAULT_LOKI_LOOKBACK_MINUTES
     query_start = (
-        query_end - timedelta(minutes=since)
-        if since is not None
-        else query_end - DEFAULT_LOKI_LOOKBACK
+        query_now - timedelta(minutes=lookback_minutes)
     )
 
     try:
@@ -222,12 +279,59 @@ async def get_container_logs(
         if not isinstance(result, list):
             _raise_loki_query_error(container=container, result=result)
 
-        logs_text, returned_line_count = _tail_rendered_logs(result, line_limit=lines)
+        timestamped_lines = _decode_timestamped_lines(result)
+        selected = timestamped_lines[-lines:]
+        rendered = _join_log_lines([line for _, line in selected])
+        safe_char_cursor = min(char_cursor, len(rendered))
+        logs_text = _json_bounded_log_prefix(rendered[safe_char_cursor:], max_chars)
+        next_char_cursor = safe_char_cursor + len(logs_text)
+        character_complete = next_char_cursor >= len(rendered)
+        oldest_timestamp = selected[0][0] if selected else None
+        line_complete = len(timestamped_lines) < lines or not selected
+        complete = character_complete and line_complete
+        next_call = None
+        if not character_complete:
+            next_call = {
+                "container": container,
+                "lines": lines,
+                "level": normalized_level,
+                "since": lookback_minutes,
+                "line_cursor": str(query_end_ns),
+                "char_cursor": next_char_cursor,
+            }
+        elif not line_complete and oldest_timestamp is not None:
+            next_call = {
+                "container": container,
+                "lines": lines,
+                "level": normalized_level,
+                "since": lookback_minutes,
+                "line_cursor": str(max(0, oldest_timestamp - 1)),
+                "char_cursor": 0,
+            }
 
         return LogsResponse(
             container=container,
-            lines=returned_line_count,
+            lines=len(selected),
             logs=logs_text,
+            summary={
+                "matching_lines_in_page": len(selected),
+                "first_timestamp_ns": oldest_timestamp,
+                "last_timestamp_ns": selected[-1][0] if selected else None,
+                "returned_char_count": len(logs_text),
+            },
+            filters={
+                "container": container,
+                "level": normalized_level,
+                "since": lookback_minutes,
+            },
+            page={
+                "line_cursor": str(query_end_ns),
+                "char_cursor": safe_char_cursor,
+                "next_char_cursor": None if character_complete else next_char_cursor,
+                "complete": complete,
+                "truncated": not complete,
+                "next_call": next_call,
+            },
         )
 
     except HTTPException:

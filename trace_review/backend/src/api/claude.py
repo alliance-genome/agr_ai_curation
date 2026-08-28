@@ -33,6 +33,7 @@ from ..services.langfuse_run_reconstruction import (
 )
 from ..config import (
     get_agent_studio_provider_tool_result_inline_max_chars,
+    get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
@@ -74,6 +75,7 @@ router = APIRouter()
 LOGGER = logging.getLogger(__name__)
 TRANSIENT_CACHE_TTL_SECONDS = 15
 TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
+TRACE_REVIEW_AGGREGATE_PAGE_SIZE = get_agent_studio_trace_review_aggregate_page_size()
 TRACE_REVIEW_SUMMARY_MAX_CHARS = get_agent_studio_trace_review_summary_max_chars()
 TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
 TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS = (
@@ -239,6 +241,190 @@ def _exact_text_chunk(
 def _bounded_summary(value: Any) -> str:
     text = str(value or "")
     return _json_bounded_prefix(text, TRACE_REVIEW_SUMMARY_MAX_CHARS)
+
+
+def _aggregate_items(value: Any) -> List[Any]:
+    """Project a sequence or mapping into lossless, deterministically ordered items."""
+    if isinstance(value, Mapping):
+        return [
+            {"key": str(key), "value": value[key]}
+            for key in sorted(value, key=str)
+        ]
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _aggregate_token_info(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Measure the complete provider-visible aggregate result to a fixed point."""
+    token_info = create_token_info_dict(data)
+    for _ in range(3):
+        provider_result = {
+            "status": "success",
+            "data": data,
+            "token_info": token_info,
+            "error": None,
+        }
+        serialized_chars = len(json.dumps(provider_result, default=str))
+        within_budget = serialized_chars <= TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        token_info = {
+            **token_info,
+            "serialized_chars": serialized_chars,
+            "max_serialized_chars": TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS,
+            "within_budget": within_budget,
+            "warning": (
+                None
+                if within_budget
+                else (
+                    "Response exceeds the Agent Studio serialized-character boundary "
+                    f"({serialized_chars:,} chars > "
+                    f"{TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS:,})."
+                )
+            ),
+        }
+    return token_info
+
+
+def _aggregate_provider_result(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Build the complete provider-visible wrapper emitted by Agent Studio."""
+    return {
+        "status": "success",
+        "data": data,
+        "token_info": _aggregate_token_info(data),
+        "error": None,
+    }
+
+
+def _aggregate_response_data(
+    *,
+    source: str,
+    trace_id: str,
+    view: str,
+    summary: Mapping[str, Any],
+    collections: Mapping[str, Any],
+    filters: Mapping[str, Any],
+    section: Optional[str],
+    offset: int,
+    limit: int,
+    next_call_base: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Return a summary-first aggregate page that fits the provider envelope."""
+    inventory_limit = min(max(1, limit), TRACE_REVIEW_AGGREGATE_PAGE_SIZE)
+    inventory = []
+    for name, value in collections.items():
+        total_items = len(_aggregate_items(value))
+        complete = total_items == 0
+        inventory.append({
+            "section": name,
+            "total_items": total_items,
+            "complete": complete,
+            "truncated": not complete,
+            "next_call": (
+                None
+                if complete
+                else {
+                    **next_call_base,
+                    "section": name,
+                    "offset": 0,
+                    "limit": inventory_limit,
+                }
+            ),
+        })
+    base: Dict[str, Any] = {
+        "source": source,
+        "trace_id": trace_id,
+        "view": view,
+        "summary": dict(summary),
+        "filters": {key: value for key, value in filters.items() if value is not None},
+        "collections": inventory,
+    }
+    if section is None:
+        base["page"] = None
+        if len(json.dumps(_aggregate_provider_result(base), default=str)) > (
+            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Aggregate summary exceeds the provider inline tool-result limit",
+            )
+        return base
+    if section not in collections:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid section '{section}'. Valid sections: "
+                f"{', '.join(collections)}"
+            ),
+        )
+
+    items = _aggregate_items(collections[section])
+    safe_offset = max(0, offset)
+    safe_limit = inventory_limit
+    selected: List[Any] = []
+
+    def build_page(page_items: List[Any]) -> Dict[str, Any]:
+        next_offset = safe_offset + len(page_items)
+        complete = next_offset >= len(items)
+        return {
+            **base,
+            "page": {
+                "section": section,
+                "offset": safe_offset,
+                "limit": safe_limit,
+                "total_items": len(items),
+                "returned_items": len(page_items),
+                "complete": complete,
+                "truncated": not complete,
+                "next_offset": None if complete else next_offset,
+                "next_call": (
+                    None
+                    if complete
+                    else {
+                        **next_call_base,
+                        "section": section,
+                        "offset": next_offset,
+                        "limit": safe_limit,
+                    }
+                ),
+                "items": page_items,
+            },
+        }
+
+    for item in items[safe_offset:safe_offset + safe_limit]:
+        candidate = build_page([*selected, item])
+        if len(json.dumps(_aggregate_provider_result(candidate), default=str)) > (
+            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        ):
+            break
+        selected.append(item)
+
+    page_data = build_page(selected)
+    if safe_offset < len(items) and not selected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"One lossless item in aggregate section '{section}' exceeds the "
+                "provider inline tool-result limit; apply a narrower trace filter"
+            ),
+        )
+    return page_data
+
+
+def _flatten_trace_tree(root: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Flatten a tree losslessly except for replacing children with stable IDs."""
+    flattened: List[Dict[str, Any]] = []
+
+    def visit(node: Mapping[str, Any]) -> None:
+        children = [child for child in node.get("children", []) if isinstance(child, Mapping)]
+        flattened.append({
+            **{key: value for key, value in node.items() if key != "children"},
+            "child_ids": [child.get("id") for child in children],
+        })
+        for child in children:
+            visit(child)
+
+    visit(root)
+    return flattened
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -754,15 +940,31 @@ async def search_traces(
 async def get_langfuse_tree(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
+    offset: Annotated[int, Query(ge=0, description="Section item offset")] = 0,
+    limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
-    response_data = {
-        "source": source,
-        "trace_id": trace_id,
-        "tree": build_trace_tree(trace_data),
-    }
-    token_info = create_token_info_dict(response_data)
+    tree = build_trace_tree(trace_data)
+    nodes = _flatten_trace_tree(tree)
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="langfuse_tree",
+        summary={
+            "root_id": tree.get("id"),
+            "node_count": len(nodes),
+            "root_child_count": len(tree.get("children", [])),
+        },
+        collections={"nodes": nodes},
+        filters={},
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={"trace_id": trace_id},
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
         data=response_data,
@@ -782,8 +984,9 @@ async def get_langfuse_tree(
 async def get_langfuse_reconstruction(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
-    limit: int = Query(default=100, ge=1, le=500, description="Maximum events to return"),
-    offset: int = Query(default=0, ge=0, description="Event offset"),
+    limit: int = Query(default=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, description="Maximum events to return"),
+    offset: Annotated[int, Query(ge=0, description="Event offset")] = 0,
+    section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
@@ -792,20 +995,22 @@ async def get_langfuse_reconstruction(
         include_payload_values=False,
     )
     events = reconstruction.get("events", [])
-    page = events[offset:offset + limit]
-    response_data = {
-        "source": source,
-        "trace_id": trace_id,
-        "trace": reconstruction.get("trace"),
-        "event_count": reconstruction.get("event_count", len(events)),
-        "events": page,
-        "pagination": _offset_pagination(
-            limit=limit,
-            offset=offset,
-            total_items=len(events),
-        ),
-    }
-    token_info = create_token_info_dict(response_data)
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="langfuse_reconstruction",
+        summary={
+            "trace": reconstruction.get("trace"),
+            "event_count": reconstruction.get("event_count", len(events)),
+        },
+        collections={"events": events},
+        filters={},
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={"trace_id": trace_id},
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
         data=response_data,
@@ -829,9 +1034,10 @@ async def get_langfuse_payloads(
     sort: str = Query(default="largest", description="Sort order: largest or chronological"),
     limit: Annotated[
         int,
-        Query(ge=1, le=TRACE_REVIEW_PAGE_SIZE, description="Maximum payload summaries"),
-    ] = TRACE_REVIEW_PAGE_SIZE,
-    offset: int = Query(default=0, ge=0, description="Pagination offset"),
+        Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, description="Maximum payload summaries"),
+    ] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    offset: Annotated[int, Query(ge=0, description="Pagination offset")] = 0,
+    section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     if sort not in {"largest", "chronological"}:
@@ -842,15 +1048,24 @@ async def get_langfuse_payloads(
         preview = _bounded_summary(payload.get("preview"))
         payload["preview"] = preview
         payload["truncated_preview"] = payload.get("char_count", 0) > len(preview)
-    page, pagination = paginate_payloads(payloads, limit=limit, offset=offset, sort=sort)
-    response_data = {
-        "source": source,
-        "trace_id": trace_id,
-        "sort": sort,
-        "pagination": pagination,
-        "payloads": page,
-    }
-    token_info = create_token_info_dict(response_data)
+    page, _pagination = paginate_payloads(payloads, limit=len(payloads) or 1, offset=0, sort=sort)
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="langfuse_payloads",
+        summary={
+            "payload_count": len(page),
+            "total_json_chars": sum(int(item.get("json_chars") or item.get("char_count") or 0) for item in page),
+            "total_bytes": sum(int(item.get("byte_count") or 0) for item in page),
+        },
+        collections={"payloads": page},
+        filters={"sort": sort},
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={"trace_id": trace_id, "sort": sort},
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
         data=response_data,
@@ -966,22 +1181,35 @@ async def get_langfuse_payload(
 async def get_model_live_context(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
+    offset: Annotated[int, Query(ge=0, description="Section item offset")] = 0,
+    limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
     model_live_context = _build_model_live_context(trace_data)
-    response_data = {
-        "source": source,
-        "trace_id": trace_id,
-        "model_live_context": model_live_context,
-        "observability_payloads": {
+    calls = model_live_context.pop("calls", [])
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="model_live_context",
+        summary={
+            **model_live_context,
+            "observability_payloads": {
             "payload_inventory_available": True,
             "exact_payload_requires_explicit_lookup": True,
             "inventory_endpoint": "langfuse_payloads",
             "exact_payload_endpoint": "langfuse_payload",
         },
-    }
-    token_info = create_token_info_dict(response_data)
+        },
+        collections={"calls": calls},
+        filters={},
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={"trace_id": trace_id},
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
         data=response_data,
@@ -998,15 +1226,26 @@ async def get_model_live_context(
 async def get_langfuse_costs(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    section: Annotated[Optional[str], Query(description="Cost collection to page")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
-    response_data = {
-        "source": source,
-        "trace_id": trace_id,
-        "costs": build_cost_summary(trace_data),
-    }
-    token_info = create_token_info_dict(response_data)
+    costs = build_cost_summary(trace_data)
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="langfuse_costs",
+        summary={"totals": costs["totals"]},
+        collections={key: costs[key] for key in ("by_agent", "by_model", "by_kind", "observations")},
+        filters={},
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={"trace_id": trace_id},
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
         data=response_data,
@@ -1023,15 +1262,44 @@ async def get_langfuse_costs(
 async def get_langfuse_duplicates(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    section: Annotated[Optional[str], Query(description="Duplicate collection to page")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
-    response_data = {
-        "source": source,
-        "trace_id": trace_id,
-        "duplicates": build_duplicate_report(trace_data),
-    }
-    token_info = create_token_info_dict(response_data)
+    duplicates = build_duplicate_report(trace_data)
+    duplicate_groups = []
+    duplicate_payloads = []
+    for group in duplicates["duplicates"]:
+        payload_refs = group.get("payloads", [])
+        duplicate_groups.append({
+            **{key: value for key, value in group.items() if key != "payloads"},
+            "payload_count": len(payload_refs),
+        })
+        duplicate_payloads.extend(
+            {"sha256": group["sha256"], "payload": payload}
+            for payload in payload_refs
+        )
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="langfuse_duplicates",
+        summary={
+            "duplicate_group_count": duplicates["duplicate_group_count"],
+            "duplicated_payload_count": duplicates["duplicated_payload_count"],
+        },
+        collections={
+            "duplicate_groups": duplicate_groups,
+            "duplicate_payloads": duplicate_payloads,
+        },
+        filters={},
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={"trace_id": trace_id},
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
         data=response_data,
@@ -1516,6 +1784,9 @@ async def get_extraction_timeline(
     tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
     event_type: Optional[str] = Query(default=None, description="Filter by event type"),
     candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
+    section: Annotated[Optional[str], Query(description="Timeline collection to page")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     context = await load_extraction_timeline_context(
@@ -1548,10 +1819,45 @@ async def get_extraction_timeline(
         session_id=session_id,
         feedback_id=feedback_id,
     )
-    token_info = create_token_info_dict(timeline)
+    reasoning = timeline.get("reasoning_summary", {})
+    summary = {
+        key: value
+        for key, value in timeline.items()
+        if key not in {"timeline", "sibling_trace_ids", "reasoning_summary", "query"}
+    }
+    summary["reasoning_summary_status"] = reasoning.get("status")
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="extraction_timeline",
+        summary=summary,
+        collections={
+            "timeline": timeline.get("timeline", []),
+            "sibling_trace_ids": timeline.get("sibling_trace_ids", []),
+            "reasoning_request_settings": reasoning.get("request_settings", []),
+            "reasoning_summaries": reasoning.get("summaries", []),
+        },
+        filters=timeline.get("query", {}),
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "feedback_id": feedback_id,
+            "include_sibling_traces": include_sibling_traces,
+            "refresh": refresh,
+            "include_raw_args": include_raw_args,
+            "include_raw_outputs": include_raw_outputs,
+            "tool_name": tool_name,
+            "event_type": event_type,
+            "candidate_id": candidate_id,
+        },
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
-        data=timeline,
+        data=response_data,
         token_info=TokenInfo(**token_info),
     )
 
@@ -1578,6 +1884,9 @@ async def get_extraction_diagnostic_report(
     tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
     event_type: Optional[str] = Query(default=None, description="Filter by event type"),
     candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
+    section: Annotated[Optional[str], Query(description="Report collection to page")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     context = await load_extraction_timeline_context(
@@ -1611,10 +1920,44 @@ async def get_extraction_diagnostic_report(
         feedback_id=feedback_id,
     )
     report = ExtractionTimelineAnalyzer.diagnostic_report(timeline)
-    token_info = create_token_info_dict(report)
+    reasoning = report.get("reasoning_summary", {})
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="diagnostic_report",
+        summary={
+            **report.get("summary", {}),
+            "schema_version": report.get("schema_version"),
+            "size_summary": report.get("size_summary", {}),
+            "reasoning_summary_status": reasoning.get("status"),
+        },
+        collections={
+            "validation_failures": report.get("validation_failures", []),
+            "timeline": report.get("timeline", []),
+            "reasoning_request_settings": reasoning.get("request_settings", []),
+            "reasoning_summaries": reasoning.get("summaries", []),
+        },
+        filters=timeline.get("query", {}),
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "feedback_id": feedback_id,
+            "include_sibling_traces": include_sibling_traces,
+            "refresh": refresh,
+            "include_raw_args": include_raw_args,
+            "include_raw_outputs": include_raw_outputs,
+            "tool_name": tool_name,
+            "event_type": event_type,
+            "candidate_id": candidate_id,
+        },
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
-        data=report,
+        data=response_data,
         token_info=TokenInfo(**token_info),
     )
 
@@ -1640,6 +1983,9 @@ async def get_evidence_revisions(
     tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
     event_type: Optional[str] = Query(default=None, description="Filter by event type"),
     candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
+    section: Annotated[Optional[str], Query(description="Evidence collection to page")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     context = await load_extraction_timeline_context(
@@ -1670,10 +2016,37 @@ async def get_evidence_revisions(
         session_id=session_id,
         feedback_id=feedback_id,
     )
-    token_info = create_token_info_dict(evidence_revisions)
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view="evidence_revisions",
+        summary={
+            **evidence_revisions.get("summary", {}),
+            "schema_version": evidence_revisions.get("schema_version"),
+        },
+        collections={
+            "evidence_records": evidence_revisions.get("evidence_records", []),
+            "scope_refusals": evidence_revisions.get("scope_refusals", []),
+        },
+        filters=evidence_revisions.get("query", {}),
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "feedback_id": feedback_id,
+            "include_sibling_traces": include_sibling_traces,
+            "refresh": refresh,
+            "tool_name": tool_name,
+            "event_type": event_type,
+            "candidate_id": candidate_id,
+        },
+    )
+    token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
         status="success",
-        data=evidence_revisions,
+        data=response_data,
         token_info=TokenInfo(**token_info),
     )
 
@@ -1701,6 +2074,9 @@ async def get_trace_view(
     view_name: Annotated[str, Path(description="View name")],
     request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    section: Annotated[Optional[str], Query(description="View section to page")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE)] = TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     """Get specific trace view with token metadata."""
@@ -1737,10 +2113,28 @@ async def get_trace_view(
             event_type=None,
             candidate_id=None,
         )
-        token_info = create_token_info_dict(view_data)
+        response_data = _aggregate_response_data(
+            source=source,
+            trace_id=trace_id,
+            view=view_name,
+            summary={
+                **view_data.get("summary", {}),
+                "schema_version": view_data.get("schema_version"),
+            },
+            collections={
+                "evidence_records": view_data.get("evidence_records", []),
+                "scope_refusals": view_data.get("scope_refusals", []),
+            },
+            filters=view_data.get("query", {}),
+            section=section,
+            offset=offset,
+            limit=limit,
+            next_call_base={"trace_id": trace_id, "view_name": view_name},
+        )
+        token_info = _aggregate_token_info(response_data)
         return ClaudeTraceResponse(
             status="success",
-            data=view_data,
+            data=response_data,
             token_info=TokenInfo(**token_info),
         )
 
@@ -1755,10 +2149,26 @@ async def get_trace_view(
             detail=f"View '{view_name}' not found for trace {trace_id}"
         )
 
-    token_info = create_token_info_dict(view_data)
+    view_mapping = view_data if isinstance(view_data, Mapping) else {"value": view_data}
+    response_data = _aggregate_response_data(
+        source=source,
+        trace_id=trace_id,
+        view=view_name,
+        summary={
+            "section_count": len(view_mapping),
+            "serialized_json_chars": len(json.dumps(view_data, default=str)),
+        },
+        collections=view_mapping,
+        filters={},
+        section=section,
+        offset=offset,
+        limit=limit,
+        next_call_base={"trace_id": trace_id, "view_name": view_name},
+    )
+    token_info = _aggregate_token_info(response_data)
 
     return ClaudeTraceResponse(
         status="success",
-        data=view_data,
+        data=response_data,
         token_info=TokenInfo(**token_info)
     )

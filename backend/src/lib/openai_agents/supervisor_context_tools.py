@@ -35,6 +35,7 @@ from src.lib.openai_agents.bounded_list import (
     recent_page,
 )
 from src.lib.openai_agents.config import (
+    get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_page_size,
     get_supervisor_field_text_limit,
     get_supervisor_inspect_chat_traces_default_limit,
@@ -665,9 +666,15 @@ async def inspect_chat_traces(
         result = await get_trace_model_live_context(authorized_trace_id)
     elif normalized_detail == "payload_inventory":
         offset = parse_offset_cursor(cursor)
+        configured_page_size = get_agent_studio_trace_review_aggregate_page_size()
         result = await get_trace_payloads(
             authorized_trace_id,
-            limit=normalize_page_limit(limit, default=10, maximum=20),
+            section="payloads",
+            limit=normalize_page_limit(
+                limit,
+                default=configured_page_size,
+                maximum=configured_page_size,
+            ),
             offset=offset,
         )
     else:
