@@ -1643,10 +1643,11 @@ def get_agent_studio_trace_review_summary_max_chars() -> int:
 
 
 def get_agent_studio_trace_review_chunk_max_chars() -> int:
-    """Max exact characters in one TraceReview detail/payload chunk.
+    """Max JSON-encoded exact content characters in one TraceReview chunk.
 
-    The default leaves JSON-envelope headroom beneath the provider's 12,000
-    character inline-result boundary. Default 8000.
+    Source text is shortened when JSON escaping expands it. The default leaves
+    envelope headroom beneath the provider's 12,000-character inline-result
+    boundary. Default 8000.
     """
     return max(
         1,

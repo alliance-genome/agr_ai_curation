@@ -49,6 +49,47 @@ def _large_analysis(call_count: int = 7) -> dict:
     }
 
 
+def _analyzer_shaped_analysis() -> dict:
+    large_arguments = "😀\\\"argument-" * 2000
+    legacy_result = "legacy-result-\\\"" * 2000
+    calls = [
+        {
+            "id": f"generation-{index}",
+            "call_id": "N/A",
+            "name": "search_document",
+            "input": {"query": large_arguments, "ordinal": index},
+            "output": {
+                "type": "function_call",
+                "name": "search_document",
+                "arguments": json.dumps({"query": large_arguments}),
+                "status": "completed",
+            },
+            "tool_result": {"summary": f"result {index}", "raw": f"rows-{index}" * 3000},
+        }
+        for index in range(2)
+    ]
+    calls.append(
+        {
+            "id": "legacy-tool-observation",
+            "name": "legacy_tool",
+            "input": {"query": "legacy"},
+            "output": legacy_result,
+            "tool_result": None,
+        }
+    )
+    return {
+        "analysis": {
+            "tool_calls": {
+                "total_count": len(calls),
+                "unique_tools": ["search_document", "legacy_tool"],
+                "duplicates": {"has_duplicates": False},
+                "tool_calls": calls,
+            },
+            "conversation": {},
+        }
+    }
+
+
 @pytest.mark.asyncio
 async def test_tool_call_summary_and_page_are_bounded_exact_reference_contracts():
     analyzed = _large_analysis()
@@ -104,9 +145,59 @@ async def test_tool_call_summary_and_page_are_bounded_exact_reference_contracts(
     }
 
 
+@pytest.mark.asyncio
+async def test_analyzer_formats_have_unique_selectors_and_no_inline_exact_output():
+    analyzed = _analyzer_shaped_analysis()
+    with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+        page = await claude.get_tool_calls_paginated(
+            TRACE_ID,
+            Mock(),
+            page=1,
+            page_size=3,
+            tool_name=None,
+            source="local",
+        )
+        second_call = await claude.get_tool_call_detail(
+            TRACE_ID,
+            "generation-1",
+            Mock(),
+            field="input",
+            start=0,
+            max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+            source="local",
+        )
+    legacy_reconstructed, legacy_chunks = await _reconstruct_tool_field(
+        analyzed,
+        "tool_result",
+        call_id="legacy-tool-observation",
+    )
+
+    assert [call["call_id"] for call in page.tool_calls] == [
+        "generation-0",
+        "generation-1",
+        "legacy-tool-observation",
+    ]
+    assert all("output" not in call for call in page.tool_calls)
+    assert all("input" not in call and "tool_result" not in call for call in page.tool_calls)
+    legacy_fields = {item["field"]: item for item in page.tool_calls[2]["exact_fields"]}
+    expected_legacy = analyzed["analysis"]["tool_calls"]["tool_calls"][2]["output"]
+    assert legacy_fields["tool_result"]["sha256"] == hashlib.sha256(
+        expected_legacy.encode("utf-8")
+    ).hexdigest()
+    assert "output" not in second_call.tool_call
+    assert second_call.chunk["field_id"] == "tool_call:generation-1:input"
+    assert legacy_reconstructed == expected_legacy
+    assert {chunk["sha256"] for chunk in legacy_chunks} == {
+        hashlib.sha256(expected_legacy.encode("utf-8")).hexdigest()
+    }
+    assert len(json.dumps(page.model_dump())) < claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+    assert len(json.dumps(second_call.model_dump())) < claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+
+
 async def _reconstruct_tool_field(
     analyzed: dict,
     field: Literal["input", "tool_result"],
+    call_id: str = "call-0",
 ) -> tuple[str, list[dict]]:
     chunks = []
     start = 0
@@ -114,7 +205,7 @@ async def _reconstruct_tool_field(
         while True:
             response = await claude.get_tool_call_detail(
                 TRACE_ID,
-                "call-0",
+                call_id,
                 Mock(),
                 field=field,
                 start=start,
@@ -126,7 +217,7 @@ async def _reconstruct_tool_field(
                 break
             assert response.chunk["next_call"] == {
                 "trace_id": TRACE_ID,
-                "call_id": "call-0",
+                "call_id": call_id,
                 "field": field,
                 "start": response.chunk["end"],
                 "max_chars": 2048,
@@ -205,6 +296,29 @@ def test_default_exact_chunk_leaves_json_envelope_headroom():
 
     assert chunk["returned_char_count"] == claude.TRACE_REVIEW_CHUNK_MAX_CHARS
     assert len(json.dumps({"status": "success", "data": {"chunk": chunk}})) < 12_000
+
+
+@pytest.mark.parametrize("value", ["😀" * 10_000, "\\\"quoted\\\\value" * 2000])
+def test_default_exact_chunk_accounts_for_provider_json_escaping(value: str):
+    chunk = claude._exact_text_chunk(
+        field_id="conversation:assistant_response",
+        field="assistant_response",
+        value=value,
+        start=0,
+        max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+        next_call={"trace_id": TRACE_ID, "field": "assistant_response"},
+    )
+    response = {
+        "status": "success",
+        "data": {"field": "assistant_response", "chunk": chunk, "domain_envelope": None},
+        "token_info": {"estimated_tokens": 2500, "within_budget": True, "warning": None},
+        "error": None,
+    }
+
+    assert chunk["end"] < claude.TRACE_REVIEW_CHUNK_MAX_CHARS
+    assert chunk["returned_char_count"] == len(chunk["serialized"])
+    assert len(json.dumps(response, default=str)) < claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+    assert chunk["next_call"]["start"] == chunk["end"]
 
 
 def _large_payload_trace() -> dict:

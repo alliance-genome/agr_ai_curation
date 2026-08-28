@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 import src.api.agent_studio as api_module
 import src.lib.agent_studio.flow_tools as flow_tools
 from src.lib.chat_history_repository import (
@@ -447,6 +449,59 @@ def test_default_exact_trace_chunk_stays_inline_with_metadata_headroom(monkeypat
         tool_result=tool_result,
         session_id="agent-studio-session-1",
         turn_id="opus-turn-4-abc123",
+    )
+
+    assert len(content) < 12000
+    assert json.loads(content) == tool_result
+
+
+@pytest.mark.parametrize(
+    "serialized",
+    [
+        "😀" * 666,
+        "\\\"quoted\\\\value" * 400,
+    ],
+)
+def test_json_escape_aware_exact_trace_chunks_stay_inline(monkeypatch, serialized):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    tool_result = {
+        "status": "success",
+        "data": {
+            "field": "assistant_response",
+            "chunk": {
+                "field_id": "conversation:assistant_response",
+                "field": "assistant_response",
+                "sha256": "a" * 64,
+                "total_char_count": 20000,
+                "byte_count": 80000,
+                "start": 0,
+                "end": len(serialized),
+                "returned_char_count": len(serialized),
+                "complete": False,
+                "next_start": len(serialized),
+                "next_call": {
+                    "trace_id": "856df16f1752cb53ee43dcb2f5ecfd16",
+                    "field": "assistant_response",
+                    "start": len(serialized),
+                    "max_chars": 8000,
+                },
+                "serialized": serialized,
+            },
+            "domain_envelope": None,
+        },
+        "token_info": {"estimated_tokens": 2500, "within_budget": True, "warning": None},
+        "error": None,
+    }
+
+    content = api_module._provider_tool_result_content(
+        tool_name="get_trace_conversation",
+        tool_input={
+            "trace_id": "856df16f1752cb53ee43dcb2f5ecfd16",
+            "field": "assistant_response",
+        },
+        tool_result=tool_result,
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-escape-aware",
     )
 
     assert len(content) < 12000

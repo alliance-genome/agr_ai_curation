@@ -32,6 +32,7 @@ from ..services.langfuse_run_reconstruction import (
     serialize_payload,
 )
 from ..config import (
+    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
@@ -75,6 +76,9 @@ TRANSIENT_CACHE_TTL_SECONDS = 15
 TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 TRACE_REVIEW_SUMMARY_MAX_CHARS = get_agent_studio_trace_review_summary_max_chars()
 TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
+TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS = (
+    get_agent_studio_provider_tool_result_inline_max_chars()
+)
 
 
 # Default source for trace extraction (EC2 Langfuse)
@@ -114,7 +118,44 @@ def _payload_json_chars(value: Any) -> int:
 
 def _tool_call_selector(tool_call: Mapping[str, Any], index: int) -> str:
     """Return the stable selector accepted by the exact-detail endpoint."""
-    return str(tool_call.get("call_id") or tool_call.get("id") or f"index:{index}")
+    for key in ("call_id", "id"):
+        value = str(tool_call.get(key) or "").strip()
+        if value and value.upper() != "N/A":
+            return value
+    return f"index:{index}"
+
+
+def _tool_call_exact_value(tool_call: Mapping[str, Any], field: str) -> Any:
+    """Project analyzer formats onto canonical exact input/result fields."""
+    if field == "input":
+        return tool_call.get("input")
+    tool_result = tool_call.get("tool_result")
+    if tool_result is not None or "call_id" in tool_call:
+        return tool_result
+    return tool_call.get("output")
+
+
+def _json_bounded_prefix(value: str, max_json_chars: int) -> str:
+    """Bound a string by its provider-compatible JSON-encoded content size."""
+    if not value:
+        return ""
+
+    def encoded_content_chars(candidate: str) -> int:
+        # The provider serializer uses json.dumps defaults, including ensure_ascii.
+        return max(0, len(json.dumps(candidate, default=str)) - 2)
+
+    if encoded_content_chars(value) <= max_json_chars:
+        return value
+
+    low, high = 0, len(value)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if encoded_content_chars(value[:midpoint]) <= max_json_chars:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    # Always advance a valid cursor even under an unrealistically tiny setting.
+    return value[: max(1, low)]
 
 
 def _exact_text_metadata(*, field_id: str, field: str, value: Any) -> Dict[str, Any]:
@@ -141,7 +182,13 @@ def _exact_text_chunk(
     serialized = serialize_payload(value)
     safe_start = min(max(0, start), len(serialized))
     safe_max_chars = min(max(1, max_chars), TRACE_REVIEW_CHUNK_MAX_CHARS)
-    end = min(safe_start + safe_max_chars, len(serialized))
+    source_candidate = serialized[safe_start:safe_start + safe_max_chars]
+    encoded_content_budget = min(
+        TRACE_REVIEW_CHUNK_MAX_CHARS,
+        TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS,
+    )
+    chunk_text = _json_bounded_prefix(source_candidate, encoded_content_budget)
+    end = safe_start + len(chunk_text)
     complete = end >= len(serialized)
     metadata = _exact_text_metadata(field_id=field_id, field=field, value=value)
     return {
@@ -156,13 +203,13 @@ def _exact_text_chunk(
             if complete
             else {**next_call, "start": end, "max_chars": safe_max_chars}
         ),
-        "serialized": serialized[safe_start:end],
+        "serialized": chunk_text,
     }
 
 
 def _bounded_summary(value: Any) -> str:
     text = str(value or "")
-    return text[:TRACE_REVIEW_SUMMARY_MAX_CHARS]
+    return _json_bounded_prefix(text, TRACE_REVIEW_SUMMARY_MAX_CHARS)
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -269,6 +316,10 @@ def _generation_call_from_observation(
 
 def _build_model_live_context(trace_data: Mapping[str, Any]) -> Dict[str, Any]:
     payloads = build_payload_inventory(trace_data, include_values=False)
+    for payload in payloads:
+        preview = _bounded_summary(payload.get("preview"))
+        payload["preview"] = preview
+        payload["truncated_preview"] = payload.get("char_count", 0) > len(preview)
     payloads_by_id = {
         str(payload.get("payload_id")): payload
         for payload in payloads
@@ -758,6 +809,10 @@ async def get_langfuse_payloads(
         raise HTTPException(status_code=400, detail="sort must be 'largest' or 'chronological'")
     trace_data = _extract_langfuse_trace(trace_id, source)
     payloads = build_payload_inventory(trace_data, include_values=False)
+    for payload in payloads:
+        preview = _bounded_summary(payload.get("preview"))
+        payload["preview"] = preview
+        payload["truncated_preview"] = payload.get("char_count", 0) > len(preview)
     page, pagination = paginate_payloads(payloads, limit=limit, offset=offset, sort=sort)
     response_data = {
         "source": source,
@@ -814,25 +869,31 @@ async def get_langfuse_payload(
         scope=scope,
         observation_id=observation_id,
         field=field,
-        start=start,
-        max_chars=max_chars,
+        start=0,
+        max_chars=0,
     )
     if payload is None:
         raise HTTPException(status_code=404, detail="Payload not found in Langfuse trace data")
 
-    payload["field_id"] = f"payload:{payload['payload_id']}"
-    payload["complete"] = payload["next_start"] is None
-    payload["next_call"] = (
-        None
-        if payload["complete"]
-        else {
-            "trace_id": trace_id,
-            "payload_id": payload["payload_id"],
-            "start": payload["next_start"],
-            "max_chars": max_chars,
+    serialized = payload.get("serialized", "")
+    payload_metadata = {
+        key: value
+        for key, value in payload.items()
+        if key not in {
+            "value", "serialized", "preview", "truncated_preview", "sha256",
+            "byte_count", "char_count", "rough_token_estimate", "start", "end",
+            "returned_char_count", "total_char_count", "truncated", "next_start",
         }
+    }
+    chunk = _exact_text_chunk(
+        field_id=f"payload:{payload['payload_id']}",
+        field=str(payload["field"]),
+        value=serialized,
+        start=start,
+        max_chars=max_chars,
+        next_call={"trace_id": trace_id, "payload_id": payload["payload_id"]},
     )
-    payload.pop("value", None)
+    payload = {**payload_metadata, **chunk, "truncated": not chunk["complete"]}
 
     response_data = {
         "source": source,
@@ -1033,6 +1094,14 @@ async def get_tool_calls_summary(
     summaries = []
     for i, tc in enumerate(tool_calls[start_idx:start_idx + page_size], start=start_idx):
         lightweight = create_lightweight_tool_call_summary(tc)
+        exact_result = _tool_call_exact_value(tc, "tool_result")
+        if (
+            lightweight["result_summary"] == "N/A"
+            and tc.get("tool_result") is None
+            and "call_id" not in tc
+            and exact_result is not None
+        ):
+            lightweight["result_summary"] = _bounded_summary(exact_result)
         selector = _tool_call_selector(tc, i)
         summaries.append(ToolCallSummaryItem(
             index=i,
@@ -1155,7 +1224,7 @@ async def get_tool_calls_paginated(
                 **_exact_text_metadata(
                     field_id=field_id,
                     field=field,
-                    value=tool_call.get(field),
+                    value=_tool_call_exact_value(tool_call, field),
                 ),
                 "next_call": {
                     "trace_id": trace_id,
@@ -1169,7 +1238,7 @@ async def get_tool_calls_paginated(
             **{
                 key: value
                 for key, value in tool_call.items()
-                if key not in {"input", "tool_result"}
+                if key not in {"input", "output", "tool_result"}
             },
             "index": index,
             "call_id": selector,
@@ -1268,13 +1337,13 @@ async def get_tool_call_detail(
     tool_call_metadata = {
         key: value
         for key, value in tool_call.items()
-        if key not in {"input", "tool_result"}
+        if key not in {"input", "output", "tool_result"}
     }
     tool_call_metadata.update({"index": tool_call_index, "call_id": selector})
     chunk = _exact_text_chunk(
         field_id=f"tool_call:{selector}:{field}",
         field=field,
-        value=tool_call.get(field),
+        value=_tool_call_exact_value(tool_call, field),
         start=start,
         max_chars=max_chars,
         next_call={"trace_id": trace_id, "call_id": selector, "field": field},
