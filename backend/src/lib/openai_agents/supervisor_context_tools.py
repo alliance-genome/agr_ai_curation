@@ -35,6 +35,7 @@ from src.lib.openai_agents.bounded_list import (
     recent_page,
 )
 from src.lib.openai_agents.config import (
+    get_agent_studio_trace_review_page_size,
     get_supervisor_field_text_limit,
     get_supervisor_inspect_chat_traces_default_limit,
     get_supervisor_max_list_limit,
@@ -618,9 +619,16 @@ async def inspect_chat_traces(
     if normalized_detail == "summary":
         result = await get_trace_summary(authorized_trace_id)
     elif normalized_detail == "conversation":
+        if field not in {"user_query", "assistant_response"}:
+            return _tool_response(
+                "invalid_field",
+                "Conversation detail requires field=user_query or field=assistant_response; fetch each field independently and follow its next_call cursor until complete=true.",
+                detail=normalized_detail,
+                field=field,
+            )
         result = await get_trace_conversation(
             authorized_trace_id,
-            field=field or "user_query",
+            field=field,
             start=start,
             max_chars=max_chars,
         )
@@ -636,11 +644,17 @@ async def inspect_chat_traces(
             candidate_id=candidate_id,
         )
     elif normalized_detail == "tool_calls":
-        page_size = normalize_page_limit(limit, default=10, maximum=20)
+        configured_page_size = get_agent_studio_trace_review_page_size()
+        page_size = normalize_page_limit(
+            limit,
+            default=configured_page_size,
+            maximum=configured_page_size,
+        )
         offset = parse_offset_cursor(cursor)
+        aligned_offset = offset - (offset % page_size)
         result = await get_tool_calls_summary(
             authorized_trace_id,
-            page=(offset // page_size) + 1,
+            page=(aligned_offset // page_size) + 1,
             page_size=page_size,
         )
     elif normalized_detail == "costs":
