@@ -326,17 +326,28 @@ def test_gene_prompt_uses_extractor_handoff_context_for_disambiguation():
         assert paper_specific_fragment not in prompt
 
 
-def test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries():
+def test_allele_prompt_selects_literal_entity_span_without_biological_renaming():
     prompt = yaml.safe_load(
         (ALLIANCE_AGENTS_PATH / "allele" / "prompt.yaml").read_text(encoding="utf-8")
     )["content"]
 
     required_fragments = [
-        "do not rewrite or normalize it before the first lookup",
+        "Preserve the complete source wording",
+        "literal name of the entity being named within that wording",
+        "not necessarily the complete surrounding phrase",
+        "Selecting the entity span is not biological renaming",
+        "For `LAMP-2A flox/flox`, search `LAMP-2A`",
+        "For `BMAL1 cardiac-specific knockout mice`, search `BMAL1`",
+        "do not replace it with `Arntl` from memory",
+        "A full phrase such as `N fa-g` may itself be formal allele notation",
+        "do not mechanically remove text",
+        "complete source mention, source mentions, and evidence as context",
+        "different biological name or identifier based on memory",
         "Never pass a whole evidence sentence",
         "Evidence text is context for judging candidates",
         "Keep supporting evidence quotes out of the `allele_symbol` argument",
         "Do not use a full sentence or surrounding prose as the search string",
+        "If the request stays ambiguous after lookup, return the verified candidates rather than guessing.",
         # Species discipline: when the paper's species is known, the matching
         # data_provider is mandatory on the lookup -- only omit it when the
         # species is genuinely unknown. This keeps the search inside the correct
@@ -349,6 +360,9 @@ def test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries():
         assert fragment in prompt
 
     forbidden_fragments = [
+        "ALWAYS search the LITERAL symbol from the paper first",
+        "FIRST search the exact compact symbol, notation, or ID from the paper",
+        "do not rewrite or normalize it before the first lookup",
         "`N fa-g` -> search `N[fa-g]`",
         "after stripping genotype notation",
         "Automatically tries original",

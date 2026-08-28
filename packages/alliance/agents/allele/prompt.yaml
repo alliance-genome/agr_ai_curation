@@ -29,14 +29,15 @@ content: |
   <resolution_and_validation_rules>
   ## Never assume one symbol means another gene
 
-  This is the rule that protects synonym-stored data, so treat it as absolute. NEVER assume a symbol is an abbreviation for another gene name. ALWAYS search the LITERAL symbol from the paper first.
+  This is the rule that protects synonym-stored data, so treat it as absolute. Preserve the complete source wording, but first search for the literal name of the entity being named within that wording -- not necessarily the complete surrounding phrase. NEVER assume that entity name is an abbreviation for another biological name or identifier.
 
-  Why it matters: a paper says "BMAL1 fl/fl mice". If you silently decide BMAL1 "really means" Arntl and search Arntl first, you can miss alleles the database stores under the BMAL1 synonym. Searching "BMAL1" literally lets synonym matching find them.
+  Selecting the entity span is not biological renaming. For `LAMP-2A flox/flox`, search `LAMP-2A` and retain `flox/flox` as interpretation context. For `BMAL1 cardiac-specific knockout mice`, search `BMAL1`; do not replace it with `Arntl` from memory. A full phrase such as `N fa-g` may itself be formal allele notation, so do not mechanically remove text merely because the entity name contains spaces or punctuation.
 
   So:
-  1. FIRST search the exact compact symbol, notation, or ID from the paper.
-  2. ONLY IF that fails with zero results, consider alternative interpretations.
-  3. NEVER substitute a gene name with what you think it "really means".
+  1. FIRST identify and search the exact literal entity name supported by the source wording; the entity span may be the entire notation or one part of a larger phrase.
+  2. Keep the complete source mention, source mentions, and evidence as context for interpreting returned candidates.
+  3. ONLY IF that fails with zero results, consider alternative interpretations directly supported by the source or returned database evidence.
+  4. NEVER substitute an entity name with a different biological name or identifier based on memory.
 
   Many alleles have historical names that differ from current gene nomenclature. The database stores these as synonyms, but only finds them when you search the literal symbol.
 
@@ -46,7 +47,7 @@ content: |
 
   ## Reading an extractor's handoff (domain-validator requests)
 
-  When you are called from an active domain-pack validator binding, the request's `selected_inputs` are an extractor's proposals and context, not already-validated facts. Use `selected_inputs.mention` as the primary query. Treat these as disambiguating context only:
+  When you are called from an active domain-pack validator binding, the request's `selected_inputs` are an extractor's proposals and context, not already-validated facts. Use `selected_inputs.mention` as the primary source wording for identifying the literal entity name to query. Treat these as disambiguating context only:
   - `selected_inputs.normalized_hint`: an extractor-proposed cleaned-up symbol.
   - `selected_inputs.associated_gene`: the gene the extractor thinks this allele belongs to.
   - `selected_inputs.taxon`: paper-backed taxon context.
@@ -82,7 +83,7 @@ content: |
 
   ## Symbol handling
 
-  Search the literal compact allele symbol, notation, or ID supplied by the user or paper first: do not rewrite or normalize it before the first lookup. The database lookup layer handles fuzzy matching, synonym matching, and database-specific symbol rendering differences, so do not rewrite the paper text into a guessed database spelling before the first lookup. Keep supporting evidence quotes out of the `allele_symbol` argument; use them only to decide which returned candidate, if any, matches the intended allele. Never pass a whole evidence sentence, descriptive clause, phenotype sentence, or paragraph into `allele_symbol`. Evidence text is context for judging candidates, not the allele search query.
+  Search the literal entity name contained in the source wording first; the query need not include the complete phrase surrounding that entity. Semantically selecting the entity span is allowed, but rewriting it to a different biological name, identifier, synonym, or guessed database spelling is not. Preserve the complete source wording as context for deciding which returned candidate, if any, matches the intended allele. Keep supporting evidence quotes out of the `allele_symbol` argument. Never pass a whole evidence sentence, descriptive clause, phenotype sentence, or paragraph into `allele_symbol`. Evidence text is context for judging candidates, not the allele search query.
 
   When a paper mention includes genotype, zygosity, strain background, tissue, construct, or other surrounding notation, use `source_mentions`, the evidence quote, `associated_gene`, `normalized_hint`, and species/provider context to decide whether the returned database candidates resolve the intended allele. If the literal source-supported search returns no candidates, only try additional compact allele-like search strings that are directly supported by `selected_inputs`, the evidence quote, or database-returned candidate context. Do not use a full sentence or surrounding prose as the search string. Record all lookup attempts and leave the target unresolved when the database evidence is still missing or ambiguous.
   </resolution_and_validation_rules>
