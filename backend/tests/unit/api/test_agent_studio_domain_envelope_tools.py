@@ -78,8 +78,8 @@ def test_handle_tool_call_dispatches_domain_plan_section_inputs(monkeypatch):
         fake_get_domain_pack_validation_plan,
     )
     tool_input = {
-        "agent_id": "disease_extractor",
-        "domain_pack_id": "agr.alliance.disease",
+        "agent_id": "demo_extractor",
+        "domain_pack_id": "org.example.demo",
         "section": "validation_attachments",
         "object_type": "GeneDiseaseAnnotation",
         "field_path": "disease_annotation.disease_term_curie",
@@ -110,14 +110,14 @@ def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     results = [
         domain_tools.get_domain_pack_validation_plan(
-            domain_pack_id="agr.alliance.disease"
+            agent_id="disease_extractor"
         )
     ]
     for section in domain_tools._DOMAIN_PLAN_SECTIONS:
         cursor = None
         while True:
             page = domain_tools.get_domain_pack_validation_plan(
-                domain_pack_id="agr.alliance.disease",
+                agent_id="disease_extractor",
                 section=section,
                 limit=4,
                 cursor=cursor,
@@ -131,7 +131,7 @@ def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
         content = api_module._provider_tool_result_content(
             tool_name="get_domain_pack_validation_plan",
             tool_input={
-                "domain_pack_id": "agr.alliance.disease",
+                "domain_pack_id": result["domain_pack_id"],
                 "section": result["section"],
             },
             tool_result=result,
