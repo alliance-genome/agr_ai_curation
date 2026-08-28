@@ -1,15 +1,18 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
+import type { ReactNode } from 'react';
+import { render, screen, fireEvent, userEvent, waitFor, within } from '../../test/test-utils';
 import DocumentList from './DocumentList';
 import type { DocumentSummary } from '../../services/weaviate';
 import {
   DOCUMENT_LOADING_STORAGE_KEY,
   DOCUMENT_LOAD_START_EVENT,
 } from '../../features/documents/documentLoadEvents';
+import { getDocumentTablePreferencesStorageKey } from '../../features/documents/documentTablePreferences';
 
 const refetchHealthMock = vi.fn();
 const emitGlobalToastMock = vi.fn();
 const openCurationWorkspaceMock = vi.fn();
+const useAuthMock = vi.fn(() => ({ user: { uid: 'user-1' } }));
 const usePdfExtractionHealthMock = vi.fn((_options?: unknown) => ({
   data: {
     status: 'healthy',
@@ -37,6 +40,10 @@ vi.mock('../../lib/globalNotifications', () => ({
   emitGlobalToast: (detail: unknown) => emitGlobalToastMock(detail),
 }));
 
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => useAuthMock(),
+}));
+
 vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
   const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
     '@/features/curation/navigation/openCurationWorkspace'
@@ -59,9 +66,29 @@ vi.mock('../../services/weaviate', async () => {
 vi.mock('@mui/x-data-grid', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
 
+  type MockGridRow = DocumentSummary & Record<string, unknown>;
+  interface MockGridColumn {
+    field: string;
+    headerName?: ReactNode;
+    minWidth?: number;
+    sortable?: boolean;
+    sortComparator?: (left: unknown, right: unknown) => number;
+    renderCell?: (params: {
+      row: MockGridRow;
+      value: unknown;
+      field: string;
+    }) => ReactNode;
+    valueFormatter?: (params: {
+      row: MockGridRow;
+      value: unknown;
+      field: string;
+    }) => ReactNode;
+  }
+
   const DataGrid = ({
     rows = [],
     columns = [],
+    columnVisibilityModel = {},
     checkboxSelection = false,
     rowSelectionModel,
     onRowSelectionModelChange,
@@ -77,8 +104,9 @@ vi.mock('@mui/x-data-grid', async () => {
     sortingOrder = ['asc', 'desc', null],
     sx,
   }: {
-    rows?: any[];
-    columns?: any[];
+    rows?: MockGridRow[];
+    columns?: MockGridColumn[];
+    columnVisibilityModel?: Record<string, boolean>;
     checkboxSelection?: boolean;
     rowSelectionModel?: string[];
     onRowSelectionModelChange?: (ids: string[]) => void;
@@ -98,12 +126,15 @@ vi.mock('@mui/x-data-grid', async () => {
     const selectedIds =
       rowSelectionModel !== undefined ? rowSelectionModel.map(String) : internalSelection;
     const activeSort = sortModel[0];
+    const visibleColumns = columns.filter(
+      (column) => columnVisibilityModel[column.field] !== false,
+    );
     const sortedRows = React.useMemo(() => {
       if (sortingMode === 'server' || !activeSort?.field || !activeSort.sort) {
         return rows;
       }
 
-      const sortedColumn = columns.find((column: any) => column.field === activeSort.field);
+      const sortedColumn = columns.find((column) => column.field === activeSort.field);
       if (!sortedColumn) {
         return rows;
       }
@@ -169,7 +200,7 @@ vi.mock('@mui/x-data-grid', async () => {
                   <input type="checkbox" />
                 </th>
               )}
-              {columns.map((column: any) => (
+              {visibleColumns.map((column) => (
                 <th
                   key={column.field}
                   style={{ minWidth: column.minWidth }}
@@ -188,7 +219,7 @@ vi.mock('@mui/x-data-grid', async () => {
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map((row: any) => (
+            {sortedRows.map((row) => (
               <tr key={row.id} className="MuiDataGrid-row" style={{ cursor: 'pointer' }}>
                 {checkboxSelection && (
                   <td>
@@ -207,9 +238,9 @@ vi.mock('@mui/x-data-grid', async () => {
                     />
                   </td>
                 )}
-                {columns.map((column: any) => {
+                {visibleColumns.map((column) => {
                   const rawValue = row[column.field];
-                  let content = rawValue;
+                  let content = rawValue as ReactNode;
 
                   if (typeof column.renderCell === 'function') {
                     content = column.renderCell({ row, value: rawValue, field: column.field });
@@ -257,11 +288,100 @@ describe('DocumentList', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     sessionStorage.clear();
     refetchHealthMock.mockReset();
     usePdfExtractionHealthMock.mockClear();
     emitGlobalToastMock.mockReset();
     openCurationWorkspaceMock.mockReset();
+    useAuthMock.mockReturnValue({ user: { uid: 'user-1' } });
+  });
+
+  it('restores user-scoped column visibility and order after remount', () => {
+    const firstRender = render(<DocumentList {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show Title column' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move Source column earlier' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move Source column earlier' }));
+    firstRender.unmount();
+
+    render(<DocumentList {...defaultProps} />);
+
+    expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
+    const headers = screen.getAllByRole('columnheader');
+    expect(headers[0]).toHaveTextContent('Source');
+  });
+
+  it('supports keyboard column reordering from the layout popover', async () => {
+    const user = userEvent.setup();
+    render(<DocumentList {...defaultProps} />);
+
+    await user.click(screen.getByRole('button', { name: 'Table layout' }));
+
+    const filenameCheckbox = screen.getByRole('checkbox', { name: 'Show Filename column' });
+    expect(filenameCheckbox).toHaveFocus();
+
+    await user.tab();
+    const moveLaterButton = screen.getByRole('button', { name: 'Move Filename column later' });
+    expect(moveLaterButton).toHaveFocus();
+    await user.keyboard('{Enter}');
+    await user.keyboard('{Escape}');
+
+    expect(screen.getAllByRole('columnheader')[0]).toHaveTextContent('Title');
+  });
+
+  it('does not toggle visibility when a disabled boundary control is clicked', () => {
+    render(<DocumentList {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
+
+    const filenameCheckbox = screen.getByRole('checkbox', { name: 'Show Filename column' });
+    const disabledMoveButton = screen.getByRole('button', {
+      name: 'Move Filename column earlier',
+    });
+    expect(disabledMoveButton).toBeDisabled();
+
+    fireEvent.click(disabledMoveButton.parentElement as HTMLElement);
+
+    expect(filenameCheckbox).toBeChecked();
+    fireEvent.keyDown(screen.getByRole('presentation'), { key: 'Escape' });
+    expect(screen.getByRole('columnheader', { name: 'Filename' })).toBeInTheDocument();
+  });
+
+  it('keeps table preferences isolated by authenticated user', () => {
+    localStorage.setItem(
+      getDocumentTablePreferencesStorageKey('user-1'),
+      JSON.stringify({
+        version: 1,
+        columnVisibilityModel: { title: false },
+        columnOrder: ['title', 'filename'],
+      }),
+    );
+    useAuthMock.mockReturnValue({ user: { uid: 'user-2' } });
+
+    render(<DocumentList {...defaultProps} />);
+
+    expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    expect(screen.getAllByRole('columnheader')[0]).toHaveTextContent('Filename');
+  });
+
+  it('resets the persisted table layout to current defaults', () => {
+    const firstRender = render(<DocumentList {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show Title column' }));
+    fireEvent.keyDown(screen.getByRole('presentation'), { key: 'Escape' });
+
+    const resetButton = screen.getByRole('button', { name: 'Reset table layout' });
+    expect(resetButton).toBeEnabled();
+    fireEvent.click(resetButton);
+
+    expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    expect(resetButton).toBeDisabled();
+    expect(localStorage.getItem(getDocumentTablePreferencesStorageKey('user-1'))).toBeNull();
+
+    firstRender.unmount();
+    render(<DocumentList {...defaultProps} />);
+    expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
   });
 
   it('renders document list with all documents', () => {

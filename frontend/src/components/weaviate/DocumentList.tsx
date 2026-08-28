@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   DataGrid,
   GridColDef,
+  GridColumnVisibilityModel,
   GridRenderCellParams,
   GridSortModel,
   GridPaginationModel,
@@ -23,6 +24,11 @@ import {
   Tooltip,
   LinearProgress,
   Button,
+  Checkbox,
+  List,
+  ListItem,
+  ListItemText,
+  Popover,
   Stack,
   Typography,
   CircularProgress,
@@ -35,6 +41,10 @@ import {
   FileOpen,
   Download,
   Edit,
+  ArrowDownward,
+  ArrowUpward,
+  RestartAlt,
+  ViewColumn,
 } from '@mui/icons-material';
 import DocumentDetailsDialog from './DocumentDetailsDialog';
 import DocumentDownloadDialog from './DocumentDownloadDialog';
@@ -56,6 +66,17 @@ import {
 } from '@/features/documents/pdfUploadFlow';
 import { startDocumentLoad } from '@/features/documents/documentLoadEvents';
 import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  clearDocumentTablePreferences,
+  defaultDocumentTablePreferences,
+  hasCustomDocumentTablePreferences,
+  loadDocumentTablePreferences,
+  normalizeDocumentTablePreferences,
+  reorderDocumentTableColumns,
+  saveDocumentTablePreferences,
+  type DocumentTablePreferences,
+} from '@/features/documents/documentTablePreferences';
 
 interface DocumentListProps {
   documents: DocumentSummary[];
@@ -92,6 +113,19 @@ interface DocumentListProps {
 const PDF_BACKGROUND_PROCESSING_TOAST =
   'Your PDFs are processing in the background. You can safely navigate away.';
 const PDF_BACKGROUND_PROCESSING_TOAST_AUTO_HIDE_MS = 6000;
+
+const DOCUMENT_COLUMN_OPTIONS = [
+  { field: 'filename', label: 'Filename' },
+  { field: 'title', label: 'Title' },
+  { field: 'sourceProvenance', label: 'Source' },
+  { field: 'fileSize', label: 'Size' },
+  { field: 'creationDate', label: 'Created' },
+  { field: 'processingStatus', label: 'Status' },
+  { field: 'vectorCount', label: 'Vectors' },
+  { field: 'chunkCount', label: 'Chunks' },
+  { field: 'actions', label: 'Actions' },
+] as const;
+const DOCUMENT_COLUMN_FIELDS = DOCUMENT_COLUMN_OPTIONS.map(({ field }) => field);
 
 const compareTextValues = (left: unknown, right: unknown): number => {
   const leftValue = left == null ? '' : String(left);
@@ -186,6 +220,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const extractionHealthQuery = usePdfExtractionHealth({ enabled: showUploadControls });
   const extractionHealth = extractionHealthQuery.data;
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const preferenceUserId = user?.uid ?? null;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [internalPaginationModel, setInternalPaginationModel] = useState<GridPaginationModel>({
@@ -200,12 +236,74 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const [downloadDocumentId, setDownloadDocumentId] = useState<string | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editDocument, setEditDocument] = useState<DocumentSummary | null>(null);
+  const [layoutMenuAnchor, setLayoutMenuAnchor] = useState<HTMLElement | null>(null);
+  const [tablePreferences, setTablePreferences] = useState<DocumentTablePreferences>(() => (
+    loadDocumentTablePreferences(preferenceUserId, DOCUMENT_COLUMN_FIELDS)
+  ));
 
   const paginationModel = controlledPaginationModel ?? internalPaginationModel;
   const sortModel = controlledSortModel ?? internalSortModel;
   const handlePaginationModelChange = onPaginationModelChange ?? setInternalPaginationModel;
   const handleSortModelChange = onSortModelChange ?? setInternalSortModel;
   const serverSorting = onSortModelChange !== undefined;
+
+  React.useEffect(() => {
+    setTablePreferences(loadDocumentTablePreferences(preferenceUserId, DOCUMENT_COLUMN_FIELDS));
+  }, [preferenceUserId]);
+
+  const updateTablePreferences = React.useCallback((
+    update: (current: DocumentTablePreferences) => DocumentTablePreferences,
+  ) => {
+    setTablePreferences((current) => saveDocumentTablePreferences(
+      preferenceUserId,
+      update(current),
+      DOCUMENT_COLUMN_FIELDS,
+    ));
+  }, [preferenceUserId]);
+
+  const handleColumnVisibilityModelChange = React.useCallback((
+    model: GridColumnVisibilityModel,
+  ) => {
+    updateTablePreferences((current) => normalizeDocumentTablePreferences({
+      ...current,
+      columnVisibilityModel: model,
+    }, DOCUMENT_COLUMN_FIELDS));
+  }, [updateTablePreferences]);
+
+  const handleToggleColumnVisibility = React.useCallback((field: string) => {
+    updateTablePreferences((current) => {
+      const columnVisibilityModel = { ...current.columnVisibilityModel };
+      if (columnVisibilityModel[field] === false) {
+        delete columnVisibilityModel[field];
+      } else {
+        columnVisibilityModel[field] = false;
+      }
+      return normalizeDocumentTablePreferences({
+        ...current,
+        columnVisibilityModel,
+      }, DOCUMENT_COLUMN_FIELDS);
+    });
+  }, [updateTablePreferences]);
+
+  const handleMoveColumn = React.useCallback((field: string, offset: -1 | 1) => {
+    updateTablePreferences((current) => {
+      const oldIndex = current.columnOrder.indexOf(field);
+      return {
+        ...current,
+        columnOrder: reorderDocumentTableColumns(
+          current.columnOrder,
+          field,
+          oldIndex,
+          oldIndex + offset,
+        ),
+      };
+    });
+  }, [updateTablePreferences]);
+
+  const handleResetTableLayout = React.useCallback(() => {
+    clearDocumentTablePreferences(preferenceUserId);
+    setTablePreferences(defaultDocumentTablePreferences(DOCUMENT_COLUMN_FIELDS));
+  }, [preferenceUserId]);
 
   React.useEffect(() => {
     if (!selectedDocumentId) {
@@ -409,7 +507,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
     }
   };
 
-  const columns: GridColDef[] = [
+  const defaultColumns: GridColDef[] = [
     {
       field: 'filename',
       headerName: 'Filename',
@@ -624,6 +722,20 @@ const DocumentList: React.FC<DocumentListProps> = ({
     },
   ];
 
+  const columnsByField = new Map(defaultColumns.map((column) => [column.field, column]));
+  const columns = tablePreferences.columnOrder.flatMap((field) => {
+    const column = columnsByField.get(field);
+    return column ? [column] : [];
+  });
+
+  const hasCustomTablePreferences = hasCustomDocumentTablePreferences(
+    tablePreferences,
+    DOCUMENT_COLUMN_FIELDS,
+  );
+  const columnLabels = new Map<string, string>(
+    DOCUMENT_COLUMN_OPTIONS.map(({ field, label }) => [field, label]),
+  );
+
   const hasDocuments = documents.length > 0;
 
   return (
@@ -703,7 +815,12 @@ const DocumentList: React.FC<DocumentListProps> = ({
         </>
       )}
 
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+      <Stack
+        direction="row"
+        useFlexGap
+        spacing={2}
+        sx={{ mb: 2, flexWrap: 'wrap' }}
+      >
         {showUploadControls && (
           <Button
             variant="contained"
@@ -722,6 +839,83 @@ const DocumentList: React.FC<DocumentListProps> = ({
         >
           Refresh
         </Button>
+        <Button
+          variant="outlined"
+          startIcon={<ViewColumn />}
+          onClick={(event) => setLayoutMenuAnchor(event.currentTarget)}
+          aria-controls={layoutMenuAnchor ? 'documents-table-layout-menu' : undefined}
+          aria-haspopup="dialog"
+          aria-expanded={layoutMenuAnchor ? 'true' : undefined}
+        >
+          Table layout
+        </Button>
+        <Button
+          variant="outlined"
+          startIcon={<RestartAlt />}
+          onClick={handleResetTableLayout}
+          disabled={!hasCustomTablePreferences}
+        >
+          Reset table layout
+        </Button>
+        <Popover
+          id="documents-table-layout-menu"
+          anchorEl={layoutMenuAnchor}
+          open={Boolean(layoutMenuAnchor)}
+          onClose={() => setLayoutMenuAnchor(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          PaperProps={{ role: 'dialog', 'aria-label': 'Documents table layout' }}
+        >
+          <List
+            dense
+            aria-label="Documents table columns"
+            sx={{ minWidth: 320 }}
+          >
+            {tablePreferences.columnOrder.map((field, index) => {
+              const label = columnLabels.get(field) ?? field;
+              const visible = tablePreferences.columnVisibilityModel[field] !== false;
+              return (
+                <ListItem key={field}>
+                <Checkbox
+                  checked={visible}
+                  size="small"
+                  autoFocus={index === 0}
+                  onChange={() => handleToggleColumnVisibility(field)}
+                  inputProps={{ 'aria-label': `Show ${label} column` }}
+                />
+                <ListItemText primary={label} />
+                <Tooltip title="Move earlier">
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label={`Move ${label} column earlier`}
+                      disabled={index === 0}
+                      onClick={() => {
+                        handleMoveColumn(field, -1);
+                      }}
+                    >
+                      <ArrowUpward fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Move later">
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label={`Move ${label} column later`}
+                      disabled={index === tablePreferences.columnOrder.length - 1}
+                      onClick={() => {
+                        handleMoveColumn(field, 1);
+                      }}
+                    >
+                      <ArrowDownward fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                </ListItem>
+              );
+            })}
+          </List>
+        </Popover>
         {pipelineBusy && (
           <Stack direction="row" spacing={1} alignItems="center">
             <CircularProgress size={16} thickness={5} />
@@ -797,6 +991,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
           <DataGrid
             rows={documents}
             columns={columns}
+            columnVisibilityModel={tablePreferences.columnVisibilityModel}
+            onColumnVisibilityModelChange={handleColumnVisibilityModelChange}
             rowCount={totalCount}
             loading={loading}
             pageSizeOptions={[10, 20, 50, 100]}
