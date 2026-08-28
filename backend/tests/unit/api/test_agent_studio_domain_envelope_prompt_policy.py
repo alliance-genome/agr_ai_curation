@@ -210,6 +210,19 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "what a specialist, extractor, or validator can do" in prompt
 
 
+def test_agent_studio_system_prompt_uses_bounded_trace_review_contracts():
+    source_path, prompt = _read_runtime_agent_studio_system_prompt()
+
+    assert "get_trace_reconstruction(trace_id, limit, offset)" in prompt, source_path
+    assert "get_trace_payloads(trace_id, sort, limit, offset)" in prompt, source_path
+    assert "get_tool_calls_summary(trace_id, page, page_size)" in prompt, source_path
+    assert "get_trace_conversation(trace_id, field, start, max_chars)" in prompt, source_path
+    assert "get_tool_call_detail(trace_id, call_id, field, start, max_chars)" in prompt, source_path
+    assert "Follow `next_call` until `complete=true`" in prompt, source_path
+    assert "include_payloads" not in prompt, source_path
+    assert "include_values" not in prompt, source_path
+
+
 def test_installed_agent_studio_prompts_require_targeted_flow_verification():
     prompt_paths = (
         "packages/core/config/agent_studio_system_prompt.md",

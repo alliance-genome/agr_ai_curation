@@ -35,6 +35,7 @@ from src.lib.openai_agents.bounded_list import (
     recent_page,
 )
 from src.lib.openai_agents.config import (
+    get_agent_studio_trace_review_page_size,
     get_supervisor_field_text_limit,
     get_supervisor_inspect_chat_traces_default_limit,
     get_supervisor_max_list_limit,
@@ -547,6 +548,9 @@ async def inspect_chat_traces(
     tool_name: str | None = None,
     event_type: str | None = None,
     candidate_id: str | None = None,
+    field: str | None = None,
+    start: int = 0,
+    max_chars: int | None = None,
     include_sibling_traces: bool = False,
     limit: int | None = None,
     cursor: str | None = None,
@@ -615,7 +619,19 @@ async def inspect_chat_traces(
     if normalized_detail == "summary":
         result = await get_trace_summary(authorized_trace_id)
     elif normalized_detail == "conversation":
-        result = await get_trace_conversation(authorized_trace_id)
+        if field not in {"user_query", "assistant_response"}:
+            return _tool_response(
+                "invalid_field",
+                "Conversation detail requires field=user_query or field=assistant_response; fetch each field independently and follow its next_call cursor until complete=true.",
+                detail=normalized_detail,
+                field=field,
+            )
+        result = await get_trace_conversation(
+            authorized_trace_id,
+            field=field,
+            start=start,
+            max_chars=max_chars,
+        )
     elif normalized_detail == "diagnostic_report":
         result = await get_extraction_diagnostic_report(
             authorized_trace_id,
@@ -628,7 +644,19 @@ async def inspect_chat_traces(
             candidate_id=candidate_id,
         )
     elif normalized_detail == "tool_calls":
-        result = await get_tool_calls_summary(authorized_trace_id)
+        configured_page_size = get_agent_studio_trace_review_page_size()
+        page_size = normalize_page_limit(
+            limit,
+            default=configured_page_size,
+            maximum=configured_page_size,
+        )
+        offset = parse_offset_cursor(cursor)
+        aligned_offset = offset - (offset % page_size)
+        result = await get_tool_calls_summary(
+            authorized_trace_id,
+            page=(aligned_offset // page_size) + 1,
+            page_size=page_size,
+        )
     elif normalized_detail == "costs":
         result = await get_trace_costs(authorized_trace_id)
     elif normalized_detail == "duplicates":
@@ -641,7 +669,6 @@ async def inspect_chat_traces(
             authorized_trace_id,
             limit=normalize_page_limit(limit, default=10, maximum=20),
             offset=offset,
-            include_values=False,
         )
     else:
         return _tool_response(

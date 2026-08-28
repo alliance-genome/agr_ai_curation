@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import httpx
 import pytest
 
@@ -69,9 +71,11 @@ def test_env_helpers(monkeypatch):
         lambda: tools.get_tool_calls_summary("856df16f1752cb53ee43dcb2f5ecfd16"),
         lambda: tools.get_tool_calls_page("856df16f1752cb53ee43dcb2f5ecfd16"),
         lambda: tools.get_tool_call_detail(
-            "856df16f1752cb53ee43dcb2f5ecfd16", "call-1"
+            "856df16f1752cb53ee43dcb2f5ecfd16", "call-1", "input"
         ),
-        lambda: tools.get_trace_conversation("856df16f1752cb53ee43dcb2f5ecfd16"),
+        lambda: tools.get_trace_conversation(
+            "856df16f1752cb53ee43dcb2f5ecfd16", "user_query"
+        ),
         lambda: tools.get_trace_view(
             "856df16f1752cb53ee43dcb2f5ecfd16", "trace_summary"
         ),
@@ -142,13 +146,17 @@ async def test_get_trace_summary_404_and_timeout(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_tool_calls_summary_success_and_404(monkeypatch):
+    capture = {}
     _patch_async_client(
         monkeypatch,
         response=_FakeResponse(200, {"data": {"total_count": 2}, "token_info": {"estimated_tokens": 100}}),
+        capture=capture,
     )
     success = await tools.get_tool_calls_summary("856df16f1752cb53ee43dcb2f5ecfd16")
     assert success["status"] == "success"
     assert success["data"]["total_count"] == 2
+    assert capture["params"]["page"] == 1
+    assert capture["params"]["page_size"] == tools.get_agent_studio_trace_review_page_size()
 
     _patch_async_client(monkeypatch, response=_FakeResponse(404, {}))
     missing = await tools.get_tool_calls_summary("856df16f1752cb53ee43dcb2f5ecfd16")
@@ -172,7 +180,7 @@ async def test_get_tool_calls_page_clamps_page_size_and_filters(monkeypatch):
     )
     assert result["status"] == "success"
     assert capture["params"]["page"] == 2
-    assert capture["params"]["page_size"] == 20
+    assert capture["params"]["page_size"] == tools.get_agent_studio_trace_review_page_size()
     assert capture["params"]["tool_name"] == "search_document"
 
 
@@ -186,21 +194,41 @@ async def test_get_tool_calls_page_400(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_tool_call_detail_404(monkeypatch):
-    _patch_async_client(monkeypatch, response=_FakeResponse(404, {}))
-    result = await tools.get_tool_call_detail("856df16f1752cb53ee43dcb2f5ecfd16", "call_123")
+    capture = {}
+    _patch_async_client(monkeypatch, response=_FakeResponse(404, {}), capture=capture)
+    result = await tools.get_tool_call_detail(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        "call_123",
+        "tool_result",
+        start=21,
+        max_chars=777,
+    )
     assert result["status"] == "error"
     assert "not found" in result["error"]
+    assert capture["params"]["field"] == "tool_result"
+    assert capture["params"]["start"] == 21
+    assert capture["params"]["max_chars"] == 777
 
 
 @pytest.mark.asyncio
 async def test_get_trace_conversation_success(monkeypatch):
+    capture = {}
     _patch_async_client(
         monkeypatch,
-        response=_FakeResponse(200, {"data": {"user_query": "q", "assistant_response": "a"}, "token_info": {"estimated_tokens": 10}}),
+        response=_FakeResponse(200, {"data": {"field": "user_query", "chunk": {"serialized": "q"}}, "token_info": {"estimated_tokens": 10}}),
+        capture=capture,
     )
-    result = await tools.get_trace_conversation("856df16f1752cb53ee43dcb2f5ecfd16")
+    result = await tools.get_trace_conversation(
+        "856df16f1752cb53ee43dcb2f5ecfd16", "user_query"
+    )
     assert result["status"] == "success"
-    assert result["data"]["user_query"] == "q"
+    assert result["data"]["chunk"]["serialized"] == "q"
+    assert capture["params"]["field"] == "user_query"
+
+
+def test_get_trace_conversation_requires_explicit_field():
+    field_parameter = inspect.signature(tools.get_trace_conversation).parameters["field"]
+    assert field_parameter.default is inspect.Parameter.empty
 
 
 @pytest.mark.asyncio
@@ -325,14 +353,13 @@ async def test_get_trace_reconstruction_clamps_pagination(monkeypatch):
 
     result = await tools.get_trace_reconstruction(
         "856df16f1752cb53ee43dcb2f5ecfd16",
-        include_payloads=True,
         limit=999,
         offset=-5,
     )
 
     assert result["status"] == "success"
     assert capture["url"].endswith("/langfuse_reconstruction")
-    assert capture["params"]["include_payloads"] is True
+    assert "include_payloads" not in capture["params"]
     assert capture["params"]["limit"] == 500
     assert capture["params"]["offset"] == 0
 
@@ -355,7 +382,7 @@ async def test_get_trace_payloads_and_payload_build_expected_requests(monkeypatc
     assert payloads["status"] == "success"
     assert capture["url"].endswith("/langfuse_payloads")
     assert capture["params"]["sort"] == "chronological"
-    assert capture["params"]["limit"] == 200
+    assert capture["params"]["limit"] == tools.get_agent_studio_trace_review_page_size()
     assert capture["params"]["offset"] == 3
 
     capture = {}
@@ -374,7 +401,7 @@ async def test_get_trace_payloads_and_payload_build_expected_requests(monkeypatc
     assert capture["url"].endswith("/langfuse_payload")
     assert capture["params"]["payload_id"] == "observation:obs-1:output"
     assert capture["params"]["start"] == 10
-    assert capture["params"]["max_chars"] == 50000
+    assert capture["params"]["max_chars"] == tools.get_agent_studio_trace_review_chunk_max_chars()
 
 
 @pytest.mark.asyncio

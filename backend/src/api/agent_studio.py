@@ -121,6 +121,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_opus_context_editing_keep_tool_uses,
     get_agent_studio_opus_context_editing_trigger_tokens,
     get_agent_studio_provider_tool_result_inline_max_chars,
+    get_agent_studio_trace_review_chunk_max_chars,
+    get_agent_studio_trace_review_page_size,
     get_agent_studio_workshop_prompt_chunk_max_chars,
     get_agent_studio_workshop_prompt_max_chars,
 )
@@ -2593,7 +2595,14 @@ async def _handle_tool_call(
                 "error": "Missing required parameter: trace_id",
                 "help": "Call get_trace_summary first to verify trace exists"
             }
-        return await get_tool_calls_summary(trace_id=trace_id)
+        return await get_tool_calls_summary(
+            trace_id=trace_id,
+            page=tool_input.get("page", 1),
+            page_size=tool_input.get(
+                "page_size",
+                get_agent_studio_trace_review_page_size(),
+            ),
+        )
 
     elif tool_name == "get_tool_calls_page":
         trace_id = tool_input.get("trace_id")
@@ -2607,7 +2616,10 @@ async def _handle_tool_call(
                 "help": "Call get_trace_summary first"
             }
         page = tool_input.get("page", 1)
-        page_size = tool_input.get("page_size", 10)
+        page_size = tool_input.get(
+            "page_size",
+            get_agent_studio_trace_review_page_size(),
+        )
         tool_name_filter = tool_input.get("tool_name")
         return await get_tool_calls_page(
             trace_id=trace_id,
@@ -2619,12 +2631,15 @@ async def _handle_tool_call(
     elif tool_name == "get_tool_call_detail":
         trace_id = tool_input.get("trace_id")
         call_id = tool_input.get("call_id")
-        if not trace_id or not call_id:
+        field = tool_input.get("field")
+        if not trace_id or not call_id or not field:
             missing = []
             if not trace_id:
                 missing.append("trace_id")
             if not call_id:
                 missing.append("call_id")
+            if not field:
+                missing.append("field")
             return {
                 "status": "error",
                 "tool_call": None,
@@ -2632,19 +2647,37 @@ async def _handle_tool_call(
                 "error": f"Missing required parameters: {', '.join(missing)}",
                 "help": "Get call_id from get_tool_calls_summary response"
             }
-        return await get_tool_call_detail(trace_id=trace_id, call_id=call_id)
+        return await get_tool_call_detail(
+            trace_id=trace_id,
+            call_id=call_id,
+            field=field,
+            start=tool_input.get("start", 0),
+            max_chars=tool_input.get(
+                "max_chars",
+                get_agent_studio_trace_review_chunk_max_chars(),
+            ),
+        )
 
     elif tool_name == "get_trace_conversation":
         trace_id = tool_input.get("trace_id")
-        if not trace_id:
+        field = tool_input.get("field")
+        if not trace_id or not field:
             return {
                 "status": "error",
                 "data": None,
                 "token_info": None,
-                "error": "Missing required parameter: trace_id",
+                "error": "Missing required parameters: trace_id and field",
                 "help": "Call get_trace_summary first"
             }
-        return await get_trace_conversation(trace_id=trace_id)
+        return await get_trace_conversation(
+            trace_id=trace_id,
+            field=field,
+            start=tool_input.get("start", 0),
+            max_chars=tool_input.get(
+                "max_chars",
+                get_agent_studio_trace_review_chunk_max_chars(),
+            ),
+        )
 
     elif tool_name == "get_extraction_diagnostic_report":
         trace_id = tool_input.get("trace_id")
@@ -2737,7 +2770,6 @@ async def _handle_tool_call(
             }
         return await get_trace_reconstruction(
             trace_id=trace_id,
-            include_payloads=tool_input.get("include_payloads", False),
             limit=tool_input.get("limit", 100),
             offset=tool_input.get("offset", 0),
         )
@@ -2767,9 +2799,11 @@ async def _handle_tool_call(
         return await get_trace_payloads(
             trace_id=trace_id,
             sort=tool_input.get("sort", "largest"),
-            limit=tool_input.get("limit", 50),
+            limit=tool_input.get(
+                "limit",
+                get_agent_studio_trace_review_page_size(),
+            ),
             offset=tool_input.get("offset", 0),
-            include_values=tool_input.get("include_values", False),
         )
 
     elif tool_name == "get_trace_payload":
@@ -2789,7 +2823,10 @@ async def _handle_tool_call(
             observation_id=tool_input.get("observation_id"),
             field=tool_input.get("field"),
             start=tool_input.get("start", 0),
-            max_chars=tool_input.get("max_chars", 12000),
+            max_chars=tool_input.get(
+                "max_chars",
+                get_agent_studio_trace_review_chunk_max_chars(),
+            ),
         )
 
     elif tool_name == "get_trace_costs":

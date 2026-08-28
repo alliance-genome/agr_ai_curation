@@ -20,6 +20,9 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_name_max_chars,
     get_agent_studio_flow_output_filename_template_max_chars,
     get_agent_studio_flow_step_goal_max_chars,
+    get_agent_studio_trace_review_chunk_max_chars,
+    get_agent_studio_trace_review_page_size,
+    get_agent_studio_trace_review_summary_max_chars,
     get_api_key,
     get_base_url,
     get_background_task_observability_value_max_chars,
@@ -131,9 +134,24 @@ def test_weaviate_search_defaults_are_bounded_and_configurable(monkeypatch):
             get_tool_failure_alert_summary_max_chars,
             500,
         ),
+        (
+            "AGENT_STUDIO_TRACE_REVIEW_PAGE_SIZE",
+            get_agent_studio_trace_review_page_size,
+            10,
+        ),
+        (
+            "AGENT_STUDIO_TRACE_REVIEW_SUMMARY_MAX_CHARS",
+            get_agent_studio_trace_review_summary_max_chars,
+            200,
+        ),
+        (
+            "AGENT_STUDIO_TRACE_REVIEW_CHUNK_MAX_CHARS",
+            get_agent_studio_trace_review_chunk_max_chars,
+            8_000,
+        ),
     ],
 )
-def test_observability_preview_limits_use_env_with_invalid_fallback(
+def test_character_and_page_limits_use_env_with_invalid_fallback(
     monkeypatch,
     environment_name,
     getter,

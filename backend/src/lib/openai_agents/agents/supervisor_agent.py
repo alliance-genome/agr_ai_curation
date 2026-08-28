@@ -1941,6 +1941,9 @@ def create_supervisor_agent(
             "this main chat session. Use when the curator asks why a prior answer "
             "selected, omitted, searched, validated, or failed something. Trace IDs "
             "must resolve from this chat inventory before TraceReview is queried. "
+            "For detail=\"conversation\", field is required: fetch user_query and "
+            "assistant_response independently, passing start and max_chars from each "
+            "next_call until complete=true. "
             "Do not use this for normal extraction-result browsing; use "
             "inspect_results for persisted extraction objects, evidence, fields, "
             "and validation."
@@ -1954,6 +1957,9 @@ def create_supervisor_agent(
         tool_name: str | None = None,
         event_type: str | None = None,
         candidate_id: str | None = None,
+        field: str | None = None,
+        start: int = 0,
+        max_chars: int | None = None,
         include_sibling_traces: bool = False,
         limit: int | None = None,
         cursor: str | None = None,
@@ -1968,6 +1974,9 @@ def create_supervisor_agent(
             tool_name=tool_name,
             event_type=event_type,
             candidate_id=candidate_id,
+            field=field,
+            start=start,
+            max_chars=max_chars,
             include_sibling_traces=include_sibling_traces,
             limit=limit,
             cursor=cursor,

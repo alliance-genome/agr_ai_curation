@@ -360,12 +360,31 @@ async def test_inspect_chat_traces_uses_safe_trace_review_flags(monkeypatch):
         captured["payloads"] = {"trace_id": trace_id, **kwargs}
         return {"status": "success", "data": {"payloads": []}, "error": None}
 
+    async def _fake_conversation(trace_id, **kwargs):
+        captured["conversation"] = {"trace_id": trace_id, **kwargs}
+        return {"status": "success", "data": {"chunk": {}}, "error": None}
+
+    async def _fake_tool_calls(trace_id, **kwargs):
+        captured["tool_calls"] = {"trace_id": trace_id, **kwargs}
+        return {"status": "success", "data": {"calls": []}, "error": None}
+
     monkeypatch.setattr(
         supervisor_context_tools,
         "get_extraction_diagnostic_report",
         _fake_diagnostic_report,
     )
     monkeypatch.setattr(supervisor_context_tools, "get_trace_payloads", _fake_payloads)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_trace_conversation",
+        _fake_conversation,
+    )
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_tool_calls_summary",
+        _fake_tool_calls,
+    )
+    monkeypatch.setenv("AGENT_STUDIO_TRACE_REVIEW_PAGE_SIZE", "10")
 
     diagnostic_response = await supervisor_context_tools.inspect_chat_traces(
         detail="diagnostic_report",
@@ -377,14 +396,48 @@ async def test_inspect_chat_traces_uses_safe_trace_review_flags(monkeypatch):
         limit=3,
         cursor="2",
     )
+    conversation_response = await supervisor_context_tools.inspect_chat_traces(
+        detail="conversation",
+        trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        field="assistant_response",
+        start=120,
+        max_chars=700,
+    )
+    missing_field_response = await supervisor_context_tools.inspect_chat_traces(
+        detail="conversation",
+        trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    tool_calls_response = await supervisor_context_tools.inspect_chat_traces(
+        detail="tool_calls",
+        trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        limit=20,
+        cursor="20",
+    )
 
     assert json.loads(diagnostic_response)["status"] == "ok"
     assert captured["diagnostic"]["include_raw_args"] is False
     assert captured["diagnostic"]["include_raw_outputs"] is False
     assert json.loads(payload_response)["status"] == "ok"
-    assert captured["payloads"]["include_values"] is False
+    assert "include_values" not in captured["payloads"]
     assert captured["payloads"]["limit"] == 3
     assert captured["payloads"]["offset"] == 2
+    assert json.loads(conversation_response)["status"] == "ok"
+    assert captured["conversation"] == {
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "field": "assistant_response",
+        "start": 120,
+        "max_chars": 700,
+    }
+    missing_field = json.loads(missing_field_response)
+    assert missing_field["status"] == "invalid_field"
+    assert "user_query" in missing_field["message"]
+    assert "assistant_response" in missing_field["message"]
+    assert json.loads(tool_calls_response)["status"] == "ok"
+    assert captured["tool_calls"] == {
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "page": 3,
+        "page_size": 10,
+    }
 
 
 @pytest.mark.asyncio
@@ -1496,6 +1549,8 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "use inspect_results for persisted extraction objects"
         in tools_by_name["inspect_chat_traces"].description
     )
+    assert "field is required" in tools_by_name["inspect_chat_traces"].description
+    assert "assistant_response independently" in tools_by_name["inspect_chat_traces"].description
     assert "action=\"search\"" in tools_by_name["inspect_results"].description
     assert "export_to_file" not in tools_by_name
     assert captured_langfuse["metadata"]["specialist_count"] == 4

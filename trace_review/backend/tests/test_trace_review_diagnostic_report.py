@@ -660,7 +660,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, "success")
         self.assertEqual(response.data.tool_calls[0].status, "N/A")
-        self.assertEqual(response.data.tool_calls[0].call_id, "N/A")
+        self.assertEqual(response.data.tool_calls[0].call_id, "index:0")
         self.assertEqual(response.data.tool_calls[0].result_summary, "N/A")
 
     @patch(

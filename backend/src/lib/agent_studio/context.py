@@ -34,7 +34,7 @@ The user has provided a trace ID for analysis: `{trace_id}`
 To analyze this trace, use these token-aware tools:
 - **search_traces**: Find traces by session, document, run, extraction, name, or time window
 - **get_trace_summary**: Quick overview (duration, cost, tokens, observation counts)
-- **get_trace_conversation**: User query and assistant response
+- **get_trace_conversation**: Exact field chunks for user query or assistant response
 - **get_extraction_diagnostic_report**: Concise extraction/builder/validation timeline and findings
 - **get_extraction_timeline**: Detailed ordered extraction events and tool observations
 - **get_trace_reconstruction**: Chronological Langfuse model/tool/event reconstruction with payload refs
@@ -42,9 +42,9 @@ To analyze this trace, use these token-aware tools:
 - **get_trace_payload**: Exact chunked payload retrieval by payload_id
 - **get_trace_costs**: Token and cost accounting by agent/model/kind
 - **get_trace_duplicates**: Duplicate prompt/context/payload report
-- **get_tool_calls_summary**: Lightweight summaries of all tool calls
-- **get_tool_calls_page**: Paginated full tool calls (use for large traces)
-- **get_tool_call_detail**: Single tool call details
+- **get_tool_calls_summary**: Paginated lightweight tool-call summaries
+- **get_tool_calls_page**: Paginated call metadata and exact-field references
+- **get_tool_call_detail**: Exact input or result chunks for one call
 - **get_trace_view**: Specialized views (pdf_citations, token_analysis, agent_context, domain_envelope, etc.)
 
 Start with the summary, then use the diagnostic report or reconstruction to

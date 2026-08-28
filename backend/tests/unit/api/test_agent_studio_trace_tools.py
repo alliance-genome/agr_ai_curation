@@ -166,6 +166,25 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
         "metadata.agent_config",
         "metadata.event_payload",
     ]
+    assert "include_values" not in tools_by_name["get_trace_payloads"]["input_schema"]["properties"]
+    assert "include_payloads" not in tools_by_name["get_trace_reconstruction"]["input_schema"]["properties"]
+    assert tools_by_name["get_tool_call_detail"]["input_schema"]["required"] == [
+        "trace_id",
+        "call_id",
+        "field",
+    ]
+    assert tools_by_name["get_trace_conversation"]["input_schema"]["required"] == [
+        "trace_id",
+        "field",
+    ]
+    payload_chunk_schema = tools_by_name["get_trace_payload"]["input_schema"]["properties"]["max_chars"]
+    assert payload_chunk_schema["minimum"] == 1
+    assert payload_chunk_schema["default"] == payload_chunk_schema["maximum"]
+    assert payload_chunk_schema["default"] < api_module.get_agent_studio_provider_tool_result_inline_max_chars()
+    assert (
+        tools_by_name["get_trace_payloads"]["input_schema"]["properties"]["limit"]["maximum"]
+        == api_module.get_agent_studio_trace_review_page_size()
+    )
     assert "extraction_timeline" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
     assert "evidence_revisions" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
     assert "group_context" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
@@ -288,7 +307,7 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
 
     reconstruction = await api_module._handle_tool_call(
         tool_name="get_trace_reconstruction",
-        tool_input={"trace_id": "trace-1", "include_payloads": True, "limit": 5, "offset": 10},
+        tool_input={"trace_id": "trace-1", "limit": 5, "offset": 10},
         context=None,
         user_email="dev@example.org",
         user_auth_sub="auth-sub-1",
@@ -297,7 +316,6 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
     assert reconstruction["tool"] == "reconstruction"
     assert captured["reconstruction"] == {
         "trace_id": "trace-1",
-        "include_payloads": True,
         "limit": 5,
         "offset": 10,
     }
@@ -340,7 +358,7 @@ async def test_handle_tool_call_get_docker_logs_is_unknown():
 async def test_handle_tool_call_get_tool_call_detail_requires_call_id():
     result = await api_module._handle_tool_call(
         tool_name="get_tool_call_detail",
-        tool_input={"trace_id": "trace-1"},
+        tool_input={"trace_id": "trace-1", "field": "input"},
         context=None,
         user_email="dev@example.org",
         user_auth_sub="auth-sub-1",

@@ -176,6 +176,35 @@ def get_langfuse_request_timeout_seconds() -> float:
     )
 
 
+def get_agent_studio_trace_review_page_size() -> int:
+    """Return the shared Agent Studio exact TraceReview page bound."""
+    return max(1, int(os.getenv("AGENT_STUDIO_TRACE_REVIEW_PAGE_SIZE", "10")))
+
+
+def get_agent_studio_trace_review_summary_max_chars() -> int:
+    """Return the shared per-call summary character bound."""
+    return max(
+        1,
+        int(os.getenv("AGENT_STUDIO_TRACE_REVIEW_SUMMARY_MAX_CHARS", "200")),
+    )
+
+
+def get_agent_studio_trace_review_chunk_max_chars() -> int:
+    """Return the shared exact-detail JSON-content character bound."""
+    return max(
+        1,
+        int(os.getenv("AGENT_STUDIO_TRACE_REVIEW_CHUNK_MAX_CHARS", "8000")),
+    )
+
+
+def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
+    """Return the provider continuation's shared inline JSON boundary."""
+    return max(
+        1,
+        int(os.getenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")),
+    )
+
+
 def sanitize_url_for_diagnostics(url: Optional[str]) -> str:
     """Return a URL that is safe to include in health responses."""
     if not url:

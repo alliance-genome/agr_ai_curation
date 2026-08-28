@@ -231,13 +231,13 @@ You have a 200K token context window. Large traces can exceed this.
 - `get_extraction_diagnostic_report`: usually compact; best early diagnostic view for extraction/validation traces
 - `get_trace_reconstruction`: varies; defaults to 100 events with payload references only
 - `get_trace_payloads`: compact inventory; use largest sort for prompt/context bloat
-- `get_trace_payload`: exact payload chunks; default chunk is 12K chars
+- `get_trace_payload`: exact payload chunks bounded below the provider result envelope
 - `get_trace_costs`: varies by observation count
 - `get_trace_duplicates`: compact unless many duplicate payload groups exist
-- `get_tool_calls_summary`: ~100 tokens per call
-- `get_trace_conversation`: 1-10K tokens (varies by response length)
-- `get_tool_calls_page`: varies (use page_size=5 for large traces)
-- `get_tool_call_detail`: 1-5K tokens per call
+- `get_tool_calls_summary`: one bounded page of compact summaries (~100 tokens per call)
+- `get_trace_conversation`: one exact `user_query` or `assistant_response` chunk
+- `get_tool_calls_page`: bounded metadata and exact-field references
+- `get_tool_call_detail`: one exact `input` or `tool_result` chunk
 
 **If you hit limits:** Use summaries instead of full data; reduce page_size or event `limit`; fetch one payload chunk at a time with `start`/`max_chars`; filter by `tool_name`, `event_type`, or `candidate_id`.
 </token_budget>
@@ -253,7 +253,7 @@ You have a 200K token context window. Large traces can exceed this.
 
 3. **Get `get_trace_reconstruction(trace_id)`** - Follow the chronological model/tool/event path and identify payload IDs for exact evidence.
 
-4. **Get `get_trace_conversation(trace_id)` and `get_tool_calls_summary(trace_id)`** - Compare the user's question, final answer, and legacy tool-call summary.
+4. **Get both `get_trace_conversation(trace_id, field, start, max_chars)` fields and page through `get_tool_calls_summary(trace_id, page, page_size)`** - Compare the user's question, final answer, and legacy tool-call summaries. Follow each returned `next_call` until `complete=true` or no next page remains.
 
 5. **Fetch exact evidence only when needed** - Use `get_trace_payloads(trace_id)` to find prompt/tool/model payloads, then `get_trace_payload(trace_id, payload_id, start, max_chars)` to inspect chunks. Use `get_extraction_timeline` for event-level details.
 
@@ -338,15 +338,15 @@ Include `token_info` in responses for budget management:
 - **`search_traces(session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp, limit)`** - Find trace IDs when the curator gives a session, document, run, extraction, name, or time window instead of a trace ID.
 - **`get_extraction_diagnostic_report(trace_id, session_id, feedback_id, include_sibling_traces, refresh, include_raw_args, include_raw_outputs, tool_name, event_type, candidate_id)`** - Concise extraction/builder/validator report. Use early for domain-envelope and validation trace questions.
 - **`get_extraction_timeline(trace_id, ...)`** - Detailed ordered extraction events and tool observations. Use after the diagnostic report when you need event-level detail.
-- **`get_trace_reconstruction(trace_id, include_payloads, limit, offset)`** - Chronological Langfuse model/tool/event reconstruction with payload references.
-- **`get_trace_payloads(trace_id, sort, limit, offset, include_values)`** - Payload inventory with IDs, size, token estimate, hash, and preview.
+- **`get_trace_reconstruction(trace_id, limit, offset)`** - Chronological Langfuse model/tool/event reconstruction with payload references.
+- **`get_trace_payloads(trace_id, sort, limit, offset)`** - Payload inventory with IDs, size, token estimate, hash, and preview.
 - **`get_trace_payload(trace_id, payload_id, scope, observation_id, field, start, max_chars)`** - Exact chunked payload retrieval for prompts, model output, tool IO, agent_config, or event_payload.
 - **`get_trace_costs(trace_id)`** - Token/cost accounting by trace, agent, model, kind, and observation.
 - **`get_trace_duplicates(trace_id)`** - Duplicate payload report for repeated prompt/context/tool payloads.
-- **`get_tool_calls_summary(trace_id)`** - Lightweight summaries (~100 tokens/call). Returns call_id, name, duration, status, input_summary, result_summary.
-- **`get_trace_conversation(trace_id)`** - User query and response (1-10K tokens).
-- **`get_tool_calls_page(trace_id, page, page_size, tool_name)`** - Paginated full calls. Use page_size=5 for large traces.
-- **`get_tool_call_detail(trace_id, call_id)`** - Single call full details.
+- **`get_tool_calls_summary(trace_id, page, page_size)`** - One bounded page of lightweight summaries (~100 tokens/call). Follow `next_call` until no next page remains.
+- **`get_trace_conversation(trace_id, field, start, max_chars)`** - One exact `user_query` or `assistant_response` chunk. Follow `next_call` until `complete=true`.
+- **`get_tool_calls_page(trace_id, page, page_size, tool_name)`** - Paginated call metadata and exact-field references.
+- **`get_tool_call_detail(trace_id, call_id, field, start, max_chars)`** - One exact `input` or `tool_result` chunk. Follow `next_call` until `complete=true`.
 - **`get_trace_view(trace_id, view_name)`** - Specialized views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, domain_envelope, extraction_timeline.
 
 ### System Tools
