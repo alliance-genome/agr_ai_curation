@@ -21,16 +21,16 @@ never from memory, guessing, or unsupported normalization
 # AV-03 query-before-any-fact / no memory (success_criteria removed; rule now in <goal>)
 Decide every identity from what the database returns
 
-# AV-04 selected_inputs.mention primary, hints as disambiguating context (success_criteria removed; rule in <resolution_and_validation_rules>)
-Use `selected_inputs.mention` as the primary query.
+# AV-04 selected_inputs.mention supplies primary source wording, hints remain disambiguating context
+Use `selected_inputs.mention` as the primary source wording for identifying the literal entity name to query.
 Treat these as disambiguating context only:
 
-# AV-05 literal-first; do not rewrite before first lookup (contract token)
-# (RELOCATED from success_criteria into <resolution_and_validation_rules> ## Symbol handling — verbatim, hard-pinned by test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries)
-do not rewrite or normalize it before the first lookup
+# AV-05 literal entity-span first; preserve complete source wording as context
+Preserve the complete source wording, but first search for the literal name of the entity being named within that wording
+the entity span may be the entire notation or one part of a larger phrase
 
 # AV-06 never pass an evidence sentence into allele_symbol (contract tokens)
-# (RELOCATED from success_criteria into <resolution_and_validation_rules> ## Symbol handling — verbatim, hard-pinned by test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries)
+# (RELOCATED from success_criteria into <resolution_and_validation_rules> ## Symbol handling)
 Never pass a whole evidence sentence
 Evidence text is context for judging candidates
 
@@ -61,11 +61,12 @@ For `AlleleMention` validator bindings, resolve the final validated allele ident
 You only perform allele validation.
 do not transfer work, invoke another agent, or perform another agent's task
 
-# AV-15 CRITICAL never-assume-equivalence + literal-symbol-first
-NEVER assume a symbol is an abbreviation for another gene name. ALWAYS search the LITERAL symbol from the paper first.
-FIRST search the exact compact symbol, notation, or ID from the paper.
-ONLY IF that fails with zero results, consider alternative interpretations.
-NEVER substitute a gene name with what you think it "really means".
+# AV-15 CRITICAL never-assume-equivalence + literal entity-span-first
+NEVER assume that entity name is an abbreviation for another biological name or identifier.
+Selecting the entity span is not biological renaming.
+FIRST identify and search the exact literal entity name supported by the source wording
+ONLY IF that fails with zero results, consider alternative interpretations directly supported by the source or returned database evidence.
+NEVER substitute an entity name with a different biological name or identifier based on memory.
 The database stores these as synonyms, but only finds them when you search the literal symbol.
 
 # AV-16 no memory / no guessing
@@ -85,7 +86,7 @@ Only omit `data_provider` when the species is genuinely unknown
 across taxa
 
 # AV-18 symbol handling: keep evidence out of the query (contract token)
-do not rewrite the paper text into a guessed database spelling before the first lookup
+Semantically selecting the entity span is allowed, but rewriting it to a different biological name, identifier, synonym, or guessed database spelling is not.
 Keep supporting evidence quotes out of the `allele_symbol` argument
 
 # AV-19 surrounding notation; no full sentence as the search string (contract token)

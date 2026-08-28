@@ -85,6 +85,23 @@ def test_supervisor_alliance_rules_are_selected_only_for_the_matching_group():
     assert rgd_rule not in mgi
 
 
+def test_allele_mgi_render_preserves_literal_entity_span_boundary():
+    base = harness.assembled_prompt_text("allele_validation")
+    mgi = harness.assembled_prompt_text("allele_validation", "MGI")
+
+    for rendered in (base, mgi):
+        assert "literal name of the entity being named within that wording" in rendered
+        assert "For `LAMP-2A flox/flox`, search `LAMP-2A`" in rendered
+        assert "do not replace it with `Arntl` from memory" in rendered
+        assert "`N fa-g` may itself be formal allele notation" in rendered
+        assert "ALWAYS search the LITERAL symbol from the paper first" not in rendered
+        assert "do not rewrite or normalize it before the first lookup" not in rendered
+
+    assert "Strip Genotype Notation Before Searching" not in base
+    assert "Strip Genotype Notation Before Searching" in mgi
+    assert "Do NOT guess or select arbitrarily" in mgi
+
+
 # ---------------------------------------------------------------------------
 # Workflow-invariant guard (retention + ordering)
 # ---------------------------------------------------------------------------
