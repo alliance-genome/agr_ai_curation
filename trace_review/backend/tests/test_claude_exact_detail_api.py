@@ -12,6 +12,20 @@ from src.services.langfuse_run_reconstruction import serialize_payload
 TRACE_ID = "856df16f1752cb53ee43dcb2f5ecfd16"
 
 
+def _conversation_provider_result(chunk: dict) -> dict:
+    data = {
+        "field": "assistant_response",
+        "chunk": chunk,
+        "domain_envelope": None,
+    }
+    return {
+        "status": "success",
+        "data": data,
+        "token_info": claude.create_token_info_dict(data),
+        "error": None,
+    }
+
+
 def _large_analysis(call_count: int = 7) -> dict:
     tool_calls = []
     for index in range(call_count):
@@ -292,6 +306,7 @@ def test_default_exact_chunk_leaves_json_envelope_headroom():
         start=0,
         max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
         next_call={"field": "assistant_response"},
+        provider_result_builder=_conversation_provider_result,
     )
 
     assert chunk["returned_char_count"] == claude.TRACE_REVIEW_CHUNK_MAX_CHARS
@@ -307,18 +322,67 @@ def test_default_exact_chunk_accounts_for_provider_json_escaping(value: str):
         start=0,
         max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
         next_call={"trace_id": TRACE_ID, "field": "assistant_response"},
+        provider_result_builder=_conversation_provider_result,
     )
-    response = {
-        "status": "success",
-        "data": {"field": "assistant_response", "chunk": chunk, "domain_envelope": None},
-        "token_info": {"estimated_tokens": 2500, "within_budget": True, "warning": None},
-        "error": None,
-    }
+    response = _conversation_provider_result(chunk)
 
-    assert chunk["end"] < claude.TRACE_REVIEW_CHUNK_MAX_CHARS
+    assert chunk["end"] <= claude.TRACE_REVIEW_CHUNK_MAX_CHARS
     assert chunk["returned_char_count"] == len(chunk["serialized"])
     assert len(json.dumps(response, default=str)) < claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
     assert chunk["next_call"]["start"] == chunk["end"]
+
+
+@pytest.mark.asyncio
+async def test_conversation_chunks_fit_complete_reduced_provider_envelope(monkeypatch):
+    value = "ordinary exact conversation text " * 400
+    analyzed = _large_analysis(call_count=0)
+    analyzed["analysis"]["conversation"]["assistant_response"] = value
+    monkeypatch.setattr(claude, "TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS", 1000)
+    chunks = []
+    start = 0
+
+    with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+        while True:
+            response = await claude.get_trace_conversation(
+                TRACE_ID,
+                Mock(),
+                field="assistant_response",
+                start=start,
+                max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+                source="local",
+            )
+            provider_result = {
+                "status": "success",
+                "data": response.data.model_dump(),
+                "token_info": response.token_info.model_dump(),
+                "error": None,
+            }
+            assert len(json.dumps(provider_result, default=str)) <= 1000
+            chunks.append(response.data.chunk)
+            if response.data.chunk["complete"]:
+                break
+            start = response.data.chunk["next_start"]
+
+    assert "".join(chunk["serialized"] for chunk in chunks) == value
+    assert all(chunk["returned_char_count"] > 0 for chunk in chunks)
+
+
+def test_exact_chunk_fails_when_required_envelope_cannot_fit(monkeypatch):
+    monkeypatch.setattr(claude, "TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS", 1)
+
+    with pytest.raises(claude.HTTPException) as exc_info:
+        claude._exact_text_chunk(
+            field_id="conversation:assistant_response",
+            field="assistant_response",
+            value="exact text",
+            start=0,
+            max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+            next_call={"trace_id": TRACE_ID, "field": "assistant_response"},
+            provider_result_builder=_conversation_provider_result,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "too small to return even one exact TraceReview character" in exc_info.value.detail
 
 
 def _large_payload_trace() -> dict:

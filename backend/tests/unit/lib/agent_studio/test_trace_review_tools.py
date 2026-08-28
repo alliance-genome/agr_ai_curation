@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import httpx
 import pytest
 
@@ -71,7 +73,9 @@ def test_env_helpers(monkeypatch):
         lambda: tools.get_tool_call_detail(
             "856df16f1752cb53ee43dcb2f5ecfd16", "call-1", "input"
         ),
-        lambda: tools.get_trace_conversation("856df16f1752cb53ee43dcb2f5ecfd16"),
+        lambda: tools.get_trace_conversation(
+            "856df16f1752cb53ee43dcb2f5ecfd16", "user_query"
+        ),
         lambda: tools.get_trace_view(
             "856df16f1752cb53ee43dcb2f5ecfd16", "trace_summary"
         ),
@@ -214,10 +218,17 @@ async def test_get_trace_conversation_success(monkeypatch):
         response=_FakeResponse(200, {"data": {"field": "user_query", "chunk": {"serialized": "q"}}, "token_info": {"estimated_tokens": 10}}),
         capture=capture,
     )
-    result = await tools.get_trace_conversation("856df16f1752cb53ee43dcb2f5ecfd16")
+    result = await tools.get_trace_conversation(
+        "856df16f1752cb53ee43dcb2f5ecfd16", "user_query"
+    )
     assert result["status"] == "success"
     assert result["data"]["chunk"]["serialized"] == "q"
     assert capture["params"]["field"] == "user_query"
+
+
+def test_get_trace_conversation_requires_explicit_field():
+    field_parameter = inspect.signature(tools.get_trace_conversation).parameters["field"]
+    assert field_parameter.default is inspect.Parameter.empty
 
 
 @pytest.mark.asyncio

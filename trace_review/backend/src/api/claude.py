@@ -17,7 +17,7 @@ import hashlib
 import logging
 import math
 from datetime import datetime
-from typing import Annotated, Dict, Any, Optional, List, Mapping, Literal
+from typing import Annotated, Callable, Dict, Any, Optional, List, Mapping, Literal
 from fastapi import APIRouter, HTTPException, Request, Query, Path
 
 from ..services.trace_extractor import TraceExtractor
@@ -177,34 +177,63 @@ def _exact_text_chunk(
     start: int,
     max_chars: int,
     next_call: Mapping[str, Any],
+    provider_result_builder: Callable[[Dict[str, Any]], Mapping[str, Any]],
 ) -> Dict[str, Any]:
-    """Build a deterministic, reconstructable exact-text chunk contract."""
+    """Build the largest exact chunk whose complete provider result fits."""
     serialized = serialize_payload(value)
     safe_start = min(max(0, start), len(serialized))
     safe_max_chars = min(max(1, max_chars), TRACE_REVIEW_CHUNK_MAX_CHARS)
-    source_candidate = serialized[safe_start:safe_start + safe_max_chars]
-    encoded_content_budget = min(
-        TRACE_REVIEW_CHUNK_MAX_CHARS,
-        TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS,
-    )
-    chunk_text = _json_bounded_prefix(source_candidate, encoded_content_budget)
-    end = safe_start + len(chunk_text)
-    complete = end >= len(serialized)
     metadata = _exact_text_metadata(field_id=field_id, field=field, value=value)
-    return {
-        **metadata,
-        "start": safe_start,
-        "end": end,
-        "returned_char_count": end - safe_start,
-        "complete": complete,
-        "next_start": None if complete else end,
-        "next_call": (
-            None
-            if complete
-            else {**next_call, "start": end, "max_chars": safe_max_chars}
+
+    def build_chunk(end: int) -> Dict[str, Any]:
+        complete = end >= len(serialized)
+        return {
+            **metadata,
+            "start": safe_start,
+            "end": end,
+            "returned_char_count": end - safe_start,
+            "complete": complete,
+            "next_start": None if complete else end,
+            "next_call": (
+                None
+                if complete
+                else {**next_call, "start": end, "max_chars": safe_max_chars}
+            ),
+            "serialized": serialized[safe_start:end],
+        }
+
+    def fits_provider_result(chunk: Dict[str, Any]) -> bool:
+        return len(json.dumps(provider_result_builder(chunk), default=str)) <= (
+            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        )
+
+    requested_end = min(safe_start + safe_max_chars, len(serialized))
+    requested_chunk = build_chunk(requested_end)
+    if fits_provider_result(requested_chunk):
+        return requested_chunk
+
+    fitting_chunk: Dict[str, Any] | None = None
+    low = safe_start + 1
+    high = requested_end - 1
+    while low <= high:
+        candidate_end = (low + high) // 2
+        candidate = build_chunk(candidate_end)
+        if fits_provider_result(candidate):
+            fitting_chunk = candidate
+            low = candidate_end + 1
+        else:
+            high = candidate_end - 1
+
+    if fitting_chunk is not None:
+        return fitting_chunk
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "The provider inline tool-result limit is too small to return even one "
+            "exact TraceReview character with its required identity metadata."
         ),
-        "serialized": chunk_text,
-    }
+    )
 
 
 def _bounded_summary(value: Any) -> str:
@@ -885,6 +914,21 @@ async def get_langfuse_payload(
             "returned_char_count", "total_char_count", "truncated", "next_start",
         }
     }
+
+    def build_payload_provider_result(chunk: Dict[str, Any]) -> Mapping[str, Any]:
+        provider_payload = {**payload_metadata, **chunk, "truncated": not chunk["complete"]}
+        provider_data = {
+            "source": source,
+            "trace_id": trace_id,
+            "payload": provider_payload,
+        }
+        return {
+            "status": "success",
+            "data": provider_data,
+            "token_info": create_token_info_dict(provider_data),
+            "error": None,
+        }
+
     chunk = _exact_text_chunk(
         field_id=f"payload:{payload['payload_id']}",
         field=str(payload["field"]),
@@ -892,6 +936,7 @@ async def get_langfuse_payload(
         start=start,
         max_chars=max_chars,
         next_call={"trace_id": trace_id, "payload_id": payload["payload_id"]},
+        provider_result_builder=build_payload_provider_result,
     )
     payload = {**payload_metadata, **chunk, "truncated": not chunk["complete"]}
 
@@ -1340,6 +1385,17 @@ async def get_tool_call_detail(
         if key not in {"input", "output", "tool_result"}
     }
     tool_call_metadata.update({"index": tool_call_index, "call_id": selector})
+
+    def build_tool_call_provider_result(chunk: Dict[str, Any]) -> Mapping[str, Any]:
+        token_info = create_token_info_dict({"tool_call": tool_call_metadata, "chunk": chunk})
+        return {
+            "status": "success",
+            "tool_call": tool_call_metadata,
+            "chunk": chunk,
+            "token_info": token_info,
+            "error": None,
+        }
+
     chunk = _exact_text_chunk(
         field_id=f"tool_call:{selector}:{field}",
         field=field,
@@ -1347,6 +1403,7 @@ async def get_tool_call_detail(
         start=start,
         max_chars=max_chars,
         next_call={"trace_id": trace_id, "call_id": selector, "field": field},
+        provider_result_builder=build_tool_call_provider_result,
     )
 
     token_info = create_token_info_dict({"tool_call": tool_call_metadata, "chunk": chunk})
@@ -1394,6 +1451,21 @@ async def get_trace_conversation(
     conversation = analysis.get("conversation", {})
 
     analyzer_field = "user_input" if field == "user_query" else "assistant_response"
+    domain_envelope = conversation.get("domain_envelope")
+
+    def build_conversation_provider_result(chunk: Dict[str, Any]) -> Mapping[str, Any]:
+        provider_data = {
+            "field": field,
+            "chunk": chunk,
+            "domain_envelope": domain_envelope,
+        }
+        return {
+            "status": "success",
+            "data": provider_data,
+            "token_info": create_token_info_dict(provider_data),
+            "error": None,
+        }
+
     chunk = _exact_text_chunk(
         field_id=f"conversation:{field}",
         field=field,
@@ -1401,11 +1473,12 @@ async def get_trace_conversation(
         start=start,
         max_chars=max_chars,
         next_call={"trace_id": trace_id, "field": field},
+        provider_result_builder=build_conversation_provider_result,
     )
     response_data = ConversationData(
         field=field,
         chunk=chunk,
-        domain_envelope=conversation.get("domain_envelope"),
+        domain_envelope=domain_envelope,
     )
 
     token_info = create_token_info_dict(response_data.model_dump())

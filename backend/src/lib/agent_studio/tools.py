@@ -324,6 +324,8 @@ async def get_tool_calls_summary(
 
     Args:
         trace_id: Langfuse trace ID
+        page: One-indexed summary page.
+        page_size: Requested summaries per page, capped by configuration.
 
     Returns:
         {
@@ -343,6 +345,8 @@ async def get_tool_calls_summary(
                         "result_summary": str
                     }
                 ],
+                "pagination": {...},
+                "next_call": {...} | None,
                 "has_duplicates": bool,
                 "duplicate_count": int
             },
@@ -563,6 +567,9 @@ async def get_tool_call_detail(
         call_id: Either the OpenAI call_id (e.g., "call_oVv6...") or the
                  Langfuse observation id (e.g., "5d8254fb..."). Both work.
                  Prefer call_id when available (from tool_calls_summary).
+        field: Exact field to retrieve: input or tool_result.
+        start: Start character in the serialized exact field.
+        max_chars: Requested exact characters, capped by configuration.
 
     Returns:
         {
@@ -572,9 +579,16 @@ async def get_tool_call_detail(
                 "name": str,
                 "time": str,
                 "duration": str,
-                "status": str,
-                "input": {...},
-                "tool_result": {...}
+                "status": str
+            },
+            "chunk": {
+                "field_id": str,
+                "sha256": str,
+                "start": int,
+                "end": int,
+                "complete": bool,
+                "next_call": {...} | None,
+                "serialized": str
             },
             "token_info": {...},
             "error": str | None
@@ -654,26 +668,37 @@ async def get_tool_call_detail(
 
 async def get_trace_conversation(
     trace_id: str,
-    field: str = "user_query",
+    field: str,
     start: int = 0,
     max_chars: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Get the user's query and assistant's final response.
+    Get one exact selected conversation-field chunk.
 
-    Use when you need to see what the curator asked and what the AI answered.
-    Token cost varies by response length.
+    Select user_query or assistant_response independently, then follow
+    next_call until the response reports complete=true.
 
     Args:
         trace_id: Langfuse trace ID
+        field: Exact field to retrieve: user_query or assistant_response.
+        start: Start character in the selected field.
+        max_chars: Requested exact characters, capped by configuration.
 
     Returns:
         {
             "status": "success" | "error",
             "data": {
-                "user_query": str,
-                "assistant_response": str,
-                "response_length": int
+                "field": str,
+                "chunk": {
+                    "field_id": str,
+                    "sha256": str,
+                    "start": int,
+                    "end": int,
+                    "complete": bool,
+                    "next_call": {...} | None,
+                    "serialized": str
+                },
+                "domain_envelope": {...} | None
             },
             "token_info": {...},
             "error": str | None
