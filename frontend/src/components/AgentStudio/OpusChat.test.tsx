@@ -454,6 +454,8 @@ describe('OpusChat', () => {
       writable: true,
     })
 
+    const longProposedPrompt = 'Evidence line.\n'.repeat(2600)
+
     serviceMocks.streamOpusChat.mockImplementation(async function* () {
       yield {
         type: 'TOOL_RESULT',
@@ -462,7 +464,9 @@ describe('OpusChat', () => {
           success: true,
           pending_user_approval: true,
           apply_mode: 'replace',
-          proposed_prompt: 'You are an expert curator. Return concise extracted evidence with citations.',
+          proposed_prompt: longProposedPrompt,
+          prompt_length: longProposedPrompt.length,
+          prompt_hash: 'sha256-for-full-ui-proposal',
           change_summary: 'Rewrote instructions for stronger evidence grounding.',
         },
       }
@@ -493,7 +497,7 @@ describe('OpusChat', () => {
 
     await waitFor(() => {
       expect(onApplyWorkshopPromptUpdate).toHaveBeenCalledWith({
-        prompt: 'You are an expert curator. Return concise extracted evidence with citations.',
+        prompt: longProposedPrompt,
         summary: 'Rewrote instructions for stronger evidence grounding.',
         apply_mode: 'replace',
         target_prompt: 'main',
