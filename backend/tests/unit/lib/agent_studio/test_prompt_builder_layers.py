@@ -132,3 +132,28 @@ def test_flow_context_describes_grouped_output_sources(monkeypatch):
     ) in prompt
     assert "grouped sources are projected together in that declared order" in prompt
     assert "exactly one extraction node" not in prompt
+
+
+def test_flow_context_describes_current_flow_manifest_and_detail_calls(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.prompt_builder.build_package_diagnostic_tools_prompt",
+        lambda: "DIAGNOSTIC TOOLS",
+    )
+    prompt = build_opus_system_prompt(
+        ChatContext.model_validate({"active_tab": "flows"}),
+        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        list_model_definitions=lambda: [],
+        get_prompt_catalog=lambda: None,
+        prepare_trace_context=lambda _trace_id: None,
+    )
+
+    assert "ALWAYS call `get_current_flow` tool FIRST" in prompt
+    assert "`current_flow_manifest_v1` contract" in prompt
+    assert "`ordered_control_node_ids` and `executable_agent_node_ids`" in prompt
+    assert "`output_node_ids` and `validation_sidecar_node_ids`" in prompt
+    assert "`findings` and `has_critical_issues`" in prompt
+    assert "targeted tools named in `detail_calls`" in prompt
+    assert "call `get_domain_pack_validation_plan`" in prompt
+    assert "Use `get_prompt`, `get_tool_inventory`, and `get_tool_details`" in prompt
+    assert "Clean markdown representation" not in prompt
+    assert "`domain_envelope_analysis`" not in prompt

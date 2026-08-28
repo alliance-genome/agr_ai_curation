@@ -84,12 +84,6 @@ _current_active_group_ids: ContextVar[tuple[str, ...]] = ContextVar(
 _current_flow_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar("current_flow_context", default=None)
 
 
-def _truncate_preview(text: str, max_chars: int) -> str:
-    """Return a preview string with ellipsis only when truncation occurred."""
-
-    return text[:max_chars] + ("..." if len(text) > max_chars else "")
-
-
 def set_workflow_user_context(
     user_id: int,
     user_email: Optional[str] = None,
