@@ -127,7 +127,7 @@ def validate_view(view: str) -> None:
         "summary", "tool_calls", "conversation", "pdf_citations",
         "token_analysis", "agent_context", "trace_summary",
         "document_hierarchy", "agent_configs", "group_context",
-        "tool_calls", "domain_envelope", "extraction_timeline", "evidence_revisions"
+        "domain_envelope", "extraction_timeline", "evidence_revisions"
     ]
     if view not in valid_views:
         raise ValueError(f"Invalid view '{view}'. Must be one of: {', '.join(valid_views)}")
