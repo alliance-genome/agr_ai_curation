@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from src.api import agent_studio as api_module
 from src.lib.agent_studio.diagnostic_tools import codebase_tools
 
 
@@ -187,7 +188,7 @@ def test_search_codebase_raises_clear_error_when_rg_times_out(tmp_path, monkeypa
 def test_search_codebase_recovers_one_minified_match_in_bounded_exact_chunks(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
-    long_line = 'const payload = "' + ('x\\"' * 4_000) + '";'
+    long_line = 'const payload = "' + ('🧬\\"' * 4_000) + '";'
     rg_payload = {"type": "match", "data": {"path": {"text": str(repo_root / "bundle.js")},
                   "lines": {"text": long_line + "\n"}, "line_number": 1}}
     monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
@@ -200,7 +201,15 @@ def test_search_codebase_recovers_one_minified_match_in_bounded_exact_chunks(tmp
     chunks, cursor = [], None
     while True:
         result = codebase_tools.search_codebase(query="payload", limit=1, cursor=cursor)
-        assert len(json.dumps(result, ensure_ascii=False, sort_keys=True)) <= 1_200
+        assert len(json.dumps(result, default=str)) <= 1_200
+        content = api_module._provider_tool_result_content(
+            tool_name="search_codebase",
+            tool_input={"query": "payload", "limit": 1, "cursor": cursor},
+            tool_result=result,
+            session_id="session-1",
+            turn_id="turn-1",
+        )
+        assert json.loads(content).get("status") != "compacted_tool_result"
         chunks.append(result["results"][0]["line_text"])
         assert result["results"][0]["line_sha256"] == hashlib.sha256(long_line.encode()).hexdigest()
         if not result["truncated"]:
@@ -212,7 +221,7 @@ def test_search_codebase_recovers_one_minified_match_in_bounded_exact_chunks(tmp
 def test_read_source_file_recovers_minified_line_with_executable_continuations(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
-    long_line = "{" + ('\"key\":\"value\",' * 2_000) + "}"
+    long_line = "{" + ('\"🧬\":\"値\",' * 2_000) + "}"
     (repo_root / "minified.json").write_text(long_line + "\nnext\n", encoding="utf-8")
     monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
     monkeypatch.setattr(codebase_tools, "_RESULT_MAX_CHARS", 1_100)
@@ -221,7 +230,15 @@ def test_read_source_file_recovers_minified_line_with_executable_continuations(t
     arguments = {"path": "minified.json", "start_line": 1, "end_line": 1}
     while True:
         result = codebase_tools.read_source_file(**arguments)
-        assert len(json.dumps(result, ensure_ascii=False, sort_keys=True)) <= 1_100
+        assert len(json.dumps(result, default=str)) <= 1_100
+        content = api_module._provider_tool_result_content(
+            tool_name="read_source_file",
+            tool_input=arguments,
+            tool_result=result,
+            session_id="session-1",
+            turn_id="turn-1",
+        )
+        assert json.loads(content).get("status") != "compacted_tool_result"
         chunks.extend(line["text"] for line in result["lines"])
         if not result["truncated"]:
             break

@@ -128,7 +128,7 @@ def test_get_tool_inventory_agent_scope_query_and_paging(monkeypatch):
 
 def test_installed_catalog_pages_stay_bounded_and_have_executable_continuations(monkeypatch):
     installed = {f"tool_{index:02d}": {"name": f"Installed tool {index:02d}",
-                 "description": "rich installed metadata " * 80,
+                 "description": "rich installed metadata 🧬 " * 80,
                  "category": f"category_{index % 4}"} for index in range(67)}
     monkeypatch.setattr(catalog_service, "get_tool_registry", lambda: installed)
     handler = tool_definitions._create_get_tool_inventory_handler()
@@ -136,7 +136,7 @@ def test_installed_catalog_pages_stay_bounded_and_have_executable_continuations(
     arguments: dict[str, Any] = {}
     while True:
         result = handler(**arguments)
-        assert len(json.dumps(result, ensure_ascii=False, sort_keys=True)) <= 8_000
+        assert len(json.dumps(result, default=str)) <= 8_000
         content = api_module._provider_tool_result_content(
             tool_name="get_tool_inventory", tool_input=arguments, tool_result=result,
             session_id="session-1", turn_id="turn-1")
@@ -160,8 +160,8 @@ def test_runtime_installed_catalog_default_page_stays_provider_visible():
 
 
 def test_large_parent_tool_metadata_is_exactly_section_addressable(monkeypatch):
-    metadata = {"name": "Large parent", "category": "database",
-                "documentation": {"methods": [{"id": f"method_{index}", "schema": "x" * 500}
+    metadata = {"name": "Large parent 🧬", "category": "database",
+                "documentation": {"methods": [{"id": f"method_{index}", "schema": "🧬値" * 500}
                                                 for index in range(40)]}}
     monkeypatch.setattr(catalog_service, "get_tool_details",
                         lambda tool_id: metadata if tool_id == "large_parent" else None)
@@ -173,7 +173,7 @@ def test_large_parent_tool_metadata_is_exactly_section_addressable(monkeypatch):
     arguments: dict[str, Any] = {"tool_id": "large_parent", "section": "documentation"}
     while True:
         result = handler(**arguments)
-        assert len(json.dumps(result, ensure_ascii=False, sort_keys=True)) <= 8_000
+        assert len(json.dumps(result, default=str)) <= 8_000
         content = api_module._provider_tool_result_content(
             tool_name="get_tool_details", tool_input=arguments, tool_result=result,
             session_id="session-1", turn_id="turn-1")

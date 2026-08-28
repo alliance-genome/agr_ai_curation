@@ -1683,6 +1683,28 @@ def get_agent_studio_flow_template_max_items() -> int:
     return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_TEMPLATE_MAX_ITEMS", 20))
 
 
+def get_agent_studio_flow_catalog_result_max_chars() -> int:
+    """Maximum provider-serialized characters for one flow catalog result."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_FLOW_CATALOG_RESULT_MAX_CHARS",
+            8_000,
+        ),
+    )
+
+
+def get_agent_studio_flow_catalog_chunk_max_chars() -> int:
+    """Maximum exact characters requested from one flow catalog detail chunk."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_FLOW_CATALOG_CHUNK_MAX_CHARS",
+            6_000,
+        ),
+    )
+
+
 def get_agent_studio_trace_review_page_size() -> int:
     """Max/default page size for exact TraceReview call listings.
 

@@ -28,6 +28,7 @@ from src.lib.openai_agents.bounded_list import (
 )
 from src.lib.openai_agents.config import (
     get_agent_studio_prompt_inspection_chunk_max_chars,
+    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_tool_details_chunk_max_chars,
     get_agent_studio_tool_details_result_max_chars,
     get_agent_studio_tool_inventory_default_items,
@@ -48,9 +49,16 @@ logger = logging.getLogger(__name__)
 
 _TOOL_INVENTORY_DEFAULT_ITEMS = get_agent_studio_tool_inventory_default_items()
 _TOOL_INVENTORY_MAX_ITEMS = get_agent_studio_tool_inventory_max_items()
-_TOOL_INVENTORY_RESULT_MAX_CHARS = get_agent_studio_tool_inventory_result_max_chars()
+_PROVIDER_RESULT_INLINE_MAX_CHARS = get_agent_studio_provider_tool_result_inline_max_chars()
+_TOOL_INVENTORY_RESULT_MAX_CHARS = min(
+    get_agent_studio_tool_inventory_result_max_chars(),
+    _PROVIDER_RESULT_INLINE_MAX_CHARS,
+)
 _TOOL_INVENTORY_SUMMARY_MAX_CHARS = get_agent_studio_tool_inventory_summary_max_chars()
-_TOOL_DETAILS_RESULT_MAX_CHARS = get_agent_studio_tool_details_result_max_chars()
+_TOOL_DETAILS_RESULT_MAX_CHARS = min(
+    get_agent_studio_tool_details_result_max_chars(),
+    _PROVIDER_RESULT_INLINE_MAX_CHARS,
+)
 _TOOL_DETAILS_CHUNK_MAX_CHARS = get_agent_studio_tool_details_chunk_max_chars()
 
 
@@ -59,7 +67,8 @@ def _canonical_json(value: Any) -> str:
 
 
 def _serialized_chars(value: Dict[str, Any]) -> int:
-    return len(json.dumps(value, ensure_ascii=False, sort_keys=True))
+    """Measure the exact JSON representation used for provider continuation."""
+    return len(json.dumps(value, default=str))
 
 
 def _unwrap_function_tool(tool: FunctionTool) -> Callable:

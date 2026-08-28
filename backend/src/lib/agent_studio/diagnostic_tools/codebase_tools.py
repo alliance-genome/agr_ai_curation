@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from src.lib.openai_agents.config import (
+    get_agent_studio_provider_tool_result_inline_max_chars,
     get_codebase_file_list_max_results,
     get_codebase_long_line_chunk_max_chars,
     get_codebase_read_max_lines,
@@ -28,12 +29,16 @@ _MAX_READ_LINES = get_codebase_read_max_lines()
 _MAX_SEARCH_RESULTS = get_codebase_search_max_results()
 _MAX_FILE_LIST_RESULTS = get_codebase_file_list_max_results()
 _RG_SUBPROCESS_TIMEOUT_SECONDS = get_codebase_search_timeout_seconds()
-_RESULT_MAX_CHARS = get_codebase_result_max_chars()
+_RESULT_MAX_CHARS = min(
+    get_codebase_result_max_chars(),
+    get_agent_studio_provider_tool_result_inline_max_chars(),
+)
 _LONG_LINE_CHUNK_MAX_CHARS = get_codebase_long_line_chunk_max_chars()
 
 
 def _serialized_chars(value: Dict[str, Any]) -> int:
-    return len(json.dumps(value, ensure_ascii=False, sort_keys=True))
+    """Measure the exact JSON representation used for provider continuation."""
+    return len(json.dumps(value, default=str))
 
 
 def _parse_search_cursor(cursor: Optional[str]) -> tuple[int, int]:

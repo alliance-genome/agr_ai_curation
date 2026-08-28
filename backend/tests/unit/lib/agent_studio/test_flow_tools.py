@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, cast
 
@@ -2003,6 +2004,85 @@ def test_get_flow_templates_pages_templates_independently_without_agent_repetiti
     assert template_page["templates"][0]["name"] == "Gene template 2"
 
 
+def test_get_flow_templates_recovers_oversized_unicode_records_without_provider_compaction(
+    monkeypatch,
+):
+    template = {
+        "name": "Large 🧬 template",
+        "description": "🧬値" * 2_000,
+        "steps": [
+            {"agent_id": "gene_extractor", "custom_instructions": "🧬" * 2_000}
+            for _ in range(30)
+        ],
+    }
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["gene_extractor"])
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "gene_extractor": {
+                "name": "Gene 🧬 extractor",
+                "description": "🧬値" * 2_000,
+                "category": "Extraction",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "_filter_flow_templates",
+        lambda *args, **kwargs: [template],
+    )
+    monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_RESULT_MAX_CHARS", 1_400)
+    monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_CHUNK_MAX_CHARS", 1_000)
+    handler = flow_tools._get_flow_templates_handler()
+
+    for kind, initial_arguments, expected in (
+        ("template", {"section": "templates"}, template),
+        (
+            "agent",
+            {"section": "agents"},
+            {
+                "agent_id": "gene_extractor",
+                "display_name": "Gene 🧬 extractor",
+                "description": "🧬値" * 2_000,
+                "category": "Extraction",
+                "requires_document": False,
+            },
+        ),
+    ):
+        page = handler(**cast(dict[str, Any], initial_arguments))
+        assert len(json.dumps(page, default=str)) <= 1_400
+        page_content = api_module._provider_tool_result_content(
+            tool_name="get_flow_templates",
+            tool_input=initial_arguments,
+            tool_result=page,
+            session_id="session-1",
+            turn_id="turn-1",
+        )
+        assert json.loads(page_content).get("status") != "compacted_tool_result"
+        next_call = page[f"{kind}_next_call"]
+        assert next_call["arguments"]["detail_kind"] == kind
+        chunks = []
+        expected_hash = None
+        while next_call is not None and "detail_kind" in next_call["arguments"]:
+            detail = handler(**next_call["arguments"])
+            assert len(json.dumps(detail, default=str)) <= 1_400
+            content = api_module._provider_tool_result_content(
+                tool_name="get_flow_templates",
+                tool_input=next_call["arguments"],
+                tool_result=detail,
+                session_id="session-1",
+                turn_id="turn-1",
+            )
+            assert json.loads(content).get("status") != "compacted_tool_result"
+            chunks.append(detail["content"])
+            expected_hash = detail["sha256"]
+            next_call = detail["next_call"]
+        reconstructed = "".join(chunks)
+        assert hashlib.sha256(reconstructed.encode()).hexdigest() == expected_hash
+        assert json.loads(reconstructed) == expected
+
+
 def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeypatch):
     registrations = []
 
@@ -2032,6 +2112,14 @@ def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeyp
     ]
     assert all(entry["category"] == "flows" for entry in registrations)
     assert all(callable(entry["handler"]) for entry in registrations)
+    flow_catalog_schema = registrations[2]["input_schema"]["properties"]
+    assert {
+        "detail_kind",
+        "detail_index",
+        "detail_cursor",
+        "detail_max_chars",
+    }.issubset(flow_catalog_schema)
+    assert flow_catalog_schema["detail_max_chars"]["maximum"] == 6_000
     create_flow_schema = registrations[0]["input_schema"]
     create_steps_schema = create_flow_schema["properties"]["steps"]
     step_properties = create_steps_schema["items"][
