@@ -6,6 +6,7 @@ repo_root="$(cd "${script_dir}/../.." && pwd)"
 compose_file="${repo_root}/docker-compose.production.yml"
 preflight="${script_dir}/production_compose_preflight.py"
 fixture_dir="${script_dir}/fixtures"
+provider_boundary_contract="${fixture_dir}/agent_studio_provider_boundary_env.txt"
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
 
@@ -40,6 +41,13 @@ write_test_env() {
       'VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7' \
       'VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500'
   } >"${env_file}"
+
+  while IFS='|' read -r category key default services; do
+    if [[ -z "${category}" || "${category}" == \#* ]]; then
+      continue
+    fi
+    printf '%s=%s\n' "${key}" '987654321' >>"${env_file}"
+  done <"${provider_boundary_contract}"
 }
 
 render_with_override() {
@@ -141,8 +149,9 @@ docker compose --env-file "${env_file}" -f "${compose_file}" config --format jso
 # installer tests cover its real image-inspection invocation.
 "${preflight}" --env-file "${env_file}" --config-json "${rendered_file}" \
   --frontend-build-metadata-json "${frontend_build_metadata_file}"
-python3 - "${rendered_file}" <<'PY'
+python3 - "${rendered_file}" "${provider_boundary_contract}" <<'PY'
 import json
+from pathlib import Path
 import sys
 
 config = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -170,6 +179,17 @@ backup_mounts = [
 ]
 assert len(backup_mounts) == 1
 assert backup_mounts[0]["type"] == "bind"
+
+for raw_line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    category, key, _default, service_names = line.split("|", 3)
+    for service_name in service_names.split(","):
+        actual = config["services"][service_name]["environment"].get(key)
+        assert str(actual) == "987654321", (
+            f"{category}: sentinel for {key} did not reach {service_name}: {actual!r}"
+        )
 PY
 
 python3 - "${repo_root}" <<'PY'

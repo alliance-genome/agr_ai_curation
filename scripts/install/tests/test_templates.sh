@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 env_template="${repo_root}/scripts/install/lib/templates/env.standalone"
 groups_template="${repo_root}/scripts/install/lib/templates/groups.standalone.yaml"
+provider_boundary_contract="${repo_root}/scripts/testing/fixtures/agent_studio_provider_boundary_env.txt"
 
 required_env_keys=(
   OPENAI_API_KEY
@@ -90,6 +91,16 @@ for key in "${required_env_keys[@]}"; do
     exit 1
   fi
 done
+
+while IFS='|' read -r category key default services; do
+  if [[ -z "${category}" || "${category}" == \#* ]]; then
+    continue
+  fi
+  if ! grep -Fqx "${key}=${default}" "${env_template}"; then
+    echo "Provider-boundary template drift (${category}): expected ${key}=${default}" >&2
+    exit 1
+  fi
+done <"${provider_boundary_contract}"
 
 grep -q '^LANGFUSE_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}$' "$env_template"
 grep -q '^LANGFUSE_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY}$' "$env_template"
