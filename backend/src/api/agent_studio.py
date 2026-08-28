@@ -2575,7 +2575,9 @@ async def _handle_tool_call(
             extraction_id=tool_input.get("extraction_id"),
             from_timestamp=tool_input.get("from_timestamp"),
             to_timestamp=tool_input.get("to_timestamp"),
-            limit=tool_input.get("limit", 25),
+            offset=tool_input.get("offset", 0),
+            limit=tool_input.get("limit"),
+            item_start=tool_input.get("item_start", 0),
         )
 
     if tool_name == "get_trace_summary":
@@ -2607,6 +2609,7 @@ async def _handle_tool_call(
                 "page_size",
                 get_agent_studio_trace_review_page_size(),
             ),
+            item_offset=tool_input.get("item_offset", 0),
         )
 
     elif tool_name == "get_tool_calls_page":
@@ -2630,7 +2633,8 @@ async def _handle_tool_call(
             trace_id=trace_id,
             page=page,
             page_size=page_size,
-            tool_name=tool_name_filter
+            item_offset=tool_input.get("item_offset", 0),
+            tool_name=tool_name_filter,
         )
 
     elif tool_name == "get_tool_call_detail":
@@ -2912,7 +2916,7 @@ async def _handle_tool_call(
                 "data": None,
                 "token_info": None,
                 "error": f"Missing required parameters: {', '.join(missing)}",
-                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, domain_envelope, extraction_timeline, evidence_revisions"
+                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, tool_calls, domain_envelope, extraction_timeline, evidence_revisions"
             }
         return await get_trace_view(
             trace_id=trace_id,

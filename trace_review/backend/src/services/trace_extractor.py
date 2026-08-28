@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Mapping, Optional, cast
 from langfuse import Langfuse
 from ..analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from ..config import (
+    get_agent_studio_trace_search_max_limit,
     get_langfuse_observation_page_limit,
     get_langfuse_request_timeout_seconds,
     get_trace_source_runtime_config,
@@ -225,6 +226,7 @@ class TraceExtractor:
         document_id: Optional[str] = None,
         run_id: Optional[str] = None,
         extraction_id: Optional[str] = None,
+        offset: int = 0,
         limit: int = SESSION_TRACE_LIST_LIMIT,
         from_timestamp: Optional[datetime] = None,
         to_timestamp: Optional[datetime] = None,
@@ -251,11 +253,17 @@ class TraceExtractor:
         meta: Dict[str, Any] = {}
         filter_json = json.dumps(filters) if filters else None
 
-        while len(traces) < limit:
-            page_limit = min(100, limit - len(traces))
+        safe_offset = max(0, offset)
+        requested_end = safe_offset + max(1, limit)
+        source_page_limit = min(
+            get_agent_studio_trace_search_max_limit(),
+            requested_end,
+        )
+        source_exhausted = False
+        while len(traces) < requested_end:
             response = self.client.api.trace.list(
                 page=page,
-                limit=page_limit,
+                limit=source_page_limit,
                 session_id=session_id,
                 user_id=user_id,
                 name=name,
@@ -271,15 +279,23 @@ class TraceExtractor:
             meta = self._normalize_item(response_meta) if response_meta is not None else {}
             total_pages = meta.get("totalPages") or meta.get("total_pages")
             if total_pages is None:
+                source_exhausted = len(response_data) < source_page_limit
                 break
             if page >= total_pages:
+                source_exhausted = True
                 break
             page += 1
 
+        total_items = meta.get("totalItems") or meta.get("total_items")
+        if total_items is None and source_exhausted:
+            total_items = len(traces)
+
         return {
             "source": self.source,
-            "traces": traces,
+            "traces": traces[safe_offset:requested_end],
             "meta": meta,
+            "total_items": total_items,
+            "source_exhausted": source_exhausted,
             "query": {
                 "session_id": session_id,
                 "user_id": user_id,
@@ -287,6 +303,7 @@ class TraceExtractor:
                 "document_id": document_id,
                 "run_id": run_id,
                 "extraction_id": extraction_id,
+                "offset": safe_offset,
                 "limit": limit,
                 "from_timestamp": from_timestamp.isoformat() if from_timestamp else None,
                 "to_timestamp": to_timestamp.isoformat() if to_timestamp else None,

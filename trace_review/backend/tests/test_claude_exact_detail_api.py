@@ -210,7 +210,7 @@ async def test_analyzer_formats_have_unique_selectors_and_no_inline_exact_output
 
 async def _reconstruct_tool_field(
     analyzed: dict,
-    field: Literal["input", "tool_result"],
+    field: Literal["input", "tool_result", "thought", "metadata", "domain_envelope"],
     call_id: str = "call-0",
 ) -> tuple[str, list[dict]]:
     chunks = []
@@ -238,6 +238,254 @@ async def _reconstruct_tool_field(
             }
             start = response.chunk["next_start"]
     return "".join(chunk["serialized"] for chunk in chunks), chunks
+
+
+@pytest.mark.asyncio
+async def test_call_scoped_domain_envelopes_reconstruct_the_selected_call_exactly():
+    analyzed = _large_analysis(call_count=2)
+    calls = analyzed["analysis"]["tool_calls"]["tool_calls"]
+    calls[0]["domain_envelope"] = {
+        "found": True,
+        "object_ids": [f"first-{index}" for index in range(40)],
+        "finding_ids": ["finding-first"],
+    }
+    calls[1]["domain_envelope"] = {
+        "found": True,
+        "object_ids": [f"second-{index}" for index in range(55)],
+        "finding_ids": ["finding-second"],
+    }
+
+    with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+        page = await claude.get_tool_calls_paginated(
+            TRACE_ID,
+            Mock(),
+            page=1,
+            page_size=2,
+            tool_name=None,
+            source="local",
+        )
+
+    by_call = {item["call_id"]: item for item in page.tool_calls}
+    for index, call in enumerate(calls):
+        call_id = f"call-{index}"
+        collection_ref = by_call[call_id]["domain_envelope"]["collections"]["object_ids"]
+        assert collection_ref["next_call"] == {
+            "trace_id": TRACE_ID,
+            "call_id": call_id,
+            "field": "domain_envelope",
+            "start": 0,
+            "max_chars": claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+        }
+        reconstructed, chunks = await _reconstruct_tool_field(
+            analyzed,
+            "domain_envelope",
+            call_id=call_id,
+        )
+        assert json.loads(reconstructed) == call["domain_envelope"]
+        assert all(chunk["field"] == "domain_envelope" for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_maximum_tool_call_pages_fit_and_replay_without_skipping():
+    analyzed = _large_analysis(call_count=claude.TRACE_REVIEW_PAGE_SIZE)
+    calls = analyzed["analysis"]["tool_calls"]["tool_calls"]
+    for index, call in enumerate(calls):
+        for key in ("id", "name", "time", "duration", "model", "url", "method", "status", "status_code"):
+            call[key] = f"{key}-{index}-" + key[0] * 500
+        call["thought"] = f"thought-{index}-" * 1_500
+        call["domain_envelope"] = {
+            "found": True,
+            "summary": {"object_count": 200, "finding_count": 200},
+            "object_ids": [f"object-{index}-{item}" for item in range(200)],
+            "finding_ids": [f"finding-{index}-{item}" for item in range(200)],
+        }
+
+    async def replay(endpoint, result_builder):
+        arguments = {"page": 1, "page_size": claude.TRACE_REVIEW_PAGE_SIZE, "item_offset": 0}
+        seen = []
+        with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+            while True:
+                response = await endpoint(TRACE_ID, Mock(), source="local", **arguments)
+                seen.extend(result_builder(response)[0])
+                provider_result = result_builder(response)[1]
+                assert len(json.dumps(provider_result, default=str)) <= 12_000
+                next_call = response.next_call if hasattr(response, "next_call") else response.data.next_call
+                if next_call is None:
+                    break
+                assert next_call.get("item_offset", 0) > arguments.get("item_offset", -1) or next_call["page"] > arguments["page"]
+                arguments = {
+                    "page": next_call["page"],
+                    "page_size": next_call["page_size"],
+                    "item_offset": next_call.get("item_offset", 0),
+                }
+        return seen
+
+    async def get_page(*args, **kwargs):
+        return await claude.get_tool_calls_paginated(*args, tool_name=None, **kwargs)
+
+    page_indexes = await replay(
+        get_page,
+        lambda response: (
+            [item["index"] for item in response.tool_calls],
+            {**response.model_dump(), "error": None},
+        ),
+    )
+    summary_indexes = await replay(
+        claude.get_tool_calls_summary,
+        lambda response: (
+            [item.index for item in response.data.tool_calls],
+            {**response.model_dump(), "error": None},
+        ),
+    )
+    assert page_indexes == list(range(len(calls)))
+    assert summary_indexes == list(range(len(calls)))
+
+
+@pytest.mark.asyncio
+async def test_large_thought_and_unknown_metadata_are_bounded_and_exactly_reconstructable():
+    analyzed = _large_analysis(call_count=10)
+    call = analyzed["analysis"]["tool_calls"]["tool_calls"][0]
+    call["thought"] = "reasoning-😀-" * 1_400
+    call["model"] = "provider-model-metadata-" * 700
+    call["call_id"] = "oversized-call-id-" * 800
+    call["unknown_analyzer_metadata"] = "must-not-leak-" * 2_000
+
+    with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+        page = await claude.get_tool_calls_paginated(
+            TRACE_ID,
+            Mock(),
+            page=1,
+            page_size=10,
+            tool_name=None,
+            source="local",
+        )
+
+    provider_page = {
+        "status": "success",
+        "tool_calls": page.tool_calls,
+        "pagination": page.pagination.model_dump(),
+        "next_call": page.next_call,
+        "token_info": page.token_info.model_dump(),
+        "filter_applied": page.filter_applied,
+        "error": None,
+    }
+    assert len(json.dumps(provider_page, default=str)) < 12_000
+    assert "unknown_analyzer_metadata" not in page.tool_calls[0]
+    assert "thought" not in page.tool_calls[0]
+    thought_ref = next(
+        field for field in page.tool_calls[0]["exact_fields"] if field["field"] == "thought"
+    )
+    metadata_ref = next(
+        field for field in page.tool_calls[0]["exact_fields"] if field["field"] == "metadata"
+    )
+    assert thought_ref["total_char_count"] > 13_000
+    assert metadata_ref["total_char_count"] > 13_000
+
+    selector = claude._tool_call_selector(call, 0)
+    assert selector.startswith("sha256:")
+    reconstructed, chunks = await _reconstruct_tool_field(
+        analyzed,
+        "thought",
+        call_id=selector,
+    )
+    assert reconstructed == call["thought"]
+    assert all(chunk["returned_char_count"] > 0 for chunk in chunks)
+    assert all(
+        len(json.dumps({
+            "status": "success",
+            "tool_call": page.tool_calls[0],
+            "chunk": chunk,
+            "token_info": claude.create_token_info_dict({"chunk": chunk}),
+            "error": None,
+        }, default=str)) < 12_000
+        for chunk in chunks
+    )
+    reconstructed_metadata, _ = await _reconstruct_tool_field(
+        analyzed,
+        "metadata",
+        call_id=selector,
+    )
+    assert json.loads(reconstructed_metadata)["model"] == call["model"]
+    assert json.loads(reconstructed_metadata)["call_id"] == call["call_id"]
+
+
+@pytest.mark.asyncio
+async def test_trace_and_tool_summaries_project_large_collections_to_exact_views():
+    analyzed = _large_analysis(call_count=2)
+    analyzed["analysis"]["summary"] = {
+        "trace_id": TRACE_ID,
+        "trace_name": "large summary",
+        "domain_envelope": {
+            "found": True,
+            "summary": {"object_count": 500, "finding_count": 500, "blocker_count": 250},
+            "object_ids": [f"object-{index}-" + "x" * 100 for index in range(500)],
+            "finding_ids": [f"finding-{index}-" + "y" * 100 for index in range(500)],
+        },
+    }
+    analyzed["analysis"]["domain_envelope"] = analyzed["analysis"]["summary"]["domain_envelope"]
+    analyzed["analysis"]["trace_summary"] = {"has_errors": False}
+    analyzed["analysis"]["tool_calls"]["unique_tools"] = [
+        f"tool-{index}-" + "z" * 100 for index in range(500)
+    ]
+
+    with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+        trace_summary = await claude.get_trace_summary(TRACE_ID, Mock(), source="local")
+        tool_summary = await claude.get_tool_calls_summary(
+            TRACE_ID, Mock(), page=1, page_size=2, source="local"
+        )
+
+    for response in (trace_summary, tool_summary):
+        provider_result = {
+            "status": "success",
+            "data": response.data if isinstance(response.data, dict) else response.data.model_dump(),
+            "token_info": response.token_info.model_dump(),
+            "error": None,
+        }
+        assert len(json.dumps(provider_result, default=str)) < 12_000
+    assert trace_summary.data["domain_envelope"]["collections"]["object_ids"]["next_call"] == {
+        "trace_id": TRACE_ID,
+        "view_name": "domain_envelope",
+        "section": "object_ids",
+        "offset": 0,
+        "limit": claude.TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+    }
+    assert trace_summary.data["unique_tools"]["total_items"] == 500
+    assert tool_summary.data.unique_tools["complete"] is False
+
+    expected_sections = {
+        "domain_envelope": (
+            "object_ids",
+            analyzed["analysis"]["domain_envelope"]["object_ids"],
+        ),
+        "tool_calls": (
+            "unique_tools",
+            analyzed["analysis"]["tool_calls"]["unique_tools"],
+        ),
+    }
+    with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
+        for view_name, (section, expected_items) in expected_sections.items():
+            replayed = []
+            offset = 0
+            while True:
+                response = await claude.get_trace_view(
+                    TRACE_ID,
+                    view_name,
+                    Mock(),
+                    source="local",
+                    section=section,
+                    offset=offset,
+                    limit=claude.TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
+                    item_start=0,
+                )
+                replayed.extend(response.data["page"]["items"])
+                next_call = response.data["page"]["next_call"]
+                if next_call is None:
+                    break
+                assert next_call["view_name"] == view_name
+                assert next_call["section"] == section
+                assert next_call["offset"] > offset
+                offset = next_call["offset"]
+            assert replayed == expected_items
 
 
 @pytest.mark.asyncio

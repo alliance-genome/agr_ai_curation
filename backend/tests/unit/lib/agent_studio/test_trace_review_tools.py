@@ -108,6 +108,7 @@ def test_validate_helpers():
 
     tools.validate_view("summary")
     tools.validate_view("domain_envelope")
+    tools.validate_view("tool_calls")
     tools.validate_view("extraction_timeline")
     tools.validate_view("evidence_revisions")
     with pytest.raises(ValueError):
@@ -157,6 +158,7 @@ async def test_get_tool_calls_summary_success_and_404(monkeypatch):
     assert success["data"]["total_count"] == 2
     assert capture["params"]["page"] == 1
     assert capture["params"]["page_size"] == tools.get_agent_studio_trace_review_page_size()
+    assert capture["params"]["item_offset"] == 0
 
     _patch_async_client(monkeypatch, response=_FakeResponse(404, {}))
     missing = await tools.get_tool_calls_summary("856df16f1752cb53ee43dcb2f5ecfd16")
@@ -176,11 +178,13 @@ async def test_get_tool_calls_page_clamps_page_size_and_filters(monkeypatch):
         "856df16f1752cb53ee43dcb2f5ecfd16",
         page=2,
         page_size=999,
+        item_offset=3,
         tool_name="search_document",
     )
     assert result["status"] == "success"
     assert capture["params"]["page"] == 2
     assert capture["params"]["page_size"] == tools.get_agent_studio_trace_review_page_size()
+    assert capture["params"]["item_offset"] == 3
     assert capture["params"]["tool_name"] == "search_document"
 
 
@@ -284,7 +288,12 @@ async def test_search_traces_requires_filter_and_calls_claude_search(monkeypatch
         capture=capture,
     )
 
-    result = await tools.search_traces(session_id="session-1", limit=999)
+    result = await tools.search_traces(
+        session_id="session-1",
+        offset=7,
+        limit=999,
+        item_start=9,
+    )
 
     assert result["status"] == "success"
     assert result["data"]["trace_count"] == 1
@@ -292,6 +301,8 @@ async def test_search_traces_requires_filter_and_calls_claude_search(monkeypatch
     assert capture["params"]["source"] == tools.get_trace_source()
     assert capture["params"]["session_id"] == "session-1"
     assert capture["params"]["limit"] == 100
+    assert capture["params"]["offset"] == 7
+    assert capture["params"]["item_start"] == 9
 
 
 @pytest.mark.asyncio

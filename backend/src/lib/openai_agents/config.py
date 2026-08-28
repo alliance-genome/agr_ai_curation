@@ -1761,6 +1761,33 @@ def get_agent_studio_trace_review_aggregate_page_size() -> int:
     )
 
 
+def get_agent_studio_trace_search_default_limit() -> int:
+    """Default number of TraceReview search matches requested per page."""
+    return max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_TRACE_SEARCH_DEFAULT_LIMIT", 25),
+    )
+
+
+def get_agent_studio_trace_search_max_limit() -> int:
+    """Maximum number of TraceReview search matches requested per page."""
+    return max(
+        get_agent_studio_trace_search_default_limit(),
+        _get_env_int_with_fallback("AGENT_STUDIO_TRACE_SEARCH_MAX_LIMIT", 100),
+    )
+
+
+def get_agent_studio_trace_search_filter_max_chars() -> int:
+    """Maximum exact characters accepted in one TraceReview search filter."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_TRACE_SEARCH_FILTER_MAX_CHARS",
+            256,
+        ),
+    )
+
+
 def get_agent_studio_service_log_default_lines() -> int:
     """Default logical log lines requested by Agent Studio."""
     return max(

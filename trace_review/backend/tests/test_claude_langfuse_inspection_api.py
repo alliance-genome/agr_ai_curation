@@ -1,3 +1,4 @@
+import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -91,7 +92,9 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
             extraction_id=None,
             from_timestamp=None,
             to_timestamp=None,
+            offset=0,
             limit=25,
+            item_start=0,
         )
     assert exc_info.value.status_code == 400
 
@@ -109,6 +112,8 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
         ],
         "query": {"session_id": "session-1"},
         "meta": {"page": 1, "limit": 25, "totalItems": 1},
+        "total_items": 1,
+        "source_exhausted": True,
     }
 
     response = await claude.search_traces(
@@ -121,13 +126,220 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
         extraction_id=None,
         from_timestamp=None,
         to_timestamp=None,
+        offset=0,
         limit=25,
+        item_start=0,
     )
 
     assert response.status == "success"
     assert response.data["trace_count"] == 1
     assert response.data["traces"][0]["trace_id_short"] == "856df16f"
     extractor.list_traces.assert_called_once()
+
+
+def _large_search_references(count: int, *, oversized: bool = False) -> list[dict]:
+    references = []
+    for index in range(count):
+        width = 15_000 if oversized and index == 0 else 300
+        references.append({
+            "id": f"{index:032x}",
+            "name": f"trace-{index}-" + "n" * width,
+            "timestamp": f"2026-06-06T03:{index:02d}:00Z",
+            "sessionId": "session-" + "s" * width,
+            "userId": "user-" + "u" * width,
+            "environment": "env-" + "e" * width,
+            "tags": ["tag-" + "t" * width],
+            "htmlPath": "/trace/" + "h" * width,
+        })
+    return references
+
+
+def _search_listing(records: list[dict], kwargs: dict) -> dict:
+    offset = kwargs["offset"]
+    limit = kwargs["limit"]
+    query = {
+        key: value.isoformat() if hasattr(value, "isoformat") else value
+        for key, value in kwargs.items()
+        if key not in {"offset", "limit"}
+    }
+    query.update({"offset": offset, "limit": limit})
+    return {
+        "traces": records[offset:offset + limit],
+        "query": query,
+        "meta": {"totalItems": len(records)},
+        "total_items": len(records),
+        "source_exhausted": offset + limit >= len(records),
+    }
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+@pytest.mark.parametrize("record_count", [25, 100])
+async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
+    extractor_cls: Mock,
+    record_count: int,
+):
+    records = _large_search_references(record_count)
+    extractor_cls.return_value.list_traces.side_effect = (
+        lambda **kwargs: _search_listing(records, kwargs)
+    )
+    arguments = {
+        "source": "local",
+        "session_id": "session-" + "s" * 248,
+        "user_id": "user-" + "u" * 251,
+        "name": "trace-" + "n" * 250,
+        "document_id": "document-" + "d" * 247,
+        "run_id": "run-" + "r" * 252,
+        "extraction_id": "extraction-" + "e" * 245,
+        "from_timestamp": "2026-06-01T00:00:00Z",
+        "to_timestamp": "2026-06-30T00:00:00Z",
+        "offset": 0,
+        "limit": record_count,
+        "item_start": 0,
+    }
+    reconstructed = []
+    while True:
+        response = await claude.search_traces(**arguments)
+        provider_result = {
+            "status": "success",
+            "data": response.data,
+            "token_info": response.token_info.model_dump(),
+            "error": None,
+        }
+        assert len(json.dumps(provider_result, default=str)) <= 12_000
+        assert response.token_info.within_budget is True
+        reconstructed.extend(response.data["traces"])
+        next_call = response.data["pagination"]["next_call"]
+        if next_call is None:
+            break
+        for key in (
+            "session_id", "user_id", "name", "document_id", "run_id",
+            "extraction_id", "from_timestamp", "to_timestamp",
+        ):
+            expected = (
+                arguments[key].replace("Z", "+00:00")
+                if key.endswith("timestamp")
+                else arguments[key]
+            )
+            assert next_call[key] == expected
+        arguments = {"source": "local", **next_call}
+
+    assert [record["trace_id"] for record in reconstructed] == [
+        record["id"] for record in records
+    ]
+    assert response.data["pagination"]["complete"] is True
+    assert response.data["total_items"] == record_count
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_search_traces_rejects_filter_that_cannot_fit_provider_wrapper(extractor_cls: Mock):
+    with pytest.raises(claude.HTTPException) as exc_info:
+        await claude.search_traces(
+            source="local",
+            session_id="s" * (claude.TRACE_SEARCH_FILTER_MAX_CHARS + 1),
+            user_id=None,
+            name=None,
+            document_id=None,
+            run_id=None,
+            extraction_id=None,
+            from_timestamp=None,
+            to_timestamp=None,
+            offset=0,
+            limit=1,
+            item_start=0,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "session_id" in str(exc_info.value.detail)
+    extractor_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_search_traces_rejects_encoded_filters_without_chunk_headroom(extractor_cls: Mock):
+    encoded_filter = "😀" * claude.TRACE_SEARCH_FILTER_MAX_CHARS
+    with pytest.raises(claude.HTTPException) as exc_info:
+        await claude.search_traces(
+            source="local",
+            session_id=encoded_filter,
+            user_id=encoded_filter,
+            name=encoded_filter,
+            document_id=encoded_filter,
+            run_id=encoded_filter,
+            extraction_id=encoded_filter,
+            from_timestamp=None,
+            to_timestamp=None,
+            offset=0,
+            limit=1,
+            item_start=0,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "provider-envelope room" in str(exc_info.value.detail)
+    extractor_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_search_traces_oversized_reference_reconstructs_with_forward_progress(extractor_cls: Mock):
+    records = _large_search_references(1, oversized=True)
+    extractor_cls.return_value.list_traces.side_effect = (
+        lambda **kwargs: _search_listing(records, kwargs)
+    )
+    arguments = {
+        "source": "local",
+        "session_id": "session-filter",
+        "user_id": None,
+        "name": None,
+        "document_id": None,
+        "run_id": None,
+        "extraction_id": None,
+        "from_timestamp": None,
+        "to_timestamp": None,
+        "offset": 0,
+        "limit": 1,
+        "item_start": 0,
+    }
+    content = []
+    starts = []
+    while True:
+        response = await claude.search_traces(**arguments)
+        assert len(json.dumps({
+            "status": "success",
+            "data": response.data,
+            "token_info": response.token_info.model_dump(),
+            "error": None,
+        }, default=str)) <= 12_000
+        chunk = response.data["trace_chunk"]
+        starts.append(chunk["start"])
+        content.append(chunk["content"])
+        assert chunk["end"] > chunk["start"]
+        next_call = response.data["pagination"]["next_call"]
+        if next_call is None:
+            break
+        arguments = {
+            "source": "local",
+            "session_id": None,
+            "user_id": None,
+            "name": None,
+            "document_id": None,
+            "run_id": None,
+            "extraction_id": None,
+            "from_timestamp": None,
+            "to_timestamp": None,
+            **next_call,
+        }
+
+    expected = json.dumps(
+        claude._listed_trace_reference(records[0]),
+        default=str,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert "".join(content) == expected
+    assert starts == sorted(starts)
+    assert response.data["pagination"]["complete"] is True
 
 
 @pytest.mark.asyncio

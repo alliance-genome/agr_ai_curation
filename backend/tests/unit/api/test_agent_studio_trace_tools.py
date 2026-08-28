@@ -10,6 +10,7 @@ import pytest
 import src.api.agent_studio as api_module
 from src.api import logs as logs_api
 from src.lib.agent_studio.models import ChatContext
+from src.lib.openai_agents.config import get_agent_studio_trace_review_summary_max_chars
 
 
 def _chat_context(**overrides: Any) -> ChatContext:
@@ -124,6 +125,39 @@ async def test_handle_tool_call_get_tool_calls_page_forwards_inputs(monkeypatch)
     assert result["kwargs"]["tool_name"] == "read_section"
 
 
+@pytest.mark.asyncio
+async def test_handle_tool_call_search_traces_forwards_continuation(monkeypatch):
+    from src.lib.agent_studio import tools as tools_module
+
+    async def _fake_search(**kwargs):
+        return {"status": "ok", "kwargs": kwargs}
+
+    monkeypatch.setattr(tools_module, "search_traces", _fake_search)
+    tool_input = {
+        "session_id": "session-1",
+        "user_id": "user-1",
+        "name": "trace-name",
+        "document_id": "doc-1",
+        "run_id": "run-1",
+        "extraction_id": "extraction-1",
+        "from_timestamp": "2026-01-01T00:00:00Z",
+        "to_timestamp": "2026-02-01T00:00:00Z",
+        "offset": 12,
+        "limit": 25,
+        "item_start": 345,
+    }
+    result = await api_module._handle_tool_call(
+        tool_name="search_traces",
+        tool_input=tool_input,
+        context=None,
+        user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
+        messages=[],
+    )
+
+    assert result == {"status": "ok", "kwargs": tool_input}
+
+
 def test_get_service_logs_tool_schema_matches_logs_api_contract():
     schema = api_module.GET_SERVICE_LOGS_TOOL["input_schema"]["properties"]
 
@@ -173,6 +207,13 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
         "call_id",
         "field",
     ]
+    assert tools_by_name["get_tool_call_detail"]["input_schema"]["properties"]["field"]["enum"] == [
+        "input",
+        "tool_result",
+        "thought",
+        "metadata",
+        "domain_envelope",
+    ]
     assert tools_by_name["get_trace_conversation"]["input_schema"]["required"] == [
         "trace_id",
         "field",
@@ -187,8 +228,20 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
     )
     assert "extraction_timeline" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
     assert "evidence_revisions" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
+    assert "tool_calls" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
     assert "group_context" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
     assert "mod_context" not in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
+    search_schema = tools_by_name["search_traces"]["input_schema"]["properties"]
+    assert search_schema["limit"]["default"] == 25
+    assert search_schema["limit"]["maximum"] == 100
+    assert search_schema["session_id"]["maxLength"] == 256
+    assert {"offset", "item_start"} <= search_schema.keys()
+    assert "item_offset" in tools_by_name["get_tool_calls_summary"]["input_schema"]["properties"]
+    assert "item_offset" in tools_by_name["get_tool_calls_page"]["input_schema"]["properties"]
+    assert (
+        tools_by_name["get_tool_calls_page"]["input_schema"]["properties"]["tool_name"]["maxLength"]
+        == get_agent_studio_trace_review_summary_max_chars()
+    )
 
 
 def test_codebase_tools_are_agents_only():
@@ -262,6 +315,41 @@ async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
         "line_cursor_offset": 4,
         "char_cursor": 0,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "function_name"),
+    [
+        ("get_tool_calls_summary", "get_tool_calls_summary"),
+        ("get_tool_calls_page", "get_tool_calls_page"),
+    ],
+)
+async def test_handle_tool_call_forwards_tool_call_page_continuation(
+    monkeypatch,
+    tool_name,
+    function_name,
+):
+    from src.lib.agent_studio import tools as tools_module
+
+    captured = {}
+
+    async def _fake_page(**kwargs):
+        captured.update(kwargs)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(tools_module, function_name, _fake_page)
+    result = await api_module._handle_tool_call(
+        tool_name=tool_name,
+        tool_input={"trace_id": "trace-1", "page": 2, "page_size": 10, "item_offset": 4},
+        context=None,
+        user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
+        messages=[],
+    )
+
+    assert result == {"status": "ok"}
+    assert captured["item_offset"] == 4
 
 
 @pytest.mark.asyncio
