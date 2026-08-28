@@ -1612,6 +1612,36 @@ def get_agent_studio_workshop_prompt_max_chars() -> int:
     )
 
 
+def get_agent_studio_workshop_context_prompt_max_chars() -> int:
+    """Max main-prompt characters included in Agent Workshop system context.
+
+    Exact current prompt text remains available through the bounded Workshop
+    refresh tool when this preview is clipped. Default 12000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS",
+            12_000,
+        ),
+    )
+
+
+def get_agent_studio_workshop_context_group_prompt_max_chars() -> int:
+    """Max selected-group prompt characters included in Workshop context.
+
+    Exact current group prompt text remains available through the bounded
+    Workshop refresh tool when this preview is clipped. Default 6000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS",
+            6_000,
+        ),
+    )
+
+
 def get_agent_studio_workshop_prompt_chunk_max_chars() -> int:
     """Max exact prompt characters returned by one Workshop refresh chunk.
 
