@@ -124,6 +124,11 @@ async def _authorize_claude_trace_request(
         owner = str(raw_trace.get("userId") or raw_trace.get("user_id") or "").strip()
         if not owner or owner != caller_sub:
             raise HTTPException(status_code=404, detail="Trace not found.")
+        request.state.authorized_trace_extraction = {
+            "trace_id": trace_id,
+            "source": _effective_source(source),
+            "trace_data": trace_data,
+        }
         return
 
     route_name = str(getattr(request.scope.get("route"), "name", ""))
@@ -1376,9 +1381,26 @@ def _sibling_trace_ids(
     ]
 
 
-def _extract_langfuse_trace(trace_id: str, source: str) -> Dict[str, Any]:
+def _extract_langfuse_trace(
+    request: Request,
+    trace_id: str,
+    source: str,
+) -> Dict[str, Any]:
+    authorized_extraction = getattr(
+        request.state,
+        "authorized_trace_extraction",
+        None,
+    )
+    effective_source = _effective_source(source)
+    if (
+        authorized_extraction
+        and authorized_extraction.get("trace_id") == trace_id
+        and authorized_extraction.get("source") == effective_source
+    ):
+        return authorized_extraction["trace_data"]
+
     try:
-        extractor = TraceExtractor(source=_effective_source(source))
+        extractor = TraceExtractor(source=effective_source)
         return extractor.extract_complete_trace(trace_id)
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -1517,6 +1539,7 @@ async def search_traces(
 )
 async def get_langfuse_tree(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
     offset: Annotated[int, Query(ge=0, description="Section item offset")] = 0,
@@ -1524,7 +1547,7 @@ async def get_langfuse_tree(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     tree = build_trace_tree(trace_data, include_metadata_values=False)
     nodes = _flatten_trace_tree(tree)
     response_data = _aggregate_response_data(
@@ -1563,6 +1586,7 @@ async def get_langfuse_tree(
 )
 async def get_langfuse_reconstruction(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     limit: int = Query(default=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, ge=1, le=TRACE_REVIEW_AGGREGATE_PAGE_SIZE, description="Maximum events to return"),
     offset: Annotated[int, Query(ge=0, description="Event offset")] = 0,
@@ -1570,7 +1594,7 @@ async def get_langfuse_reconstruction(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     reconstruction = build_ordered_reconstruction(
         trace_data,
         include_payload_values=False,
@@ -1612,6 +1636,7 @@ async def get_langfuse_reconstruction(
 )
 async def get_langfuse_payloads(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     sort: str = Query(default="largest", description="Sort order: largest or chronological"),
     limit: Annotated[
@@ -1625,7 +1650,7 @@ async def get_langfuse_payloads(
 ) -> ClaudeTraceResponse:
     if sort not in {"largest", "chronological"}:
         raise HTTPException(status_code=400, detail="sort must be 'largest' or 'chronological'")
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     payloads = build_payload_inventory(trace_data, include_values=False)
     for payload in payloads:
         preview = _bounded_summary(payload.get("preview"))
@@ -1669,6 +1694,7 @@ async def get_langfuse_payloads(
 )
 async def get_langfuse_payload(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     payload_id: Optional[str] = Query(default=None, description="Payload ID returned by langfuse_payloads"),
     scope: Optional[str] = Query(default=None, description="Payload scope: trace or observation"),
@@ -1690,7 +1716,7 @@ async def get_langfuse_payload(
         if scope and scope not in {"trace", "observation"}:
             raise HTTPException(status_code=400, detail="scope must be 'trace' or 'observation'")
 
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     payload = find_payload(
         trace_data,
         payload_id=payload_id,
@@ -1764,6 +1790,7 @@ async def get_langfuse_payload(
 )
 async def get_model_live_context(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     section: Annotated[Optional[str], Query(description="Collection section to page")] = None,
     offset: Annotated[int, Query(ge=0, description="Section item offset")] = 0,
@@ -1771,7 +1798,7 @@ async def get_model_live_context(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     model_live_context = _build_model_live_context(trace_data)
     calls = model_live_context.pop("calls", [])
     response_data = _aggregate_response_data(
@@ -1811,6 +1838,7 @@ async def get_model_live_context(
 )
 async def get_langfuse_costs(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     section: Annotated[Optional[str], Query(description="Cost collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -1818,7 +1846,7 @@ async def get_langfuse_costs(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     costs = build_cost_summary(trace_data)
     response_data = _aggregate_response_data(
         source=source,
@@ -1849,6 +1877,7 @@ async def get_langfuse_costs(
 )
 async def get_langfuse_duplicates(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     section: Annotated[Optional[str], Query(description="Duplicate collection to page")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -1856,7 +1885,7 @@ async def get_langfuse_duplicates(
     item_start: Annotated[int, Query(ge=0)] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
-    trace_data = _extract_langfuse_trace(trace_id, source)
+    trace_data = _extract_langfuse_trace(request, trace_id, source)
     duplicates = build_duplicate_report(trace_data)
     duplicate_groups = []
     duplicate_payloads = []

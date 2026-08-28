@@ -25,6 +25,10 @@ def _authorization_request(trace_id: str = "trace-1") -> SimpleNamespace:
     )
 
 
+def _handler_request() -> SimpleNamespace:
+    return SimpleNamespace(state=SimpleNamespace())
+
+
 def _trace_data():
     repeated = {"question": "Which payload got large?"}
     return {
@@ -221,6 +225,50 @@ async def test_exact_trace_authorization_uses_cached_owner_without_provider_look
     assert cross_user.value.status_code == 404
     assert cross_user.value.detail == "Trace not found."
     extractor_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_langfuse_http_route_reuses_authorized_cache_miss_extraction(
+    extractor_cls: Mock,
+):
+    trace_data = _trace_data()
+    trace_id = trace_data["raw_trace"]["id"]
+    extractor_cls.return_value.extract_complete_trace.return_value = trace_data
+
+    async with _claude_http_client("user-1") as client:
+        response = await client.get(
+            f"/api/claude/traces/{trace_id}/langfuse_tree",
+            params={"source": "local"},
+        )
+
+    assert response.status_code == 200
+    extractor_cls.return_value.extract_complete_trace.assert_called_once_with(trace_id)
+
+
+@pytest.mark.parametrize(
+    ("authorized_trace_id", "authorized_source"),
+    [("other-trace", "local"), ("trace-1", "remote")],
+)
+@patch("src.api.claude.TraceExtractor")
+def test_langfuse_extraction_does_not_reuse_mismatched_request_state(
+    extractor_cls: Mock,
+    authorized_trace_id: str,
+    authorized_source: str,
+):
+    request = _handler_request()
+    request.state.authorized_trace_extraction = {
+        "trace_id": authorized_trace_id,
+        "source": authorized_source,
+        "trace_data": {"marker": "stale"},
+    }
+    fresh_trace_data = {"marker": "fresh"}
+    extractor_cls.return_value.extract_complete_trace.return_value = fresh_trace_data
+
+    result = claude._extract_langfuse_trace(request, "trace-1", "local")
+
+    assert result is fresh_trace_data
+    extractor_cls.return_value.extract_complete_trace.assert_called_once_with("trace-1")
 
 
 @pytest.mark.asyncio
@@ -607,6 +655,7 @@ async def test_claude_langfuse_reconstruction_is_event_paginated(extractor_cls: 
 
     response = await claude.get_langfuse_reconstruction(
         "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
         source="local",
         limit=2,
         offset=1,
@@ -628,6 +677,7 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
 
     inventory = await claude.get_langfuse_payloads(
         "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
         source="local",
         sort="chronological",
         limit=10,
@@ -641,6 +691,7 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
 
     exact = await claude.get_langfuse_payload(
         "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
         source="local",
         payload_id="observation:agent-1:metadata.agent_config",
         scope=None,
@@ -661,8 +712,18 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
 async def test_claude_langfuse_costs_and_duplicates(extractor_cls: Mock):
     extractor_cls.return_value.extract_complete_trace.return_value = _trace_data()
 
-    costs = await claude.get_langfuse_costs("856df16f1752cb53ee43dcb2f5ecfd16", source="local", section="observations")
-    duplicates = await claude.get_langfuse_duplicates("856df16f1752cb53ee43dcb2f5ecfd16", source="local", section="duplicate_groups")
+    costs = await claude.get_langfuse_costs(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
+        source="local",
+        section="observations",
+    )
+    duplicates = await claude.get_langfuse_duplicates(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
+        source="local",
+        section="duplicate_groups",
+    )
 
     assert costs.data["summary"]["totals"]["total_tokens"] == 15
     assert duplicates.data["summary"]["duplicate_group_count"] == 1
@@ -676,6 +737,7 @@ async def test_claude_model_live_context_uses_preflight_and_generation_inputs(ex
 
     response = await claude.get_model_live_context(
         "856df16f1752cb53ee43dcb2f5ecfd16",
+        request=_handler_request(),
         source="local",
     )
 
