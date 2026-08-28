@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import cast
 from uuid import uuid4
@@ -593,9 +593,9 @@ def _persist_large_runtime_state(db, *, envelope_id: str, document_id, session_i
                 envelope_id=envelope_id,
                 event_id=f"event-{index}",
                 envelope_revision=2,
-                event_index=index,
+                event_index=LARGE_RUNTIME_ITEM_COUNT - index - 1,
                 event_type=HistoryEventKind.VALIDATION_FINDING_ADDED,
-                occurred_at=now + timedelta(seconds=index),
+                occurred_at=now,
                 actor_type=HistoryActorType.AGENT,
                 actor_id="fixture-validator",
                 object_id=f"obj-{index}",
@@ -872,6 +872,8 @@ def test_large_runtime_state_is_summary_first_and_completely_revision_paged(
             )
             assert page["section_total_count"] == expected_count
             assert page["returned_count"] == len(page["items"])
+            assert page["blocker_count"] == LARGE_RUNTIME_ITEM_COUNT
+            assert page["readiness_status"] == "blocked"
             items.extend(page["items"])
             if page["complete"]:
                 assert page["next_request"] is None
@@ -879,6 +881,10 @@ def test_large_runtime_state_is_summary_first_and_completely_revision_paged(
             request = page["next_request"]
             assert request["revision"] == 2
         assert len(items) == expected_count
+        if section == "history":
+            assert [item["event_index"] for item in items] == list(
+                range(LARGE_RUNTIME_ITEM_COUNT)
+            )
 
     filtered = domain_tools.get_domain_envelope_state(
         session_factory=db_session_factory,
@@ -1404,3 +1410,60 @@ def test_large_readiness_is_authoritative_then_pages_candidates_and_blockers(mon
         if section == "candidates":
             assert all("blockers" not in item for item in items)
             assert all(item["blocker_count"] == 3 for item in items)
+
+
+def test_readiness_partial_revision_pin_is_completed_for_every_selected_envelope(
+    monkeypatch,
+):
+    class FakeDb:
+        def close(self):
+            pass
+
+    class FakeReadiness:
+        def __init__(self, candidate_id):
+            self.candidate_id = str(candidate_id)
+
+        def model_dump(self, *, mode):
+            assert mode == "json"
+            return {"candidate_id": self.candidate_id, "ready": True, "blockers": []}
+
+    candidates = [SimpleNamespace(id="candidate-1"), SimpleNamespace(id="candidate-2")]
+    monkeypatch.setattr(domain_tools, "_session_visible_to_user", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        domain_tools,
+        "_load_session_for_validation",
+        lambda *_args, **_kwargs: SimpleNamespace(candidates=candidates),
+    )
+    monkeypatch.setattr(
+        domain_tools,
+        "_build_domain_envelope_submission_context",
+        lambda **_kwargs: SimpleNamespace(
+            envelope_snapshots={
+                "env-1": {"envelope_revision": 3},
+                "env-2": {"envelope_revision": 7},
+            }
+        ),
+    )
+    monkeypatch.setattr(domain_tools, "_latest_candidate_validation_snapshot", lambda _item: {})
+    monkeypatch.setattr(
+        domain_tools,
+        "_candidate_submission_readiness",
+        lambda candidate, *_args, **_kwargs: FakeReadiness(candidate.id),
+    )
+
+    page = domain_tools.get_export_submission_readiness(
+        session_factory=FakeDb,
+        user_auth_sub="curator-1",
+        session_id="session-1",
+        candidate_ids=["candidate-1", "candidate-2"],
+        expected_envelope_revisions={"env-1": 3},
+        section="candidates",
+        limit=1,
+    )
+
+    assert page["envelope_revisions"] == {"env-1": 3, "env-2": 7}
+    assert page["domain_envelope_ids"] == ["env-1", "env-2"]
+    assert page["next_request"]["expected_envelope_revisions"] == {
+        "env-1": 3,
+        "env-2": 7,
+    }

@@ -265,7 +265,12 @@ def get_domain_envelope_state(
             select(DomainEnvelopeHistory)
             .where(DomainEnvelopeHistory.envelope_id == normalized_envelope_id)
             .where(DomainEnvelopeHistory.envelope_revision <= row.revision)
-            .order_by(DomainEnvelopeHistory.occurred_at.desc())
+            .order_by(
+                DomainEnvelopeHistory.occurred_at.desc(),
+                DomainEnvelopeHistory.envelope_revision.desc(),
+                DomainEnvelopeHistory.event_index.desc(),
+                DomainEnvelopeHistory.event_id.desc(),
+            )
         )
 
         object_rows = db.scalars(object_query).all()
@@ -304,18 +309,21 @@ def get_domain_envelope_state(
             "section": resolved_section,
             "filters": filters,
         }
+        blocker_count = _envelope_validation_blocker_count(envelope)
+        authoritative_status = {
+            "envelope_status": envelope.status.value,
+            "readiness_status": "blocked" if blocker_count else envelope.status.value,
+            "blocker_count": blocker_count,
+        }
         if resolved_section == "summary":
             if any(value is not None for value in (limit, cursor)):
                 raise ValueError("section is required when limit or cursor is provided")
-            blocker_count = _envelope_validation_blocker_count(envelope)
             return {
                 **identity,
+                **authoritative_status,
                 "section_counts": {
                     name: len(items) for name, items in section_items.items()
                 },
-                "envelope_status": envelope.status.value,
-                "readiness_status": "blocked" if blocker_count else envelope.status.value,
-                "blocker_count": blocker_count,
                 "lookup_status_counts": lookup_attempts["by_status"],
                 "validator_status_counts": validator_summaries["by_result_status"],
                 "detail_requests": [
@@ -355,6 +363,7 @@ def get_domain_envelope_state(
         )
         return {
             **identity,
+            **authoritative_status,
             **_runtime_page(
                 items=filtered_items,
                 section_total_count=len(section_items[resolved_section]),
@@ -958,9 +967,10 @@ def get_export_submission_readiness(
             envelope_id: int(snapshot["envelope_revision"])
             for envelope_id, snapshot in domain_context.envelope_snapshots.items()
         }
-        envelope_revisions = dict(
-            expected_envelope_revisions or current_envelope_revisions
-        )
+        envelope_revisions = {
+            **current_envelope_revisions,
+            **dict(expected_envelope_revisions or {}),
+        }
         identity = {
             "success": True,
             "session_id": normalized_session_id,
