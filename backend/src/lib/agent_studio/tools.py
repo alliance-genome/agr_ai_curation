@@ -6,10 +6,10 @@ Used in the Workflow Analysis feature (formerly Prompt Explorer).
 
 Token-Aware Tools (Claude-Specific Endpoints):
 - get_trace_summary: Lightweight overview (~500 tokens)
-- get_tool_calls_summary: All tool calls with summaries (~100 tokens/call)
-- get_tool_calls_page: Paginated full tool calls with filtering
-- get_tool_call_detail: Single tool call detail
-- get_trace_conversation: User query and assistant response
+- get_tool_calls_summary: Paginated call summaries
+- get_tool_calls_page: Paginated call metadata and exact-field references
+- get_tool_call_detail: Independently selected exact call-field chunks
+- get_trace_conversation: Independently selected exact conversation-field chunks
 - get_trace_view: Generic view access with token metadata
 - search_traces: Find traces by session/document/run/extraction metadata
 - get_extraction_diagnostic_report: Concise extraction/builder/validation report
@@ -35,6 +35,8 @@ from typing import Dict, Any, Optional
 from src.lib.loki_client import LOG_LEVEL_LABEL_PATTERNS
 from src.lib.openai_agents.config import (
     get_agent_studio_endpoint_timeout_seconds,
+    get_agent_studio_trace_review_chunk_max_chars,
+    get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_tool_timeout_seconds,
 )
 
@@ -309,9 +311,13 @@ async def get_trace_summary(trace_id: str) -> Dict[str, Any]:
         }
 
 
-async def get_tool_calls_summary(trace_id: str) -> Dict[str, Any]:
+async def get_tool_calls_summary(
+    trace_id: str,
+    page: int = 1,
+    page_size: Optional[int] = None,
+) -> Dict[str, Any]:
     """
-    Get lightweight summary of ALL tool calls without full results.
+    Get one bounded page of tool-call summaries without exact results.
 
     Use this to see what tools were called before drilling into details.
     Token cost: ~100 tokens per call (much smaller than full tool_calls view).
@@ -352,7 +358,14 @@ async def get_tool_calls_summary(trace_id: str) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
                 url,
-                params={"source": get_trace_source()},
+                params={
+                    "source": get_trace_source(),
+                    "page": max(1, page),
+                    "page_size": max(1, min(
+                        page_size or get_agent_studio_trace_review_page_size(),
+                        get_agent_studio_trace_review_page_size(),
+                    )),
+                },
                 headers=_trace_review_request_headers(),
             )
 
@@ -410,14 +423,13 @@ async def get_tool_calls_summary(trace_id: str) -> Dict[str, Any]:
 async def get_tool_calls_page(
     trace_id: str,
     page: int = 1,
-    page_size: int = 10,
+    page_size: Optional[int] = None,
     tool_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Get paginated tool calls with full details.
+    Get paginated tool-call metadata and exact-field references.
 
-    Use for detailed analysis of specific calls. Results are automatically
-    truncated to fit within token budget.
+    Use for selecting one call and exact field before chunked retrieval.
 
     Args:
         trace_id: Langfuse trace ID
@@ -450,7 +462,10 @@ async def get_tool_calls_page(
         params = {
             "source": get_trace_source(),
             "page": page,
-            "page_size": min(page_size, 20)  # Enforce max
+            "page_size": max(1, min(
+                page_size or get_agent_studio_trace_review_page_size(),
+                get_agent_studio_trace_review_page_size(),
+            )),
         }
         if tool_name:
             params["tool_name"] = tool_name
@@ -468,6 +483,7 @@ async def get_tool_calls_page(
                     "status": "success",
                     "tool_calls": data.get("tool_calls"),
                     "pagination": data.get("pagination"),
+                    "next_call": data.get("next_call"),
                     "token_info": data.get("token_info"),
                     "filter_applied": data.get("filter_applied"),
                     "error": None
@@ -529,12 +545,18 @@ async def get_tool_calls_page(
         }
 
 
-async def get_tool_call_detail(trace_id: str, call_id: str) -> Dict[str, Any]:
+async def get_tool_call_detail(
+    trace_id: str,
+    call_id: str,
+    field: str,
+    start: int = 0,
+    max_chars: Optional[int] = None,
+) -> Dict[str, Any]:
     """
-    Get full details for a single tool call.
+    Get one exact field chunk for a single tool call.
 
-    Use when you need complete input/output for a specific call identified
-    from get_tool_calls_summary or get_tool_calls_page.
+    Select input or tool_result independently, then follow next_call until the
+    response reports complete=true.
 
     Args:
         trace_id: Langfuse trace ID
@@ -566,7 +588,15 @@ async def get_tool_call_detail(trace_id: str, call_id: str) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
                 url,
-                params={"source": get_trace_source()},
+                params={
+                    "source": get_trace_source(),
+                    "field": field,
+                    "start": max(0, start),
+                    "max_chars": max(1, min(
+                        max_chars or get_agent_studio_trace_review_chunk_max_chars(),
+                        get_agent_studio_trace_review_chunk_max_chars(),
+                    )),
+                },
                 headers=_trace_review_request_headers(),
             )
 
@@ -575,6 +605,7 @@ async def get_tool_call_detail(trace_id: str, call_id: str) -> Dict[str, Any]:
                 return {
                     "status": "success",
                     "tool_call": data.get("tool_call"),
+                    "chunk": data.get("chunk"),
                     "token_info": data.get("token_info"),
                     "error": None
                 }
@@ -621,7 +652,12 @@ async def get_tool_call_detail(trace_id: str, call_id: str) -> Dict[str, Any]:
         }
 
 
-async def get_trace_conversation(trace_id: str) -> Dict[str, Any]:
+async def get_trace_conversation(
+    trace_id: str,
+    field: str = "user_query",
+    start: int = 0,
+    max_chars: Optional[int] = None,
+) -> Dict[str, Any]:
     """
     Get the user's query and assistant's final response.
 
@@ -651,7 +687,15 @@ async def get_trace_conversation(trace_id: str) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
                 url,
-                params={"source": get_trace_source()},
+                params={
+                    "source": get_trace_source(),
+                    "field": field,
+                    "start": max(0, start),
+                    "max_chars": max(1, min(
+                        max_chars or get_agent_studio_trace_review_chunk_max_chars(),
+                        get_agent_studio_trace_review_chunk_max_chars(),
+                    )),
+                },
                 headers=_trace_review_request_headers(),
             )
 
@@ -981,7 +1025,6 @@ async def get_trace_tree(trace_id: str) -> Dict[str, Any]:
 
 async def get_trace_reconstruction(
     trace_id: str,
-    include_payloads: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> Dict[str, Any]:
@@ -999,7 +1042,6 @@ async def get_trace_reconstruction(
     return await _get_claude_endpoint(
         f"/{trace_id}/langfuse_reconstruction",
         params={
-            "include_payloads": include_payloads,
             "limit": max(1, min(limit, 500)),
             "offset": max(0, offset),
         },
@@ -1011,9 +1053,8 @@ async def get_trace_reconstruction(
 async def get_trace_payloads(
     trace_id: str,
     sort: str = "largest",
-    limit: int = 50,
+    limit: Optional[int] = None,
     offset: int = 0,
-    include_values: bool = False,
 ) -> Dict[str, Any]:
     """List Langfuse trace payload summaries with sizes, hashes, and previews."""
     try:
@@ -1038,9 +1079,11 @@ async def get_trace_payloads(
         f"/{trace_id}/langfuse_payloads",
         params={
             "sort": sort,
-            "limit": max(1, min(limit, 200)),
+            "limit": max(1, min(
+                limit or get_agent_studio_trace_review_page_size(),
+                get_agent_studio_trace_review_page_size(),
+            )),
             "offset": max(0, offset),
-            "include_values": include_values,
         },
         # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
         timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),
@@ -1069,7 +1112,7 @@ async def get_trace_payload(
     observation_id: Optional[str] = None,
     field: Optional[str] = None,
     start: int = 0,
-    max_chars: int = 12000,
+    max_chars: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Retrieve one exact Langfuse payload by ID or scope/observation/field."""
     try:
@@ -1098,7 +1141,10 @@ async def get_trace_payload(
             "observation_id": observation_id,
             "field": field,
             "start": max(0, start),
-            "max_chars": max(0, min(max_chars, 50000)),
+            "max_chars": max(1, min(
+                max_chars or get_agent_studio_trace_review_chunk_max_chars(),
+                get_agent_studio_trace_review_chunk_max_chars(),
+            )),
         },
         # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
         timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),

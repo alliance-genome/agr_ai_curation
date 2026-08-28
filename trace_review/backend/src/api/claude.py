@@ -6,17 +6,18 @@ All responses include token metadata to help Claude manage context budget.
 
 Endpoints:
 - GET /summary - Lightweight trace overview (~500 tokens)
-- GET /tool_calls/summary - All tool calls with summaries (~100 tokens/call)
-- GET /tool_calls - Paginated full tool calls with filtering
-- GET /tool_calls/{call_id} - Single tool call detail
-- GET /conversation - User query and assistant response
+- GET /tool_calls/summary - Paginated tool-call summaries
+- GET /tool_calls - Paginated exact-field references
+- GET /tool_calls/{call_id} - One exact input/result chunk
+- GET /conversation - One exact user/assistant field chunk
 """
 
 import json
+import hashlib
 import logging
 import math
 from datetime import datetime
-from typing import Annotated, Dict, Any, Optional, List, Mapping
+from typing import Annotated, Dict, Any, Optional, List, Mapping, Literal
 from fastapi import APIRouter, HTTPException, Request, Query, Path
 
 from ..services.trace_extractor import TraceExtractor
@@ -28,6 +29,12 @@ from ..services.langfuse_run_reconstruction import (
     build_trace_tree,
     find_payload,
     paginate_payloads,
+    serialize_payload,
+)
+from ..config import (
+    get_agent_studio_trace_review_chunk_max_chars,
+    get_agent_studio_trace_review_page_size,
+    get_agent_studio_trace_review_summary_max_chars,
 )
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
@@ -44,7 +51,6 @@ from .extraction_timeline_helpers import (
 from ..utils.token_budget import (
     create_token_info_dict,
     create_lightweight_tool_call_summary,
-    truncate_tool_call_results,
 )
 from ..models.responses import (
     TokenInfo,
@@ -66,6 +72,9 @@ from .domain_envelope_responses import domain_envelope_response_views
 router = APIRouter()
 LOGGER = logging.getLogger(__name__)
 TRANSIENT_CACHE_TTL_SECONDS = 15
+TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
+TRACE_REVIEW_SUMMARY_MAX_CHARS = get_agent_studio_trace_review_summary_max_chars()
+TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
 
 
 # Default source for trace extraction (EC2 Langfuse)
@@ -101,6 +110,59 @@ def _payload_json_chars(value: Any) -> int:
     except (TypeError, ValueError):
         LOGGER.warning("Falling back to string length for payload JSON sizing", exc_info=True)
         return len(str(value))
+
+
+def _tool_call_selector(tool_call: Mapping[str, Any], index: int) -> str:
+    """Return the stable selector accepted by the exact-detail endpoint."""
+    return str(tool_call.get("call_id") or tool_call.get("id") or f"index:{index}")
+
+
+def _exact_text_metadata(*, field_id: str, field: str, value: Any) -> Dict[str, Any]:
+    serialized = serialize_payload(value)
+    return {
+        "field_id": field_id,
+        "field": field,
+        "sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+        "total_char_count": len(serialized),
+        "byte_count": len(serialized.encode("utf-8")),
+    }
+
+
+def _exact_text_chunk(
+    *,
+    field_id: str,
+    field: str,
+    value: Any,
+    start: int,
+    max_chars: int,
+    next_call: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Build a deterministic, reconstructable exact-text chunk contract."""
+    serialized = serialize_payload(value)
+    safe_start = min(max(0, start), len(serialized))
+    safe_max_chars = min(max(1, max_chars), TRACE_REVIEW_CHUNK_MAX_CHARS)
+    end = min(safe_start + safe_max_chars, len(serialized))
+    complete = end >= len(serialized)
+    metadata = _exact_text_metadata(field_id=field_id, field=field, value=value)
+    return {
+        **metadata,
+        "start": safe_start,
+        "end": end,
+        "returned_char_count": end - safe_start,
+        "complete": complete,
+        "next_start": None if complete else end,
+        "next_call": (
+            None
+            if complete
+            else {**next_call, "start": end, "max_chars": safe_max_chars}
+        ),
+        "serialized": serialized[safe_start:end],
+    }
+
+
+def _bounded_summary(value: Any) -> str:
+    text = str(value or "")
+    return text[:TRACE_REVIEW_SUMMARY_MAX_CHARS]
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -640,7 +702,6 @@ async def get_langfuse_tree(
 async def get_langfuse_reconstruction(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
-    include_payloads: bool = Query(default=False, description="Include full payload values in events"),
     limit: int = Query(default=100, ge=1, le=500, description="Maximum events to return"),
     offset: int = Query(default=0, ge=0, description="Event offset"),
     user: Dict[str, Any] = get_auth_dependency(),
@@ -648,7 +709,7 @@ async def get_langfuse_reconstruction(
     trace_data = _extract_langfuse_trace(trace_id, source)
     reconstruction = build_ordered_reconstruction(
         trace_data,
-        include_payload_values=include_payloads,
+        include_payload_values=False,
     )
     events = reconstruction.get("events", [])
     page = events[offset:offset + limit]
@@ -678,23 +739,25 @@ async def get_langfuse_reconstruction(
     summary="List Langfuse trace payloads",
     description="""
     Return trace/model/tool input/output payload summaries, largest first by
-    default. Full values are omitted unless include_values is true; prefer
-    langfuse_payload for exact chunked retrieval.
+    default. Full values are never included; use langfuse_payload for exact
+    chunked retrieval.
     """
 )
 async def get_langfuse_payloads(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
-    include_values: bool = Query(default=False, description="Include full payload values in page"),
     sort: str = Query(default="largest", description="Sort order: largest or chronological"),
-    limit: int = Query(default=50, ge=1, le=200, description="Maximum payload summaries to return"),
+    limit: Annotated[
+        int,
+        Query(ge=1, le=TRACE_REVIEW_PAGE_SIZE, description="Maximum payload summaries"),
+    ] = TRACE_REVIEW_PAGE_SIZE,
     offset: int = Query(default=0, ge=0, description="Pagination offset"),
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     if sort not in {"largest", "chronological"}:
         raise HTTPException(status_code=400, detail="sort must be 'largest' or 'chronological'")
     trace_data = _extract_langfuse_trace(trace_id, source)
-    payloads = build_payload_inventory(trace_data, include_values=include_values)
+    payloads = build_payload_inventory(trace_data, include_values=False)
     page, pagination = paginate_payloads(payloads, limit=limit, offset=offset, sort=sort)
     response_data = {
         "source": source,
@@ -717,8 +780,8 @@ async def get_langfuse_payloads(
     summary="Get one exact Langfuse payload",
     description="""
     Return one exact trace or observation payload by payload_id, or by
-    scope/observation_id/field. Defaults to a 12K-character chunk to keep
-    Claude responses bounded.
+    scope/observation_id/field. Exact chunks are environment-bounded below the
+    provider inline-result envelope.
     """
 )
 async def get_langfuse_payload(
@@ -729,7 +792,10 @@ async def get_langfuse_payload(
     observation_id: Optional[str] = Query(default=None, description="Observation/span ID"),
     field: Optional[str] = Query(default=None, description="Payload field: input, output, metadata.agent_config, or metadata.event_payload"),
     start: int = Query(default=0, ge=0, description="Start character for chunked retrieval"),
-    max_chars: int = Query(default=12000, ge=0, le=50000, description="Maximum characters; 0 returns the full payload"),
+    max_chars: Annotated[
+        int,
+        Query(ge=1, le=TRACE_REVIEW_CHUNK_MAX_CHARS, description="Maximum exact characters"),
+    ] = TRACE_REVIEW_CHUNK_MAX_CHARS,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     if not payload_id:
@@ -753,6 +819,20 @@ async def get_langfuse_payload(
     )
     if payload is None:
         raise HTTPException(status_code=404, detail="Payload not found in Langfuse trace data")
+
+    payload["field_id"] = f"payload:{payload['payload_id']}"
+    payload["complete"] = payload["next_start"] is None
+    payload["next_call"] = (
+        None
+        if payload["complete"]
+        else {
+            "trace_id": trace_id,
+            "payload_id": payload["payload_id"],
+            "start": payload["next_start"],
+            "max_chars": max_chars,
+        }
+    )
+    payload.pop("value", None)
 
     response_data = {
         "source": source,
@@ -918,7 +998,7 @@ async def get_trace_summary(
     response_model=ToolCallsSummaryResponse,
     summary="Get lightweight tool calls summary",
     description="""
-    Returns a lightweight list of ALL tool calls with summaries (no full results).
+    Returns one bounded page of tool calls with summaries (no full results).
     Use this to see what tools were called before drilling into details.
     Token cost: ~100 tokens per call.
     """
@@ -926,10 +1006,15 @@ async def get_trace_summary(
 async def get_tool_calls_summary(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     request: Request,
+    page: Annotated[int, Query(ge=1, description="Page number (1-indexed)")] = 1,
+    page_size: Annotated[
+        int,
+        Query(ge=1, le=TRACE_REVIEW_PAGE_SIZE, description="Summaries per page"),
+    ] = TRACE_REVIEW_PAGE_SIZE,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ToolCallsSummaryResponse:
-    """Get lightweight summary of all tool calls."""
+    """Get one bounded page of lightweight tool-call summaries."""
     cached_data = await _ensure_trace_analyzed(trace_id, request, source)
 
     analysis = cached_data.get("analysis", {})
@@ -937,18 +1022,27 @@ async def get_tool_calls_summary(
 
     # Create lightweight summaries
     tool_calls = tool_calls_data.get("tool_calls", [])
+    total_items = len(tool_calls)
+    total_pages = max(1, math.ceil(total_items / page_size))
+    if page > total_pages and total_items > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Page {page} exceeds total pages ({total_pages})",
+        )
+    start_idx = (page - 1) * page_size
     summaries = []
-    for i, tc in enumerate(tool_calls):
+    for i, tc in enumerate(tool_calls[start_idx:start_idx + page_size], start=start_idx):
         lightweight = create_lightweight_tool_call_summary(tc)
+        selector = _tool_call_selector(tc, i)
         summaries.append(ToolCallSummaryItem(
             index=i,
-            call_id=lightweight["call_id"],
+            call_id=selector,
             name=lightweight["name"],
             time=lightweight["time"],
             duration=lightweight["duration"],
             status=lightweight["status"],
-            input_summary=lightweight["input_summary"],
-            result_summary=lightweight["result_summary"],
+            input_summary=_bounded_summary(lightweight["input_summary"]),
+            result_summary=_bounded_summary(lightweight["result_summary"]),
             domain_envelope=lightweight.get("domain_envelope"),
         ))
 
@@ -958,6 +1052,23 @@ async def get_tool_calls_summary(
         total_count=tool_calls_data.get("total_count", 0),
         unique_tools=tool_calls_data.get("unique_tools", []),
         tool_calls=summaries,
+        pagination=PaginationInfo(
+            page=page,
+            page_size=page_size,
+            total_items=total_items,
+            total_pages=total_pages,
+            has_next=page < total_pages,
+            has_prev=page > 1,
+        ),
+        next_call=(
+            {
+                "trace_id": trace_id,
+                "page": page + 1,
+                "page_size": page_size,
+            }
+            if page < total_pages
+            else None
+        ),
         has_duplicates=duplicates.get("has_duplicates", False),
         duplicate_count=duplicates.get("total_duplicate_groups", 0)
     )
@@ -978,41 +1089,50 @@ async def get_tool_calls_summary(
 @router.get(
     "/{trace_id}/tool_calls",
     response_model=PaginatedToolCallsResponse,
-    summary="Get paginated tool calls with full details",
+    summary="Get paginated tool-call exact-field references",
     description="""
-    Returns paginated tool calls with full details. Use for detailed analysis
-    of specific calls. Supports filtering by tool name.
+    Returns paginated tool-call metadata and exact-field references. Use the
+    single-call detail endpoint to retrieve independently chunked input/result
+    fields. Supports filtering by tool name.
 
     Query parameters:
     - page: Page number (1-indexed, default: 1)
-    - page_size: Items per page (default: 10, max: 20)
+    - page_size: Items per page (environment-bounded)
     - tool_name: Optional filter by tool name
 
-    Token cost: varies by page_size (~1-5K tokens per call with results).
+    Exact input/result values are never embedded in this page.
     """
 )
 async def get_tool_calls_paginated(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     request: Request,
     page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
-    page_size: int = Query(default=10, ge=1, le=20, description="Items per page"),
+    page_size: Annotated[
+        int,
+        Query(ge=1, le=TRACE_REVIEW_PAGE_SIZE, description="Items per page"),
+    ] = TRACE_REVIEW_PAGE_SIZE,
     tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> PaginatedToolCallsResponse:
-    """Get paginated tool calls with full details."""
+    """Get paginated tool-call metadata and exact-field references."""
     cached_data = await _ensure_trace_analyzed(trace_id, request, source)
 
     analysis = cached_data.get("analysis", {})
     tool_calls_data = analysis.get("tool_calls", {})
     all_tool_calls = tool_calls_data.get("tool_calls", [])
+    indexed_tool_calls = list(enumerate(all_tool_calls))
 
     # Apply tool_name filter if provided
     if tool_name:
-        all_tool_calls = [tc for tc in all_tool_calls if tc.get("name") == tool_name]
+        indexed_tool_calls = [
+            (index, tool_call)
+            for index, tool_call in indexed_tool_calls
+            if tool_call.get("name") == tool_name
+        ]
 
     # Calculate pagination
-    total_items = len(all_tool_calls)
+    total_items = len(indexed_tool_calls)
     total_pages = max(1, math.ceil(total_items / page_size))
 
     # Validate page number
@@ -1022,13 +1142,39 @@ async def get_tool_calls_paginated(
             detail=f"Page {page} exceeds total pages ({total_pages})"
         )
 
-    # Get page slice
+    # Get page slice and replace exact values with deterministic field refs.
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
-    page_tool_calls = all_tool_calls[start_idx:end_idx]
-
-    # Truncate results if needed to fit token budget
-    page_tool_calls = truncate_tool_call_results(page_tool_calls)
+    page_tool_calls = []
+    for index, tool_call in indexed_tool_calls[start_idx:end_idx]:
+        selector = _tool_call_selector(tool_call, index)
+        exact_fields = []
+        for field in ("input", "tool_result"):
+            field_id = f"tool_call:{selector}:{field}"
+            exact_fields.append({
+                **_exact_text_metadata(
+                    field_id=field_id,
+                    field=field,
+                    value=tool_call.get(field),
+                ),
+                "next_call": {
+                    "trace_id": trace_id,
+                    "call_id": selector,
+                    "field": field,
+                    "start": 0,
+                    "max_chars": TRACE_REVIEW_CHUNK_MAX_CHARS,
+                },
+            })
+        page_tool_calls.append({
+            **{
+                key: value
+                for key, value in tool_call.items()
+                if key not in {"input", "tool_result"}
+            },
+            "index": index,
+            "call_id": selector,
+            "exact_fields": exact_fields,
+        })
 
     pagination = PaginationInfo(
         page=page,
@@ -1045,6 +1191,16 @@ async def get_tool_calls_paginated(
         status="success",
         tool_calls=page_tool_calls,
         pagination=pagination,
+        next_call=(
+            {
+                "trace_id": trace_id,
+                "page": page + 1,
+                "page_size": page_size,
+                **({"tool_name": tool_name} if tool_name else {}),
+            }
+            if page < total_pages
+            else None
+        ),
         token_info=TokenInfo(**token_info),
         filter_applied=tool_name
     )
@@ -1059,8 +1215,8 @@ async def get_tool_calls_paginated(
     response_model=SingleToolCallResponse,
     summary="Get single tool call detail",
     description="""
-    Returns full details for a single tool call.
-    Use when you need to see the complete input/output of a specific call.
+    Returns one exact, independently selected input or result field chunk for a
+    single tool call. Follow next_call until complete=true.
 
     Accepts either:
     - `call_id`: OpenAI function call ID (e.g., "call_oVv6VsfK3iJEVN4eXh31evsf")
@@ -1075,10 +1231,16 @@ async def get_tool_call_detail(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     call_id: Annotated[str, Path(description="Tool call_id or observation id")],
     request: Request,
+    field: Annotated[Literal["input", "tool_result"], Query(description="Exact field to retrieve")],
+    start: Annotated[int, Query(ge=0, description="Start character")] = 0,
+    max_chars: Annotated[
+        int,
+        Query(ge=1, le=TRACE_REVIEW_CHUNK_MAX_CHARS, description="Maximum exact characters"),
+    ] = TRACE_REVIEW_CHUNK_MAX_CHARS,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> SingleToolCallResponse:
-    """Get full details for a single tool call."""
+    """Get one exact field chunk for a single tool call."""
     cached_data = await _ensure_trace_analyzed(trace_id, request, source)
 
     analysis = cached_data.get("analysis", {})
@@ -1088,9 +1250,11 @@ async def get_tool_call_detail(
     # Find the tool call by call_id or observation id
     # Support both because paginated response includes both fields
     tool_call = None
-    for tc in all_tool_calls:
-        if tc.get("call_id") == call_id or tc.get("id") == call_id:
+    tool_call_index = -1
+    for index, tc in enumerate(all_tool_calls):
+        if _tool_call_selector(tc, index) == call_id:
             tool_call = tc
+            tool_call_index = index
             break
 
     if not tool_call:
@@ -1100,15 +1264,28 @@ async def get_tool_call_detail(
                    f"Use call_id from tool_calls/summary or id from paginated tool_calls."
         )
 
-    # Truncate if needed
-    truncated = truncate_tool_call_results([tool_call])
-    tool_call = truncated[0] if truncated else tool_call
+    selector = _tool_call_selector(tool_call, tool_call_index)
+    tool_call_metadata = {
+        key: value
+        for key, value in tool_call.items()
+        if key not in {"input", "tool_result"}
+    }
+    tool_call_metadata.update({"index": tool_call_index, "call_id": selector})
+    chunk = _exact_text_chunk(
+        field_id=f"tool_call:{selector}:{field}",
+        field=field,
+        value=tool_call.get(field),
+        start=start,
+        max_chars=max_chars,
+        next_call={"trace_id": trace_id, "call_id": selector, "field": field},
+    )
 
-    token_info = create_token_info_dict(tool_call)
+    token_info = create_token_info_dict({"tool_call": tool_call_metadata, "chunk": chunk})
 
     return SingleToolCallResponse(
         status="success",
-        tool_call=tool_call,
+        tool_call=tool_call_metadata,
+        chunk=chunk,
         token_info=TokenInfo(**token_info)
     )
 
@@ -1122,14 +1299,22 @@ async def get_tool_call_detail(
     response_model=ConversationResponse,
     summary="Get trace conversation",
     description="""
-    Returns the user's query and the assistant's final response.
-
-    Token cost: varies by response length (typically 1-10K tokens).
+    Returns one exact user-query or assistant-response chunk. Follow next_call
+    until complete=true.
     """
 )
 async def get_trace_conversation(
     trace_id: Annotated[str, Path(description="Langfuse trace ID")],
     request: Request,
+    field: Annotated[
+        Literal["user_query", "assistant_response"],
+        Query(description="Exact conversation field to retrieve"),
+    ],
+    start: Annotated[int, Query(ge=0, description="Start character")] = 0,
+    max_chars: Annotated[
+        int,
+        Query(ge=1, le=TRACE_REVIEW_CHUNK_MAX_CHARS, description="Maximum exact characters"),
+    ] = TRACE_REVIEW_CHUNK_MAX_CHARS,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ConversationResponse:
@@ -1139,10 +1324,18 @@ async def get_trace_conversation(
     analysis = cached_data.get("analysis", {})
     conversation = analysis.get("conversation", {})
 
+    analyzer_field = "user_input" if field == "user_query" else "assistant_response"
+    chunk = _exact_text_chunk(
+        field_id=f"conversation:{field}",
+        field=field,
+        value=conversation.get(analyzer_field),
+        start=start,
+        max_chars=max_chars,
+        next_call={"trace_id": trace_id, "field": field},
+    )
     response_data = ConversationData(
-        user_query=conversation.get("user_input"),  # ConversationAnalyzer returns "user_input" key
-        assistant_response=conversation.get("assistant_response"),
-        response_length=len(conversation.get("assistant_response", "") or ""),
+        field=field,
+        chunk=chunk,
         domain_envelope=conversation.get("domain_envelope"),
     )
 

@@ -138,7 +138,6 @@ async def test_claude_langfuse_reconstruction_is_event_paginated(extractor_cls: 
     response = await claude.get_langfuse_reconstruction(
         "856df16f1752cb53ee43dcb2f5ecfd16",
         source="local",
-        include_payloads=False,
         limit=2,
         offset=1,
     )
@@ -164,7 +163,6 @@ async def test_claude_langfuse_payload_inventory_and_exact_chunk(extractor_cls: 
     inventory = await claude.get_langfuse_payloads(
         "856df16f1752cb53ee43dcb2f5ecfd16",
         source="local",
-        include_values=False,
         sort="chronological",
         limit=10,
         offset=0,

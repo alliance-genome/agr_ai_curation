@@ -78,10 +78,15 @@ class ToolCallSummaryItem(BaseModel):
 
 
 class ToolCallsSummaryData(BaseModel):
-    """Summary of all tool calls without full results."""
+    """One bounded page of tool-call summaries without full results."""
     total_count: int = Field(..., description="Total number of tool calls")
     unique_tools: List[str] = Field(..., description="List of unique tool names used")
     tool_calls: List[ToolCallSummaryItem] = Field(..., description="Lightweight call summaries")
+    pagination: PaginationInfo
+    next_call: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Deterministic next summary-page tool arguments",
+    )
     has_duplicates: bool = Field(default=False, description="Whether duplicate calls were detected")
     duplicate_count: int = Field(default=0, description="Number of duplicate call groups")
 
@@ -96,8 +101,12 @@ class ToolCallsSummaryResponse(BaseModel):
 class PaginatedToolCallsResponse(BaseModel):
     """Response for paginated tool calls endpoint."""
     status: str = Field(default="success")
-    tool_calls: List[Dict] = Field(..., description="Full tool call details")
+    tool_calls: List[Dict] = Field(..., description="Tool-call metadata and exact-field references")
     pagination: PaginationInfo
+    next_call: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Deterministic next metadata-page tool arguments",
+    )
     token_info: TokenInfo
     filter_applied: Optional[str] = Field(
         default=None,
@@ -106,17 +115,17 @@ class PaginatedToolCallsResponse(BaseModel):
 
 
 class SingleToolCallResponse(BaseModel):
-    """Response for single tool call detail endpoint."""
+    """Response for one exact field chunk from a single tool call."""
     status: str = Field(default="success")
-    tool_call: Dict = Field(..., description="Full tool call details")
+    tool_call: Dict = Field(..., description="Tool call metadata without exact field values")
+    chunk: Dict = Field(..., description="Exact selected input or result field chunk")
     token_info: TokenInfo
 
 
 class ConversationData(BaseModel):
-    """User query and assistant response."""
-    user_query: Optional[str] = None
-    assistant_response: Optional[str] = None
-    response_length: int = 0
+    """One exact selected trace-conversation field chunk."""
+    field: Literal["user_query", "assistant_response"]
+    chunk: Dict = Field(..., description="Exact selected conversation field chunk")
     domain_envelope: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Compact domain-envelope signal summary when present",

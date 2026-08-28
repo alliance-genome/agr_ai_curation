@@ -725,7 +725,7 @@ def find_payload(
         return None
 
     serialized = selected.get("serialized") or serialize_payload(selected.get("value"))
-    safe_start = max(start, 0)
+    safe_start = min(max(start, 0), len(serialized))
     if max_chars and max_chars > 0:
         safe_end = min(safe_start + max_chars, len(serialized))
         chunk = serialized[safe_start:safe_end]

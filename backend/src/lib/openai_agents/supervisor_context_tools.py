@@ -547,6 +547,9 @@ async def inspect_chat_traces(
     tool_name: str | None = None,
     event_type: str | None = None,
     candidate_id: str | None = None,
+    field: str | None = None,
+    start: int = 0,
+    max_chars: int | None = None,
     include_sibling_traces: bool = False,
     limit: int | None = None,
     cursor: str | None = None,
@@ -615,7 +618,12 @@ async def inspect_chat_traces(
     if normalized_detail == "summary":
         result = await get_trace_summary(authorized_trace_id)
     elif normalized_detail == "conversation":
-        result = await get_trace_conversation(authorized_trace_id)
+        result = await get_trace_conversation(
+            authorized_trace_id,
+            field=field or "user_query",
+            start=start,
+            max_chars=max_chars,
+        )
     elif normalized_detail == "diagnostic_report":
         result = await get_extraction_diagnostic_report(
             authorized_trace_id,
@@ -628,7 +636,13 @@ async def inspect_chat_traces(
             candidate_id=candidate_id,
         )
     elif normalized_detail == "tool_calls":
-        result = await get_tool_calls_summary(authorized_trace_id)
+        page_size = normalize_page_limit(limit, default=10, maximum=20)
+        offset = parse_offset_cursor(cursor)
+        result = await get_tool_calls_summary(
+            authorized_trace_id,
+            page=(offset // page_size) + 1,
+            page_size=page_size,
+        )
     elif normalized_detail == "costs":
         result = await get_trace_costs(authorized_trace_id)
     elif normalized_detail == "duplicates":
@@ -641,7 +655,6 @@ async def inspect_chat_traces(
             authorized_trace_id,
             limit=normalize_page_limit(limit, default=10, maximum=20),
             offset=offset,
-            include_values=False,
         )
     else:
         return _tool_response(

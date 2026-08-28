@@ -1613,6 +1613,50 @@ def get_agent_studio_prompt_inspection_chunk_max_chars() -> int:
     )
 
 
+def get_agent_studio_trace_review_page_size() -> int:
+    """Max/default page size for exact TraceReview call listings.
+
+    The same bound is used for summary and detail-reference pages so neither
+    tool can return an unbounded number of call records. Default 10.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_TRACE_REVIEW_PAGE_SIZE",
+            10,
+        ),
+    )
+
+
+def get_agent_studio_trace_review_summary_max_chars() -> int:
+    """Max characters in each TraceReview call input/result summary.
+
+    Exact content remains available through field chunks. Default 200.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_TRACE_REVIEW_SUMMARY_MAX_CHARS",
+            200,
+        ),
+    )
+
+
+def get_agent_studio_trace_review_chunk_max_chars() -> int:
+    """Max exact characters in one TraceReview detail/payload chunk.
+
+    The default leaves JSON-envelope headroom beneath the provider's 12,000
+    character inline-result boundary. Default 8000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_TRACE_REVIEW_CHUNK_MAX_CHARS",
+            8_000,
+        ),
+    )
+
+
 def get_flow_definition_max_nodes() -> int:
     """Max canonical flow nodes, including the required task-input node."""
     configured = _get_env_int_with_fallback(

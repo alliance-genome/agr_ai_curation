@@ -360,12 +360,21 @@ async def test_inspect_chat_traces_uses_safe_trace_review_flags(monkeypatch):
         captured["payloads"] = {"trace_id": trace_id, **kwargs}
         return {"status": "success", "data": {"payloads": []}, "error": None}
 
+    async def _fake_conversation(trace_id, **kwargs):
+        captured["conversation"] = {"trace_id": trace_id, **kwargs}
+        return {"status": "success", "data": {"chunk": {}}, "error": None}
+
     monkeypatch.setattr(
         supervisor_context_tools,
         "get_extraction_diagnostic_report",
         _fake_diagnostic_report,
     )
     monkeypatch.setattr(supervisor_context_tools, "get_trace_payloads", _fake_payloads)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_trace_conversation",
+        _fake_conversation,
+    )
 
     diagnostic_response = await supervisor_context_tools.inspect_chat_traces(
         detail="diagnostic_report",
@@ -377,14 +386,28 @@ async def test_inspect_chat_traces_uses_safe_trace_review_flags(monkeypatch):
         limit=3,
         cursor="2",
     )
+    conversation_response = await supervisor_context_tools.inspect_chat_traces(
+        detail="conversation",
+        trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        field="assistant_response",
+        start=120,
+        max_chars=700,
+    )
 
     assert json.loads(diagnostic_response)["status"] == "ok"
     assert captured["diagnostic"]["include_raw_args"] is False
     assert captured["diagnostic"]["include_raw_outputs"] is False
     assert json.loads(payload_response)["status"] == "ok"
-    assert captured["payloads"]["include_values"] is False
+    assert "include_values" not in captured["payloads"]
     assert captured["payloads"]["limit"] == 3
     assert captured["payloads"]["offset"] == 2
+    assert json.loads(conversation_response)["status"] == "ok"
+    assert captured["conversation"] == {
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "field": "assistant_response",
+        "start": 120,
+        "max_chars": 700,
+    }
 
 
 @pytest.mark.asyncio

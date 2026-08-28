@@ -16,6 +16,8 @@ from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
 )
 from src.lib.openai_agents.config import (
+    get_agent_studio_trace_review_chunk_max_chars,
+    get_agent_studio_trace_review_page_size,
     get_domain_pack_validation_plan_default_limit,
     get_domain_pack_validation_plan_max_limit,
 )
@@ -26,6 +28,8 @@ _DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT = min(
     get_domain_pack_validation_plan_default_limit(),
     _DOMAIN_PACK_VALIDATION_PLAN_MAX_LIMIT,
 )
+_TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
+_TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
 
 # Convert tool definition to Anthropic format
 ANTHROPIC_SUGGESTION_TOOL = {
@@ -344,14 +348,27 @@ GET_TRACE_SUMMARY_TOOL = {
 
 GET_TOOL_CALLS_SUMMARY_TOOL = {
     "name": "get_tool_calls_summary",
-    "description": "Get lightweight summary of ALL tool calls without full results (~100 tokens/call). Use this to see what tools were called before drilling into details. Returns: total count, unique tools, and list of summaries (call_id, name, time, duration, status, input_summary, result_summary).",
+    "description": "Get one bounded page of lightweight tool-call summaries without exact values. Follow pagination, then use get_tool_call_detail with a call_id and field for exact chunks.",
     "input_schema": {
         "type": "object",
         "properties": {
             "trace_id": {
                 "type": "string",
                 "description": "Langfuse trace ID",
-            }
+            },
+            "page": {
+                "type": "integer",
+                "description": "Page number (1-indexed).",
+                "default": 1,
+                "minimum": 1,
+            },
+            "page_size": {
+                "type": "integer",
+                "description": "Summaries per page (environment-bounded).",
+                "default": _TRACE_REVIEW_PAGE_SIZE,
+                "minimum": 1,
+                "maximum": _TRACE_REVIEW_PAGE_SIZE,
+            },
         },
         "required": ["trace_id"],
     },
@@ -359,7 +376,7 @@ GET_TOOL_CALLS_SUMMARY_TOOL = {
 
 GET_TOOL_CALLS_PAGE_TOOL = {
     "name": "get_tool_calls_page",
-    "description": "Get paginated tool calls with full details. Use for detailed analysis of specific calls. Results are automatically truncated to fit within token budget. Supports filtering by tool name.",
+    "description": "Get paginated tool-call metadata and deterministic exact-field references, without inline input/result values. Use get_tool_call_detail to retrieve a selected field chunk.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -375,10 +392,10 @@ GET_TOOL_CALLS_PAGE_TOOL = {
             },
             "page_size": {
                 "type": "integer",
-                "description": "Items per page (default: 10, max: 20)",
-                "default": 10,
+                "description": "Items per page (environment-bounded).",
+                "default": _TRACE_REVIEW_PAGE_SIZE,
                 "minimum": 1,
-                "maximum": 20,
+                "maximum": _TRACE_REVIEW_PAGE_SIZE,
             },
             "tool_name": {
                 "type": "string",
@@ -391,7 +408,7 @@ GET_TOOL_CALLS_PAGE_TOOL = {
 
 GET_TOOL_CALL_DETAIL_TOOL = {
     "name": "get_tool_call_detail",
-    "description": "Get full details for a single tool call. Use when you need complete input/output for a specific call identified from get_tool_calls_summary. Token cost: ~1-5K tokens depending on result size.",
+    "description": "Get one exact input or tool_result chunk for a selected tool call. Follow next_call until complete=true; concatenating serialized chunks reconstructs the hashed field exactly.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -403,23 +420,57 @@ GET_TOOL_CALL_DETAIL_TOOL = {
                 "type": "string",
                 "description": "Tool call ID from get_tool_calls_summary response",
             },
+            "field": {
+                "type": "string",
+                "enum": ["input", "tool_result"],
+                "description": "Exact field to retrieve independently.",
+            },
+            "start": {
+                "type": "integer",
+                "description": "Start character for exact chunk retrieval.",
+                "default": 0,
+                "minimum": 0,
+            },
+            "max_chars": {
+                "type": "integer",
+                "description": "Maximum exact characters in this chunk.",
+                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
+                "minimum": 1,
+                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
+            },
         },
-        "required": ["trace_id", "call_id"],
+        "required": ["trace_id", "call_id", "field"],
     },
 }
 
 GET_TRACE_CONVERSATION_TOOL = {
     "name": "get_trace_conversation",
-    "description": "Get the user's query and assistant's final response. Use when you need to see what the curator asked and what the AI answered. Token cost varies by response length.",
+    "description": "Get one exact user_query or assistant_response chunk. Follow next_call until complete=true; concatenating serialized chunks reconstructs the hashed field exactly.",
     "input_schema": {
         "type": "object",
         "properties": {
             "trace_id": {
                 "type": "string",
                 "description": "Langfuse trace ID",
-            }
+            },
+            "field": {
+                "type": "string",
+                "enum": ["user_query", "assistant_response"],
+                "description": "Exact conversation field to retrieve.",
+            },
+            "start": {
+                "type": "integer",
+                "default": 0,
+                "minimum": 0,
+            },
+            "max_chars": {
+                "type": "integer",
+                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
+                "minimum": 1,
+                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
+            },
         },
-        "required": ["trace_id"],
+        "required": ["trace_id", "field"],
     },
 }
 
@@ -529,16 +580,11 @@ GET_TRACE_TREE_TOOL = {
 
 GET_TRACE_RECONSTRUCTION_TOOL = {
     "name": "get_trace_reconstruction",
-    "description": "Get chronological Langfuse trace/model/tool/event reconstruction with payload references. Use this to understand the order of model calls, tools, handoffs, validation, and trace input/output. Defaults to payload references only.",
+    "description": "Get chronological Langfuse trace/model/tool/event reconstruction with payload references, never full payload values. Use get_trace_payload for selected exact content.",
     "input_schema": {
         "type": "object",
         "properties": {
             "trace_id": {"type": "string", "description": "Langfuse trace ID."},
-            "include_payloads": {
-                "type": "boolean",
-                "description": "Include full payload values inside events. Leave false unless a small page needs exact inline values.",
-                "default": False,
-            },
             "limit": {
                 "type": "integer",
                 "description": "Maximum events to return (default: 100, max: 500).",
@@ -572,21 +618,16 @@ GET_TRACE_PAYLOADS_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum payload summaries to return (default: 50, max: 200).",
-                "default": 50,
+                "description": "Maximum payload summaries to return (environment-bounded).",
+                "default": _TRACE_REVIEW_PAGE_SIZE,
                 "minimum": 1,
-                "maximum": 200,
+                "maximum": _TRACE_REVIEW_PAGE_SIZE,
             },
             "offset": {
                 "type": "integer",
                 "description": "Pagination offset.",
                 "default": 0,
                 "minimum": 0,
-            },
-            "include_values": {
-                "type": "boolean",
-                "description": "Include full payload values in the listing. Prefer false, then call get_trace_payload for exact chunked retrieval.",
-                "default": False,
             },
         },
         "required": ["trace_id"],
@@ -632,10 +673,10 @@ GET_TRACE_PAYLOAD_TOOL = {
             },
             "max_chars": {
                 "type": "integer",
-                "description": "Maximum characters to return (default: 12000, max: 50000; 0 asks TraceReview for the full payload).",
-                "default": 12000,
-                "minimum": 0,
-                "maximum": 50000,
+                "description": "Maximum exact characters in this chunk.",
+                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
+                "minimum": 1,
+                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
             },
         },
         "required": ["trace_id"],
