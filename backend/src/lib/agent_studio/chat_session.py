@@ -5,6 +5,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,9 +15,11 @@ from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
+    ChatMessageCursor,
     ChatMessageRecord,
     ChatSessionRecord,
-    MAX_MESSAGE_PAGE_SIZE,
+    decode_chat_message_cursor,
+    encode_chat_message_cursor,
 )
 from src.lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
@@ -63,18 +66,88 @@ def serialize_chat_history_session(record: ChatSessionRecord) -> Dict[str, Any]:
     }
 
 
-def serialize_chat_history_message(record: ChatMessageRecord) -> Dict[str, Any]:
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _serialize_payload_json(value: dict[str, Any] | list[Any] | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(
+        value,
+        default=str,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _field_metadata(value: str | None, *, serialization: str) -> Dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        "length": len(value),
+        "sha256": _sha256_text(value),
+        "serialization": serialization,
+    }
+
+
+def _serialize_chat_message_summary(record: ChatMessageRecord) -> Dict[str, Any]:
     return {
         "message_id": str(record.message_id),
-        "session_id": record.session_id,
-        "chat_kind": record.chat_kind,
         "turn_id": record.turn_id,
         "role": record.role,
         "message_type": record.message_type,
-        "content": record.content,
-        "payload_json": record.payload_json,
         "trace_id": record.trace_id,
         "created_at": record.created_at.isoformat(),
+        "fields": {
+            "content": _field_metadata(record.content, serialization="utf-8 text"),
+            "payload_json": _field_metadata(
+                _serialize_payload_json(record.payload_json),
+                serialization="canonical JSON (UTF-8, sorted keys, compact separators)",
+            ),
+        },
+    }
+
+
+def _cursor_for_message(message: ChatMessageRecord) -> ChatMessageCursor:
+    return ChatMessageCursor(
+        created_at=message.created_at,
+        message_id=message.message_id,
+    )
+
+
+def _provider_result_chars(value: Dict[str, Any]) -> int:
+    return len(json.dumps(value, default=str))
+
+
+def _bounded_page_result(
+    *,
+    items: list[ChatMessageRecord],
+    repository_next_cursor: ChatMessageCursor | None,
+    provider_inline_max_chars: int,
+    build_result: Callable[[list[ChatMessageRecord], ChatMessageCursor | None], Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Fit a metadata page to the actual provider-visible JSON envelope."""
+
+    for item_count in range(len(items), -1, -1):
+        page_items = items[:item_count]
+        if item_count < len(items) and page_items:
+            next_cursor = _cursor_for_message(page_items[-1])
+        else:
+            next_cursor = repository_next_cursor
+        candidate = build_result(page_items, next_cursor)
+        if _provider_result_chars(candidate) <= provider_inline_max_chars:
+            if item_count == 0 and items:
+                break
+            return candidate
+    return {
+        "success": False,
+        "error": (
+            "The provider inline tool-result limit is too small to return one "
+            "chat row with its required stable identity metadata."
+        ),
+        "provider_inline_max_chars": provider_inline_max_chars,
     }
 
 
@@ -111,13 +184,17 @@ def get_chat_conversation_payload(
     repository: ChatHistoryRepository,
     session_id: str,
     user_auth_sub: str,
+    cursor: str | None,
+    limit: int,
+    provider_inline_max_chars: int,
     serialize_session: Callable[[ChatSessionRecord], Dict[str, Any]] = serialize_chat_history_session,
-    serialize_message: Callable[[ChatMessageRecord], Dict[str, Any]] = serialize_chat_history_message,
 ) -> Dict[str, Any]:
+    message_cursor = decode_chat_message_cursor(cursor)
     detail = repository.get_session_detail(
         session_id=session_id,
         user_auth_sub=user_auth_sub,
-        message_limit=MAX_MESSAGE_PAGE_SIZE,
+        message_limit=limit,
+        message_cursor=message_cursor,
         excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES),
     )
     if detail is None:
@@ -126,30 +203,70 @@ def get_chat_conversation_payload(
             "error": "Chat session not found.",
         }
 
-    session_chat_kind = detail.session.chat_kind
-    messages = list(detail.messages)
-    cursor = detail.next_message_cursor
-    while cursor is not None:
-        if not session_chat_kind:
-            raise ValueError("chat_kind is required to paginate the chat conversation")
-        page = repository.list_messages(
+    chat_kind = detail.session.chat_kind
+    if not chat_kind:
+        raise ValueError("chat_kind is required to paginate the chat conversation")
+    excluded_types = set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES)
+    total_messages = repository.count_messages(
+        session_id=session_id,
+        user_auth_sub=user_auth_sub,
+        chat_kind=chat_kind,
+        excluded_message_types=excluded_types,
+    )
+    range_start = (
+        repository.count_messages(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
-            chat_kind=session_chat_kind,
-            limit=MAX_MESSAGE_PAGE_SIZE,
-            cursor=cursor,
-            excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES),
+            chat_kind=chat_kind,
+            excluded_message_types=excluded_types,
+            through_cursor=message_cursor,
         )
-        messages.extend(page.items)
-        cursor = page.next_cursor
+        if message_cursor is not None
+        else 0
+    )
 
-    return {
-        "success": True,
-        "chat_kind": session_chat_kind,
-        "session": serialize_session(detail.session),
-        "message_count": len(messages),
-        "messages": [serialize_message(message) for message in messages],
-    }
+    def build_result(
+        page_items: list[ChatMessageRecord],
+        next_cursor_value: ChatMessageCursor | None,
+    ) -> Dict[str, Any]:
+        encoded_next_cursor = encode_chat_message_cursor(next_cursor_value)
+        complete = encoded_next_cursor is None
+        next_call = None
+        if not complete:
+            next_call = {
+                "tool": "get_chat_conversation",
+                "arguments": {
+                    "session_id": session_id,
+                    "cursor": encoded_next_cursor,
+                    "limit": limit,
+                },
+            }
+        return {
+            "success": True,
+            "contract_version": "chat_conversation_recall.v1",
+            "view": "message_page",
+            "chat_kind": chat_kind,
+            "session": serialize_session(detail.session),
+            "total_message_count": total_messages,
+            "returned_range": {
+                "start": range_start,
+                "end": range_start + len(page_items),
+            },
+            "messages": [_serialize_chat_message_summary(item) for item in page_items],
+            "complete": complete,
+            "next_call": next_call,
+            "instruction": (
+                "Follow next_call until complete=true. Select a turn_id and call "
+                "get_chat_turn for independently chunked exact row fields."
+            ),
+        }
+
+    return _bounded_page_result(
+        items=list(detail.messages),
+        repository_next_cursor=detail.next_message_cursor,
+        provider_inline_max_chars=provider_inline_max_chars,
+        build_result=build_result,
+    )
 
 
 def get_chat_turn_payload(
@@ -158,8 +275,16 @@ def get_chat_turn_payload(
     session_id: str,
     turn_id: str,
     user_auth_sub: str,
+    cursor: str | None,
+    limit: int,
+    message_id: str | None,
+    field: str | None,
+    start: int | None,
+    max_chars: int | None,
+    field_hash: str | None,
+    chunk_max_chars: int,
+    provider_inline_max_chars: int,
     serialize_session: Callable[[ChatSessionRecord], Dict[str, Any]] = serialize_chat_history_session,
-    serialize_message: Callable[[ChatMessageRecord], Dict[str, Any]] = serialize_chat_history_message,
 ) -> Dict[str, Any]:
     session = repository.get_session(
         session_id=session_id,
@@ -173,14 +298,160 @@ def get_chat_turn_payload(
     if not session.chat_kind:
         raise ValueError("chat_kind is required to load a chat turn")
 
-    messages = repository.list_messages_for_turn(
+    detail_requested = any(
+        value is not None
+        for value in (message_id, field, start, max_chars, field_hash)
+    )
+    if detail_requested:
+        if cursor is not None:
+            raise ValueError("cursor cannot be combined with exact field retrieval")
+        if (
+            not isinstance(message_id, str)
+            or not message_id.strip()
+            or field not in {"content", "payload_json"}
+        ):
+            raise ValueError("message_id and field are required for exact field retrieval")
+        if not isinstance(field_hash, str) or not field_hash.strip():
+            raise ValueError("field_hash is required for exact field retrieval")
+        message_id = message_id.strip()
+        field_hash = field_hash.strip()
+        chunk_start = 0 if start is None else start
+        if isinstance(chunk_start, bool) or not isinstance(chunk_start, int) or chunk_start < 0:
+            raise ValueError("start must be a non-negative integer")
+        requested_max_chars = chunk_max_chars if max_chars is None else max_chars
+        if (
+            isinstance(requested_max_chars, bool)
+            or not isinstance(requested_max_chars, int)
+            or requested_max_chars < 1
+        ):
+            raise ValueError("max_chars must be a positive integer")
+        chunk_size = min(requested_max_chars, chunk_max_chars)
+        try:
+            durable_message_id = UUID(message_id)
+        except ValueError as exc:
+            raise ValueError("message_id must be a valid UUID") from exc
+        message = repository.get_message_by_id(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=session.chat_kind,
+            message_id=durable_message_id,
+            excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES),
+        )
+        if message is None or message.turn_id != turn_id:
+            return {
+                "success": False,
+                "error": "Chat turn row not found.",
+                "turn_id": turn_id,
+                "message_id": message_id,
+            }
+        serialized_value = (
+            message.content
+            if field == "content"
+            else _serialize_payload_json(message.payload_json)
+        )
+        if serialized_value is None:
+            return {
+                "success": False,
+                "error": f"Chat turn row has no {field} value.",
+                "turn_id": turn_id,
+                "message_id": message_id,
+            }
+        current_hash = _sha256_text(serialized_value)
+        if field_hash != current_hash:
+            return {
+                "success": False,
+                "error": "The durable chat field changed; reload turn metadata and restart chunks.",
+                "current_hash": current_hash,
+                "length": len(serialized_value),
+            }
+        if chunk_start > len(serialized_value):
+            raise ValueError(
+                f"start {chunk_start} exceeds field length {len(serialized_value)}"
+            )
+
+        def build_chunk_result(end: int) -> Dict[str, Any]:
+            complete = end == len(serialized_value)
+            next_call = None
+            if not complete:
+                next_call = {
+                    "tool": "get_chat_turn",
+                    "arguments": {
+                        "session_id": session_id,
+                        "turn_id": turn_id,
+                        "message_id": message_id,
+                        "field": field,
+                        "field_hash": current_hash,
+                        "start": end,
+                        "max_chars": chunk_size,
+                    },
+                }
+            return {
+                "success": True,
+                "contract_version": "chat_turn_field_recall.v1",
+                "view": "field_chunk",
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "message_id": message_id,
+                "field": field,
+                "serialization": (
+                    "utf-8 text"
+                    if field == "content"
+                    else "canonical JSON (UTF-8, sorted keys, compact separators)"
+                ),
+                "length": len(serialized_value),
+                "sha256": current_hash,
+                "returned_range": {"start": chunk_start, "end": end},
+                "chunk": serialized_value[chunk_start:end],
+                "complete": complete,
+                "next_call": next_call,
+                "instruction": "Concatenate chunks in returned_range order and verify sha256.",
+            }
+
+        requested_end = min(chunk_start + chunk_size, len(serialized_value))
+        candidate = build_chunk_result(requested_end)
+        if _provider_result_chars(candidate) <= provider_inline_max_chars:
+            return candidate
+        low = chunk_start + 1
+        high = requested_end - 1
+        fitting_result = None
+        while low <= high:
+            candidate_end = (low + high) // 2
+            candidate = build_chunk_result(candidate_end)
+            if _provider_result_chars(candidate) <= provider_inline_max_chars:
+                fitting_result = candidate
+                low = candidate_end + 1
+            else:
+                high = candidate_end - 1
+        if fitting_result is not None:
+            return fitting_result
+        return {
+            "success": False,
+            "error": (
+                "The provider inline tool-result limit is too small to return even one "
+                "exact chat field character with its required identity metadata."
+            ),
+            "provider_inline_max_chars": provider_inline_max_chars,
+        }
+
+    message_cursor = decode_chat_message_cursor(cursor)
+    excluded_types = set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES)
+    page = repository.list_messages_for_turn_page(
         session_id=session_id,
         user_auth_sub=user_auth_sub,
         chat_kind=session.chat_kind,
         turn_id=turn_id,
-        excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES),
+        limit=limit,
+        cursor=message_cursor,
+        excluded_message_types=excluded_types,
     )
-    if not messages:
+    total_messages = repository.count_messages(
+        session_id=session_id,
+        user_auth_sub=user_auth_sub,
+        chat_kind=session.chat_kind,
+        turn_id=turn_id,
+        excluded_message_types=excluded_types,
+    )
+    if total_messages == 0:
         return {
             "success": False,
             "error": "Chat turn not found.",
@@ -188,14 +459,83 @@ def get_chat_turn_payload(
             "turn_id": turn_id,
         }
 
-    return {
-        "success": True,
-        "chat_kind": session.chat_kind,
-        "session": serialize_session(session),
-        "turn_id": turn_id,
-        "message_count": len(messages),
-        "messages": [serialize_message(message) for message in messages],
-    }
+    range_start = (
+        repository.count_messages(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=session.chat_kind,
+            turn_id=turn_id,
+            excluded_message_types=excluded_types,
+            through_cursor=message_cursor,
+        )
+        if message_cursor is not None
+        else 0
+    )
+
+    def build_result(
+        page_items: list[ChatMessageRecord],
+        next_cursor_value: ChatMessageCursor | None,
+    ) -> Dict[str, Any]:
+        row_summaries = []
+        for message in page_items:
+            summary = _serialize_chat_message_summary(message)
+            for field_name, metadata in summary["fields"].items():
+                if metadata is not None:
+                    metadata["complete"] = False
+                    metadata["next_call"] = {
+                        "tool": "get_chat_turn",
+                        "arguments": {
+                            "session_id": session_id,
+                            "turn_id": turn_id,
+                            "message_id": str(message.message_id),
+                            "field": field_name,
+                            "field_hash": metadata["sha256"],
+                            "start": 0,
+                            "max_chars": chunk_max_chars,
+                        },
+                    }
+            row_summaries.append(summary)
+        encoded_next_cursor = encode_chat_message_cursor(next_cursor_value)
+        complete = encoded_next_cursor is None
+        next_call = None
+        if not complete:
+            next_call = {
+                "tool": "get_chat_turn",
+                "arguments": {
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "cursor": encoded_next_cursor,
+                    "limit": limit,
+                },
+            }
+        return {
+            "success": True,
+            "contract_version": "chat_turn_recall.v1",
+            "view": "row_page",
+            "chat_kind": session.chat_kind,
+            "session": serialize_session(session),
+            "turn_id": turn_id,
+            "total_message_count": total_messages,
+            "returned_range": {
+                "start": range_start,
+                "end": range_start + len(page_items),
+            },
+            "messages": row_summaries,
+            "complete": complete,
+            "next_call": next_call,
+            "durability": (
+                "Completed prior turns are recallable here. An in-flight same-turn raw "
+                "tool result exists only in the current provider tool continuation until "
+                "the assistant turn completes and is persisted."
+            ),
+        }
+
+    return _bounded_page_result(
+        items=list(page.items),
+        repository_next_cursor=page.next_cursor,
+        provider_inline_max_chars=provider_inline_max_chars,
+        build_result=build_result,
+    )
 
 
 def extract_latest_user_message(messages: List[ChatMessage]) -> str:

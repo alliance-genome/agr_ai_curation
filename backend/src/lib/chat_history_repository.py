@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -141,6 +144,46 @@ class AppendMessageResult:
 
 class ChatHistorySessionNotFoundError(LookupError):
     """Raised when a session is missing, deleted, or not visible to the caller."""
+
+
+def encode_chat_message_cursor(cursor: ChatMessageCursor | None) -> str | None:
+    """Encode a repository message cursor as a stable URL-safe token."""
+
+    if cursor is None:
+        return None
+    payload = {
+        "created_at": cursor.created_at.isoformat(),
+        "message_id": str(cursor.message_id),
+    }
+    raw_payload = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw_payload).decode("ascii").rstrip("=")
+
+
+def decode_chat_message_cursor(cursor: str | None) -> ChatMessageCursor | None:
+    """Decode a repository message cursor or reject malformed input."""
+
+    if cursor is None:
+        return None
+    normalized_cursor = cursor.strip()
+    if not normalized_cursor:
+        raise ValueError("message cursor cannot be blank")
+
+    padding = "=" * (-len(normalized_cursor) % 4)
+    try:
+        decoded_bytes = base64.urlsafe_b64decode(f"{normalized_cursor}{padding}")
+        payload = json.loads(decoded_bytes.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid message cursor")
+        created_at = str(payload.get("created_at", "")).strip()
+        message_id = str(payload.get("message_id", "")).strip()
+        if not created_at or not message_id:
+            raise ValueError("Invalid message cursor")
+        return ChatMessageCursor(
+            created_at=datetime.fromisoformat(created_at),
+            message_id=UUID(message_id),
+        )
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise ValueError("Invalid message cursor") from exc
 
 
 def _normalize_required_text(value: str, *, field_name: str) -> str:
@@ -649,6 +692,46 @@ class ChatHistoryRepository:
             after_created_at=after_created_at,
         )
 
+    def count_messages(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        turn_id: str | None = None,
+        excluded_message_types: set[str] | None = None,
+        through_cursor: ChatMessageCursor | None = None,
+    ) -> int:
+        """Count visible transcript rows, optionally through one stable cursor."""
+
+        session = self._require_active_session_for_kind(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+        )
+        stmt = select(func.count()).select_from(ChatMessageModel).where(
+            ChatMessageModel.session_id == session.session_id,
+            ChatMessageModel.chat_kind == session.chat_kind,
+        )
+        if turn_id is not None:
+            stmt = stmt.where(
+                ChatMessageModel.turn_id
+                == _normalize_required_text(turn_id, field_name="turn_id")
+            )
+        if excluded_message_types:
+            stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
+        if through_cursor is not None:
+            stmt = stmt.where(
+                or_(
+                    ChatMessageModel.created_at < through_cursor.created_at,
+                    and_(
+                        ChatMessageModel.created_at == through_cursor.created_at,
+                        ChatMessageModel.message_id <= through_cursor.message_id,
+                    ),
+                )
+            )
+        return int(self._db.scalar(stmt) or 0)
+
     def list_recent_messages(
         self,
         *,
@@ -836,6 +919,66 @@ class ChatHistoryRepository:
         ).all()
         return [_message_record(message) for message in messages]
 
+    def list_messages_for_turn_page(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        turn_id: str,
+        limit: int,
+        cursor: ChatMessageCursor | None = None,
+        excluded_message_types: set[str] | None = None,
+    ) -> ChatMessagePage:
+        """Return one bounded chronological page of visible rows for a turn."""
+
+        page_size = _validate_page_size(
+            limit,
+            field_name="limit",
+            max_value=MAX_MESSAGE_PAGE_SIZE,
+        )
+        session = self._require_active_session_for_kind(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+        )
+        normalized_turn_id = _normalize_required_text(turn_id, field_name="turn_id")
+        stmt = select(ChatMessageModel).where(
+            ChatMessageModel.session_id == session.session_id,
+            ChatMessageModel.chat_kind == session.chat_kind,
+            ChatMessageModel.turn_id == normalized_turn_id,
+        )
+        if excluded_message_types:
+            stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
+        if cursor is not None:
+            stmt = stmt.where(
+                or_(
+                    ChatMessageModel.created_at > cursor.created_at,
+                    and_(
+                        ChatMessageModel.created_at == cursor.created_at,
+                        ChatMessageModel.message_id > cursor.message_id,
+                    ),
+                )
+            )
+        messages = self._db.scalars(
+            stmt.order_by(
+                ChatMessageModel.created_at.asc(),
+                ChatMessageModel.message_id.asc(),
+            ).limit(page_size + 1)
+        ).all()
+        items = messages[:page_size]
+        next_cursor = None
+        if len(messages) > page_size and items:
+            last_item = items[-1]
+            next_cursor = ChatMessageCursor(
+                created_at=last_item.created_at,
+                message_id=last_item.message_id,
+            )
+        return ChatMessagePage(
+            items=[_message_record(message) for message in items],
+            next_cursor=next_cursor,
+        )
+
     def get_message_by_id(
         self,
         *,
@@ -843,6 +986,7 @@ class ChatHistoryRepository:
         user_auth_sub: str,
         chat_kind: str,
         message_id: UUID,
+        excluded_message_types: set[str] | None = None,
     ) -> ChatMessageRecord | None:
         """Return one visible transcript row by durable message id."""
 
@@ -851,13 +995,14 @@ class ChatHistoryRepository:
             user_auth_sub=user_auth_sub,
             chat_kind=chat_kind,
         )
-        message = self._db.scalar(
-            select(ChatMessageModel).where(
-                ChatMessageModel.session_id == session.session_id,
-                ChatMessageModel.chat_kind == session.chat_kind,
-                ChatMessageModel.message_id == message_id,
-            )
+        stmt = select(ChatMessageModel).where(
+            ChatMessageModel.session_id == session.session_id,
+            ChatMessageModel.chat_kind == session.chat_kind,
+            ChatMessageModel.message_id == message_id,
         )
+        if excluded_message_types:
+            stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
+        message = self._db.scalar(stmt)
         if message is None:
             return None
 
@@ -1189,5 +1334,7 @@ __all__ = [
     "ChatSessionDetail",
     "ChatSessionPage",
     "ChatSessionRecord",
+    "decode_chat_message_cursor",
+    "encode_chat_message_cursor",
     "VALID_CHAT_KINDS",
 ]

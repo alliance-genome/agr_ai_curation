@@ -66,6 +66,8 @@ def test_shipped_alliance_profile_uses_explicit_runtime_selection():
     assert "domain envelopes are the semantic source of truth" in loaded.content
     assert "follow each deterministic `next_call`" in loaded.content
     assert "ordered returned chunk ranges" in loaded.content
+    assert "raw tool results exist only in the current provider tool continuation" in loaded.content
+    assert "They are not durable chat recall until the assistant turn completes" in loaded.content
     assert "refreshed `current_prompt`" not in loaded.content
 
 

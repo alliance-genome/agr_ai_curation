@@ -39,6 +39,8 @@ from ..lib.chat_history_repository import (
     ChatSessionCursor,
     ChatSessionRecord,
     VALID_CHAT_KINDS,
+    decode_chat_message_cursor,
+    encode_chat_message_cursor,
 )
 from ..lib.chat_state import document_state
 from ..lib.chat_transcript import (
@@ -769,20 +771,10 @@ def _encode_session_cursor(cursor: ChatSessionCursor | None) -> str | None:
 def _decode_message_cursor(cursor: Optional[str]) -> ChatMessageCursor | None:
     """Decode an opaque message cursor into the repository representation."""
 
-    payload = _decode_cursor(cursor, kind="message")
-    if payload is None:
-        return None
-
-    message_id = payload.get("message_id", "").strip()
-    created_at = payload.get("created_at", "").strip()
-    if not message_id or not created_at:
-        raise HTTPException(status_code=400, detail="Invalid message cursor")
-
+    if cursor is not None and not cursor.strip():
+        raise HTTPException(status_code=400, detail="message cursor cannot be blank")
     try:
-        return ChatMessageCursor(
-            created_at=datetime.fromisoformat(created_at),
-            message_id=UUID(message_id),
-        )
+        return decode_chat_message_cursor(cursor)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid message cursor") from exc
 
@@ -790,15 +782,7 @@ def _decode_message_cursor(cursor: Optional[str]) -> ChatMessageCursor | None:
 def _encode_message_cursor(cursor: ChatMessageCursor | None) -> str | None:
     """Encode one repository message cursor for API responses."""
 
-    if cursor is None:
-        return None
-
-    return _encode_cursor(
-        {
-            "created_at": cursor.created_at.isoformat(),
-            "message_id": str(cursor.message_id),
-        }
-    )
+    return encode_chat_message_cursor(cursor)
 
 
 def _build_title_sources_from_messages(

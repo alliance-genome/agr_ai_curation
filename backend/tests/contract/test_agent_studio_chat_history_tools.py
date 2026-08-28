@@ -172,3 +172,19 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
     ]
     assert tools_by_name["get_chat_conversation"]["input_schema"]["required"] == ["session_id"]
     assert tools_by_name["get_chat_turn"]["input_schema"]["required"] == ["session_id", "turn_id"]
+    assert set(tools_by_name["get_chat_conversation"]["input_schema"]["properties"]) == {
+        "session_id",
+        "cursor",
+        "limit",
+    }
+    assert set(tools_by_name["get_chat_turn"]["input_schema"]["properties"]) == {
+        "session_id",
+        "turn_id",
+        "cursor",
+        "limit",
+        "message_id",
+        "field",
+        "field_hash",
+        "start",
+        "max_chars",
+    }

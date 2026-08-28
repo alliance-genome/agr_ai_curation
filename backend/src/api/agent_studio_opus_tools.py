@@ -16,6 +16,8 @@ from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
 )
 from src.lib.openai_agents.config import (
+    get_agent_studio_chat_recall_chunk_max_chars,
+    get_agent_studio_chat_recall_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_domain_pack_validation_plan_default_limit,
@@ -30,6 +32,8 @@ _DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT = min(
 )
 _TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 _TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
+_CHAT_RECALL_PAGE_SIZE = get_agent_studio_chat_recall_page_size()
+_CHAT_RECALL_CHUNK_MAX_CHARS = get_agent_studio_chat_recall_chunk_max_chars()
 
 # Convert tool definition to Anthropic format
 ANTHROPIC_SUGGESTION_TOOL = {
@@ -287,11 +291,12 @@ SEARCH_CHAT_HISTORY_TOOL = {
 GET_CHAT_CONVERSATION_TOOL = {
     "name": "get_chat_conversation",
     "description": (
-        "Load the full durable transcript for one visible chat session by session_id. "
+        "Browse one bounded metadata page of a visible durable chat transcript. "
         "Use this when the user asks to open a specific prior conversation, or when "
         "you need to rehydrate durable prior-turn context from the current session "
-        "after provider context editing compacted it. Hidden context-compaction "
-        "projection rows are not returned."
+        "after provider context editing compacted it. Follow next_call until complete=true, "
+        "then select a turn and use get_chat_turn for exact fields. Hidden "
+        "context-compaction projection rows are not returned."
     ),
     "input_schema": {
         "type": "object",
@@ -299,6 +304,17 @@ GET_CHAT_CONVERSATION_TOOL = {
             "session_id": {
                 "type": "string",
                 "description": "Durable chat session identifier returned by list_recent_chats or search_chat_history.",
+            },
+            "cursor": {
+                "type": "string",
+                "description": "Opaque stable message cursor from the previous response's next_call.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum row summaries in this page (environment-bounded).",
+                "default": _CHAT_RECALL_PAGE_SIZE,
+                "minimum": 1,
+                "maximum": _CHAT_RECALL_PAGE_SIZE,
             },
         },
         "required": ["session_id"],
@@ -308,12 +324,12 @@ GET_CHAT_CONVERSATION_TOOL = {
 GET_CHAT_TURN_TOOL = {
     "name": "get_chat_turn",
     "description": (
-        "Load durable transcript rows for one turn_id in a visible chat session. "
-        "Use this to rehydrate a completed prior turn, or rows from the current "
-        "turn that have already been persisted, after provider context editing "
-        "clears stale live context. Same-turn tool-call summaries are durable only "
-        "after the assistant turn completes. Prefer this over loading a whole "
-        "conversation when you know the turn_id."
+        "Browse bounded durable row metadata for one turn_id, then retrieve one exact "
+        "content or payload_json field by message_id in deterministic chunks. Follow "
+        "each returned next_call until complete=true. Completed prior turns are "
+        "recallable from persistence. An in-flight same-turn raw tool result exists "
+        "only in the current tool continuation until the assistant turn completes; "
+        "this tool makes no earlier durability promise."
     ),
     "input_schema": {
         "type": "object",
@@ -325,6 +341,42 @@ GET_CHAT_TURN_TOOL = {
             "turn_id": {
                 "type": "string",
                 "description": "Durable turn identifier, for example opus-turn-3-<digest>.",
+            },
+            "cursor": {
+                "type": "string",
+                "description": "Opaque row-page cursor from a previous get_chat_turn next_call.",
+            },
+            "limit": {
+                "type": "integer",
+                "default": _CHAT_RECALL_PAGE_SIZE,
+                "minimum": 1,
+                "maximum": _CHAT_RECALL_PAGE_SIZE,
+            },
+            "message_id": {
+                "type": "string",
+                "description": "Durable row UUID from turn metadata; required with field detail retrieval.",
+            },
+            "field": {
+                "type": "string",
+                "enum": ["content", "payload_json"],
+                "description": "Exact row field to retrieve independently.",
+            },
+            "field_hash": {
+                "type": "string",
+                "description": "SHA-256 from row metadata, required to pin exact chunk identity.",
+            },
+            "start": {
+                "type": "integer",
+                "description": "Start character offset in the serialized field.",
+                "default": 0,
+                "minimum": 0,
+            },
+            "max_chars": {
+                "type": "integer",
+                "description": "Maximum requested exact characters; runtime may shorten to fit provider JSON.",
+                "default": _CHAT_RECALL_CHUNK_MAX_CHARS,
+                "minimum": 1,
+                "maximum": _CHAT_RECALL_CHUNK_MAX_CHARS,
             },
         },
         "required": ["session_id", "turn_id"],
