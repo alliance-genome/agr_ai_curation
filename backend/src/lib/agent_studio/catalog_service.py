@@ -1978,10 +1978,14 @@ def _curation_metadata_from_definition(agent_definition: Any) -> Dict[str, Any] 
     curation = getattr(agent_definition, "curation", None)
     if curation is None:
         return None
-    return {
+    metadata = {
         "adapter_key": getattr(curation, "adapter_key", None),
         "launchable": bool(getattr(curation, "launchable", False)),
     }
+    domain_pack_id = str(getattr(curation, "domain_pack_id", "") or "").strip()
+    if domain_pack_id:
+        metadata["domain_pack_id"] = domain_pack_id
+    return metadata
 
 
 def _launchable_curation_metadata_from_definition(

@@ -32,7 +32,10 @@ from ..lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
     apply_flow_validation_attachment_defaults,
 )
-from ..lib.agent_studio.catalog_service import get_active_visible_agent_metadata
+from ..lib.agent_studio.catalog_service import (
+    AGENT_REGISTRY,
+    get_active_visible_agent_metadata,
+)
 from ..lib.agent_studio.flow_agent_policy import (
     agent_allows_ordinary_flow_step,
     attachment_only_validator_reason,
@@ -53,6 +56,8 @@ from ..schemas.flows import (
     FlowListResponse,
     FlowResponse,
     FlowSummaryResponse,
+    FlowValidationAttachmentGroup,
+    FlowValidationAttachmentSelection,
     FlowValidationWarning,
     UpdateFlowRequest,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
@@ -105,16 +110,105 @@ def _validated_flow_definition(
     *,
     db_user_id: int | None = None,
     enforce_agent_references: bool = False,
+    tolerate_unavailable_custom_agent_attachments: bool = False,
 ) -> FlowDefinition:
     """Return a flow definition hydrated with metadata-backed validation defaults."""
 
+    agent_registry, unavailable_custom_agent_ids = _validation_attachment_agent_registry(
+        flow_definition,
+        db_user_id=db_user_id,
+    )
+    validation_input = flow_definition
+    preserved_unavailable_data: dict[
+        str,
+        tuple[
+            list[FlowValidationAttachmentSelection],
+            list[FlowValidationAttachmentGroup],
+        ],
+    ] = {}
+    preserved_edges = None
+    if tolerate_unavailable_custom_agent_attachments and unavailable_custom_agent_ids:
+        validation_input = flow_definition.model_copy(deep=True)
+        unavailable_node_ids: set[str] = set()
+        for node in validation_input.nodes:
+            if node.data.agent_id not in unavailable_custom_agent_ids:
+                continue
+            unavailable_node_ids.add(node.id)
+            preserved_unavailable_data[node.id] = (
+                node.data.validation_attachments,
+                node.data.validation_groups,
+            )
+            node.data.validation_attachments = []
+            node.data.validation_groups = []
+        preserved_edges = validation_input.edges
+        validation_input.edges = [
+            edge
+            for edge in validation_input.edges
+            if not (
+                edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
+                and edge.source in unavailable_node_ids
+            )
+        ]
     try:
-        validated = apply_flow_validation_attachment_defaults(flow_definition)
+        if agent_registry is None:
+            validated = apply_flow_validation_attachment_defaults(validation_input)
+        else:
+            validated = apply_flow_validation_attachment_defaults(
+                validation_input,
+                agent_registry=agent_registry,
+            )
     except FlowValidationAttachmentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if enforce_agent_references:
         _validate_flow_agent_references(validated, db_user_id=db_user_id)
+    for node in validated.nodes:
+        preserved = preserved_unavailable_data.get(node.id)
+        if preserved is None:
+            continue
+        node.data.validation_attachments, node.data.validation_groups = preserved
+    if preserved_edges is not None:
+        validated.edges = preserved_edges
     return validated
+
+
+def _validation_attachment_agent_registry(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None,
+) -> tuple[dict[str, dict[str, Any]] | None, set[str]]:
+    """Add visible custom extractors to the validation-attachment registry."""
+
+    if db_user_id is None:
+        return None, set()
+
+    custom_agent_ids = sorted(
+        {
+            str(node.data.agent_id or "").strip()
+            for node in flow_definition.nodes
+            if str(node.data.agent_id or "").strip().startswith("ca_")
+        }
+    )
+    custom_entries: dict[str, dict[str, Any]] = {}
+    unavailable_custom_agent_ids: set[str] = set()
+    for agent_id in custom_agent_ids:
+        try:
+            metadata = get_active_visible_agent_metadata(
+                agent_id,
+                db_user_id=db_user_id,
+            )
+        except ValueError:
+            unavailable_custom_agent_ids.add(agent_id)
+            continue
+        curation = metadata.get("curation") if isinstance(metadata, dict) else None
+        if not isinstance(curation, dict) or not str(
+            curation.get("domain_pack_id") or ""
+        ).strip():
+            continue
+        custom_entries[agent_id] = metadata
+
+    if not custom_entries:
+        return None, unavailable_custom_agent_ids
+    return {**AGENT_REGISTRY, **custom_entries}, unavailable_custom_agent_ids
 
 
 def _flow_agent_policy_entry(
@@ -343,6 +437,7 @@ def _flow_to_response(flow: CurationFlow) -> FlowResponse:
     flow_definition = _validated_flow_definition(
         FlowDefinition.model_validate(flow.flow_definition),
         db_user_id=flow.user_id,
+        tolerate_unavailable_custom_agent_attachments=True,
     )
     missing_references = _missing_flow_agent_reference_messages(
         flow_definition,
