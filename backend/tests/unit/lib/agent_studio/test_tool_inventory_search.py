@@ -126,6 +126,46 @@ def test_get_tool_inventory_agent_scope_query_and_paging(monkeypatch):
     assert paged["next_cursor"] == "1"
 
 
+@pytest.mark.parametrize("agent_id", [None, "gene_extractor"])
+def test_get_tool_inventory_rejects_page_that_cannot_advance(monkeypatch, agent_id):
+    tools = {
+        "large_tool": {
+            "name": "Large tool",
+            "description": "Large summary " * 100,
+            "category": "lookup",
+        }
+    }
+    monkeypatch.setattr(catalog_service, "get_tool_registry", lambda: tools)
+    monkeypatch.setattr(catalog_service, "get_all_tools", lambda: tools)
+    monkeypatch.setattr(
+        catalog_service,
+        "AGENT_REGISTRY",
+        {"gene_extractor": {"name": "Gene Specialist", "tools": ["large_tool"]}},
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "expand_tools_for_agent",
+        lambda selected_agent_id, tool_ids: list(tool_ids),
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "get_tool_for_agent",
+        lambda tool_id, selected_agent_id: tools.get(tool_id),
+    )
+    monkeypatch.setattr(tool_definitions, "_TOOL_INVENTORY_RESULT_MAX_CHARS", 150)
+    monkeypatch.setattr(
+        tool_definitions,
+        "_serialized_chars",
+        lambda response: 200 if response.get("tools") else 100,
+    )
+    handler = tool_definitions._create_get_tool_inventory_handler()
+
+    result = handler(**({"agent_id": agent_id} if agent_id else {}))
+
+    assert result["success"] is False
+    assert result["error"] == "metadata_too_large"
+
+
 def test_installed_catalog_pages_stay_bounded_and_have_executable_continuations(monkeypatch):
     installed = {f"tool_{index:02d}": {"name": f"Installed tool {index:02d}",
                  "description": "rich installed metadata 🧬 " * 80,

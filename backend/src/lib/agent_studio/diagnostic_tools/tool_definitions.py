@@ -818,9 +818,9 @@ def _create_get_tool_inventory_handler():
             while page and _serialized_chars(response) > _TOOL_INVENTORY_RESULT_MAX_CHARS:
                 page.pop()
                 response = build_agent_response()
-            if not page and tool_items and _serialized_chars(response) > _TOOL_INVENTORY_RESULT_MAX_CHARS:
+            if not page and offset < len(tool_items):
                 return {"success": False, "error": "metadata_too_large",
-                        "message": "Focused catalog envelope exceeds AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS."}
+                        "message": "One focused tool summary plus catalog continuation metadata exceeds AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS."}
             return response
 
         all_tools = (
@@ -882,9 +882,9 @@ def _create_get_tool_inventory_handler():
         while page and _serialized_chars(response) > _TOOL_INVENTORY_RESULT_MAX_CHARS:
             page.pop()
             response = build_global_response()
-        if not page and tool_items and _serialized_chars(response) > _TOOL_INVENTORY_RESULT_MAX_CHARS:
+        if not page and offset < len(tool_items):
             return {"success": False, "error": "metadata_too_large",
-                    "message": "Catalog envelope exceeds AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS."}
+                    "message": "One tool summary plus catalog continuation metadata exceeds AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS."}
         return response
 
     return handler
