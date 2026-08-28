@@ -251,11 +251,11 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
             created_by="test@example.org",
             source_file=str(agent_dir / "prompt.yaml"),
         ),
-        "disease_extractor:group_rules:test_group": PromptTemplate(
+        "disease_extractor:group_rules:TEST_GROUP": PromptTemplate(
             id=uuid.uuid4(),
             agent_name="disease_extractor",
             prompt_type="group_rules",
-            group_id="test_group",
+            group_id="TEST_GROUP",
             content=group_content,
             version=1,
             is_active=True,
@@ -266,20 +266,21 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
     }
     monkeypatch.setattr(assembly, "get_all_active_prompts", lambda: prompt_cache)
     bundle = assembly.build_agent_prompt_layers(
-        "disease_extractor", group_id="test_group"
+        "disease_extractor", group_id="TEST_GROUP"
     )
+    assert any(layer.kind == "group_rules" for layer in bundle.layers)
     agent = SimpleNamespace(
         agent_name=definition.name,
         description=definition.description,
         source_file=str(agent_dir / "prompt.yaml"),
         has_group_rules=True,
-        group_rules={"test_group": SimpleNamespace()},
+        group_rules={"TEST_GROUP": SimpleNamespace()},
     )
     service = SimpleNamespace(
         get_agent=lambda agent_id: agent if agent_id == "disease_extractor" else None,
         get_effective_prompt_bundle=lambda agent_id, group_id=None: (
             bundle
-            if agent_id == "disease_extractor" and group_id == "test_group"
+            if agent_id == "disease_extractor" and group_id == "TEST_GROUP"
             else None
         ),
         catalog=SimpleNamespace(categories=[]),
@@ -290,14 +291,15 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
     prompt_handler = tool_definitions._create_get_prompt_handler()
 
     prompt_summary = prompt_handler(
-        agent_id="disease_extractor", group_id="test_group"
+        agent_id="disease_extractor", group_id="TEST_GROUP"
     )
+    assert prompt_summary["group_id_applied"] == "TEST_GROUP"
     prompt_detail_results = []
     cursor = 0
     while True:
         chunk = prompt_handler(
             agent_id="disease_extractor",
-            group_id="test_group",
+            group_id="TEST_GROUP",
             view="effective_prompt",
             cursor=cursor,
         )
@@ -313,7 +315,7 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
         while True:
             chunk = prompt_handler(
                 agent_id="disease_extractor",
-                group_id="test_group",
+                group_id="TEST_GROUP",
                 view="layer",
                 layer_id=layer.id,
                 cursor=cursor,
