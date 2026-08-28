@@ -22,6 +22,7 @@ from src.lib.chat_history_repository import (
     ChatSessionDetail,
     ChatSessionPage,
     ChatSessionRecord,
+    encode_chat_session_cursor,
 )
 from src.lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 
@@ -425,6 +426,38 @@ def test_handle_tool_call_search_chat_history_requires_query():
 
     assert result["success"] is False
     assert result["error"] == "Missing required parameter: query"
+
+
+def test_handle_tool_call_list_recent_chats_rejects_ranked_search_cursor(monkeypatch):
+    class _FakeRepository:
+        def __init__(self, _db):
+            pass
+
+    monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
+    cursor = encode_chat_session_cursor(
+        ChatSessionCursor(
+            recent_activity_at=datetime(2026, 4, 23, 3, 15, tzinfo=timezone.utc),
+            session_id="session-ranked",
+            relevance=0.75,
+        )
+    )
+
+    result = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name="list_recent_chats",
+            tool_input={"chat_kind": "all", "cursor": cursor},
+            context=None,
+            user_email="dev@example.org",
+            user_auth_sub="auth-sub-1",
+            messages=[],
+        )
+    )
+
+    assert result == {
+        "success": False,
+        "error": "ranked search cursor cannot be used for list_recent_chats",
+    }
 
 
 def test_chat_history_limit_uses_environment_bounded_default(monkeypatch):

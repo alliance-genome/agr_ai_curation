@@ -216,7 +216,9 @@ def get_chat_session_page_payload(
     session_cursor = decode_chat_session_cursor(cursor)
     if query is None:
         if session_cursor is not None and session_cursor.relevance is not None:
-            raise ValueError("recent chat cursor cannot be used for ranked search")
+            raise ValueError(
+                "ranked search cursor cannot be used for list_recent_chats"
+            )
         page = repository.list_sessions(
             user_auth_sub=user_auth_sub,
             chat_kind=chat_kind,
