@@ -1771,6 +1771,36 @@ def get_domain_envelope_max_limit() -> int:
     return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_LIMIT", 50))
 
 
+def get_domain_pack_validation_plan_default_limit() -> int:
+    """Default detail page size for domain-pack validation plans.
+
+    ``DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT`` defaults to 3 so verbose
+    disease-pack records remain below the provider's inline result budget.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT",
+            3,
+        ),
+    )
+
+
+def get_domain_pack_validation_plan_max_limit() -> int:
+    """Maximum detail page size for domain-pack validation plans.
+
+    ``DOMAIN_PACK_VALIDATION_PLAN_MAX_LIMIT`` defaults to 4 to keep even the
+    largest installed disease-pack section pages provider-visible.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "DOMAIN_PACK_VALIDATION_PLAN_MAX_LIMIT",
+            4,
+        ),
+    )
+
+
 def get_domain_envelope_max_json_chars() -> int:
     """Char cap on bounded JSON returned by domain-envelope tools (DOMAIN_ENVELOPE_MAX_JSON_CHARS).
 

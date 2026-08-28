@@ -2745,6 +2745,15 @@ async def _handle_tool_call(
         return agent_studio_domain_envelope_tools.get_domain_pack_validation_plan(
             agent_id=tool_input.get("agent_id"),
             domain_pack_id=tool_input.get("domain_pack_id"),
+            section=tool_input.get("section"),
+            object_type=tool_input.get("object_type"),
+            field_path=tool_input.get("field_path"),
+            validator_id=tool_input.get("validator_id"),
+            binding_id=tool_input.get("binding_id"),
+            state=tool_input.get("state"),
+            query=tool_input.get("query"),
+            limit=tool_input.get("limit"),
+            cursor=tool_input.get("cursor"),
         )
 
     elif tool_name == "get_domain_envelope_review_rows":

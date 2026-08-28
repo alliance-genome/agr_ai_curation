@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from src.api import agent_studio as api_module
+from src.lib.agent_studio import domain_envelope_tools as domain_tools
 from src.lib.agent_studio.models import ChatContext
 
 
@@ -42,7 +44,15 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert "active automatic validation defaults" in validation_plan_description
     assert "under-development validator metadata" in validation_plan_description
     assert "get_prompt(agent_id=...)" in validation_plan_description
-    assert "validator_bindings[].validator_agent.agent_id" in validation_plan_description
+    assert "bounded detail pages by section" in validation_plan_description
+    validation_plan_schema = tools_by_name["get_domain_pack_validation_plan"][
+        "input_schema"
+    ]
+    assert set(validation_plan_schema["properties"]["section"]["enum"]) == set(
+        domain_tools._DOMAIN_PLAN_SECTIONS
+    )
+    assert validation_plan_schema["properties"]["limit"]["maximum"] == 4
+    assert validation_plan_schema["properties"]["limit"]["default"] == 3
     assert "installed specialist or validator" in get_prompt_description
     assert "installed prompt targets" in tools_by_name["get_prompt"]["input_schema"][
         "properties"
@@ -53,6 +63,83 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     legacy_availability_phrase = "planned or blocked " + "validators"
     assert legacy_availability_phrase not in validation_plan_description
     assert "opt-out reason" not in validation_plan_description.lower()
+
+
+def test_handle_tool_call_dispatches_domain_plan_section_inputs(monkeypatch):
+    captured = {}
+
+    def fake_get_domain_pack_validation_plan(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "section": kwargs["section"]}
+
+    monkeypatch.setattr(
+        api_module.agent_studio_domain_envelope_tools,
+        "get_domain_pack_validation_plan",
+        fake_get_domain_pack_validation_plan,
+    )
+    tool_input = {
+        "agent_id": "demo_extractor",
+        "domain_pack_id": "org.example.demo",
+        "section": "validation_attachments",
+        "object_type": "GeneDiseaseAnnotation",
+        "field_path": "disease_annotation.disease_term_curie",
+        "validator_id": "disease_ontology_lookup",
+        "binding_id": "disease.ontology_lookup",
+        "state": "active",
+        "query": "ontology",
+        "limit": 2,
+        "cursor": "2",
+    }
+
+    result = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name="get_domain_pack_validation_plan",
+            tool_input=tool_input,
+            context=ChatContext(active_tab="agents"),
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
+            messages=[],
+        )
+    )
+
+    assert result == {"success": True, "section": "validation_attachments"}
+    assert captured == tool_input
+
+
+def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    results = [
+        domain_tools.get_domain_pack_validation_plan(
+            agent_id="disease_extractor"
+        )
+    ]
+    for section in domain_tools._DOMAIN_PLAN_SECTIONS:
+        cursor = None
+        while True:
+            page = domain_tools.get_domain_pack_validation_plan(
+                agent_id="disease_extractor",
+                section=section,
+                limit=4,
+                cursor=cursor,
+            )
+            results.append(page)
+            if page["complete"]:
+                break
+            cursor = page["next_cursor"]
+
+    for result in results:
+        content = api_module._provider_tool_result_content(
+            tool_name="get_domain_pack_validation_plan",
+            tool_input={
+                "domain_pack_id": result["domain_pack_id"],
+                "section": result["section"],
+            },
+            tool_result=result,
+            session_id="agent-studio-session-1",
+            turn_id="opus-turn-domain-plan",
+        )
+        assert json.loads(content) == result
+        assert len(content) <= 12000
 
 
 def test_handle_tool_call_dispatches_domain_envelope_state_with_user_scope(monkeypatch):

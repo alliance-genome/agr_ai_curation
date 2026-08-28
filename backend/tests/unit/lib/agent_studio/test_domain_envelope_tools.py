@@ -120,13 +120,26 @@ metadata:
         lambda: {"fixture.validation": registry},
     )
 
-    result = domain_tools.get_domain_pack_validation_plan(
+    summary = domain_tools.get_domain_pack_validation_plan(
         domain_pack_id="fixture.validation",
     )
+    bindings = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="fixture.validation",
+        section="validator_bindings",
+        limit=4,
+    )
+    attachments = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="fixture.validation",
+        section="validation_attachments",
+        limit=4,
+    )
 
-    assert result["success"] is True
-    binding = result["validator_bindings"][0]
-    attachment = result["validation_attachments"][0]
+    assert summary["success"] is True
+    assert summary["section"] == "summary"
+    assert set(summary["section_counts"]) == set(domain_tools._DOMAIN_PLAN_SECTIONS)
+    assert "validator_bindings" not in summary
+    binding = bindings["items"][0]
+    attachment = attachments["items"][0]
     assert binding["validator_agent"] == {
         "package_id": "org.validators",
         "agent_id": "shared_validator",
@@ -135,12 +148,12 @@ metadata:
     assert attachment["validator_agent_id"] == "shared_validator"
     under_development_attachment = next(
         option
-        for option in result["validation_attachments"]
+        for option in attachments["items"]
         if option["state"] == "under_development"
     )
     under_development_binding = next(
         item
-        for item in result["validator_bindings"]
+        for item in bindings["items"]
         if item["binding_state"] == "under_development"
     )
     assert under_development_attachment["state_explanation"] == (
@@ -150,27 +163,27 @@ metadata:
     assert under_development_binding["state_explanation"] == (
         "Lookup dispatch is still being configured."
     )
-    assert result["validation_dispatch_summary"]["active_automatic"] == 1
-    assert result["validation_dispatch_summary"]["under_development_metadata"] == 1
-    assert "metadata_only" not in result["validation_dispatch_summary"]
+    assert summary["validation_dispatch_summary"]["active_automatic"] == 1
+    assert summary["validation_dispatch_summary"]["under_development_metadata"] == 1
+    assert "metadata_only" not in summary["validation_dispatch_summary"]
     assert (
         "get_prompt(agent_id=<validator agent id>)"
-        in result["validation_dispatch_summary"]["validator_prompt_inspection"]
+        in summary["validation_dispatch_summary"]["validator_prompt_inspection"]
     )
     assert (
         "Active default-enabled attachments are the only validators scheduled automatically"
-        in result["automatic_validation_semantics"]
+        in summary["automatic_validation_semantics"]
     )
-    assert "Under-development validator bindings are explanatory metadata" in result[
+    assert "Under-development validator bindings are explanatory metadata" in summary[
         "automatic_validation_semantics"
     ]
-    assert "Do not ask extractor prompts to call validators directly" in result[
+    assert "Do not ask extractor prompts to call validators directly" in summary[
         "automatic_validation_semantics"
     ]
-    assert "planned" not in result["automatic_validation_semantics"].lower()
-    assert "blocked" not in result["automatic_validation_semantics"].lower()
-    assert "opt-out " + "reason" not in json.dumps(result).lower()
-    assert "repair" not in json.dumps(result).lower()
+    assert "planned" not in summary["automatic_validation_semantics"].lower()
+    assert "blocked" not in summary["automatic_validation_semantics"].lower()
+    assert "opt-out " + "reason" not in json.dumps(summary).lower()
+    assert "repair" not in json.dumps(summary).lower()
 
 
 def test_gene_expression_validation_plan_accepts_flow_alias_and_package_agent_id():
@@ -188,12 +201,113 @@ def test_gene_expression_validation_plan_accepts_flow_alias_and_package_agent_id
     assert package_agent_result["domain_pack_id"] == "agr.alliance.gene_expression"
     assert flow_alias_result["agent_id"] == "gene_expression"
     assert package_agent_result["agent_id"] == "gene_expression_extraction"
-    assert flow_alias_result["validator_bindings"] == package_agent_result[
-        "validator_bindings"
-    ]
     assert flow_alias_result["validation_dispatch_summary"] == package_agent_result[
         "validation_dispatch_summary"
     ]
+
+
+@pytest.mark.parametrize("section", domain_tools._DOMAIN_PLAN_SECTIONS)
+def test_disease_validation_plan_pages_every_section_deterministically(section):
+    summary = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease"
+    )
+    expected_count = summary["section_counts"][section]
+    items = []
+    cursor = None
+    requests = []
+
+    while True:
+        page = domain_tools.get_domain_pack_validation_plan(
+            domain_pack_id="agr.alliance.disease",
+            section=section,
+            limit=4,
+            cursor=cursor,
+        )
+        assert page["success"] is True
+        assert page["section"] == section
+        assert page["section_total_count"] == expected_count
+        assert page["returned_count"] == len(page["items"])
+        assert page["truncated"] is (not page["complete"])
+        items.extend(page["items"])
+        requests.append(page)
+        if page["complete"]:
+            assert page["next_cursor"] is None
+            assert page["next_request"] is None
+            break
+        assert page["next_request"]["cursor"] == page["next_cursor"]
+        cursor = page["next_cursor"]
+
+    repeated_first_page = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section=section,
+        limit=4,
+    )
+    assert repeated_first_page == requests[0]
+    assert len(items) == expected_count
+
+
+def test_domain_pack_validation_plan_filters_and_invalid_inputs():
+    summary = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease"
+    )
+    object_page = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="object_definitions",
+        limit=1,
+    )
+    object_type = object_page["items"][0]["object_type"]
+    filtered = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="fields",
+        object_type=object_type,
+    )
+
+    assert filtered["success"] is True
+    assert filtered["total_count"] <= summary["section_counts"]["fields"]
+    assert all(item["object_type"] == object_type for item in filtered["items"])
+    assert domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="not-a-section",
+    )["error"].startswith("section must be one of")
+    assert "does not support filter" in domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="object_definitions",
+        validator_id="validator",
+    )["error"]
+    assert "state must be one of" in domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="validators",
+        state="retired",
+    )["error"]
+    assert "cursor must be" in domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="fields",
+        cursor="next",
+    )["error"]
+    assert "section is required" in domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        limit=1,
+    )["error"]
+
+
+def test_disease_field_pages_keep_verbose_policies_in_policy_section():
+    policy_page = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="field_policies",
+        limit=1,
+    )
+    policy = policy_page["items"][0]
+    field_page = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="agr.alliance.disease",
+        section="fields",
+        object_type=policy["object_type"],
+        field_path=policy["field_path"],
+    )
+
+    assert field_page["returned_count"] == 1
+    assert "validation_policy" not in field_page["items"][0]
+    assert policy["object_type"] == field_page["items"][0]["object_type"]
+    assert policy["field_path"] == field_page["items"][0]["field_path"]
 
 
 @pytest.fixture
@@ -352,19 +466,7 @@ def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(mo
         lambda **_kwargs: {
             "success": True,
             "domain_pack_version": "0.7.0",
-            "object_definitions": [
-                {
-                    "object_type": "allele",
-                    "display_name": "Allele",
-                    "field_paths": ["gene.symbol", "allele.symbol"],
-                }
-            ],
-            "validation_attachment_summary": {
-                "total": 3,
-                "default_enabled": 1,
-                "required": 1,
-                "export_blocking": 1,
-            },
+            "section": "summary",
         },
     )
 
@@ -426,7 +528,11 @@ def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(mo
     assert result["envelope_node_count"] == 1
     assert node["domain_pack_id"] == "alliance_allele"
     assert node["domain_pack_version"] == "0.7.0"
-    assert node["object_definitions"][0]["object_type"] == "allele"
+    assert node["validation_plan_request"] == {
+        "tool": "get_domain_pack_validation_plan",
+        "input": {"agent_id": "allele_extractor"},
+    }
+    assert "object_definitions" not in node
     assert node["validation_schedule"]["scheduled_validators"][0][
         "validator_binding_id"
     ] == "active-binding"
