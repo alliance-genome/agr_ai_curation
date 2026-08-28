@@ -14,6 +14,8 @@ from src.lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
+    decode_chat_message_cursor,
+    encode_chat_message_cursor,
 )
 from src.models.sql.chat_message import ChatMessage
 from src.models.sql.pdf_document import PDFDocument
@@ -606,6 +608,108 @@ def test_get_message_by_turn_id_returns_one_visible_turn_row(db_session):
             user_auth_sub=USER_B,
             turn_id="turn-lookup-1",
             role="assistant",
+        )
+
+
+def test_turn_pages_counts_and_message_id_reads_preserve_hidden_row_exclusions(db_session):
+    repository = ChatHistoryRepository(db_session)
+    session_id = f"{SESSION_PREFIX}paged-turn"
+    turn_id = "turn-paged-1"
+    hidden_types = {"context_compaction"}
+    _create_session(
+        repository,
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        created_at=_ts(12, 5),
+    )
+    visible = []
+    for index in range(5):
+        visible.append(
+            _append_message(
+                repository,
+                session_id=session_id,
+                user_auth_sub=USER_A,
+                role="flow",
+                content=f"visible-{index}",
+                turn_id=turn_id,
+                created_at=_ts(12, 6, index),
+            ).message
+        )
+    hidden = _append_message(
+        repository,
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        role="flow",
+        content="hidden projection",
+        message_type="context_compaction",
+        turn_id=turn_id,
+        created_at=_ts(12, 6, 2),
+    ).message
+    db_session.commit()
+
+    first_page = repository.list_messages_for_turn_page(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        chat_kind=ASSISTANT_CHAT_KIND,
+        turn_id=turn_id,
+        limit=2,
+        excluded_message_types=hidden_types,
+    )
+    assert [item.content for item in first_page.items] == ["visible-0", "visible-1"]
+    assert first_page.next_cursor is not None
+    encoded_cursor = encode_chat_message_cursor(first_page.next_cursor)
+    assert decode_chat_message_cursor(encoded_cursor) == first_page.next_cursor
+    assert repository.count_messages(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        chat_kind=ASSISTANT_CHAT_KIND,
+        turn_id=turn_id,
+        excluded_message_types=hidden_types,
+    ) == 5
+    assert repository.count_messages(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        chat_kind=ASSISTANT_CHAT_KIND,
+        turn_id=turn_id,
+        excluded_message_types=hidden_types,
+        through_cursor=first_page.next_cursor,
+    ) == 2
+
+    second_page = repository.list_messages_for_turn_page(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        chat_kind=ASSISTANT_CHAT_KIND,
+        turn_id=turn_id,
+        limit=3,
+        cursor=decode_chat_message_cursor(encoded_cursor),
+        excluded_message_types=hidden_types,
+    )
+    assert [item.content for item in second_page.items] == [
+        "visible-2",
+        "visible-3",
+        "visible-4",
+    ]
+    assert second_page.next_cursor is None
+    assert repository.get_message_by_id(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        chat_kind=ASSISTANT_CHAT_KIND,
+        message_id=visible[0].message_id,
+        excluded_message_types=hidden_types,
+    ) == visible[0]
+    assert repository.get_message_by_id(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        chat_kind=ASSISTANT_CHAT_KIND,
+        message_id=hidden.message_id,
+        excluded_message_types=hidden_types,
+    ) is None
+    with pytest.raises(ChatHistorySessionNotFoundError):
+        repository.count_messages(
+            session_id=session_id,
+            user_auth_sub=USER_B,
+            chat_kind=ASSISTANT_CHAT_KIND,
+            excluded_message_types=hidden_types,
         )
 
 

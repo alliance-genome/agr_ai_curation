@@ -19,7 +19,6 @@ from src.lib.chat_history_repository import (
     ChatSessionDetail,
     ChatSessionPage,
     ChatSessionRecord,
-    MAX_MESSAGE_PAGE_SIZE,
 )
 from src.lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 
@@ -93,9 +92,21 @@ def test_chat_history_tools_are_registered_for_opus():
 
     conversation_schema = tools_by_name["get_chat_conversation"]["input_schema"]
     assert conversation_schema["required"] == ["session_id"]
+    assert {"session_id", "cursor", "limit"} == set(conversation_schema["properties"])
 
     turn_schema = tools_by_name["get_chat_turn"]["input_schema"]
     assert turn_schema["required"] == ["session_id", "turn_id"]
+    assert {
+        "session_id",
+        "turn_id",
+        "cursor",
+        "limit",
+        "message_id",
+        "field",
+        "field_hash",
+        "start",
+        "max_chars",
+    } == set(turn_schema["properties"])
 
 
 def test_handle_tool_call_list_recent_chats_forwards_user_auth_sub(monkeypatch):
@@ -210,27 +221,32 @@ def test_handle_tool_call_search_chat_history_requires_query():
     assert result["error"] == "Missing required parameter: query"
 
 
-def test_handle_tool_call_get_chat_conversation_hides_compaction_rows(monkeypatch):
-    captured: dict[str, object] = {}
-    hidden_types = {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE}
-    first_cursor = ChatMessageCursor(
-        created_at=datetime(2026, 4, 23, 3, 17, tzinfo=timezone.utc),
-        message_id=uuid4(),
+def test_handle_tool_call_get_chat_conversation_rejects_malformed_cursor():
+    result = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name="get_chat_conversation",
+            tool_input={"session_id": "session-1", "cursor": "not-a-valid-cursor"},
+            context=None,
+            user_email="dev@example.org",
+            user_auth_sub="auth-sub-1",
+            messages=[],
+        )
     )
+
+    assert result == {"success": False, "error": "Invalid message cursor"}
+
+
+def test_handle_tool_call_get_chat_conversation_pages_summaries_and_hides_compaction_rows(
+    monkeypatch,
+):
+    captured: list[dict[str, object]] = []
+    hidden_types = {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE}
     visible_user = _message_record(
         session_id="assistant-session-1",
         turn_id="turn-1",
         role="user",
         content="Visible question",
         chat_kind=ASSISTANT_CHAT_KIND,
-    )
-    hidden_projection = _message_record(
-        session_id="assistant-session-1",
-        turn_id="turn-1",
-        role="assistant",
-        content="Compacted standard-chat model-live context projection",
-        chat_kind=ASSISTANT_CHAT_KIND,
-        message_type=CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE,
     )
     visible_assistant = _message_record(
         session_id="assistant-session-1",
@@ -245,26 +261,32 @@ def test_handle_tool_call_get_chat_conversation_hides_compaction_rows(monkeypatc
             pass
 
         def get_session_detail(self, **kwargs):
-            captured["detail_kwargs"] = kwargs
+            captured.append(kwargs)
             assert kwargs["excluded_message_types"] == hidden_types
+            if kwargs["message_cursor"] is not None:
+                return ChatSessionDetail(
+                    session=_session_record(
+                        session_id=kwargs["session_id"],
+                        chat_kind=ASSISTANT_CHAT_KIND,
+                    ),
+                    messages=[visible_assistant],
+                    next_message_cursor=None,
+                )
             return ChatSessionDetail(
                 session=_session_record(
                     session_id=kwargs["session_id"],
                     chat_kind=ASSISTANT_CHAT_KIND,
                 ),
                 messages=[visible_user],
-                next_message_cursor=first_cursor,
+                next_message_cursor=ChatMessageCursor(
+                    created_at=visible_user.created_at,
+                    message_id=visible_user.message_id,
+                ),
             )
 
-        def list_messages(self, **kwargs):
-            captured["page_kwargs"] = kwargs
+        def count_messages(self, **kwargs):
             assert kwargs["excluded_message_types"] == hidden_types
-            items = [
-                message
-                for message in [hidden_projection, visible_assistant]
-                if message.message_type not in kwargs["excluded_message_types"]
-            ]
-            return ChatMessagePage(items=items, next_cursor=None)
+            return 1 if kwargs.get("through_cursor") is not None else 2
 
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
@@ -281,75 +303,65 @@ def test_handle_tool_call_get_chat_conversation_hides_compaction_rows(monkeypatc
     )
 
     assert result["success"] is True
-    assert [message["content"] for message in result["messages"]] == [
-        "Visible question",
-        "Visible answer",
-    ]
-    assert all(
-        message["message_type"] != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
-        for message in result["messages"]
+    assert result["total_message_count"] == 2
+    assert result["returned_range"] == {"start": 0, "end": 1}
+    assert result["messages"][0]["fields"]["content"]["length"] == len("Visible question")
+    assert "content" not in result["messages"][0]
+    assert result["complete"] is False
+
+    next_call = result["next_call"]
+    replay = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name=next_call["tool"],
+            tool_input=next_call["arguments"],
+            context=None,
+            user_email="dev@example.org",
+            user_auth_sub="auth-sub-conversation",
+            messages=[],
+        )
     )
-    assert captured["detail_kwargs"] == {
-        "session_id": "assistant-session-1",
-        "user_auth_sub": "auth-sub-conversation",
-        "message_limit": MAX_MESSAGE_PAGE_SIZE,
-        "excluded_message_types": hidden_types,
-    }
-    assert captured["page_kwargs"] == {
-        "session_id": "assistant-session-1",
-        "user_auth_sub": "auth-sub-conversation",
-        "chat_kind": ASSISTANT_CHAT_KIND,
-        "limit": MAX_MESSAGE_PAGE_SIZE,
-        "cursor": first_cursor,
-        "excluded_message_types": hidden_types,
-    }
+    assert replay["returned_range"] == {"start": 1, "end": 2}
+    assert replay["complete"] is True
+    assert replay["next_call"] is None
+    assert len(captured) == 2
 
 
-def test_handle_tool_call_get_chat_turn_loads_current_session_turn(monkeypatch):
-    captured: dict[str, object] = {}
+def test_handle_tool_call_get_chat_turn_chunks_large_exact_fields_with_replayable_calls(
+    monkeypatch,
+):
     hidden_types = {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE}
+    content = "quoted \\\"value\\\" and slash \\\\ " * 600
+    message = _message_record(
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-2",
+        role="assistant",
+        content=content,
+    )
+    message = ChatMessageRecord(
+        **{**message.__dict__, "payload_json": {"z": content, "a": [1, 2, 3]}}
+    )
 
     class _FakeRepository:
         def __init__(self, _db):
             pass
 
         def get_session(self, **kwargs):
-            captured["get_session_kwargs"] = kwargs
             return _session_record(
                 session_id=kwargs["session_id"],
                 chat_kind=AGENT_STUDIO_CHAT_KIND,
             )
 
-        def list_messages_for_turn(self, **kwargs):
-            captured["turn_kwargs"] = kwargs
+        def list_messages_for_turn_page(self, **kwargs):
             assert kwargs["excluded_message_types"] == hidden_types
-            hidden_projection = _message_record(
-                session_id=kwargs["session_id"],
-                turn_id=kwargs["turn_id"],
-                role="assistant",
-                content="Compacted standard-chat model-live context projection",
-                message_type=CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE,
-            )
-            messages = [
-                _message_record(
-                    session_id=kwargs["session_id"],
-                    turn_id=kwargs["turn_id"],
-                    role="user",
-                    content="Earlier compacted question",
-                ),
-                hidden_projection,
-                _message_record(
-                    session_id=kwargs["session_id"],
-                    turn_id=kwargs["turn_id"],
-                    role="assistant",
-                    content="Earlier answer with tool-call summary",
-                ),
-            ]
-            return [
-                message
-                for message in messages
-                if message.message_type not in kwargs["excluded_message_types"]
-            ]
+            return ChatMessagePage(items=[message], next_cursor=None)
+
+        def count_messages(self, **kwargs):
+            assert kwargs["excluded_message_types"] == hidden_types
+            return 1
+
+        def get_message_by_id(self, **kwargs):
+            assert kwargs["excluded_message_types"] == hidden_types
+            return message if kwargs["message_id"] == message.message_id else None
 
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
@@ -367,22 +379,60 @@ def test_handle_tool_call_get_chat_turn_loads_current_session_turn(monkeypatch):
 
     assert result["success"] is True
     assert result["turn_id"] == "opus-turn-2"
-    assert [message["role"] for message in result["messages"]] == ["user", "assistant"]
-    assert all(
-        message["message_type"] != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
-        for message in result["messages"]
+    assert result["total_message_count"] == 1
+    assert "content" not in result["messages"][0]
+    assert result["messages"][0]["fields"]["content"]["length"] == len(content)
+    assert result["messages"][0]["fields"]["content"]["complete"] is False
+
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1200")
+    stale_hash_call = {
+        **result["messages"][0]["fields"]["content"]["next_call"],
+        "arguments": {
+            **result["messages"][0]["fields"]["content"]["next_call"]["arguments"],
+            "field_hash": "0" * 64,
+        },
+    }
+    stale_hash_result = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name=stale_hash_call["tool"],
+            tool_input=stale_hash_call["arguments"],
+            context=None,
+            user_email="dev@example.org",
+            user_auth_sub="auth-sub-turn",
+            messages=[],
+        )
     )
-    assert captured["get_session_kwargs"] == {
-        "session_id": "agent-studio-session-1",
-        "user_auth_sub": "auth-sub-turn",
-    }
-    assert captured["turn_kwargs"] == {
-        "session_id": "agent-studio-session-1",
-        "user_auth_sub": "auth-sub-turn",
-        "chat_kind": AGENT_STUDIO_CHAT_KIND,
-        "turn_id": "opus-turn-2",
-        "excluded_message_types": hidden_types,
-    }
+    assert stale_hash_result["success"] is False
+    assert "changed" in stale_hash_result["error"]
+    assert stale_hash_result["current_hash"] == result["messages"][0]["fields"]["content"]["sha256"]
+
+    for field_name in ("content", "payload_json"):
+        next_call = result["messages"][0]["fields"][field_name]["next_call"]
+        chunks = []
+        while next_call is not None:
+            chunk_result = asyncio.run(
+                api_module._handle_tool_call(
+                    tool_name=next_call["tool"],
+                    tool_input=next_call["arguments"],
+                    context=None,
+                    user_email="dev@example.org",
+                    user_auth_sub="auth-sub-turn",
+                    messages=[],
+                )
+            )
+            assert len(api_module._serialize_provider_tool_result(chunk_result)) <= 1200
+            assert chunk_result["returned_range"]["end"] > chunk_result["returned_range"]["start"]
+            chunks.append(chunk_result["chunk"])
+            next_call = chunk_result["next_call"]
+        reconstructed = "".join(chunks)
+        expected = content if field_name == "content" else api_module.json.dumps(
+            message.payload_json,
+            default=str,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        assert reconstructed == expected
 
 
 def test_handle_tool_call_get_chat_turn_same_turn_returns_only_persisted_rows(monkeypatch):
@@ -394,11 +444,9 @@ def test_handle_tool_call_get_chat_turn_same_turn_returns_only_persisted_rows(mo
         turn_id="opus-turn-current",
     )
     purpose = compact["chat_turn"]["purpose"]
-    assert "already persisted" in purpose
-    assert (
-        "same-turn tool-call summaries become durable only after the assistant turn completes"
-        in purpose
-    )
+    assert "completed prior turn" in purpose
+    assert "raw tool results exist only in this provider tool continuation" in purpose
+    assert "only after the assistant turn completes and is persisted" in purpose
 
     class _FakeRepository:
         def __init__(self, _db):
@@ -410,16 +458,20 @@ def test_handle_tool_call_get_chat_turn_same_turn_returns_only_persisted_rows(mo
                 chat_kind=AGENT_STUDIO_CHAT_KIND,
             )
 
-        def list_messages_for_turn(self, **kwargs):
+        def list_messages_for_turn_page(self, **kwargs):
             assert kwargs["excluded_message_types"] == {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE}
-            return [
-                _message_record(
+            return ChatMessagePage(
+                items=[_message_record(
                     session_id=kwargs["session_id"],
                     turn_id=kwargs["turn_id"],
                     role="user",
                     content="Current same-turn request already persisted.",
-                )
-            ]
+                )],
+                next_cursor=None,
+            )
+
+        def count_messages(self, **kwargs):
+            return 1
 
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
@@ -436,18 +488,8 @@ def test_handle_tool_call_get_chat_turn_same_turn_returns_only_persisted_rows(mo
     )
 
     assert result["success"] is True
-    assert result["message_count"] == 1
-    assert result["messages"] == [
-        {
-            "message_id": result["messages"][0]["message_id"],
-            "session_id": "agent-studio-session-1",
-            "chat_kind": AGENT_STUDIO_CHAT_KIND,
-            "turn_id": "opus-turn-current",
-            "role": "user",
-            "message_type": "text",
-            "content": "Current same-turn request already persisted.",
-            "payload_json": None,
-            "trace_id": None,
-            "created_at": result["messages"][0]["created_at"],
-        }
-    ]
+    assert result["total_message_count"] == 1
+    assert "in-flight same-turn raw tool result exists only" in result["durability"]
+    assert result["messages"][0]["fields"]["content"]["length"] == len(
+        "Current same-turn request already persisted."
+    )

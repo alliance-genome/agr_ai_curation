@@ -1567,6 +1567,36 @@ def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
     )
 
 
+def get_agent_studio_chat_recall_page_size() -> int:
+    """Maximum durable chat rows returned by one Agent Studio recall page.
+
+    Metadata-only pages remain bounded beneath the provider result envelope.
+    Default 10.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE",
+            10,
+        ),
+    )
+
+
+def get_agent_studio_chat_recall_chunk_max_chars() -> int:
+    """Maximum exact durable chat field characters requested per chunk.
+
+    Runtime envelope fitting may return fewer characters when JSON escaping
+    expands a value. Default 8000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS",
+            8_000,
+        ),
+    )
+
+
 def get_agent_studio_workshop_prompt_max_chars() -> int:
     """Max characters accepted in an Agent Workshop prompt proposal.
 

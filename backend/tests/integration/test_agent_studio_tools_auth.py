@@ -265,7 +265,9 @@ def test_search_chat_history_returns_ranked_results_for_all_chat_kinds(db_sessio
     ]
 
 
-def test_get_chat_conversation_returns_full_transcript_across_pages(db_session):
+def test_get_chat_conversation_returns_replayable_bounded_pages_across_long_transcript(
+    db_session,
+):
     repository = ChatHistoryRepository(db_session)
     _create_user(db_session, auth_sub=USER_A)
 
@@ -287,6 +289,16 @@ def test_get_chat_conversation_returns_full_transcript_across_pages(db_session):
             turn_id=f"turn-{index}",
             created_at=_ts(14, index // 60, index % 60),
         )
+    repository.append_message(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        chat_kind=AGENT_STUDIO_CHAT_KIND,
+        role="flow",
+        content="hidden provider context projection",
+        message_type="context_compaction",
+        turn_id="turn-hidden-compaction",
+        created_at=_ts(17, 30),
+    )
     db_session.commit()
 
     result = asyncio.run(
@@ -301,11 +313,35 @@ def test_get_chat_conversation_returns_full_transcript_across_pages(db_session):
     )
 
     assert result["success"] is True
-    assert result["chat_kind"] == AGENT_STUDIO_CHAT_KIND
-    assert result["message_count"] == 205
-    assert len(result["messages"]) == 205
-    assert result["messages"][0]["content"] == "message-0"
-    assert result["messages"][-1]["content"] == "message-204"
+    pages = [result]
+    next_call = result["next_call"]
+    while next_call is not None:
+        page = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name=next_call["tool"],
+                tool_input=next_call["arguments"],
+                context=None,
+                user_email=f"{USER_A}@example.org",
+                user_auth_sub=USER_A,
+                messages=[],
+            )
+        )
+        pages.append(page)
+        next_call = page["next_call"]
+
+    assert all(page["chat_kind"] == AGENT_STUDIO_CHAT_KIND for page in pages)
+    assert all(page["total_message_count"] == 205 for page in pages)
+    assert all(len(api_module._serialize_provider_tool_result(page)) <= 12_000 for page in pages)
+    assert pages[0]["returned_range"]["start"] == 0
+    assert pages[-1]["returned_range"] == {"start": 200, "end": 205}
+    assert pages[-1]["complete"] is True
+    messages = [message for page in pages for message in page["messages"]]
+    assert len(messages) == 205
+    assert [message["turn_id"] for message in messages] == [
+        f"turn-{index}" for index in range(205)
+    ]
+    assert all(message["message_type"] != "context_compaction" for message in messages)
+    assert all("content" not in message for message in messages)
 
 
 def test_get_chat_conversation_denies_cross_user_lookup(db_session):

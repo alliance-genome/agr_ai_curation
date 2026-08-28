@@ -12,6 +12,8 @@ from src.lib.openai_agents.config import (
     build_default_model_retry,
     build_model_settings,
     get_agent_config,
+    get_agent_studio_chat_recall_chunk_max_chars,
+    get_agent_studio_chat_recall_page_size,
     get_agent_studio_flow_custom_instructions_max_chars,
     get_agent_studio_flow_description_max_chars,
     get_agent_studio_flow_inspection_chunk_max_chars,
@@ -268,6 +270,23 @@ def test_agent_studio_flow_step_limit_respects_canonical_node_capacity(monkeypat
     monkeypatch.setenv("FLOW_DEFINITION_MAX_NODES", "1")
     assert get_flow_definition_max_nodes() == 2
     assert get_agent_studio_flow_max_steps() == 1
+
+
+def test_agent_studio_chat_recall_limits_are_environment_configurable(monkeypatch):
+    monkeypatch.delenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", raising=False)
+    monkeypatch.delenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", raising=False)
+    assert get_agent_studio_chat_recall_page_size() == 10
+    assert get_agent_studio_chat_recall_chunk_max_chars() == 8_000
+
+    monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", "4")
+    monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", "900")
+    assert get_agent_studio_chat_recall_page_size() == 4
+    assert get_agent_studio_chat_recall_chunk_max_chars() == 900
+
+    monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", "0")
+    monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", "0")
+    assert get_agent_studio_chat_recall_page_size() == 1
+    assert get_agent_studio_chat_recall_chunk_max_chars() == 1
 
 
 def test_agent_studio_flow_limit_clamps_are_reported(monkeypatch, caplog):

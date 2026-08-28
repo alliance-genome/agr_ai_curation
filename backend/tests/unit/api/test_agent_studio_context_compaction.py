@@ -15,6 +15,7 @@ import src.api.agent_studio as api_module
 import src.lib.agent_studio.flow_tools as flow_tools
 from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
+    ChatMessagePage,
     ChatMessageRecord,
     ChatSessionRecord,
 )
@@ -247,9 +248,10 @@ def test_large_tool_result_is_compacted_for_provider_continuation(monkeypatch):
         "session_id": "agent-studio-session-1",
         "turn_id": "opus-turn-4-abc123",
         "purpose": (
-            "Reload durable transcript rows already persisted for this turn after "
-            "provider context editing; same-turn tool-call summaries become "
-            "durable only after the assistant turn completes."
+            "Reload a completed prior turn from durable persistence. During the "
+            "current in-flight turn, raw tool results exist only in this provider "
+            "tool continuation; they become recallable here only after the assistant "
+            "turn completes and is persisted."
         ),
     }
     assert compact["recall"]["trace_payloads"]["payload_ids"] == [
@@ -896,6 +898,20 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
             turn_id="opus-turn-early-abc123",
         )
     )
+    durable_turn_messages = [
+        _agent_studio_message(
+            session_id="agent-studio-session-1",
+            turn_id="opus-turn-early-abc123",
+            role="user",
+            content=exact_turn_phrase,
+        ),
+        _agent_studio_message(
+            session_id="agent-studio-session-1",
+            turn_id="opus-turn-early-abc123",
+            role="assistant",
+            content="I recorded that exact note.",
+        ),
+    ]
 
     class _FakeRepository:
         def __init__(self, _db):
@@ -908,31 +924,35 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
             }
             return _agent_studio_session(session_id=kwargs["session_id"])
 
-        def list_messages_for_turn(self, **kwargs):
+        def list_messages_for_turn_page(self, **kwargs):
             assert kwargs == {
                 "session_id": "agent-studio-session-1",
                 "user_auth_sub": "auth-sub-1",
                 "chat_kind": AGENT_STUDIO_CHAT_KIND,
                 "turn_id": "opus-turn-early-abc123",
+                "limit": 10,
+                "cursor": None,
                 "excluded_message_types": {"context_compaction"},
             }
-            return [
-                _agent_studio_message(
-                    session_id=kwargs["session_id"],
-                    turn_id=kwargs["turn_id"],
-                    role="user",
-                    content=exact_turn_phrase,
+            return ChatMessagePage(items=durable_turn_messages, next_cursor=None)
+
+        def count_messages(self, **kwargs):
+            assert kwargs["excluded_message_types"] == {"context_compaction"}
+            return 2
+
+        def get_message_by_id(self, **kwargs):
+            return next(
+                (
+                    item
+                    for item in durable_turn_messages
+                    if item.message_id == kwargs["message_id"]
                 ),
-                _agent_studio_message(
-                    session_id=kwargs["session_id"],
-                    turn_id=kwargs["turn_id"],
-                    role="assistant",
-                    content="I recorded that exact note.",
-                ),
-            ]
+                None,
+            )
 
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
 
     turn_result = asyncio.run(
         api_module._handle_tool_call(
@@ -977,7 +997,19 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
 
     assert exact_payload_value not in json.dumps(compact, sort_keys=True)
     assert turn_result["success"] is True
-    assert turn_result["messages"][0]["content"] == exact_turn_phrase
+    exact_turn_next_call = turn_result["messages"][0]["fields"]["content"]["next_call"]
+    exact_turn_result = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name=exact_turn_next_call["tool"],
+            tool_input=exact_turn_next_call["arguments"],
+            context=None,
+            user_email="dev@example.org",
+            user_auth_sub="auth-sub-1",
+            messages=[],
+        )
+    )
+    assert exact_turn_result["chunk"] == exact_turn_phrase
+    assert exact_turn_result["complete"] is True
     assert captured_payload_lookup == {
         "trace_id": "trace-1",
         "payload_id": "observation:abc:output",

@@ -118,6 +118,8 @@ from src.lib.agent_studio.tool_idea_service import (
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
 from src.lib.openai_agents.config import get_domain_reference_max_values
 from src.lib.openai_agents.config import (
+    get_agent_studio_chat_recall_chunk_max_chars,
+    get_agent_studio_chat_recall_page_size,
     get_agent_studio_opus_context_editing_keep_tool_uses,
     get_agent_studio_opus_context_editing_trigger_tokens,
     get_agent_studio_provider_tool_result_inline_max_chars,
@@ -1899,9 +1901,10 @@ def _provider_tool_result_recall_hints(
             "session_id": session_id,
             "turn_id": turn_id,
             "purpose": (
-                "Reload durable transcript rows already persisted for this turn after "
-                "provider context editing; same-turn tool-call summaries become "
-                "durable only after the assistant turn completes."
+                "Reload a completed prior turn from durable persistence. During the "
+                "current in-flight turn, raw tool results exist only in this provider "
+                "tool continuation; they become recallable here only after the assistant "
+                "turn completes and is persisted."
             ),
         },
     }
@@ -2936,11 +2939,25 @@ async def _handle_tool_call(
     elif tool_name == "get_chat_conversation":
         try:
             session_id = _require_tool_string(tool_input, "session_id")
+            page_size_cap = get_agent_studio_chat_recall_page_size()
+            limit = tool_input.get("limit", page_size_cap)
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or limit < 1
+                or limit > page_size_cap
+            ):
+                raise ValueError(f"limit must be an integer from 1 to {page_size_cap}")
+            cursor = tool_input.get("cursor")
+            if cursor is not None and not isinstance(cursor, str):
+                raise ValueError("cursor must be a string")
             return _with_chat_history_repository(
                 lambda repository: _get_chat_conversation_payload(
                     repository=repository,
                     session_id=session_id,
                     user_auth_sub=user_auth_sub,
+                    cursor=cursor,
+                    limit=limit,
                 )
             )
         except ValueError as exc:
@@ -2953,12 +2970,31 @@ async def _handle_tool_call(
         try:
             session_id = _require_tool_string(tool_input, "session_id")
             turn_id = _require_tool_string(tool_input, "turn_id")
+            page_size_cap = get_agent_studio_chat_recall_page_size()
+            limit = tool_input.get("limit", page_size_cap)
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or limit < 1
+                or limit > page_size_cap
+            ):
+                raise ValueError(f"limit must be an integer from 1 to {page_size_cap}")
+            cursor = tool_input.get("cursor")
+            if cursor is not None and not isinstance(cursor, str):
+                raise ValueError("cursor must be a string")
             return _with_chat_history_repository(
                 lambda repository: _get_chat_turn_payload(
                     repository=repository,
                     session_id=session_id,
                     turn_id=turn_id,
                     user_auth_sub=user_auth_sub,
+                    cursor=cursor,
+                    limit=limit,
+                    message_id=tool_input.get("message_id"),
+                    field=tool_input.get("field"),
+                    start=tool_input.get("start"),
+                    max_chars=tool_input.get("max_chars"),
+                    field_hash=tool_input.get("field_hash"),
                 )
             )
         except ValueError as exc:
@@ -3342,10 +3378,6 @@ def _serialize_chat_history_session(record: ChatSessionRecord) -> Dict[str, Any]
     return agent_studio_chat_session.serialize_chat_history_session(record)
 
 
-def _serialize_chat_history_message(record: ChatMessageRecord) -> Dict[str, Any]:
-    return agent_studio_chat_session.serialize_chat_history_message(record)
-
-
 def _require_tool_string(tool_input: dict[str, Any], field_name: str) -> str:
     return agent_studio_chat_session.require_tool_string(tool_input, field_name)
 
@@ -3398,13 +3430,17 @@ def _get_chat_conversation_payload(
     repository: ChatHistoryRepository,
     session_id: str,
     user_auth_sub: str,
+    cursor: str | None,
+    limit: int,
 ) -> Dict[str, Any]:
     return agent_studio_chat_session.get_chat_conversation_payload(
         repository=repository,
         session_id=session_id,
         user_auth_sub=user_auth_sub,
+        cursor=cursor,
+        limit=limit,
+        provider_inline_max_chars=get_agent_studio_provider_tool_result_inline_max_chars(),
         serialize_session=_serialize_chat_history_session,
-        serialize_message=_serialize_chat_history_message,
     )
 
 
@@ -3414,14 +3450,29 @@ def _get_chat_turn_payload(
     session_id: str,
     turn_id: str,
     user_auth_sub: str,
+    cursor: str | None,
+    limit: int,
+    message_id: str | None,
+    field: str | None,
+    start: int | None,
+    max_chars: int | None,
+    field_hash: str | None,
 ) -> Dict[str, Any]:
     return agent_studio_chat_session.get_chat_turn_payload(
         repository=repository,
         session_id=session_id,
         turn_id=turn_id,
         user_auth_sub=user_auth_sub,
+        cursor=cursor,
+        limit=limit,
+        message_id=message_id,
+        field=field,
+        start=start,
+        max_chars=max_chars,
+        field_hash=field_hash,
+        chunk_max_chars=get_agent_studio_chat_recall_chunk_max_chars(),
+        provider_inline_max_chars=get_agent_studio_provider_tool_result_inline_max_chars(),
         serialize_session=_serialize_chat_history_session,
-        serialize_message=_serialize_chat_history_message,
     )
 
 

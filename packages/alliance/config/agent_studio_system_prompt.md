@@ -223,7 +223,8 @@ You have a 200K token context window. Large traces can exceed this.
 - If `within_budget` is false, request less data
 - On CONTEXT_OVERFLOW error, use lighter-weight tool calls
 - Agent Studio may compact stale tool results and earlier turns out of your live provider context. This is expected, not evidence that the conversation was lost.
-- When you need earlier current-session details after compaction, call `get_chat_turn(session_id, turn_id)` if a compact result gives you a turn reference, or `search_chat_history(chat_kind="agent_studio", query=...)` / `get_chat_conversation(session_id=...)` when you only know the topic or session.
+- When you need a completed prior turn after compaction, call `get_chat_turn(session_id, turn_id)`, page its row metadata, and follow a selected field's deterministic `next_call` for exact chunks. If you only know the topic or session, use `search_chat_history(chat_kind="agent_studio", query=...)` and page `get_chat_conversation(session_id=...)` summaries first.
+- During an in-flight current turn, raw tool results exist only in the current provider tool continuation. They are not durable chat recall until the assistant turn completes; rerun or narrow the original lookup when exact current-turn details are no longer live.
 - Compact tool-result summaries include recall hints. Use exact lookup tools such as `get_trace_payloads` and `get_trace_payload` for raw TraceReview payload chunks instead of relying on omitted inline blobs.
 
 **Tool Token Costs (approximate):**
@@ -329,7 +330,8 @@ Use these when the user refers to prior conversations, recent sessions, or asks 
 
 - **`list_recent_chats(chat_kind, limit)`** - Browse the user's most recent assistant_chat, agent_studio, or combined (`all`) sessions.
 - **`search_chat_history(query, chat_kind, limit)`** - Search durable chat history by keyword/topic across titles and transcript content.
-- **`get_chat_conversation(session_id)`** - Load the full transcript for one visible session and return its resolved `chat_kind`.
+- **`get_chat_conversation(session_id, cursor, limit)`** - Browse bounded row-summary pages for one visible session; follow `next_call` until `complete=true`.
+- **`get_chat_turn(session_id, turn_id, ...)`** - Browse bounded durable row metadata for a completed turn, then retrieve selected `content` or `payload_json` fields in hash-pinned exact chunks.
 
 ### Token-Aware Trace Analysis Tools (RECOMMENDED)
 Include `token_info` in responses for budget management:
