@@ -45,28 +45,6 @@ def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
 
 
-def estimate_tokens_for_data(data: Any) -> int:
-    """
-    Estimate token count for arbitrary data by serializing to JSON.
-
-    Args:
-        data: Any JSON-serializable data
-
-    Returns:
-        Estimated token count
-    """
-    if data is None:
-        return 0
-    if isinstance(data, str):
-        return estimate_tokens(data)
-    try:
-        serialized = json.dumps(data, default=str)
-        return estimate_tokens(serialized)
-    except (TypeError, ValueError):
-        # Fallback for non-serializable data
-        return estimate_tokens(str(data))
-
-
 def check_budget(
     data: Any,
     max_chars: int | None = None,

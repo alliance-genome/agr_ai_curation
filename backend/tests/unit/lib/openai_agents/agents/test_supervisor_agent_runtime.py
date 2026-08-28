@@ -389,6 +389,10 @@ async def test_inspect_chat_traces_uses_safe_trace_review_flags(monkeypatch):
     diagnostic_response = await supervisor_context_tools.inspect_chat_traces(
         detail="diagnostic_report",
         trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        section="validation_failures",
+        limit=3,
+        cursor="2",
+        item_start=120,
     )
     payload_response = await supervisor_context_tools.inspect_chat_traces(
         detail="payload_inventory",
@@ -417,6 +421,10 @@ async def test_inspect_chat_traces_uses_safe_trace_review_flags(monkeypatch):
     assert json.loads(diagnostic_response)["status"] == "ok"
     assert captured["diagnostic"]["include_raw_args"] is False
     assert captured["diagnostic"]["include_raw_outputs"] is False
+    assert captured["diagnostic"]["section"] == "validation_failures"
+    assert captured["diagnostic"]["limit"] == 3
+    assert captured["diagnostic"]["offset"] == 2
+    assert captured["diagnostic"]["item_start"] == 120
     assert json.loads(payload_response)["status"] == "ok"
     assert "include_values" not in captured["payloads"]
     assert captured["payloads"]["limit"] == 3
@@ -1541,6 +1549,11 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "review_session_id" not in inspect_params
     assert "file_id" not in inspect_params
     tools_by_name = {getattr(tool, "name", ""): tool for tool in created.tools}
+    trace_inspect_params = inspect.signature(
+        tools_by_name["inspect_chat_traces"]
+    ).parameters
+    assert "section" in trace_inspect_params
+    assert "item_start" in trace_inspect_params
     assert (
         "persisted canonical extraction results"
         in tools_by_name["prepare_for_curation"].description
@@ -1551,6 +1564,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     )
     assert "field is required" in tools_by_name["inspect_chat_traces"].description
     assert "assistant_response independently" in tools_by_name["inspect_chat_traces"].description
+    assert "its offset as cursor" in tools_by_name["inspect_chat_traces"].description
     assert "action=\"search\"" in tools_by_name["inspect_results"].description
     assert "export_to_file" not in tools_by_name
     assert captured_langfuse["metadata"]["specialist_count"] == 4

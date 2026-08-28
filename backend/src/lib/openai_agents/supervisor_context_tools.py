@@ -555,6 +555,8 @@ async def inspect_chat_traces(
     include_sibling_traces: bool = False,
     limit: int | None = None,
     cursor: str | None = None,
+    section: str | None = None,
+    item_start: int = 0,
 ) -> str:
     """Inspect current main-chat trace metadata through a bounded allowlist."""
 
@@ -643,6 +645,14 @@ async def inspect_chat_traces(
             tool_name=tool_name,
             event_type=event_type,
             candidate_id=candidate_id,
+            section=section,
+            offset=parse_offset_cursor(cursor),
+            limit=normalize_page_limit(
+                limit,
+                default=get_agent_studio_trace_review_aggregate_page_size(),
+                maximum=get_agent_studio_trace_review_aggregate_page_size(),
+            ),
+            item_start=item_start,
         )
     elif normalized_detail == "tool_calls":
         configured_page_size = get_agent_studio_trace_review_page_size()
@@ -659,11 +669,41 @@ async def inspect_chat_traces(
             page_size=page_size,
         )
     elif normalized_detail == "costs":
-        result = await get_trace_costs(authorized_trace_id)
+        result = await get_trace_costs(
+            authorized_trace_id,
+            section=section,
+            offset=parse_offset_cursor(cursor),
+            limit=normalize_page_limit(
+                limit,
+                default=get_agent_studio_trace_review_aggregate_page_size(),
+                maximum=get_agent_studio_trace_review_aggregate_page_size(),
+            ),
+            item_start=item_start,
+        )
     elif normalized_detail == "duplicates":
-        result = await get_trace_duplicates(authorized_trace_id)
+        result = await get_trace_duplicates(
+            authorized_trace_id,
+            section=section,
+            offset=parse_offset_cursor(cursor),
+            limit=normalize_page_limit(
+                limit,
+                default=get_agent_studio_trace_review_aggregate_page_size(),
+                maximum=get_agent_studio_trace_review_aggregate_page_size(),
+            ),
+            item_start=item_start,
+        )
     elif normalized_detail == "model_live_context":
-        result = await get_trace_model_live_context(authorized_trace_id)
+        result = await get_trace_model_live_context(
+            authorized_trace_id,
+            section=section,
+            offset=parse_offset_cursor(cursor),
+            limit=normalize_page_limit(
+                limit,
+                default=get_agent_studio_trace_review_aggregate_page_size(),
+                maximum=get_agent_studio_trace_review_aggregate_page_size(),
+            ),
+            item_start=item_start,
+        )
     elif normalized_detail == "payload_inventory":
         offset = parse_offset_cursor(cursor)
         configured_page_size = get_agent_studio_trace_review_aggregate_page_size()
