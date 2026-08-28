@@ -1567,6 +1567,36 @@ def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
     )
 
 
+def get_agent_studio_workshop_prompt_max_chars() -> int:
+    """Max characters accepted in an Agent Workshop prompt proposal.
+
+    This bounds both complete replacement prompts and the result of targeted
+    edits before the proposal is sent to the curator approval UI. Default 40000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_WORKSHOP_PROMPT_MAX_CHARS",
+            40_000,
+        ),
+    )
+
+
+def get_agent_studio_workshop_prompt_chunk_max_chars() -> int:
+    """Max exact prompt characters returned by one Workshop refresh chunk.
+
+    The default leaves room for chunk identity and freshness metadata beneath
+    the provider's default inline-result boundary. Default 8000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_WORKSHOP_PROMPT_CHUNK_MAX_CHARS",
+            8_000,
+        ),
+    )
+
+
 def get_agent_studio_prompt_inspection_chunk_max_chars() -> int:
     """Max prompt characters returned by one get_prompt detail call.
 

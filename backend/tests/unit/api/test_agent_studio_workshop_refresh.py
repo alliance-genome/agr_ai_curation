@@ -129,6 +129,12 @@ def test_workshop_refresh_tool_is_agent_workshop_scoped():
     assert "refresh_workshop_prompt" in api_module._WORKSHOP_TOOLS
     assert "refresh_workshop_prompt" in tools_by_name
     assert tools_by_name["refresh_workshop_prompt"]["input_schema"]["required"] == []
+    refresh_properties = tools_by_name["refresh_workshop_prompt"]["input_schema"][
+        "properties"
+    ]
+    assert refresh_properties["start"]["minimum"] == 0
+    assert refresh_properties["max_chars"]["minimum"] == 1
+    assert "prompt_hash" in refresh_properties
 
     agents_tools = {
         tool["name"]
@@ -215,6 +221,31 @@ async def test_refresh_workshop_prompt_rejects_invalid_context_timestamp():
 
 
 @pytest.mark.asyncio
+async def test_refresh_workshop_prompt_requires_explicit_selected_group_identity():
+    result = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input={"target_prompt": "group", "target_group_id": "WB"},
+        context=ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                selected_group_id="FB",
+                selected_group_prompt_draft="Current FB draft",
+            ),
+        ),
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+    )
+
+    assert result == {
+        "success": False,
+        "error": (
+            "To inspect a group prompt, select that group in Agent Workshop first "
+            "and then retry the refresh."
+        ),
+    }
+
+
+@pytest.mark.asyncio
 async def test_refresh_workshop_prompt_returns_error_when_saved_agent_is_inaccessible(monkeypatch):
     custom_agent_uuid = uuid4()
 
@@ -286,7 +317,101 @@ async def test_refresh_workshop_prompt_prefers_newer_saved_custom_agent(monkeypa
     assert result["updated_at"] == saved_updated_at.isoformat()
     assert result["length"] == len("Current prompt with the typo removed.")
     assert result["hash"] == api_module._prompt_hash("Current prompt with the typo removed.")
-    assert "minerite" not in result["current_prompt"]
+    assert result["view"] == "summary"
+    assert "content" not in result
+    assert "current_prompt" not in result
+    assert result["freshness"] == {
+        "draft_is_dirty": True,
+        "has_unsaved_context": False,
+        "saved_is_newer": True,
+        "context_updated_at": "2026-05-06T14:10:00+00:00",
+        "saved_updated_at": saved_updated_at.isoformat(),
+    }
+    assert result["next_call"]["arguments"]["prompt_hash"] == result["hash"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_workshop_prompt_chunks_reconstruct_long_dirty_draft(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_PROMPT_CHUNK_MAX_CHARS", "8000")
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    prompt = "alpha beta\n" * 2500
+    context = ChatContext(
+        active_tab="agent_workshop",
+        agent_workshop=AgentWorkshopContext(
+            prompt_draft=prompt,
+            draft_is_dirty=True,
+            custom_agent_updated_at="2026-05-06T14:10:00+00:00",
+        ),
+    )
+
+    summary = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input={"target_prompt": "main"},
+        context=context,
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+    )
+
+    assert summary["contract_version"] == "workshop_prompt_refresh.v1"
+    assert summary["source"] == "current_workshop_draft"
+    assert summary["length"] == len(prompt)
+    assert summary["hash"] == api_module._prompt_hash(prompt)
+
+    chunks: list[str] = []
+    next_call = summary["next_call"]
+    last_result: dict[str, Any] | None = None
+    while next_call is not None:
+        result = await api_module._handle_tool_call(
+            tool_name=next_call["tool"],
+            tool_input=next_call["arguments"],
+            context=context,
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
+        )
+        assert result["view"] == "chunk"
+        assert result["hash"] == summary["hash"]
+        assert result["returned_range"]["end"] - result["returned_range"]["start"] == len(
+            result["content"]
+        )
+        provider_content = api_module._provider_tool_result_content(
+            tool_name="refresh_workshop_prompt",
+            tool_input=next_call["arguments"],
+            tool_result=result,
+            session_id="agent-studio-session-1",
+            turn_id="opus-turn-1",
+        )
+        provider_chunk = json.loads(provider_content)
+        assert provider_chunk["view"] == "chunk"
+        assert provider_chunk.get("tool_result_compacted") is not True
+        chunks.append(provider_chunk["content"])
+        last_result = result
+        next_call = result["next_call"]
+
+    assert last_result is not None
+    assert last_result["complete"] is True
+    assert "".join(chunks) == prompt
+
+
+@pytest.mark.asyncio
+async def test_refresh_workshop_prompt_rejects_chunk_from_stale_hash():
+    result = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input={
+            "target_prompt": "main",
+            "prompt_hash": "stale-hash",
+            "start": 0,
+        },
+        context=ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(prompt_draft="Current draft"),
+        ),
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+    )
+
+    assert result["success"] is False
+    assert "changed after the summary" in result["error"]
+    assert result["current_hash"] == api_module._prompt_hash("Current draft")
 
 
 def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
@@ -433,11 +558,14 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
 
     tool_result = output_events[1]["result"]
     assert tool_result["source"] == "saved_custom_agent"
-    assert tool_result["current_prompt"] == "Current saved prompt with no typo."
-    assert "minerite" not in tool_result["current_prompt"]
+    assert tool_result["view"] == "summary"
+    assert tool_result["length"] == len("Current saved prompt with no typo.")
+    assert "content" not in tool_result
+    assert "current_prompt" not in tool_result
 
     second_messages = captured["second_call_messages"]
     tool_result_message = second_messages[-1]["content"][0]
     assert tool_result_message["type"] == "tool_result"
-    assert "Current saved prompt with no typo." in tool_result_message["content"]
+    assert "Current saved prompt with no typo." not in tool_result_message["content"]
+    assert "workshop_prompt_refresh.v1" in tool_result_message["content"]
     assert "minerite" not in tool_result_message["content"]

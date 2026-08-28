@@ -121,6 +121,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_opus_context_editing_keep_tool_uses,
     get_agent_studio_opus_context_editing_trigger_tokens,
     get_agent_studio_provider_tool_result_inline_max_chars,
+    get_agent_studio_workshop_prompt_chunk_max_chars,
+    get_agent_studio_workshop_prompt_max_chars,
 )
 from src.lib.executable_runs import (
     ExecutableRunAccessError,
@@ -1878,12 +1880,20 @@ def _provider_tool_result_recall_hints(
                 "durable only after the assistant turn completes."
             ),
         },
-        "repeat_or_narrow_tool": {
+    }
+    if tool_name == "update_workshop_prompt_draft":
+        hints["retained_proposal_input"] = {
+            "purpose": (
+                "The exact authored proposal remains in the originating retained "
+                "tool input; it is not duplicated in provider tool results or recall hints."
+            ),
+        }
+    else:
+        hints["repeat_or_narrow_tool"] = {
             "tool": tool_name,
             "input": _json_safe(tool_input),
             "purpose": "Rerun the same lookup, or rerun it with narrower pagination/chunk parameters, when exact current-turn details are needed.",
-        },
-    }
+        }
     if payload_refs:
         hints["trace_payloads"] = {
             "tool": "get_trace_payload",
@@ -1908,7 +1918,37 @@ def _provider_tool_result_content(
 ) -> str:
     """Serialize a bounded tool result for Anthropic continuation only."""
 
-    raw_content = json.dumps(tool_result, default=str)
+    provider_tool_result = tool_result
+    if (
+        tool_name == "update_workshop_prompt_draft"
+        and isinstance(tool_result, dict)
+        and tool_result.get("success") is True
+        and tool_result.get("pending_user_approval") is True
+    ):
+        # The originating tool_use already retains updated_prompt because
+        # Anthropic context editing keeps tool inputs. Do not replay that large
+        # text in the result; the full result remains authoritative for the UI.
+        provider_tool_result = {
+            "contract_version": "workshop_prompt_proposal_ack.v1",
+            "success": True,
+            "approval_status": tool_result.get("approval_status"),
+            "pending_user_approval": True,
+            "proposal_id": tool_result.get("proposal_id"),
+            "target_prompt": tool_result.get("target_prompt"),
+            "target_group_id": tool_result.get("target_group_id"),
+            "apply_mode": tool_result.get("apply_mode"),
+            "prompt_length": tool_result.get("prompt_length"),
+            "prompt_hash": tool_result.get("prompt_hash"),
+            "change_summary": tool_result.get("change_summary"),
+            "message": tool_result.get("message"),
+            "instruction": (
+                "The full proposal was streamed to the curator approval UI. "
+                "The exact proposed text remains in this call's retained tool input; "
+                "do not repeat it in another tool call unless the curator requests changes."
+            ),
+        }
+
+    raw_content = json.dumps(provider_tool_result, default=str)
     inline_max_chars = get_agent_studio_provider_tool_result_inline_max_chars()
     if len(raw_content) <= inline_max_chars:
         return raw_content
@@ -1919,7 +1959,9 @@ def _provider_tool_result_content(
         "tool_result_compacted": True,
         "raw_result_json_chars": len(raw_content),
         "provider_inline_max_chars": inline_max_chars,
-        "summary": _summarize_provider_tool_result_value(_json_safe(tool_result)),
+        "summary": _summarize_provider_tool_result_value(
+            _json_safe(provider_tool_result)
+        ),
         "recall": _provider_tool_result_recall_hints(
             tool_name=tool_name,
             tool_input=tool_input,
@@ -2137,7 +2179,7 @@ def _build_refresh_workshop_prompt_result(
     context: Optional[ChatContext],
     user_db_id: int | None,
 ) -> Dict[str, Any]:
-    """Return the current Agent Workshop prompt text with compact freshness metadata."""
+    """Return Workshop prompt identity first, then stable exact chunks on request."""
 
     if not context or context.active_tab != "agent_workshop" or not context.agent_workshop:
         return {
@@ -2160,6 +2202,21 @@ def _build_refresh_workshop_prompt_result(
         tool_input,
         context,
     )
+    if target_prompt == "group":
+        selected_group_id = (workshop.selected_group_id or "").strip().upper()
+        if not target_group_id:
+            return {
+                "success": False,
+                "error": "No Agent Workshop group is selected for a group prompt refresh.",
+            }
+        if target_group_id != selected_group_id:
+            return {
+                "success": False,
+                "error": (
+                    "To inspect a group prompt, select that group in Agent Workshop "
+                    "first and then retry the refresh."
+                ),
+            }
     context_prompt = (
         workshop.selected_group_prompt_draft
         if target_prompt == "group"
@@ -2180,11 +2237,6 @@ def _build_refresh_workshop_prompt_result(
                 user_db_id,
             )
             if target_prompt == "group":
-                if not target_group_id:
-                    return {
-                        "success": False,
-                        "error": "No Agent Workshop group is selected for a group prompt refresh.",
-                    }
                 saved_parent_agent_key = str(saved_custom_agent.template_source or "").strip()
                 saved_prompt = get_custom_agent_group_prompt(
                     parent_agent_key=saved_parent_agent_key,
@@ -2246,8 +2298,12 @@ def _build_refresh_workshop_prompt_result(
         version = None
         updated_at = context_updated_at
 
-    return {
+    prompt_hash = _prompt_hash(refreshed_prompt)
+    prompt_length = len(refreshed_prompt)
+    chunk_cap = get_agent_studio_workshop_prompt_chunk_max_chars()
+    common_result = {
         "success": True,
+        "contract_version": "workshop_prompt_refresh.v1",
         "source": source,
         "target_prompt": target_prompt,
         "target_group_id": target_group_id or None,
@@ -2255,12 +2311,122 @@ def _build_refresh_workshop_prompt_result(
         "runtime_agent_id": make_custom_agent_id(custom_agent_uuid) if custom_agent_uuid else None,
         "version": int(version) if version is not None else None,
         "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else None,
-        "length": len(refreshed_prompt),
-        "hash": _prompt_hash(refreshed_prompt),
-        "current_prompt": refreshed_prompt,
+        "length": prompt_length,
+        "hash": prompt_hash,
+        "freshness": {
+            "draft_is_dirty": bool(workshop.draft_is_dirty),
+            "has_unsaved_context": has_unsaved_context,
+            "saved_is_newer": saved_is_newer,
+            "context_updated_at": (
+                context_updated_at.isoformat()
+                if isinstance(context_updated_at, datetime)
+                else None
+            ),
+            "saved_updated_at": (
+                saved_updated_at.isoformat()
+                if isinstance(saved_updated_at, datetime)
+                else None
+            ),
+        },
+        "chunk_max_chars": chunk_cap,
+    }
+
+    start = tool_input.get("start")
+    requested_hash = tool_input.get("prompt_hash")
+    requested_max_chars = tool_input.get("max_chars")
+    if start is None:
+        if requested_hash is not None or requested_max_chars is not None:
+            return {
+                "success": False,
+                "error": "prompt_hash and max_chars require a start character offset.",
+            }
+        return {
+            **common_result,
+            "view": "summary",
+            "next_call": {
+                "tool": "refresh_workshop_prompt",
+                "arguments": {
+                    "target_prompt": target_prompt,
+                    **(
+                        {"target_group_id": target_group_id}
+                        if target_group_id
+                        else {}
+                    ),
+                    "prompt_hash": prompt_hash,
+                    "start": 0,
+                    "max_chars": chunk_cap,
+                },
+            },
+            "instruction": (
+                "This summary contains no prompt text. Follow next_call until "
+                "complete is true before judging the current prompt."
+            ),
+        }
+
+    if not isinstance(start, int) or isinstance(start, bool) or start < 0:
+        return {
+            "success": False,
+            "error": "start must be a non-negative integer character offset.",
+        }
+    if start > prompt_length:
+        return {
+            "success": False,
+            "error": f"start {start} exceeds prompt length {prompt_length}.",
+        }
+    if not isinstance(requested_hash, str) or not requested_hash:
+        return {
+            "success": False,
+            "error": "prompt_hash is required for exact chunk retrieval.",
+        }
+    if requested_hash != prompt_hash:
+        return {
+            "success": False,
+            "error": (
+                "The Workshop prompt changed after the summary was read. "
+                "Refresh the summary and restart chunk retrieval."
+            ),
+            "current_hash": prompt_hash,
+            "current_length": prompt_length,
+        }
+    if requested_max_chars is not None and (
+        not isinstance(requested_max_chars, int)
+        or isinstance(requested_max_chars, bool)
+        or requested_max_chars < 1
+    ):
+        return {
+            "success": False,
+            "error": "max_chars must be a positive integer when provided.",
+        }
+
+    chunk_size = min(requested_max_chars or chunk_cap, chunk_cap)
+    end = min(start + chunk_size, prompt_length)
+    complete = end == prompt_length
+    next_call = None
+    if not complete:
+        next_call = {
+            "tool": "refresh_workshop_prompt",
+            "arguments": {
+                "target_prompt": target_prompt,
+                **(
+                    {"target_group_id": target_group_id}
+                    if target_group_id
+                    else {}
+                ),
+                "prompt_hash": prompt_hash,
+                "start": end,
+                "max_chars": chunk_size,
+            },
+        }
+    return {
+        **common_result,
+        "view": "chunk",
+        "returned_range": {"start": start, "end": end},
+        "content": refreshed_prompt[start:end],
+        "complete": complete,
+        "next_call": next_call,
         "instruction": (
-            "Use current_prompt as the only current Agent Workshop prompt text. "
-            "Treat conversation history and older versions as historical."
+            "Reconstruct prompt chunks in returned_range order. Treat conversation "
+            "history and older prompt versions as historical."
         ),
     }
 
@@ -2964,10 +3130,14 @@ async def _handle_tool_call(
             if not change_summary and isinstance(edit_result.get("summary"), str):
                 change_summary = edit_result["summary"]
 
-        if len(updated_prompt) > 40000:
+        prompt_max_chars = get_agent_studio_workshop_prompt_max_chars()
+        if len(updated_prompt) > prompt_max_chars:
             return {
                 "success": False,
-                "error": "proposed prompt exceeds maximum size (40,000 characters).",
+                "error": (
+                    "proposed prompt exceeds maximum size "
+                    f"({prompt_max_chars:,} characters)."
+                ),
             }
         try:
             reject_locked_prompt_markers(
@@ -2983,11 +3153,19 @@ async def _handle_tool_call(
                 ),
             }
 
+        prompt_hash = _prompt_hash(updated_prompt)
+        proposal_target = (
+            f"group:{target_group_id}" if target_prompt == "group" else "main"
+        )
         return {
             "success": True,
+            "approval_status": "pending_user_approval",
             "pending_user_approval": True,
+            "proposal_id": f"{proposal_target}:{prompt_hash}",
             "apply_mode": apply_mode,
             "proposed_prompt": updated_prompt,
+            "prompt_length": len(updated_prompt),
+            "prompt_hash": prompt_hash,
             "target_prompt": target_prompt,
             "target_group_id": target_group_id if target_prompt == "group" else None,
             "change_summary": change_summary.strip() if isinstance(change_summary, str) else "",

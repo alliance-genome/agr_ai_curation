@@ -44,6 +44,9 @@ override ("group"). Backend-owned core/generated layers and inherited base promp
 are read-only context and must not be copied into updated_prompt.
 This tool does NOT auto-apply or auto-save changes.
 The UI will show the proposal and require explicit curator approval before applying.
+The continuation result is a compact approval acknowledgment; the full proposal is
+delivered to the UI and remains available in the originating retained tool input.
+Do not replay the same proposal in another call while approval is pending.
 Before proposing edits about PDF evidence extraction, inspect current prompt and
 tool schemas so the update preserves span-id evidence recording instead of
 legacy quote-generation guidance.
@@ -116,13 +119,16 @@ ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = UPDATE_WORKSHOP_PROMPT_TOOL
 
 REFRESH_WORKSHOP_PROMPT_TOOL = {
     "name": "refresh_workshop_prompt",
-    "description": """Refresh the current Agent Workshop prompt before reviewing it.
+    "description": """Inspect the exact current Agent Workshop prompt before reviewing it.
 
 Use this before commenting on the current Agent Workshop prompt text, especially
 after the curator saves manual edits or asks whether a typo, schema issue, or
 prompt-quality concern is fixed. Treat older chat history and version snapshots
-as historical after this tool returns. Pair this with get_tool_inventory and
-get_tool_details before advising on document/evidence tool instructions.
+as historical after this tool returns. Omit start for a content-free identity,
+hash, length, and freshness summary. Then follow next_call with its prompt_hash,
+start, and max_chars until complete=true to reconstruct the exact prompt. Pair
+this with get_tool_inventory and get_tool_details before advising on
+document/evidence tool instructions.
 """,
     "input_schema": {
         "type": "object",
@@ -136,6 +142,20 @@ get_tool_details before advising on document/evidence tool instructions.
             "target_group_id": {
                 "type": "string",
                 "description": "Optional group ID when target_prompt='group'. Defaults to the selected Agent Workshop group.",
+            },
+            "prompt_hash": {
+                "type": "string",
+                "description": "Stable prompt hash from the summary. Required with start so a changed prompt cannot be mixed into reconstruction.",
+            },
+            "start": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based character offset for exact chunk retrieval. Omit for the content-free summary.",
+            },
+            "max_chars": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Requested chunk size, bounded by backend configuration. Valid only with start.",
             },
         },
         "required": [],

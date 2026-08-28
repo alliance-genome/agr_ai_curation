@@ -275,6 +275,79 @@ def test_small_tool_result_stays_inline_for_provider_continuation(monkeypatch):
     assert json.loads(content) == tool_result
 
 
+def test_workshop_proposal_provider_projection_excludes_full_prompt(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    proposed_prompt = "Exact curator proposal.\n" * 1800
+    prompt_hash = api_module._prompt_hash(proposed_prompt)
+    tool_result = {
+        "success": True,
+        "approval_status": "pending_user_approval",
+        "pending_user_approval": True,
+        "proposal_id": f"main:{prompt_hash}",
+        "target_prompt": "main",
+        "target_group_id": None,
+        "apply_mode": "replace",
+        "proposed_prompt": proposed_prompt,
+        "prompt_length": len(proposed_prompt),
+        "prompt_hash": prompt_hash,
+        "change_summary": "Clarified exact evidence requirements.",
+        "message": "Prompt update proposal prepared. Awaiting curator approval in the UI.",
+    }
+
+    content = api_module._provider_tool_result_content(
+        tool_name="update_workshop_prompt_draft",
+        tool_input={"apply_mode": "replace", "updated_prompt": proposed_prompt},
+        tool_result=tool_result,
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-1",
+    )
+    provider_result = json.loads(content)
+
+    assert provider_result["contract_version"] == "workshop_prompt_proposal_ack.v1"
+    assert provider_result["approval_status"] == "pending_user_approval"
+    assert provider_result["proposal_id"] == f"main:{prompt_hash}"
+    assert provider_result["prompt_length"] == len(proposed_prompt)
+    assert provider_result["prompt_hash"] == prompt_hash
+    assert provider_result["change_summary"] == "Clarified exact evidence requirements."
+    assert "proposed_prompt" not in provider_result
+    assert proposed_prompt not in content
+    assert len(content) < 12000
+
+
+def test_compacted_workshop_ack_never_replays_proposal_input(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "300")
+    proposed_prompt = "Do not replay this exact proposal.\n" * 1200
+    prompt_hash = api_module._prompt_hash(proposed_prompt)
+
+    content = api_module._provider_tool_result_content(
+        tool_name="update_workshop_prompt_draft",
+        tool_input={"apply_mode": "replace", "updated_prompt": proposed_prompt},
+        tool_result={
+            "success": True,
+            "approval_status": "pending_user_approval",
+            "pending_user_approval": True,
+            "proposal_id": f"main:{prompt_hash}",
+            "target_prompt": "main",
+            "target_group_id": None,
+            "apply_mode": "replace",
+            "proposed_prompt": proposed_prompt,
+            "prompt_length": len(proposed_prompt),
+            "prompt_hash": prompt_hash,
+            "change_summary": "A summary long enough to force generic compaction.",
+            "message": "Awaiting approval.",
+        },
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-1",
+    )
+    compact = json.loads(content)
+
+    assert compact["status"] == "compacted_tool_result"
+    assert "repeat_or_narrow_tool" not in compact["recall"]
+    assert "retained_proposal_input" in compact["recall"]
+    assert proposed_prompt not in content
+    assert "updated_prompt" not in content
+
+
 def test_current_flow_manifest_and_bounded_details_stay_under_provider_cap(monkeypatch):
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "1000")

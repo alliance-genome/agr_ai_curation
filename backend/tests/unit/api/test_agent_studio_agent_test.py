@@ -816,6 +816,7 @@ class TestAgentWorkshopSystemPrompt:
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
 
+        updated_prompt = "x" * 40_000
         context = ChatContext(
             active_tab="agent_workshop",
             agent_workshop=AgentWorkshopContext(template_source="gene"),
@@ -825,7 +826,7 @@ class TestAgentWorkshopSystemPrompt:
             api_module._handle_tool_call(
                 tool_name="update_workshop_prompt_draft",
                 tool_input={
-                    "updated_prompt": "You are a strict gene expression extraction assistant.",
+                    "updated_prompt": updated_prompt,
                     "change_summary": "Tightened extraction and citation requirements.",
                     "apply_mode": "replace",
                 },
@@ -838,10 +839,43 @@ class TestAgentWorkshopSystemPrompt:
 
         assert result["success"] is True
         assert result["pending_user_approval"] is True
+        assert result["approval_status"] == "pending_user_approval"
         assert result["apply_mode"] == "replace"
         assert result["target_prompt"] == "main"
-        assert result["proposed_prompt"] == "You are a strict gene expression extraction assistant."
+        assert result["proposed_prompt"] == updated_prompt
+        assert result["prompt_length"] == len(result["proposed_prompt"])
+        assert result["prompt_hash"] == api_module._prompt_hash(result["proposed_prompt"])
+        assert result["proposal_id"] == f"main:{result['prompt_hash']}"
         assert result["change_summary"] == "Tightened extraction and citation requirements."
+
+    def test_workshop_prompt_size_limit_is_environment_backed(self, monkeypatch):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
+
+        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_PROMPT_MAX_CHARS", "12")
+        context = ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(template_source="gene"),
+        )
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="update_workshop_prompt_draft",
+                tool_input={
+                    "updated_prompt": "thirteen chars",
+                    "apply_mode": "replace",
+                },
+                context=context,
+                user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
+                messages=[],
+            )
+        )
+
+        assert result == {
+            "success": False,
+            "error": "proposed prompt exceeds maximum size (12 characters).",
+        }
 
     def test_handle_update_workshop_prompt_tool_rejects_locked_layer_copy(self):
         from src.api import agent_studio as api_module
