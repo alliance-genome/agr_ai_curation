@@ -331,10 +331,20 @@ async def test_refresh_workshop_prompt_prefers_newer_saved_custom_agent(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_refresh_workshop_prompt_chunks_reconstruct_long_dirty_draft(monkeypatch):
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "alpha beta\n" * 2500,
+        "\n" * 20_000,
+    ],
+    ids=["ordinary-text", "json-escape-heavy-text"],
+)
+async def test_refresh_workshop_prompt_chunks_reconstruct_long_dirty_draft(
+    monkeypatch,
+    prompt,
+):
     monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_PROMPT_CHUNK_MAX_CHARS", "8000")
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    prompt = "alpha beta\n" * 2500
     context = ChatContext(
         active_tab="agent_workshop",
         agent_workshop=AgentWorkshopContext(

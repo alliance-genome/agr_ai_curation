@@ -1948,7 +1948,7 @@ def _provider_tool_result_content(
             ),
         }
 
-    raw_content = json.dumps(provider_tool_result, default=str)
+    raw_content = _serialize_provider_tool_result(provider_tool_result)
     inline_max_chars = get_agent_studio_provider_tool_result_inline_max_chars()
     if len(raw_content) <= inline_max_chars:
         return raw_content
@@ -1976,6 +1976,12 @@ def _provider_tool_result_content(
         ),
     }
     return json.dumps(compact_payload, default=str)
+
+
+def _serialize_provider_tool_result(tool_result: Any) -> str:
+    """Serialize tool results exactly as the provider continuation will receive them."""
+
+    return json.dumps(tool_result, default=str)
 
 
 def _resolve_saved_workshop_agent(
@@ -2399,35 +2405,70 @@ def _build_refresh_workshop_prompt_result(
         }
 
     chunk_size = min(requested_max_chars or chunk_cap, chunk_cap)
-    end = min(start + chunk_size, prompt_length)
-    complete = end == prompt_length
-    next_call = None
-    if not complete:
-        next_call = {
-            "tool": "refresh_workshop_prompt",
-            "arguments": {
-                "target_prompt": target_prompt,
-                **(
-                    {"target_group_id": target_group_id}
-                    if target_group_id
-                    else {}
-                ),
-                "prompt_hash": prompt_hash,
-                "start": end,
-                "max_chars": chunk_size,
-            },
+
+    def build_chunk_result(end: int) -> Dict[str, Any]:
+        complete = end == prompt_length
+        next_call = None
+        if not complete:
+            next_call = {
+                "tool": "refresh_workshop_prompt",
+                "arguments": {
+                    "target_prompt": target_prompt,
+                    **(
+                        {"target_group_id": target_group_id}
+                        if target_group_id
+                        else {}
+                    ),
+                    "prompt_hash": prompt_hash,
+                    "start": end,
+                    "max_chars": chunk_size,
+                },
+            }
+        return {
+            **common_result,
+            "view": "chunk",
+            "returned_range": {"start": start, "end": end},
+            "content": refreshed_prompt[start:end],
+            "complete": complete,
+            "next_call": next_call,
+            "instruction": (
+                "Reconstruct prompt chunks in returned_range order. Treat conversation "
+                "history and older prompt versions as historical."
+            ),
         }
+
+    requested_end = min(start + chunk_size, prompt_length)
+    result = build_chunk_result(requested_end)
+    provider_inline_cap = get_agent_studio_provider_tool_result_inline_max_chars()
+    if len(_serialize_provider_tool_result(result)) <= provider_inline_cap:
+        return result
+
+    # Prompt characters can expand substantially during JSON escaping. Find the
+    # largest exact range that fits the same serialization boundary enforced by
+    # _provider_tool_result_content(), rather than allowing generic compaction to
+    # discard the chunk content.
+    fitting_result: Dict[str, Any] | None = None
+    low = start + 1
+    high = requested_end - 1
+    while low <= high:
+        candidate_end = (low + high) // 2
+        candidate = build_chunk_result(candidate_end)
+        if len(_serialize_provider_tool_result(candidate)) <= provider_inline_cap:
+            fitting_result = candidate
+            low = candidate_end + 1
+        else:
+            high = candidate_end - 1
+
+    if fitting_result is not None:
+        return fitting_result
+
     return {
-        **common_result,
-        "view": "chunk",
-        "returned_range": {"start": start, "end": end},
-        "content": refreshed_prompt[start:end],
-        "complete": complete,
-        "next_call": next_call,
-        "instruction": (
-            "Reconstruct prompt chunks in returned_range order. Treat conversation "
-            "history and older prompt versions as historical."
+        "success": False,
+        "error": (
+            "The provider inline tool-result limit is too small to return even one "
+            "exact Workshop prompt character with its required identity metadata."
         ),
+        "provider_inline_max_chars": provider_inline_cap,
     }
 
 
