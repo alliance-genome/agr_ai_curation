@@ -87,6 +87,10 @@ async def test_trace_review_requests_forward_internal_bearer(
 ):
     capture = {}
     monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "shared-service-token")
+    tools.set_trusted_trace_caller(
+        caller_sub="curator-sub-1",
+        caller_email="curator@example.org",
+    )
     _patch_async_client(
         monkeypatch,
         response=_FakeResponse(200, {"data": {}, "token_info": {}}),
@@ -96,7 +100,9 @@ async def test_trace_review_requests_forward_internal_bearer(
     await request_factory()
 
     assert capture["headers"] == {
-        "Authorization": "Bearer shared-service-token"
+        "Authorization": "Bearer shared-service-token",
+        "X-AGR-Trusted-Caller-Sub": "curator-sub-1",
+        "X-AGR-Trusted-Caller-Email": "curator@example.org",
     }
 
 

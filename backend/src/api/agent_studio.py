@@ -2707,6 +2707,12 @@ async def _handle_tool_call(
         get_trace_costs,
         get_trace_duplicates,
         get_trace_view,
+        set_trusted_trace_caller,
+    )
+
+    set_trusted_trace_caller(
+        caller_sub=user_auth_sub,
+        caller_email=user_email,
     )
 
     # ==========================================================================
@@ -2716,7 +2722,6 @@ async def _handle_tool_call(
     if tool_name == "search_traces":
         return await search_traces(
             session_id=tool_input.get("session_id"),
-            user_id=tool_input.get("user_id"),
             name=tool_input.get("name"),
             document_id=tool_input.get("document_id"),
             run_id=tool_input.get("run_id"),

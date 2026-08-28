@@ -30,6 +30,7 @@ System Tools:
 import httpx
 import os
 import re
+from contextvars import ContextVar
 from typing import Dict, Any, Optional
 
 from src.lib.loki_client import LOG_LEVEL_LABEL_PATTERNS
@@ -50,6 +51,20 @@ from src.lib.openai_agents.config import (
 
 
 VALID_SERVICE_LOG_LEVELS = frozenset(LOG_LEVEL_LABEL_PATTERNS)
+_trusted_trace_caller_sub: ContextVar[Optional[str]] = ContextVar(
+    "agent_studio_trusted_trace_caller_sub",
+    default=None,
+)
+_trusted_trace_caller_email: ContextVar[Optional[str]] = ContextVar(
+    "agent_studio_trusted_trace_caller_email",
+    default=None,
+)
+
+
+def set_trusted_trace_caller(*, caller_sub: str, caller_email: Optional[str]) -> None:
+    """Bind trusted request identity for downstream diagnostic service calls."""
+    _trusted_trace_caller_sub.set(caller_sub)
+    _trusted_trace_caller_email.set(caller_email)
 
 
 def get_trace_source() -> str:
@@ -71,12 +86,23 @@ def get_trace_review_url() -> str:
     return os.getenv("TRACE_REVIEW_URL", "http://trace_review_backend:8001")
 
 
-def _trace_review_request_headers() -> Dict[str, str]:
-    """Authenticate backend-to-TraceReview requests when a service token exists."""
+def _trace_review_request_headers(
+    *,
+    caller_sub: Optional[str] = None,
+    caller_email: Optional[str] = None,
+) -> Dict[str, str]:
+    """Authenticate a backend request and bind it to its originating curator."""
     token = os.getenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "").strip()
     if not token:
         return {}
-    return {"Authorization": f"Bearer {token}"}
+    trusted_sub = caller_sub or _trusted_trace_caller_sub.get()
+    trusted_email = caller_email or _trusted_trace_caller_email.get()
+    headers = {"Authorization": f"Bearer {token}"}
+    if trusted_sub:
+        headers["X-AGR-Trusted-Caller-Sub"] = trusted_sub
+    if trusted_email:
+        headers["X-AGR-Trusted-Caller-Email"] = trusted_email
+    return headers
 
 
 # ============================================================================
@@ -157,6 +183,8 @@ def _response_detail(resp: httpx.Response) -> str:
 async def _get_claude_endpoint(
     path: str,
     *,
+    caller_sub: Optional[str] = None,
+    caller_email: Optional[str] = None,
     params: Optional[Dict[str, Any]] = None,
     # Env-configurable via AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS (default 30).
     timeout_seconds: float = get_agent_studio_endpoint_timeout_seconds(),
@@ -171,7 +199,10 @@ async def _get_claude_endpoint(
             resp = await client.get(
                 f"{_get_claude_api_url()}{path}",
                 params=request_params,
-                headers=_trace_review_request_headers(),
+                headers=_trace_review_request_headers(
+                    caller_sub=caller_sub,
+                    caller_email=caller_email,
+                ),
             )
 
         if resp.status_code == 200:
@@ -921,7 +952,6 @@ async def get_trace_view(
 
 async def search_traces(
     session_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     name: Optional[str] = None,
     document_id: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -932,21 +962,20 @@ async def search_traces(
     limit: Optional[int] = None,
     item_start: int = 0,
 ) -> Dict[str, Any]:
-    """Search Langfuse traces by bounded session, user, metadata, name, or time filters."""
-    if not any([session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp]):
+    """Search the trusted caller's traces by bounded metadata, name, or time filters."""
+    if not any([session_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp]):
         return {
             "status": "error",
             "data": None,
             "token_info": None,
             "error": "At least one search filter is required",
-            "help": "Provide session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, or to_timestamp",
+            "help": "Provide session_id, name, document_id, run_id, extraction_id, from_timestamp, or to_timestamp",
         }
 
     return await _get_claude_endpoint(
         "/search",
         params={
             "session_id": session_id,
-            "user_id": user_id,
             "name": name,
             "document_id": document_id,
             "run_id": run_id,
@@ -1410,7 +1439,8 @@ async def get_service_logs(
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
             response = await client.get(
                 f"http://localhost:8000/api/logs/{container}",
-                params=params
+                params=params,
+                headers=_trace_review_request_headers(),
             )
 
             if response.status_code == 200:

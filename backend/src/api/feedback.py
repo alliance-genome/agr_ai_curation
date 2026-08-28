@@ -97,7 +97,7 @@ def _can_admin_debug_feedback(user: Dict[str, Any]) -> bool:
     return user_email.lower() in get_admin_emails()
 
 
-def _require_trace_review_internal_request(request: Request) -> None:
+def _require_trace_review_internal_request(request: Request) -> tuple[str, str | None]:
     expected_token = os.getenv(TRACE_REVIEW_INTERNAL_API_TOKEN_ENV, "").strip()
     if not expected_token:
         raise HTTPException(
@@ -116,6 +116,11 @@ def _require_trace_review_internal_request(request: Request) -> None:
             status_code=401,
             detail="Invalid TraceReview service token.",
         )
+    caller_sub = request.headers.get("x-agr-trusted-caller-sub", "").strip()
+    caller_email = request.headers.get("x-agr-trusted-caller-email", "").strip() or None
+    if not caller_sub:
+        raise HTTPException(status_code=401, detail="Trusted caller identity is required.")
+    return caller_sub, caller_email
 
 
 def _run_feedback_processing_in_background(feedback_id: str) -> None:
@@ -367,11 +372,14 @@ def get_feedback_trace_artifacts(
 ) -> Dict[str, Any]:
     """Return persisted feedback trace artifacts for TraceReview."""
 
-    _require_trace_review_internal_request(request)
+    caller_sub, caller_email = _require_trace_review_internal_request(request)
     from src.lib.feedback.models import FeedbackReport
 
     report = db.query(FeedbackReport).filter(FeedbackReport.id == feedback_id).first()
     if report is None:
+        raise HTTPException(status_code=404, detail="Feedback report not found")
+    owner = str(report.curator_id or "").strip()
+    if owner != caller_sub and (caller_email is None or owner.casefold() != caller_email.casefold()):
         raise HTTPException(status_code=404, detail="Feedback report not found")
 
     return {

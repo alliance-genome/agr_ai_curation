@@ -75,8 +75,14 @@ async def load_extraction_timeline_context(
     load_sibling_cached_data: SiblingTraceCacheLoader,
     fallback_exceptions: tuple[type[BaseException], ...],
     unavailable_exception_factory: ExceptionFactory | None = None,
+    caller_sub: str | None = None,
+    caller_email: str | None = None,
 ) -> ExtractionTimelineContext:
-    feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
+    feedback_artifacts = fetch_feedback_trace_artifacts(
+        feedback_id,
+        caller_sub=caller_sub,
+        caller_email=caller_email,
+    )
     feedback_trace_data = _feedback_trace_data(feedback_artifacts)
 
     try:

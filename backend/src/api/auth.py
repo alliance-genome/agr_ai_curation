@@ -268,6 +268,34 @@ def get_auth_dependency():
     return Depends(_get_user_from_cookie_impl)
 
 
+async def _get_user_or_trace_review_service_impl(
+    request: Request,
+    security_scopes: SecurityScopes = SecurityScopes(),
+) -> Dict[str, Any]:
+    """Authenticate a browser user or the narrowly trusted diagnostics service."""
+    authorization = request.headers.get("authorization", "")
+    if authorization:
+        expected_token = os.getenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "").strip()
+        scheme, separator, token = authorization.partition(" ")
+        if (
+            not expected_token
+            or not separator
+            or scheme.lower() != "bearer"
+            or not secrets.compare_digest(token.strip(), expected_token)
+        ):
+            raise HTTPException(status_code=401, detail="Invalid TraceReview service token.")
+        return {
+            "sub": "trace-review-internal-service",
+            "token_use": "internal_service",
+        }
+    return await _get_user_from_cookie_impl(request, security_scopes)
+
+
+def get_auth_or_trace_review_service_dependency():
+    """Get the dependency used only by diagnostics routes with service callers."""
+    return Depends(_get_user_or_trace_review_service_impl)
+
+
 def reset_auth_provider_cache() -> None:
     """Clear process-local auth provider initialization state."""
     global _provider, _provider_failed
@@ -351,6 +379,7 @@ auth = _AuthCompat()
 __all__ = [
     "router",
     "get_auth_dependency",
+    "get_auth_or_trace_review_service_dependency",
     "get_db",
     "auth",
     "reset_auth_provider_cache",

@@ -3,12 +3,15 @@
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from src.api import logs as logs_api
+from src.api import auth as auth_api
 from src.lib import http_errors
 
 
@@ -20,6 +23,65 @@ class _FrozenDateTime(datetime):
         if tz is None:
             return cls._now.replace(tzinfo=None)
         return cls._now.astimezone(tz)
+
+
+@pytest.mark.asyncio
+async def test_logs_auth_rejects_anonymous_request(monkeypatch):
+    async def _reject_anonymous(*_args, **_kwargs):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    monkeypatch.setattr(auth_api, "_get_user_from_cookie_impl", _reject_anonymous)
+    request = SimpleNamespace(headers={})
+
+    with pytest.raises(HTTPException) as exc:
+        await auth_api._get_user_or_trace_review_service_impl(request)
+
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_logs_auth_allows_interactive_and_trusted_internal_callers(monkeypatch):
+    async def _interactive_user(*_args, **_kwargs):
+        return {"sub": "curator-sub-1"}
+
+    monkeypatch.setattr(auth_api, "_get_user_from_cookie_impl", _interactive_user)
+    interactive = await auth_api._get_user_or_trace_review_service_impl(
+        SimpleNamespace(headers={})
+    )
+    assert interactive["sub"] == "curator-sub-1"
+
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
+    internal = await auth_api._get_user_or_trace_review_service_impl(
+        SimpleNamespace(headers={"authorization": "Bearer service-token"})
+    )
+    assert internal["token_use"] == "internal_service"
+
+
+def test_logs_http_route_denies_anonymous_and_accepts_trusted_callers(monkeypatch):
+    async def _reject_anonymous(*_args, **_kwargs):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    app = FastAPI()
+    app.include_router(logs_api.router, prefix="/api")
+    client = TestClient(app)
+    monkeypatch.setattr(auth_api, "_get_user_from_cookie_impl", _reject_anonymous)
+
+    anonymous = client.get("/api/logs/not-allowed")
+    assert anonymous.status_code == 401
+
+    async def _interactive_user(*_args, **_kwargs):
+        return {"sub": "curator-sub-1"}
+
+    monkeypatch.setattr(auth_api, "_get_user_from_cookie_impl", _interactive_user)
+    interactive = client.get("/api/logs/not-allowed")
+    assert interactive.status_code == 400
+
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
+    internal = client.get(
+        "/api/logs/not-allowed",
+        headers={"Authorization": "Bearer service-token"},
+    )
+    assert internal.status_code == 400
 
 
 @pytest.fixture(autouse=True)

@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 import requests
 import jwt
 from jwt import PyJWKClient
-from fastapi import APIRouter, HTTPException, Request, Response, Depends, Security
+from fastapi import APIRouter, HTTPException, Request, Response, Depends
 from fastapi.responses import RedirectResponse
 from fastapi.security import SecurityScopes
 
@@ -41,6 +41,8 @@ from ..models.requests import DevBypassRequest
 logger = logging.getLogger(__name__)
 router = APIRouter()
 TRACE_REVIEW_INTERNAL_API_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
+TRUSTED_CALLER_SUB_HEADER = "x-agr-trusted-caller-sub"
+TRUSTED_CALLER_EMAIL_HEADER = "x-agr-trusted-caller-email"
 
 
 # ===========================
@@ -149,9 +151,12 @@ async def _get_user_from_cookie_impl(
 
     # Validate token with JWKS
     issuer = f"https://cognito-idp.{cognito_region}.amazonaws.com/{cognito_user_pool_id}"
+    configured_jwks_client = jwks_client
+    if configured_jwks_client is None:
+        raise HTTPException(status_code=500, detail="Cognito authentication is not initialized.")
 
     try:
-        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        signing_key = configured_jwks_client.get_signing_key_from_jwt(token)
         decoded_token = jwt.decode(
             token,
             signing_key.key,
@@ -186,13 +191,20 @@ def _get_internal_service_user(request: Request) -> Optional[Dict[str, Any]]:
             detail="Invalid TraceReview service token.",
         )
 
-    return {
+    user = {
         "sub": "trace-review-internal-service",
         "uid": "trace-review-internal-service",
         "email": "trace-review-internal-service@internal",
         "name": "TraceReview internal service",
         "token_use": "internal_service",
     }
+    caller_sub = request.headers.get(TRUSTED_CALLER_SUB_HEADER, "").strip()
+    caller_email = request.headers.get(TRUSTED_CALLER_EMAIL_HEADER, "").strip()
+    if caller_sub:
+        user["trusted_caller_sub"] = caller_sub
+    if caller_email:
+        user["trusted_caller_email"] = caller_email
+    return user
 
 
 def get_auth_dependency():
@@ -371,9 +383,12 @@ async def callback(
 
         # Validate ID token with JWKS
         issuer = f"https://cognito-idp.{cognito_region}.amazonaws.com/{cognito_user_pool_id}"
+        configured_jwks_client = jwks_client
+        if configured_jwks_client is None:
+            raise HTTPException(status_code=500, detail="Cognito authentication is not initialized.")
 
         try:
-            signing_key = jwks_client.get_signing_key_from_jwt(id_token)
+            signing_key = configured_jwks_client.get_signing_key_from_jwt(id_token)
             decoded_token = jwt.decode(
                 id_token,
                 signing_key.key,

@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.lib import loki_client as loki
+from src.api.auth import get_auth_or_trace_review_service_dependency
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import (
     get_agent_studio_service_log_default_lines,
@@ -221,6 +222,7 @@ async def get_container_logs(
         int,
         Query(ge=1, le=MAX_LOG_CHARS, description="Maximum JSON-encoded log content characters"),
     ] = MAX_LOG_CHARS,
+    _user: dict[str, Any] = get_auth_or_trace_review_service_dependency(),
 ) -> LogsResponse:
     """
     Get service logs from Loki.

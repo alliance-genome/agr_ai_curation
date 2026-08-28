@@ -257,6 +257,7 @@ async def test_evidence_revisions_replays_oversized_item_next_call_verbatim():
             response = await claude.get_evidence_revisions(
                 request=Mock(),
                 source="local",
+                user={"sub": "user-1", "email": "curator@example.org"},
                 **call,
             )
             assert _provider_chars(response) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS

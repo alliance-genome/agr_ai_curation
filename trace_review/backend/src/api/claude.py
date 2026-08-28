@@ -18,7 +18,7 @@ import logging
 import math
 from datetime import datetime
 from typing import Annotated, Callable, Dict, Any, Optional, List, Mapping, Literal
-from fastapi import APIRouter, HTTPException, Request, Query, Path
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, Path
 
 from ..services.trace_extractor import TraceExtractor
 from ..services.langfuse_run_reconstruction import (
@@ -74,7 +74,47 @@ from .auth import get_auth_dependency
 from .domain_envelope_responses import domain_envelope_response_views
 
 
-router = APIRouter()
+def _trusted_caller_sub(user: Mapping[str, Any]) -> str:
+    """Resolve the owner identity from authenticated, non-model-controlled claims."""
+    claim = (
+        user.get("trusted_caller_sub")
+        if user.get("token_use") == "internal_service"
+        else user.get("sub")
+    )
+    caller_sub = str(claim or "").strip()
+    if not caller_sub:
+        raise HTTPException(status_code=401, detail="Trusted caller identity is required.")
+    return caller_sub
+
+
+async def _authorize_claude_trace_request(
+    request: Request,
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> None:
+    """Enforce owner-only access for every exact trace route on this router."""
+    caller_sub = _trusted_caller_sub(user)
+    request.state.trace_caller_sub = caller_sub
+    trace_id = str(request.path_params.get("trace_id") or "").strip()
+    if not trace_id:
+        return
+
+    source = request.query_params.get("source", DEFAULT_SOURCE)
+    try:
+        trace_data = TraceExtractor(
+            source=_effective_source(source)
+        ).extract_complete_trace(trace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Trace not found.") from exc
+
+    raw_trace = trace_data.get("raw_trace") or {}
+    owner = str(raw_trace.get("userId") or raw_trace.get("user_id") or "").strip()
+    if not owner or owner != caller_sub:
+        raise HTTPException(status_code=404, detail="Trace not found.")
+
+
+router = APIRouter(dependencies=[Depends(_authorize_claude_trace_request)])
 LOGGER = logging.getLogger(__name__)
 TRANSIENT_CACHE_TTL_SECONDS = 15
 TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
@@ -892,7 +932,6 @@ def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
         "trace_name": trace.get("name"),
         "timestamp": trace.get("timestamp"),
         "session_id": trace.get("sessionId"),
-        "user_id": trace.get("userId"),
         "environment": trace.get("environment"),
         "tags": trace.get("tags", []),
         "latency": trace.get("latency"),
@@ -1270,6 +1309,7 @@ def _sibling_trace_ids(
     source: str,
     session_id: Optional[str],
     include_sibling_traces: bool,
+    caller_sub: str,
 ) -> List[str]:
     if not include_sibling_traces or not session_id:
         return []
@@ -1278,7 +1318,9 @@ def _sibling_trace_ids(
     return [
         listed_trace["id"]
         for listed_trace in session_listing.get("traces", [])
-        if listed_trace.get("id") and listed_trace.get("id") != trace_id
+        if listed_trace.get("id")
+        and listed_trace.get("id") != trace_id
+        and str(listed_trace.get("userId") or "").strip() == caller_sub
     ]
 
 
@@ -1315,7 +1357,7 @@ def _offset_pagination(*, limit: int, offset: int, total_items: int) -> Dict[str
     response_model=ClaudeTraceResponse,
     summary="Search Langfuse traces",
     description="""
-    Search Langfuse traces by session, user, trace name, indexed metadata IDs,
+    Search the authenticated curator's Langfuse traces by session, trace name, indexed metadata IDs,
     or bounded timestamp window. Use this when a curator gives a session,
     document, run, or extraction ID instead of a trace ID.
     """
@@ -1323,7 +1365,6 @@ def _offset_pagination(*, limit: int, offset: int, total_items: int) -> Dict[str
 async def search_traces(
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source: local, remote, or auto"),
     session_id: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Langfuse session ID"),
-    user_id: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Langfuse user ID"),
     name: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Trace name filter"),
     document_id: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Trace metadata.document_id filter"),
     run_id: Optional[str] = Query(default=None, max_length=TRACE_SEARCH_FILTER_MAX_CHARS, description="Trace metadata.run_id filter"),
@@ -1343,9 +1384,10 @@ async def search_traces(
     ] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
+    user_id = _trusted_caller_sub(user)
     _ensure_search_scope(
         session_id=session_id,
-        user_id=user_id,
+        user_id=None,
         name=name,
         document_id=document_id,
         run_id=run_id,
@@ -1357,7 +1399,6 @@ async def search_traces(
         source=source,
         query={
             "session_id": session_id,
-            "user_id": user_id,
             "name": name,
             "document_id": document_id,
             "run_id": run_id,
@@ -1393,7 +1434,11 @@ async def search_traces(
     response_data = _search_response_data(
         source=source,
         traces=listing["traces"],
-        query=listing["query"],
+        query={
+            key: value
+            for key, value in listing["query"].items()
+            if key != "user_id"
+        },
         offset=offset,
         limit=limit,
         total_items=listing.get("total_items"),
@@ -2417,6 +2462,7 @@ async def get_extraction_timeline(
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
+            caller_sub=_trusted_caller_sub(user),
         ),
         load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
             sibling_trace_id,
@@ -2425,6 +2471,8 @@ async def get_extraction_timeline(
             refresh=refresh,
         ),
         fallback_exceptions=(HTTPException,),
+        caller_sub=_trusted_caller_sub(user),
+        caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
     )
     timeline = build_extraction_timeline(
         trace_id=trace_id,
@@ -2519,6 +2567,7 @@ async def get_extraction_diagnostic_report(
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
+            caller_sub=_trusted_caller_sub(user),
         ),
         load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
             sibling_trace_id,
@@ -2527,6 +2576,8 @@ async def get_extraction_diagnostic_report(
             refresh=refresh,
         ),
         fallback_exceptions=(HTTPException,),
+        caller_sub=_trusted_caller_sub(user),
+        caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
     )
     timeline = build_extraction_timeline(
         trace_id=trace_id,
@@ -2620,6 +2671,7 @@ async def get_evidence_revisions(
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
+            caller_sub=_trusted_caller_sub(user),
         ),
         load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
             sibling_trace_id,
@@ -2628,6 +2680,8 @@ async def get_evidence_revisions(
             refresh=refresh,
         ),
         fallback_exceptions=(HTTPException,),
+        caller_sub=_trusted_caller_sub(user),
+        caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
     )
     evidence_revisions = build_evidence_revisions(
         trace_id=trace_id,

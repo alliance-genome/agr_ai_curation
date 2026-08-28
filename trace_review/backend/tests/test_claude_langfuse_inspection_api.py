@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -85,7 +86,6 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
         await claude.search_traces(
             source="local",
             session_id=None,
-            user_id=None,
             name=None,
             document_id=None,
             run_id=None,
@@ -95,6 +95,7 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
             offset=0,
             limit=25,
             item_start=0,
+            user={"sub": "user-1"},
         )
     assert exc_info.value.status_code == 400
 
@@ -119,7 +120,6 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
     response = await claude.search_traces(
         source="local",
         session_id="session-1",
-        user_id=None,
         name=None,
         document_id=None,
         run_id=None,
@@ -129,12 +129,66 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
         offset=0,
         limit=25,
         item_start=0,
+        user={"sub": "user-1"},
     )
 
     assert response.status == "success"
     assert response.data["trace_count"] == 1
     assert response.data["traces"][0]["trace_id_short"] == "856df16f"
     extractor.list_traces.assert_called_once()
+    assert extractor.list_traces.call_args.kwargs["user_id"] == "user-1"
+    assert "user_id" not in response.data["traces"][0]
+    assert "user_id" not in json.dumps(response.data)
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extractor_cls: Mock):
+    extractor_cls.return_value.extract_complete_trace.return_value = {
+        "raw_trace": {"id": "trace-1", "userId": "curator-1"},
+    }
+    owner_request = SimpleNamespace(
+        path_params={"trace_id": "trace-1"},
+        query_params={"source": "local"},
+        state=SimpleNamespace(),
+    )
+    await claude._authorize_claude_trace_request(
+        owner_request,
+        user={"sub": "curator-1"},
+    )
+
+    other_request = SimpleNamespace(
+        path_params={"trace_id": "trace-1"},
+        query_params={"source": "local"},
+        state=SimpleNamespace(),
+    )
+    with pytest.raises(HTTPException) as cross_user:
+        await claude._authorize_claude_trace_request(
+            other_request,
+            user={"sub": "curator-2"},
+        )
+
+    extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError("missing")
+    with pytest.raises(HTTPException) as missing:
+        await claude._authorize_claude_trace_request(
+            other_request,
+            user={"sub": "curator-2"},
+        )
+
+    assert cross_user.value.status_code == missing.value.status_code == 404
+    assert cross_user.value.detail == missing.value.detail == "Trace not found."
+
+
+def test_every_exact_claude_route_inherits_central_trace_authorization():
+    exact_routes = [
+        route
+        for route in claude.router.routes
+        if "{trace_id}" in getattr(route, "path", "")
+    ]
+    assert exact_routes
+    for route in exact_routes:
+        dependencies = [dependency.call for dependency in route.dependant.dependencies]
+        assert claude._authorize_claude_trace_request in dependencies
 
 
 def _large_search_references(count: int, *, oversized: bool = False) -> list[dict]:
@@ -186,7 +240,6 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
     arguments = {
         "source": "local",
         "session_id": "session-" + "s" * 248,
-        "user_id": "user-" + "u" * 251,
         "name": "trace-" + "n" * 250,
         "document_id": "document-" + "d" * 247,
         "run_id": "run-" + "r" * 252,
@@ -196,6 +249,7 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
         "offset": 0,
         "limit": record_count,
         "item_start": 0,
+        "user": {"sub": "user-1"},
     }
     reconstructed = []
     while True:
@@ -213,7 +267,7 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
         if next_call is None:
             break
         for key in (
-            "session_id", "user_id", "name", "document_id", "run_id",
+            "session_id", "name", "document_id", "run_id",
             "extraction_id", "from_timestamp", "to_timestamp",
         ):
             expected = (
@@ -222,7 +276,7 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
                 else arguments[key]
             )
             assert next_call[key] == expected
-        arguments = {"source": "local", **next_call}
+        arguments = {"source": "local", "user": {"sub": "user-1"}, **next_call}
 
     assert [record["trace_id"] for record in reconstructed] == [
         record["id"] for record in records
@@ -238,7 +292,6 @@ async def test_search_traces_rejects_filter_that_cannot_fit_provider_wrapper(ext
         await claude.search_traces(
             source="local",
             session_id="s" * (claude.TRACE_SEARCH_FILTER_MAX_CHARS + 1),
-            user_id=None,
             name=None,
             document_id=None,
             run_id=None,
@@ -248,6 +301,7 @@ async def test_search_traces_rejects_filter_that_cannot_fit_provider_wrapper(ext
             offset=0,
             limit=1,
             item_start=0,
+            user={"sub": "user-1"},
         )
 
     assert exc_info.value.status_code == 400
@@ -263,7 +317,6 @@ async def test_search_traces_rejects_encoded_filters_without_chunk_headroom(extr
         await claude.search_traces(
             source="local",
             session_id=encoded_filter,
-            user_id=encoded_filter,
             name=encoded_filter,
             document_id=encoded_filter,
             run_id=encoded_filter,
@@ -273,6 +326,7 @@ async def test_search_traces_rejects_encoded_filters_without_chunk_headroom(extr
             offset=0,
             limit=1,
             item_start=0,
+            user={"sub": "user-1"},
         )
 
     assert exc_info.value.status_code == 400
@@ -290,7 +344,6 @@ async def test_search_traces_oversized_reference_reconstructs_with_forward_progr
     arguments = {
         "source": "local",
         "session_id": "session-filter",
-        "user_id": None,
         "name": None,
         "document_id": None,
         "run_id": None,
@@ -300,6 +353,7 @@ async def test_search_traces_oversized_reference_reconstructs_with_forward_progr
         "offset": 0,
         "limit": 1,
         "item_start": 0,
+        "user": {"sub": "user-1"},
     }
     content = []
     starts = []
@@ -321,13 +375,13 @@ async def test_search_traces_oversized_reference_reconstructs_with_forward_progr
         arguments = {
             "source": "local",
             "session_id": None,
-            "user_id": None,
             "name": None,
             "document_id": None,
             "run_id": None,
             "extraction_id": None,
             "from_timestamp": None,
             "to_timestamp": None,
+            "user": {"sub": "user-1"},
             **next_call,
         }
 
