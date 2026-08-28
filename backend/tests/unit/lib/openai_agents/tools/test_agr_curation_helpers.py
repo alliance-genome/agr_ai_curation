@@ -49,8 +49,8 @@ def test_curie_validation_helpers(monkeypatch):
 
 
 def test_limit_normalization_helpers(monkeypatch):
-    monkeypatch.setattr(agr_curation, "DEFAULT_LIMIT", 100)
-    monkeypatch.setattr(agr_curation, "HARD_MAX", 500)
+    monkeypatch.setenv("AGR_DEFAULT_LIMIT", "100")
+    monkeypatch.setenv("AGR_HARD_MAX", "500")
 
     assert agr_curation._normalize_limit(None) == (100, ["default_limit_applied:100"])
     assert agr_curation._normalize_limit("abc")[0] == 100

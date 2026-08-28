@@ -294,6 +294,15 @@
           ],
           "type": "object"
         },
+        "result_contract": {
+          "kind": "structured",
+          "page_paths": [
+            "data",
+            "lookup_attempts",
+            "candidate_matches",
+            "result_projections"
+          ]
+        },
         "tags": [
           "gene",
           "allele",
@@ -1153,6 +1162,10 @@
           ],
           "type": "object"
         },
+        "result_contract": {
+          "kind": "raw",
+          "page_paths": []
+        },
         "tags": [
           "chemical",
           "ontology",
@@ -1222,6 +1235,12 @@
             "query"
           ],
           "type": "object"
+        },
+        "result_contract": {
+          "kind": "sql_rows",
+          "page_paths": [
+            "rows"
+          ]
         },
         "tags": [
           "sql",
@@ -2841,19 +2860,35 @@
     "agent_studio": {
       "diagnostic": {
         "category": "api",
-        "description": "Fetch typed existing annotations from the Gene Ontology Consortium API.\n\nBase URL: https://api.geneontology.org/api\n\nThe adapter accepts a gene_id rather than a URL, validates the CURIE\nbefore network dispatch, and makes one request to:\n- GET /bioentity/gene/{gene_id}/function?rows=-1\n\nSupported namespaces: FB, HGNC, MGI, RGD, SGD, WB, and ZFIN.\n\nStatus is one of: ok, not_found, invalid_input,\nunsupported_identifier, or upstream_error. Typed annotations preserve\nterm/aspect, evidence and ECO, reference, relation, With/From,\nqualifier, negation, provider, product type, and source provenance.",
+        "description": "Fetch typed existing annotations from the Gene Ontology Consortium API.\n\nBase URL: https://api.geneontology.org/api\n\nThe adapter accepts a gene_id rather than a URL, validates the CURIE\nbefore network dispatch, and pages the source through:\n- GET /bioentity/gene/{gene_id}/function?start={source_cursor}&rows={source_limit}\n\nSupported namespaces: FB, HGNC, MGI, RGD, SGD, WB, and ZFIN.\n\nStatus is one of: ok, not_found, invalid_input,\nunsupported_identifier, or upstream_error. Typed annotations preserve\nterm/aspect, evidence and ECO, reference, relation, With/From,\nqualifier, negation, provider, product type, and source provenance.",
         "enabled": true,
         "input_schema": {
           "properties": {
             "gene_id": {
               "description": "Supported Alliance gene CURIE.",
               "type": "string"
+            },
+            "source_cursor": {
+              "description": "Zero-based source offset from next_source_cursor.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source_limit": {
+              "description": "Source page size capped by GO_ANNOTATIONS_PAGE_MAX_RESULTS.",
+              "minimum": 1,
+              "type": "integer"
             }
           },
           "required": [
             "gene_id"
           ],
           "type": "object"
+        },
+        "result_contract": {
+          "kind": "structured",
+          "page_paths": [
+            "annotations"
+          ]
         },
         "tags": [
           "go",
@@ -2875,6 +2910,18 @@
           "name": "gene_id",
           "required": true,
           "type": "string"
+        },
+        {
+          "description": "Zero-based GO Consortium source offset for recoverable pagination.",
+          "name": "source_cursor",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "Requested source page size, capped by GO_ANNOTATIONS_PAGE_MAX_RESULTS.",
+          "name": "source_limit",
+          "required": false,
+          "type": "integer"
         }
       ],
       "summary": "Retrieves typed existing GO annotations from the Gene Ontology Consortium API, preserving curator-comparison fields and source-record provenance without source fallback."
@@ -3946,6 +3993,10 @@
           ],
           "type": "object"
         },
+        "result_contract": {
+          "kind": "raw",
+          "page_paths": []
+        },
         "tags": [
           "go",
           "ontology",
@@ -4284,6 +4335,14 @@
             "mirbase_organism_prefix"
           ],
           "type": "object"
+        },
+        "result_contract": {
+          "kind": "structured",
+          "page_paths": [
+            "product_candidates",
+            "candidate_mappings",
+            "provenance"
+          ]
         },
         "tags": [
           "gene",

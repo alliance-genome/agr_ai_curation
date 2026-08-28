@@ -89,6 +89,13 @@ class ExistingGOAnnotationsResult(_StrictModel):
     annotations: list[ExistingGOAnnotation] = Field(default_factory=list)
     source: Literal["Gene Ontology Consortium API"] = "Gene Ontology Consortium API"
     source_url: str | None = None
+    source_cursor: int = 0
+    source_limit: int | None = None
+    returned_count: int = 0
+    next_source_cursor: int | None = None
+    source_complete: bool = True
+    source_limit_capped: bool = False
+    source_response_truncated: bool = False
     message: str | None = None
 
 
@@ -102,6 +109,18 @@ def _request_timeout_seconds() -> float:
             raw,
         )
         return 30.0
+
+
+def _page_max_results() -> int:
+    raw = os.getenv("GO_ANNOTATIONS_PAGE_MAX_RESULTS", "500")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logger.warning(
+            "Invalid GO_ANNOTATIONS_PAGE_MAX_RESULTS=%r; using 500 results",
+            raw,
+        )
+        return 500
 
 
 def validate_go_gene_id(gene_id: object) -> ExistingGOAnnotationsResult | str:
@@ -224,6 +243,8 @@ def _normalize_association(
 def lookup_existing_go_annotations(
     gene_id: object,
     *,
+    source_cursor: int = 0,
+    source_limit: int | None = None,
     requester: Callable[..., Any] = requests.get,
 ) -> ExistingGOAnnotationsResult:
     """Validate, fetch, and normalize existing GO annotations without source fallback."""
@@ -232,9 +253,34 @@ def lookup_existing_go_annotations(
     if isinstance(validated, ExistingGOAnnotationsResult):
         return validated
 
+    if (
+        isinstance(source_cursor, bool)
+        or not isinstance(source_cursor, int)
+        or source_cursor < 0
+    ):
+        return ExistingGOAnnotationsResult(
+            status="invalid_input",
+            gene_id=validated,
+            message="source_cursor must be a non-negative integer",
+        )
+    if source_limit is not None and (
+        isinstance(source_limit, bool)
+        or not isinstance(source_limit, int)
+        or source_limit < 1
+    ):
+        return ExistingGOAnnotationsResult(
+            status="invalid_input",
+            gene_id=validated,
+            source_cursor=source_cursor,
+            message="source_limit must be a positive integer",
+        )
+    page_max = _page_max_results()
+    effective_limit = page_max if source_limit is None else min(source_limit, page_max)
+    limit_capped = source_limit is not None and source_limit > page_max
+
     source_url = (
         f"{_GO_API_BASE}/bioentity/gene/{quote(validated, safe=':')}/function"
-        "?rows=-1"
+        f"?start={source_cursor}&rows={effective_limit}"
     )
     try:
         response = requester(
@@ -247,18 +293,31 @@ def lookup_existing_go_annotations(
             status="upstream_error",
             gene_id=validated,
             source_url=source_url,
+            source_cursor=source_cursor,
+            source_limit=effective_limit,
+            source_complete=False,
+            source_limit_capped=limit_capped,
             message=f"GO Consortium API request failed: {exc}",
         )
 
     if response.status_code == 404:
         return ExistingGOAnnotationsResult(
-            status="not_found", gene_id=validated, source_url=source_url
+            status="not_found",
+            gene_id=validated,
+            source_url=source_url,
+            source_cursor=source_cursor,
+            source_limit=effective_limit,
+            source_limit_capped=limit_capped,
         )
     if not 200 <= response.status_code < 300:
         return ExistingGOAnnotationsResult(
             status="upstream_error",
             gene_id=validated,
             source_url=source_url,
+            source_cursor=source_cursor,
+            source_limit=effective_limit,
+            source_complete=False,
+            source_limit_capped=limit_capped,
             message=f"GO Consortium API returned HTTP {response.status_code}",
         )
 
@@ -269,26 +328,49 @@ def lookup_existing_go_annotations(
         )
         if not isinstance(associations, list):
             raise ValueError("response must contain an associations list")
+        source_response_truncated = len(associations) > effective_limit
         normalized = [
-            _normalize_association(item, source_url=source_url) for item in associations
+            _normalize_association(item, source_url=source_url)
+            for item in associations[:effective_limit]
         ]
         if not normalized:
             return ExistingGOAnnotationsResult(
-                status="not_found", gene_id=validated, source_url=source_url
+                status="ok" if source_cursor > 0 else "not_found",
+                gene_id=validated,
+                source_url=source_url,
+                source_cursor=source_cursor,
+                source_limit=effective_limit,
+                source_complete=True,
+                source_limit_capped=limit_capped,
             )
         gene_symbols = {item[1] for item in normalized if item[1]}
+        returned_count = len(normalized)
+        source_complete = returned_count < effective_limit
         return ExistingGOAnnotationsResult(
             status="ok",
             gene_id=validated,
             gene_symbol=next(iter(gene_symbols)) if len(gene_symbols) == 1 else None,
             annotations=[item[0] for item in normalized],
             source_url=source_url,
+            source_cursor=source_cursor,
+            source_limit=effective_limit,
+            returned_count=returned_count,
+            next_source_cursor=(
+                None if source_complete else source_cursor + returned_count
+            ),
+            source_complete=source_complete,
+            source_limit_capped=limit_capped,
+            source_response_truncated=source_response_truncated,
         )
     except (TypeError, ValueError, ValidationError) as exc:
         return ExistingGOAnnotationsResult(
             status="upstream_error",
             gene_id=validated,
             source_url=source_url,
+            source_cursor=source_cursor,
+            source_limit=effective_limit,
+            source_complete=False,
+            source_limit_capped=limit_capped,
             message=f"GO Consortium API returned an invalid annotation contract: {exc}",
         )
 
@@ -297,13 +379,22 @@ def lookup_existing_go_annotations(
     name_override="go_api_call",
     description_override=(
         "Fetch typed existing GO annotations for one supported Alliance gene CURIE "
-        "from the GO Consortium API, preserving evidence and provenance."
+        "from the GO Consortium API, preserving evidence and provenance. Follow "
+        "next_source_cursor until source_complete is true."
     ),
 )
-def go_api_call(gene_id: str) -> ExistingGOAnnotationsResult:
+def go_api_call(
+    gene_id: str,
+    source_cursor: int = 0,
+    source_limit: int | None = None,
+) -> ExistingGOAnnotationsResult:
     """Return typed existing GO annotations for one validated Alliance gene CURIE."""
 
-    return lookup_existing_go_annotations(gene_id)
+    return lookup_existing_go_annotations(
+        gene_id,
+        source_cursor=source_cursor,
+        source_limit=source_limit,
+    )
 
 
 __all__ = [

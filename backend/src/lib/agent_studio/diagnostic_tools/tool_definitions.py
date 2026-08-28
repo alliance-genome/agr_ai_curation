@@ -29,6 +29,12 @@ from src.lib.openai_agents.config import (
 )
 
 from .registry import DiagnosticToolRegistry
+from .result_contracts import (
+    create_bounded_result_handler,
+    create_sql_query_handler,
+    diagnostic_input_schema,
+    validate_result_contract,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +108,23 @@ def _unwrap_function_tool(tool: FunctionTool) -> Callable:
         if getattr(fn, "__name__", "") == tool.name:
             return fn
 
+    # Name overrides (for example chebi_api_call around a function named
+    # restricted_rest_api_call) cannot use the signal above. Prefer a real
+    # Python function whose parameters match the published tool schema; SDK
+    # wrappers also retain a callable Pydantic input model with the same fields.
+    expected_params = set(
+        (getattr(tool, "params_json_schema", {}) or {}).get("properties", {})
+    )
+    for fn in candidates:
+        if not (inspect.isfunction(fn) or inspect.ismethod(fn)):
+            continue
+        try:
+            params = set(inspect.signature(fn).parameters)
+        except Exception:
+            continue
+        if expected_params and params == expected_params:
+            return fn
+
     # Fall back to the first callable that is not the SDK invoke wrapper.
     for fn in candidates:
         name = getattr(fn, "__name__", "")
@@ -120,24 +143,29 @@ def _unwrap_function_tool(tool: FunctionTool) -> Callable:
     )
 
 
-def _callable_handler_from_tool(tool: Any) -> Callable[..., Dict[str, Any]]:
+def _callable_handler_from_tool(
+    tool: Any,
+    result_contract: Dict[str, Any],
+) -> Callable[..., Dict[str, Any]]:
     """Create a diagnostic handler from a package-bound callable tool."""
     base_callable = _unwrap_function_tool(tool) if isinstance(tool, FunctionTool) else tool
+    return create_bounded_result_handler(base_callable, result_contract)
 
-    def handler(**kwargs: Any) -> Dict[str, Any]:
-        result = base_callable(**kwargs)
-        if hasattr(result, "model_dump"):
-            return result.model_dump()
-        if hasattr(result, "dict"):
-            return result.dict()
-        if isinstance(result, dict):
-            return result
-        raise TypeError(
-            f"Package diagnostic tool '{getattr(tool, 'name', tool)}' returned "
-            f"unsupported result type {type(result).__name__}; expected dict or Pydantic model."
-        )
 
-    return handler
+def _create_sql_query_handler(
+    database_url: str,
+    result_contract: Dict[str, Any],
+) -> Callable[..., Dict[str, Any]]:
+    """Create a bounded SQL diagnostic without materializing the full SELECT."""
+    return create_sql_query_handler(database_url, result_contract)
+
+
+def _create_rest_api_handler(
+    tool: Any,
+    result_contract: Dict[str, Any],
+) -> Callable[..., Dict[str, Any]]:
+    """Keep the package REST allowlist while bounding its diagnostic result."""
+    return _callable_handler_from_tool(tool, result_contract)
 
 
 def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None:
@@ -183,9 +211,9 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
             )
             continue
 
-        tool = _instantiate_package_tool(
-            binding,
-            execution_context=execution_context,
+        result_contract = validate_result_contract(
+            diagnostic.get("result_contract"),
+            tool_id=binding.tool_id,
         )
         input_schema = diagnostic.get("input_schema")
         if not isinstance(input_schema, dict):
@@ -203,6 +231,17 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
                 f"Package diagnostic tool '{binding.tool_id}' must declare "
                 "agent_studio.prompt_description or agent_studio.diagnostic.description."
             )
+        page_paths = result_contract.get("page_paths") or []
+        continuation_description = (
+            "Start with result_view='summary'. "
+            + (
+                f"Use result_view='page' with result_path one of {', '.join(page_paths)} for structured continuation. "
+                if page_paths
+                else ""
+            )
+            + "Use result_view='detail' with detail_path/detail_cursor for exact hash-addressed chunks."
+        )
+        description = f"{description}\n\nResult contract: {continuation_description}"
         category = str(diagnostic.get("category") or "").strip()
         if not category:
             raise ValueError(
@@ -216,11 +255,32 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
                 "agent_studio.diagnostic.tags as a list."
             )
 
+        bounded_input_schema = diagnostic_input_schema(input_schema, result_contract)
+        if result_contract["kind"] == "sql_rows":
+            database_url = execution_context.database_url
+            if not isinstance(database_url, str) or not database_url:
+                raise ValueError(
+                    f"Package diagnostic tool '{binding.tool_id}' requires a database URL."
+                )
+            handler = _create_sql_query_handler(
+                database_url,
+                result_contract,
+            )
+        else:
+            tool = _instantiate_package_tool(
+                binding,
+                execution_context=execution_context,
+            )
+            if result_contract["kind"] == "raw":
+                handler = _create_rest_api_handler(tool, result_contract)
+            else:
+                handler = _callable_handler_from_tool(tool, result_contract)
+
         registry.register(
             name=binding.tool_id,
             description=description,
-            input_schema=input_schema,
-            handler=_callable_handler_from_tool(tool),
+            input_schema=bounded_input_schema,
+            handler=handler,
             category=category,
             tags=list(raw_tags),
         )
