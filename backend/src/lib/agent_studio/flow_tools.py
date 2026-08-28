@@ -1194,6 +1194,8 @@ def _get_flow_templates_handler():
         template_limit: Optional[int] = None,
         template_cursor: Optional[str] = None,
         section: Literal["both", "templates", "agents"] = "both",
+        pending_template_cursor: Optional[str] = None,
+        pending_agent_cursor: Optional[str] = None,
         detail_kind: Optional[Literal["template", "agent"]] = None,
         detail_index: Optional[int] = None,
         detail_cursor: Optional[int] = None,
@@ -1262,6 +1264,16 @@ def _get_flow_templates_handler():
             default=_FLOW_TEMPLATE_DEFAULT_ITEMS,
             maximum=_FLOW_TEMPLATE_MAX_ITEMS,
         )
+        pending_template_offset = (
+            parse_offset_cursor(pending_template_cursor)
+            if pending_template_cursor is not None
+            else None
+        )
+        pending_agent_offset = (
+            parse_offset_cursor(pending_agent_cursor)
+            if pending_agent_cursor is not None
+            else None
+        )
 
         def agent_filters() -> Dict[str, Any]:
             return {
@@ -1279,6 +1291,15 @@ def _get_flow_templates_handler():
                 ),
                 "template_limit": bounded_template_limit,
             }
+
+        def pending_frontier_arguments(
+            kind: Literal["template", "agent"],
+        ) -> Dict[str, str]:
+            if kind == "template" and pending_agent_offset is not None:
+                return {"pending_agent_cursor": str(pending_agent_offset)}
+            if kind == "agent" and pending_template_offset is not None:
+                return {"pending_template_cursor": str(pending_template_offset)}
+            return {}
 
         if detail_kind is not None:
             if detail_index is None or detail_index < 0:
@@ -1315,6 +1336,7 @@ def _get_flow_templates_handler():
                             "detail_index": detail_index,
                             "detail_cursor": end,
                             "detail_max_chars": requested_chars,
+                            **pending_frontier_arguments(detail_kind),
                         },
                     }
                 elif detail_index + 1 < len(records):
@@ -1327,6 +1349,7 @@ def _get_flow_templates_handler():
                         "section": (
                             "templates" if detail_kind == "template" else "agents"
                         ),
+                        **pending_frontier_arguments(detail_kind),
                     }
                     next_arguments[
                         "template_cursor" if detail_kind == "template" else "cursor"
@@ -1334,6 +1357,24 @@ def _get_flow_templates_handler():
                     next_call = {
                         "tool": "get_flow_templates",
                         "arguments": next_arguments,
+                    }
+                elif detail_kind == "template" and pending_agent_offset is not None:
+                    next_call = {
+                        "tool": "get_flow_templates",
+                        "arguments": {
+                            **agent_filters(),
+                            "section": "agents",
+                            "cursor": str(pending_agent_offset),
+                        },
+                    }
+                elif detail_kind == "agent" and pending_template_offset is not None:
+                    next_call = {
+                        "tool": "get_flow_templates",
+                        "arguments": {
+                            **template_filters(),
+                            "section": "templates",
+                            "template_cursor": str(pending_template_offset),
+                        },
                     }
                 else:
                     next_call = None
@@ -1416,6 +1457,8 @@ def _get_flow_templates_handler():
             *,
             kind: Literal["template", "agent"],
             next_offset: Optional[str],
+            other_next_offset: Optional[str],
+            record_was_attempted: bool,
             returned_count: int,
         ) -> Optional[Dict[str, Any]]:
             if next_offset is None:
@@ -1424,7 +1467,16 @@ def _get_flow_templates_handler():
                 **(template_filters() if kind == "template" else agent_filters()),
                 "section": "templates" if kind == "template" else "agents",
             }
-            if returned_count:
+            if other_next_offset is not None:
+                arguments.update(
+                    agent_filters() if kind == "template" else template_filters()
+                )
+                arguments[
+                    "pending_agent_cursor"
+                    if kind == "template"
+                    else "pending_template_cursor"
+                ] = other_next_offset
+            if returned_count or not record_was_attempted:
                 arguments["template_cursor" if kind == "template" else "cursor"] = next_offset
             else:
                 arguments.update(
@@ -1440,21 +1492,33 @@ def _get_flow_templates_handler():
                 str(template_offset + len(template_page))
                 if section != "agents"
                 and template_offset + len(template_page) < len(matched_templates)
-                else None
+                else (
+                    str(pending_template_offset)
+                    if section == "agents" and pending_template_offset is not None
+                    else None
+                )
             )
             actual_agent_next = (
                 str(offset + len(page))
                 if section != "templates" and offset + len(page) < len(matched_agents)
-                else None
+                else (
+                    str(pending_agent_offset)
+                    if section == "templates" and pending_agent_offset is not None
+                    else None
+                )
             )
             template_call = continuation_call(
                 kind="template",
                 next_offset=actual_template_next,
+                other_next_offset=actual_agent_next,
+                record_was_attempted=section != "agents",
                 returned_count=len(template_page),
             )
             agent_call = continuation_call(
                 kind="agent",
                 next_offset=actual_agent_next,
+                other_next_offset=actual_template_next,
+                record_was_attempted=section != "templates",
                 returned_count=len(page),
             )
             return {
@@ -2492,6 +2556,8 @@ large agent catalogs. Use template_query and template_limit/template_cursor to
 search and page compatible templates independently. When a single template or
 agent is too large for an inline page, follow the returned detail call and its
 hash-addressed character chunks, then follow its final next_call to resume paging.
+Always copy returned next_call arguments exactly; pending cursors retain the other
+collection's frontier while a section-specific page or detail chunk is retrieved.
 
 Use this as a starting point when helping users design flows.""",
         input_schema={
@@ -2522,6 +2588,14 @@ Use this as a starting point when helping users design flows.""",
                 "template_cursor": {"type": "string", "description": "Independent marker returned as template_next_cursor."},
                 "section": {"type": "string", "enum": ["both", "templates", "agents"], "default": "both",
                             "description": "Return both first pages or only one collection; continuations select one collection."},
+                "pending_template_cursor": {
+                    "type": "string",
+                    "description": "Template frontier retained by a returned agent continuation. Copy only from next_call.",
+                },
+                "pending_agent_cursor": {
+                    "type": "string",
+                    "description": "Agent frontier retained by a returned template continuation. Copy only from next_call.",
+                },
                 "detail_kind": {"type": "string", "enum": ["template", "agent"],
                                 "description": "Record collection selector copied from an oversized-record continuation."},
                 "detail_index": {"type": "integer", "minimum": 0,

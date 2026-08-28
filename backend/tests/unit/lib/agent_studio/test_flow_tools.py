@@ -1999,13 +1999,65 @@ def test_get_flow_templates_pages_templates_independently_without_agent_repetiti
     assert first["agent_next_call"]["arguments"]["section"] == "agents"
     assert first["complete"] is False
     assert first["next_call"] == first["agent_next_call"]
+    assert first["next_call"]["arguments"]["template_query"] == "gene"
+    assert first["next_call"]["arguments"]["template_limit"] == 2
     agent_page = handler(**first["agent_next_call"]["arguments"])
     assert agent_page["templates"] == []
     template_page = handler(**first["template_next_call"]["arguments"])
     assert template_page["available_agents"] == []
     assert template_page["templates"][0]["name"] == "Gene template 2"
     assert template_page["complete"] is False
-    assert template_page["next_call"] == template_page["template_next_call"]
+    assert template_page["template_next_call"]["arguments"]["template_cursor"] == "4"
+    assert template_page["template_next_call"]["arguments"]["pending_agent_cursor"] == "1"
+    assert template_page["next_call"] == template_page["agent_next_call"]
+
+
+def test_get_flow_templates_top_level_continuation_reconstructs_both_collections(
+    monkeypatch,
+):
+    agent_ids = ["gene_extractor", "gene_validation", "disease_extractor"]
+    templates = [
+        {
+            "name": f"Gene template {index}",
+            "description": f"Example {index}",
+            "steps": [{"agent_id": "gene_extractor"}],
+        }
+        for index in range(7)
+    ]
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", agent_ids)
+    monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
+    monkeypatch.setattr(
+        flow_tools,
+        "_filter_flow_templates",
+        lambda *args, **kwargs: [
+            *templates,
+            {
+                "name": "Unrelated workflow",
+                "description": "Does not match the template filter",
+                "steps": [{"agent_id": "disease_extractor"}],
+            },
+        ],
+    )
+    handler = flow_tools._get_flow_templates_handler()
+
+    response = handler(limit=1, template_limit=2, template_query="gene")
+    returned_agent_ids = []
+    returned_template_names = []
+    while True:
+        returned_agent_ids.extend(
+            agent["agent_id"] for agent in response["available_agents"]
+        )
+        returned_template_names.extend(
+            template["name"] for template in response["templates"]
+        )
+        if response["complete"]:
+            assert response["next_call"] is None
+            break
+        assert response["next_call"] is not None
+        response = handler(**response["next_call"]["arguments"])
+
+    assert returned_agent_ids == agent_ids
+    assert returned_template_names == [template["name"] for template in templates]
 
 
 def test_get_flow_templates_recovers_oversized_unicode_records_without_provider_compaction(
