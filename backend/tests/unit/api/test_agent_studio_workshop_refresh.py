@@ -224,12 +224,12 @@ async def test_refresh_workshop_prompt_rejects_invalid_context_timestamp():
 async def test_refresh_workshop_prompt_requires_explicit_selected_group_identity():
     result = await api_module._handle_tool_call(
         tool_name="refresh_workshop_prompt",
-        tool_input={"target_prompt": "group", "target_group_id": "WB"},
+        tool_input={"target_prompt": "group", "target_group_id": "group-b"},
         context=ChatContext(
             active_tab="agent_workshop",
             agent_workshop=AgentWorkshopContext(
-                selected_group_id="FB",
-                selected_group_prompt_draft="Current FB draft",
+                selected_group_id="group-a",
+                selected_group_prompt_draft="Current group A draft",
             ),
         ),
         user_email="curator@example.org",

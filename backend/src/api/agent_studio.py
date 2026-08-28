@@ -1859,6 +1859,28 @@ def _collect_provider_payload_refs(
                 return
 
 
+def _workshop_proposal_retention_guidance(apply_mode: Any) -> tuple[str, str]:
+    if apply_mode == "replace":
+        return (
+            "The full proposal was streamed to the curator approval UI. "
+            "The exact proposed text remains in this call's retained tool input; "
+            "do not repeat it in another tool call unless the curator requests changes.",
+            "The exact authored proposal remains in the originating retained "
+            "tool input; it is not duplicated in provider tool results or recall hints.",
+        )
+    if apply_mode == "targeted_edit":
+        return (
+            "The full resulting proposal was streamed to the curator approval UI. "
+            "Only the authored targeted edits remain in this call's retained tool input; "
+            "after approval, use refresh_workshop_prompt chunks to read the exact resulting "
+            "text when needed.",
+            "Only the authored targeted edits remain in the originating retained tool input; "
+            "the exact resulting proposal is not duplicated in provider tool results or "
+            "recall hints and can be read through refresh_workshop_prompt after approval.",
+        )
+    raise ValueError(f"Unsupported Workshop proposal apply mode: {apply_mode!r}")
+
+
 def _provider_tool_result_recall_hints(
     *,
     tool_name: str,
@@ -1882,11 +1904,11 @@ def _provider_tool_result_recall_hints(
         },
     }
     if tool_name == "update_workshop_prompt_draft":
+        _, recall_purpose = _workshop_proposal_retention_guidance(
+            tool_result.get("apply_mode") if isinstance(tool_result, dict) else None
+        )
         hints["retained_proposal_input"] = {
-            "purpose": (
-                "The exact authored proposal remains in the originating retained "
-                "tool input; it is not duplicated in provider tool results or recall hints."
-            ),
+            "purpose": recall_purpose,
         }
     else:
         hints["repeat_or_narrow_tool"] = {
@@ -1925,9 +1947,13 @@ def _provider_tool_result_content(
         and tool_result.get("success") is True
         and tool_result.get("pending_user_approval") is True
     ):
-        # The originating tool_use already retains updated_prompt because
-        # Anthropic context editing keeps tool inputs. Do not replay that large
-        # text in the result; the full result remains authoritative for the UI.
+        # Anthropic context editing retains the originating tool input. Replace
+        # calls retain updated_prompt; targeted edits retain only their edits.
+        # Do not replay derived prompt text; the full result remains authoritative
+        # for the UI.
+        instruction, _ = _workshop_proposal_retention_guidance(
+            tool_result.get("apply_mode")
+        )
         provider_tool_result = {
             "contract_version": "workshop_prompt_proposal_ack.v1",
             "success": True,
@@ -1941,11 +1967,7 @@ def _provider_tool_result_content(
             "prompt_hash": tool_result.get("prompt_hash"),
             "change_summary": tool_result.get("change_summary"),
             "message": tool_result.get("message"),
-            "instruction": (
-                "The full proposal was streamed to the curator approval UI. "
-                "The exact proposed text remains in this call's retained tool input; "
-                "do not repeat it in another tool call unless the curator requests changes."
-            ),
+            "instruction": instruction,
         }
 
     raw_content = _serialize_provider_tool_result(provider_tool_result)

@@ -44,9 +44,11 @@ override ("group"). Backend-owned core/generated layers and inherited base promp
 are read-only context and must not be copied into updated_prompt.
 This tool does NOT auto-apply or auto-save changes.
 The UI will show the proposal and require explicit curator approval before applying.
-The continuation result is a compact approval acknowledgment; the full proposal is
-delivered to the UI and remains available in the originating retained tool input.
-Do not replay the same proposal in another call while approval is pending.
+The continuation result is a compact approval acknowledgment and the full proposal is
+delivered to the UI. For replace mode, updated_prompt remains in the retained tool
+input. For targeted-edit mode, only the authored edits remain there; after approval,
+use refresh_workshop_prompt chunks to read the exact resulting text when needed. Do
+not replay the same proposal in another call while approval is pending.
 Before proposing edits about PDF evidence extraction, inspect current prompt and
 tool schemas so the update preserves span-id evidence recording instead of
 legacy quote-generation guidance.

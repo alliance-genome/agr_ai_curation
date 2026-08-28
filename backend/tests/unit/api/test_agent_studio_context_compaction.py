@@ -311,7 +311,64 @@ def test_workshop_proposal_provider_projection_excludes_full_prompt(monkeypatch)
     assert provider_result["change_summary"] == "Clarified exact evidence requirements."
     assert "proposed_prompt" not in provider_result
     assert proposed_prompt not in content
+    assert "exact proposed text remains" in provider_result["instruction"]
     assert len(content) < 12000
+
+
+def test_targeted_edit_provider_projection_describes_retained_edits(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    proposed_prompt = "Server-derived proposal text.\n" * 1200
+    prompt_hash = api_module._prompt_hash(proposed_prompt)
+
+    tool_input = {
+        "apply_mode": "targeted_edit",
+        "edits": [{"old_text": "old", "new_text": "new"}],
+    }
+    tool_result = {
+        "success": True,
+        "approval_status": "pending_user_approval",
+        "pending_user_approval": True,
+        "proposal_id": f"main:{prompt_hash}",
+        "target_prompt": "main",
+        "target_group_id": None,
+        "apply_mode": "targeted_edit",
+        "proposed_prompt": proposed_prompt,
+        "prompt_length": len(proposed_prompt),
+        "prompt_hash": prompt_hash,
+        "change_summary": "Applied one targeted edit.",
+        "message": "Awaiting approval.",
+    }
+
+    inline_content = api_module._provider_tool_result_content(
+        tool_name="update_workshop_prompt_draft",
+        tool_input=tool_input,
+        tool_result=tool_result,
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-1",
+    )
+    inline_result = json.loads(inline_content)
+
+    assert "Only the authored targeted edits remain" in inline_result["instruction"]
+    assert "refresh_workshop_prompt chunks" in inline_result["instruction"]
+    assert "exact proposed text remains" not in inline_result["instruction"]
+    assert proposed_prompt not in inline_content
+
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "300")
+    content = api_module._provider_tool_result_content(
+        tool_name="update_workshop_prompt_draft",
+        tool_input=tool_input,
+        tool_result=tool_result,
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-1",
+    )
+    compact = json.loads(content)
+
+    assert compact["status"] == "compacted_tool_result"
+    recall_purpose = compact["recall"]["retained_proposal_input"]["purpose"]
+    assert "Only the authored targeted edits remain" in recall_purpose
+    assert "refresh_workshop_prompt after approval" in recall_purpose
+    assert "exact authored proposal remains" not in recall_purpose
+    assert proposed_prompt not in content
 
 
 def test_compacted_workshop_ack_never_replays_proposal_input(monkeypatch):

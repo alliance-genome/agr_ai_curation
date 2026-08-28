@@ -64,6 +64,9 @@ def test_shipped_alliance_profile_uses_explicit_runtime_selection():
     ).resolve()
     assert "Alliance of Genome Resources" in loaded.content
     assert "domain envelopes are the semantic source of truth" in loaded.content
+    assert "follow each deterministic `next_call`" in loaded.content
+    assert "ordered returned chunk ranges" in loaded.content
+    assert "refreshed `current_prompt`" not in loaded.content
 
 
 def test_multiple_prompt_exports_without_selection_fail_with_full_provenance():
