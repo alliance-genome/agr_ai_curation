@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from typing import Any
 import pytest
 
+from src.api import agent_studio as api_module
 from src.lib.agent_studio import catalog_service
 from src.lib.agent_studio.diagnostic_tools import tool_definitions
 
@@ -61,6 +65,16 @@ def test_get_tool_inventory_query_matches_description(_patched_catalog):
     assert result["total_count"] == 1
 
 
+def test_get_tool_inventory_query_matches_description_beyond_summary_preview(monkeypatch):
+    tools = {"deep_match": {"name": "Deep match", "description": ("x" * 500) + " sentinel",
+                            "category": "lookup"}}
+    monkeypatch.setattr(catalog_service, "get_tool_registry", lambda: tools)
+    result = tool_definitions._create_get_tool_inventory_handler()(query="sentinel")
+    assert [item["tool_id"] for item in result["tools"]] == ["deep_match"]
+    assert result["tools"][0]["description_truncated"] is True
+    assert "search_description" not in result["tools"][0]
+
+
 def test_get_tool_inventory_pages_global_catalog(_patched_catalog):
     handler = tool_definitions._create_get_tool_inventory_handler()
 
@@ -110,3 +124,114 @@ def test_get_tool_inventory_agent_scope_query_and_paging(monkeypatch):
     assert paged["total_count"] == 3
     assert paged["truncated"] is True
     assert paged["next_cursor"] == "1"
+
+
+@pytest.mark.parametrize("agent_id", [None, "gene_extractor"])
+def test_get_tool_inventory_rejects_page_that_cannot_advance(monkeypatch, agent_id):
+    tools = {
+        "large_tool": {
+            "name": "Large tool",
+            "description": "Large summary " * 100,
+            "category": "lookup",
+        }
+    }
+    monkeypatch.setattr(catalog_service, "get_tool_registry", lambda: tools)
+    monkeypatch.setattr(catalog_service, "get_all_tools", lambda: tools)
+    monkeypatch.setattr(
+        catalog_service,
+        "AGENT_REGISTRY",
+        {"gene_extractor": {"name": "Gene Specialist", "tools": ["large_tool"]}},
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "expand_tools_for_agent",
+        lambda selected_agent_id, tool_ids: list(tool_ids),
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "get_tool_for_agent",
+        lambda tool_id, selected_agent_id: tools.get(tool_id),
+    )
+    monkeypatch.setattr(tool_definitions, "_TOOL_INVENTORY_RESULT_MAX_CHARS", 150)
+    monkeypatch.setattr(
+        tool_definitions,
+        "_serialized_chars",
+        lambda response: 200 if response.get("tools") else 100,
+    )
+    handler = tool_definitions._create_get_tool_inventory_handler()
+
+    result = handler(**({"agent_id": agent_id} if agent_id else {}))
+
+    assert result["success"] is False
+    assert result["error"] == "metadata_too_large"
+
+
+def test_installed_catalog_pages_stay_bounded_and_have_executable_continuations(monkeypatch):
+    installed = {f"tool_{index:02d}": {"name": f"Installed tool {index:02d}",
+                 "description": "rich installed metadata 🧬 " * 80,
+                 "category": f"category_{index % 4}"} for index in range(67)}
+    monkeypatch.setattr(catalog_service, "get_tool_registry", lambda: installed)
+    handler = tool_definitions._create_get_tool_inventory_handler()
+    seen = []
+    arguments: dict[str, Any] = {}
+    while True:
+        result = handler(**arguments)
+        assert len(json.dumps(result, default=str)) <= 8_000
+        content = api_module._provider_tool_result_content(
+            tool_name="get_tool_inventory", tool_input=arguments, tool_result=result,
+            session_id="session-1", turn_id="turn-1")
+        assert json.loads(content).get("status") != "compacted_tool_result"
+        assert result["returned_count"] <= 20
+        seen.extend(item["tool_id"] for item in result["tools"])
+        if not result["truncated"]:
+            break
+        arguments = result["next_call"]["arguments"]
+    assert seen == sorted(installed)
+
+
+def test_runtime_installed_catalog_default_page_stays_provider_visible():
+    result = tool_definitions._create_get_tool_inventory_handler()()
+    assert result["total_count"] == len(catalog_service.get_tool_registry())
+    assert result["returned_count"] <= 20
+    content = api_module._provider_tool_result_content(
+        tool_name="get_tool_inventory", tool_input={}, tool_result=result,
+        session_id="session-1", turn_id="turn-1")
+    assert json.loads(content).get("status") != "compacted_tool_result"
+
+
+def test_large_parent_tool_metadata_is_exactly_section_addressable(monkeypatch):
+    metadata = {"name": "Large parent 🧬", "category": "database",
+                "documentation": {"methods": [{"id": f"method_{index}", "schema": "🧬値" * 500}
+                                                for index in range(40)]}}
+    monkeypatch.setattr(catalog_service, "get_tool_details",
+                        lambda tool_id: metadata if tool_id == "large_parent" else None)
+    handler = tool_definitions._create_get_tool_details_handler()
+    index = handler(tool_id="large_parent")
+    assert index["detail_mode"] == "sections"
+    documentation = next(item for item in index["sections"] if item["section"] == "documentation")
+    chunks = []
+    arguments: dict[str, Any] = {"tool_id": "large_parent", "section": "documentation"}
+    while True:
+        result = handler(**arguments)
+        assert len(json.dumps(result, default=str)) <= 8_000
+        content = api_module._provider_tool_result_content(
+            tool_name="get_tool_details", tool_input=arguments, tool_result=result,
+            session_id="session-1", turn_id="turn-1")
+        assert json.loads(content).get("status") != "compacted_tool_result"
+        chunks.append(result["content"])
+        assert result["sha256"] == documentation["sha256"]
+        if result["complete"]:
+            break
+        arguments = result["next_call"]["arguments"]
+    reconstructed = "".join(chunks)
+    assert hashlib.sha256(reconstructed.encode()).hexdigest() == documentation["sha256"]
+    assert json.loads(reconstructed) == metadata["documentation"]
+
+
+def test_small_focused_tool_details_remain_one_call(monkeypatch):
+    metadata = {"name": "read_chunk", "documentation": {"parameters": {}}}
+    monkeypatch.setattr(catalog_service, "get_tool_for_agent", lambda tool_id, agent_id: metadata)
+    result = tool_definitions._create_get_tool_details_handler()(
+        tool_id="read_chunk", agent_id="pdf_extraction")
+    assert result["tool"] == metadata
+    assert "detail_mode" not in result

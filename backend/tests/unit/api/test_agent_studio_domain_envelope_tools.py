@@ -46,6 +46,11 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert tools_by_name["get_tool_details"]["input_schema"]["required"] == [
         "tool_id"
     ]
+    assert {"section", "cursor", "max_chars"}.issubset(
+        tools_by_name["get_tool_details"]["input_schema"]["properties"])
+    assert tools_by_name["get_tool_inventory"]["input_schema"]["properties"]["limit"]["default"] == 20
+    assert "cursor" in tools_by_name["search_codebase"]["input_schema"]["properties"]
+    assert "line_char_start" in tools_by_name["read_source_file"]["input_schema"]["properties"]
     assert tools_by_name["get_export_submission_readiness"]["input_schema"]["required"] == [
         "session_id"
     ]

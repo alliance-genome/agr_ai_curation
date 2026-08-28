@@ -1,4 +1,5 @@
 """Tests for hybrid tool registry (introspection + overrides)."""
+import json
 import re
 from types import SimpleNamespace
 
@@ -361,7 +362,18 @@ def test_tool_details_diagnostic_reports_agent_specific_metadata(monkeypatch):
     assert result["success"] is True
     assert result["tool_id"] == "agr_curation_query"
     assert result["agent_id"] == "disease_validation"
-    assert result["tool"]["name"]
+    assert result["detail_mode"] == "sections"
+    assert "name" in {item["section"] for item in result["sections"]}
+
+    name_section = details_tool.handler(
+        tool_id="agr_curation_query",
+        agent_id="disease_validation",
+        section="name",
+    )
+    assert name_section["success"] is True
+    assert name_section["detail_mode"] == "section"
+    assert name_section["complete"] is True
+    assert json.loads(name_section["content"])
 
 
 def test_get_tool_registry_has_description():

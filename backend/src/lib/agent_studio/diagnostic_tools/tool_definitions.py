@@ -14,6 +14,8 @@ Tool Categories:
 
 import logging
 import inspect
+import hashlib
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from agents import FunctionTool
@@ -26,6 +28,13 @@ from src.lib.openai_agents.bounded_list import (
 )
 from src.lib.openai_agents.config import (
     get_agent_studio_prompt_inspection_chunk_max_chars,
+    get_agent_studio_provider_tool_result_inline_max_chars,
+    get_agent_studio_tool_details_chunk_max_chars,
+    get_agent_studio_tool_details_result_max_chars,
+    get_agent_studio_tool_inventory_default_items,
+    get_agent_studio_tool_inventory_max_items,
+    get_agent_studio_tool_inventory_result_max_chars,
+    get_agent_studio_tool_inventory_summary_max_chars,
 )
 
 from .registry import DiagnosticToolRegistry
@@ -37,6 +46,29 @@ from .result_contracts import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TOOL_INVENTORY_DEFAULT_ITEMS = get_agent_studio_tool_inventory_default_items()
+_TOOL_INVENTORY_MAX_ITEMS = get_agent_studio_tool_inventory_max_items()
+_PROVIDER_RESULT_INLINE_MAX_CHARS = get_agent_studio_provider_tool_result_inline_max_chars()
+_TOOL_INVENTORY_RESULT_MAX_CHARS = min(
+    get_agent_studio_tool_inventory_result_max_chars(),
+    _PROVIDER_RESULT_INLINE_MAX_CHARS,
+)
+_TOOL_INVENTORY_SUMMARY_MAX_CHARS = get_agent_studio_tool_inventory_summary_max_chars()
+_TOOL_DETAILS_RESULT_MAX_CHARS = min(
+    get_agent_studio_tool_details_result_max_chars(),
+    _PROVIDER_RESULT_INLINE_MAX_CHARS,
+)
+_TOOL_DETAILS_CHUNK_MAX_CHARS = get_agent_studio_tool_details_chunk_max_chars()
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _serialized_chars(value: Dict[str, Any]) -> int:
+    """Measure the exact JSON representation used for provider continuation."""
+    return len(json.dumps(value, default=str))
 
 
 def _unwrap_function_tool(tool: FunctionTool) -> Callable:
@@ -595,6 +627,7 @@ def _create_search_codebase_handler():
         path_glob: Optional[str] = None,
         per_file_matches: int = 1,
         limit: int = 20,
+        cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         return search_codebase(
             query=query,
@@ -602,6 +635,7 @@ def _create_search_codebase_handler():
             path_glob=path_glob,
             per_file_matches=per_file_matches,
             limit=limit,
+            cursor=cursor,
         )
 
     return handler
@@ -615,11 +649,13 @@ def _create_read_source_file_handler():
         path: str,
         start_line: int = 1,
         end_line: Optional[int] = None,
+        line_char_start: int = 0,
     ) -> Dict[str, Any]:
         return read_source_file(
             path=path,
             start_line=start_line,
             end_line=end_line,
+            line_char_start=line_char_start,
         )
 
     return handler
@@ -640,7 +676,7 @@ def _filter_tool_items_by_query(
             query,
             item.get("tool_id"),
             item.get("name"),
-            item.get("description"),
+            item.get("search_description", item.get("description")),
         )
     ]
 
@@ -648,10 +684,14 @@ def _filter_tool_items_by_query(
 def _tool_inventory_item(tool_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
     methods = metadata.get("methods")
     agent_methods = metadata.get("agent_methods")
+    description = metadata.get("description")
+    description_text = str(description) if description is not None else None
     return {
         "tool_id": tool_id,
         "name": metadata.get("name") or tool_id,
-        "description": metadata.get("description"),
+        "description": description_text[:_TOOL_INVENTORY_SUMMARY_MAX_CHARS] if description_text is not None else None,
+        "search_description": description_text,
+        "description_truncated": bool(description_text and len(description_text) > _TOOL_INVENTORY_SUMMARY_MAX_CHARS),
         "category": metadata.get("category"),
         "source_file": metadata.get("source_file"),
         "parent_tool": metadata.get("parent_tool"),
@@ -679,13 +719,13 @@ def _create_get_tool_inventory_handler():
         category: Optional[str] = None,
         include_method_tools: bool = False,
         query: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = None,
         cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         normalized_agent_id = str(agent_id).strip() if agent_id else None
         normalized_category = str(category).strip() if category else None
         normalized_query = str(query).strip() if query else None
-        bounded_limit = normalize_page_limit(limit, default=100, maximum=250)
+        bounded_limit = normalize_page_limit(limit, default=_TOOL_INVENTORY_DEFAULT_ITEMS, maximum=_TOOL_INVENTORY_MAX_ITEMS)
         offset = parse_offset_cursor(cursor)
 
         if normalized_agent_id:
@@ -730,13 +770,18 @@ def _create_get_tool_inventory_handler():
                 tool_items.append(_tool_inventory_item(tool_id, metadata))
 
             tool_items = _filter_tool_items_by_query(tool_items, normalized_query)
-            page, truncated, next_cursor = offset_page(
+            for item in tool_items:
+                item.pop("search_description", None)
+            page, _, _ = offset_page(
                 tool_items,
                 limit=bounded_limit,
                 cursor=offset,
             )
 
-            return {
+            def build_agent_response() -> Dict[str, Any]:
+                next_offset = offset + len(page)
+                next_cursor = str(next_offset) if next_offset < len(tool_items) else None
+                return {
                 "success": True,
                 "agent_id": normalized_agent_id,
                 "agent_name": agent_entry.get("name"),
@@ -746,8 +791,15 @@ def _create_get_tool_inventory_handler():
                 "total_count": len(tool_items),
                 "returned_count": len(page),
                 "tools": page,
-                "truncated": truncated,
+                "truncated": next_cursor is not None,
                 "next_cursor": next_cursor,
+                "next_call": ({"tool": "get_tool_inventory", "arguments": {
+                    "agent_id": normalized_agent_id,
+                    **({"category": normalized_category} if normalized_category else {}),
+                    "include_method_tools": include_method_tools,
+                    **({"query": normalized_query} if normalized_query else {}),
+                    "limit": bounded_limit, "cursor": next_cursor,
+                }} if next_cursor is not None else None),
                 "filters": {
                     "category": normalized_category,
                     "include_method_tools": include_method_tools,
@@ -761,6 +813,15 @@ def _create_get_tool_inventory_handler():
                     "span IDs, and active-run evidence workspace tools."
                 ),
             }
+
+            response = build_agent_response()
+            while page and _serialized_chars(response) > _TOOL_INVENTORY_RESULT_MAX_CHARS:
+                page.pop()
+                response = build_agent_response()
+            if not page and offset < len(tool_items):
+                return {"success": False, "error": "metadata_too_large",
+                        "message": "One focused tool summary plus catalog continuation metadata exceeds AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS."}
+            return response
 
         all_tools = (
             catalog_service.get_all_tools()
@@ -777,12 +838,17 @@ def _create_get_tool_inventory_handler():
             for tool_id, metadata in filtered_tools.items()
         ]
         tool_items = _filter_tool_items_by_query(tool_items, normalized_query)
-        page, truncated, next_cursor = offset_page(
+        for item in tool_items:
+            item.pop("search_description", None)
+        page, _, _ = offset_page(
             tool_items,
             limit=bounded_limit,
             cursor=offset,
         )
-        return {
+        def build_global_response() -> Dict[str, Any]:
+            next_offset = offset + len(page)
+            next_cursor = str(next_offset) if next_offset < len(tool_items) else None
+            return {
             "success": True,
             "agent_id": None,
             "total_tools": len(tool_items),
@@ -790,8 +856,14 @@ def _create_get_tool_inventory_handler():
             "returned_count": len(page),
             "categories": _category_counts(filtered_tools),
             "tools": page,
-            "truncated": truncated,
+            "truncated": next_cursor is not None,
             "next_cursor": next_cursor,
+            "next_call": ({"tool": "get_tool_inventory", "arguments": {
+                **({"category": normalized_category} if normalized_category else {}),
+                "include_method_tools": include_method_tools,
+                **({"query": normalized_query} if normalized_query else {}),
+                "limit": bounded_limit, "cursor": next_cursor,
+            }} if next_cursor is not None else None),
             "filters": {
                 "category": normalized_category,
                 "include_method_tools": include_method_tools,
@@ -806,6 +878,15 @@ def _create_get_tool_inventory_handler():
             ),
         }
 
+        response = build_global_response()
+        while page and _serialized_chars(response) > _TOOL_INVENTORY_RESULT_MAX_CHARS:
+            page.pop()
+            response = build_global_response()
+        if not page and offset < len(tool_items):
+            return {"success": False, "error": "metadata_too_large",
+                    "message": "One tool summary plus catalog continuation metadata exceeds AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS."}
+        return response
+
     return handler
 
 
@@ -816,6 +897,9 @@ def _create_get_tool_details_handler():
     def handler(
         tool_id: str,
         agent_id: Optional[str] = None,
+        section: Optional[str] = None,
+        cursor: Optional[int] = None,
+        max_chars: Optional[int] = None,
     ) -> Dict[str, Any]:
         normalized_tool_id = str(tool_id).strip()
         normalized_agent_id = str(agent_id).strip() if agent_id else None
@@ -841,7 +925,7 @@ def _create_get_tool_details_handler():
                 "error": f"Tool {normalized_tool_id}{agent_suffix} was not found.",
             }
 
-        return {
+        inline_result = {
             "success": True,
             "tool_id": normalized_tool_id,
             "agent_id": normalized_agent_id,
@@ -855,6 +939,64 @@ def _create_get_tool_details_handler():
                 "input, and immutable evidence provenance behavior."
             ),
         }
+        if section is None and _serialized_chars(inline_result) <= _TOOL_DETAILS_RESULT_MAX_CHARS:
+            return inline_result
+
+        metadata_json = _canonical_json(metadata)
+        metadata_hash = hashlib.sha256(metadata_json.encode("utf-8")).hexdigest()
+        sections = [{"section": str(key),
+                     "sha256": hashlib.sha256(_canonical_json(metadata[key]).encode("utf-8")).hexdigest(),
+                     "total_chars": len(_canonical_json(metadata[key]))} for key in sorted(metadata)]
+        if section is None:
+            result = {"success": True, "tool_id": normalized_tool_id,
+                      "agent_id": normalized_agent_id, "detail_mode": "sections",
+                      "tool_sha256": metadata_hash, "tool_total_chars": len(metadata_json),
+                      "sections": sections,
+                      "instruction": "Call get_tool_details again with one returned section. Follow next_call until complete; concatenate content in range order and verify sha256.",
+                      "next_call": ({"tool": "get_tool_details", "arguments": {
+                          "tool_id": normalized_tool_id,
+                          **({"agent_id": normalized_agent_id} if normalized_agent_id else {}),
+                          "section": sections[0]["section"]}} if sections else None)}
+            if _serialized_chars(result) > _TOOL_DETAILS_RESULT_MAX_CHARS:
+                return {"success": False, "error": "metadata_too_large",
+                        "message": "Tool metadata section index exceeds AGENT_STUDIO_TOOL_DETAILS_RESULT_MAX_CHARS.",
+                        "tool_id": normalized_tool_id, "tool_sha256": metadata_hash}
+            return result
+        if section not in metadata:
+            return {"success": False, "error": f"Unknown section {section}.",
+                    "available_sections": [item["section"] for item in sections]}
+        section_text = _canonical_json(metadata[section])
+        section_hash = hashlib.sha256(section_text.encode("utf-8")).hexdigest()
+        start = parse_offset_cursor(cursor)
+        if start > len(section_text):
+            return {"success": False, "error": "cursor is beyond the selected metadata section."}
+        requested_chars = normalize_page_limit(max_chars, default=_TOOL_DETAILS_CHUNK_MAX_CHARS,
+                                               maximum=_TOOL_DETAILS_CHUNK_MAX_CHARS)
+
+        def build_chunk(end: int) -> Dict[str, Any]:
+            complete = end >= len(section_text)
+            return {"success": True, "tool_id": normalized_tool_id, "agent_id": normalized_agent_id,
+                    "detail_mode": "section", "section": section, "tool_sha256": metadata_hash,
+                    "sha256": section_hash, "total_chars": len(section_text),
+                    "range": {"start": start, "end": end}, "content": section_text[start:end],
+                    "complete": complete, "next_cursor": None if complete else end,
+                    "next_call": (None if complete else {"tool": "get_tool_details", "arguments": {
+                        "tool_id": normalized_tool_id,
+                        **({"agent_id": normalized_agent_id} if normalized_agent_id else {}),
+                        "section": section, "cursor": end, "max_chars": requested_chars}})}
+        low, high = start + 1, min(len(section_text), start + requested_chars)
+        fitting_end: Optional[int] = start if start == len(section_text) else None
+        while low <= high:
+            end = (low + high) // 2
+            if _serialized_chars(build_chunk(end)) <= _TOOL_DETAILS_RESULT_MAX_CHARS:
+                fitting_end, low = end, end + 1
+            else:
+                high = end - 1
+        if fitting_end is None:
+            return {"success": False, "error": "metadata_too_large",
+                    "message": "Metadata section identity exceeds AGENT_STUDIO_TOOL_DETAILS_RESULT_MAX_CHARS before one exact character can be returned.",
+                    "tool_id": normalized_tool_id, "section": section, "sha256": section_hash}
+        return build_chunk(fitting_end)
 
     return handler
 
@@ -892,8 +1034,8 @@ Use this when a curator asks what an agent can do, what tools are attached to an
 installed agent, or which package tools/method-level helpers exist.
 Pass agent_id to see one agent's raw and expanded tool IDs; omit it to list the
 global catalog. Pass query to search tools by id, name, or description, and use
-limit/cursor to page through large catalogs. Use get_tool_details for full
-schemas and method metadata.""",
+limit/cursor to page through large catalogs; truncated results include next_call.
+Use get_tool_details for full schemas and method metadata.""",
         input_schema={
             "type": "object",
             "properties": {
@@ -916,10 +1058,10 @@ schemas and method metadata.""",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum tools to return in this page (default: 100, max: 250).",
-                    "default": 100,
+                    "description": f"Maximum tools in this page (default: {_TOOL_INVENTORY_DEFAULT_ITEMS}, max: {_TOOL_INVENTORY_MAX_ITEMS}); the character budget may return fewer.",
+                    "default": _TOOL_INVENTORY_DEFAULT_ITEMS,
                     "minimum": 1,
-                    "maximum": 250,
+                    "maximum": _TOOL_INVENTORY_MAX_ITEMS,
                 },
                 "cursor": {
                     "type": "string",
@@ -941,7 +1083,8 @@ schemas and method metadata.""",
 Use this after get_tool_inventory when you need parameters, source file,
 documentation, available methods, or agent-specific method allowlists. Pass
 agent_id to show relevant_methods and agent_context for multi-method package
-tools.""",
+tools. Oversized parent metadata returns hash-addressed sections and exact
+continuation chunks; small method/PDF details remain a single call.""",
         input_schema={
             "type": "object",
             "properties": {
@@ -953,6 +1096,10 @@ tools.""",
                     "type": "string",
                     "description": "Optional installed agent ID used to include agent-specific method context.",
                 },
+                "section": {"type": "string", "description": "Optional top-level metadata section returned by an oversized first call."},
+                "cursor": {"type": "integer", "minimum": 0, "description": "Exact character offset returned by a section next_call."},
+                "max_chars": {"type": "integer", "minimum": 1, "maximum": _TOOL_DETAILS_CHUNK_MAX_CHARS,
+                              "description": "Requested exact section characters; JSON escaping may reduce the range."},
             },
             "required": ["tool_id"],
         },
@@ -981,7 +1128,11 @@ Typical workflow:
 2. search_codebase(query="tool policy", search_mode="content", path_glob="backend/src/**/*.py")
 3. read_source_file(path="backend/src/api/agent_studio.py", start_line=1400, end_line=1505)
 
-The tool only reads files from the current repository checkout and never executes code.""",
+Every page bounds the complete serialized result. Follow next_call for more
+matches or exact chunks of one oversized/minified matching line. When
+result_set_truncated is true, narrow query or path_glob because the bounded
+search catalog contains additional matches. The tool only reads files from the
+current repository checkout and never executes code.""",
         input_schema={
             "type": "object",
             "properties": {
@@ -1013,6 +1164,7 @@ The tool only reads files from the current repository checkout and never execute
                     "maximum": 200,
                     "default": 20,
                 },
+                "cursor": {"type": "string", "description": "Opaque match/line marker returned by next_cursor."},
             },
             "required": ["query"],
         },
@@ -1033,7 +1185,9 @@ Use this after search_codebase identifies the relevant file. The response is
 line-numbered so you can cite the implementation precisely when explaining a
 feature, behavior, or limitation to a curator.
 
-This tool is read-only and restricted to files inside the current repository checkout.""",
+The complete serialized result is character-bounded. Oversized lines use exact
+hash-addressed chunks and executable next_call continuation. This tool is
+read-only and restricted to files inside the current repository checkout.""",
         input_schema={
             "type": "object",
             "properties": {
@@ -1049,9 +1203,11 @@ This tool is read-only and restricted to files inside the current repository che
                 },
                 "end_line": {
                     "type": "integer",
-                    "description": "Optional inclusive ending line number. Reads up to 400 lines per call.",
+                    "description": "Optional inclusive ending line number. Configured line and character bounds still apply.",
                     "minimum": 1,
                 },
+                "line_char_start": {"type": "integer", "minimum": 0, "default": 0,
+                                    "description": "Exact character offset from an oversized-line next_call."},
             },
             "required": ["path"],
         },

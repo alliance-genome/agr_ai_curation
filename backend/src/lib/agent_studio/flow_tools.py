@@ -43,6 +43,8 @@ from src.lib.openai_agents.bounded_list import (
     substring_match,
 )
 from src.lib.openai_agents.config import (
+    get_agent_studio_flow_catalog_chunk_max_chars,
+    get_agent_studio_flow_catalog_result_max_chars,
     get_agent_studio_flow_custom_instructions_max_chars,
     get_agent_studio_flow_description_max_chars,
     get_agent_studio_flow_max_steps,
@@ -51,6 +53,9 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_inspection_chunk_max_chars,
     get_agent_studio_flow_inspection_page_limit,
     get_agent_studio_flow_step_goal_max_chars,
+    get_agent_studio_flow_template_default_items,
+    get_agent_studio_flow_template_max_items,
+    get_agent_studio_provider_tool_result_inline_max_chars,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 
@@ -62,6 +67,30 @@ from .flow_agent_policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FLOW_TEMPLATE_DEFAULT_ITEMS = get_agent_studio_flow_template_default_items()
+_FLOW_TEMPLATE_MAX_ITEMS = get_agent_studio_flow_template_max_items()
+_FLOW_CATALOG_RESULT_MAX_CHARS = min(
+    get_agent_studio_flow_catalog_result_max_chars(),
+    get_agent_studio_provider_tool_result_inline_max_chars(),
+)
+_FLOW_CATALOG_CHUNK_MAX_CHARS = get_agent_studio_flow_catalog_chunk_max_chars()
+
+
+def _flow_catalog_json(value: Any) -> str:
+    """Return stable UTF-8 canonical JSON used for exact record reconstruction."""
+    return json.dumps(
+        value,
+        default=str,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _flow_catalog_provider_chars(value: Any) -> int:
+    """Measure the exact JSON representation used for provider continuation."""
+    return len(json.dumps(value, default=str))
 
 if TYPE_CHECKING:
     from src.schemas.flows import FlowDefinition
@@ -1161,6 +1190,16 @@ def _get_flow_templates_handler():
         category: Optional[str] = None,
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
+        template_query: Optional[str] = None,
+        template_limit: Optional[int] = None,
+        template_cursor: Optional[str] = None,
+        section: Literal["both", "templates", "agents"] = "both",
+        pending_template_cursor: Optional[str] = None,
+        pending_agent_cursor: Optional[str] = None,
+        detail_kind: Optional[Literal["template", "agent"]] = None,
+        detail_index: Optional[int] = None,
+        detail_cursor: Optional[int] = None,
+        detail_max_chars: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Get flow templates and available agents.
 
@@ -1176,6 +1215,10 @@ def _get_flow_templates_handler():
             Dict with templates list, a bounded available_agents page, and the
             standard total_count/returned_count/truncated/next_cursor keys.
         """
+        if section not in {"both", "templates", "agents"}:
+            raise ValueError("section must be 'both', 'templates', or 'agents'")
+        if detail_kind not in {None, "template", "agent"}:
+            raise ValueError("detail_kind must be 'template' or 'agent'")
         normalized_category = str(category).strip() if category else None
 
         accessible_agent_ids = _accessible_flow_agent_ids()
@@ -1203,22 +1246,196 @@ def _get_flow_templates_handler():
             )
         ]
 
-        available_agent_ids = {agent["agent_id"] for agent in matched_agents}
-        templates = _filter_flow_templates(
-            available_agent_ids,
+        installed_agent_ids = {agent["agent_id"] for agent in all_agents}
+        compatible_templates = _filter_flow_templates(
+            installed_agent_ids,
             active_group_ids=get_current_active_group_ids(),
         )
+        matched_templates = [template for template in compatible_templates if substring_match(
+            template_query, template.get("name"), template.get("description"),
+            *(step.get("agent_id") for step in template.get("steps", []) if isinstance(step, dict)),
+        )]
+
+        normalized_query = str(query or "").strip() or None
+        normalized_template_query = str(template_query or "").strip() or None
+        bounded_limit = normalize_page_limit(limit)
+        bounded_template_limit = normalize_page_limit(
+            template_limit,
+            default=_FLOW_TEMPLATE_DEFAULT_ITEMS,
+            maximum=_FLOW_TEMPLATE_MAX_ITEMS,
+        )
+        pending_template_offset = (
+            parse_offset_cursor(pending_template_cursor)
+            if pending_template_cursor is not None
+            else None
+        )
+        pending_agent_offset = (
+            parse_offset_cursor(pending_agent_cursor)
+            if pending_agent_cursor is not None
+            else None
+        )
+
+        def agent_filters() -> Dict[str, Any]:
+            return {
+                **({"query": normalized_query} if normalized_query else {}),
+                **({"category": normalized_category} if normalized_category else {}),
+                "limit": bounded_limit,
+            }
+
+        def template_filters() -> Dict[str, Any]:
+            return {
+                **(
+                    {"template_query": normalized_template_query}
+                    if normalized_template_query
+                    else {}
+                ),
+                "template_limit": bounded_template_limit,
+            }
+
+        def pending_frontier_arguments(
+            kind: Literal["template", "agent"],
+        ) -> Dict[str, str]:
+            if kind == "template" and pending_agent_offset is not None:
+                return {"pending_agent_cursor": str(pending_agent_offset)}
+            if kind == "agent" and pending_template_offset is not None:
+                return {"pending_template_cursor": str(pending_template_offset)}
+            return {}
+
+        if detail_kind is not None:
+            if detail_index is None or detail_index < 0:
+                raise ValueError("detail_index must be a non-negative record selector")
+            records = matched_templates if detail_kind == "template" else matched_agents
+            if detail_index >= len(records):
+                raise ValueError("detail_index is beyond the selected catalog")
+            record_json = _flow_catalog_json(records[detail_index])
+            record_hash = hashlib.sha256(record_json.encode("utf-8")).hexdigest()
+            start = parse_offset_cursor(detail_cursor)
+            if start > len(record_json):
+                raise ValueError("detail_cursor is beyond the selected record")
+            requested_chars = normalize_page_limit(
+                detail_max_chars,
+                default=_FLOW_CATALOG_CHUNK_MAX_CHARS,
+                maximum=_FLOW_CATALOG_CHUNK_MAX_CHARS,
+            )
+
+            def build_detail(end: int) -> Dict[str, Any]:
+                complete = end >= len(record_json)
+                if not complete:
+                    next_call = {
+                        "tool": "get_flow_templates",
+                        "arguments": {
+                            **(
+                                template_filters()
+                                if detail_kind == "template"
+                                else agent_filters()
+                            ),
+                            "section": (
+                                "templates" if detail_kind == "template" else "agents"
+                            ),
+                            "detail_kind": detail_kind,
+                            "detail_index": detail_index,
+                            "detail_cursor": end,
+                            "detail_max_chars": requested_chars,
+                            **pending_frontier_arguments(detail_kind),
+                        },
+                    }
+                elif detail_index + 1 < len(records):
+                    next_arguments = {
+                        **(
+                            template_filters()
+                            if detail_kind == "template"
+                            else agent_filters()
+                        ),
+                        "section": (
+                            "templates" if detail_kind == "template" else "agents"
+                        ),
+                        **pending_frontier_arguments(detail_kind),
+                    }
+                    next_arguments[
+                        "template_cursor" if detail_kind == "template" else "cursor"
+                    ] = str(detail_index + 1)
+                    next_call = {
+                        "tool": "get_flow_templates",
+                        "arguments": next_arguments,
+                    }
+                elif detail_kind == "template" and pending_agent_offset is not None:
+                    next_call = {
+                        "tool": "get_flow_templates",
+                        "arguments": {
+                            **agent_filters(),
+                            "section": "agents",
+                            "cursor": str(pending_agent_offset),
+                        },
+                    }
+                elif detail_kind == "agent" and pending_template_offset is not None:
+                    next_call = {
+                        "tool": "get_flow_templates",
+                        "arguments": {
+                            **template_filters(),
+                            "section": "templates",
+                            "template_cursor": str(pending_template_offset),
+                        },
+                    }
+                else:
+                    next_call = None
+                return {
+                    "success": True,
+                    "detail_mode": "record",
+                    "detail_kind": detail_kind,
+                    "detail_index": detail_index,
+                    "sha256": record_hash,
+                    "total_chars": len(record_json),
+                    "range": {"start": start, "end": end},
+                    "content": record_json[start:end],
+                    "complete": complete,
+                    "next_cursor": None if complete else end,
+                    "next_call": next_call,
+                    "instruction": (
+                        "Concatenate content in range order and verify sha256. "
+                        "Follow next_call to continue this record or resume its page."
+                    ),
+                }
+
+            low = start + 1
+            high = min(len(record_json), start + requested_chars)
+            fitting_end: Optional[int] = start if start == len(record_json) else None
+            while low <= high:
+                end = (low + high) // 2
+                if _flow_catalog_provider_chars(build_detail(end)) <= _FLOW_CATALOG_RESULT_MAX_CHARS:
+                    fitting_end, low = end, end + 1
+                else:
+                    high = end - 1
+            if fitting_end is None:
+                return {
+                    "success": False,
+                    "error": "metadata_too_large",
+                    "message": (
+                        "Flow catalog record identity exceeds "
+                        "AGENT_STUDIO_FLOW_CATALOG_RESULT_MAX_CHARS before one exact "
+                        "character can be returned."
+                    ),
+                    "detail_kind": detail_kind,
+                    "detail_index": detail_index,
+                    "sha256": record_hash,
+                }
+            return build_detail(fitting_end)
 
         total_count = len(matched_agents)
-        bounded_limit = normalize_page_limit(limit)
         offset = parse_offset_cursor(cursor)
-        page, truncated, next_cursor = offset_page(
+        page, _, _ = offset_page(
             matched_agents,
             limit=bounded_limit,
             cursor=offset,
         )
+        template_offset = parse_offset_cursor(template_cursor)
+        template_page, _, _ = offset_page(
+            matched_templates, limit=bounded_template_limit, cursor=template_offset)
+        if section == "agents":
+            template_page = []
+        elif section == "templates":
+            page = []
 
-        searched = bool(str(query or "").strip() or normalized_category)
+        searched = bool(normalized_query or normalized_category)
         if total_count == 0 and not searched:
             message = (
                 "No flow-capable agents are currently installed. "
@@ -1231,45 +1448,121 @@ def _get_flow_templates_handler():
             )
         else:
             message = (
-                f"Found {len(templates)} compatible templates and {total_count} matching agents "
-                f"(showing {len(page)}). "
+                f"Found {len(matched_templates)} compatible templates and {total_count} matching agents "
+                f"(showing {len(template_page)} templates and {len(page)} agents). "
                 "Use validate_flow to check a custom workflow, or create_flow to save one."
             )
 
-        return {
-            "templates": templates,
-            "available_agents": page,
-            "total_count": total_count,
-            "returned_count": len(page),
-            "truncated": truncated,
-            "next_cursor": next_cursor,
-            "complete": not truncated,
-            "next_call": (
-                {
-                    "tool": "get_flow_templates",
-                    "arguments": {
-                        **(
-                            {"query": str(query).strip()}
-                            if str(query or "").strip()
-                            else {}
-                        ),
-                        **(
-                            {"category": normalized_category}
-                            if normalized_category
-                            else {}
-                        ),
-                        "limit": bounded_limit,
-                        "cursor": next_cursor,
-                    },
+        def continuation_call(
+            *,
+            kind: Literal["template", "agent"],
+            next_offset: Optional[str],
+            other_next_offset: Optional[str],
+            record_was_attempted: bool,
+            returned_count: int,
+        ) -> Optional[Dict[str, Any]]:
+            if next_offset is None:
+                return None
+            arguments = {
+                **(template_filters() if kind == "template" else agent_filters()),
+                "section": "templates" if kind == "template" else "agents",
+            }
+            if other_next_offset is not None:
+                arguments.update(
+                    agent_filters() if kind == "template" else template_filters()
+                )
+                arguments[
+                    "pending_agent_cursor"
+                    if kind == "template"
+                    else "pending_template_cursor"
+                ] = other_next_offset
+            if returned_count or not record_was_attempted:
+                arguments["template_cursor" if kind == "template" else "cursor"] = next_offset
+            else:
+                arguments.update(
+                    {
+                        "detail_kind": kind,
+                        "detail_index": int(next_offset),
+                    }
+                )
+            return {"tool": "get_flow_templates", "arguments": arguments}
+
+        def build_response() -> Dict[str, Any]:
+            actual_template_next = (
+                str(template_offset + len(template_page))
+                if section != "agents"
+                and template_offset + len(template_page) < len(matched_templates)
+                else (
+                    str(pending_template_offset)
+                    if section == "agents" and pending_template_offset is not None
+                    else None
+                )
+            )
+            actual_agent_next = (
+                str(offset + len(page))
+                if section != "templates" and offset + len(page) < len(matched_agents)
+                else (
+                    str(pending_agent_offset)
+                    if section == "templates" and pending_agent_offset is not None
+                    else None
+                )
+            )
+            template_call = continuation_call(
+                kind="template",
+                next_offset=actual_template_next,
+                other_next_offset=actual_agent_next,
+                record_was_attempted=section != "agents",
+                returned_count=len(template_page),
+            )
+            agent_call = continuation_call(
+                kind="agent",
+                next_offset=actual_agent_next,
+                other_next_offset=actual_template_next,
+                record_was_attempted=section != "templates",
+                returned_count=len(page),
+            )
+            return {
+                "templates": template_page,
+                "template_total_count": len(matched_templates),
+                "template_returned_count": len(template_page),
+                "templates_truncated": actual_template_next is not None,
+                "template_next_cursor": actual_template_next,
+                "template_query": normalized_template_query,
+                "template_limit": bounded_template_limit,
+                "template_next_call": template_call,
+                "available_agents": page,
+                "total_count": total_count,
+                "returned_count": len(page),
+                "truncated": actual_agent_next is not None,
+                "next_cursor": actual_agent_next,
+                "complete": (
+                    actual_agent_next is None and actual_template_next is None
+                ),
+                "agent_next_call": agent_call,
+                "next_call": agent_call or template_call,
+                "limit": bounded_limit,
+                "query": normalized_query,
+                "category": normalized_category,
+                "message": message,
+            }
+
+        response = build_response()
+        while _flow_catalog_provider_chars(response) > _FLOW_CATALOG_RESULT_MAX_CHARS:
+            if template_page:
+                template_page.pop()
+            elif page:
+                page.pop()
+            else:
+                return {
+                    "success": False,
+                    "error": "metadata_too_large",
+                    "message": (
+                        "Flow catalog continuation metadata exceeds "
+                        "AGENT_STUDIO_FLOW_CATALOG_RESULT_MAX_CHARS."
+                    ),
                 }
-                if next_cursor is not None
-                else None
-            ),
-            "limit": bounded_limit,
-            "query": str(query or "").strip() or None,
-            "category": normalized_category,
-            "message": message,
-        }
+            response = build_response()
+        return response
 
     return handler
 
@@ -2253,13 +2546,18 @@ ALWAYS use this before create_flow to catch issues early.""",
         name="get_flow_templates",
         description="""Get list of common flow patterns and examples.
 
-Use this tool to show the user example workflows they can use as
-starting points. Returns template flows for common curation tasks
-and a searchable, paged list of available agents with their descriptions.
+Use this tool to show the user example workflows they can use as starting
+points. Templates and agents have independent filters, totals, cursors, and
+continuation calls so paging one collection does not repeat the other.
 
 Pass query to search agents by id, name, or description, category to keep
 one kind (Extraction, Validation, Output), and limit/cursor to page through
-large agent catalogs.
+large agent catalogs. Use template_query and template_limit/template_cursor to
+search and page compatible templates independently. When a single template or
+agent is too large for an inline page, follow the returned detail call and its
+hash-addressed character chunks, then follow its final next_call to resume paging.
+Always copy returned next_call arguments exactly; pending cursors retain the other
+collection's frontier while a section-specific page or detail chunk is retrieved.
 
 Use this as a starting point when helping users design flows.""",
         input_schema={
@@ -2283,6 +2581,31 @@ Use this as a starting point when helping users design flows.""",
                     "type": "string",
                     "description": "Page marker returned as next_cursor by a previous call. Omit to start from the first page.",
                 },
+                "template_query": {"type": "string", "description": "Optional words to match against template name, description, or step agent IDs."},
+                "template_limit": {"type": "integer", "minimum": 1, "maximum": _FLOW_TEMPLATE_MAX_ITEMS,
+                                   "default": _FLOW_TEMPLATE_DEFAULT_ITEMS,
+                                   "description": "How many compatible templates to return independently."},
+                "template_cursor": {"type": "string", "description": "Independent marker returned as template_next_cursor."},
+                "section": {"type": "string", "enum": ["both", "templates", "agents"], "default": "both",
+                            "description": "Return both first pages or only one collection; continuations select one collection."},
+                "pending_template_cursor": {
+                    "type": "string",
+                    "description": "Template frontier retained by a returned agent continuation. Copy only from next_call.",
+                },
+                "pending_agent_cursor": {
+                    "type": "string",
+                    "description": "Agent frontier retained by a returned template continuation. Copy only from next_call.",
+                },
+                "detail_kind": {"type": "string", "enum": ["template", "agent"],
+                                "description": "Record collection selector copied from an oversized-record continuation."},
+                "detail_index": {"type": "integer", "minimum": 0,
+                                 "description": "Stable filtered-record index copied from an oversized-record continuation."},
+                "detail_cursor": {"type": "integer", "minimum": 0,
+                                  "description": "Exact canonical-JSON character offset returned by a detail chunk."},
+                "detail_max_chars": {"type": "integer", "minimum": 1,
+                                     "maximum": _FLOW_CATALOG_CHUNK_MAX_CHARS,
+                                     "default": _FLOW_CATALOG_CHUNK_MAX_CHARS,
+                                     "description": "Requested exact record characters, capped by runtime configuration."},
             },
         },
         handler=_get_flow_templates_handler(),
