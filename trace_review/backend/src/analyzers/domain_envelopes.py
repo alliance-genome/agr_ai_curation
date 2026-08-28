@@ -137,12 +137,13 @@ class DomainEnvelopeTraceAnalyzer:
             "pending_ref_ids": list(summary.get("pending_ref_ids") or []),
             "finding_ids": list(summary.get("finding_ids") or []),
             "field_paths": list(summary.get("field_paths") or []),
+            "readiness_statuses": list(summary.get("readiness_statuses") or []),
             "validator_group_scope_audits": list(
                 summary.get("validator_group_scope_audits") or []
             ),
             "validation_state_counts": dict(summary.get("validation_state_counts") or {}),
             "definition_state_counts": dict(summary.get("definition_state_counts") or {}),
-            "has_blockers": bool(summary.get("blockers")),
+            "has_blockers": bool(summary_counts.get("blocker_count")),
             "has_definition_state_flags": bool(summary.get("definition_state_flags")),
         }
 
@@ -167,6 +168,7 @@ class DomainEnvelopeTraceAnalyzer:
             "pending_ref_ids": [],
             "finding_ids": [],
             "field_paths": [],
+            "readiness_statuses": [],
             "validation_states": [],
             "validation_state_counts": {},
             "definition_state_counts": {},
@@ -185,6 +187,7 @@ class DomainEnvelopeTraceAnalyzer:
             "_nested_envelope_object_paths": set(),
             "_nested_envelope_finding_paths": set(),
             "_nested_envelope_history_paths": set(),
+            "_authoritative_blocker_count": 0,
         }
 
     @classmethod
@@ -239,6 +242,9 @@ class DomainEnvelopeTraceAnalyzer:
         cls._add_unique(accumulator, "pending_ref_ids", pending_ref_id)
         cls._add_unique(accumulator, "finding_ids", finding_id)
         cls._add_unique(accumulator, "field_paths", field_path)
+
+        if cls._looks_like_readiness_inspection(payload):
+            cls._record_readiness_inspection(accumulator, payload, source_path)
 
         validation_state = _state_value(payload.get("validation_state"))
         if validation_state and not nested_envelope_object:
@@ -402,6 +408,70 @@ class DomainEnvelopeTraceAnalyzer:
     @staticmethod
     def _looks_like_submission_state(payload: Mapping[str, Any], source_path: str) -> bool:
         return _path_contains(source_path, "submission_state") or "submission_state" in payload
+
+    @staticmethod
+    def _looks_like_readiness_inspection(payload: Mapping[str, Any]) -> bool:
+        envelope = payload.get("envelope")
+        has_envelope_state_identity = (
+            isinstance(envelope, Mapping)
+            and _as_string(envelope.get("envelope_id")) is not None
+            and isinstance(payload.get("section_counts"), Mapping)
+        )
+        return (
+            "blocker_count" in payload
+            and (
+                isinstance(payload.get("domain_envelope_ids"), list)
+                or isinstance(payload.get("envelope_revisions"), Mapping)
+                or has_envelope_state_identity
+            )
+            and (
+                "candidate_count" in payload
+                or _state_value(payload.get("readiness_status")) is not None
+            )
+        )
+
+    @classmethod
+    def _record_readiness_inspection(
+        cls,
+        accumulator: dict[str, Any],
+        payload: Mapping[str, Any],
+        source_path: str,
+    ) -> None:
+        envelope_ids = payload.get("domain_envelope_ids")
+        if isinstance(envelope_ids, list):
+            for envelope_id in envelope_ids:
+                cls._add_unique(accumulator, "envelope_ids", _as_string(envelope_id))
+
+        envelope_revisions = payload.get("envelope_revisions")
+        if isinstance(envelope_revisions, Mapping):
+            for envelope_id in envelope_revisions:
+                cls._add_unique(accumulator, "envelope_ids", _as_string(envelope_id))
+
+        envelope = payload.get("envelope")
+        if isinstance(envelope, Mapping):
+            cls._add_unique(
+                accumulator,
+                "envelope_ids",
+                _as_string(envelope.get("envelope_id")),
+            )
+
+        readiness_status = _state_value(payload.get("readiness_status"))
+        cls._add_unique(accumulator, "readiness_statuses", readiness_status)
+
+        blocker_count = payload.get("blocker_count")
+        if isinstance(blocker_count, int) and not isinstance(blocker_count, bool):
+            accumulator["_authoritative_blocker_count"] = max(
+                accumulator["_authoritative_blocker_count"],
+                max(0, blocker_count),
+            )
+
+        if _state_value(payload.get("section")) == "blockers":
+            for index, blocker in enumerate(_iter_mappings(payload.get("items"))):
+                cls._record_blocker(
+                    accumulator,
+                    blocker,
+                    f"{source_path}.items[{index}]",
+                )
 
     @classmethod
     def _record_envelope(
@@ -960,7 +1030,10 @@ class DomainEnvelopeTraceAnalyzer:
             ),
             "field_path_count": len(accumulator["field_paths"]),
             "definition_state_flag_count": len(accumulator["definition_state_flags"]),
-            "blocker_count": len(accumulator["blockers"]),
+            "blocker_count": max(
+                len(accumulator["blockers"]),
+                accumulator["_authoritative_blocker_count"],
+            ),
             "curator_edit_count": len(accumulator["curator_edits"]),
             "projection_count": len(accumulator["projections"]),
             "submission_state_count": len(accumulator["submission_states"]),
@@ -982,4 +1055,5 @@ class DomainEnvelopeTraceAnalyzer:
         accumulator.pop("_nested_envelope_object_paths", None)
         accumulator.pop("_nested_envelope_finding_paths", None)
         accumulator.pop("_nested_envelope_history_paths", None)
+        accumulator.pop("_authoritative_blocker_count", None)
         return accumulator

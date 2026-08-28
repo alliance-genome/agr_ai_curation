@@ -22,6 +22,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_trace_review_page_size,
     get_domain_pack_validation_plan_default_limit,
     get_domain_pack_validation_plan_max_limit,
+    get_domain_runtime_inspection_default_limit,
+    get_domain_runtime_inspection_max_limit,
 )
 
 
@@ -29,6 +31,11 @@ _DOMAIN_PACK_VALIDATION_PLAN_MAX_LIMIT = get_domain_pack_validation_plan_max_lim
 _DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT = min(
     get_domain_pack_validation_plan_default_limit(),
     _DOMAIN_PACK_VALIDATION_PLAN_MAX_LIMIT,
+)
+_DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT = get_domain_runtime_inspection_max_limit()
+_DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT = min(
+    get_domain_runtime_inspection_default_limit(),
+    _DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT,
 )
 _TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 _TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
@@ -834,11 +841,9 @@ LIST_DOMAIN_ENVELOPES_TOOL = {
 GET_DOMAIN_ENVELOPE_STATE_TOOL = {
     "name": "get_domain_envelope_state",
     "description": (
-        "Inspect the current persisted domain envelope state by envelope_id. Returns "
-        "curatable objects, object IDs, field paths, validation findings, lookup "
-        "attempts, bounded validator request/result summaries, materialization "
-        "paths, history, projections, and schema/provider refs. "
-        "Use this instead of relying on prompt memory for live envelope facts."
+        "Summarize current persisted domain envelope state, then retrieve revision-pinned "
+        "bounded detail pages for objects, findings, lookup and validator summaries, "
+        "history, projections, and reference indexes. Follow next_request until complete."
     ),
     "input_schema": {
         "type": "object",
@@ -846,6 +851,24 @@ GET_DOMAIN_ENVELOPE_STATE_TOOL = {
             "envelope_id": {
                 "type": "string",
                 "description": "Persisted domain envelope ID.",
+            },
+            "revision": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Revision from the summary or next_request; omit only for a fresh summary.",
+            },
+            "section": {
+                "type": "string",
+                "enum": [
+                    "objects",
+                    "validation_findings",
+                    "projections",
+                    "history",
+                    "lookup_attempts",
+                    "validator_summaries",
+                    "object_ref_index",
+                ],
+                "description": "Optional detail section. Omit for authoritative summary counts/status.",
             },
             "object_id": {
                 "type": "string",
@@ -855,17 +878,25 @@ GET_DOMAIN_ENVELOPE_STATE_TOOL = {
                 "type": "string",
                 "description": "Optional field path filter for validation findings.",
             },
+            "query": {
+                "type": "string",
+                "description": "Case-insensitive text query for supported detail sections.",
+            },
             "include_object_payload": {
                 "type": "boolean",
                 "description": "Include bounded object payload JSON when true.",
                 "default": False,
             },
-            "history_limit": {
+            "limit": {
                 "type": "integer",
-                "description": "Maximum history events to return (default: 10, max: 50).",
-                "default": 10,
                 "minimum": 1,
-                "maximum": 50,
+                "maximum": _DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT,
+                "default": _DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT,
+                "description": "Bounded records to return from a detail section.",
+            },
+            "cursor": {
+                "type": "string",
+                "description": "Deterministic decimal offset from next_cursor.",
             },
         },
         "required": ["envelope_id"],
@@ -951,9 +982,8 @@ GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
 GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL = {
     "name": "get_domain_envelope_review_rows",
     "description": (
-        "Materialize review rows from a persisted domain envelope revision. Use this "
-        "to explain curator review rows as projections from envelope objects, not as "
-        "a separate semantic source of truth."
+        "Summarize review rows from a persisted domain envelope revision, then retrieve "
+        "bounded revision-pinned row pages. Follow next_request until complete."
     ),
     "input_schema": {
         "type": "object",
@@ -970,6 +1000,25 @@ GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL = {
                 "type": "string",
                 "description": "Optional object_id filter.",
             },
+            "section": {
+                "type": "string",
+                "enum": ["rows"],
+                "description": "Omit for authoritative row totals; use rows for details.",
+            },
+            "query": {
+                "type": "string",
+                "description": "Case-insensitive text query over materialized rows.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": _DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT,
+                "default": _DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT,
+            },
+            "cursor": {
+                "type": "string",
+                "description": "Deterministic decimal offset from next_cursor.",
+            },
         },
         "required": ["envelope_id"],
     },
@@ -978,9 +1027,9 @@ GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL = {
 GET_EXPORT_SUBMISSION_READINESS_TOOL = {
     "name": "get_export_submission_readiness",
     "description": (
-        "Inspect read-only projection/export/submission readiness for a review "
-        "session. Returns blockers tied to envelope IDs, object IDs, field paths, "
-        "and readiness codes without executing export or submission."
+        "Summarize read-only projection/export/submission readiness with authoritative "
+        "candidate, ready, and blocker totals, then page candidate or blocker details. "
+        "Follow next_request until complete; this never executes export or submission."
     ),
     "input_schema": {
         "type": "object",
@@ -1003,6 +1052,27 @@ GET_EXPORT_SUBMISSION_READINESS_TOOL = {
                 "type": "string",
                 "description": "Optional label for the readiness check, such as export or submission.",
                 "default": "readiness",
+            },
+            "section": {
+                "type": "string",
+                "enum": ["candidates", "blockers"],
+                "description": "Omit for authoritative readiness totals; select a detail page otherwise.",
+            },
+            "candidate_id": {"type": "string", "description": "Exact candidate filter."},
+            "envelope_id": {"type": "string", "description": "Exact blocker envelope filter."},
+            "object_id": {"type": "string", "description": "Exact blocker object filter."},
+            "field_path": {"type": "string", "description": "Exact blocker field filter."},
+            "code": {"type": "string", "description": "Exact blocker code filter."},
+            "query": {"type": "string", "description": "Case-insensitive text detail filter."},
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": _DOMAIN_RUNTIME_INSPECTION_MAX_LIMIT,
+                "default": _DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT,
+            },
+            "cursor": {
+                "type": "string",
+                "description": "Deterministic decimal offset from next_cursor.",
             },
         },
         "required": ["session_id"],

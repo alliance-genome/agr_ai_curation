@@ -3035,10 +3035,14 @@ async def _handle_tool_call(
                 session_factory=SessionLocal,
                 user_auth_sub=user_auth_sub,
                 envelope_id=envelope_id,
+                revision=tool_input.get("revision"),
+                section=tool_input.get("section"),
                 object_id=tool_input.get("object_id"),
                 field_path=tool_input.get("field_path"),
+                query=tool_input.get("query"),
                 include_object_payload=tool_input.get("include_object_payload", False),
-                history_limit=tool_input.get("history_limit"),
+                limit=tool_input.get("limit"),
+                cursor=tool_input.get("cursor"),
             )
         except ValueError as exc:
             return {"success": False, "error": str(exc)}
@@ -3066,7 +3070,11 @@ async def _handle_tool_call(
                 user_auth_sub=user_auth_sub,
                 envelope_id=envelope_id,
                 revision=tool_input.get("revision"),
+                section=tool_input.get("section"),
                 object_id=tool_input.get("object_id"),
+                query=tool_input.get("query"),
+                limit=tool_input.get("limit"),
+                cursor=tool_input.get("cursor"),
             )
         except ValueError as exc:
             return {"success": False, "error": str(exc)}
@@ -3094,6 +3102,15 @@ async def _handle_tool_call(
             candidate_ids=candidate_ids,
             expected_envelope_revisions=expected_revisions,
             mode=tool_input.get("mode", "readiness"),
+            section=tool_input.get("section"),
+            candidate_id=tool_input.get("candidate_id"),
+            envelope_id=tool_input.get("envelope_id"),
+            object_id=tool_input.get("object_id"),
+            field_path=tool_input.get("field_path"),
+            code=tool_input.get("code"),
+            query=tool_input.get("query"),
+            limit=tool_input.get("limit"),
+            cursor=tool_input.get("cursor"),
         )
 
     elif tool_name == "refresh_workshop_prompt":

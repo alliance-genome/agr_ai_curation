@@ -668,6 +668,73 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(domain["summary"]["blocker_count"], 1)
         self.assertEqual(domain["summary"]["submission_state_count"], 1)
 
+    def test_domain_envelope_analyzer_uses_authoritative_paged_readiness_summary(self):
+        summary = {
+            "success": True,
+            "session_id": "session-large",
+            "section": "summary",
+            "candidate_count": 6,
+            "ready_count": 0,
+            "blocker_count": 18,
+            "domain_envelope_ids": ["env-1", "env-2"],
+            "envelope_revisions": {"env-1": 3, "env-2": 7},
+            "readiness_status": "blocked",
+            "section_counts": {"candidates": 6, "blockers": 18},
+        }
+        blocker_page = {
+            **summary,
+            "section": "blockers",
+            "items": [
+                {
+                    "candidate_id": f"candidate-{index}",
+                    "envelope_id": "env-1" if index % 2 == 0 else "env-2",
+                    "object_id": f"object-{index}",
+                    "field_path": "symbol",
+                    "code": f"fixture.blocker_{index}",
+                    "message": f"Resolve blocker {index}.",
+                }
+                for index in range(4)
+            ],
+        }
+
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload([summary, blocker_page])
+        compact = DomainEnvelopeTraceAnalyzer.compact(domain)
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-1", "env-2"])
+        self.assertEqual(domain["readiness_statuses"], ["blocked"])
+        self.assertEqual(domain["summary"]["blocker_count"], 18)
+        self.assertEqual(len(domain["blockers"]), 4)
+        self.assertTrue(compact["has_blockers"])
+        self.assertEqual(compact["readiness_statuses"], ["blocked"])
+
+    def test_domain_envelope_analyzer_uses_authoritative_envelope_state_summary(self):
+        summary = {
+            "success": True,
+            "semantic_source": "domain_envelope.extracted_objects",
+            "section": "summary",
+            "envelope": {
+                "envelope_id": "env-state",
+                "envelope_revision": 9,
+            },
+            "readiness_status": "blocked",
+            "blocker_count": 11,
+            "section_counts": {
+                "objects": 3,
+                "validation_findings": 11,
+                "history": 20,
+            },
+        }
+
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload(summary)
+        compact = DomainEnvelopeTraceAnalyzer.compact(domain)
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-state"])
+        self.assertEqual(domain["readiness_statuses"], ["blocked"])
+        self.assertEqual(domain["summary"]["blocker_count"], 11)
+        self.assertTrue(compact["has_blockers"])
+
     def test_cache_policy_only_caches_finished_trace_outputs(self):
         self.assertTrue(is_trace_output_cacheable({"response": "final answer"}))
         self.assertTrue(is_trace_output_cacheable({"error": "boom"}))

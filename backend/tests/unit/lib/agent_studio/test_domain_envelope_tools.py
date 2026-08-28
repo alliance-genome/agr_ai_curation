@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -23,7 +24,11 @@ from src.lib.curation_workspace.models import (
     CurationCandidate,
     CurationExtractionResultRecord,
     CurationReviewSession,
+    DomainEnvelopeHistory,
     DomainEnvelopeModel,
+    DomainEnvelopeObject,
+    DomainEnvelopeProjectionIndex,
+    DomainValidationFinding,
 )
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
@@ -34,8 +39,15 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
+    CuratableObjectStatus,
     DomainEnvelope,
     DomainEnvelopeStatus,
+    HistoryActorType,
+    HistoryEventKind,
+    ObjectRef,
+    ValidationFinding,
+    ValidationFindingSeverity,
+    ValidationFindingStatus,
 )
 
 
@@ -54,8 +66,13 @@ TEST_TABLES = [
     CurationReviewSession.__table__,
     CurationExtractionResultRecord.__table__,
     DomainEnvelopeModel.__table__,
+    DomainEnvelopeObject.__table__,
+    DomainValidationFinding.__table__,
+    DomainEnvelopeHistory.__table__,
+    DomainEnvelopeProjectionIndex.__table__,
     CurationCandidate.__table__,
 ]
+LARGE_RUNTIME_ITEM_COUNT = 27
 
 
 def test_domain_pack_validation_plan_exposes_validator_agent_owner(
@@ -459,6 +476,156 @@ def _persist_candidate_for_envelope(db, *, session_id, envelope: DomainEnvelope)
     db.flush()
 
 
+def _persist_large_runtime_state(db, *, envelope_id: str, document_id, session_id):
+    now = _now()
+    objects = [
+        CuratableObjectEnvelope(
+            object_type="gene",
+            object_id=f"obj-{index}",
+            payload={
+                "symbol": f"GENE{index}",
+                "lookup_attempts": [
+                    {
+                        "outcome": "success",
+                        "query": {"symbol": f"GENE{index}"},
+                        "result_count": 1,
+                    }
+                ],
+            },
+        )
+        for index in range(LARGE_RUNTIME_ITEM_COUNT)
+    ]
+    findings = [
+        ValidationFinding(
+            finding_id=f"finding-{index}",
+            severity=ValidationFindingSeverity.BLOCKER,
+            status=ValidationFindingStatus.OPEN,
+            code="fixture.required_lookup",
+            message=f"Resolve GENE{index}.",
+            object_ref=ObjectRef(object_id=f"obj-{index}", object_type="gene"),
+            details={
+                "validation_metadata": {
+                    "validator_binding_id": "fixture.lookup",
+                    "binding_state": "active",
+                    "blocking": True,
+                    "required": True,
+                },
+                "validation_request": {
+                    "validator_binding_id": "fixture.lookup",
+                    "target": {"object_id": f"obj-{index}"},
+                    "selected_inputs": {"symbol": f"GENE{index}"},
+                },
+                "validation_result": {
+                    "status": "unresolved",
+                    "resolved_values": {},
+                },
+            },
+        )
+        for index in range(LARGE_RUNTIME_ITEM_COUNT)
+    ]
+    envelope = DomainEnvelope(
+        envelope_id=envelope_id,
+        domain_pack_id="fixture.pack",
+        status=DomainEnvelopeStatus.VALIDATED,
+        extracted_objects=objects,
+        validation_findings=findings,
+    )
+    db.add(
+        DomainEnvelopeModel(
+            envelope_id=envelope_id,
+            revision=2,
+            project_key="fixture",
+            domain_pack_key="fixture.pack",
+            adapter_key="fixture_adapter",
+            source_extraction_result_id=f"source:{envelope_id}",
+            source_payload_hash="1" * 64,
+            status=DomainEnvelopeStatus.VALIDATED,
+            document_id=document_id,
+            session_id=session_id,
+            schema_ref_json={"provider": "fixture"},
+            object_model_ref_json={},
+            model_field_ref_json={},
+            envelope_json=envelope.model_dump(mode="json"),
+            created_at=now,
+            updated_at=now,
+            checkpointed_at=now,
+        )
+    )
+    for index in range(LARGE_RUNTIME_ITEM_COUNT):
+        db.add(
+            DomainEnvelopeObject(
+                envelope_id=envelope_id,
+                object_id=f"obj-{index}",
+                envelope_revision=2,
+                object_index=index,
+                object_type="gene",
+                status=CuratableObjectStatus.EXTRACTED,
+                validation_state="blocked",
+                schema_ref_json={"provider": "fixture"},
+                object_model_ref_json={"object_type": "gene"},
+                model_field_ref_json={"symbol": {"field_path": "symbol"}},
+                payload_json=objects[index].payload,
+                object_json=objects[index].model_dump(mode="json"),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            DomainValidationFinding(
+                envelope_id=envelope_id,
+                finding_id=f"finding-{index}",
+                envelope_revision=2,
+                finding_index=index,
+                object_id=f"obj-{index}",
+                field_path="symbol",
+                severity=ValidationFindingSeverity.BLOCKER,
+                status=ValidationFindingStatus.OPEN,
+                code="fixture.required_lookup",
+                object_model_ref_json={"object_type": "gene"},
+                model_field_ref_json={"field_path": "symbol"},
+                finding_json=findings[index].model_dump(mode="json"),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            DomainEnvelopeHistory(
+                envelope_id=envelope_id,
+                event_id=f"event-{index}",
+                envelope_revision=2,
+                event_index=LARGE_RUNTIME_ITEM_COUNT - index - 1,
+                event_type=HistoryEventKind.VALIDATION_FINDING_ADDED,
+                occurred_at=now,
+                actor_type=HistoryActorType.AGENT,
+                actor_id="fixture-validator",
+                object_id=f"obj-{index}",
+                field_path="symbol",
+                model_field_ref_json={"field_path": "symbol"},
+                event_json={"message": f"Added finding {index}.", "details": {}},
+                created_at=now,
+            )
+        )
+        db.add(
+            DomainEnvelopeProjectionIndex(
+                envelope_id=envelope_id,
+                object_id=f"obj-{index}",
+                envelope_revision=2,
+                object_type="gene",
+                projection_type="review_row",
+                projection_key=f"gene:{index}",
+                projection_status="blocked",
+                schema_ref_json={"provider": "fixture"},
+                object_model_ref_json={"object_type": "gene"},
+                model_field_ref_json={"field_path": "symbol"},
+                projection_json={"symbol": f"GENE{index}"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.flush()
+    return envelope
+
+
 def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(monkeypatch):
     monkeypatch.setattr(
         domain_tools,
@@ -642,6 +809,205 @@ def test_sessionless_domain_envelope_visibility_requires_visible_candidate_sessi
     }
 
 
+def test_large_runtime_state_is_summary_first_and_completely_revision_paged(
+    db_session_factory,
+):
+    seed_db = db_session_factory()
+    try:
+        document = _persist_document(seed_db, suffix="runtime")
+        review_session = _persist_review_session(
+            seed_db,
+            document_id=document.id,
+            curator_id="curator-1",
+        )
+        _persist_large_runtime_state(
+            seed_db,
+            envelope_id="env-runtime",
+            document_id=document.id,
+            session_id=review_session.id,
+        )
+        seed_db.commit()
+    finally:
+        seed_db.close()
+
+    summary = domain_tools.get_domain_envelope_state(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-runtime",
+    )
+
+    assert summary["success"] is True
+    assert summary["section"] == "summary"
+    assert summary["envelope"]["envelope_revision"] == 2
+    assert summary["blocker_count"] == LARGE_RUNTIME_ITEM_COUNT
+    assert summary["readiness_status"] == "blocked"
+    assert summary["section_counts"] == {
+        "objects": LARGE_RUNTIME_ITEM_COUNT,
+        "validation_findings": LARGE_RUNTIME_ITEM_COUNT,
+        "projections": LARGE_RUNTIME_ITEM_COUNT,
+        "history": LARGE_RUNTIME_ITEM_COUNT,
+        "lookup_attempts": LARGE_RUNTIME_ITEM_COUNT,
+        "validator_summaries": LARGE_RUNTIME_ITEM_COUNT,
+        "object_ref_index": LARGE_RUNTIME_ITEM_COUNT,
+    }
+    assert "items" not in summary
+    assert all(
+        request["envelope_id"] == "env-runtime" and request["revision"] == 2
+        for request in summary["detail_requests"]
+    )
+
+    for section, expected_count in summary["section_counts"].items():
+        items = []
+        request = {
+            "envelope_id": "env-runtime",
+            "revision": 2,
+            "section": section,
+            "limit": 2,
+        }
+        while True:
+            page = domain_tools.get_domain_envelope_state(
+                session_factory=db_session_factory,
+                user_auth_sub="curator-1",
+                **request,
+            )
+            assert page["section_total_count"] == expected_count
+            assert page["returned_count"] == len(page["items"])
+            assert page["blocker_count"] == LARGE_RUNTIME_ITEM_COUNT
+            assert page["readiness_status"] == "blocked"
+            items.extend(page["items"])
+            if page["complete"]:
+                assert page["next_request"] is None
+                break
+            request = page["next_request"]
+            assert request["revision"] == 2
+        assert len(items) == expected_count
+        if section == "history":
+            assert [item["event_index"] for item in items] == list(
+                reversed(range(LARGE_RUNTIME_ITEM_COUNT))
+            )
+
+    filtered = domain_tools.get_domain_envelope_state(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-runtime",
+        revision=2,
+        section="validation_findings",
+        object_id="obj-3",
+    )
+    assert filtered["section_total_count"] == LARGE_RUNTIME_ITEM_COUNT
+    assert filtered["total_count"] == 1
+    assert filtered["items"][0]["finding_id"] == "finding-3"
+
+    filtered_history = domain_tools.get_domain_envelope_state(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-runtime",
+        revision=2,
+        section="history",
+        object_id="obj-3",
+        query="Added finding 3.",
+    )
+    assert filtered_history["section_total_count"] == LARGE_RUNTIME_ITEM_COUNT
+    assert filtered_history["total_count"] == 1
+    assert filtered_history["items"][0]["event_id"] == "event-3"
+
+    update_db = db_session_factory()
+    try:
+        update_db.get(DomainEnvelopeModel, "env-runtime").revision = 3
+        update_db.commit()
+    finally:
+        update_db.close()
+    stale_page = domain_tools.get_domain_envelope_state(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-runtime",
+        revision=2,
+        section="objects",
+    )
+    assert "at revision 3, not requested revision 2" in stale_page["error"]
+
+
+def test_large_review_rows_are_summary_first_and_completely_paged(
+    db_session_factory,
+    monkeypatch,
+):
+    seed_db = db_session_factory()
+    try:
+        document = _persist_document(seed_db, suffix="rows")
+        review_session = _persist_review_session(
+            seed_db,
+            document_id=document.id,
+            curator_id="curator-1",
+        )
+        _persist_domain_envelope(
+            seed_db,
+            envelope_id="env-rows",
+            document_id=document.id,
+            session_id=review_session.id,
+        )
+        seed_db.commit()
+    finally:
+        seed_db.close()
+
+    class FakeRow:
+        def __init__(self, index):
+            self.object_id = f"obj-{index % 2}"
+            self.index = index
+
+        def model_dump(self, *, mode):
+            assert mode == "json"
+            return {
+                "envelope_id": "env-rows",
+                "envelope_revision": 1,
+                "object_id": self.object_id,
+                "field_path": "symbol",
+                "row_key": f"row-{self.index}",
+            }
+
+    monkeypatch.setattr(
+        domain_tools,
+        "materialize_persisted_envelope_review_rows",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            envelope_id="env-rows",
+            envelope_revision=1,
+            row_count=7,
+            rows=[FakeRow(index) for index in range(7)],
+        ),
+    )
+
+    summary = domain_tools.get_domain_envelope_review_rows(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        envelope_id="env-rows",
+    )
+    assert summary["section"] == "summary"
+    assert summary["row_count"] == 7
+    assert summary["section_counts"] == {"rows": 7}
+    assert "items" not in summary
+    assert summary["detail_requests"][0]["envelope_id"] == "env-rows"
+    assert summary["detail_requests"][0]["revision"] == 1
+
+    items = []
+    request = {
+        "envelope_id": "env-rows",
+        "revision": 1,
+        "section": "rows",
+        "limit": 2,
+    }
+    while True:
+        page = domain_tools.get_domain_envelope_review_rows(
+            session_factory=db_session_factory,
+            user_auth_sub="curator-1",
+            **request,
+        )
+        items.extend(page["items"])
+        if page["complete"]:
+            break
+        request = page["next_request"]
+        assert request["revision"] == 1
+    assert len(items) == 7
+
+
 def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final_status():
     envelope = DomainEnvelope(
         envelope_id="env-lookup",
@@ -689,7 +1055,7 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
 
     summary = domain_tools._lookup_attempt_summary(
         envelope=envelope,
-        projection_rows=[projection_row],
+        projection_rows=[cast(DomainEnvelopeProjectionIndex, projection_row)],
     )
 
     assert summary["attempt_count"] == 3
@@ -831,7 +1197,9 @@ def test_validator_summary_payload_exposes_request_result_and_materialization_pa
         },
     )
 
-    payload = domain_tools._validator_summary_payload([row])
+    payload = domain_tools._validator_summary_payload(
+        [cast(DomainValidationFinding, row)]
+    )
 
     assert payload["summary_count"] == 1
     assert payload["by_result_status"] == {"resolved": 1}
@@ -913,7 +1281,11 @@ def test_export_submission_readiness_returns_read_only_blockers(monkeypatch):
     monkeypatch.setattr(
         domain_tools,
         "_build_domain_envelope_submission_context",
-        lambda **_kwargs: SimpleNamespace(envelope_snapshots={"env-1": object()}),
+        lambda **_kwargs: SimpleNamespace(
+            envelope_snapshots={
+                "env-1": {"envelope_id": "env-1", "envelope_revision": 3}
+            }
+        ),
     )
     monkeypatch.setattr(
         domain_tools,
@@ -940,5 +1312,214 @@ def test_export_submission_readiness_returns_read_only_blockers(monkeypatch):
     assert result["ready_count"] == 0
     assert result["blocker_count"] == 1
     assert result["domain_envelope_ids"] == ["env-1"]
-    assert result["readiness"][0]["blockers"][0]["envelope_id"] == "env-1"
-    assert "read-only readiness explanation" in result["instruction"]
+    assert result["envelope_revisions"] == {"env-1": 3}
+    assert result["section"] == "summary"
+    assert result["section_counts"] == {"candidates": 1, "blockers": 1}
+
+    blocker_page = domain_tools.get_export_submission_readiness(
+        session_factory=FakeDb,
+        user_auth_sub="curator-1",
+        session_id="session-1",
+        candidate_ids=["candidate-1"],
+        expected_envelope_revisions={"env-1": 3},
+        mode="submission",
+        section="blockers",
+    )
+    assert blocker_page["items"][0]["envelope_id"] == "env-1"
+    assert blocker_page["items"][0]["candidate_id"] == "candidate-1"
+    assert "read-only readiness explanation" in blocker_page["instruction"]
+
+
+def test_export_submission_readiness_is_not_ready_without_candidates(monkeypatch):
+    class FakeDb:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        domain_tools,
+        "_session_visible_to_user",
+        lambda _db, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        domain_tools,
+        "_load_session_for_validation",
+        lambda _db, *, session_id: SimpleNamespace(candidates=[]),
+    )
+    monkeypatch.setattr(
+        domain_tools,
+        "_build_domain_envelope_submission_context",
+        lambda **_kwargs: SimpleNamespace(envelope_snapshots={}),
+    )
+
+    result = domain_tools.get_export_submission_readiness(
+        session_factory=FakeDb,
+        user_auth_sub="curator-1",
+        session_id="session-empty",
+    )
+
+    assert result["success"] is True
+    assert result["candidate_count"] == 0
+    assert result["ready_count"] == 0
+    assert result["blocker_count"] == 0
+    assert result["ready"] is False
+    assert result["readiness_status"] == "no_candidates"
+
+
+def test_runtime_limit_rejects_explicit_values_above_configured_maximum():
+    with pytest.raises(
+        ValueError,
+        match=rf"limit must be between 1 and {domain_tools._RUNTIME_MAX_LIMIT}",
+    ):
+        domain_tools._runtime_limit(domain_tools._RUNTIME_MAX_LIMIT + 1)
+
+
+def test_large_readiness_is_authoritative_then_pages_candidates_and_blockers(monkeypatch):
+    class FakeDb:
+        def close(self):
+            pass
+
+    class FakeReadiness:
+        def __init__(self, candidate_id):
+            self.candidate_id = str(candidate_id)
+
+        def model_dump(self, *, mode):
+            assert mode == "json"
+            return {
+                "candidate_id": self.candidate_id,
+                "ready": False,
+                "blockers": [
+                    {
+                        "code": f"fixture.blocker_{index}",
+                        "envelope_id": "env-large",
+                        "object_id": self.candidate_id,
+                        "field_path": f"field_{index}",
+                        "message": f"Resolve blocker {index}.",
+                    }
+                    for index in range(3)
+                ],
+            }
+
+    candidates = [SimpleNamespace(id=f"candidate-{index}") for index in range(6)]
+    monkeypatch.setattr(domain_tools, "_session_visible_to_user", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        domain_tools,
+        "_load_session_for_validation",
+        lambda *_args, **_kwargs: SimpleNamespace(candidates=candidates),
+    )
+    monkeypatch.setattr(
+        domain_tools,
+        "_build_domain_envelope_submission_context",
+        lambda **_kwargs: SimpleNamespace(
+            envelope_snapshots={
+                "env-large": {
+                    "envelope_id": "env-large",
+                    "envelope_revision": 8,
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(domain_tools, "_latest_candidate_validation_snapshot", lambda _item: {})
+    monkeypatch.setattr(
+        domain_tools,
+        "_candidate_submission_readiness",
+        lambda candidate, *_args, **_kwargs: FakeReadiness(candidate.id),
+    )
+
+    summary = domain_tools.get_export_submission_readiness(
+        session_factory=FakeDb,
+        user_auth_sub="curator-1",
+        session_id="session-large",
+    )
+    assert summary["section"] == "summary"
+    assert summary["candidate_count"] == 6
+    assert summary["ready_count"] == 0
+    assert summary["blocker_count"] == 18
+    assert summary["readiness_status"] == "blocked"
+    assert summary["section_counts"] == {"candidates": 6, "blockers": 18}
+    assert summary["envelope_revisions"] == {"env-large": 8}
+    assert "items" not in summary
+    assert all(
+        request["candidate_ids"] == [f"candidate-{index}" for index in range(6)]
+        for request in summary["detail_requests"]
+    )
+
+    for section, expected_count in summary["section_counts"].items():
+        items = []
+        request = {
+            "session_id": "session-large",
+            "expected_envelope_revisions": {"env-large": 8},
+            "section": section,
+            "limit": 4,
+        }
+        while True:
+            page = domain_tools.get_export_submission_readiness(
+                session_factory=FakeDb,
+                user_auth_sub="curator-1",
+                **request,
+            )
+            items.extend(page["items"])
+            if page["complete"]:
+                break
+            request = page["next_request"]
+            assert request["expected_envelope_revisions"] == {"env-large": 8}
+        assert len(items) == expected_count
+        if section == "candidates":
+            assert all("blockers" not in item for item in items)
+            assert all(item["blocker_count"] == 3 for item in items)
+
+
+def test_readiness_partial_revision_pin_is_completed_for_every_selected_envelope(
+    monkeypatch,
+):
+    class FakeDb:
+        def close(self):
+            pass
+
+    class FakeReadiness:
+        def __init__(self, candidate_id):
+            self.candidate_id = str(candidate_id)
+
+        def model_dump(self, *, mode):
+            assert mode == "json"
+            return {"candidate_id": self.candidate_id, "ready": True, "blockers": []}
+
+    candidates = [SimpleNamespace(id="candidate-1"), SimpleNamespace(id="candidate-2")]
+    monkeypatch.setattr(domain_tools, "_session_visible_to_user", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        domain_tools,
+        "_load_session_for_validation",
+        lambda *_args, **_kwargs: SimpleNamespace(candidates=candidates),
+    )
+    monkeypatch.setattr(
+        domain_tools,
+        "_build_domain_envelope_submission_context",
+        lambda **_kwargs: SimpleNamespace(
+            envelope_snapshots={
+                "env-1": {"envelope_revision": 3},
+                "env-2": {"envelope_revision": 7},
+            }
+        ),
+    )
+    monkeypatch.setattr(domain_tools, "_latest_candidate_validation_snapshot", lambda _item: {})
+    monkeypatch.setattr(
+        domain_tools,
+        "_candidate_submission_readiness",
+        lambda candidate, *_args, **_kwargs: FakeReadiness(candidate.id),
+    )
+
+    page = domain_tools.get_export_submission_readiness(
+        session_factory=FakeDb,
+        user_auth_sub="curator-1",
+        session_id="session-1",
+        candidate_ids=["candidate-1", "candidate-2"],
+        expected_envelope_revisions={"env-1": 3},
+        section="candidates",
+        limit=1,
+    )
+
+    assert page["envelope_revisions"] == {"env-1": 3, "env-2": 7}
+    assert page["domain_envelope_ids"] == ["env-1", "env-2"]
+    assert page["next_request"]["expected_envelope_revisions"] == {
+        "env-1": 3,
+        "env-2": 7,
+    }

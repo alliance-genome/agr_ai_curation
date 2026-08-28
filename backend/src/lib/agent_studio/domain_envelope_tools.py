@@ -8,7 +8,7 @@ from typing import Any, Callable, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
@@ -25,6 +25,8 @@ from src.lib.curation_workspace.session_serializers import _validation_snapshot
 from src.lib.curation_workspace.session_submission_service import (
     _build_domain_envelope_submission_context,
     _candidate_submission_readiness,
+    _finding_blocks_readiness,
+    _finding_waiver_allowed,
 )
 from src.lib.curation_workspace.session_validation_service import _load_session_for_validation
 from src.lib.domain_packs.materialization import (
@@ -46,6 +48,8 @@ from src.lib.openai_agents.config import (
     get_domain_envelope_max_validator_summaries,
     get_domain_pack_validation_plan_default_limit,
     get_domain_pack_validation_plan_max_limit,
+    get_domain_runtime_inspection_default_limit,
+    get_domain_runtime_inspection_max_limit,
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -53,6 +57,7 @@ from src.schemas.domain_envelope import (
     FieldRef,
     HistoryEvent,
     ObjectRef,
+    ValidationFindingStatus,
 )
 
 
@@ -70,6 +75,40 @@ _MAX_SUMMARY_JSON_CHARS = get_domain_envelope_max_summary_json_chars()
 _MAX_FIELD_PATHS = get_domain_envelope_max_field_paths()
 _DOMAIN_PLAN_DEFAULT_LIMIT = get_domain_pack_validation_plan_default_limit()
 _DOMAIN_PLAN_MAX_LIMIT = get_domain_pack_validation_plan_max_limit()
+_RUNTIME_DEFAULT_LIMIT = get_domain_runtime_inspection_default_limit()
+_RUNTIME_MAX_LIMIT = get_domain_runtime_inspection_max_limit()
+
+_ENVELOPE_STATE_SECTIONS = (
+    "objects",
+    "validation_findings",
+    "projections",
+    "history",
+    "lookup_attempts",
+    "validator_summaries",
+    "object_ref_index",
+)
+_ENVELOPE_STATE_FILTERS = {
+    "objects": ("object_id", "query"),
+    "validation_findings": ("object_id", "field_path", "query"),
+    "projections": ("object_id", "query"),
+    "history": ("object_id", "field_path", "query"),
+    "lookup_attempts": ("query",),
+    "validator_summaries": ("object_id", "field_path", "query"),
+    "object_ref_index": ("object_id", "query"),
+}
+_REVIEW_ROW_SECTIONS = ("rows",)
+_READINESS_SECTIONS = ("candidates", "blockers")
+_READINESS_FILTERS = {
+    "candidates": ("candidate_id", "query"),
+    "blockers": (
+        "candidate_id",
+        "envelope_id",
+        "object_id",
+        "field_path",
+        "code",
+        "query",
+    ),
+}
 
 _DOMAIN_PLAN_SECTIONS = (
     "object_definitions",
@@ -172,12 +211,16 @@ def get_domain_envelope_state(
     session_factory: SessionFactory,
     user_auth_sub: str,
     envelope_id: str,
+    revision: int | None = None,
+    section: str | None = None,
     object_id: str | None = None,
     field_path: str | None = None,
+    query: str | None = None,
     include_object_payload: bool = False,
-    history_limit: int | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return current persisted envelope state and indexed references."""
+    """Return a compact envelope summary or one revision-pinned detail page."""
 
     db = session_factory()
     try:
@@ -185,6 +228,7 @@ def get_domain_envelope_state(
         row = db.get(DomainEnvelopeModel, normalized_envelope_id)
         if row is None or not _envelope_visible_to_user(db, row=row, user_auth_sub=user_auth_sub):
             return _error(f"Domain envelope {normalized_envelope_id} was not found.")
+        _require_current_revision(row=row, revision=revision)
 
         requested_object_ref = _optional_text(object_id)
         normalized_field_path = _optional_text(field_path)
@@ -198,93 +242,234 @@ def get_domain_envelope_state(
         object_query = (
             select(DomainEnvelopeObject)
             .where(DomainEnvelopeObject.envelope_id == normalized_envelope_id)
+            .where(DomainEnvelopeObject.envelope_revision == row.revision)
             .order_by(DomainEnvelopeObject.object_index.asc())
         )
-        if requested_object_ref:
-            object_query = object_query.where(
-                or_(
-                    DomainEnvelopeObject.object_id == requested_object_ref,
-                    DomainEnvelopeObject.pending_ref_id == requested_object_ref,
-                )
-            )
-
         finding_query = (
             select(DomainValidationFinding)
             .where(DomainValidationFinding.envelope_id == normalized_envelope_id)
+            .where(DomainValidationFinding.envelope_revision == row.revision)
             .order_by(DomainValidationFinding.finding_index.asc())
         )
-        if resolved_object_id:
-            finding_query = finding_query.where(DomainValidationFinding.object_id == resolved_object_id)
-        if normalized_field_path:
-            finding_query = finding_query.where(DomainValidationFinding.field_path == normalized_field_path)
-
         projection_query = (
             select(DomainEnvelopeProjectionIndex)
             .where(DomainEnvelopeProjectionIndex.envelope_id == normalized_envelope_id)
+            .where(DomainEnvelopeProjectionIndex.envelope_revision == row.revision)
             .order_by(
                 DomainEnvelopeProjectionIndex.object_id.asc(),
                 DomainEnvelopeProjectionIndex.projection_type.asc(),
                 DomainEnvelopeProjectionIndex.projection_key.asc(),
             )
         )
-        if resolved_object_id:
-            projection_query = projection_query.where(
-                DomainEnvelopeProjectionIndex.object_id == resolved_object_id
-            )
-
+        history_conditions = (
+            DomainEnvelopeHistory.envelope_id == normalized_envelope_id,
+            DomainEnvelopeHistory.envelope_revision <= row.revision,
+        )
         history_query = (
             select(DomainEnvelopeHistory)
-            .where(DomainEnvelopeHistory.envelope_id == normalized_envelope_id)
-            .order_by(DomainEnvelopeHistory.occurred_at.desc())
-            .limit(_bounded_limit(history_limit))
+            .where(*history_conditions)
+            .order_by(
+                DomainEnvelopeHistory.occurred_at.desc(),
+                DomainEnvelopeHistory.envelope_revision.desc(),
+                DomainEnvelopeHistory.event_index.desc(),
+                DomainEnvelopeHistory.event_id.desc(),
+            )
         )
 
         object_rows = db.scalars(object_query).all()
         finding_rows = db.scalars(finding_query).all()
         projection_rows = db.scalars(projection_query).all()
-        history_rows = list(reversed(db.scalars(history_query).all()))
+        history_total_count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(DomainEnvelopeHistory)
+                .where(*history_conditions)
+            )
+            or 0
+        )
         lookup_attempts = _lookup_attempt_summary(
             envelope=envelope,
             projection_rows=projection_rows,
+            include_all=True,
         )
-        validator_summaries = _validator_summary_payload(finding_rows)
-
-        return {
+        validator_summaries = _validator_summary_payload(finding_rows, include_all=True)
+        section_items = {
+            "objects": [
+                _object_row_payload(item, include_payload=include_object_payload)
+                for item in object_rows
+            ],
+            "validation_findings": [_finding_row_payload(item) for item in finding_rows],
+            "projections": [_projection_row_payload(item) for item in projection_rows],
+            "history": [],
+            "lookup_attempts": list(lookup_attempts["attempts"]),
+            "validator_summaries": list(validator_summaries["summaries"]),
+            "object_ref_index": _object_ref_index_payload(object_id_by_ref),
+        }
+        resolved_section = _optional_text(section) or "summary"
+        filters = {
+            "object_id": resolved_object_id,
+            "field_path": normalized_field_path,
+            "query": _optional_text(query),
+            "include_object_payload": include_object_payload,
+        }
+        identity = {
             "success": True,
             "semantic_source": "domain_envelope.extracted_objects",
             "envelope": _envelope_row_summary(row),
-            "objects": [
-                _object_row_payload(
-                    object_row,
-                    include_payload=include_object_payload,
-                )
-                for object_row in object_rows
-            ],
-            "validation_findings": [
-                _finding_row_payload(finding_row)
-                for finding_row in finding_rows
-            ],
-            "history": [_history_row_payload(history_row) for history_row in history_rows],
-            "lookup_attempts": lookup_attempts,
-            "validator_summaries": validator_summaries,
-            "projections": [
-                _projection_row_payload(projection_row)
-                for projection_row in projection_rows
-            ],
-            "object_ref_index": _object_ref_index_payload(object_id_by_ref),
-            "filters": {
-                "requested_object_ref": requested_object_ref,
-                "object_id": resolved_object_id,
-                "field_path": normalized_field_path,
-                "include_object_payload": include_object_payload,
-            },
-            "instruction": (
-                "Treat the envelope/object/finding/history/projection identifiers in this "
-                "tool result as the current source-of-truth references for follow-up turns."
+            "section": resolved_section,
+            "filters": filters,
+        }
+        blocker_count = _envelope_validation_blocker_count(envelope)
+        authoritative_status = {
+            "envelope_status": envelope.status.value,
+            "readiness_status": "blocked" if blocker_count else envelope.status.value,
+            "blocker_count": blocker_count,
+        }
+        section_counts = {name: len(items) for name, items in section_items.items()}
+        section_counts["history"] = history_total_count
+        if resolved_section == "summary":
+            if any(value is not None for value in (limit, cursor)):
+                raise ValueError("section is required when limit or cursor is provided")
+            return {
+                **identity,
+                **authoritative_status,
+                "section_counts": section_counts,
+                "lookup_status_counts": lookup_attempts["by_status"],
+                "validator_status_counts": validator_summaries["by_result_status"],
+                "detail_requests": [
+                    {
+                        "envelope_id": normalized_envelope_id,
+                        "section": name,
+                        "revision": row.revision,
+                        "supported_filters": list(_ENVELOPE_STATE_FILTERS[name]),
+                    }
+                    for name in _ENVELOPE_STATE_SECTIONS
+                ],
+                "instruction": (
+                    "Request one detail section and follow next_request until complete. "
+                    "Keep revision unchanged so later writes cannot splice snapshots."
+                ),
+            }
+
+        if resolved_section not in _ENVELOPE_STATE_SECTIONS:
+            raise ValueError(
+                "section must be one of: summary, "
+                + ", ".join(_ENVELOPE_STATE_SECTIONS)
+            )
+        active_filters = {
+            key: value
+            for key, value in filters.items()
+            if key != "include_object_payload" and value is not None
+        }
+        unsupported = sorted(set(active_filters) - set(_ENVELOPE_STATE_FILTERS[resolved_section]))
+        if unsupported:
+            raise ValueError(
+                f"section {resolved_section} does not support filter(s): "
+                + ", ".join(unsupported)
+            )
+        next_request = {
+            "envelope_id": normalized_envelope_id,
+            "revision": row.revision,
+            "section": resolved_section,
+            **active_filters,
+            **(
+                {"include_object_payload": True}
+                if resolved_section == "objects" and include_object_payload
+                else {}
             ),
         }
-    except ValueError as exc:
-        return _error(str(exc))
+        if resolved_section == "history":
+            filtered_history_conditions = list(history_conditions)
+            if resolved_object_id is not None:
+                filtered_history_conditions.append(
+                    DomainEnvelopeHistory.object_id == resolved_object_id
+                )
+            if normalized_field_path is not None:
+                filtered_history_conditions.append(
+                    DomainEnvelopeHistory.field_path == normalized_field_path
+                )
+            normalized_query = _optional_text(query)
+            if normalized_query is not None:
+                escaped_query = (
+                    normalized_query.replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                search_pattern = f"%{escaped_query}%"
+                filtered_history_conditions.append(
+                    or_(
+                        *(
+                            cast(column, String).ilike(search_pattern, escape="\\")
+                            for column in (
+                                DomainEnvelopeHistory.envelope_id,
+                                DomainEnvelopeHistory.event_id,
+                                DomainEnvelopeHistory.envelope_revision,
+                                DomainEnvelopeHistory.event_index,
+                                DomainEnvelopeHistory.event_type,
+                                DomainEnvelopeHistory.occurred_at,
+                                DomainEnvelopeHistory.actor_type,
+                                DomainEnvelopeHistory.actor_id,
+                                DomainEnvelopeHistory.object_id,
+                                DomainEnvelopeHistory.field_path,
+                                DomainEnvelopeHistory.event_json,
+                            )
+                        )
+                    )
+                )
+            filtered_total_count = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(DomainEnvelopeHistory)
+                    .where(*filtered_history_conditions)
+                )
+                or 0
+            )
+            page_limit = _runtime_limit(limit)
+            offset = _domain_plan_cursor(cursor, total_count=filtered_total_count)
+            history_rows = db.scalars(
+                history_query.where(*filtered_history_conditions[len(history_conditions) :])
+                .offset(offset)
+                .limit(page_limit)
+            ).all()
+            page = _runtime_page_result(
+                page_items=[_history_row_payload(item) for item in history_rows],
+                section_total_count=history_total_count,
+                total_count=filtered_total_count,
+                page_limit=page_limit,
+                offset=offset,
+                next_request=next_request,
+            )
+            return {
+                **identity,
+                **authoritative_status,
+                **page,
+                "instruction": (
+                    "Treat identifiers and provenance in this revision-pinned page as "
+                    "source-of-truth references; follow next_request until complete."
+                ),
+            }
+        filtered_items = _filter_runtime_items(
+            section_items[resolved_section],
+            filters=active_filters,
+        )
+        return {
+            **identity,
+            **authoritative_status,
+            **_runtime_page(
+                items=filtered_items,
+                section_total_count=len(section_items[resolved_section]),
+                limit=limit,
+                cursor=cursor,
+                next_request=next_request,
+            ),
+            "instruction": (
+                "Treat identifiers and provenance in this revision-pinned page as "
+                "source-of-truth references; follow next_request until complete."
+            ),
+        }
+    except (HTTPException, ValueError) as exc:
+        detail = getattr(exc, "detail", str(exc))
+        return _error(str(detail))
     finally:
         db.close()
 
@@ -295,9 +480,13 @@ def get_domain_envelope_review_rows(
     user_auth_sub: str,
     envelope_id: str,
     revision: int | None = None,
+    section: str | None = None,
     object_id: str | None = None,
+    query: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Regenerate materialized review rows for a persisted envelope revision."""
+    """Summarize or page review rows regenerated from one envelope revision."""
 
     db = session_factory()
     try:
@@ -317,16 +506,60 @@ def get_domain_envelope_review_rows(
             for review_row in response.rows
             if normalized_object_id is None or review_row.object_id == normalized_object_id
         ]
-        return {
+        query_filter = _optional_text(query)
+        if query_filter is not None:
+            rows = _filter_runtime_items(rows, filters={"query": query_filter})
+        resolved_section = _optional_text(section) or "summary"
+        identity = {
             "success": True,
             "semantic_source": "domain_envelope.extracted_objects",
             "envelope_id": response.envelope_id,
             "envelope_revision": response.envelope_revision,
-            "row_count": len(rows),
-            "rows": rows,
+            "section": resolved_section,
+            "row_count": response.row_count,
+            "filtered_row_count": len(rows),
+            "filters": {"object_id": normalized_object_id, "query": query_filter},
+        }
+        if resolved_section == "summary":
+            if any(value is not None for value in (limit, cursor)):
+                raise ValueError("section is required when limit or cursor is provided")
+            return {
+                **identity,
+                "section_counts": {"rows": response.row_count},
+                "detail_requests": [
+                    {
+                        "envelope_id": response.envelope_id,
+                        "section": "rows",
+                        "revision": response.envelope_revision,
+                        "supported_filters": ["object_id", "query"],
+                    }
+                ],
+                "instruction": (
+                    "Request section=rows and follow next_request until complete. "
+                    "Keep envelope_revision unchanged while traversing pages."
+                ),
+            }
+        if resolved_section not in _REVIEW_ROW_SECTIONS:
+            raise ValueError("section must be one of: summary, rows")
+        return {
+            **identity,
+            **_runtime_page(
+                items=rows,
+                section_total_count=response.row_count,
+                limit=limit,
+                cursor=cursor,
+                next_request={
+                    "envelope_id": response.envelope_id,
+                    "revision": response.envelope_revision,
+                    "section": "rows",
+                    **({"object_id": normalized_object_id} if normalized_object_id else {}),
+                    **({"query": query_filter} if query_filter else {}),
+                },
+            ),
             "instruction": (
                 "These rows are projections regenerated from the persisted envelope; "
-                "cite envelope_id, object_id, envelope_revision, and field_path back to the curator."
+                "cite envelope_id, object_id, envelope_revision, and field_path, and "
+                "follow next_request until complete."
             ),
         }
     except (ValueError, DomainEnvelopeMaterializationError) as exc:
@@ -610,6 +843,118 @@ def _domain_plan_cursor(value: str | None, *, total_count: int) -> int:
     return offset
 
 
+def _runtime_limit(value: int | None) -> int:
+    if value is None:
+        return min(_RUNTIME_DEFAULT_LIMIT, _RUNTIME_MAX_LIMIT)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("limit must be an integer")
+    if value < 1 or value > _RUNTIME_MAX_LIMIT:
+        raise ValueError(f"limit must be between 1 and {_RUNTIME_MAX_LIMIT}")
+    return value
+
+
+def _runtime_page(
+    *,
+    items: Sequence[Mapping[str, Any]],
+    section_total_count: int,
+    limit: int | None,
+    cursor: str | None,
+    next_request: Mapping[str, Any],
+) -> dict[str, Any]:
+    page_limit = _runtime_limit(limit)
+    offset = _domain_plan_cursor(cursor, total_count=len(items))
+    page_items = [dict(item) for item in items[offset : offset + page_limit]]
+    return _runtime_page_result(
+        page_items=page_items,
+        section_total_count=section_total_count,
+        total_count=len(items),
+        page_limit=page_limit,
+        offset=offset,
+        next_request=next_request,
+    )
+
+
+def _runtime_page_result(
+    *,
+    page_items: Sequence[Mapping[str, Any]],
+    section_total_count: int,
+    total_count: int,
+    page_limit: int,
+    offset: int,
+    next_request: Mapping[str, Any],
+) -> dict[str, Any]:
+    next_offset = offset + len(page_items)
+    complete = next_offset >= total_count
+    next_cursor = None if complete else str(next_offset)
+    return {
+        "section_total_count": section_total_count,
+        "total_count": total_count,
+        "returned_count": len(page_items),
+        "items": [dict(item) for item in page_items],
+        "complete": complete,
+        "truncated": not complete,
+        "next_cursor": next_cursor,
+        "limit": page_limit,
+        "next_request": (
+            None
+            if next_cursor is None
+            else {**dict(next_request), "limit": page_limit, "cursor": next_cursor}
+        ),
+    }
+
+
+def _filter_runtime_items(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    filters: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    def matches(item: Mapping[str, Any]) -> bool:
+        for filter_name, expected in filters.items():
+            if filter_name == "query":
+                if expected.casefold() not in json.dumps(
+                    item,
+                    sort_keys=True,
+                    default=str,
+                ).casefold():
+                    return False
+                continue
+            actual = item.get(filter_name)
+            if actual != expected:
+                return False
+        return True
+
+    return [dict(item) for item in items if matches(item)]
+
+
+def _require_current_revision(
+    *,
+    row: DomainEnvelopeModel,
+    revision: int | None,
+) -> None:
+    if revision is None:
+        return
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ValueError("revision must be a positive integer")
+    if row.revision != revision:
+        raise ValueError(
+            f"Domain envelope {row.envelope_id} is at revision {row.revision}, "
+            f"not requested revision {revision}"
+        )
+
+
+def _envelope_validation_blocker_count(envelope: DomainEnvelope) -> int:
+    return sum(
+        1
+        for finding in envelope.validation_findings
+        if _finding_blocks_readiness(finding)
+        and finding.status is not ValidationFindingStatus.RESOLVED
+        and not (
+            finding.status is ValidationFindingStatus.WAIVED
+            and _finding_waiver_allowed(finding)
+        )
+    )
+
+
 def _filter_domain_plan_items(
     items: Sequence[Mapping[str, Any]],
     *,
@@ -658,8 +1003,17 @@ def get_export_submission_readiness(
     candidate_ids: Sequence[str] | None = None,
     expected_envelope_revisions: Mapping[str, int] | None = None,
     mode: str = "readiness",
+    section: str | None = None,
+    candidate_id: str | None = None,
+    envelope_id: str | None = None,
+    object_id: str | None = None,
+    field_path: str | None = None,
+    code: str | None = None,
+    query: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Inspect current export/submission readiness without executing submission."""
+    """Summarize or page current readiness without executing submission."""
 
     db = session_factory()
     try:
@@ -687,8 +1041,8 @@ def get_export_submission_readiness(
             expected_envelope_revisions=dict(expected_envelope_revisions or {}),
         )
         readiness = []
-        for candidate_id in target_candidate_ids:
-            candidate = candidate_map[candidate_id]
+        for target_candidate_id in target_candidate_ids:
+            candidate = candidate_map[target_candidate_id]
             latest_snapshot = _latest_candidate_validation_snapshot(candidate)
             readiness_item = _candidate_submission_readiness(
                 candidate,
@@ -698,23 +1052,113 @@ def get_export_submission_readiness(
             readiness.append(readiness_item.model_dump(mode="json"))
 
         blockers = [
-            blocker
+            {"candidate_id": readiness_item.get("candidate_id"), **blocker}
             for readiness_item in readiness
             for blocker in readiness_item.get("blockers", [])
         ]
-        return {
+        candidate_items = []
+        for readiness_item in readiness:
+            item = dict(readiness_item)
+            item_blockers = item.pop("blockers", [])
+            item["blocker_count"] = len(item_blockers)
+            candidate_items.append(item)
+        resolved_section = _optional_text(section) or "summary"
+        normalized_mode = _required_text(mode, "mode")
+        current_envelope_revisions = {
+            envelope_id: int(snapshot["envelope_revision"])
+            for envelope_id, snapshot in domain_context.envelope_snapshots.items()
+        }
+        envelope_revisions = {
+            **current_envelope_revisions,
+            **dict(expected_envelope_revisions or {}),
+        }
+        identity = {
             "success": True,
             "session_id": normalized_session_id,
-            "mode": _required_text(mode, "mode"),
+            "mode": normalized_mode,
+            "section": resolved_section,
             "candidate_count": len(readiness),
             "ready_count": sum(1 for item in readiness if item.get("ready") is True),
             "blocker_count": len(blockers),
-            "readiness": readiness,
-            "domain_envelope_ids": sorted(domain_context.envelope_snapshots.keys()),
+            "domain_envelope_ids": sorted(envelope_revisions),
+            "envelope_revisions": envelope_revisions,
+        }
+        if resolved_section == "summary":
+            if any(value is not None for value in (limit, cursor)):
+                raise ValueError("section is required when limit or cursor is provided")
+            ready_count = identity["ready_count"]
+            ready = bool(readiness) and ready_count == len(readiness)
+            return {
+                **identity,
+                "ready": ready,
+                "readiness_status": (
+                    "ready" if ready else "no_candidates" if not readiness else "blocked"
+                ),
+                "section_counts": {
+                    "candidates": len(candidate_items),
+                    "blockers": len(blockers),
+                },
+                "detail_requests": [
+                    {
+                        "section": name,
+                        "candidate_ids": target_candidate_ids,
+                        "expected_envelope_revisions": envelope_revisions,
+                        "supported_filters": list(_READINESS_FILTERS[name]),
+                    }
+                    for name in _READINESS_SECTIONS
+                ],
+                "instruction": (
+                    "This is a read-only readiness summary. Request candidates or "
+                    "blockers and follow next_request until complete; keep expected "
+                    "envelope revisions unchanged while traversing pages."
+                ),
+            }
+        if resolved_section not in _READINESS_SECTIONS:
+            raise ValueError("section must be one of: summary, candidates, blockers")
+        filters = {
+            "candidate_id": _optional_text(candidate_id),
+            "envelope_id": _optional_text(envelope_id),
+            "object_id": _optional_text(object_id),
+            "field_path": _optional_text(field_path),
+            "code": _optional_text(code),
+            "query": _optional_text(query),
+        }
+        active_filters = {key: value for key, value in filters.items() if value is not None}
+        unsupported = sorted(set(active_filters) - set(_READINESS_FILTERS[resolved_section]))
+        if unsupported:
+            raise ValueError(
+                f"section {resolved_section} does not support filter(s): "
+                + ", ".join(unsupported)
+            )
+        section_items = {
+            "candidates": candidate_items,
+            "blockers": blockers,
+        }
+        filtered_items = _filter_runtime_items(
+            section_items[resolved_section],
+            filters=active_filters,
+        )
+        return {
+            **identity,
+            "filters": filters,
+            **_runtime_page(
+                items=filtered_items,
+                section_total_count=len(section_items[resolved_section]),
+                limit=limit,
+                cursor=cursor,
+                next_request={
+                    "session_id": normalized_session_id,
+                    "candidate_ids": target_candidate_ids,
+                    "expected_envelope_revisions": envelope_revisions,
+                    "mode": normalized_mode,
+                    "section": resolved_section,
+                    **active_filters,
+                },
+            ),
             "instruction": (
                 "This is a read-only readiness explanation. It does not export or submit. "
-                "Use blockers[].envelope_id, object_id, field_path, code, and message when "
-                "explaining what needs curator review."
+                "Use blocker envelope_id, object_id, field_path, code, and message when "
+                "explaining curator work, and follow next_request until complete."
             ),
         }
     except (HTTPException, ValueError) as exc:
@@ -1032,12 +1476,14 @@ def _lookup_attempt_summary(
     *,
     envelope: DomainEnvelope,
     projection_rows: Sequence[DomainEnvelopeProjectionIndex],
+    include_all: bool = False,
 ) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     _collect_lookup_attempts(
         envelope.model_dump(mode="json"),
         path="envelope",
         attempts=attempts,
+        max_attempts=None if include_all else _MAX_LOOKUP_ATTEMPTS,
     )
     for row in projection_rows:
         _collect_lookup_attempts(
@@ -1047,14 +1493,15 @@ def _lookup_attempt_summary(
                 f"{row.object_id}:{row.projection_type}:{row.projection_key}"
             ),
             attempts=attempts,
+            max_attempts=None if include_all else _MAX_LOOKUP_ATTEMPTS,
         )
 
     statuses = Counter(_lookup_attempt_status(attempt) for attempt in attempts)
     return {
         "attempt_count": len(attempts),
         "by_status": dict(sorted(statuses.items())),
-        "attempts": attempts[:_MAX_LOOKUP_ATTEMPTS],
-        "truncated": len(attempts) > _MAX_LOOKUP_ATTEMPTS,
+        "attempts": attempts if include_all else attempts[:_MAX_LOOKUP_ATTEMPTS],
+        "truncated": not include_all and len(attempts) > _MAX_LOOKUP_ATTEMPTS,
         "interpretation": (
             "lookup_attempts is an audit trail. Use top-level lookup_status or "
             "projection/finding status for final outcome; attempts may include "
@@ -1069,8 +1516,11 @@ def _collect_lookup_attempts(
     path: str,
     attempts: list[dict[str, Any]],
     depth: int = 0,
+    max_attempts: int | None = _MAX_LOOKUP_ATTEMPTS,
 ) -> None:
-    if depth > 8 or len(attempts) > _MAX_LOOKUP_ATTEMPTS * 3:
+    if max_attempts is not None and (
+        depth > 8 or len(attempts) > max_attempts * 3
+    ):
         return
     if isinstance(value, Mapping):
         raw_attempts = value.get("lookup_attempts")
@@ -1081,10 +1531,23 @@ def _collect_lookup_attempts(
         for key, item in value.items():
             if key == "lookup_attempts":
                 continue
-            _collect_lookup_attempts(item, path=f"{path}.{key}", attempts=attempts, depth=depth + 1)
+            _collect_lookup_attempts(
+                item,
+                path=f"{path}.{key}",
+                attempts=attempts,
+                depth=depth + 1,
+                max_attempts=max_attempts,
+            )
     elif isinstance(value, list):
-        for index, item in enumerate(value[:25]):
-            _collect_lookup_attempts(item, path=f"{path}[{index}]", attempts=attempts, depth=depth + 1)
+        selected = value if max_attempts is None else value[:25]
+        for index, item in enumerate(selected):
+            _collect_lookup_attempts(
+                item,
+                path=f"{path}[{index}]",
+                attempts=attempts,
+                depth=depth + 1,
+                max_attempts=max_attempts,
+            )
 
 
 def _lookup_attempt_payload(attempt: Mapping[str, Any], path: str) -> dict[str, Any]:
@@ -1132,6 +1595,8 @@ def _lookup_attempt_status(attempt: Mapping[str, Any]) -> str:
 
 def _validator_summary_payload(
     finding_rows: Sequence[DomainValidationFinding],
+    *,
+    include_all: bool = False,
 ) -> dict[str, Any]:
     summaries = [
         summary
@@ -1145,8 +1610,8 @@ def _validator_summary_payload(
     return {
         "summary_count": len(summaries),
         "by_result_status": dict(sorted(statuses.items())),
-        "summaries": summaries[:_MAX_VALIDATOR_SUMMARIES],
-        "truncated": len(summaries) > _MAX_VALIDATOR_SUMMARIES,
+        "summaries": summaries if include_all else summaries[:_MAX_VALIDATOR_SUMMARIES],
+        "truncated": not include_all and len(summaries) > _MAX_VALIDATOR_SUMMARIES,
         "interpretation": (
             "Each summary is reconstructed from persisted validation finding "
             "details. selected_inputs came from domain-pack selectors; "
