@@ -102,17 +102,6 @@ def _join_log_lines(log_lines: list[str]) -> str:
     return "\n".join(log_lines) + "\n"
 
 
-def _tail_rendered_logs(log_entries: list[str], *, line_limit: int) -> tuple[str, int]:
-    """Apply the requested line limit after multiline entries are rendered."""
-    rendered_logs = _join_log_lines(log_entries)
-    if not rendered_logs:
-        return "", 0
-
-    rendered_lines = rendered_logs.splitlines(keepends=True)
-    tailed_lines = rendered_lines[-line_limit:]
-    return "".join(tailed_lines), len(tailed_lines)
-
-
 def _extract_chronological_lines(payload: dict[str, Any]) -> list[str]:
     """Flatten Loki results into timestamp-addressable chronological entries."""
     entries = loki.extract_timestamped_entries(payload)
@@ -287,6 +276,9 @@ async def get_container_logs(
     query_start = (
         query_now - timedelta(minutes=lookback_minutes)
     )
+    source_query_end: loki.TimeInput = (
+        str(query_end_ns + 1) if line_cursor is not None else query_now
+    )
 
     try:
         loki_client = loki.LokiClient(timeout_seconds=10.0)
@@ -294,7 +286,7 @@ async def get_container_logs(
             loki_client,
             service=service_label,
             start=query_start,
-            end=query_end,
+            end=source_query_end,
             limit=query_limit,
             level=normalized_level,
         )

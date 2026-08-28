@@ -1712,14 +1712,6 @@ def get_agent_studio_service_log_timeout_seconds() -> float:
     )
 
 
-def get_trace_review_payload_preview_max_chars() -> int:
-    """Maximum payload preview characters in TraceReview inventories."""
-    return max(
-        1,
-        _get_env_int_with_fallback("TRACE_REVIEW_PAYLOAD_PREVIEW_MAX_CHARS", 500),
-    )
-
-
 def get_agent_studio_service_log_default_lookback_minutes() -> int:
     """Default Loki lookback used when Agent Studio omits ``since``."""
     return max(

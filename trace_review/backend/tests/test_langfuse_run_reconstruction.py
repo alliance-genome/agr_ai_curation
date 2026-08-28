@@ -74,6 +74,8 @@ def test_trace_tree_nests_observations_under_parents():
     assert [child["id"] for child in tree["children"]] == ["agent-1"]
     assert [child["id"] for child in tree["children"][0]["children"]] == ["gen-1", "tool-1"]
     assert tree["children"][0]["kind"] == "agent"
+    assert tree["metadata"] == {"document_id": "doc-1", "run_id": "run-1"}
+    assert tree["children"][0]["metadata"]["agent_name"] == "supervisor"
     assert tree["children"][0]["children"][0]["kind"] == "model"
     assert tree["children"][0]["children"][1]["kind"] == "tool"
 
@@ -92,6 +94,22 @@ def test_ordered_reconstruction_preserves_event_order_and_payload_refs():
     model_event = reconstruction["events"][2]
     assert model_event["model"] == "gpt-5-mini"
     assert {payload["field"] for payload in model_event["payloads"]} == {"input", "output"}
+    assert "metadata_inventory" in reconstruction["trace"]
+
+
+def test_exact_reconstruction_preserves_trace_and_observation_metadata_values():
+    reconstruction = build_ordered_reconstruction(
+        _trace_data(),
+        include_payload_values=True,
+    )
+
+    assert reconstruction["trace"]["metadata"] == {
+        "document_id": "doc-1",
+        "run_id": "run-1",
+    }
+    agent_event = reconstruction["events"][1]
+    assert agent_event["metadata"]["agent_name"] == "supervisor"
+    assert "metadata_inventory" not in agent_event
 
 
 def test_payload_inventory_and_exact_payload_chunks_are_langfuse_payloads():

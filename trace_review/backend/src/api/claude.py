@@ -1017,7 +1017,7 @@ async def get_langfuse_tree(
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     trace_data = _extract_langfuse_trace(trace_id, source)
-    tree = build_trace_tree(trace_data)
+    tree = build_trace_tree(trace_data, include_metadata_values=False)
     nodes = _flatten_trace_tree(tree)
     response_data = _aggregate_response_data(
         source=source,

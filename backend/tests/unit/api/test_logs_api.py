@@ -227,7 +227,7 @@ async def test_get_container_logs_line_cursor_is_exact_and_non_overlapping(monke
         line_cursor_offset=next_call["line_cursor_offset"],
         char_cursor=next_call["char_cursor"],
     )
-    assert query_ends[1] == "100"
+    assert query_ends[1] == "101"
     assert second.page["complete"] is True
 
 
@@ -244,7 +244,7 @@ async def test_get_container_logs_continues_within_equal_timestamp_group(monkeyp
         query_limits.append(kwargs["limit"])
         end = kwargs["end"]
         end_ns = int(end) if isinstance(end, str) else 10**30
-        eligible = [entry for entry in entries if entry[0] <= end_ns]
+        eligible = [entry for entry in entries if entry[0] < end_ns]
         return [
             f"{timestamp}\0{line}"
             for timestamp, line in eligible[-kwargs["limit"]:]
