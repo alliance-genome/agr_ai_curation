@@ -110,16 +110,16 @@ def _validated_flow_definition(
     *,
     db_user_id: int | None = None,
     enforce_agent_references: bool = False,
-    tolerate_unavailable_custom_agent_attachments: bool = False,
+    tolerate_unresolvable_custom_agent_attachments: bool = False,
 ) -> FlowDefinition:
     """Return a flow definition hydrated with metadata-backed validation defaults."""
 
-    agent_registry, unavailable_custom_agent_ids = _validation_attachment_agent_registry(
+    agent_registry, unresolvable_custom_agent_ids = _validation_attachment_agent_registry(
         flow_definition,
         db_user_id=db_user_id,
     )
     validation_input = flow_definition
-    preserved_unavailable_data: dict[
+    preserved_unresolvable_data: dict[
         str,
         tuple[
             list[FlowValidationAttachmentSelection],
@@ -127,14 +127,14 @@ def _validated_flow_definition(
         ],
     ] = {}
     preserved_edges = None
-    if tolerate_unavailable_custom_agent_attachments and unavailable_custom_agent_ids:
+    if tolerate_unresolvable_custom_agent_attachments and unresolvable_custom_agent_ids:
         validation_input = flow_definition.model_copy(deep=True)
-        unavailable_node_ids: set[str] = set()
+        unresolvable_node_ids: set[str] = set()
         for node in validation_input.nodes:
-            if node.data.agent_id not in unavailable_custom_agent_ids:
+            if node.data.agent_id not in unresolvable_custom_agent_ids:
                 continue
-            unavailable_node_ids.add(node.id)
-            preserved_unavailable_data[node.id] = (
+            unresolvable_node_ids.add(node.id)
+            preserved_unresolvable_data[node.id] = (
                 node.data.validation_attachments,
                 node.data.validation_groups,
             )
@@ -146,7 +146,7 @@ def _validated_flow_definition(
             for edge in validation_input.edges
             if not (
                 edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
-                and edge.source in unavailable_node_ids
+                and edge.source in unresolvable_node_ids
             )
         ]
     try:
@@ -162,7 +162,7 @@ def _validated_flow_definition(
     if enforce_agent_references:
         _validate_flow_agent_references(validated, db_user_id=db_user_id)
     for node in validated.nodes:
-        preserved = preserved_unavailable_data.get(node.id)
+        preserved = preserved_unresolvable_data.get(node.id)
         if preserved is None:
             continue
         node.data.validation_attachments, node.data.validation_groups = preserved
@@ -189,7 +189,7 @@ def _validation_attachment_agent_registry(
         }
     )
     custom_entries: dict[str, dict[str, Any]] = {}
-    unavailable_custom_agent_ids: set[str] = set()
+    unresolvable_custom_agent_ids: set[str] = set()
     for agent_id in custom_agent_ids:
         try:
             metadata = get_active_visible_agent_metadata(
@@ -197,18 +197,19 @@ def _validation_attachment_agent_registry(
                 db_user_id=db_user_id,
             )
         except ValueError:
-            unavailable_custom_agent_ids.add(agent_id)
+            unresolvable_custom_agent_ids.add(agent_id)
             continue
         curation = metadata.get("curation") if isinstance(metadata, dict) else None
         if not isinstance(curation, dict) or not str(
             curation.get("domain_pack_id") or ""
         ).strip():
+            unresolvable_custom_agent_ids.add(agent_id)
             continue
         custom_entries[agent_id] = metadata
 
     if not custom_entries:
-        return None, unavailable_custom_agent_ids
-    return {**AGENT_REGISTRY, **custom_entries}, unavailable_custom_agent_ids
+        return None, unresolvable_custom_agent_ids
+    return {**AGENT_REGISTRY, **custom_entries}, unresolvable_custom_agent_ids
 
 
 def _flow_agent_policy_entry(
@@ -252,6 +253,7 @@ def _flow_agent_policy_entry(
         "visibility": metadata.get("visibility"),
         "produces_flow_artifacts": is_extraction or is_typed_validation,
         "supervisor": metadata.get("supervisor") or {},
+        "curation": metadata.get("curation"),
     }
 
 
@@ -411,7 +413,22 @@ def _missing_flow_agent_reference_messages(
         agent_id = str(node.data.agent_id or "").strip()
         if not agent_id or agent_id == "task_input":
             continue
-        if _flow_agent_policy_entry(agent_id, db_user_id=db_user_id) is not None:
+        policy_entry = _flow_agent_policy_entry(agent_id, db_user_id=db_user_id)
+        if policy_entry is not None:
+            curation = policy_entry.get("curation")
+            has_domain_pack = isinstance(curation, dict) and bool(
+                str(curation.get("domain_pack_id") or "").strip()
+            )
+            if (
+                agent_id.startswith("ca_")
+                and node.data.validation_attachments
+                and not has_domain_pack
+            ):
+                agent_name = str(node.data.agent_display_name or agent_id)
+                missing_references.append(
+                    f"node '{node.id}' ({agent_name}) references agent_id "
+                    f"'{agent_id}', which no longer declares validation attachments"
+                )
             continue
         agent_name = str(node.data.agent_display_name or agent_id)
         missing_references.append(
@@ -437,7 +454,7 @@ def _flow_to_response(flow: CurationFlow) -> FlowResponse:
     flow_definition = _validated_flow_definition(
         FlowDefinition.model_validate(flow.flow_definition),
         db_user_id=flow.user_id,
-        tolerate_unavailable_custom_agent_attachments=True,
+        tolerate_unresolvable_custom_agent_attachments=True,
     )
     missing_references = _missing_flow_agent_reference_messages(
         flow_definition,
