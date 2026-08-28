@@ -429,13 +429,18 @@ def _render_result(
     view = controls.get("result_view", "summary")
     page_paths = set(contract.get("page_paths") or [])
     if view == "summary":
+        requested_limit = controls.get("result_limit")
         return _summary(
             result,
             page_paths=page_paths,
             cursor=_normalized_cursor(
                 controls.get("result_cursor", 0), name="result_cursor"
             ),
-            limit=_normalized_limit(controls.get("result_limit")),
+            limit=(
+                len(result)
+                if requested_limit is None
+                else _normalized_limit(requested_limit)
+            ),
         )
     if view == "page":
         path = controls.get("result_path")

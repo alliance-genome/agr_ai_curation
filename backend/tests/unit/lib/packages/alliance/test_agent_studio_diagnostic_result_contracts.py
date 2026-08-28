@@ -159,6 +159,40 @@ def test_structured_maximum_results_are_summary_page_and_detail_addressable(
         _provider_visible(tool_id, detail)
 
 
+def test_go_summary_exposes_source_truncation_fields_by_default(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "8000")
+    result = {
+        "status": "ok",
+        "gene_id": "RGD:620474",
+        "gene_symbol": "Egfr",
+        "annotations": [],
+        "source": "Gene Ontology Consortium API",
+        "source_url": "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function",
+        "source_cursor": 0,
+        "source_limit": 500,
+        "returned_count": 500,
+        "next_source_cursor": 500,
+        "source_complete": False,
+        "source_limit_capped": True,
+        "source_response_truncated": True,
+        "message": None,
+    }
+    assert len(result) == 14
+    handler = result_contracts.create_bounded_result_handler(
+        lambda: result,
+        {"kind": "structured", "page_paths": ["annotations"]},
+    )
+
+    summary = handler()
+
+    assert summary["fields_complete"] is True
+    assert summary["fields_truncated"] is False
+    assert summary["returned_field_count"] == 14
+    assert summary["fields"]["source_limit_capped"] is True
+    assert summary["fields"]["source_response_truncated"] is True
+    _provider_visible("go_api_call", summary)
+
+
 @pytest.mark.parametrize(
     ("tool_id", "result", "detail_path"),
     [
