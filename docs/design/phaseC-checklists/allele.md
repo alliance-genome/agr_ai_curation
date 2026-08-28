@@ -57,12 +57,15 @@ ORDER (Role -> Goal -> Scope -> Rules -> Workflow -> Output -> Stop) is preserve
 > `<result_contract>`, and `<stop_rules>`. That section is now **removed** to match
 > the lean validator standard (agm/subject_entity carry no `<success_criteria>`).
 > The "record every database call you make" success idea was folded into `<goal>`.
-> Three contract-test-pinned fragments that lived ONLY in `<success_criteria>` —
-> "do not rewrite or normalize it before the first lookup" (AV-05), "Never pass a
+> The literal-first rule that lived in `<success_criteria>` was moved into
+> `<resolution_and_validation_rules>` (## Symbol handling). ALL-590 later clarified
+> that this means selecting the literal entity-name span from the complete source
+> wording, not necessarily querying the complete surrounding phrase; biological
+> renaming remains prohibited. The contract-test-pinned fragments "Never pass a
 > whole evidence sentence" and "Evidence text is context for judging candidates"
-> (AV-06) — were **RELOCATED verbatim** into `<resolution_and_validation_rules>`
-> (## Symbol handling), NOT deleted, so
-> `test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries` stays green. A
+> (AV-06) remain there, so
+> `test_allele_prompt_selects_literal_entity_span_without_biological_renaming` guards
+> both boundaries. A
 > duplicate "Keep supporting evidence quotes out of the `allele_symbol` argument …"
 > sentence in `<lookup_workflow>` (a verbatim restatement of the same sentence in
 > `<resolution_and_validation_rules>` ## Symbol handling) was dropped as a clean free
@@ -217,9 +220,9 @@ and are NOT promoted to a `.reason_codes.txt`. So none is created.
 | AV-01 | Agent identity: an Allele Data Specialist for the Alliance Genome Resources Curation Database who helps curators identify and validate allele information by querying the AGR curation database. | `<role>` (reframed to curator-voice "stronger specialized resolver"; identity + DB-query purpose retained) |
 | AV-02 | Goal: validate allele symbols, names, IDs, species, obsolete status, and extinction status from database evidence; return structured `AlleleResultEnvelope` data using the shared validator result contract, without guessing or unsupported normalization. | `<goal>` |
 | AV-03 | Success: calls `agr_curation_query` before providing allele information. | `<goal>` ("Decide every identity from what the database returns") + `<resolution_and_validation_rules>` (## No memory, no guessing). The imperative "you MUST call before responding" is CORE's required-tool-call policy (AV-RTC). Literal token `` `agr_curation_query` `` retained. **(`<success_criteria>` removed in the leanness pass — restatement.)** |
-| AV-04 | Success: for domain validation requests, uses `selected_inputs.mention` as the primary query, with optional `selected_inputs.normalized_hint`, `selected_inputs.associated_gene`, `selected_inputs.taxon`, and `selected_inputs.evidence_quote` only as disambiguating context. | `<resolution_and_validation_rules>` (the `selected_inputs` handoff contract; AV-14). **(`<success_criteria>` removed — restatement of AV-14.)** |
-| AV-05 | Success: searches the literal compact allele symbol, notation, or ID supplied by the user or paper first; do not rewrite or normalize it before the first lookup. | **RELOCATED verbatim** `<success_criteria>` -> `<resolution_and_validation_rules>` (## Symbol handling). "do not rewrite or normalize it before the first lookup" is a contract-test token hard-pinned by `test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries`; moved, not deleted. |
-| AV-06 | Success: never pass a whole evidence sentence, descriptive clause, phenotype sentence, or paragraph into `allele_symbol`. Evidence text is context for judging candidates, not the allele search query. | **RELOCATED verbatim** `<success_criteria>` -> `<resolution_and_validation_rules>` (## Symbol handling). "Never pass a whole evidence sentence" and "Evidence text is context for judging candidates" are contract-test tokens hard-pinned by `test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries`; moved, not deleted. |
+| AV-04 | Success: for domain validation requests, uses `selected_inputs.mention` as the primary source for selecting the literal entity query, with optional `selected_inputs.normalized_hint`, `selected_inputs.associated_gene`, `selected_inputs.taxon`, and `selected_inputs.evidence_quote` only as disambiguating context. | `<resolution_and_validation_rules>` (the `selected_inputs` handoff contract; AV-14). **(`<success_criteria>` removed — restatement of AV-14.)** |
+| AV-05 | Success: preserves the complete source wording but searches the literal entity name it contains first. Selecting that exact span is allowed; replacing it with a different biological name, symbol, or identifier from memory is prohibited. | `<resolution_and_validation_rules>` (## Symbol handling), hard-pinned by `test_allele_prompt_selects_literal_entity_span_without_biological_renaming`. |
+| AV-06 | Success: never pass a whole evidence sentence, descriptive clause, phenotype sentence, or paragraph into `allele_symbol`. Evidence text is context for judging candidates, not the allele search query. | **RELOCATED verbatim** `<success_criteria>` -> `<resolution_and_validation_rules>` (## Symbol handling). "Never pass a whole evidence sentence" and "Evidence text is context for judging candidates" are contract-test tokens hard-pinned by `test_allele_prompt_selects_literal_entity_span_without_biological_renaming`; moved, not deleted. |
 | AV-07 | Success: uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated. | `<resolution_and_validation_rules>` (species selection; AV-17). **(`<success_criteria>` removed — restatement of AV-17.)** |
 | AV-08 | Success: reports each resolved allele in `resolved_objects`, copies expected scalar fields into `resolved_values`, and records candidate matches in `candidates` and `allele_candidates`. | `<result_contract>` (AV-30). **(`<success_criteria>` removed — restatement of the result-contract field roster.)** |
 | AV-09 | Success: uses `status: "resolved"` only when expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors. | `<result_contract>` (verbatim `status: "resolved"` / `status: "unresolved"` tokens — contract-test requirement). **(`<success_criteria>` removed — restatement of AV-28.)** |
@@ -238,11 +241,11 @@ and are NOT promoted to a `.reason_codes.txt`. So none is created.
 
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
-| AV-15 | CRITICAL: NEVER assume a symbol is an abbreviation for another gene name; ALWAYS search the LITERAL symbol from the paper first. Worked example (BMAL1 fl/fl mice -> do NOT silently jump to Arntl; search "BMAL1" literally so synonym matching finds stored alleles). The rule: (1) FIRST search the exact compact symbol, notation, or ID from the paper; (2) ONLY IF that fails with zero results, consider alternatives; (3) NEVER substitute a gene name with what you think it "really means". The DB stores historical names that differ from current gene nomenclature as synonyms, but only if you search the literal symbol. | `<resolution_and_validation_rules>` (the load-bearing never-assume-equivalence + literal-symbol-first rule; worked example retained; "NEVER ASSUME"/"ALWAYS" emphasis kept as a true invariant) |
+| AV-15 | CRITICAL: NEVER assume a symbol is an abbreviation for another gene name; ALWAYS search the literal entity name used by the paper first. The entity query may be an exact span within a larger mention, but must not be replaced with an outside synonym or different biological name. Worked example: select BMAL1 from the source wording, but do NOT silently jump to Arntl. | `<resolution_and_validation_rules>` (the load-bearing never-assume-equivalence + literal-entity-first rule; "NEVER ASSUME"/"ALWAYS" emphasis kept as a true invariant) |
 | AV-16 | Tool requirement: do not answer from memory or training data, guess allele IDs, guess symbols or names, or provide allele information without querying. | `<resolution_and_validation_rules>` (no-memory/no-guessing; the "MUST call before responding" imperative is CORE AV-RTC, but the no-memory/no-guess curation rule is KEPT) |
-| AV-14 | Domain-envelope validation inputs (`selected_inputs`): use `selected_inputs.mention` as the primary query; treat `selected_inputs.normalized_hint`, `selected_inputs.associated_gene`, `selected_inputs.taxon`, and `selected_inputs.evidence_quote` as disambiguating context only, NOT as already-validated facts. The extractor's lookup hints are proposals, not authoritative identity. | `<resolution_and_validation_rules>` (the `selected_inputs` handoff contract; field list retained as the channel the validator reads) |
+| AV-14 | Domain-envelope validation inputs (`selected_inputs`): use `selected_inputs.mention` as the primary source for selecting the literal entity query; treat `selected_inputs.normalized_hint`, `selected_inputs.associated_gene`, `selected_inputs.taxon`, and `selected_inputs.evidence_quote` as disambiguating context only, NOT as already-validated facts. The extractor's lookup hints are proposals, not authoritative identity. | `<resolution_and_validation_rules>` (the `selected_inputs` handoff contract; field list retained as the channel the validator reads) |
 | AV-17 | Species filtering table: when the query/paper mentions a species, pass the matching `data_provider` (mouse->MGI, fly->FB, worm->WB, human->HGNC, zebrafish->ZFIN, rat->RGD, yeast->SGD); if no species is mentioned, or if the species/provider context is uncertain, omit `data_provider` rather than guessing; the database search can search across taxa. | `<resolution_and_validation_rules>` (full species->provider table retained; verbatim contract-test tokens "omit `data_provider` rather than guessing", "across taxa") |
-| AV-18 | Symbol handling — keep evidence out of the query: search the source-supported allele mention exactly as supplied first; the DB lookup layer is responsible for fuzzy matching, synonym matching, and database-specific symbol rendering differences; do not rewrite the paper text into a guessed database spelling before the first lookup. Keep supporting evidence quotes out of the `allele_symbol` argument; use them only to decide which returned candidate, if any, matches the intended allele. | `<resolution_and_validation_rules>` (verbatim contract-test tokens: "do not rewrite or normalize it before the first lookup" [from AV-05], "Keep supporting evidence quotes out of the `allele_symbol` argument") |
+| AV-18 | Symbol handling — keep evidence out of the query: preserve the complete source wording, select its literal entity-name span, and do not rewrite that span into a guessed database spelling. The DB lookup layer remains responsible for fuzzy matching, synonym matching, and database-specific symbol rendering differences. Keep supporting evidence quotes out of the `allele_symbol` argument; use them only to decide which returned candidate, if any, matches the intended allele. | `<resolution_and_validation_rules>` (contract tokens include "form the first query from the literal name of the entity being named" and "Keep supporting evidence quotes out of the `allele_symbol` argument") |
 | AV-19 | Symbol handling — surrounding notation: when a paper mention includes genotype, zygosity, strain background, tissue, construct, or other surrounding notation, use the evidence quote, `associated_gene`, `normalized_hint`, and species/provider context to decide whether the returned database candidates resolve the intended allele. If the literal source-supported search returns no candidates, only try additional compact allele-like search strings that are directly supported by `selected_inputs`, the evidence quote, or database-returned candidate context. Do not use a full sentence or surrounding prose as the search string. Record all lookup attempts and leave the target unresolved when the database evidence is still missing or ambiguous. | `<resolution_and_validation_rules>` (verbatim contract-test token: "Do not use a full sentence or surrounding prose as the search string") |
 
 ## Lookup workflow (bounded ordered DB path + which-method-when judgment)
@@ -250,7 +253,7 @@ and are NOT promoted to a `.reason_codes.txt`. So none is created.
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
 | AV-20 | Use the minimum lookup path sufficient for correctness: if the user/PDF provides a CURIE/ID, call `get_allele_by_id`; if you have a compact allele notation, gene-associated allele symbol, or partial allele symbol, call `search_alleles`; if you have an exact full symbol, call `get_allele_by_exact_symbol`. | `<lookup_workflow>` (which-method-when JUDGMENT retained; per-method MECHANICS relocated to bindings). **Leanness pass: the duplicate "Keep supporting evidence quotes out of the `allele_symbol` argument …" sentence that had also appeared here was dropped (clean free cut); AV-18's contract token now lives once in `<resolution_and_validation_rules>` ## Symbol handling.** |
-| AV-21 | Bounded lookup path (ordered): (1) determine whether the input is a CURIE/ID or a compact symbol/notation; (2) for CURIE/ID input, call `get_allele_by_id`; (3) for symbol/notation input, call `search_alleles`; (4) if too many results return, narrow by adding more characters or applying the known species `data_provider`; (5) if no result returns, report "Allele not found in database" with the exact search attempted. | `<lookup_workflow>` (ordered bounded path — the invariants file pins this order) |
+| AV-21 | Bounded lookup path (ordered): (1) select the literal entity name from the source wording and determine whether it is a CURIE/ID or a compact symbol/notation; (2) for CURIE/ID input, call `get_allele_by_id`; (3) for symbol/notation input, call `search_alleles`; (4) if too many results return, narrow by adding more characters or applying the known species `data_provider`; (5) if no result returns, report "Allele not found in database" with the exact search attempted. | `<lookup_workflow>` (ordered bounded path — the invariants file pins this order) |
 | AV-22 | Troubleshooting judgment: too many results -> add a species filter with `data_provider`; a compact notation or partial symbol (e.g. "Ulk1") -> use `search_alleles` so it returns the matching allele variants; a deprecated or synonym-stored symbol -> use `search_alleles` because synonym matching may surface the current allele; multiple alleles sharing a symbol -> check the species, associated gene, and notation on each query result before deciding. | `<lookup_workflow>` (consolidated troubleshooting judgment; de-duped against the pre-rewrite `# Lookup Examples`) |
 
 ## Result contract (AlleleResultEnvelope — model-authored shared validator contract)
@@ -328,10 +331,11 @@ and are NOT promoted to a `.reason_codes.txt`. So none is created.
 
 ## Contract-test coverage
 
-**No test assertion is edited, deleted, or weakened by this rewrite.** Two contract
-tests in `backend/tests/unit/test_gene_allele_validator_result_contract.py`
-constrain the allele base prompt content; every asserted fragment is **retained
-verbatim** in the rewrite, so all assertions pass unchanged:
+Two contract tests in
+`backend/tests/unit/test_gene_allele_validator_result_contract.py` constrain the
+allele base prompt content. Shared validator-schema assertions remain unchanged;
+the allele-specific prompt assertions track the current load-bearing contract and
+are updated when that contract intentionally changes:
 
 - `test_gene_and_allele_prompts_describe_shared_validator_policy` (gene + allele):
   requires `` `status: "resolved"` ``, `` `status: "unresolved"` ``,
@@ -341,15 +345,16 @@ verbatim** in the rewrite, so all assertions pass unchanged:
   curator_message, explanation) — all retained (AV-09/AV-28/AV-29/AV-30/AV-31).
   Forbidden: `under_development`, `mark_under_development`, `repair_action`,
   `extractor_patch` — none introduced.
-- `test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries` (allele-specific):
-  requires "do not rewrite or normalize it before the first lookup" (AV-05),
-  "Never pass a whole evidence sentence" (AV-06), "Evidence text is context for
+- `test_allele_prompt_selects_literal_entity_span_without_biological_renaming` (allele-specific):
+  requires the literal entity-span selection and no-biological-renaming rules
+  (AV-05), "Never pass a whole evidence sentence" (AV-06), "Evidence text is context for
   judging candidates" (AV-06), "Keep supporting evidence quotes out of the
   `allele_symbol` argument" (AV-18), "Do not use a full sentence or surrounding prose
-  as the search string" (AV-19), "omit `data_provider` rather than guessing" (AV-17),
-  "across taxa" (AV-17) — all retained verbatim. Forbidden: `` `N fa-g` -> search
+  as the search string" (AV-19), the known-species provider requirement, and
+  "across taxa" (AV-17). Forbidden: `` `N fa-g` -> search
   `N[fa-g]` ``, "after stripping genotype notation", "Automatically tries original" —
-  none introduced.
+  none introduced. It also pins the `LAMP-2A flox/flox`, `BMAL1`/`Arntl`, and
+  `N fa-g` semantic boundaries introduced by ALL-590.
 
 The schema-validation tests assert against the `AlleleResultEnvelope` model, not the
 prompt text, so they are unaffected. No re-baseline was needed.

@@ -326,13 +326,15 @@ def test_gene_prompt_uses_extractor_handoff_context_for_disambiguation():
         assert paper_specific_fragment not in prompt
 
 
-def test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries():
+def test_allele_prompt_selects_literal_entity_span_without_biological_renaming():
     prompt = yaml.safe_load(
         (ALLIANCE_AGENTS_PATH / "allele" / "prompt.yaml").read_text(encoding="utf-8")
     )["content"]
 
     required_fragments = [
-        "do not rewrite or normalize it before the first lookup",
+        "form the first query from the literal name of the entity being named",
+        "Selecting an exact entity-name span from a larger phrase is not biological renaming",
+        "Do not replace that span with a different biological name, symbol, or identifier from memory",
         "Never pass a whole evidence sentence",
         "Evidence text is context for judging candidates",
         "Keep supporting evidence quotes out of the `allele_symbol` argument",
@@ -344,11 +346,17 @@ def test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries():
         "When the paper's species IS known, the matching `data_provider` is REQUIRED on the lookup -- never omit it.",
         "Only omit `data_provider` when the species is genuinely unknown",
         "across taxa",
+        "For `LAMP-2A flox/flox`, search `LAMP-2A`",
+        "For `BMAL1 cardiac-specific knockout mice`, search `BMAL1`",
+        "do not substitute `Arntl`",
+        "For `N fa-g`, search the complete `N fa-g` phrase",
     ]
     for fragment in required_fragments:
         assert fragment in prompt
 
     forbidden_fragments = [
+        "Use `selected_inputs.mention` as the primary query.",
+        "do not rewrite or normalize it before the first lookup",
         "`N fa-g` -> search `N[fa-g]`",
         "after stripping genotype notation",
         "Automatically tries original",

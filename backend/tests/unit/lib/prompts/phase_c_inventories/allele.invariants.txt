@@ -13,8 +13,8 @@
 # (steps 1-5), where each occurs exactly once and in order. (AV-21 in
 # docs/design/phaseC-checklists/allele.md.)
 
-# Step 1 -- classify the input as a CURIE/ID or a compact symbol/notation.
-Decide whether the input is a CURIE/ID or a compact symbol/notation.
+# Step 1 -- select the literal entity name, then classify it as a CURIE/ID or compact symbol/notation.
+Select the literal entity name from the source wording, then decide whether it is a CURIE/ID or a compact symbol/notation.
 
 # Step 2 -- a CURIE/ID is resolved by id.
 For CURIE/ID input, call `get_allele_by_id`.
