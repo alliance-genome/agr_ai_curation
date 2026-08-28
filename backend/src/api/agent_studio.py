@@ -1975,19 +1975,67 @@ def _fit_provider_compact_payload(
         if serialize_if_fits(payload) is None:
             payload["recall"].pop("retained_proposal_input")
     else:
-        repeat_call = {"tool": tool_name, "input": {}}
-        payload["recall"]["next_call"] = repeat_call
+        exact_call = {"tool": tool_name, "input": safe_input}
+        payload["recall"]["next_call"] = exact_call
         if serialize_if_fits(payload) is None:
             payload["recall"].pop("next_call")
-        else:
-            exact_call = {"tool": tool_name, "input": safe_input}
-            payload["recall"]["next_call"] = exact_call
-            if serialize_if_fits(payload) is None:
-                payload["recall"]["next_call"] = repeat_call
-                selectors = _provider_tool_input_selectors(safe_input)
+            selectors = _provider_tool_input_selectors(safe_input)
+            required_inputs = opus_tools.get_builtin_tool_required_inputs(tool_name)
+            projected_input: Dict[str, Any] = {}
+            narrowing: Dict[str, Any] = {
+                "tool": tool_name,
+                "input": projected_input,
+            }
 
-                def selector_priority(item: tuple[str, Any]) -> tuple[int, int, str]:
+            def omitted_input_fields() -> list[str]:
+                if not isinstance(safe_input, dict):
+                    return []
+                omitted_required = (
+                    [
+                        field
+                        for field in required_inputs
+                        if field not in projected_input
+                    ]
+                    if required_inputs is not None
+                    else []
+                )
+                omitted_other = sorted(
+                    str(field)
+                    for field in safe_input
+                    if str(field) not in projected_input
+                    and str(field) not in omitted_required
+                )
+                return omitted_required + omitted_other
+
+            def update_narrowing_guidance() -> None:
+                omitted = omitted_input_fields()
+                guidance_fields = (
+                    omitted
+                    if required_inputs is None
+                    else [
+                        field
+                        for field in omitted
+                        if field in required_inputs or field.endswith("_id")
+                    ]
+                )
+                if guidance_fields:
+                    narrowing["supply_bounded"] = guidance_fields
+                else:
+                    narrowing.pop("supply_bounded", None)
+
+            update_narrowing_guidance()
+            payload["recall"]["narrow"] = narrowing
+            if serialize_if_fits(payload) is None:
+                payload["recall"].pop("narrow")
+            else:
+
+                def selector_priority(item: tuple[str, Any]) -> tuple[int, int, int, str]:
                     key, value = item
+                    required_priority = (
+                        0
+                        if required_inputs is not None and key in required_inputs
+                        else 1
+                    )
                     if key == "payload_id":
                         identity_priority = 0
                     elif key == "trace_id":
@@ -1997,19 +2045,37 @@ def _fit_provider_compact_payload(
                     else:
                         identity_priority = 3
                     return (
+                        required_priority,
                         identity_priority,
                         len(_serialize_provider_tool_result(value)),
                         key,
                     )
 
-                selector_items = sorted(
-                    selectors.items(),
-                    key=selector_priority,
-                )
-                for key, value in selector_items:
-                    repeat_call["input"][key] = value
+                for key, value in sorted(selectors.items(), key=selector_priority):
+                    projected_input[key] = value
+                    update_narrowing_guidance()
                     if serialize_if_fits(payload) is None:
-                        repeat_call["input"].pop(key)
+                        projected_input.pop(key)
+                        update_narrowing_guidance()
+
+                omitted = omitted_input_fields()
+                required_or_identity_omitted = any(
+                    (
+                        required_inputs is not None
+                        and field in required_inputs
+                    )
+                    or field.endswith("_id")
+                    for field in omitted
+                )
+                if required_inputs is not None and not required_or_identity_omitted:
+                    payload["recall"].pop("narrow")
+                    payload["recall"]["next_call"] = {
+                        "tool": tool_name,
+                        "input": projected_input,
+                    }
+                    if serialize_if_fits(payload) is None:
+                        payload["recall"].pop("next_call")
+                        payload["recall"]["narrow"] = narrowing
 
     payload_refs: set[str] = set()
     _collect_provider_payload_refs(tool_result, payload_refs)
@@ -2034,7 +2100,7 @@ def _fit_provider_compact_payload(
         ),
         (
             "instruction",
-            "Use the exact repeat call, a narrower projected call, or durable turn recall before relying on omitted details.",
+            "Use the exact next call, bounded narrowing guidance, or durable turn recall before relying on omitted details.",
         ),
     )
     for key, value in optional_fields:

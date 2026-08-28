@@ -514,8 +514,8 @@ def test_low_limit_escape_heavy_compaction_is_bounded_and_deterministic(monkeypa
     oversized_query = 'find "escaped\\value" 😀 ' * 1000
     tool_input = {
         "query": oversized_query,
-        "session_id": "session-selector-1",
-        "page": 2,
+        "chat_kind": "agent_studio",
+        "limit": 25,
     }
     tool_result = {"rows": [{"preview": '\\"😀' * 5000}]}
 
@@ -543,9 +543,13 @@ def test_low_limit_escape_heavy_compaction_is_bounded_and_deterministic(monkeypa
     )
     assert len(compact["tool"]["input"]["sha256"]) == 64
     assert oversized_query not in first
-    assert compact["recall"]["next_call"]["input"]["session_id"] == (
-        "session-selector-1"
-    )
+    assert "next_call" not in compact["recall"]
+    assert compact["recall"]["narrow"]["tool"] == "search_chat_history"
+    assert compact["recall"]["narrow"]["input"] == {"limit": 25}
+    assert compact["recall"]["narrow"]["supply_bounded"] == [
+        "query",
+        "chat_kind",
+    ]
 
 
 def test_default_limit_oversized_input_and_result_keep_summary_and_identity(monkeypatch):
@@ -566,7 +570,9 @@ def test_default_limit_oversized_input_and_result_keep_summary_and_identity(monk
 
     assert len(content) <= 12000
     assert compact["status"] == "compacted_tool_result"
-    assert compact["recall"]["next_call"]["input"] == {"page": 3}
+    assert "next_call" not in compact["recall"]
+    assert compact["recall"]["narrow"]["input"] == {"page": 3}
+    assert compact["recall"]["narrow"]["supply_bounded"] == ["query"]
     assert compact["summary"]["fields"]["rows"]["type"] == "array"
     assert compact["tool"]["input"]["json_chars"] == len(
         api_module._serialize_provider_tool_result(tool_input)
@@ -613,8 +619,29 @@ def test_default_limit_compaction_preserves_exact_small_input_and_payload_recall
     assert "instruction" in compact
 
 
-def test_unusable_provider_cap_returns_bounded_explicit_json_error(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "300")
+@pytest.mark.parametrize(
+    ("inline_max_chars", "expected_error"),
+    [
+        (
+            300,
+            {
+                "configured_max_chars": 300,
+                "error": "provider_tool_result_cap_too_small",
+            },
+        ),
+        (36, "provider_tool_result_cap_too_small"),
+        (24, "provider_cap_too_small"),
+    ],
+)
+def test_unusable_provider_cap_returns_bounded_explicit_json_error(
+    monkeypatch,
+    inline_max_chars,
+    expected_error,
+):
+    monkeypatch.setenv(
+        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
+        str(inline_max_chars),
+    )
 
     content = api_module._provider_tool_result_content(
         tool_name="get_trace_payload",
@@ -624,11 +651,8 @@ def test_unusable_provider_cap_returns_bounded_explicit_json_error(monkeypatch):
         turn_id="opus-turn-too-small",
     )
 
-    assert len(content) <= 300
-    assert json.loads(content) == {
-        "configured_max_chars": 300,
-        "error": "provider_tool_result_cap_too_small",
-    }
+    assert len(content) <= inline_max_chars
+    assert json.loads(content) == expected_error
 
 
 def test_current_flow_manifest_and_bounded_details_stay_under_provider_cap(monkeypatch):
@@ -989,9 +1013,9 @@ def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
     assert second_compact["recall"]["turn"]["turn_id"] == (
         "opus-turn-repeat-abc123"
     )
-    assert second_compact["recall"]["next_call"]["input"]["payload_id"] == (
-        "observation:abc:output"
-    )
+    assert "next_call" not in second_compact["recall"]
+    assert second_compact["recall"]["narrow"]["tool"] == "get_trace_payload"
+    assert "payload_id" in second_compact["recall"]["narrow"]["supply_bounded"]
     assert inventory_value not in first_provider_result
     assert exact_payload_value not in second_provider_result
 
@@ -1107,12 +1131,8 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
     monkeypatch.setattr(tools_module, "get_trace_payload", _fake_get_trace_payload)
     payload_result = asyncio.run(
         api_module._handle_tool_call(
-            tool_name=compact["recall"]["next_call"]["tool"],
-            tool_input={
-                "trace_id": "trace-1",
-                "payload_id": compact["recall"]["next_call"]["input"]["payload_id"],
-                "max_chars": 0,
-            },
+            tool_name=compact["recall"]["narrow"]["tool"],
+            tool_input={**compact["recall"]["narrow"]["input"], "max_chars": 0},
             context=None,
             user_email="dev@example.org",
             user_auth_sub="auth-sub-1",
@@ -1121,6 +1141,10 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
     )
 
     assert exact_payload_value not in json.dumps(compact, sort_keys=True)
+    assert "next_call" not in compact["recall"]
+    assert compact["recall"]["narrow"]["input"]["payload_id"] == (
+        "observation:abc:output"
+    )
     assert turn_result["success"] is True
     exact_turn_next_call = turn_result["messages"][0]["fields"]["content"]["next_call"]
     exact_turn_result = asyncio.run(

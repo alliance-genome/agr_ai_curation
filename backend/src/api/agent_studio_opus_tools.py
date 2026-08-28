@@ -1283,6 +1283,54 @@ AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
     "read_source_file",
 }
 
+_BUILTIN_OPUS_TOOLS = (
+    ANTHROPIC_SUGGESTION_TOOL,
+    ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL,
+    ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
+    ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
+    LIST_RECENT_CHATS_TOOL,
+    SEARCH_CHAT_HISTORY_TOOL,
+    GET_CHAT_CONVERSATION_TOOL,
+    GET_CHAT_TURN_TOOL,
+    SEARCH_TRACES_TOOL,
+    GET_TRACE_SUMMARY_TOOL,
+    GET_TOOL_CALLS_SUMMARY_TOOL,
+    GET_TOOL_CALLS_PAGE_TOOL,
+    GET_TOOL_CALL_DETAIL_TOOL,
+    GET_TRACE_CONVERSATION_TOOL,
+    GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL,
+    GET_EXTRACTION_TIMELINE_TOOL,
+    GET_EVIDENCE_REVISIONS_TOOL,
+    GET_TRACE_TREE_TOOL,
+    GET_TRACE_RECONSTRUCTION_TOOL,
+    GET_TRACE_MODEL_LIVE_CONTEXT_TOOL,
+    GET_TRACE_PAYLOADS_TOOL,
+    GET_TRACE_PAYLOAD_TOOL,
+    GET_TRACE_COSTS_TOOL,
+    GET_TRACE_DUPLICATES_TOOL,
+    GET_TRACE_VIEW_TOOL,
+    GET_SERVICE_LOGS_TOOL,
+    LIST_DOMAIN_ENVELOPES_TOOL,
+    GET_DOMAIN_ENVELOPE_STATE_TOOL,
+    GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL,
+    GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL,
+    GET_EXPORT_SUBMISSION_READINESS_TOOL,
+)
+
+
+def get_builtin_tool_required_inputs(tool_name: str) -> tuple[str, ...] | None:
+    """Return canonical required inputs, or None for a registry-provided tool."""
+
+    for tool in _BUILTIN_OPUS_TOOLS:
+        if tool.get("name") != tool_name:
+            continue
+        input_schema = tool.get("input_schema")
+        if not isinstance(input_schema, dict):
+            return ()
+        required = input_schema.get("required", [])
+        return tuple(str(field) for field in required)
+    return None
+
 
 @lru_cache(maxsize=1)
 def _package_agent_only_diagnostic_tools() -> set[str]:
@@ -1377,43 +1425,9 @@ def get_all_opus_tools(
     Combines the suggestion tool, workflow analysis tools, and diagnostic tools.
     """
 
-    candidate_tools = [
-        ANTHROPIC_SUGGESTION_TOOL,
-        ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL,
-        ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
-        ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
-        LIST_RECENT_CHATS_TOOL,
-        SEARCH_CHAT_HISTORY_TOOL,
-        GET_CHAT_CONVERSATION_TOOL,
-        GET_CHAT_TURN_TOOL,
-        SEARCH_TRACES_TOOL,
-        GET_TRACE_SUMMARY_TOOL,
-        GET_TOOL_CALLS_SUMMARY_TOOL,
-        GET_TOOL_CALLS_PAGE_TOOL,
-        GET_TOOL_CALL_DETAIL_TOOL,
-        GET_TRACE_CONVERSATION_TOOL,
-        GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL,
-        GET_EXTRACTION_TIMELINE_TOOL,
-        GET_EVIDENCE_REVISIONS_TOOL,
-        GET_TRACE_TREE_TOOL,
-        GET_TRACE_RECONSTRUCTION_TOOL,
-        GET_TRACE_MODEL_LIVE_CONTEXT_TOOL,
-        GET_TRACE_PAYLOADS_TOOL,
-        GET_TRACE_PAYLOAD_TOOL,
-        GET_TRACE_COSTS_TOOL,
-        GET_TRACE_DUPLICATES_TOOL,
-        GET_TRACE_VIEW_TOOL,
-        GET_SERVICE_LOGS_TOOL,
-        LIST_DOMAIN_ENVELOPES_TOOL,
-        GET_DOMAIN_ENVELOPE_STATE_TOOL,
-        GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL,
-        GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL,
-        GET_EXPORT_SUBMISSION_READINESS_TOOL,
-    ]
-
     tools = [
         tool
-        for tool in candidate_tools
+        for tool in _BUILTIN_OPUS_TOOLS
         if is_allowed(str(tool.get("name", "")), context)
     ]
 
