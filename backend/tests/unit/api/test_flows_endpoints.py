@@ -38,6 +38,7 @@ def _available_flow_agent_policy(monkeypatch):
             "visibility": None,
             "produces_flow_artifacts": True,
             "supervisor": {},
+            "curation": {"domain_pack_id": "fixture.validation"},
         },
     )
 
@@ -201,8 +202,10 @@ async def test_get_flow_reports_missing_agent_reference_on_read(monkeypatch):
     assert "gene_expression" in response.validation_warnings[0].message
 
 
-def test_flow_response_preserves_unavailable_custom_agent_attachments_with_warning(
+@pytest.mark.parametrize("metadata_state", ["unavailable", "missing_domain_pack"])
+def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warning(
     monkeypatch,
+    metadata_state,
 ):
     template_definition = _flow_definition()
     template_definition["nodes"][1]["data"].update(
@@ -252,24 +255,42 @@ def test_flow_response_preserves_unavailable_custom_agent_attachments_with_warni
     inherited_groups = owned.flow_definition["nodes"][1]["data"]["validation_groups"]
     inherited_edges = owned.flow_definition["edges"]
 
-    def _unavailable(*_args, **_kwargs):
-        raise ValueError("unavailable")
+    def _custom_metadata(agent_id, **_kwargs):
+        if metadata_state == "unavailable":
+            raise ValueError("unavailable")
+        return {
+            "agent_id": agent_id,
+            "display_name": "Custom Extraction Agent",
+            "category": "Extraction",
+            "curation": None,
+        }
+
+    def _policy_entry(agent_id, **_kwargs):
+        if agent_id != custom_agent_id:
+            return {}
+        if metadata_state == "unavailable":
+            return None
+        return {"curation": None}
 
     monkeypatch.setattr(
         flows,
         "get_active_visible_agent_metadata",
-        _unavailable,
+        _custom_metadata,
     )
     monkeypatch.setattr(
         flows,
         "_flow_agent_policy_entry",
-        lambda agent_id, **_kwargs: None if agent_id == custom_agent_id else {},
+        _policy_entry,
     )
 
     response = flows._flow_to_response(owned)
 
     assert response.has_critical_issues is True
     assert custom_agent_id in response.validation_warnings[0].message
+    if metadata_state == "missing_domain_pack":
+        assert "no longer declares validation attachments" in (
+            response.validation_warnings[0].message
+        )
     attachments = response.flow_definition.nodes[1].data.validation_attachments
     assert [attachment.model_dump() for attachment in attachments] == inherited_attachments
     groups = response.flow_definition.nodes[1].data.validation_groups
