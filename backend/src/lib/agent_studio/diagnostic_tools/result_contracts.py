@@ -16,6 +16,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_package_diagnostic_page_max_items,
     get_agent_studio_package_diagnostic_result_max_chars,
     get_agent_studio_package_diagnostic_scalar_preview_max_chars,
+    get_agent_studio_provider_tool_result_inline_max_chars,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,18 @@ def _canonical_json(value: Any) -> str:
 
 def _json_safe(value: Any) -> Any:
     return json.loads(_canonical_json(value))
+
+
+def _provider_json_chars(value: Any) -> int:
+    """Measure the exact JSON representation used for provider continuation."""
+    return len(json.dumps(value, default=str))
+
+
+def _result_max_chars() -> int:
+    return min(
+        get_agent_studio_package_diagnostic_result_max_chars(),
+        get_agent_studio_provider_tool_result_inline_max_chars(),
+    )
 
 
 def _hash(content: str) -> str:
@@ -122,12 +135,15 @@ def _summary(result: Mapping[str, Any], *, page_paths: set[str]) -> dict[str, An
             and len(value)
             > get_agent_studio_package_diagnostic_scalar_preview_max_chars()
         ):
-            fields[key] = _detail_descriptor(value, path, include_preview=True)
+            descriptor = _detail_descriptor(value, path, include_preview=True)
+            if _provider_json_chars(descriptor) > _result_max_chars():
+                descriptor = _detail_descriptor(value, path)
+            fields[key] = descriptor
         else:
             fields[key] = value
 
     canonical = _canonical_json(result)
-    return {
+    summary = {
         "status": result.get("status", "ok"),
         "result_view": "summary",
         "result_sha256": _hash(canonical),
@@ -141,6 +157,14 @@ def _summary(result: Mapping[str, Any], *, page_paths: set[str]) -> dict[str, An
             else "Use result_view='detail' with detail_path for exact content."
         ),
     }
+    if _provider_json_chars(summary) > _result_max_chars():
+        for key, value in list(fields.items()):
+            if not isinstance(value, dict) or "detail_path" in value:
+                continue
+            fields[key] = _detail_descriptor(result[key], str(key))
+            if _provider_json_chars(summary) <= _result_max_chars():
+                break
+    return summary
 
 
 def _page(
@@ -168,18 +192,18 @@ def _page(
         "cursor": cursor,
         "items": [],
     }
-    result_max = get_agent_studio_package_diagnostic_result_max_chars()
+    result_max = _result_max_chars()
     stop = min(len(items), cursor + limit)
     for index in range(cursor, stop):
         item = items[index]
         candidate = _json_safe(item)
         output["items"].append(candidate)
-        if len(_canonical_json(output)) > result_max:
+        if _provider_json_chars(output) > result_max:
             output["items"].pop()
             output["items"].append(
                 _detail_descriptor(item, f"{path}.{index + path_index_offset}")
             )
-        if len(_canonical_json(output)) > result_max:
+        if _provider_json_chars(output) > result_max:
             output["items"].pop()
             break
 
@@ -191,7 +215,7 @@ def _page(
         complete=next_cursor >= len(items),
         truncated=next_cursor < len(items),
     )
-    while output["items"] and len(_canonical_json(output)) > result_max:
+    while output["items"] and _provider_json_chars(output) > result_max:
         output["items"].pop()
         returned = len(output["items"])
         next_cursor = cursor + returned
@@ -210,26 +234,44 @@ def _detail(
     path: str,
     cursor: int,
     max_chars: int,
+    output_path: str | None = None,
 ) -> dict[str, Any]:
     value = _resolve_path(result, path)
     is_text = isinstance(value, str)
     content = value if is_text else _canonical_json(value)
     if cursor < 0 or cursor > len(content):
         raise ValueError(f"detail_cursor {cursor} is outside the 0..{len(content)} range")
-    end = min(len(content), cursor + max_chars)
-    complete = end >= len(content)
-    return {
-        "status": result.get("status", "ok"),
-        "result_view": "detail",
-        "detail_path": path,
-        "encoding": "text" if is_text else "canonical_json",
-        "content": content[cursor:end],
-        "sha256": _hash(content),
-        "total_chars": len(content),
-        "returned_range": {"start": cursor, "end": end},
-        "next_cursor": None if complete else end,
-        "complete": complete,
-    }
+    requested_end = min(len(content), cursor + max_chars)
+
+    def render(end: int) -> dict[str, Any]:
+        complete = end >= len(content)
+        return {
+            "status": result.get("status", "ok"),
+            "result_view": "detail",
+            "detail_path": output_path or path,
+            "encoding": "text" if is_text else "canonical_json",
+            "content": content[cursor:end],
+            "sha256": _hash(content),
+            "total_chars": len(content),
+            "returned_range": {"start": cursor, "end": end},
+            "next_cursor": None if complete else end,
+            "complete": complete,
+        }
+
+    low = cursor
+    high = requested_end
+    while low < high:
+        candidate_end = (low + high + 1) // 2
+        if _provider_json_chars(render(candidate_end)) <= _result_max_chars():
+            low = candidate_end
+        else:
+            high = candidate_end - 1
+    detail = render(low)
+    if low == cursor and requested_end > cursor:
+        raise ValueError(
+            "provider inline limit is too small for diagnostic detail metadata"
+        )
+    return detail
 
 
 def _normalized_limit(value: Any) -> int:
@@ -251,6 +293,12 @@ def _normalized_chunk_size(value: Any) -> int:
     return min(value, maximum)
 
 
+def _normalized_cursor(value: Any, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
 def _render_result(
     result: Mapping[str, Any],
     contract: Mapping[str, Any],
@@ -267,7 +315,9 @@ def _render_result(
         return _page(
             result,
             path=path,
-            cursor=controls.get("result_cursor", 0),
+            cursor=_normalized_cursor(
+                controls.get("result_cursor", 0), name="result_cursor"
+            ),
             limit=_normalized_limit(controls.get("result_limit")),
             page_paths=page_paths,
         )
@@ -278,7 +328,9 @@ def _render_result(
         return _detail(
             result,
             path=path,
-            cursor=controls.get("detail_cursor", 0),
+            cursor=_normalized_cursor(
+                controls.get("detail_cursor", 0), name="detail_cursor"
+            ),
             max_chars=_normalized_chunk_size(controls.get("detail_max_chars")),
         )
     raise ValueError("result_view must be one of: summary, page, detail")
@@ -359,7 +411,9 @@ def create_sql_query_handler(
             )
             if not isinstance(path, str) or not path.startswith("rows"):
                 raise ValueError("SQL result_path/detail_path must address rows")
-            cursor = controls.get("result_cursor", 0)
+            cursor = _normalized_cursor(
+                controls.get("result_cursor", 0), name="result_cursor"
+            )
             limit = _normalized_limit(controls.get("result_limit"))
             if view == "detail":
                 parts = _path_parts(path)
@@ -372,10 +426,19 @@ def create_sql_query_handler(
                 limit = 1
             page_query = sa.text(
                 f"SELECT * FROM ({query}) AS diagnostic_page "
-                f"LIMIT {limit + 1} OFFSET {cursor}"
+                "LIMIT :diagnostic_limit OFFSET :diagnostic_offset"
             )
             with engine.connect() as connection:
-                rows = [dict(row._mapping) for row in connection.execute(page_query)]
+                rows = [
+                    dict(row._mapping)
+                    for row in connection.execute(
+                        page_query,
+                        {
+                            "diagnostic_limit": limit + 1,
+                            "diagnostic_offset": cursor,
+                        },
+                    )
+                ]
             rows = rows[:limit]
             result = {"status": "ok", "rows": _json_safe(rows)}
             if view == "detail":
@@ -383,10 +446,12 @@ def create_sql_query_handler(
                 detail = _detail(
                     result,
                     path=relative_path,
-                    cursor=controls.get("detail_cursor", 0),
+                    cursor=_normalized_cursor(
+                        controls.get("detail_cursor", 0), name="detail_cursor"
+                    ),
                     max_chars=_normalized_chunk_size(controls.get("detail_max_chars")),
+                    output_path=path,
                 )
-                detail["detail_path"] = path
                 return detail
             page = _page(
                 result,

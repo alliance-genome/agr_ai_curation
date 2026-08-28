@@ -208,6 +208,58 @@ def test_rest_success_and_error_bodies_reconstruct_from_exact_chunks(
     _provider_visible(tool_id, summary)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "\0" * 6_000,
+        '\\"' * 3_000,
+        "é" * 2_500,
+    ],
+    ids=["escaped-controls", "slashes-and-quotes", "non-ascii"],
+)
+def test_chunks_budget_against_provider_json_serialization(monkeypatch, payload):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1000")
+    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "20000")
+    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_CHUNK_MAX_CHARS", "6000")
+    handler = result_contracts.create_bounded_result_handler(
+        lambda: {"status": "ok", "message": payload},
+        {"kind": "raw", "page_paths": []},
+    )
+
+    chunks = []
+    cursor = 0
+    while True:
+        detail = handler(
+            result_view="detail",
+            detail_path="message",
+            detail_cursor=cursor,
+        )
+        content = json.dumps(detail, default=str)
+        assert len(content) <= 1000
+        provider_result = _provider_visible("quickgo_api_call", detail)
+        chunks.append(provider_result["content"])
+        if detail["complete"]:
+            break
+        assert detail["next_cursor"] > cursor
+        cursor = detail["next_cursor"]
+
+    assert "".join(chunks) == payload
+
+
+@pytest.mark.parametrize("payload", ["\0" * 2_500, '\\"' * 2_500, "é" * 2_500])
+def test_structured_pages_budget_escaped_items_for_provider(payload):
+    handler = result_contracts.create_bounded_result_handler(
+        lambda: {"status": "ok", "data": [{"payload": payload}]},
+        {"kind": "structured", "page_paths": ["data"]},
+    )
+
+    page = handler(result_view="page", result_path="data")
+
+    assert page["returned_count"] == 1
+    assert page["items"][0]["detail_path"] == "data.0"
+    _provider_visible("agr_curation_query", page)
+
+
 def test_sql_diagnostic_counts_pages_and_chunks_without_full_materialization(monkeypatch):
     engine = sa.create_engine("sqlite://")
     with engine.begin() as connection:
@@ -219,8 +271,8 @@ def test_sql_diagnostic_counts_pages_and_chunks_without_full_materialization(mon
     executed = []
 
     @sa.event.listens_for(engine, "before_cursor_execute")
-    def _record_sql(_connection, _cursor, statement, _parameters, _context, _many):
-        executed.append(statement)
+    def _record_sql(_connection, _cursor, statement, parameters, _context, _many):
+        executed.append((statement, parameters))
 
     monkeypatch.setattr(result_contracts.sa, "create_engine", lambda _url: engine)
     handler = result_contracts.create_sql_query_handler(
@@ -243,6 +295,16 @@ def test_sql_diagnostic_counts_pages_and_chunks_without_full_materialization(mon
         detail_max_chars=1000,
     )
     rejected = handler(query="DELETE FROM records")
+    executed_before_invalid_cursor = list(executed)
+    invalid_cursors = [
+        handler(
+            query="SELECT id FROM records",
+            result_view="page",
+            result_path="rows",
+            result_cursor=value,
+        )
+        for value in ("0; SELECT 999", True, -1)
+    ]
 
     assert summary["fields"]["count"] == 60
     assert page["total_count"] == 60
@@ -253,8 +315,14 @@ def test_sql_diagnostic_counts_pages_and_chunks_without_full_materialization(mon
     assert detail["complete"] is False
     assert rejected["status"] == "error"
     assert "Only SELECT" in rejected["message"]
-    assert any("LIMIT 11 OFFSET 20" in statement for statement in executed)
-    assert not any("DELETE FROM records" in statement for statement in executed)
+    assert all(result["status"] == "error" for result in invalid_cursors)
+    assert all("non-negative integer" in result["message"] for result in invalid_cursors)
+    assert executed == executed_before_invalid_cursor
+    assert any(
+        "LIMIT ? OFFSET ?" in statement and parameters == (11, 20)
+        for statement, parameters in executed
+    )
+    assert not any("DELETE FROM records" in statement for statement, _ in executed)
     _provider_visible("curation_db_sql", summary)
     _provider_visible("curation_db_sql", page)
     _provider_visible("curation_db_sql", detail)
