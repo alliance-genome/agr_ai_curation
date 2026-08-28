@@ -48,6 +48,7 @@ import type {
   WorkshopPromptUpdateProposal,
 } from '@/types/promptExplorer'
 import SuggestionDialog from './SuggestionDialog'
+import { buildFlowVerificationPrompt } from './flowVerificationPrompt'
 
 const ChatContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -1163,40 +1164,7 @@ function OpusChat({
 
   // Flow-specific suggestions (shown when on flows tab)
   const flowQuickActions = [
-    { label: 'Verify my flow', prompt: `Verify my current curation flow.
-
-REQUIRED: Call these tools first:
-1. get_current_flow() - returns flow definition with validation_warnings and has_critical_issues flag
-2. get_available_agents() - get agent categories and output_agents list
-3. get_prompt(), get_tool_inventory(), and get_tool_details() as needed before judging custom instructions, document tools, or PDF evidence behavior
-
-IMPORTANT: Check get_current_flow() response for:
-- has_critical_issues: true/false - if TRUE, verification MUST FAIL
-- validation_warnings: array of issues with type (CRITICAL/WARNING) and message
-- task_instructions_is_empty: true in any step means CRITICAL error
-
-CRITICAL ERRORS (must fail verification):
-- has_critical_issues is TRUE in get_current_flow() response
-- Any step has task_instructions_is_empty: true
-- task_input node has EMPTY task_instructions (this is required content)
-- Disconnected nodes (won't execute)
-- Cycles (infinite loops)
-- PARALLEL/BRANCHING FLOWS: Any node with multiple outgoing edges is NOT YET SUPPORTED (parallel flows will be supported in a future update - for now, each node can only connect to ONE next node)
-
-HIGH PRIORITY ISSUES:
-- Flow doesn't end with an output-category agent
-- Duplicate output_key values
-- Custom instructions that try to paste prior step output instead of steering the current agent
-
-SUGGESTIONS (only if evidence-based):
-- ONLY suggest alternative agents if the curator's task_instructions or custom_instructions explicitly mention something that a different agent handles better
-- Do NOT make speculative suggestions without evidence from the instructions
-
-OUTPUT:
-### FLOW VERIFICATION: [PASS/FAIL]
-**Critical:** [list or "None"]
-**High:** [list or "None"]
-**Suggestions:** [evidence-based only, or "None"]` },
+    { label: 'Verify my flow', prompt: buildFlowVerificationPrompt() },
     { label: 'Help build a flow', prompt: 'I want to build a new curation flow. Please help me design it starting with Initial Instructions. What should I define in my initial instructions, and what agents should follow?' },
     { label: 'Optimize my flow', prompt: 'Can you suggest optimizations for my current flow? I want to make sure it\'s efficient and well-designed.' },
   ]

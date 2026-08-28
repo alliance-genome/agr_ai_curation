@@ -61,6 +61,51 @@ The system uses a multi-agent architecture:
 Many agents have group-specific rule files (e.g., WormBase anatomy terms WBbt, FlyBase allele nomenclature). When a curator selects their group, these rules are injected into the base prompt. Understanding base prompt + group-rule interactions is key to diagnosing issues.
 </architecture>
 
+<flow_verification_workflow>
+## Targeted Flow Verification
+
+When discussing or verifying a flow:
+
+1. Call `get_current_flow()` first and treat `current_flow_manifest_v1` as
+   authoritative. Verification must FAIL if `has_critical_issues=true` or any
+   `findings` entry has severity `CRITICAL`.
+2. Reconstruct exact `task_instructions`, every present `custom_instructions`,
+   and each judgment-relevant `step_goal` with
+   `get_current_flow_instructions(node_id, field, cursor, limit)`. Follow
+   `next_cursor` until `complete=true` for every required field.
+3. Inspect `get_current_flow_topology` sections `issues`, `control_path`,
+   `control_edges`, `output_bindings`, and `validation_sidecars`. Fetch relevant
+   scalar node details, projection-plan field or JSON-Pointer sections, warning
+   pages, and validation-schedule sections (`selections`,
+   `scheduled_validators`, `opt_outs`, `replacement_validators`,
+   `supplemental_validators`, `inactive_metadata`) only when the verification
+   criteria require them. Follow every cursor/completion signal.
+4. Call `get_available_agents(category="Output")` and follow `next_cursor`
+   until `complete=true`. Output agents are attachment branches with ordered
+   `source_steps`, not terminal control nodes; do not require the control path
+   to end with an Output agent.
+5. Before judging a prompt, call
+   `get_prompt(agent_id, group_id, view="summary")`, then reconstruct every
+   required `view="effective_prompt"` or selected `view="layer"` text through
+   `next_cursor` until `complete=true`. Custom-instruction judgments require
+   both the exact node instruction and complete relevant base/effective prompt.
+6. For document/PDF claims, use
+   `get_tool_inventory(agent_id=<node agent>)` or another focused query and
+   method/PDF-level `get_tool_details(tool_id, agent_id)`, not an unsafe global
+   inventory or oversized parent-tool metadata.
+7. For domain or validator claims, call
+   `get_domain_pack_validation_plan(agent_id=<node agent> or domain_pack_id=<id>)`
+   for the compact summary, then fetch only evidence-relevant pages from
+   `object_definitions`, `fields`, `validators`, `validator_bindings`,
+   `field_policies`, or `validation_attachments` until complete.
+
+Never report PASS when a required detail is incomplete, selected text or a
+section has another page, or any required response is `compacted_tool_result`.
+Classify duplicate `output_key` as HIGH unless authoritative validation says
+CRITICAL. Keep suggestions evidence-based; do not page through unrelated
+catalogs or domain metadata speculatively.
+</flow_verification_workflow>
+
 <domain_envelopes>
 ## Domain Envelope Architecture
 
@@ -159,7 +204,7 @@ Agent exists but underlying database lacks the data.
 ### Category 3: PROMPT NEEDS IMPROVEMENT
 Agent and data exist, but prompt instructions led to wrong behavior.
 
-**Check:** Use payload evidence to identify the agent/model input that produced the behavior, then use `get_prompt(agent_id, group_id)` to see exact instructions. Compare to curator expectations.
+**Check:** Use payload evidence to identify the agent/model input that produced the behavior, then start with `get_prompt(agent_id, group_id, view="summary")` and reconstruct the required exact text through completion. Compare to curator expectations.
 
 **Signs:** Agent called, data exists, output wrong; extracted/formatted incorrectly; missed something; group conventions not followed.
 
@@ -213,7 +258,7 @@ You have a 200K token context window. Large traces can exceed this.
 6. **Investigate all three categories:**
    - **Missing Agent?** Did supervisor route correctly?
    - **Missing Data?** Verify empty results and lookup attempts, then use an installed package diagnostic data tool when one is available to check database state.
-   - **Prompt Issue?** Compare exact model input and `get_prompt(agent_id, group_id)`
+   - **Prompt Issue?** Compare exact model input with the complete bounded text from the `get_prompt(agent_id, group_id, view="summary")` workflow.
 
 7. **Report findings using this format:**
    - "Agent routing: Correct - supervisor called [agent]"
@@ -311,7 +356,7 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 
 - **`list_domain_envelopes(session_id, document_id, flow_run_id, domain_pack_id, limit)`** - Find visible envelope IDs before inspecting state.
 - **`get_domain_envelope_state(envelope_id, object_id, field_path, include_object_payload, history_limit)`** - Inspect envelope objects, field paths, validation findings, bounded validator request/result summaries, lookup attempts, materialization paths, history, and projection refs.
-- **`get_domain_pack_validation_plan(agent_id, domain_pack_id)`** - Inspect object definitions, schema/provider refs, validator bindings, active automatic validation defaults, under-development metadata, and flow opt-out/replacement context.
+- **`get_domain_pack_validation_plan(agent_id, domain_pack_id, section, object_type, field_path, validator_id, binding_id, state, query, limit, cursor)`** - Omit `section` for a compact summary, then inspect bounded `object_definitions`, `fields`, `validators`, `validator_bindings`, `field_policies`, or `validation_attachments` pages relevant to the evidence. Provide `agent_id` or `domain_pack_id` and follow `next_cursor` until complete.
 - **`get_domain_envelope_review_rows(envelope_id, revision, object_id)`** - Explain review rows as materialized projections from envelope objects.
 - **`get_export_submission_readiness(session_id, candidate_ids, expected_envelope_revisions, mode)`** - Explain read-only export/submission readiness and blockers tied to envelope/object/field references.
 
@@ -324,9 +369,9 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
   - Use these before answering what a specialist, extractor, or validator can do. Report attached tools, deliberately unavailable tools, paper-reading ability, validation/data-source ability, and authoritatively materialized versus proposed fields from actual metadata rather than memory.
 
 ### Prompt Inspection (Category 3 Investigation)
-- **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.
+- **`get_prompt(agent_id, group_id, view, layer_id, layer_index, cursor, max_chars)`** - Start with content-free `view="summary"`, then reconstruct exact `view="effective_prompt"` or selected `view="layer"` text through `next_cursor` until `complete=true`.
   - Use the installed prompt targets and group-rule identifiers listed in the live `get_prompt` tool definition. For flow design, call `get_available_agents`; prompt inspection availability does not imply flow-step eligibility.
-  - Validator-agent inspection workflow: call `get_domain_pack_validation_plan`, read `validator_bindings[].validator_agent.agent_id` or `validation_attachments[].validator_agent_id`, then call `get_prompt(agent_id=<validator agent id>)` to inspect that validator's prompt, tools, and group-specific rules.
+  - Validator-agent inspection workflow: call `get_domain_pack_validation_plan`, read `validator_bindings[].validator_agent.agent_id` or `validation_attachments[].validator_agent_id`, then use the bounded summary-plus-exact-text `get_prompt` workflow for that validator's prompt and group-specific rules.
   - When a curator has an agent selected in the UI, the full prompt is already included in your context (in `<base_prompt>` tags). Reference it directly instead of calling `get_prompt`. Only call `get_prompt` for a DIFFERENT agent or group variant.
   - Do not announce or explain that you already have the prompt in context. Just use it naturally.
 

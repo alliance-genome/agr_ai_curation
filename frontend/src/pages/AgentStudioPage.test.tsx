@@ -26,6 +26,7 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
     onApplyWorkshopPromptUpdate,
     onDurableSessionIdChange,
     onConversationSnapshotChange,
+    verifyMessage,
   }: {
     context?: Record<string, unknown>
     initialConversation?: Array<{ content: string }>
@@ -42,6 +43,7 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
     onConversationSnapshotChange?: (
       messages: Array<{ role: 'user' | 'assistant'; content: string }>
     ) => void
+    verifyMessage?: string | null
   }) => (
     <div data-testid="opus-chat">
       Opus
@@ -51,6 +53,7 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
       </div>
       <div data-testid="opus-chat-durable-session">{durableSessionId ?? 'none'}</div>
       <div data-testid="opus-chat-source-session">{sourceSessionId ?? 'none'}</div>
+      <div data-testid="opus-chat-verify-message">{verifyMessage ?? 'none'}</div>
       <button
         onClick={() =>
           onApplyWorkshopPromptUpdate?.({
@@ -82,7 +85,13 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
 }))
 
 vi.mock('@/components/AgentStudio/FlowBuilder', () => ({
-  FlowBuilder: ({ onFlowChange }: { onFlowChange?: (flow: Record<string, unknown>) => void }) => (
+  FlowBuilder: ({
+    onFlowChange,
+    onVerifyRequest,
+  }: {
+    onFlowChange?: (flow: Record<string, unknown>) => void
+    onVerifyRequest?: () => void
+  }) => (
     <div data-testid="flow-builder">
       Flow
       <button
@@ -109,6 +118,7 @@ vi.mock('@/components/AgentStudio/FlowBuilder', () => ({
       >
         emit-flow-context
       </button>
+      <button onClick={() => onVerifyRequest?.()}>verify-flow</button>
     </div>
   ),
 }))
@@ -246,6 +256,32 @@ describe('AgentStudioPage', () => {
       expect(context).toHaveTextContent('"state":"replaced"')
       expect(context).toHaveTextContent('"state":"supplemental"')
     })
+  })
+
+  it('sends the complete targeted verification contract from Flow Builder', async () => {
+    render(
+      <MemoryRouter>
+        <AgentStudioPage />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(1)
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+    fireEvent.click(await screen.findByText('verify-flow'))
+
+    const message = screen.getByTestId('opus-chat-verify-message')
+    expect(message).toHaveTextContent('get_current_flow() first')
+    expect(message).toHaveTextContent('get_current_flow_instructions')
+    expect(message).toHaveTextContent('get_available_agents(category="Output")')
+    expect(message).toHaveTextContent('view="summary"')
+    expect(message).toHaveTextContent('scheduled_validators')
+    expect(message).toHaveTextContent('get_tool_inventory(agent_id=')
+    expect(message).toHaveTextContent('get_domain_pack_validation_plan')
+    expect(message).toHaveTextContent('compacted_tool_result')
+    expect(message).toHaveTextContent('not terminal control nodes')
+    expect(message).toHaveTextContent('Duplicate output_key is HIGH')
   })
 
   it('passes cloned custom agent id into PromptWorkshop after clone-to-workshop', async () => {

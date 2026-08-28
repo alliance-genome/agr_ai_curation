@@ -2063,3 +2063,7 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
     assert by_name["get_current_flow_instructions"]["input_schema"]["properties"][
         "limit"
     ]["maximum"] == 900
+    available_agents_description = by_name["get_available_agents"]["description"]
+    assert "complete focused\nOutput catalog" in available_agents_description
+    assert "terminal control nodes" in available_agents_description
+    assert "flow ends with an appropriate output agent" not in available_agents_description

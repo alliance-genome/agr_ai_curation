@@ -185,7 +185,7 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "Validator-agent inspection workflow" in prompt
     assert "read `validator_bindings[].validator_agent.agent_id`" in prompt
     assert "validation_attachments[].validator_agent_id" in prompt
-    assert "get_prompt(agent_id=<validator agent id>)" in prompt
+    assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
     assert "Extractor and validator responsibilities are deliberately separate" in prompt
     assert "First-pass extractors must not use broad database/entity lookup tools" in prompt
     assert "`agr_species_context_lookup` is the shared narrow context tool" in prompt
@@ -208,6 +208,30 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "what fields it proposes or preserves as hints" in prompt
     assert "what fields it materializes or validates authoritatively" in prompt
     assert "what a specialist, extractor, or validator can do" in prompt
+
+
+def test_installed_agent_studio_prompts_require_targeted_flow_verification():
+    prompt_paths = (
+        "packages/core/config/agent_studio_system_prompt.md",
+        "packages/alliance/config/agent_studio_system_prompt.md",
+    )
+
+    for relative_path in prompt_paths:
+        prompt = _read_repo_text(relative_path)
+        assert "Call `get_current_flow()` first" in prompt, relative_path
+        assert 'get_available_agents(category="Output")' in prompt, relative_path
+        assert 'get_prompt(agent_id, group_id, view="summary")' in prompt, relative_path
+        assert 'view="effective_prompt"' in prompt, relative_path
+        assert "`compacted_tool_result`" in prompt, relative_path
+        assert "every present `custom_instructions`" in prompt, relative_path
+        assert "`scheduled_validators`" in prompt, relative_path
+        assert "method/PDF-level `get_tool_details(tool_id, agent_id)`" in prompt, relative_path
+        assert "Output agents are attachment branches with ordered" in prompt, relative_path
+        assert "duplicate `output_key` as HIGH" in prompt, relative_path
+        assert (
+            "get_domain_pack_validation_plan(agent_id, domain_pack_id, section, "
+            "object_type, field_path, validator_id, binding_id, state, query, limit, cursor)"
+        ) in prompt, relative_path
 
 
 def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():

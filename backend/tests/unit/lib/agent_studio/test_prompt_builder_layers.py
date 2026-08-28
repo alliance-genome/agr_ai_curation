@@ -153,7 +153,31 @@ def test_flow_context_describes_current_flow_manifest_and_detail_calls(monkeypat
     assert "`output_node_ids` and `validation_sidecar_node_ids`" in prompt
     assert "`findings` and `has_critical_issues`" in prompt
     assert "targeted tools named in `detail_calls`" in prompt
-    assert "call `get_domain_pack_validation_plan`" in prompt
-    assert "Use `get_prompt`, `get_tool_inventory`, and `get_tool_details`" in prompt
+    assert "`get_domain_pack_validation_plan" in prompt
+    assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
     assert "Clean markdown representation" not in prompt
     assert "`domain_envelope_analysis`" not in prompt
+
+
+def test_flow_context_requires_complete_targeted_verification_evidence(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.prompt_builder.build_package_diagnostic_tools_prompt",
+        lambda: "DIAGNOSTIC TOOLS",
+    )
+    prompt = build_opus_system_prompt(
+        ChatContext.model_validate({"active_tab": "flows"}),
+        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        list_model_definitions=lambda: [],
+        get_prompt_catalog=lambda: None,
+        prepare_trace_context=lambda _trace_id: None,
+    )
+
+    assert 'get_available_agents(category="Output")' in prompt
+    assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
+    assert 'view="effective_prompt"' in prompt
+    assert '`compacted_tool_result`' in prompt
+    assert "every present `custom_instructions`" in prompt
+    assert "`scheduled_validators`" in prompt
+    assert "method/PDF-level `get_tool_details(tool_id, agent_id)`" in prompt
+    assert "Output agents are attachment branches with ordered `source_steps`" in prompt
+    assert "Duplicate `output_key` is HIGH unless authoritative validation" in prompt

@@ -2487,7 +2487,8 @@ total_count and next_cursor so you can fetch the rest. Use category="Output"
 for a focused Output lookup; every category list describes only the current page.
 
 ALWAYS call this tool along with get_current_flow() when verifying a flow,
-so you can check if the flow ends with an appropriate output agent.""",
+so you can verify every configured Output attachment against the complete focused
+Output catalog without treating attachment branches as terminal control nodes.""",
         input_schema={
             "type": "object",
             "properties": {

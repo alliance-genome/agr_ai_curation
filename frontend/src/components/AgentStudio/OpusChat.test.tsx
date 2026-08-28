@@ -23,6 +23,30 @@ describe('OpusChat', () => {
     })
   })
 
+  it('loads the complete targeted flow verification contract from the quick action', () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    render(<OpusChat context={{ active_tab: 'flows' }} />)
+
+    fireEvent.click(screen.getByText('Verify my flow'))
+
+    const prompt = (screen.getByPlaceholderText('Ask about flows...') as HTMLInputElement).value
+    expect(prompt).toContain('get_current_flow() first')
+    expect(prompt).toContain('get_current_flow_instructions')
+    expect(prompt).toContain('get_available_agents(category="Output")')
+    expect(prompt).toContain('view="summary"')
+    expect(prompt).toContain('scheduled_validators')
+    expect(prompt).toContain('get_tool_inventory(agent_id=')
+    expect(prompt).toContain('get_domain_pack_validation_plan')
+    expect(prompt).toContain('compacted_tool_result')
+    expect(prompt).toContain('not terminal control nodes')
+    expect(prompt).toContain('Duplicate output_key is HIGH')
+  })
+
   it('publishes conversation snapshots for tool-idea transcript capture', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
