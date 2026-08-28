@@ -28,6 +28,7 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert tools_by_name["get_domain_envelope_state"]["input_schema"]["required"] == [
         "envelope_id"
     ]
+    assert "cursor" in tools_by_name["list_domain_envelopes"]["input_schema"]["properties"]
     assert "validator summaries" in (
         tools_by_name["get_domain_envelope_state"]["description"]
     )
@@ -37,6 +38,9 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert "history_limit" not in tools_by_name["get_domain_envelope_state"][
         "input_schema"
     ]["properties"]
+    state_schema = tools_by_name["get_domain_envelope_state"]["input_schema"]["properties"]
+    assert "reference" in state_schema["section"]["enum"]
+    assert {"reference_locator", "reference_sha256", "char_cursor"}.issubset(state_schema)
     assert tools_by_name["get_domain_envelope_review_rows"]["input_schema"][
         "properties"
     ]["section"]["enum"] == ["rows"]
@@ -54,6 +58,9 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert tools_by_name["get_export_submission_readiness"]["input_schema"]["required"] == [
         "session_id"
     ]
+    assert "readiness_token" in tools_by_name["get_export_submission_readiness"][
+        "input_schema"
+    ]["properties"]
     validation_plan_description = tools_by_name["get_domain_pack_validation_plan"][
         "description"
     ]
@@ -397,6 +404,7 @@ def test_handle_tool_call_dispatches_export_readiness_with_normalized_inputs(mon
                 "field_path": "gene.symbol",
                 "limit": 2,
                 "cursor": "2",
+                "readiness_token": "v1.*.digest",
             },
             context=ChatContext(active_tab="agents"),
             user_email="curator@example.org",
@@ -417,6 +425,7 @@ def test_handle_tool_call_dispatches_export_readiness_with_normalized_inputs(mon
     assert captured["field_path"] == "gene.symbol"
     assert captured["limit"] == 2
     assert captured["cursor"] == "2"
+    assert captured["readiness_token"] == "v1.*.digest"
 
 
 def test_handle_tool_call_rejects_invalid_export_readiness_revision_map():

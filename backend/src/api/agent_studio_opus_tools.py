@@ -949,6 +949,10 @@ LIST_DOMAIN_ENVELOPES_TOOL = {
                 "minimum": 1,
                 "maximum": 50,
             },
+            "cursor": {
+                "type": "string",
+                "description": "Deterministic decimal offset from next_request.",
+            },
         },
         "required": [],
     },
@@ -983,6 +987,7 @@ GET_DOMAIN_ENVELOPE_STATE_TOOL = {
                     "lookup_attempts",
                     "validator_summaries",
                     "object_ref_index",
+                    "reference",
                 ],
                 "description": "Optional detail section. Omit for authoritative summary counts/status.",
             },
@@ -1013,6 +1018,19 @@ GET_DOMAIN_ENVELOPE_STATE_TOOL = {
             "cursor": {
                 "type": "string",
                 "description": "Deterministic decimal offset from next_cursor.",
+            },
+            "reference_locator": {
+                "type": "string",
+                "description": "Opaque exact-reference selector from a reference manifest.",
+            },
+            "reference_sha256": {
+                "type": "string",
+                "description": "Expected canonical JSON hash from a reference manifest.",
+            },
+            "char_cursor": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Exact character offset from a reference next_request.",
             },
         },
         "required": ["envelope_id"],
@@ -1163,6 +1181,13 @@ GET_EXPORT_SUBMISSION_READINESS_TOOL = {
                 "type": "object",
                 "description": "Optional map of envelope_id to expected revision.",
                 "additionalProperties": {"type": "integer"},
+            },
+            "readiness_token": {
+                "type": "string",
+                "description": (
+                    "Bounded candidate-scope and revision identity from the summary or "
+                    "next_request; replaces repeated candidate/revision sets."
+                ),
             },
             "mode": {
                 "type": "string",

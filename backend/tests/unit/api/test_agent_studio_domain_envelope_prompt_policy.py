@@ -172,7 +172,8 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "get_domain_envelope_state" in prompt
     assert (
         "get_domain_envelope_state(envelope_id, revision, section, object_id, "
-        "field_path, query, include_object_payload, limit, cursor)"
+        "field_path, query, include_object_payload, limit, cursor, "
+        "reference_locator, reference_sha256, char_cursor)"
     ) in prompt, source_path
     assert "bounded validator request/result summaries" in prompt
     assert "materialization paths" in prompt
@@ -184,8 +185,8 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     ) in prompt, source_path
     assert (
         "get_export_submission_readiness(session_id, candidate_ids, "
-        "expected_envelope_revisions, mode, section, candidate_id, envelope_id, "
-        "object_id, field_path, code, query, limit, cursor)"
+        "expected_envelope_revisions, readiness_token, mode, section, candidate_id, "
+        "envelope_id, object_id, field_path, code, query, limit, cursor)"
     ) in prompt, source_path
     assert "Omit `section` for a compact runtime summary" in prompt, source_path
     assert "follow `next_request` until complete" in prompt, source_path

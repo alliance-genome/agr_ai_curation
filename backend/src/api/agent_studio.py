@@ -3067,6 +3067,7 @@ async def _handle_tool_call(
             flow_run_id=tool_input.get("flow_run_id"),
             domain_pack_id=tool_input.get("domain_pack_id"),
             limit=tool_input.get("limit"),
+            cursor=tool_input.get("cursor"),
         )
 
     elif tool_name == "get_domain_envelope_state":
@@ -3084,6 +3085,9 @@ async def _handle_tool_call(
                 include_object_payload=tool_input.get("include_object_payload", False),
                 limit=tool_input.get("limit"),
                 cursor=tool_input.get("cursor"),
+                reference_locator=tool_input.get("reference_locator"),
+                reference_sha256=tool_input.get("reference_sha256"),
+                char_cursor=tool_input.get("char_cursor"),
             )
         except ValueError as exc:
             return {"success": False, "error": str(exc)}
@@ -3152,6 +3156,7 @@ async def _handle_tool_call(
             query=tool_input.get("query"),
             limit=tool_input.get("limit"),
             cursor=tool_input.get("cursor"),
+            readiness_token=tool_input.get("readiness_token"),
         )
 
     elif tool_name == "refresh_workshop_prompt":
