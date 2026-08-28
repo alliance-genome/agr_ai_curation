@@ -425,17 +425,28 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
         }
     )
 
-    monkeypatch.setattr(
-        flows,
-        "get_active_visible_agent_metadata",
-        lambda agent_id, **_kwargs: {
+    metadata_calls = []
+
+    def _custom_agent_metadata(agent_id, **kwargs):
+        metadata_calls.append(kwargs)
+        return {
             "agent_id": agent_id,
             "curation": {
                 "adapter_key": "gene",
                 "domain_pack_id": "gene",
                 "launchable": True,
             },
-        },
+        }
+
+    monkeypatch.setattr(
+        flows,
+        "get_active_visible_agent_metadata",
+        _custom_agent_metadata,
+    )
+    monkeypatch.setattr(
+        flows,
+        "get_groups_from_provider_groups",
+        lambda _groups: ["group-17"],
     )
     monkeypatch.setattr(
         flows,
@@ -450,7 +461,7 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
             description="Regression for inherited validation attachments",
             flow_definition=custom_definition,
         ),
-        user={"sub": "u1"},
+        user={"sub": "u1", "cognito:groups": ["provider-group-17"]},
         db=db,
     )
 
@@ -459,6 +470,10 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
     assert persisted["agent_id"] == custom_agent_id
     assert persisted["validation_attachments"] == inherited_attachments
     assert response.flow_definition.nodes[1].data.validation_attachments
+    assert metadata_calls
+    assert all(
+        call["authenticated_groups"] == ["group-17"] for call in metadata_calls
+    )
 
 
 @pytest.mark.asyncio
