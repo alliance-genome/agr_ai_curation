@@ -429,7 +429,11 @@ def test_get_agent_metadata_inherits_curation_from_custom_agent_template(monkeyp
         group_rules_component="gene_extractor",
         output_schema_key="GeneExtractionResultEnvelope",
     )
-    fake_curation = SimpleNamespace(adapter_key="gene", launchable=True)
+    fake_curation = SimpleNamespace(
+        adapter_key="gene",
+        domain_pack_id="gene",
+        launchable=True,
+    )
     fake_definition = SimpleNamespace(
         curation=fake_curation,
         structured_finalization={"tool_name": "finalize_gene_extraction"},
@@ -446,7 +450,11 @@ def test_get_agent_metadata_inherits_curation_from_custom_agent_template(monkeyp
     metadata = catalog_service.get_agent_metadata("ca_custom_gene_extractor")
 
     assert metadata["display_name"] == "Custom Gene Extractor"
-    assert metadata["curation"] == {"adapter_key": "gene", "launchable": True}
+    assert metadata["curation"] == {
+        "adapter_key": "gene",
+        "domain_pack_id": "gene",
+        "launchable": True,
+    }
 
 
 def test_get_agent_metadata_does_not_inherit_curation_when_custom_agent_no_longer_looks_extractable(monkeypatch):
