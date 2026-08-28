@@ -943,6 +943,12 @@ FLOW_TOOLS = {
     "validate_flow",
     "get_flow_templates",
     "get_current_flow",
+    "get_current_flow_topology",
+    "get_current_flow_node",
+    "get_current_flow_instructions",
+    "get_current_flow_projection_plan",
+    "get_current_flow_validation_warnings",
+    "get_current_flow_validation_schedule",
     "get_available_agents",
 }
 AGENTS_ONLY_DIAGNOSTIC_TOOLS = {

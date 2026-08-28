@@ -281,12 +281,15 @@ export interface FlowContextDefinition {
     agent_id: string
     agent_display_name: string
     task_instructions?: string  // For task_input nodes
+    step_goal?: string
     custom_instructions?: string
+    prompt_version?: number
     include_evidence?: boolean
     output_filename_template?: string
     projection_plan?: Record<string, unknown>
     output_key: string
     validation_attachments?: Array<Record<string, unknown>>
+    validation_groups?: Array<Record<string, unknown>>
   }>
   edges: Array<{
     id: string

@@ -337,13 +337,18 @@ function AgentStudioPage() {
             agent_id: node.agent_id,
             agent_display_name: node.agent_display_name,
             task_instructions: node.task_instructions,
+            step_goal: node.step_goal,
             custom_instructions: node.custom_instructions,
+            prompt_version: node.prompt_version,
             include_evidence: node.include_evidence,
             output_filename_template: node.output_filename_template,
             projection_plan: node.projection_plan,
             output_key: node.output_key,
             validation_attachments: node.validation_attachments?.map((attachment) => ({
               ...attachment,
+            }) as Record<string, unknown>),
+            validation_groups: node.validation_groups?.map((group) => ({
+              ...group,
             }) as Record<string, unknown>),
           })),
           edges: flowState.edges.map((edge) => ({

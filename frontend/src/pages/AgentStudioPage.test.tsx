@@ -82,7 +82,35 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
 }))
 
 vi.mock('@/components/AgentStudio/FlowBuilder', () => ({
-  FlowBuilder: () => <div data-testid="flow-builder">Flow</div>,
+  FlowBuilder: ({ onFlowChange }: { onFlowChange?: (flow: Record<string, unknown>) => void }) => (
+    <div data-testid="flow-builder">
+      Flow
+      <button
+        onClick={() => onFlowChange?.({
+          flowName: 'Propagation Flow',
+          version: '1.1',
+          entry_node_id: 'extract',
+          nodes: [{
+            id: 'extract',
+            type: 'agent',
+            agent_id: 'gene_extractor',
+            agent_display_name: 'Gene Extractor',
+            output_key: 'genes',
+            step_goal: 'Extract genes',
+            prompt_version: 11,
+            validation_attachments: [],
+            validation_groups: [
+              { group_id: 'replacement', state: 'replaced', validator_node_id: 'custom' },
+              { group_id: 'supplemental', state: 'supplemental', validator_node_id: 'extra' },
+            ],
+          }],
+          edges: [],
+        })}
+      >
+        emit-flow-context
+      </button>
+    </div>
+  ),
 }))
 
 vi.mock('@/components/AgentStudio/AgentBrowser', () => ({
@@ -196,6 +224,28 @@ describe('AgentStudioPage', () => {
     })
     historyMocks.useChatHistoryDetailQuery.mockReturnValue(buildEmptyHistoryQueryResult())
     historyMocks.useChatHistoryTranscriptQuery.mockReturnValue(buildEmptyHistoryQueryResult())
+  })
+
+  it('maps verification fields from FlowBuilder state into chat context', async () => {
+    render(
+      <MemoryRouter>
+        <AgentStudioPage />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(1)
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+    fireEvent.click(await screen.findByText('emit-flow-context'))
+
+    await waitFor(() => {
+      const context = screen.getByTestId('opus-chat-context')
+      expect(context).toHaveTextContent('"step_goal":"Extract genes"')
+      expect(context).toHaveTextContent('"prompt_version":11')
+      expect(context).toHaveTextContent('"state":"replaced"')
+      expect(context).toHaveTextContent('"state":"supplemental"')
+    })
   })
 
   it('passes cloned custom agent id into PromptWorkshop after clone-to-workshop', async () => {

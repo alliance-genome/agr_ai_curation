@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 import pytest
@@ -30,6 +31,8 @@ def _isolate_flow_tool_state(monkeypatch):
         "AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS",
         "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
         "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
+        "AGENT_STUDIO_FLOW_INSPECTION_PAGE_LIMIT",
+        "AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS",
     ):
         monkeypatch.delenv(environment_name, raising=False)
     flow_tools.clear_workflow_user_context()
@@ -85,6 +88,41 @@ def test_flow_context_definition_is_v1_1_only():
         FlowContextDefinition(version="1.0")
     flow_tools.clear_current_flow_context()
     assert flow_tools.get_current_flow_context() is None
+
+
+def test_flow_context_definition_preserves_node_verification_fields():
+    definition = FlowContextDefinition(
+        nodes=[
+            {
+                "id": "extract",
+                "agent_id": "gene_extractor",
+                "agent_display_name": "Gene",
+                "output_key": "genes",
+                "step_goal": "Extract genes",
+                "prompt_version": 9,
+                "validation_groups": [
+                    {
+                        "group_id": "replacement",
+                        "state": "replaced",
+                        "validator_node_id": "custom-validator",
+                    },
+                    {
+                        "group_id": "supplemental",
+                        "state": "supplemental",
+                        "validator_node_id": "supplemental-validator",
+                    },
+                ],
+            }
+        ]
+    )
+
+    node = definition.model_dump()["nodes"][0]
+    assert node["step_goal"] == "Extract genes"
+    assert node["prompt_version"] == 9
+    assert [group["state"] for group in node["validation_groups"]] == [
+        "replaced",
+        "supplemental",
+    ]
 
 
 def test_get_flow_agent_ids_excludes_supervisor_task_input_and_attachment_only_validators(monkeypatch):
@@ -1205,480 +1243,400 @@ def test_get_available_agents_handler_reports_core_only_install(monkeypatch):
     assert "No flow-capable agents are currently installed" in result["message"]
 
 
-def test_get_current_flow_handler_no_context_and_empty_flow():
+def _inspection_flow() -> dict[str, Any]:
+    return {
+        "flow_name": "Inspection Flow",
+        "version": "1.1",
+        "entry_node_id": "task",
+        "nodes": [
+            {
+                "id": "task",
+                "type": "task_input",
+                "data": {
+                    "agent_id": "task_input",
+                    "agent_display_name": "Task",
+                    "task_instructions": "abcdefghij",
+                    "output_key": "task_input",
+                },
+            },
+            {
+                "id": "extract",
+                "type": "agent",
+                "data": {
+                    "agent_id": "gene_extractor",
+                    "agent_display_name": "Extract",
+                    "step_goal": "Extract genes",
+                    "custom_instructions": "klmnopqrst",
+                    "prompt_version": 7,
+                    "output_key": "genes",
+                    "validation_attachments": [],
+                    "validation_groups": [],
+                },
+            },
+            {
+                "id": "csv",
+                "type": "output",
+                "data": {
+                    "agent_id": "csv_formatter",
+                    "agent_display_name": "CSV",
+                    "output_key": "csv",
+                    "projection_plan": {
+                        "columns": [{"field": "gene.symbol"}, {"field": "gene.id"}],
+                        "format": "csv",
+                    },
+                },
+            },
+            {
+                "id": "next",
+                "type": "agent",
+                "data": {
+                    "agent_id": "disease_extractor",
+                    "agent_display_name": "Continue",
+                    "output_key": "diseases",
+                },
+            },
+            {
+                "id": "json",
+                "type": "output",
+                "data": {
+                    "agent_id": "json_formatter",
+                    "agent_display_name": "JSON",
+                    "output_key": "json",
+                },
+            },
+        ],
+        "edges": [
+            {"id": "c1", "source": "task", "target": "extract", "role": "control_flow"},
+            {"id": "o1", "source": "extract", "target": "csv", "role": "output_attachment"},
+            {"id": "c2", "source": "extract", "target": "next", "role": "control_flow"},
+            {"id": "o2", "source": "next", "target": "json", "role": "output_attachment"},
+        ],
+    }
+
+
+def test_get_current_flow_returns_minimal_manifest_for_empty_flow():
     handler = flow_tools._get_current_flow_handler()
 
     no_context = handler()
     assert no_context["success"] is False
-    assert "No flow is currently being edited" in no_context["error"]
+    assert no_context["complete"] is True
 
-    flow_tools.set_current_flow_context({"flow_name": "Untitled", "nodes": [], "edges": []})
-    empty = handler()
-    assert empty["success"] is True
-    assert empty["step_count"] == 0
-    assert empty["steps"] == []
-
-
-def test_get_current_flow_handler_detects_parallel_and_disconnected_nodes():
-    handler = flow_tools._get_current_flow_handler()
     flow_tools.set_current_flow_context(
-        {
-            "flow_name": "Branchy Flow",
-            "entry_node_id": "task_input_0",
-            "nodes": [
-                {
-                    "id": "task_input_0",
-                    "type": "task_input",
-                    "data": {
-                        "agent_id": "task_input",
-                        "agent_display_name": "Initial Instructions",
-                        "task_instructions": "",
-                        "output_key": "task_input",
-                    },
-                },
-                {
-                    "id": "step_1",
-                    "type": "agent",
-                    "data": {"agent_id": "pdf_extraction", "agent_display_name": "PDF", "output_key": "step_1_output"},
-                },
-                {
-                    "id": "step_2",
-                    "type": "agent",
-                    "data": {"agent_id": "gene", "agent_display_name": "Gene", "output_key": "step_2_output"},
-                },
-                {
-                    "id": "step_3",
-                    "type": "agent",
-                    "data": {"agent_id": "chat_output", "agent_display_name": "Output", "output_key": "out"},
-                },
-            ],
-            "edges": [
-                {"source": "task_input_0", "target": "step_1"},
-                {"source": "task_input_0", "target": "step_2"},  # parallel branch
-            ],
-        }
+        {"flow_name": "Untitled", "version": "1.1", "nodes": [], "edges": []}
     )
+    manifest = handler()
 
-    result = handler()
+    assert manifest["success"] is True
+    assert manifest["contract"] == "current_flow_manifest_v1"
+    assert manifest["counts"]["all_nodes"] == 0
+    assert manifest["has_critical_issues"] is True
+    assert {item["code"] for item in manifest["findings"]} >= {"missing_task_input"}
+    for verbose_key in (
+        "steps",
+        "edges",
+        "execution_order_markdown",
+        "executable_graph",
+        "domain_envelope_analysis",
+        "projection_plan",
+        "validation_attachments",
+    ):
+        assert verbose_key not in manifest
 
-    assert result["success"] is True
-    # Invalid branches do not get flattened into a pretend sequential order.
-    assert result["step_count"] == 0
-    assert result["disconnected_count"] == 3
-    assert result["has_critical_issues"] is True
-    assert result["critical_issue_count"] >= 2  # empty task instructions + parallel branching
-    assert any(w["type"] == "CRITICAL" for w in result["validation_warnings"])
-    assert {issue["code"] for issue in result["executable_graph"]["issues"]} >= {
-        "branch",
-        "ambiguous_terminal",
-        "disconnected",
+
+def test_manifest_classifies_continuing_multi_output_control_path_and_duplicates():
+    flow = _inspection_flow()
+    flow["nodes"][4]["data"]["output_key"] = "diseases"
+    flow_tools.set_current_flow_context(flow)
+
+    manifest = flow_tools._get_current_flow_handler()()
+
+    assert manifest["topology_valid"] is True
+    assert manifest["ordered_control_node_ids"] == ["task", "extract", "next"]
+    assert manifest["executable_agent_node_ids"] == ["extract", "next"]
+    assert manifest["output_node_ids"] == ["csv", "json"]
+    assert manifest["counts"] == {
+        "all_nodes": 5,
+        "control_nodes": 3,
+        "ordered_control_nodes": 3,
+        "executable_agents": 2,
+        "output_nodes": 2,
+        "validation_sidecars": 0,
+        "disconnected_nodes": 0,
     }
-    assert "Invalid executable flow topology" in result["execution_order_markdown"]
+    duplicate = next(
+        item for item in manifest["findings"] if item["code"] == "duplicate_output_key"
+    )
+    assert duplicate["severity"] == "HIGH"
+    assert duplicate["duplicate_count"] == 2
+    assert manifest["high_issue_count"] == 1
+    assert manifest["has_critical_issues"] is False
+
+    bindings = flow_tools._get_current_flow_topology_handler()(
+        section="output_bindings"
+    )
+    assert [item["output_node_id"] for item in bindings["items"]] == ["csv", "json"]
+    assert bindings["complete"] is True
 
 
-def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
-    handler = flow_tools._get_current_flow_handler()
-    flow_tools.set_current_flow_context(
+def test_manifest_keeps_critical_topology_and_task_findings_in_first_call():
+    flow = _inspection_flow()
+    flow["nodes"][0]["data"]["task_instructions"] = ""
+    flow["edges"].append(
+        {"id": "branch", "source": "task", "target": "next", "role": "control_flow"}
+    )
+    flow_tools.set_current_flow_context(flow)
+
+    manifest = flow_tools._get_current_flow_handler()()
+
+    assert manifest["has_critical_issues"] is True
+    assert {item["code"] for item in manifest["findings"]} >= {
+        "empty_task_input",
+        "branch",
+    }
+    topology = flow_tools._get_current_flow_topology_handler()(
+        section="issues", limit=1
+    )
+    assert topology["truncated"] is True
+    topology_next = flow_tools._get_current_flow_topology_handler()(
+        **topology["next_call"]["arguments"]
+    )
+    assert topology_next["cursor"] == "1"
+    first = flow_tools._get_current_flow_validation_warnings_handler()(limit=1)
+    assert first["truncated"] is True
+    assert first["next_call"]["tool"] == "get_current_flow_validation_warnings"
+    second = flow_tools._get_current_flow_validation_warnings_handler()(
+        **first["next_call"]["arguments"]
+    )
+    assert second["cursor"] == "1"
+
+
+def test_instruction_chunks_reconstruct_exact_text(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "4")
+    flow_tools.set_current_flow_context(_inspection_flow())
+    handler = flow_tools._get_current_flow_instructions_handler()
+
+    response = handler(node_id="extract", field="custom_instructions")
+    chunks = [response["content"]]
+    assert response["content_sha256"]
+    while response["next_call"] is not None:
+        response = handler(**response["next_call"]["arguments"])
+        chunks.append(response["content"])
+
+    assert "".join(chunks) == "klmnopqrst"
+    assert response["complete"] is True
+    assert response["truncated"] is False
+
+
+def test_projection_plan_inventory_and_chunks_are_bounded_and_reconstructable(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "8")
+    flow_tools.set_current_flow_context(_inspection_flow())
+
+    node = flow_tools._get_current_flow_node_handler()(node_id="csv")
+    assert node["scalar_configuration"]["agent_id"] == "csv_formatter"
+    assert "projection_plan" not in node["scalar_configuration"]
+    assert node["detail_availability"]["projection_plan"] is True
+
+    handler = flow_tools._get_current_flow_projection_plan_handler()
+    inventory = handler(node_id="csv", limit=1)
+    assert inventory["items"] == [{"field": "columns", "value_type": "list"}]
+    assert inventory["next_call"]["arguments"]["cursor"] == "1"
+
+    response = handler(node_id="csv", field="columns")
+    chunks = [response["content"]]
+    while response["next_call"] is not None:
+        response = handler(**response["next_call"]["arguments"])
+        chunks.append(response["content"])
+
+    assert "".join(chunks) == '[{"field":"gene.symbol"},{"field":"gene.id"}]'
+    assert response["encoding"] == "canonical_json"
+    assert response["complete"] is True
+
+
+def test_projection_plan_sections_follow_json_pointer_semantics():
+    flow = _inspection_flow()
+    flow["nodes"][2]["data"]["projection_plan"]["details"] = {
+        "": "empty-key",
+        "a/b": {"til~de": "escaped-key"},
+        "rows": [{"name": "first"}, {"name": "second"}],
+    }
+    flow_tools.set_current_flow_context(flow)
+    handler = flow_tools._get_current_flow_projection_plan_handler()
+
+    root = handler(node_id="csv", field="details", section="")
+    assert root["success"] is True
+    assert json.loads(root["content"])["rows"][1]["name"] == "second"
+
+    empty_key = handler(node_id="csv", field="details", section="/")
+    assert empty_key["success"] is True
+    assert empty_key["content"] == '"empty-key"'
+
+    nested_array = handler(
+        node_id="csv", field="details", section="/rows/1/name"
+    )
+    assert nested_array["success"] is True
+    assert nested_array["content"] == '"second"'
+
+    escaped_keys = handler(
+        node_id="csv", field="details", section="/a~1b/til~0de"
+    )
+    assert escaped_keys["success"] is True
+    assert escaped_keys["content"] == '"escaped-key"'
+
+    for invalid_index in ("-1", "+1", "01", "1.0", "-", "2"):
+        invalid = handler(
+            node_id="csv",
+            field="details",
+            section=f"/rows/{invalid_index}",
+        )
+        assert invalid["success"] is False
+
+    invalid_escape = handler(node_id="csv", field="details", section="/a~2b")
+    assert invalid_escape["success"] is False
+
+
+def test_validation_schedule_details_preserve_defaults_opt_outs_and_sidecars():
+    flow = _inspection_flow()
+    extract = flow["nodes"][1]["data"]
+    extract["validation_attachments"] = [
         {
-            "flow_name": "Validator Sidecar Flow",
-            "version": "1.1",
-            "entry_node_id": "task_input_0",
-            "nodes": [
-                {
-                    "id": "task_input_0",
-                    "type": "task_input",
-                    "data": {
-                        "agent_id": "task_input",
-                        "agent_display_name": "Initial Instructions",
-                        "task_instructions": "Extract genes.",
-                        "output_key": "task_input",
-                    },
-                },
-                {
-                    "id": "extract_1",
-                    "type": "agent",
-                    "data": {
-                        "agent_id": "gene_extractor",
-                        "agent_display_name": "Gene Extraction",
-                        "output_key": "genes",
-                    },
-                },
-                {
-                    "id": "custom_validator_1",
-                    "type": "agent",
-                    "data": {
-                        "agent_id": "custom_gene_validator",
-                        "agent_display_name": "Custom Gene Validator",
-                        "output_key": "gene_validation",
-                    },
-                },
-                {
-                    "id": "output_1",
-                    "type": "output",
-                    "data": {
-                        "agent_id": "chat_output",
-                        "agent_display_name": "Output",
-                        "output_key": "out",
-                    },
-                },
-            ],
-            "edges": [
-                {"source": "task_input_0", "target": "extract_1"},
-                {
-                    "source": "extract_1",
-                    "target": "output_1",
-                    "role": "output_attachment",
-                },
-                {
-                    "source": "extract_1",
-                    "target": "custom_validator_1",
-                    "role": "validation_attachment",
-                    "satisfies_binding_id": "alliance.gene.identity",
-                },
-            ],
-        }
-    )
-
-    result = handler()
-
-    assert result["success"] is True
-    assert result["step_count"] == 2
-    assert result["disconnected_count"] == 0
-    assert result["has_critical_issues"] is False
-    assert [step["node_id"] for step in result["steps"]] == [
-        "extract_1",
-        "output_1",
-    ]
-    assert "Parallel flows not yet supported" not in result["execution_order_markdown"]
-    assert not any(
-        warning["node_id"] == "custom_validator_1"
-        for warning in result["validation_warnings"]
-    )
-
-
-def test_get_current_flow_handler_explains_output_attachment_binding():
-    handler = flow_tools._get_current_flow_handler()
-    flow_tools.set_current_flow_context(
+            "attachment_id": "default",
+            "validator_id": "default-validator",
+            "validator_binding_id": "default-binding",
+            "state": "active",
+            "enabled": True,
+            "default_enabled": True,
+            "allow_opt_out": False,
+        },
         {
-            "flow_name": "Multiple Export Flow",
-            "version": "1.1",
-            "entry_node_id": "task_input_0",
-            "nodes": [
-                {
-                    "id": "task_input_0",
-                    "type": "task_input",
-                    "data": {
-                        "agent_id": "task_input",
-                        "agent_display_name": "Initial Instructions",
-                        "task_instructions": "Extract alleles and genes.",
-                        "output_key": "task_input",
-                    },
-                },
-                {
-                    "id": "allele_1",
-                    "type": "agent",
-                    "data": {
-                        "agent_id": "allele_extractor",
-                        "agent_display_name": "Allele Extraction",
-                        "output_key": "alleles",
-                    },
-                },
-                {
-                    "id": "allele_csv",
-                    "type": "output",
-                    "data": {
-                        "agent_id": "csv_formatter",
-                        "agent_display_name": "Allele CSV",
-                        "output_key": "allele_csv",
-                    },
-                },
-                {
-                    "id": "gene_1",
-                    "type": "agent",
-                    "data": {
-                        "agent_id": "gene_extractor",
-                        "agent_display_name": "Gene Extraction",
-                        "output_key": "genes",
-                    },
-                },
-            ],
-            "edges": [
-                {
-                    "id": "control_1",
-                    "source": "task_input_0",
-                    "target": "allele_1",
-                    "role": "control_flow",
-                },
-                {
-                    "id": "output_1",
-                    "source": "allele_1",
-                    "target": "allele_csv",
-                    "role": "output_attachment",
-                },
-                {
-                    "id": "control_2",
-                    "source": "allele_1",
-                    "target": "gene_1",
-                    "role": "control_flow",
-                },
-                {
-                    "id": "output_2",
-                    "source": "gene_1",
-                    "target": "allele_csv",
-                    "role": "output_attachment",
-                },
-            ],
-        }
-    )
-
-    result = handler()
-
-    assert result["success"] is True
-    assert [step["node_id"] for step in result["steps"]] == [
-        "allele_1",
-        "gene_1",
-        "allele_csv",
+            "attachment_id": "optional",
+            "validator_id": "optional-validator",
+            "validator_binding_id": "optional-binding",
+            "state": "active",
+            "enabled": False,
+            "default_enabled": True,
+            "allow_opt_out": True,
+        },
+        {
+            "attachment_id": "replaced",
+            "validator_id": "old-validator",
+            "validator_binding_id": "old-binding",
+            "state": "active",
+            "enabled": True,
+            "default_enabled": True,
+        },
+        {
+            "attachment_id": "future",
+            "validator_id": "future-validator",
+            "state": "under_development",
+            "enabled": False,
+            "default_enabled": False,
+        },
     ]
-    formatter_step = result["steps"][2]
-    assert "source_node_id" not in formatter_step["output_attachment"]
-    assert "edge_id" not in formatter_step["output_attachment"]
-    assert [
-        source["source_node_id"]
-        for source in formatter_step["output_attachment"]["sources"]
-    ] == ["allele_1", "gene_1"]
-    assert [
-        source["source_agent_id"]
-        for source in formatter_step["output_attachment"]["sources"]
-    ] == ["allele_extractor", "gene_extractor"]
-    assert result["edges"][1]["role"] == "output_attachment"
-    assert result["has_critical_issues"] is False
-    assert not any(
-        issue["code"] == "entry_mismatch"
-        for issue in result["executable_graph"]["issues"]
+    extract["validation_groups"] = [
+        {
+            "group_id": "replacement",
+            "state": "replaced",
+            "attachment_id": "replaced",
+            "binding_id": "new-binding",
+            "validator_node_id": "custom-validator",
+            "replaces_attachment_id": "replaced",
+        },
+        {
+            "group_id": "supplement",
+            "state": "supplemental",
+            "binding_id": "supplemental-binding",
+            "validator_node_id": "supplemental-validator",
+        },
+    ]
+    flow["nodes"].extend(
+        [
+            {
+                "id": "custom-validator",
+                "type": "agent",
+                "data": {
+                    "agent_id": "custom_validator",
+                    "agent_display_name": "Replacement",
+                    "output_key": "replacement",
+                },
+            },
+            {
+                "id": "supplemental-validator",
+                "type": "agent",
+                "data": {
+                    "agent_id": "supplemental_validator",
+                    "agent_display_name": "Supplemental",
+                    "output_key": "supplemental",
+                },
+            },
+        ]
     )
-    markdown = result["execution_order_markdown"]
-    assert "Formatter output branches" in markdown
-    assert "Multiple formatter branches create multiple independent" in markdown
-    assert "Projects the ordered results from Allele Extraction" in markdown
-    assert "Gene Extraction (`gene_1`)" in markdown
-    assert "ordered results of Allele Extraction, Gene Extraction" in markdown
+    flow["edges"].extend(
+        [
+            {
+                "id": "v1",
+                "source": "extract",
+                "target": "custom-validator",
+                "role": "validation_attachment",
+                "satisfies_binding_id": "new-binding",
+                "replaces_attachment_id": "replaced",
+            },
+            {
+                "id": "v2",
+                "source": "extract",
+                "target": "supplemental-validator",
+                "role": "validation_attachment",
+                "satisfies_binding_id": "supplemental-binding",
+            },
+        ]
+    )
+    flow_tools.set_current_flow_context(flow)
+    handler = flow_tools._get_current_flow_validation_schedule_handler()
+
+    selections = handler(node_id="extract", section="selections")
+    assert selections["items"][0]["default_enabled"] is True
+    assert selections["section_counts"] == {
+        "selections": 4,
+        "scheduled_validators": 1,
+        "opt_outs": 1,
+        "replacement_validators": 1,
+        "supplemental_validators": 1,
+        "inactive_metadata": 1,
+    }
+    assert handler(node_id="extract", section="replacement_validators")["items"][0][
+        "validator_node_id"
+    ] == "custom-validator"
+    assert handler(node_id="extract", section="supplemental_validators")["items"][0][
+        "validator_binding_id"
+    ] == "supplemental-binding"
 
 
-def test_get_current_flow_handler_flags_attachment_only_validator_step(monkeypatch):
-    handler = flow_tools._get_current_flow_handler()
+def test_manifest_exposes_compact_domain_pack_link_without_aggregate_analysis(
+    monkeypatch,
+):
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
         {
-            "allele_validation": {
-                "name": "Allele Validation",
-                "category": "Validation",
-                "supervisor": {"enabled": False},
-            }
+            "gene_extractor": {
+                "name": "Gene Extractor",
+                "category": "Extraction",
+                "curation": {"domain_pack_id": "alliance_gene"},
+            },
+            "disease_extractor": {
+                "name": "Disease Extractor",
+                "category": "Extraction",
+            },
         },
     )
-    flow_tools.set_current_flow_context(
-        {
-            "flow_name": "Standalone Validator Flow",
-            "entry_node_id": "task_input_0",
-            "nodes": [
-                {
-                    "id": "task_input_0",
-                    "type": "task_input",
-                    "data": {
-                        "agent_id": "task_input",
-                        "agent_display_name": "Initial Instructions",
-                        "task_instructions": "Validate alleles.",
-                        "output_key": "task_input",
-                    },
-                },
-                {
-                    "id": "validator_1",
-                    "type": "agent",
-                    "data": {
-                        "agent_id": "allele_validation",
-                        "agent_display_name": "Allele Validation",
-                        "output_key": "allele_validation_output",
-                    },
-                },
-            ],
-            "edges": [
-                {"id": "e1", "source": "task_input_0", "target": "validator_1"},
-            ],
-        }
-    )
+    flow_tools.set_current_flow_context(_inspection_flow())
 
-    result = handler()
+    manifest = flow_tools._get_current_flow_handler()()
 
-    assert result["success"] is True
-    assert result["has_critical_issues"] is True
-    assert result["steps"][0]["flow_step_policy_warning"].startswith(
-        "Allele Validation is an attachment-only validator"
-    )
-    assert any(
-        warning["node_id"] == "validator_1"
-        and "attachment-only validator" in warning["message"]
-        for warning in result["validation_warnings"]
-    )
-
-
-def test_get_current_flow_handler_only_adds_preview_ellipsis_when_truncated():
-    handler = flow_tools._get_current_flow_handler()
-    flow_tools.set_current_flow_context(
-        {
-            "flow_name": "Preview Flow",
-            "entry_node_id": "task_input_0",
-            "nodes": [
-                {
-                    "id": "task_input_0",
-                    "type": "task_input",
-                    "data": {
-                        "agent_id": "task_input",
-                        "agent_display_name": "Initial Instructions",
-                        "task_instructions": "Read the paper.",
-                        "output_key": "task_input",
-                    },
-                },
-                {
-                    "id": "formatter_1",
-                    "type": "agent",
-                    "data": {
-                        "agent_id": "chat_output_formatter",
-                        "agent_display_name": "Formatter",
-                        "output_filename_template": "{{input_filename_stem}}.tsv",
-                        "output_key": "formatted_output",
-                    },
-                },
-            ],
-            "edges": [
-                {"source": "task_input_0", "target": "formatter_1"},
-            ],
-        }
-    )
-
-    result = handler()
-    markdown = result["execution_order_markdown"]
-
-    assert result["success"] is True
-    assert "- **Input:** Flow task and loaded document context" in markdown
-    assert "- **Output Filename Template:** {{input_filename_stem}}.tsv" in markdown
-    assert (
-        "- **Output Filename Template:** {{input_filename_stem}}.tsv..."
-        not in markdown
-    )
-
-
-def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch):
-    handler = flow_tools._get_current_flow_handler()
-    monkeypatch.setattr(
-        flow_tools,
-        "current_flow_domain_envelope_analysis",
-        lambda **_kwargs: {
-            "semantic_source": "domain_envelope.extracted_objects",
-            "envelope_node_count": 1,
-            "nodes": [
-                {
-                    "node_id": "extract_1",
-                    "agent_id": "allele_extractor",
-                    "agent_display_name": "Allele Extraction",
-                    "domain_pack_id": "alliance_allele",
-                    "domain_pack_version": "0.7.0",
-                    "object_definitions": [
-                        {
-                            "object_type": "allele",
-                            "display_name": "Allele",
-                            "field_paths": ["gene.symbol", "allele.symbol"],
-                        }
-                    ],
-                    "validation_schedule": {
-                        "scheduled_validators": [
-                            {"validator_binding_id": "allele-symbol-binding"}
-                        ],
-                        "opt_outs": [
-                            {"validator_binding_id": "optional-note-binding"}
-                        ],
-                        "inactive_metadata": [
-                            {"validator_binding_id": "future-ontology-binding"}
-                        ],
-                        "replacement_validators": [
-                            {"validator_binding_id": "allele-custom-binding"}
-                        ],
-                        "supplemental_validators": [
-                            {"validator_binding_id": "allele-supplemental-binding"}
-                        ],
-                    },
-                }
-            ],
-        },
-    )
-    flow_tools.set_current_flow_context(
-        {
-            "flow_name": "Allele Envelope Flow",
-            "entry_node_id": "task_input_0",
-            "nodes": [
-                {
-                    "id": "task_input_0",
-                    "type": "task_input",
-                    "data": {
-                        "agent_id": "task_input",
-                        "agent_display_name": "Initial Instructions",
-                        "task_instructions": "Extract alleles.",
-                        "output_key": "task_input",
-                    },
-                },
-                {
-                    "id": "extract_1",
-                    "type": "agent",
-                    "data": {
-                        "agent_id": "allele_extractor",
-                        "agent_display_name": "Allele Extraction",
-                        "output_key": "alleles",
-                        "validation_attachments": [
-                            {
-                                "attachment_id": "allele-symbol-binding",
-                                "state": "active",
-                                "enabled": True,
-                            },
-                            {
-                                "attachment_id": "optional-note-binding",
-                                "state": "active",
-                                "enabled": False,
-                            },
-                            {
-                                "attachment_id": "source-reference-binding",
-                                "state": "under_development",
-                                "enabled": False,
-                            },
-                        ],
-                    },
-                },
-            ],
-            "edges": [{"source": "task_input_0", "target": "extract_1"}],
-        }
-    )
-
-    result = handler()
-
-    assert result["success"] is True
-    assert result["domain_envelope_analysis"]["semantic_source"] == "domain_envelope.extracted_objects"
-    assert result["domain_envelope_analysis"]["envelope_node_count"] == 1
-    assert (
-        result["domain_envelope_analysis"]["nodes"][0]["validation_schedule"][
-            "scheduled_validators"
-        ][0]["validator_binding_id"]
-        == "allele-symbol-binding"
-    )
-    assert "Domain Envelope Metadata" in result["execution_order_markdown"]
-    assert (
-        "**Validation Attachments:** 1 active scheduled, 1 opted out, "
-        "1 under-development metadata"
-    ) in result["execution_order_markdown"]
-    assert (
-        "1 scheduled validators, 1 policy opt-outs, 1 replacement validators, "
-        "1 supplemental validators, 1 under-development metadata"
-    ) in result["execution_order_markdown"]
-
-
+    extract = next(node for node in manifest["nodes"] if node["node_id"] == "extract")
+    assert extract["domain_pack_id"] == "alliance_gene"
+    assert "domain_envelope_analysis" not in manifest
 def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
     create = flow_tools._create_flow_handler()
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: None)
@@ -1949,11 +1907,21 @@ def test_get_available_agents_handler_pages_with_cursor(monkeypatch):
     assert first["total_count"] == 4
     assert first["truncated"] is True
     assert first["next_cursor"] == "2"
+    assert first["complete"] is False
+    assert first["next_call"] == {
+        "tool": "get_available_agents",
+        "arguments": {
+            "limit": 2,
+            "cursor": "2",
+        },
+    }
 
-    second = handler(limit=2, cursor=first["next_cursor"])
+    second = handler(**first["next_call"]["arguments"])
     assert second["returned_count"] == 2
     assert second["truncated"] is False
     assert second["next_cursor"] is None
+    assert second["complete"] is True
+    assert second["next_call"] is None
 
     first_ids = {a["agent_id"] for ag in first["categories"].values() for a in ag}
     second_ids = {a["agent_id"] for ag in second["categories"].values() for a in ag}
@@ -2006,7 +1974,7 @@ def test_get_flow_templates_handler_pages_available_agents(monkeypatch):
     assert second["next_cursor"] is None
 
 
-def test_register_flow_tools_registers_five_tools(monkeypatch):
+def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeypatch):
     registrations = []
 
     class _Registry:
@@ -2025,6 +1993,12 @@ def test_register_flow_tools_registers_five_tools(monkeypatch):
         "validate_flow",
         "get_flow_templates",
         "get_current_flow",
+        "get_current_flow_topology",
+        "get_current_flow_node",
+        "get_current_flow_instructions",
+        "get_current_flow_projection_plan",
+        "get_current_flow_validation_warnings",
+        "get_current_flow_validation_schedule",
         "get_available_agents",
     ]
     assert all(entry["category"] == "flows" for entry in registrations)
@@ -2063,6 +2037,8 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
         "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
         "60",
     )
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_PAGE_LIMIT", "6")
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "900")
 
     flow_tools.register_flow_tools()
 
@@ -2080,3 +2056,10 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
     assert create_schema["properties"]["name"]["maxLength"] == 40
     assert validate_schema["properties"]["name"]["maxLength"] == 40
     assert create_schema["properties"]["description"]["maxLength"] == 400
+    by_name = {registration["name"]: registration for registration in registrations}
+    assert by_name["get_current_flow_topology"]["input_schema"]["properties"][
+        "limit"
+    ]["maximum"] == 6
+    assert by_name["get_current_flow_instructions"]["input_schema"]["properties"][
+        "limit"
+    ]["maximum"] == 900

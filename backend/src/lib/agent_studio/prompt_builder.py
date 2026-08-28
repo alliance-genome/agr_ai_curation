@@ -692,12 +692,13 @@ The curator is designing a curation flow - a guided supervisor run that executes
 <critical_instruction>
 **MANDATORY: ALWAYS call `get_current_flow` tool FIRST before any flow discussion.**
 
-This tool returns:
-- Flow in **execution order** (following edges from entry node, not canvas placement order)
-- Accurate step numbering based on actual execution sequence
-- Disconnected nodes flagged as warnings
-- Clean markdown representation
-- `domain_envelope_analysis` for envelope-producing nodes, domain packs, object definitions, and validation schedules
+This tool returns the `current_flow_manifest_v1` contract:
+- `ordered_control_node_ids` and `executable_agent_node_ids` for the control path and its ordinary agents
+- `output_node_ids` and `validation_sidecar_node_ids` for attached Output and validation nodes
+- `findings` and `has_critical_issues` for authoritative first-call verification status
+- `detail_calls` with valid targeted tools for topology, node configuration, exact instructions, projection plans, validation warnings, and validation schedules omitted from the manifest
+
+Use the targeted tools named in `detail_calls` to retrieve omitted details; do not infer or reconstruct the removed aggregate response.
 
 **NEVER** reference flow structure, automatic validation choices, domain-envelope-producing nodes, or PDF evidence/tool contracts without calling the relevant inspection tools first. If the returned domain-pack or validator metadata is not enough for the curator's question, call `get_domain_pack_validation_plan`. Use `get_prompt`, `get_tool_inventory`, and `get_tool_details` before judging agent custom instructions, attached document tools, or PDF evidence schemas. Do not recommend standalone flow steps for validators that are absent from `get_available_agents`; those validators are attachment-only and run through validation attachments/default runtime dispatch.
 </critical_instruction>
