@@ -20,7 +20,11 @@ from datetime import datetime
 from typing import Annotated, Callable, Dict, Any, Optional, List, Mapping, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Path
 
-from ..services.trace_extractor import TraceExtractor
+from ..services.trace_extractor import TraceExtractor, TraceNotFoundError
+from ..services.feedback_artifacts import (
+    feedback_artifacts_contain_trace,
+    fetch_feedback_trace_artifacts,
+)
 from ..services.langfuse_run_reconstruction import (
     build_cost_summary,
     build_duplicate_report,
@@ -99,19 +103,60 @@ async def _authorize_claude_trace_request(
         return
 
     source = request.query_params.get("source", DEFAULT_SOURCE)
+    extraction_error: Exception | None = None
     try:
         trace_data = TraceExtractor(
             source=_effective_source(source)
         ).extract_complete_trace(trace_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=404, detail="Trace not found.") from exc
+        extraction_error = exc
+    else:
+        raw_trace = trace_data.get("raw_trace") or {}
+        owner = str(raw_trace.get("userId") or raw_trace.get("user_id") or "").strip()
+        if not owner or owner != caller_sub:
+            raise HTTPException(status_code=404, detail="Trace not found.")
+        return
 
-    raw_trace = trace_data.get("raw_trace") or {}
-    owner = str(raw_trace.get("userId") or raw_trace.get("user_id") or "").strip()
-    if not owner or owner != caller_sub:
-        raise HTTPException(status_code=404, detail="Trace not found.")
+    route_name = str(getattr(request.scope.get("route"), "name", ""))
+    feedback_id = request.query_params.get("feedback_id")
+    feedback_routes = {
+        "get_extraction_timeline",
+        "get_extraction_diagnostic_report",
+        "get_evidence_revisions",
+    }
+    if feedback_id and route_name in feedback_routes:
+        artifacts = fetch_feedback_trace_artifacts(
+            feedback_id,
+            caller_sub=caller_sub,
+            caller_email=str(
+                user.get("trusted_caller_email") or user.get("email") or ""
+            ).strip() or None,
+        )
+        if feedback_artifacts_contain_trace(artifacts, trace_id):
+            request.state.authorized_feedback_artifacts = artifacts
+            return
+        artifact_status = str((artifacts or {}).get("status") or "")
+        if artifact_status in {"not_configured", "unavailable"}:
+            LOGGER.error(
+                "Feedback artifact authorization lookup failed: status=%s",
+                artifact_status,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Trace provider is temporarily unavailable.",
+            ) from None
+
+    if isinstance(extraction_error, TraceNotFoundError):
+        raise HTTPException(status_code=404, detail="Trace not found.") from extraction_error
+
+    LOGGER.error(
+        "Trace authorization provider lookup failed: error_type=%s",
+        type(extraction_error).__name__,
+    )
+    raise HTTPException(
+        status_code=503,
+        detail="Trace provider is temporarily unavailable.",
+    ) from None
 
 
 router = APIRouter(dependencies=[Depends(_authorize_claude_trace_request)])
@@ -2473,6 +2518,9 @@ async def get_extraction_timeline(
         fallback_exceptions=(HTTPException,),
         caller_sub=_trusted_caller_sub(user),
         caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
+        authorized_feedback_artifacts=getattr(
+            getattr(request, "state", None), "authorized_feedback_artifacts", None
+        ),
     )
     timeline = build_extraction_timeline(
         trace_id=trace_id,
@@ -2578,6 +2626,9 @@ async def get_extraction_diagnostic_report(
         fallback_exceptions=(HTTPException,),
         caller_sub=_trusted_caller_sub(user),
         caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
+        authorized_feedback_artifacts=getattr(
+            getattr(request, "state", None), "authorized_feedback_artifacts", None
+        ),
     )
     timeline = build_extraction_timeline(
         trace_id=trace_id,
@@ -2682,6 +2733,9 @@ async def get_evidence_revisions(
         fallback_exceptions=(HTTPException,),
         caller_sub=_trusted_caller_sub(user),
         caller_email=str(user.get("trusted_caller_email") or user.get("email") or "").strip() or None,
+        authorized_feedback_artifacts=getattr(
+            getattr(request, "state", None), "authorized_feedback_artifacts", None
+        ),
     )
     evidence_revisions = build_evidence_revisions(
         trace_id=trace_id,

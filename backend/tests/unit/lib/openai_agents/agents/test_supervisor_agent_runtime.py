@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 from src.lib.chat_history_repository import ChatMessageRecord
+from src.lib.agent_studio import tools as trace_review_tools
 from src.lib.openai_agents import supervisor_context_tools
 from src.lib.openai_agents.agents import supervisor_agent
 
@@ -287,6 +288,62 @@ async def test_inspect_chat_traces_summary_uses_authorized_allowlist(monkeypatch
     assert payload["status"] == "ok"
     assert payload["data"]["tool_call_count"] == 2
     assert captured["trace_id"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+
+@pytest.mark.asyncio
+async def test_inspect_chat_traces_summary_sends_trusted_caller_header(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "curator-sub-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "_list_session_messages",
+        lambda **_kwargs: [
+            _chat_message_record(role="user", content="Question"),
+            _chat_message_record(
+                role="assistant",
+                content="Answer",
+                trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+        ],
+    )
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"data": {"trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, _url, *, params, headers):
+            captured["params"] = params
+            captured["headers"] = headers
+            return _Response()
+
+    monkeypatch.setattr(trace_review_tools.httpx, "AsyncClient", _Client)
+
+    response = await supervisor_context_tools.inspect_chat_traces(
+        detail="summary",
+        trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+
+    assert json.loads(response)["status"] == "ok"
+    assert captured["headers"] == {
+        "Authorization": "Bearer service-token",
+        "X-AGR-Trusted-Caller-Sub": "curator-sub-1",
+    }
 
 
 @pytest.mark.asyncio

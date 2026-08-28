@@ -16,6 +16,7 @@ from src.lib.agent_studio.tools import (
     get_trace_model_live_context,
     get_trace_payloads,
     get_trace_summary,
+    set_trusted_trace_caller,
 )
 from src.lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
@@ -567,6 +568,8 @@ async def inspect_chat_traces(
             "unavailable",
             "Trace inspection is only available inside an active chat session.",
         )
+
+    set_trusted_trace_caller(caller_sub=str(user_id), caller_email=None)
 
     normalized_detail = str(detail or "inventory").strip() or "inventory"
     bounded_limit = normalize_page_limit(

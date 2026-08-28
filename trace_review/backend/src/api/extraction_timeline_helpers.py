@@ -77,12 +77,15 @@ async def load_extraction_timeline_context(
     unavailable_exception_factory: ExceptionFactory | None = None,
     caller_sub: str | None = None,
     caller_email: str | None = None,
+    authorized_feedback_artifacts: Optional[Dict[str, Any]] = None,
 ) -> ExtractionTimelineContext:
-    feedback_artifacts = fetch_feedback_trace_artifacts(
-        feedback_id,
-        caller_sub=caller_sub,
-        caller_email=caller_email,
-    )
+    feedback_artifacts = authorized_feedback_artifacts
+    if feedback_artifacts is None:
+        feedback_artifacts = fetch_feedback_trace_artifacts(
+            feedback_id,
+            caller_sub=caller_sub,
+            caller_email=caller_email,
+        )
     feedback_trace_data = _feedback_trace_data(feedback_artifacts)
 
     try:

@@ -1,11 +1,14 @@
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
-from src.api import claude
+from src.api import auth, claude
+from src.services.cache_manager import CacheManager
 
 
 def _trace_data():
@@ -151,6 +154,7 @@ async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extra
         path_params={"trace_id": "trace-1"},
         query_params={"source": "local"},
         state=SimpleNamespace(),
+        scope={},
     )
     await claude._authorize_claude_trace_request(
         owner_request,
@@ -161,6 +165,7 @@ async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extra
         path_params={"trace_id": "trace-1"},
         query_params={"source": "local"},
         state=SimpleNamespace(),
+        scope={},
     )
     with pytest.raises(HTTPException) as cross_user:
         await claude._authorize_claude_trace_request(
@@ -168,7 +173,9 @@ async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extra
             user={"sub": "curator-2"},
         )
 
-    extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError("missing")
+    extractor_cls.return_value.extract_complete_trace.side_effect = claude.TraceNotFoundError(
+        "missing"
+    )
     with pytest.raises(HTTPException) as missing:
         await claude._authorize_claude_trace_request(
             other_request,
@@ -177,6 +184,158 @@ async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extra
 
     assert cross_user.value.status_code == missing.value.status_code == 404
     assert cross_user.value.detail == missing.value.detail == "Trace not found."
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_exact_trace_authorization_surfaces_sanitized_provider_failure(
+    extractor_cls: Mock,
+    caplog,
+):
+    secret_detail = "provider failed with secret-token-value"
+    extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError(
+        secret_detail
+    )
+    request = SimpleNamespace(
+        path_params={"trace_id": "trace-1"},
+        query_params={"source": "local"},
+        state=SimpleNamespace(),
+        scope={},
+    )
+
+    caplog.set_level(logging.ERROR, logger=claude.LOGGER.name)
+    with pytest.raises(HTTPException) as exc_info:
+        await claude._authorize_claude_trace_request(
+            request,
+            user={"sub": "curator-1"},
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Trace provider is temporarily unavailable."
+    assert "RuntimeError" in caplog.text
+    assert secret_detail not in caplog.text
+
+
+def _claude_http_client(user_sub: str) -> TestClient:
+    app = FastAPI()
+    app.state.cache_manager = CacheManager(ttl_hours=1)
+    app.include_router(claude.router, prefix="/api/claude/traces")
+
+    async def _authenticated_user():
+        return {"sub": user_sub, "email": f"{user_sub}@example.org"}
+
+    app.dependency_overrides[auth._get_user_from_cookie_impl] = _authenticated_user
+    return TestClient(app)
+
+
+@patch("src.api.claude.fetch_feedback_trace_artifacts")
+@patch("src.api.claude.TraceExtractor")
+def test_feedback_backed_trace_http_authorization_allows_owner_when_live_trace_missing(
+    extractor_cls: Mock,
+    fetch_artifacts: Mock,
+):
+    extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError(
+        "Langfuse unavailable"
+    )
+    fetch_artifacts.return_value = {
+        "status": "available",
+        "trace_ids": ["trace-owner"],
+        "trace_data": {
+            "traces": [
+                {"trace_id": "trace-owner", "tool_calls": []},
+            ]
+        },
+    }
+
+    response = _claude_http_client("curator-1").get(
+        "/api/claude/traces/trace-owner/extraction_timeline",
+        params={"source": "local", "feedback_id": "feedback-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    fetch_artifacts.assert_called_once_with(
+        "feedback-1",
+        caller_sub="curator-1",
+        caller_email="curator-1@example.org",
+    )
+
+
+@pytest.mark.parametrize(
+    "artifacts",
+    [
+        {"status": "not_found", "trace_data": None},
+        {
+            "status": "available",
+            "trace_ids": ["different-trace"],
+            "trace_data": {"traces": [{"trace_id": "different-trace"}]},
+        },
+    ],
+)
+@patch("src.api.claude.fetch_feedback_trace_artifacts")
+@patch("src.api.claude.TraceExtractor")
+def test_feedback_backed_trace_http_authorization_hides_absent_or_cross_owner_artifact(
+    extractor_cls: Mock,
+    fetch_artifacts: Mock,
+    artifacts: dict,
+):
+    extractor_cls.return_value.extract_complete_trace.side_effect = (
+        claude.TraceNotFoundError("missing")
+    )
+    fetch_artifacts.return_value = artifacts
+
+    response = _claude_http_client("curator-2").get(
+        "/api/claude/traces/trace-owner/extraction_timeline",
+        params={"source": "local", "feedback_id": "feedback-1"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Trace not found."}
+
+
+@patch("src.api.claude.fetch_feedback_trace_artifacts")
+@patch("src.api.claude.TraceExtractor")
+def test_feedback_backed_trace_http_authorization_surfaces_artifact_provider_failure(
+    extractor_cls: Mock,
+    fetch_artifacts: Mock,
+):
+    extractor_cls.return_value.extract_complete_trace.side_effect = (
+        claude.TraceNotFoundError("missing")
+    )
+    fetch_artifacts.return_value = {
+        "status": "unavailable",
+        "trace_data": None,
+    }
+
+    response = _claude_http_client("curator-1").get(
+        "/api/claude/traces/trace-owner/extraction_timeline",
+        params={"source": "local", "feedback_id": "feedback-1"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Trace provider is temporarily unavailable."
+    }
+
+
+@patch("src.api.claude.fetch_feedback_trace_artifacts")
+@patch("src.api.claude.TraceExtractor")
+def test_feedback_id_cannot_bypass_non_feedback_exact_route_authorization(
+    extractor_cls: Mock,
+    fetch_artifacts: Mock,
+):
+    extractor_cls.return_value.extract_complete_trace.side_effect = (
+        claude.TraceNotFoundError("missing")
+    )
+
+    response = _claude_http_client("curator-1").get(
+        "/api/claude/traces/trace-owner/summary",
+        params={"source": "local", "feedback_id": "feedback-1"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Trace not found."}
+    fetch_artifacts.assert_not_called()
 
 
 def test_every_exact_claude_route_inherits_central_trace_authorization():
