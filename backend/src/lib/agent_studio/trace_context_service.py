@@ -353,13 +353,17 @@ def _tool_calls_from_trace_review_analysis(
         if not isinstance(item, dict):
             raise TraceReviewExportError("TraceReview analysis.tool_calls contains a non-object item")
         name = _required_string(item, "name")
+        raw_input = item.get("input")
+        raw_status = item.get("status")
         tool_calls.append(
             ToolCallInfo(
                 name=name,
-                input=item.get("input") if isinstance(item.get("input"), dict) else {},
+                input=raw_input if isinstance(raw_input, dict) else {},
                 output_preview=None,
                 duration_ms=_duration_to_ms(item.get("duration")),
-                status=_required_string(item, "status"),
+                status=(
+                    "N/A" if raw_status is None else _required_string(item, "status")
+                ),
             )
         )
     return tool_calls
