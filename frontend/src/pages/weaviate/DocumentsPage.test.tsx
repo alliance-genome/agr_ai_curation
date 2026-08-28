@@ -22,7 +22,12 @@ interface MockDocumentListProps {
   onRefresh?: () => void;
   onDelete?: (id: string) => void;
   onReembed?: (id: string) => void;
+  layoutPreferenceScope?: { tableId: string; userId: string };
 }
+
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({ user: { uid: 'curator-1' } }),
+}));
 
 interface MockInlineFilterBarProps {
   filters: DocumentFilter;
@@ -43,6 +48,7 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
     onRefresh,
     onDelete,
     onReembed,
+    layoutPreferenceScope,
   }: MockDocumentListProps) => (
     <section
       data-testid="document-list"
@@ -55,6 +61,8 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
       data-first-document-id={documents[0]?.id ?? ''}
       data-first-document-file-size={String(documents[0]?.fileSize ?? '')}
       data-first-document-status={documents[0]?.processingStatus ?? ''}
+      data-layout-table-id={layoutPreferenceScope?.tableId ?? ''}
+      data-layout-user-id={layoutPreferenceScope?.userId ?? ''}
     >
       {filterBar}
       {documents.map((document) => <span key={document.id}>{document.filename}</span>)}
@@ -188,6 +196,8 @@ describe('DocumentsPage request ownership', () => {
     expect(list).toHaveAttribute('data-first-document-id', 'canonical-document');
     expect(list).toHaveAttribute('data-first-document-file-size', '1024');
     expect(list).toHaveAttribute('data-first-document-status', 'completed');
+    expect(list).toHaveAttribute('data-layout-table-id', 'library-documents');
+    expect(list).toHaveAttribute('data-layout-user-id', 'curator-1');
     expect(fetchUrl(0)).toBe(
       '/api/weaviate/documents?page=1&page_size=20&sort_by=creationDate&sort_order=desc',
     );

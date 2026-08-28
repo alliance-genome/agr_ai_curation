@@ -6,6 +6,7 @@ import {
   DOCUMENT_LOADING_STORAGE_KEY,
   DOCUMENT_LOAD_START_EVENT,
 } from '../../features/documents/documentLoadEvents';
+import { buildTableLayoutPreferenceKey } from '../../lib/tableLayoutPreferences';
 
 const refetchHealthMock = vi.fn();
 const emitGlobalToastMock = vi.fn();
@@ -75,6 +76,7 @@ vi.mock('@mui/x-data-grid', async () => {
     paginationModel,
     onPaginationModelChange,
     sortingOrder = ['asc', 'desc', null],
+    columnVisibilityModel = {},
     sx,
   }: {
     rows?: any[];
@@ -92,8 +94,12 @@ vi.mock('@mui/x-data-grid', async () => {
     paginationModel?: { page: number; pageSize: number };
     onPaginationModelChange?: (model: { page: number; pageSize: number }) => void;
     sortingOrder?: Array<'asc' | 'desc' | null>;
+    columnVisibilityModel?: Record<string, boolean>;
     sx?: Record<string, unknown>;
   }) => {
+    const visibleColumns = columns.filter(
+      (column: any) => columnVisibilityModel[column.field] !== false,
+    );
     const [internalSelection, setInternalSelection] = React.useState<string[]>([]);
     const selectedIds =
       rowSelectionModel !== undefined ? rowSelectionModel.map(String) : internalSelection;
@@ -169,7 +175,7 @@ vi.mock('@mui/x-data-grid', async () => {
                   <input type="checkbox" />
                 </th>
               )}
-              {columns.map((column: any) => (
+              {visibleColumns.map((column: any) => (
                 <th
                   key={column.field}
                   style={{ minWidth: column.minWidth }}
@@ -207,7 +213,7 @@ vi.mock('@mui/x-data-grid', async () => {
                     />
                   </td>
                 )}
-                {columns.map((column: any) => {
+                {visibleColumns.map((column: any) => {
                   const rawValue = row[column.field];
                   let content = rawValue;
 
@@ -257,6 +263,7 @@ describe('DocumentList', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     sessionStorage.clear();
     refetchHealthMock.mockReset();
     usePdfExtractionHealthMock.mockClear();
@@ -270,6 +277,69 @@ describe('DocumentList', () => {
     expect(screen.getByText('doc1.pdf')).toBeInTheDocument();
     expect(screen.getByText('doc2.pdf')).toBeInTheDocument();
     expect(screen.getByText('doc3.pdf')).toBeInTheDocument();
+  });
+
+  it('restores hidden and reordered columns after remount', () => {
+    const layoutPreferenceScope = { tableId: 'library-documents', userId: 'curator-1' };
+    const firstRender = render(
+      <DocumentList {...defaultProps} layoutPreferenceScope={layoutPreferenceScope} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Column layout' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Hide Title column' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move Status column up' }));
+    firstRender.unmount();
+
+    render(<DocumentList {...defaultProps} layoutPreferenceScope={layoutPreferenceScope} />);
+
+    const headers = within(screen.getByRole('grid')).getAllByRole('columnheader');
+    expect(headers[3]).toHaveTextContent('Status');
+    expect(headers[4]).toHaveTextContent('Created');
+    expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
+    const stored = JSON.parse(localStorage.getItem(
+      buildTableLayoutPreferenceKey(layoutPreferenceScope),
+    ) ?? '{}');
+    expect(stored.columnOrder[4]).toBe('processingStatus');
+    expect(stored.columnOrder[5]).toBe('creationDate');
+    expect(stored.columnVisibility.title).toBe(false);
+  });
+
+  it('resets persisted columns to current defaults', () => {
+    const layoutPreferenceScope = { tableId: 'library-documents', userId: 'curator-1' };
+    render(<DocumentList {...defaultProps} layoutPreferenceScope={layoutPreferenceScope} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Column layout' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Hide Title column' }));
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to defaults' }));
+
+    expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    expect(localStorage.getItem(buildTableLayoutPreferenceKey(layoutPreferenceScope))).toBeNull();
+  });
+
+  it('drops stale columns and keeps preferences isolated by user and page', () => {
+    const savedScope = { tableId: 'library-documents', userId: 'curator-1' };
+    localStorage.setItem(buildTableLayoutPreferenceKey(savedScope), JSON.stringify({
+      version: 1,
+      columnOrder: ['retiredColumn', 'processingStatus'],
+      columnVisibility: { retiredColumn: false, title: false },
+    }));
+
+    const savedRender = render(
+      <DocumentList {...defaultProps} layoutPreferenceScope={savedScope} />,
+    );
+    expect(within(screen.getByRole('grid')).getAllByRole('columnheader')[0]).toHaveTextContent('Status');
+    expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
+    expect(screen.queryByText('retiredColumn')).not.toBeInTheDocument();
+    savedRender.unmount();
+
+    render(
+      <DocumentList
+        {...defaultProps}
+        layoutPreferenceScope={{ tableId: 'other-page', userId: 'curator-2' }}
+      />,
+    );
+    expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Filename' })).toBeInTheDocument();
   });
 
   it('shows durable failed processing state and error instead of stale pending embedding state', () => {

@@ -12,6 +12,7 @@ import type {
   DocumentSummary,
   DocumentFilter,
 } from '../../services/weaviate';
+import { useAuth } from '../../contexts/AuthContext';
 
 const DocumentList = lazy(() => import('../../components/weaviate/DocumentList'));
 const InlineFilterBar = lazy(() => import('../../components/weaviate/InlineFilterBar'));
@@ -74,6 +75,7 @@ function DocumentsPageSectionFallback() {
 
 const DocumentsPage: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
@@ -378,6 +380,10 @@ const DocumentsPage: React.FC = () => {
             onPaginationModelChange={handlePaginationModelChange}
             sortModel={sortModel}
             onSortModelChange={handleSortModelChange}
+            layoutPreferenceScope={user ? {
+              tableId: 'library-documents',
+              userId: user.uid,
+            } : undefined}
           />
         </Suspense>
       </Box>

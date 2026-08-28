@@ -7,6 +7,8 @@ import {
   GridSortModel,
   GridPaginationModel,
   GridRowSelectionModel,
+  GridColumnOrderChangeParams,
+  GridColumnVisibilityModel,
 } from '@mui/x-data-grid';
 import {
   Alert,
@@ -26,6 +28,10 @@ import {
   Stack,
   Typography,
   CircularProgress,
+  Checkbox,
+  ListItemText,
+  Menu,
+  MenuItem,
 } from '@mui/material';
 import {
   Delete,
@@ -35,6 +41,9 @@ import {
   FileOpen,
   Download,
   Edit,
+  ArrowDownward,
+  ArrowUpward,
+  ViewColumn,
 } from '@mui/icons-material';
 import DocumentDetailsDialog from './DocumentDetailsDialog';
 import DocumentDownloadDialog from './DocumentDownloadDialog';
@@ -56,6 +65,13 @@ import {
 } from '@/features/documents/pdfUploadFlow';
 import { startDocumentLoad } from '@/features/documents/documentLoadEvents';
 import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
+import {
+  defaultTableLayoutPreference,
+  loadTableLayoutPreference,
+  removeTableLayoutPreference,
+  saveTableLayoutPreference,
+  TableLayoutPreferenceScope,
+} from '@/lib/tableLayoutPreferences';
 
 interface DocumentListProps {
   documents: DocumentSummary[];
@@ -87,7 +103,21 @@ interface DocumentListProps {
   sortModel?: GridSortModel;
   /** Called when the user changes sort order. */
   onSortModelChange?: (model: GridSortModel) => void;
+  /** Authenticated user and page/table identity for durable column preferences. */
+  layoutPreferenceScope?: TableLayoutPreferenceScope;
 }
+
+const DOCUMENT_COLUMN_FIELDS = [
+  'filename',
+  'title',
+  'sourceProvenance',
+  'fileSize',
+  'creationDate',
+  'processingStatus',
+  'vectorCount',
+  'chunkCount',
+  'actions',
+] as const;
 
 const PDF_BACKGROUND_PROCESSING_TOAST =
   'Your PDFs are processing in the background. You can safely navigate away.';
@@ -182,6 +212,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
   onPaginationModelChange,
   sortModel: controlledSortModel,
   onSortModelChange,
+  layoutPreferenceScope,
 }) => {
   const extractionHealthQuery = usePdfExtractionHealth({ enabled: showUploadControls });
   const extractionHealth = extractionHealthQuery.data;
@@ -200,12 +231,76 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const [downloadDocumentId, setDownloadDocumentId] = useState<string | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editDocument, setEditDocument] = useState<DocumentSummary | null>(null);
+  const [columnLayoutAnchor, setColumnLayoutAnchor] = useState<HTMLElement | null>(null);
+  const [tableLayout, setTableLayout] = useState(() => (
+    loadTableLayoutPreference(layoutPreferenceScope, DOCUMENT_COLUMN_FIELDS)
+  ));
+  const preferenceTableId = layoutPreferenceScope?.tableId;
+  const preferenceUserId = layoutPreferenceScope?.userId;
 
   const paginationModel = controlledPaginationModel ?? internalPaginationModel;
   const sortModel = controlledSortModel ?? internalSortModel;
   const handlePaginationModelChange = onPaginationModelChange ?? setInternalPaginationModel;
   const handleSortModelChange = onSortModelChange ?? setInternalSortModel;
   const serverSorting = onSortModelChange !== undefined;
+
+  React.useEffect(() => {
+    const scope = preferenceTableId && preferenceUserId
+      ? { tableId: preferenceTableId, userId: preferenceUserId }
+      : undefined;
+    setTableLayout(loadTableLayoutPreference(scope, DOCUMENT_COLUMN_FIELDS));
+  }, [preferenceTableId, preferenceUserId]);
+
+  const updateTableLayout = React.useCallback((nextLayout: typeof tableLayout) => {
+    setTableLayout(nextLayout);
+    saveTableLayoutPreference(layoutPreferenceScope, nextLayout);
+  }, [layoutPreferenceScope]);
+
+  const handleColumnVisibilityChange = React.useCallback((
+    columnVisibility: GridColumnVisibilityModel,
+  ) => {
+    updateTableLayout({ ...tableLayout, columnVisibility });
+  }, [tableLayout, updateTableLayout]);
+
+  const handleColumnOrderChange = React.useCallback((params: GridColumnOrderChangeParams) => {
+    const withoutMovedColumn = tableLayout.columnOrder.filter(
+      (field) => field !== params.column.field,
+    );
+    const checkboxOffset = checkboxSelection ? 1 : 0;
+    const targetIndex = Math.max(
+      0,
+      Math.min(params.targetIndex - checkboxOffset, withoutMovedColumn.length),
+    );
+    withoutMovedColumn.splice(targetIndex, 0, params.column.field);
+    updateTableLayout({ ...tableLayout, columnOrder: withoutMovedColumn });
+  }, [checkboxSelection, tableLayout, updateTableLayout]);
+
+  const moveColumn = React.useCallback((field: string, offset: -1 | 1) => {
+    const currentIndex = tableLayout.columnOrder.indexOf(field);
+    const targetIndex = currentIndex + offset;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= tableLayout.columnOrder.length) {
+      return;
+    }
+
+    const columnOrder = [...tableLayout.columnOrder];
+    columnOrder.splice(currentIndex, 1);
+    columnOrder.splice(targetIndex, 0, field);
+    updateTableLayout({ ...tableLayout, columnOrder });
+  }, [tableLayout, updateTableLayout]);
+
+  const toggleColumnVisibility = React.useCallback((field: string) => {
+    const currentlyVisible = tableLayout.columnVisibility[field] !== false;
+    handleColumnVisibilityChange({
+      ...tableLayout.columnVisibility,
+      [field]: !currentlyVisible,
+    });
+  }, [handleColumnVisibilityChange, tableLayout.columnVisibility]);
+
+  const resetTableLayout = React.useCallback(() => {
+    const defaults = defaultTableLayoutPreference(DOCUMENT_COLUMN_FIELDS);
+    setTableLayout(defaults);
+    removeTableLayoutPreference(layoutPreferenceScope);
+  }, [layoutPreferenceScope]);
 
   React.useEffect(() => {
     if (!selectedDocumentId) {
@@ -409,7 +504,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
     }
   };
 
-  const columns: GridColDef[] = [
+  const defaultColumns: GridColDef[] = [
     {
       field: 'filename',
       headerName: 'Filename',
@@ -623,6 +718,10 @@ const DocumentList: React.FC<DocumentListProps> = ({
       },
     },
   ];
+  const columnsByField = new Map(defaultColumns.map((column) => [column.field, column]));
+  const columns = tableLayout.columnOrder
+    .map((field) => columnsByField.get(field))
+    .filter((column): column is GridColDef => column !== undefined);
 
   const hasDocuments = documents.length > 0;
 
@@ -722,6 +821,58 @@ const DocumentList: React.FC<DocumentListProps> = ({
         >
           Refresh
         </Button>
+        <Button
+          variant="outlined"
+          startIcon={<ViewColumn />}
+          onClick={(event) => setColumnLayoutAnchor(event.currentTarget)}
+        >
+          Column layout
+        </Button>
+        <Menu
+          anchorEl={columnLayoutAnchor}
+          open={Boolean(columnLayoutAnchor)}
+          onClose={() => setColumnLayoutAnchor(null)}
+        >
+          {tableLayout.columnOrder.map((field, index) => {
+            const column = columnsByField.get(field);
+            const label = column?.headerName ?? field;
+            const visible = tableLayout.columnVisibility[field] !== false;
+            return (
+              <MenuItem key={field} disableRipple>
+                <Checkbox
+                  checked={visible}
+                  onClick={() => toggleColumnVisibility(field)}
+                  inputProps={{
+                    'aria-label': `${visible ? 'Hide' : 'Show'} ${label} column`,
+                  }}
+                />
+                <ListItemText>{label}</ListItemText>
+                <IconButton
+                  size="small"
+                  aria-label={`Move ${label} column up`}
+                  disabled={index === 0}
+                  onClick={() => moveColumn(field, -1)}
+                >
+                  <ArrowUpward fontSize="small" />
+                </IconButton>
+                <IconButton
+                  size="small"
+                  aria-label={`Move ${label} column down`}
+                  disabled={index === tableLayout.columnOrder.length - 1}
+                  onClick={() => moveColumn(field, 1)}
+                >
+                  <ArrowDownward fontSize="small" />
+                </IconButton>
+              </MenuItem>
+            );
+          })}
+          <MenuItem onClick={() => {
+            resetTableLayout();
+            setColumnLayoutAnchor(null);
+          }}>
+            Reset to defaults
+          </MenuItem>
+        </Menu>
         {pipelineBusy && (
           <Stack direction="row" spacing={1} alignItems="center">
             <CircularProgress size={16} thickness={5} />
@@ -797,6 +948,9 @@ const DocumentList: React.FC<DocumentListProps> = ({
           <DataGrid
             rows={documents}
             columns={columns}
+            columnVisibilityModel={tableLayout.columnVisibility}
+            onColumnVisibilityModelChange={handleColumnVisibilityChange}
+            onColumnOrderChange={handleColumnOrderChange}
             rowCount={totalCount}
             loading={loading}
             pageSizeOptions={[10, 20, 50, 100]}
