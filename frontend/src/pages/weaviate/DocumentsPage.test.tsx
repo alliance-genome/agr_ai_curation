@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from '../../test/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
+import type {
+  DocumentPaginationModel,
+  DocumentSortModel,
+} from '@/features/documents/documentTableTypes';
 import type { DocumentFilter, DocumentSummary } from '../../services/weaviate';
 import DocumentsPage, { lastDocumentPage } from './DocumentsPage';
 
@@ -15,10 +18,10 @@ interface MockDocumentListProps {
   loading: boolean;
   totalCount: number;
   filterBar?: ReactNode;
-  paginationModel?: GridPaginationModel;
-  onPaginationModelChange?: (model: GridPaginationModel) => void;
-  sortModel?: GridSortModel;
-  onSortModelChange?: (model: GridSortModel) => void;
+  paginationModel?: DocumentPaginationModel;
+  onPaginationModelChange?: (model: DocumentPaginationModel) => void;
+  sortModel?: DocumentSortModel;
+  onSortModelChange?: (model: DocumentSortModel) => void;
   onRefresh?: () => void;
   onDelete?: (id: string) => void;
   onReembed?: (id: string) => void;

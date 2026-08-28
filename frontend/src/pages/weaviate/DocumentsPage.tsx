@@ -2,7 +2,10 @@ import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'rea
 import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
+import type {
+  DocumentPaginationModel,
+  DocumentSortModel,
+} from '@/features/documents/documentTableTypes';
 import {
   fetchDocumentList,
   useDeleteDocument,
@@ -78,11 +81,11 @@ const DocumentsPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [filters, setFilters] = useState<DocumentFilter>({});
-  const [paginationModel, setPaginationModel] = useState<GridPaginationModel>({
+  const [paginationModel, setPaginationModel] = useState<DocumentPaginationModel>({
     page: 0,
     pageSize: DEFAULT_DOCUMENTS_PAGE_SIZE,
   });
-  const [sortModel, setSortModel] = useState<GridSortModel>([
+  const [sortModel, setSortModel] = useState<DocumentSortModel>([
     { field: 'creationDate', sort: 'desc' },
   ]);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
@@ -242,12 +245,12 @@ const DocumentsPage: React.FC = () => {
     setSelectedDocumentIds([]);
   }, []);
 
-  const handlePaginationModelChange = React.useCallback((nextPaginationModel: GridPaginationModel) => {
+  const handlePaginationModelChange = React.useCallback((nextPaginationModel: DocumentPaginationModel) => {
     setPaginationModel(nextPaginationModel);
     setSelectedDocumentIds([]);
   }, []);
 
-  const handleSortModelChange = React.useCallback((nextSortModel: GridSortModel) => {
+  const handleSortModelChange = React.useCallback((nextSortModel: DocumentSortModel) => {
     setSortModel(nextSortModel);
     setPaginationModel((previous) => ({ ...previous, page: 0 }));
     setSelectedDocumentIds([]);

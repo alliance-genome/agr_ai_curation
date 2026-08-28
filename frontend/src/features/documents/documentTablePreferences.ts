@@ -6,10 +6,14 @@ import {
 
 export const DOCUMENT_TABLE_PREFERENCES_VERSION = 1
 
+export type DocumentTableDensity = 'compact' | 'standard'
+
 export interface DocumentTablePreferences {
   version: typeof DOCUMENT_TABLE_PREFERENCES_VERSION
   columnVisibilityModel: Record<string, boolean>
   columnOrder: string[]
+  columnSizing: Record<string, number>
+  density: DocumentTableDensity
 }
 
 const STORAGE_PREFIX = 'ai-curation:preferences:v1'
@@ -28,6 +32,8 @@ export const defaultDocumentTablePreferences = (
   version: DOCUMENT_TABLE_PREFERENCES_VERSION,
   columnVisibilityModel: {},
   columnOrder: [...columnFields],
+  columnSizing: {},
+  density: 'standard',
 })
 
 export const normalizeDocumentTablePreferences = (
@@ -61,10 +67,25 @@ export const normalizeDocumentTablePreferences = (
     }
   })
 
+  const columnSizing: Record<string, number> = {}
+  if (isRecord(value.columnSizing)) {
+    Object.entries(value.columnSizing).forEach(([field, size]) => {
+      if (knownFields.has(field) && typeof size === 'number' && Number.isFinite(size) && size > 0) {
+        columnSizing[field] = size
+      }
+    })
+  }
+
+  const density: DocumentTableDensity = value.density === 'compact'
+    ? 'compact'
+    : 'standard'
+
   return {
     version: DOCUMENT_TABLE_PREFERENCES_VERSION,
     columnVisibilityModel,
     columnOrder,
+    columnSizing,
+    density,
   }
 }
 
@@ -148,4 +169,6 @@ export const hasCustomDocumentTablePreferences = (
 ): boolean => (
   Object.keys(preferences.columnVisibilityModel).length > 0
   || preferences.columnOrder.some((field, index) => field !== columnFields[index])
+  || Object.keys(preferences.columnSizing).length > 0
+  || preferences.density !== 'standard'
 )
