@@ -204,18 +204,24 @@ def _summary(
         "field_cursor": cursor,
         "returned_field_count": 0,
         "next_field_cursor": None,
+        # Reserve the largest cursor representation while fitting fields so the
+        # final provider-visible continuation cannot push the summary over budget.
+        "next_call": {
+            "result_view": "summary",
+            "result_cursor": len(field_items),
+            "result_limit": limit,
+        },
         "fields_complete": False,
         "fields_truncated": True,
         "available_page_paths": sorted(available_page_paths),
         "continuation": (
             "Use result_view='page' for listed page paths or result_view='detail' "
             "with detail_path for exact content. Continue field metadata with "
-            "result_view='summary' and next_field_cursor."
+            "the exact arguments in next_call."
             if available_page_paths
             else (
                 "Use result_view='detail' with detail_path for exact content. "
-                "Continue field metadata with result_view='summary' and "
-                "next_field_cursor."
+                "Continue field metadata with the exact arguments in next_call."
             )
         ),
     }
@@ -262,6 +268,15 @@ def _summary(
     summary.update(
         returned_field_count=returned,
         next_field_cursor=next_cursor if next_cursor < len(field_items) else None,
+        next_call=(
+            {
+                "result_view": "summary",
+                "result_cursor": next_cursor,
+                "result_limit": limit,
+            }
+            if next_cursor < len(field_items)
+            else None
+        ),
         fields_complete=next_cursor >= len(field_items),
         fields_truncated=next_cursor < len(field_items),
     )

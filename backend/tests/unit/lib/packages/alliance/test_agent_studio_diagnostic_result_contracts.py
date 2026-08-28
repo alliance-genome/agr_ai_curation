@@ -305,8 +305,13 @@ def test_many_field_summary_metadata_is_bounded_and_exactly_recoverable(
 
     recovered = {}
     cursor = 0
+    next_call = {
+        "result_view": "summary",
+        "result_cursor": cursor,
+        "result_limit": 7,
+    }
     while True:
-        summary = handler(result_view="summary", result_cursor=cursor)
+        summary = handler(**next_call)
         assert len(json.dumps(summary, default=str)) <= 1400
         _provider_visible("agr_curation_query", summary)
         assert summary["returned_field_count"] > 0
@@ -353,9 +358,16 @@ def test_many_field_summary_metadata_is_bounded_and_exactly_recoverable(
                 recovered[name] = descriptor
 
         if summary["fields_complete"]:
+            assert summary["next_call"] is None
             break
         assert summary["next_field_cursor"] > cursor
-        cursor = summary["next_field_cursor"]
+        assert summary["next_call"] == {
+            "result_view": "summary",
+            "result_cursor": summary["next_field_cursor"],
+            "result_limit": 7,
+        }
+        next_call = summary["next_call"]
+        cursor = next_call["result_cursor"]
 
     assert recovered == result
 
