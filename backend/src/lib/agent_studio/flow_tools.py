@@ -1731,7 +1731,7 @@ def _get_available_agents_handler():
                 }
             return build_detail(fitting_end)
 
-        page, truncated, next_cursor = offset_page(
+        page, _, _ = offset_page(
             matched,
             limit=bounded_limit,
             cursor=offset,
