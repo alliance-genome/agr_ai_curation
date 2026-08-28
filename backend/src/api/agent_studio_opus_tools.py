@@ -15,6 +15,17 @@ from src.lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
     AGENT_STUDIO_CHAT_KIND,
 )
+from src.lib.openai_agents.config import (
+    get_domain_pack_validation_plan_default_limit,
+    get_domain_pack_validation_plan_max_limit,
+)
+
+
+_DOMAIN_PACK_VALIDATION_PLAN_MAX_LIMIT = get_domain_pack_validation_plan_max_limit()
+_DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT = min(
+    get_domain_pack_validation_plan_default_limit(),
+    _DOMAIN_PACK_VALIDATION_PLAN_MAX_LIMIT,
+)
 
 # Convert tool definition to Anthropic format
 ANTHROPIC_SUGGESTION_TOOL = {
@@ -749,12 +760,11 @@ GET_DOMAIN_ENVELOPE_STATE_TOOL = {
 GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
     "name": "get_domain_pack_validation_plan",
     "description": (
-        "Inspect a domain pack's object definitions, field paths, schema/provider "
-        "references, validator bindings, active automatic validation defaults, "
-        "under-development validator metadata, and flow opt-out/replacement "
-        "semantics. Use validator_bindings[].validator_agent.agent_id or "
-        "validation_attachments[].validator_agent_id with get_prompt(agent_id=...) "
-        "when a curator asks how a bundled validator works."
+        "Summarize a domain pack's validation plan, then retrieve bounded detail "
+        "pages by section. The summary reports active automatic validation defaults, "
+        "under-development validator metadata, section counts, and valid detail "
+        "requests. Request validator_bindings or validation_attachments details to "
+        "find validator agent IDs for get_prompt(agent_id=...)."
     ),
     "input_schema": {
         "type": "object",
@@ -766,6 +776,57 @@ GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
             "domain_pack_id": {
                 "type": "string",
                 "description": "Optional domain pack ID to inspect directly.",
+            },
+            "section": {
+                "type": "string",
+                "enum": [
+                    "object_definitions",
+                    "fields",
+                    "validators",
+                    "validator_bindings",
+                    "field_policies",
+                    "validation_attachments",
+                ],
+                "description": (
+                    "Optional detail section. Omit for the compact summary and its "
+                    "inventory of supported section requests."
+                ),
+            },
+            "object_type": {
+                "type": "string",
+                "description": "Exact object type filter for supported sections.",
+            },
+            "field_path": {
+                "type": "string",
+                "description": "Exact field path filter for supported sections.",
+            },
+            "validator_id": {
+                "type": "string",
+                "description": "Exact validator ID filter for supported sections.",
+            },
+            "binding_id": {
+                "type": "string",
+                "description": "Exact validator binding ID filter for supported sections.",
+            },
+            "state": {
+                "type": "string",
+                "enum": ["active", "under_development"],
+                "description": "Exact validator or binding state filter.",
+            },
+            "query": {
+                "type": "string",
+                "description": "Case-insensitive text query over section records.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": _DOMAIN_PACK_VALIDATION_PLAN_MAX_LIMIT,
+                "default": _DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT,
+                "description": "Bounded records to return.",
+            },
+            "cursor": {
+                "type": "string",
+                "description": "Deterministic decimal offset from next_cursor.",
             },
         },
         "required": [],

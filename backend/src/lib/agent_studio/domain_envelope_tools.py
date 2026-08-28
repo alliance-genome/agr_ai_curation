@@ -44,6 +44,8 @@ from src.lib.openai_agents.config import (
     get_domain_envelope_max_summary_json_chars,
     get_domain_envelope_max_validator_lookup_attempts,
     get_domain_envelope_max_validator_summaries,
+    get_domain_pack_validation_plan_default_limit,
+    get_domain_pack_validation_plan_max_limit,
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -66,6 +68,38 @@ _MAX_VALIDATOR_SUMMARIES = get_domain_envelope_max_validator_summaries()
 _MAX_VALIDATOR_LOOKUP_ATTEMPTS = get_domain_envelope_max_validator_lookup_attempts()
 _MAX_SUMMARY_JSON_CHARS = get_domain_envelope_max_summary_json_chars()
 _MAX_FIELD_PATHS = get_domain_envelope_max_field_paths()
+_DOMAIN_PLAN_DEFAULT_LIMIT = get_domain_pack_validation_plan_default_limit()
+_DOMAIN_PLAN_MAX_LIMIT = get_domain_pack_validation_plan_max_limit()
+
+_DOMAIN_PLAN_SECTIONS = (
+    "object_definitions",
+    "fields",
+    "validators",
+    "validator_bindings",
+    "field_policies",
+    "validation_attachments",
+)
+_DOMAIN_PLAN_FILTERS = {
+    "object_definitions": ("object_type", "query"),
+    "fields": ("object_type", "field_path", "query"),
+    "validators": ("validator_id", "state", "query"),
+    "validator_bindings": (
+        "object_type",
+        "field_path",
+        "binding_id",
+        "state",
+        "query",
+    ),
+    "field_policies": ("object_type", "field_path", "query"),
+    "validation_attachments": (
+        "object_type",
+        "field_path",
+        "validator_id",
+        "binding_id",
+        "state",
+        "query",
+    ),
+}
 
 
 def list_domain_envelopes(
@@ -305,8 +339,17 @@ def get_domain_pack_validation_plan(
     *,
     agent_id: str | None = None,
     domain_pack_id: str | None = None,
+    section: str | None = None,
+    object_type: str | None = None,
+    field_path: str | None = None,
+    validator_id: str | None = None,
+    binding_id: str | None = None,
+    state: str | None = None,
+    query: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return domain-pack validation and authoring metadata for Opus."""
+    """Return a compact domain-pack summary or one bounded detail section."""
 
     try:
         resolved_agent_id = _optional_text(agent_id)
@@ -360,8 +403,98 @@ def get_domain_pack_validation_plan(
             for object_definition in metadata.object_definitions
             for field_definition in object_definition.fields
         ]
-
-        return {
+        section_items = {
+            "object_definitions": sorted(
+                (
+                    {
+                        "object_type": object_definition.object_type,
+                        "display_name": object_definition.display_name,
+                        "object_role": _optional_text(
+                            object_definition.metadata.get("object_role")
+                        ),
+                        "model_ref": object_definition.model_ref,
+                        "definition_state": object_definition.definition_state.value,
+                        "provider_refs": _provider_refs(object_definition.metadata),
+                        "field_paths": [
+                            field_definition.field_path
+                            for field_definition in object_definition.fields
+                        ],
+                    }
+                    for object_definition in metadata.object_definitions
+                ),
+                key=lambda item: item["object_type"],
+            ),
+            "fields": sorted(
+                fields,
+                key=lambda item: (item["object_type"], item["field_path"]),
+            ),
+            "validators": sorted(
+                (entry.identity_details() for entry in registry.validator_metadata),
+                key=lambda item: (item["validator_id"], item["binding_state"]),
+            ),
+            "validator_bindings": sorted(
+                (binding.identity_details() for binding in registry.bindings),
+                key=lambda item: item["validator_binding_id"],
+            ),
+            "field_policies": sorted(
+                (policy.identity_details() for policy in registry.field_policies),
+                key=lambda item: (item["object_type"], item["field_path"]),
+            ),
+            "validation_attachments": sorted(
+                attachment_options,
+                key=lambda item: item["attachment_id"],
+            ),
+        }
+        validation_attachment_summary = {
+            "total": len(attachment_options),
+            "by_state": {
+                attachment_state: len(items)
+                for attachment_state, items in attachments_by_state.items()
+            },
+            "default_enabled": sum(
+                1 for option in attachment_options if option.get("default_enabled")
+            ),
+            "required": sum(1 for option in attachment_options if option.get("required")),
+            "export_blocking": sum(
+                1 for option in attachment_options if option.get("export_blocking")
+            ),
+            "opt_out_allowed": sum(
+                1 for option in attachment_options if option.get("allow_opt_out")
+            ),
+        }
+        validation_dispatch_summary = {
+            "active_automatic": sum(
+                1
+                for option in attachment_options
+                if option.get("state") == "active" and option.get("default_enabled")
+            ),
+            "active_flow_opt_out_capable": sum(
+                1
+                for option in attachment_options
+                if option.get("state") == "active" and option.get("allow_opt_out")
+            ),
+            "under_development_metadata": sum(
+                1
+                for option in attachment_options
+                if option.get("state") == "under_development"
+            ),
+            "validator_prompt_inspection": (
+                "Read validator_bindings[].validator_agent.agent_id or "
+                "validation_attachments[].validator_agent_id, then call "
+                "get_prompt(agent_id=<validator agent id>) for the validator prompt."
+            ),
+        }
+        automatic_validation_semantics = (
+            "Active default-enabled attachments are the only validators scheduled "
+            "automatically on extraction nodes, and runtime dispatch writes their "
+            "findings back into domain envelopes after extraction. Under-development "
+            "validator bindings are explanatory metadata, not scheduled work. Flow "
+            "opt-outs mean an active default validator was skipped or replaced by "
+            "flow configuration; replacement_validators and supplemental_validators "
+            "appear in get_current_flow validation_schedule when configured. Do not "
+            "ask extractor prompts to call validators directly."
+        )
+        identity = {
             "success": True,
             "agent_id": resolved_agent_id,
             "domain_pack_id": metadata.pack_id,
@@ -369,86 +502,163 @@ def get_domain_pack_validation_plan(
             "display_name": metadata.display_name,
             "status": metadata.status.value,
             "metadata_api_version": metadata.metadata_api_version,
-            "schema_refs": [
-                schema_ref.model_dump(mode="json", exclude_none=True)
-                for schema_ref in metadata.schema_refs
-            ],
-            "provider_refs": _provider_refs(metadata.metadata),
-            "object_definitions": [
-                {
-                    "object_type": object_definition.object_type,
-                    "display_name": object_definition.display_name,
-                    "object_role": _optional_text(object_definition.metadata.get("object_role")),
-                    "model_ref": object_definition.model_ref,
-                    "definition_state": object_definition.definition_state.value,
-                    "provider_refs": _provider_refs(object_definition.metadata),
-                    "field_paths": [
-                        field_definition.field_path
-                        for field_definition in object_definition.fields
-                    ],
-                }
-                for object_definition in metadata.object_definitions
-            ],
-            "fields": fields,
-            "validators": [entry.identity_details() for entry in registry.validator_metadata],
-            "validator_bindings": [
-                binding.identity_details()
-                for binding in registry.bindings
-            ],
-            "field_policies": [policy.identity_details() for policy in registry.field_policies],
-            "validation_attachments": attachment_options,
-            "validation_attachment_summary": {
-                "total": len(attachment_options),
-                "by_state": {
-                    state: len(items)
-                    for state, items in attachments_by_state.items()
+        }
+        resolved_section = _optional_text(section)
+        filters = {
+            key: value
+            for key, value in {
+                "object_type": _optional_text(object_type),
+                "field_path": _optional_text(field_path),
+                "validator_id": _optional_text(validator_id),
+                "binding_id": _optional_text(binding_id),
+                "state": _optional_text(state),
+                "query": _optional_text(query),
+            }.items()
+            if value is not None
+        }
+        if resolved_section is None:
+            if filters or limit is not None or cursor is not None:
+                raise ValueError(
+                    "section is required when filters, limit, or cursor are provided"
+                )
+            return {
+                **identity,
+                "section": "summary",
+                "schema_ref_count": len(metadata.schema_refs),
+                "provider_ref_count": len(_provider_refs(metadata.metadata)),
+                "section_counts": {
+                    name: len(items) for name, items in section_items.items()
                 },
-                "default_enabled": sum(
-                    1 for option in attachment_options if option.get("default_enabled")
-                ),
-                "required": sum(1 for option in attachment_options if option.get("required")),
-                "export_blocking": sum(
-                    1 for option in attachment_options if option.get("export_blocking")
-                ),
-                "opt_out_allowed": sum(
-                    1 for option in attachment_options if option.get("allow_opt_out")
-                ),
-            },
-            "validation_dispatch_summary": {
-                "active_automatic": sum(
-                    1
-                    for option in attachment_options
-                    if option.get("state") == "active" and option.get("default_enabled")
-                ),
-                "active_flow_opt_out_capable": sum(
-                    1
-                    for option in attachment_options
-                    if option.get("state") == "active" and option.get("allow_opt_out")
-                ),
-                "under_development_metadata": sum(
-                    1
-                    for option in attachment_options
-                    if option.get("state") == "under_development"
-                ),
-                "validator_prompt_inspection": (
-                    "Read validator_bindings[].validator_agent.agent_id or "
-                    "validation_attachments[].validator_agent_id, then call "
-                    "get_prompt(agent_id=<validator agent id>) for the validator prompt."
-                ),
-            },
-            "automatic_validation_semantics": (
-                "Active default-enabled attachments are the only validators scheduled "
-                "automatically on extraction nodes, and runtime dispatch writes their "
-                "findings back into domain envelopes after extraction. Under-development "
-                "validator bindings are explanatory metadata, not scheduled work. Flow "
-                "opt-outs mean an active default validator was skipped or replaced by "
-                "flow configuration; replacement_validators and supplemental_validators "
-                "appear in get_current_flow validation_schedule when configured. Do not "
-                "ask extractor prompts to call validators directly."
+                "validation_attachment_summary": validation_attachment_summary,
+                "validation_dispatch_summary": validation_dispatch_summary,
+                "automatic_validation_semantics": automatic_validation_semantics,
+                "detail_requests": [
+                    {
+                        "section": name,
+                        "filters": list(_DOMAIN_PLAN_FILTERS[name]),
+                        "example_input": {
+                            "domain_pack_id": metadata.pack_id,
+                            "section": name,
+                            "limit": _DOMAIN_PLAN_DEFAULT_LIMIT,
+                        },
+                    }
+                    for name in _DOMAIN_PLAN_SECTIONS
+                ],
+            }
+
+        if resolved_section not in section_items:
+            raise ValueError(
+                "section must be one of: " + ", ".join(_DOMAIN_PLAN_SECTIONS)
+            )
+        if filters.get("state") not in {None, "active", "under_development"}:
+            raise ValueError("state must be one of: active, under_development")
+        unsupported_filters = sorted(
+            set(filters) - set(_DOMAIN_PLAN_FILTERS[resolved_section])
+        )
+        if unsupported_filters:
+            raise ValueError(
+                f"section {resolved_section} does not support filter(s): "
+                + ", ".join(unsupported_filters)
+            )
+        page_limit = _domain_plan_limit(limit)
+        filtered_items = _filter_domain_plan_items(
+            section_items[resolved_section],
+            filters=filters,
+        )
+        offset = _domain_plan_cursor(cursor, total_count=len(filtered_items))
+        page_items = filtered_items[offset : offset + page_limit]
+        next_offset = offset + len(page_items)
+        complete = next_offset >= len(filtered_items)
+        next_cursor = None if complete else str(next_offset)
+        return {
+            **identity,
+            "section": resolved_section,
+            "filters": filters,
+            "section_total_count": len(section_items[resolved_section]),
+            "total_count": len(filtered_items),
+            "returned_count": len(page_items),
+            "complete": complete,
+            "truncated": not complete,
+            "next_cursor": next_cursor,
+            "items": page_items,
+            "next_request": (
+                None
+                if next_cursor is None
+                else {
+                    "domain_pack_id": metadata.pack_id,
+                    "section": resolved_section,
+                    **filters,
+                    "limit": page_limit,
+                    "cursor": next_cursor,
+                }
             ),
         }
     except ValueError as exc:
         return _error(str(exc))
+
+
+def _domain_plan_limit(value: int | None) -> int:
+    if value is None:
+        return min(_DOMAIN_PLAN_DEFAULT_LIMIT, _DOMAIN_PLAN_MAX_LIMIT)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("limit must be an integer")
+    if value < 1 or value > _DOMAIN_PLAN_MAX_LIMIT:
+        raise ValueError(f"limit must be between 1 and {_DOMAIN_PLAN_MAX_LIMIT}")
+    return value
+
+
+def _domain_plan_cursor(value: str | None, *, total_count: int) -> int:
+    if value is None:
+        return 0
+    if not isinstance(value, str):
+        raise ValueError("cursor must be a non-negative decimal offset string")
+    normalized = _required_text(value, "cursor")
+    if not normalized.isdigit():
+        raise ValueError("cursor must be a non-negative decimal offset")
+    offset = int(normalized)
+    if offset > total_count:
+        raise ValueError(f"cursor offset {offset} exceeds filtered total {total_count}")
+    return offset
+
+
+def _filter_domain_plan_items(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    filters: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    def matches(item: Mapping[str, Any]) -> bool:
+        for filter_name, expected in filters.items():
+            if filter_name == "query":
+                if expected.casefold() not in json.dumps(
+                    item,
+                    sort_keys=True,
+                    default=str,
+                ).casefold():
+                    return False
+                continue
+            item_key = {
+                "binding_id": "validator_binding_id",
+                "state": "binding_state",
+            }.get(filter_name, filter_name)
+            actual = item.get(item_key)
+            if filter_name == "state" and actual is None:
+                actual = item.get("state")
+            if filter_name == "object_type" and actual is None:
+                actual = item.get("source_object_type") or item.get("object_types")
+            if filter_name == "field_path" and actual is None:
+                actual = (
+                    item.get("source_field_path")
+                    or item.get("field_paths")
+                    or item.get("affected_fields")
+                )
+            if isinstance(actual, list):
+                if expected not in actual:
+                    return False
+            elif actual != expected:
+                return False
+        return True
+
+    return [dict(item) for item in items if matches(item)]
 
 
 def get_export_submission_readiness(
@@ -530,7 +740,7 @@ def current_flow_domain_envelope_analysis(
     flow_context: Mapping[str, Any],
     agent_registry: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Summarize envelope-producing nodes and validation schedules in a flow."""
+    """Link envelope-producing nodes to compact domain-plan inspection."""
 
     nodes = flow_context.get("nodes") if isinstance(flow_context, Mapping) else []
     if not isinstance(nodes, list):
@@ -571,9 +781,11 @@ def current_flow_domain_envelope_analysis(
                 "agent_display_name": node_data.get("agent_display_name") or entry.get("name"),
                 "domain_pack_id": domain_pack_id,
                 "domain_pack_version": plan.get("domain_pack_version"),
-                "object_definitions": plan.get("object_definitions", []),
+                "validation_plan_request": {
+                    "tool": "get_domain_pack_validation_plan",
+                    "input": {"agent_id": agent_id},
+                },
                 "validation_schedule": validation_schedule_from_node_data(node_data),
-                "validation_attachment_summary": plan.get("validation_attachment_summary"),
             }
         )
 
