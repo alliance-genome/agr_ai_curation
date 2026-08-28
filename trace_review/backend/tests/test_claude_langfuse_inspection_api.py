@@ -1,11 +1,13 @@
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from src.api import auth, claude
 from src.services.cache_manager import CacheManager
@@ -216,7 +218,8 @@ async def test_exact_trace_authorization_surfaces_sanitized_provider_failure(
     assert secret_detail not in caplog.text
 
 
-def _claude_http_client(user_sub: str) -> TestClient:
+@asynccontextmanager
+async def _claude_http_client(user_sub: str) -> AsyncIterator[AsyncClient]:
     app = FastAPI()
     app.state.cache_manager = CacheManager(ttl_hours=1)
     app.include_router(claude.router, prefix="/api/claude/traces")
@@ -225,12 +228,17 @@ def _claude_http_client(user_sub: str) -> TestClient:
         return {"sub": user_sub, "email": f"{user_sub}@example.org"}
 
     app.dependency_overrides[auth._get_user_from_cookie_impl] = _authenticated_user
-    return TestClient(app)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        yield client
 
 
 @patch("src.api.claude.fetch_feedback_trace_artifacts")
 @patch("src.api.claude.TraceExtractor")
-def test_feedback_backed_trace_http_authorization_allows_owner_when_live_trace_missing(
+@pytest.mark.asyncio
+async def test_feedback_backed_trace_http_authorization_allows_owner_when_live_trace_missing(
     extractor_cls: Mock,
     fetch_artifacts: Mock,
 ):
@@ -247,10 +255,11 @@ def test_feedback_backed_trace_http_authorization_allows_owner_when_live_trace_m
         },
     }
 
-    response = _claude_http_client("curator-1").get(
-        "/api/claude/traces/trace-owner/extraction_timeline",
-        params={"source": "local", "feedback_id": "feedback-1"},
-    )
+    async with _claude_http_client("curator-1") as client:
+        response = await client.get(
+            "/api/claude/traces/trace-owner/extraction_timeline",
+            params={"source": "local", "feedback_id": "feedback-1"},
+        )
 
     assert response.status_code == 200
     assert response.json()["status"] == "success"
@@ -274,7 +283,8 @@ def test_feedback_backed_trace_http_authorization_allows_owner_when_live_trace_m
 )
 @patch("src.api.claude.fetch_feedback_trace_artifacts")
 @patch("src.api.claude.TraceExtractor")
-def test_feedback_backed_trace_http_authorization_hides_absent_or_cross_owner_artifact(
+@pytest.mark.asyncio
+async def test_feedback_backed_trace_http_authorization_hides_absent_or_cross_owner_artifact(
     extractor_cls: Mock,
     fetch_artifacts: Mock,
     artifacts: dict,
@@ -284,10 +294,11 @@ def test_feedback_backed_trace_http_authorization_hides_absent_or_cross_owner_ar
     )
     fetch_artifacts.return_value = artifacts
 
-    response = _claude_http_client("curator-2").get(
-        "/api/claude/traces/trace-owner/extraction_timeline",
-        params={"source": "local", "feedback_id": "feedback-1"},
-    )
+    async with _claude_http_client("curator-2") as client:
+        response = await client.get(
+            "/api/claude/traces/trace-owner/extraction_timeline",
+            params={"source": "local", "feedback_id": "feedback-1"},
+        )
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Trace not found."}
@@ -295,7 +306,8 @@ def test_feedback_backed_trace_http_authorization_hides_absent_or_cross_owner_ar
 
 @patch("src.api.claude.fetch_feedback_trace_artifacts")
 @patch("src.api.claude.TraceExtractor")
-def test_feedback_backed_trace_http_authorization_surfaces_artifact_provider_failure(
+@pytest.mark.asyncio
+async def test_feedback_backed_trace_http_authorization_surfaces_artifact_provider_failure(
     extractor_cls: Mock,
     fetch_artifacts: Mock,
 ):
@@ -307,10 +319,11 @@ def test_feedback_backed_trace_http_authorization_surfaces_artifact_provider_fai
         "trace_data": None,
     }
 
-    response = _claude_http_client("curator-1").get(
-        "/api/claude/traces/trace-owner/extraction_timeline",
-        params={"source": "local", "feedback_id": "feedback-1"},
-    )
+    async with _claude_http_client("curator-1") as client:
+        response = await client.get(
+            "/api/claude/traces/trace-owner/extraction_timeline",
+            params={"source": "local", "feedback_id": "feedback-1"},
+        )
 
     assert response.status_code == 503
     assert response.json() == {
@@ -320,7 +333,8 @@ def test_feedback_backed_trace_http_authorization_surfaces_artifact_provider_fai
 
 @patch("src.api.claude.fetch_feedback_trace_artifacts")
 @patch("src.api.claude.TraceExtractor")
-def test_feedback_id_cannot_bypass_non_feedback_exact_route_authorization(
+@pytest.mark.asyncio
+async def test_feedback_id_cannot_bypass_non_feedback_exact_route_authorization(
     extractor_cls: Mock,
     fetch_artifacts: Mock,
 ):
@@ -328,10 +342,11 @@ def test_feedback_id_cannot_bypass_non_feedback_exact_route_authorization(
         claude.TraceNotFoundError("missing")
     )
 
-    response = _claude_http_client("curator-1").get(
-        "/api/claude/traces/trace-owner/summary",
-        params={"source": "local", "feedback_id": "feedback-1"},
-    )
+    async with _claude_http_client("curator-1") as client:
+        response = await client.get(
+            "/api/claude/traces/trace-owner/summary",
+            params={"source": "local", "feedback_id": "feedback-1"},
+        )
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Trace not found."}
