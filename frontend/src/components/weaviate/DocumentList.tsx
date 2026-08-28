@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  defaultColumnSizing,
   flexRender,
   getCoreRowModel,
   getSortedRowModel,
@@ -1182,6 +1183,12 @@ const DocumentList: React.FC<DocumentListProps> = ({
                                 role="separator"
                                 aria-orientation="vertical"
                                 aria-label={`Resize ${label} column`}
+                                aria-valuemin={header.column.columnDef.minSize
+                                  ?? defaultColumnSizing.minSize}
+                                aria-valuemax={header.column.columnDef.maxSize
+                                  ?? defaultColumnSizing.maxSize}
+                                aria-valuenow={header.column.getSize()}
+                                aria-valuetext={`${header.column.getSize()} pixels`}
                                 tabIndex={0}
                                 onMouseDown={header.getResizeHandler()}
                                 onTouchStart={header.getResizeHandler()}

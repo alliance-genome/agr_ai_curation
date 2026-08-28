@@ -138,9 +138,19 @@ describe('DocumentList', () => {
     fireEvent.dragStart(titleHeader);
     fireEvent.drop(filenameHeader);
 
-    fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize Filename column' }), {
+    const filenameResizeHandle = screen.getByRole('separator', {
+      name: 'Resize Filename column',
+    });
+    expect(filenameResizeHandle).toHaveAttribute('aria-valuemin', '150');
+    expect(filenameResizeHandle).toHaveAttribute('aria-valuemax', String(Number.MAX_SAFE_INTEGER));
+    expect(filenameResizeHandle).toHaveAttribute('aria-valuenow', '240');
+    expect(filenameResizeHandle).toHaveAttribute('aria-valuetext', '240 pixels');
+
+    fireEvent.keyDown(filenameResizeHandle, {
       key: 'ArrowRight',
     });
+    expect(filenameResizeHandle).toHaveAttribute('aria-valuenow', '248');
+    expect(filenameResizeHandle).toHaveAttribute('aria-valuetext', '248 pixels');
     fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
 
