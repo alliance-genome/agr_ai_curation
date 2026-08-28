@@ -32,6 +32,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
+    get_agent_studio_workshop_context_group_prompt_max_chars,
+    get_agent_studio_workshop_context_prompt_max_chars,
     get_api_key,
     get_base_url,
     get_background_task_observability_value_max_chars,
@@ -339,6 +341,38 @@ def test_agent_studio_chat_recall_limits_are_environment_configurable(monkeypatc
     monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", "0")
     assert get_agent_studio_chat_recall_page_size() == 1
     assert get_agent_studio_chat_recall_chunk_max_chars() == 1
+
+
+def test_agent_studio_workshop_context_prompt_limits_are_environment_configurable(
+    monkeypatch,
+):
+    monkeypatch.delenv("AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS", raising=False)
+    monkeypatch.delenv(
+        "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS",
+        raising=False,
+    )
+    assert get_agent_studio_workshop_context_prompt_max_chars() == 12_000
+    assert get_agent_studio_workshop_context_group_prompt_max_chars() == 6_000
+
+    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS", "12")
+    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS", "8")
+    assert get_agent_studio_workshop_context_prompt_max_chars() == 12
+    assert get_agent_studio_workshop_context_group_prompt_max_chars() == 8
+
+    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS", "0")
+    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS", "0")
+    assert get_agent_studio_workshop_context_prompt_max_chars() == 1
+    assert get_agent_studio_workshop_context_group_prompt_max_chars() == 1
+
+    workspace_root = Path("/workspace")
+    if not (workspace_root / ".env.example").exists():
+        workspace_root = Path(__file__).resolve().parents[5]
+    env_example = (workspace_root / ".env.example").read_text(encoding="utf-8")
+    assert "AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS=12000" in env_example
+    assert (
+        "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS=6000" in env_example
+    )
+    assert "Exact text remains available via\n# `refresh_workshop_prompt`" in env_example
 
 
 def test_agent_studio_flow_limit_clamps_are_reported(monkeypatch, caplog):
