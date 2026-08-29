@@ -339,7 +339,7 @@ def test_package_runner_returns_timeout_failure(monkeypatch, tmp_path):
     assert result.error is not None
     assert result.error.code == "execution_failure"
     assert "Timed out while executing package tool 'echo_value'" == result.error.message
-    assert result.error.details["timeout_seconds"] == 60.0
+    assert result.error.details["timeout_seconds"] == 120.0
 
 
 def test_repo_alliance_tools_package_import_succeeds_without_backend_src(tmp_path):

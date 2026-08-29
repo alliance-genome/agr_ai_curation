@@ -1496,9 +1496,11 @@ def get_package_runner_timeout_seconds() -> float:
 
     Wall-clock budget for one package tool subprocess; on expiry the call fails
     with a timeout error. Higher = tolerate slower tools; lower = fail faster.
-    Default 60.
+    Default 120. Package tools run in isolated Python processes; concurrent
+    validator/resolver calls on the production-sized runtime can spend close to
+    a minute importing the package and completing their database query.
     """
-    return max(1.0, _get_env_float_with_fallback("PACKAGE_RUNNER_TIMEOUT_SECONDS", 60.0))
+    return max(1.0, _get_env_float_with_fallback("PACKAGE_RUNNER_TIMEOUT_SECONDS", 120.0))
 
 
 def get_agent_studio_trace_tool_timeout_seconds() -> float:
