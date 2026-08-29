@@ -61,11 +61,23 @@ def _latest_job_for_user_document(document_id: str, auth_user: Dict[str, Any]):
         session.close()
 
 
-def _owned_source_file_path(document_id: str, auth_user: Dict[str, Any]):
-    """Resolve the canonical owned source path stored with the PDF document."""
-    session = SessionLocal()
+def _owned_source_file_path(
+    document_id: str,
+    auth_user: Dict[str, Any],
+    *,
+    session=None,
+    for_update: bool = False,
+):
+    """Resolve the canonical owned source path, optionally under a row lock."""
+    owns_session = session is None
+    active_session = session or SessionLocal()
     try:
-        document = verify_document_ownership(session, document_id, auth_user)
+        document = verify_document_ownership(
+            active_session,
+            document_id,
+            auth_user,
+            for_update=for_update,
+        )
         storage_root = get_pdf_storage_path()
         return validate_user_file_path(
             storage_root / document.file_path,
@@ -73,7 +85,8 @@ def _owned_source_file_path(document_id: str, auth_user: Dict[str, Any]):
             auth_user["sub"],
         )
     finally:
-        session.close()
+        if owns_session:
+            active_session.close()
 
 
 @router.post("/documents/{document_id}/reprocess", response_model=OperationResult)
@@ -137,21 +150,37 @@ async def reprocess_document_endpoint(
                     detail=f"Document is currently being processed (stage: {stage_label})"
                 )
 
-        file_path = _owned_source_file_path(document_id, user)
-        
-        if not file_path.exists():
-             raise HTTPException(
-                status_code=404,
-                detail="Source PDF file not found"
+        stage = ProcessingStage.PARSING if request.force_reparse else ProcessingStage.CHUNKING
+        claim_session = SessionLocal()
+        try:
+            # PATCH acquires the same row lock before moving source bytes. The
+            # lock therefore makes path capture and publishing the indexed
+            # processing state one atomic initiation boundary across workers.
+            file_path = _owned_source_file_path(
+                document_id,
+                user,
+                session=claim_session,
+                for_update=True,
             )
 
-        await update_document_status(document_id, user_id, ProcessingStatus.PROCESSING)
+            if not file_path.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail="Source PDF file not found",
+                )
 
-        stage = ProcessingStage.PARSING if request.force_reparse else ProcessingStage.CHUNKING
-        await pipeline_tracker.track_pipeline_progress(
-            document_id,
-            stage
-        )
+            await update_document_status(
+                document_id,
+                user_id,
+                ProcessingStatus.PROCESSING,
+            )
+            await pipeline_tracker.track_pipeline_progress(document_id, stage)
+            claim_session.commit()
+        except Exception:
+            claim_session.rollback()
+            raise
+        finally:
+            claim_session.close()
         
         # Define background processing task
         async def process_document():

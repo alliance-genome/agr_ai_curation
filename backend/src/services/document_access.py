@@ -22,15 +22,18 @@ def require_owned_document(
     db: Session,
     document_id: UUID,
     owner_user_id: int,
+    *,
+    for_update: bool = False,
 ) -> PDFDocument:
     """Return a document only when the authenticated database user owns it.
 
     Missing documents return 404. Existing documents owned by another user,
     including legacy rows with a null owner, return 403.
     """
-    document = db.execute(
-        select(PDFDocument).where(PDFDocument.id == document_id)
-    ).scalar_one_or_none()
+    statement = select(PDFDocument).where(PDFDocument.id == document_id)
+    if for_update:
+        statement = statement.with_for_update()
+    document = db.execute(statement).scalar_one_or_none()
     if document is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

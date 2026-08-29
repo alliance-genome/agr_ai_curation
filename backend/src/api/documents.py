@@ -458,7 +458,9 @@ async def cleanup_phantom_documents(user: dict[str, Any]) -> int:
 def verify_document_ownership(
     db: Session,
     document_id: str,
-    auth_user: dict[str, Any]
+    auth_user: dict[str, Any],
+    *,
+    for_update: bool = False,
 ) -> ViewerPDFDocument:
     """Verify document ownership and return document if authorized.
 
@@ -479,7 +481,12 @@ def verify_document_ownership(
     db_user = provision_user(db, principal_from_claims(auth_user))
 
     document_uuid = _parse_document_uuid(document_id)
-    return require_owned_document(db, document_uuid, db_user.id)
+    return require_owned_document(
+        db,
+        document_uuid,
+        db_user.id,
+        for_update=for_update,
+    )
 
 
 def _parse_document_uuid(document_id: str) -> uuid.UUID:
@@ -559,7 +566,7 @@ def _rename_source_pdf(
     filename: str,
     user_sub: str,
 ) -> tuple[FilePath, FilePath, str]:
-    """Move an owned source PDF and return paths needed for compensation."""
+    """Hardlink an owned source PDF while retaining the recoverable old path."""
     storage_root = FilePath(get_pdf_storage_path())
     source_path = validate_user_file_path(
         storage_root / document.file_path,
@@ -582,29 +589,37 @@ def _rename_source_pdf(
             detail="A document file with that filename already exists",
         ) from exc
 
-    try:
-        source_path.unlink()
-    except Exception:
-        destination_path.unlink(missing_ok=True)
-        raise
     relative_destination = destination_path.relative_to(storage_root.resolve()).as_posix()
     return source_path, destination_path, relative_destination
 
 
-async def _restore_renamed_document(
+async def _recover_renamed_document(
     *,
+    session: Session,
+    document: ViewerPDFDocument,
     document_id: str,
     user_sub: str,
     old_filename: str,
+    old_file_path: str,
+    new_filename: str,
+    new_file_path: str,
     source_path: FilePath,
     destination_path: FilePath,
-    restore_index: bool,
+    index_updated: bool,
 ) -> None:
-    """Best-effort compensation after an indexed or database update failure."""
-    if restore_index:
+    """Recover to one usable metadata state after a rename transaction fails.
+
+    The old hardlink remains present until the metadata commit succeeds. If the
+    index cannot be restored after a database failure, complete the database
+    change forward to the new hardlink instead of leaving the index and source
+    metadata split.
+    """
+    restored_old_index = not index_updated
+    if index_updated:
         try:
             await update_document_filename(user_sub, document_id, old_filename)
-        except Exception as exc:  # pragma: no cover - exercised through reporting mock
+            restored_old_index = True
+        except Exception as exc:
             report_runtime_exception(
                 _sanitized_document_metadata_error(exc),
                 component="documents",
@@ -612,14 +627,45 @@ async def _restore_renamed_document(
                 context={"document_id": document_id},
             )
 
+    if restored_old_index:
+        document.filename = old_filename
+        document.file_path = old_file_path
+        try:
+            destination_path.unlink(missing_ok=True)
+        except Exception as exc:
+            # The old path and all authoritative metadata remain usable. The
+            # extra hardlink is reported for cleanup but cannot orphan the PDF.
+            report_runtime_exception(
+                _sanitized_document_metadata_error(exc),
+                component="documents",
+                operation="filename_destination_cleanup_failed",
+                context={"document_id": document_id},
+            )
+        return
+
+    document.filename = new_filename
+    document.file_path = new_file_path
     try:
-        if destination_path.exists() and not source_path.exists():
-            destination_path.rename(source_path)
-    except Exception as exc:  # pragma: no cover - exercised through reporting mock
+        session.commit()
+    except Exception as exc:
+        session.rollback()
         report_runtime_exception(
             _sanitized_document_metadata_error(exc),
             component="documents",
-            operation="filename_storage_rollback_failed",
+            operation="filename_forward_recovery_failed",
+            context={"document_id": document_id},
+        )
+        raise _sanitized_document_metadata_error(exc) from exc
+
+    try:
+        source_path.unlink(missing_ok=True)
+    except Exception as exc:
+        # Both paths address the same inode; current metadata points to the new
+        # usable path, so failure to remove the old hardlink is non-destructive.
+        report_runtime_exception(
+            _sanitized_document_metadata_error(exc),
+            component="documents",
+            operation="filename_source_cleanup_failed",
             context={"document_id": document_id},
         )
 
@@ -635,7 +681,9 @@ async def _update_owned_document_metadata(
     """Coordinate indexed, filesystem, and PostgreSQL metadata updates."""
     moved_paths: tuple[FilePath, FilePath] | None = None
     old_filename: str | None = None
-    index_update_attempted = False
+    old_file_path: str | None = None
+    new_file_path: str | None = None
+    index_updated = False
     sanitized_failure: _DocumentMetadataUpdateError | None = None
     try:
         metadata_changed = False
@@ -646,9 +694,15 @@ async def _update_owned_document_metadata(
                 reconcile_stale=True,
             )
             pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+            indexed_document = await get_document(user_sub, document_id)
+            indexed_status = (
+                indexed_document.get("document", {}).get("processing_status")
+                if indexed_document
+                else None
+            )
             processing_status = _canonical_processing_status(
                 sql_processing_status=document.status,
-                weaviate_processing_status=None,
+                weaviate_processing_status=indexed_status,
                 pipeline_status=pipeline_status,
                 job=latest_job,
             )
@@ -674,14 +728,16 @@ async def _update_owned_document_metadata(
                 )
 
             old_filename = document.filename
+            old_file_path = document.file_path
             source_path, destination_path, relative_destination = _rename_source_pdf(
                 document=document,
                 filename=request.filename,
                 user_sub=user_sub,
             )
             moved_paths = (source_path, destination_path)
-            index_update_attempted = True
+            new_file_path = relative_destination
             await update_document_filename(user_sub, document_id, request.filename)
+            index_updated = True
             document.filename = request.filename
             document.file_path = relative_destination
             metadata_changed = True
@@ -692,6 +748,16 @@ async def _update_owned_document_metadata(
 
         if metadata_changed:
             session.commit()
+            if moved_paths is not None:
+                try:
+                    moved_paths[0].unlink(missing_ok=True)
+                except Exception as exc:
+                    report_runtime_exception(
+                        _sanitized_document_metadata_error(exc),
+                        component="documents",
+                        operation="filename_source_cleanup_failed",
+                        context={"document_id": document_id},
+                    )
             logger.info("Updated metadata for document %s", document_id)
 
         return DocumentUpdateResponse(
@@ -701,14 +767,25 @@ async def _update_owned_document_metadata(
         )
     except Exception as exc:
         session.rollback()
-        if moved_paths is not None and old_filename is not None:
-            await _restore_renamed_document(
+        if (
+            moved_paths is not None
+            and old_filename is not None
+            and old_file_path is not None
+            and request.filename is not None
+            and new_file_path is not None
+        ):
+            await _recover_renamed_document(
+                session=session,
+                document=document,
                 document_id=document_id,
                 user_sub=user_sub,
                 old_filename=old_filename,
+                old_file_path=old_file_path,
+                new_filename=request.filename,
+                new_file_path=new_file_path,
                 source_path=moved_paths[0],
                 destination_path=moved_paths[1],
-                restore_index=index_update_attempted,
+                index_updated=index_updated,
             )
         if isinstance(exc, HTTPException):
             raise
@@ -1399,7 +1476,12 @@ async def update_document_endpoint(
     # Verify ownership from PostgreSQL FIRST (FR-014)
     session = SessionLocal()
     try:
-        pg_doc = verify_document_ownership(session, document_id, user)
+        pg_doc = verify_document_ownership(
+            session,
+            document_id,
+            user,
+            for_update=True,
+        )
         return await _update_owned_document_metadata(
             session=session,
             document=pg_doc,
