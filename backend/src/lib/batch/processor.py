@@ -305,6 +305,7 @@ def _report_document_failure(
             "Batch document failed after upstream Sentry reporting: batch_id=%s, doc_id=%s",
             batch_id,
             batch_doc.document_id,
+            extra={"sentry_skip_event": True},
         )
         return
     logger.exception(
@@ -312,6 +313,7 @@ def _report_document_failure(
         batch_id,
         batch_doc.document_id,
         exc_info=(type(error), error, error.__traceback__),
+        extra={"sentry_skip_event": True},
     )
     report_background_task_exception(
         error,
@@ -676,7 +678,9 @@ async def _execute_flow_for_document(
     except Exception as e:
         logger.error(
             "Flow execution failed for document %s: %s",
-            document_id, str(e)
+            document_id,
+            str(e),
+            extra={"sentry_skip_event": True},
         )
         # Publish error event before re-raising
         error_event = {

@@ -563,9 +563,10 @@ def test_process_batch_task_does_not_report_already_reported_flow_failure(monkey
     ]
     assert len(matching_records) == 1
     assert matching_records[0].exc_info is None
+    assert matching_records[0].sentry_skip_event is True
 
 
-def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
+def test_process_batch_task_reports_swallowed_document_exception(monkeypatch, caplog):
     batch, batch_doc, _flow = _build_batch_context()
     batch.flow_id = uuid4()
     batch.documents = [batch_doc]
@@ -599,6 +600,7 @@ def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
             }
         ),
     )
+    caplog.set_level(logging.ERROR, logger=processor.logger.name)
 
     processor.process_batch_task(batch.id)
 
@@ -616,6 +618,13 @@ def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
             "context": {},
         }
     ]
+    matching_records = [
+        record
+        for record in caplog.records
+        if "Error processing document" in record.getMessage()
+    ]
+    assert len(matching_records) == 1
+    assert matching_records[0].sentry_skip_event is True
 
 
 def test_execute_flow_for_document_marks_reported_persistence_flow_error(monkeypatch):
@@ -751,6 +760,7 @@ def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatc
 def test_execute_flow_for_document_fails_file_ready_without_canonical_identity(
     monkeypatch,
     details,
+    caplog,
 ):
     async def _fake_execute_flow(**_kwargs):
         yield {
@@ -769,6 +779,7 @@ def test_execute_flow_for_document_fails_file_ready_without_canonical_identity(
     monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
     monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+    caplog.set_level(logging.ERROR, logger=processor.logger.name)
 
     with pytest.raises(
         processor.BatchFlowExecutionError,
@@ -786,6 +797,13 @@ def test_execute_flow_for_document_fails_file_ready_without_canonical_identity(
         )
 
     assert published_events[-1]["type"] == "BATCH_DOCUMENT_ERROR"
+    matching_records = [
+        record
+        for record in caplog.records
+        if "Flow execution failed for document" in record.getMessage()
+    ]
+    assert len(matching_records) == 1
+    assert matching_records[0].sentry_skip_event is True
 
 
 def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
