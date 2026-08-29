@@ -185,6 +185,42 @@ def test_notify_tool_failure_captures_sentry_when_sns_disabled(
     assert ("session_id", "session-1") in fake_sentry["tags"]
 
 
+def test_notify_tool_failure_can_preserve_sns_without_duplicate_sentry(
+    monkeypatch,
+    direct_to_thread,
+    fake_sentry,
+):
+    """An owning runtime boundary may suppress only the notifier's Sentry copy."""
+
+    mock_client = MagicMock()
+    mock_client.publish.return_value = {"MessageId": "msg-owned"}
+    monkeypatch.setattr(notifier.boto3, "client", lambda *_args, **_kwargs: mock_client)
+    monkeypatch.setenv("TOOL_FAILURE_ALERTS_ENABLED", "true")
+    monkeypatch.setenv(
+        "PROMPT_SUGGESTIONS_SNS_TOPIC_ARN",
+        "arn:aws:sns:us-east-1:123456789012:test",
+    )
+
+    result = asyncio.run(
+        notifier.notify_tool_failure(
+            error_type="SpecialistOutputError",
+            error_message="specialist failed",
+            source="infrastructure",
+            specialist_name="gene_expression",
+            trace_id="trace-owned",
+            session_id="session-owned",
+            curator_id="curator@example.com",
+            capture_sentry=False,
+        )
+    )
+
+    assert result is True
+    mock_client.publish.assert_called_once()
+    assert fake_sentry["messages"] == []
+    assert fake_sentry["tags"] == []
+    assert fake_sentry["contexts"] == []
+
+
 def test_notify_tool_failure_respects_feature_flag(monkeypatch, direct_to_thread):
     """Does nothing when TOOL_FAILURE_ALERTS_ENABLED is false."""
     mock_client = MagicMock()

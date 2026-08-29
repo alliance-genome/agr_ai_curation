@@ -14,7 +14,14 @@ from src.lib.openai_agents.config import (
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_TAG_KEYS = {"run_kind"}
+_ALLOWED_TAG_KEYS = {
+    "ai_curation.flow.id_hash",
+    "flow_failure_type",
+    "phase",
+    "provider",
+    "run_kind",
+    "tool_name",
+}
 
 
 def _safe_text(value: Any, *, max_chars: int) -> str:

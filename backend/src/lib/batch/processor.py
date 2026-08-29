@@ -30,6 +30,7 @@ from src.models.sql.user import User
 from src.models.sql.file_output import FileOutput
 from src.models.sql.pdf_document import PDFDocument
 from src.lib.observability.background_tasks import report_background_task_exception
+from src.lib.flows.outcome import FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
 from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 from src.lib.openai_agents.config import (
     get_batch_worker_heartbeat_seconds,
@@ -304,6 +305,7 @@ def _report_document_failure(
             "Batch document failed after upstream Sentry reporting: batch_id=%s, doc_id=%s",
             batch_id,
             batch_doc.document_id,
+            extra={"sentry_skip_event": True},
         )
         return
     logger.exception(
@@ -311,6 +313,7 @@ def _report_document_failure(
         batch_id,
         batch_doc.document_id,
         exc_info=(type(error), error, error.__traceback__),
+        extra={"sentry_skip_event": True},
     )
     report_background_task_exception(
         error,
@@ -515,6 +518,7 @@ async def _execute_flow_for_document(
     flow_output_branches: list[dict[str, Any]] = []
     flow_failure_message: Optional[str] = None
     flow_failure_already_reported = False
+    flow_failure_event_seen = False
 
     try:
         # Execute the flow and collect events
@@ -657,13 +661,12 @@ async def _execute_flow_for_document(
                     or event.get("message")
                     or "Flow execution failed."
                 )
-                flow_failure_already_reported = (
-                    failure_details.get("reason") in {
-                        "extraction_persistence_empty_result",
-                        "extraction_persistence_failed",
-                        "extraction_persistence_partial_result",
-                    }
-                )
+                if not flow_failure_event_seen:
+                    flow_failure_already_reported = (
+                        failure_details.get("reason")
+                        in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
+                    )
+                    flow_failure_event_seen = True
 
             # Log supervisor completion for debugging
             if event_type == "SUPERVISOR_COMPLETE":
@@ -675,7 +678,9 @@ async def _execute_flow_for_document(
     except Exception as e:
         logger.error(
             "Flow execution failed for document %s: %s",
-            document_id, str(e)
+            document_id,
+            str(e),
+            extra={"sentry_skip_event": True},
         )
         # Publish error event before re-raising
         error_event = {

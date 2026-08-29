@@ -31,7 +31,10 @@ from src.lib.executable_runs import (
 from src.lib.openai_agents.config import get_chat_sse_keepalive_interval_seconds
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
-from src.lib.observability.sentry import set_sentry_transaction_identifiers
+from src.lib.observability.sentry import (
+    hash_sentry_identifier,
+    set_sentry_transaction_identifiers,
+)
 from src.lib.flows.outcome import (
     FlowRunOutcome,
     FlowRunOutcomeNotDurableError,
@@ -59,6 +62,25 @@ def _extract_execute_flow_runtime_identifiers(
         runtime_state.get(_EXECUTE_FLOW_RUNTIME_TRACE_ID_KEY) or ""
     ).strip() or None
     return flow_run_id, trace_id
+
+
+def _flow_failure_tags(
+    *,
+    flow_id: Any,
+    failure_type: str | None,
+    phase: str,
+    provider: str | None = None,
+    tool_name: str | None = None,
+) -> Dict[str, Any]:
+    """Build the stable, non-payload tags shared by flow failure owners."""
+
+    return {
+        "ai_curation.flow.id_hash": hash_sentry_identifier(flow_id),
+        "flow_failure_type": failure_type,
+        "phase": phase,
+        "provider": provider,
+        "tool_name": tool_name,
+    }
 
 
 def _build_execute_flow_runtime_payload(
@@ -1065,6 +1087,7 @@ async def execute_flow_endpoint(
                                 "user_id": user_id,
                                 "trace_id": trace_id,
                                 "turn_id": current_turn_id,
+                                "sentry_skip_event": True,
                             },
                         )
                     else:
@@ -1075,6 +1098,7 @@ async def execute_flow_endpoint(
                                 "user_id": user_id,
                                 "trace_id": trace_id,
                                 "turn_id": current_turn_id,
+                                "sentry_skip_event": True,
                             },
                         )
                     flat_event["message"] = "Flow execution failed unexpectedly."
@@ -1171,6 +1195,26 @@ async def execute_flow_endpoint(
                     transcript=True,
                     extraction_result_refs=extraction_result_refs,
                 )
+                if outcome.status == "failed" and not outcome.failure_already_reported:
+                    report_runtime_exception(
+                        outcome.terminal_failure_exception(),
+                        component="execute_flow_stream",
+                        operation="terminal_outcome_failed",
+                        tags=_flow_failure_tags(
+                            flow_id=flow.id,
+                            failure_type=outcome.failure_type,
+                            phase=outcome.failure_phase or "flow_finalization",
+                            provider=outcome.failure_provider,
+                            tool_name=outcome.failure_tool,
+                        ),
+                        context={
+                            "session_id": current_session_id,
+                            "turn_id": current_turn_id,
+                            "trace_id": trace_id,
+                            "flow_id": str(flow.id),
+                            "flow_run_id": prepared_turn.flow_run_id,
+                        },
+                    )
                 authoritative_run_status = (
                     "completed" if outcome.status == "completed" else "failed"
                 )
@@ -1230,6 +1274,11 @@ async def execute_flow_endpoint(
                 exc,
                 component="execute_flow_stream",
                 operation="event_generator_failed",
+                tags=_flow_failure_tags(
+                    flow_id=flow.id,
+                    failure_type=type(exc).__name__,
+                    phase="event_generator",
+                ),
                 context={
                     "session_id": current_session_id,
                     "turn_id": current_turn_id,
@@ -1320,6 +1369,11 @@ async def execute_flow_endpoint(
                     recovery_exc,
                     component="execute_flow_stream",
                     operation="failure_outcome_persistence_failed",
+                    tags=_flow_failure_tags(
+                        flow_id=flow.id,
+                        failure_type=type(recovery_exc).__name__,
+                        phase="outcome_persistence",
+                    ),
                     context={
                         "session_id": current_session_id,
                         "turn_id": current_turn_id,
@@ -1335,6 +1389,7 @@ async def execute_flow_endpoint(
                         "user_id": user_id,
                         "trace_id": trace_id,
                         "turn_id": current_turn_id,
+                        "sentry_skip_event": True,
                     },
                     exc_info=True,
                 )

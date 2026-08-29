@@ -4657,6 +4657,7 @@ async def execute_flow(
                     "[Flow Executor] Specialist error in flow '%s': %s",
                     flow.name,
                     failure_reason,
+                    extra={"sentry_skip_event": True},
                 )
                 yield {
                     "type": "FLOW_ERROR",
@@ -4682,6 +4683,7 @@ async def execute_flow(
                     "[Flow Executor] Run error in flow '%s': %s",
                     flow.name,
                     failure_reason,
+                    extra={"sentry_skip_event": True},
                 )
                 yield {
                     "type": "FLOW_ERROR",

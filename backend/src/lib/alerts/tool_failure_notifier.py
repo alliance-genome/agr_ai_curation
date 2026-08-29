@@ -107,22 +107,25 @@ async def notify_tool_failure(
     session_id: Optional[str],
     curator_id: Optional[str],
     context: Optional[str] = None,
+    capture_sentry: bool = True,
 ) -> bool:
     """
     Report a tool failure through the runtime alert facade.
 
-    Sentry capture is attempted whenever the SDK is initialized. SNS alerts are
-    separately gated by TOOL_FAILURE_ALERTS_ENABLED. All paths are best-effort:
-    failures are logged but never raised to callers.
+    Sentry capture is attempted whenever the SDK is initialized unless an
+    owning boundary explicitly disables it. SNS alerts are separately gated by
+    TOOL_FAILURE_ALERTS_ENABLED. All paths are best-effort: failures are logged
+    but never raised to callers.
     """
-    _capture_tool_failure_to_sentry(
-        error_type=error_type,
-        source=source,
-        specialist_name=specialist_name,
-        trace_id=trace_id,
-        session_id=session_id,
-        curator_id=curator_id,
-    )
+    if capture_sentry:
+        _capture_tool_failure_to_sentry(
+            error_type=error_type,
+            source=source,
+            specialist_name=specialist_name,
+            trace_id=trace_id,
+            session_id=session_id,
+            curator_id=curator_id,
+        )
 
     alerts_enabled = os.getenv("TOOL_FAILURE_ALERTS_ENABLED", "false").lower() == "true"
     sns_topic_arn = os.getenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN")

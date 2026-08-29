@@ -1,6 +1,6 @@
 """Unit coverage for canonical flow terminal outcome reduction."""
 
-from src.lib.flows.outcome import FlowRunOutcome
+from src.lib.flows.outcome import FlowRunOutcome, FlowTerminalOutcomeError
 
 
 def test_failed_outcome_discards_earlier_success_candidate():
@@ -31,6 +31,145 @@ def test_failed_outcome_discards_earlier_success_candidate():
     assert [event["type"] for event in outcome.publishable_terminal_events()] == [
         "FLOW_FINISHED"
     ]
+
+
+def test_failed_outcome_retains_payload_free_operator_context():
+    outcome = FlowRunOutcome()
+    outcome.observe(
+        {
+            "type": "RUN_ERROR",
+            "data": {
+                "message": "private provider response body",
+                "error_type": "ProviderTimeout",
+                "phase": "specialist_stream",
+                "provider": "openai",
+                "tool_name": "gene_extractor",
+            },
+        }
+    )
+
+    exc = outcome.terminal_failure_exception()
+
+    assert isinstance(exc, FlowTerminalOutcomeError)
+    assert str(exc) == "ProviderTimeout during specialist_stream"
+    assert "private provider response body" not in str(exc)
+    assert outcome.failure_provider == "openai"
+    assert outcome.failure_tool == "gene_extractor"
+
+
+def test_flow_error_reason_is_retained_until_failed_terminal_confirmation():
+    outcome = FlowRunOutcome()
+    outcome.observe(
+        {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_failed",
+                "message": "private extraction failure details",
+                "specialist": "Curator-created display name",
+            },
+        }
+    )
+
+    assert outcome.status == "running"
+    outcome.observe(
+        {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "failed", "failure_reason": "Extraction failed."},
+        }
+    )
+
+    assert outcome.failure_type == "extraction_persistence_failed"
+    assert outcome.failure_phase == "flow_execution"
+    assert outcome.failure_tool is None
+    assert outcome.failure_already_reported is True
+    assert "private extraction failure details" not in str(
+        outcome.terminal_failure_exception()
+    )
+
+
+def test_later_reported_persistence_failure_does_not_own_prior_runner_failure():
+    outcome = FlowRunOutcome()
+    outcome.observe(
+        {
+            "type": "RUN_ERROR",
+            "data": {
+                "message": "specialist failed",
+                "error_type": "SpecialistOutputError",
+                "phase": "specialist_stream",
+            },
+        }
+    )
+    outcome.observe(
+        {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_failed",
+                "message": "Extraction persistence also failed.",
+            },
+        }
+    )
+    outcome.observe(
+        {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "failed", "failure_reason": "Flow failed."},
+        }
+    )
+
+    assert outcome.failure_type == "SpecialistOutputError"
+    assert outcome.failure_phase == "specialist_stream"
+    assert outcome.failure_already_reported is False
+
+
+def test_failure_metadata_rejects_human_readable_tag_values():
+    outcome = FlowRunOutcome()
+    outcome.observe(
+        {
+            "type": "RUN_ERROR",
+            "error_type": "Provider Timeout for curator@example.org",
+            "phase": "specialist stream",
+            "tool_name": "Dr. Curator's custom agent",
+            "provider": "openai",
+        }
+    )
+
+    assert outcome.failure_type == "FlowRunError"
+    assert outcome.failure_phase == "runner"
+    assert outcome.failure_tool is None
+    assert outcome.failure_provider == "openai"
+
+
+def test_flow_error_does_not_replace_higher_fidelity_run_error_metadata():
+    outcome = FlowRunOutcome()
+    outcome.observe(
+        {
+            "type": "RUN_ERROR",
+            "error_type": "MissingEvidenceRecords",
+            "phase": "specialist_stream",
+            "tool_name": "gene_extractor",
+            "provider": "openai",
+        }
+    )
+    outcome.observe(
+        {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "run_error",
+                "phase": "flow_execution",
+                "tool_name": "supervisor",
+            },
+        }
+    )
+    outcome.observe(
+        {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "failed", "failure_reason": "Run failed."},
+        }
+    )
+
+    assert outcome.failure_type == "MissingEvidenceRecords"
+    assert outcome.failure_phase == "specialist_stream"
+    assert outcome.failure_tool == "gene_extractor"
+    assert outcome.failure_provider == "openai"
 
 
 def test_completed_outcome_releases_exactly_one_preferred_result_after_persistence():

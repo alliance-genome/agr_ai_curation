@@ -563,9 +563,10 @@ def test_process_batch_task_does_not_report_already_reported_flow_failure(monkey
     ]
     assert len(matching_records) == 1
     assert matching_records[0].exc_info is None
+    assert matching_records[0].sentry_skip_event is True
 
 
-def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
+def test_process_batch_task_reports_swallowed_document_exception(monkeypatch, caplog):
     batch, batch_doc, _flow = _build_batch_context()
     batch.flow_id = uuid4()
     batch.documents = [batch_doc]
@@ -599,6 +600,7 @@ def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
             }
         ),
     )
+    caplog.set_level(logging.ERROR, logger=processor.logger.name)
 
     processor.process_batch_task(batch.id)
 
@@ -616,6 +618,13 @@ def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
             "context": {},
         }
     ]
+    matching_records = [
+        record
+        for record in caplog.records
+        if "Error processing document" in record.getMessage()
+    ]
+    assert len(matching_records) == 1
+    assert matching_records[0].sentry_skip_event is True
 
 
 def test_execute_flow_for_document_marks_reported_persistence_flow_error(monkeypatch):
@@ -658,6 +667,45 @@ def test_execute_flow_for_document_marks_reported_persistence_flow_error(monkeyp
     assert exc_info.value.sentry_already_reported is True
     assert published_events
     assert published_events[0]["type"] == "FLOW_ERROR"
+
+
+def test_execute_flow_for_document_keeps_first_failure_capture_owner(monkeypatch):
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "RUN_ERROR",
+            "details": {
+                "reason": "specialist_step_failed",
+                "message": "Specialist execution failed",
+            },
+        }
+        yield {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_partial_result",
+                "message": "Extraction persistence was incomplete",
+            },
+        }
+
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(publish_sync=lambda *_args, **_kwargs: None),
+    )
+
+    with pytest.raises(processor.BatchFlowExecutionError) as exc_info:
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=SimpleNamespace(name="Batch Flow"),
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=str(uuid4()),
+                active_groups=[],
+            )
+        )
+
+    assert str(exc_info.value) == "Extraction persistence was incomplete"
+    assert exc_info.value.sentry_already_reported is False
 
 
 def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatch):
@@ -712,6 +760,7 @@ def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatc
 def test_execute_flow_for_document_fails_file_ready_without_canonical_identity(
     monkeypatch,
     details,
+    caplog,
 ):
     async def _fake_execute_flow(**_kwargs):
         yield {
@@ -730,6 +779,7 @@ def test_execute_flow_for_document_fails_file_ready_without_canonical_identity(
     monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
     monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+    caplog.set_level(logging.ERROR, logger=processor.logger.name)
 
     with pytest.raises(
         processor.BatchFlowExecutionError,
@@ -747,6 +797,13 @@ def test_execute_flow_for_document_fails_file_ready_without_canonical_identity(
         )
 
     assert published_events[-1]["type"] == "BATCH_DOCUMENT_ERROR"
+    matching_records = [
+        record
+        for record in caplog.records
+        if "Flow execution failed for document" in record.getMessage()
+    ]
+    assert len(matching_records) == 1
+    assert matching_records[0].sentry_skip_event is True
 
 
 def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):

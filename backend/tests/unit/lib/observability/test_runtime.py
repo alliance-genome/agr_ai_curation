@@ -56,6 +56,8 @@ def test_report_runtime_exception_captures_with_safe_tags_and_context(monkeypatc
         operation="producer_failed_long_name",
         tags={
             "run_kind": "assistant_chat_turn",
+            "ai_curation.flow.id_hash": "sha256:1234567890abcdef",
+            "phase": "flow_finalization",
             "session_id": "must-not-be-indexed",
         },
         context={"session_id": "session-1-long", "attempt": 2},
@@ -68,6 +70,8 @@ def test_report_runtime_exception_captures_with_safe_tags_and_context(monkeypatc
     assert ("runtime_component", "executable_r") in calls["tags"]
     assert ("operation", "producer_fai") in calls["tags"]
     assert ("run_kind", "assistant_ch") in calls["tags"]
+    assert ("ai_curation.flow.id_hash", "sha256:12345") in calls["tags"]
+    assert ("phase", "flow_finaliz") in calls["tags"]
     assert ("session_id", "must-not-be-indexed") not in calls["tags"]
     assert calls["contexts"] == [
         (

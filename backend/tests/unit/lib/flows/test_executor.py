@@ -6081,7 +6081,7 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["status"] == "failed"
 
     @pytest.mark.asyncio
-    async def test_converts_run_error_into_flow_error(self, monkeypatch):
+    async def test_converts_run_error_into_flow_error(self, monkeypatch, caplog):
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "curation_prep", step_goal="Prepare candidates"),
@@ -6112,6 +6112,7 @@ class TestExecuteFlowTermination:
             "src.lib.openai_agents.runner.run_agent_streamed",
             _fake_run_agent_streamed,
         )
+        caplog.set_level(logging.ERROR, logger="src.lib.flows.executor")
 
         events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
         event_types = [event.get("type") for event in events]
@@ -6127,6 +6128,13 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] == (
             "Curation prep flow steps require at least one upstream extraction envelope."
         )
+        propagation_logs = [
+            record
+            for record in caplog.records
+            if record.message.startswith("[Flow Executor] Run error")
+        ]
+        assert len(propagation_logs) == 1
+        assert propagation_logs[0].sentry_skip_event is True
 
     @pytest.mark.asyncio
     async def test_marks_completed_on_chat_output_ready(self, monkeypatch):
