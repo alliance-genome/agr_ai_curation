@@ -1,8 +1,10 @@
 """Unit tests for the record_evidence document tool."""
 
 import inspect
+import logging
 from copy import deepcopy
 from typing import Any, cast
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
@@ -55,6 +57,10 @@ def _span_ids(chunk_id: str, text: str) -> list[str]:
             section_title="Results",
         )
     ]
+
+
+def _chunk_uuid(label: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"agr-ai-curation-test:{label}"))
 
 
 def test_record_evidence_schema_accepts_span_ids_not_claimed_quote():
@@ -143,7 +149,7 @@ def test_merge_extra_fields_returns_merged_fields_or_none():
 
 @pytest.mark.asyncio
 async def test_record_evidence_copies_exact_span_text_and_tracks_call(monkeypatch):
-    chunk_id = "chunk-expression-1"
+    chunk_id = _chunk_uuid("chunk-expression-1")
     chunk_text = (
         "Wingless expression expanded in the mutant tissue. "
         "This sentence is exact evidence."
@@ -258,8 +264,59 @@ async def test_record_evidence_rejects_target_identity_without_field_path(monkey
 
 
 @pytest.mark.asyncio
-async def test_record_evidence_rejects_unknown_span_chunk_without_record(monkeypatch):
-    chunk_id = "chunk-missing"
+async def test_record_evidence_rejects_malformed_span_without_lookup_or_error_log(
+    monkeypatch,
+    caplog,
+):
+    async def _unexpected_get_chunk_by_id(**_kwargs):
+        raise AssertionError("malformed span IDs must not reach chunk lookup")
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
+        result = await tool(entity="wg", span_ids=["truncated-span-id"])
+
+    assert result["status"] == "not_found"
+    assert result["resolution_failure"] == "invalid_span_id"
+    assert result["span_resolution_errors"][0]["resolution_failure"] == "invalid_span_id"
+    assert not any(
+        record.name == record_evidence.__name__ and record.levelno >= logging.ERROR
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_non_uuid_chunk_without_lookup_or_error_log(
+    monkeypatch,
+    caplog,
+):
+    span_id = _span_ids("truncated-chunk-identity", "Exact sentence.")[0]
+
+    async def _unexpected_get_chunk_by_id(**_kwargs):
+        raise AssertionError("non-UUID chunk IDs must not reach chunk lookup")
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
+        result = await tool(entity="wg", span_ids=[span_id])
+
+    assert result["status"] == "not_found"
+    assert result["resolution_failure"] == "invalid_chunk_id"
+    assert "UUID" in result["failed_span_error"]
+    assert not any(
+        record.name == record_evidence.__name__ and record.levelno >= logging.ERROR
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_unknown_span_chunk_without_record(
+    monkeypatch,
+    caplog,
+):
+    chunk_id = _chunk_uuid("chunk-missing")
     span_id = _span_ids(chunk_id, "The selected sentence exists.")[0]
 
     async def _fake_get_chunk_by_id(**kwargs):
@@ -269,20 +326,51 @@ async def test_record_evidence_rejects_unknown_span_chunk_without_record(monkeyp
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
     tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
 
-    result = await tool(entity="wg", span_ids=[span_id])
+    with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
+        result = await tool(entity="wg", span_ids=[span_id])
 
     assert result["status"] == "not_found"
+    assert result["resolution_failure"] == "missing_chunk"
     assert result["failed_span_id"] == span_id
     assert result["chunk_id"] == chunk_id
     assert "not found in the active document" in result["failed_span_error"]
     assert "read_chunk" in result["retry_instructions"]
     assert "evidence_record_id" not in result
     assert "verified_quote" not in result
+    assert not any(
+        record.name == record_evidence.__name__ and record.levelno >= logging.ERROR
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_reports_lookup_runtime_failure_at_error_level(
+    monkeypatch,
+    caplog,
+):
+    chunk_id = _chunk_uuid("chunk-runtime-failure")
+    span_id = _span_ids(chunk_id, "Exact sentence.")[0]
+
+    async def _failing_get_chunk_by_id(**_kwargs):
+        raise RuntimeError("simulated Weaviate transport failure")
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _failing_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
+        result = await tool(entity="wg", span_ids=[span_id])
+
+    assert result["status"] == "not_found"
+    assert result["resolution_failure"] == "chunk_load_error"
+    assert any(
+        record.name == record_evidence.__name__ and record.levelno == logging.ERROR
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
 async def test_record_evidence_updates_existing_id_and_preserves_attachments(monkeypatch):
-    chunk_id = "chunk-update"
+    chunk_id = _chunk_uuid("chunk-update")
     chunk_text = "Old context sentence. New exact replacement sentence."
     span_ids = _span_ids(chunk_id, chunk_text)
     workspace_records = [
@@ -432,7 +520,7 @@ async def test_record_evidence_update_rejects_object_only_retarget_without_mutat
 
 @pytest.mark.asyncio
 async def test_record_evidence_update_failure_does_not_mutate_existing_record(monkeypatch):
-    chunk_id = "chunk-update-stale"
+    chunk_id = _chunk_uuid("chunk-update-stale")
     original_text = "The selected source sentence exists."
     stale_span_id = _span_ids(chunk_id, original_text)[0]
     existing_record = {
@@ -550,7 +638,7 @@ async def test_record_evidence_scoped_validator_tool_refuses_create_and_wrong_id
 
 @pytest.mark.asyncio
 async def test_record_evidence_scoped_validator_tool_updates_allowed_record(monkeypatch):
-    chunk_id = "chunk-scoped-update"
+    chunk_id = _chunk_uuid("chunk-scoped-update")
     chunk_text = "Old context sentence. Better scoped support sentence."
     span_ids = _span_ids(chunk_id, chunk_text)
     workspace_records = [
@@ -604,7 +692,7 @@ async def test_record_evidence_scoped_validator_tool_updates_allowed_record(monk
 
 @pytest.mark.asyncio
 async def test_record_evidence_rejects_stale_hash_mismatched_span_without_fallback(monkeypatch):
-    chunk_id = "chunk-stale"
+    chunk_id = _chunk_uuid("chunk-stale")
     original_text = "The selected sentence exists. Another exact sentence."
     stale_span_id = _span_ids(chunk_id, original_text)[0]
 
@@ -621,6 +709,7 @@ async def test_record_evidence_rejects_stale_hash_mismatched_span_without_fallba
     result = await tool(entity="wg", span_ids=[stale_span_id])
 
     assert result["status"] == "not_found"
+    assert result["resolution_failure"] == "stale_span_id"
     assert result["failed_span_id"] == stale_span_id
     assert "hash" in result["failed_span_error"]
     assert "Call read_chunk again" in result["failed_span_error"]
@@ -629,8 +718,35 @@ async def test_record_evidence_rejects_stale_hash_mismatched_span_without_fallba
 
 
 @pytest.mark.asyncio
+async def test_record_evidence_rejects_stale_offsets_without_fallback(
+    monkeypatch,
+    caplog,
+):
+    chunk_id = _chunk_uuid("chunk-stale-offsets")
+    span_id = f"{chunk_id}:s0000:c0000-c9999:aaaabbbb"
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return _chunk(chunk_id=chunk_id, text="Exact current sentence.")
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
+        result = await tool(entity="wg", span_ids=[span_id])
+
+    assert result["status"] == "not_found"
+    assert result["resolution_failure"] == "stale_span_id"
+    assert "offsets" in result["failed_span_error"]
+    assert not any(
+        record.name == record_evidence.__name__ and record.levelno >= logging.ERROR
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_record_evidence_multi_span_call_creates_one_conjoined_record(monkeypatch):
-    chunk_id = "chunk-multispan"
+    chunk_id = _chunk_uuid("chunk-multispan")
     chunk_text = (
         "First exact support sentence. "
         "Second exact support sentence. "
@@ -678,7 +794,7 @@ async def test_record_evidence_multi_span_call_creates_one_conjoined_record(monk
 
 @pytest.mark.asyncio
 async def test_record_evidence_multi_span_failure_is_all_or_nothing(monkeypatch):
-    chunk_id = "chunk-all-or-nothing"
+    chunk_id = _chunk_uuid("chunk-all-or-nothing")
     original_text = "First exact support sentence. Second exact support sentence."
     span_ids = _span_ids(chunk_id, original_text)
 
@@ -704,7 +820,7 @@ async def test_record_evidence_multi_span_failure_is_all_or_nothing(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_stale(monkeypatch):
-    chunk_id = "chunk-live-repro"
+    chunk_id = _chunk_uuid("chunk-live-repro")
     chunk_text = "Actin 87E accumulated to a higher molar abundance in mutant fly eyes."
     span_id = _span_ids(chunk_id, chunk_text)[0]
 
@@ -735,7 +851,7 @@ async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_st
 
 @pytest.mark.asyncio
 async def test_record_evidence_does_not_invent_missing_chunk_page(monkeypatch):
-    chunk_id = "chunk-without-page"
+    chunk_id = _chunk_uuid("chunk-without-page")
     chunk_text = "Provider metadata has no usable page provenance."
     span_id = _span_ids(chunk_id, chunk_text)[0]
 
