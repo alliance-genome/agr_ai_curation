@@ -2577,7 +2577,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert "evidence" not in runtime_payload
     assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
     assert captured["kwargs"]["max_turns"] == 18
-    assert captured["agent_lookup"][1] == {"authenticated_groups": ("RGD",)}
+    assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
     assert captured_preflight["provider"] == "anthropic"
     assert captured_preflight["model"] == "validator-model"
     assert ("conversation", request.request_id) in sentry_calls
@@ -3025,7 +3025,7 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
         "evidence_record_ids": ["evidence-1"],
     }
     assert captured["kwargs"]["max_turns"] == 6
-    assert captured["agent_lookup"][1] == {"authenticated_groups": ("RGD",)}
+    assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
 
 
 @pytest.mark.parametrize("batch", [False, True])
@@ -3047,7 +3047,7 @@ def test_package_scoped_validator_lookup_rejects_nonmatching_runtime_groups(
     )
 
     def _deny_nonmatching_agent(_agent_key, **kwargs):
-        assert kwargs == {"authenticated_groups": ("MGI",)}
+        assert kwargs == {"authenticated_groups": ["MGI"]}
         raise ValueError("restricted validator agent is unavailable")
 
     monkeypatch.setattr(
