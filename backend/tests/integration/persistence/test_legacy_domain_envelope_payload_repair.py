@@ -14,6 +14,7 @@ from sqlalchemy import delete, select, text
 from src.lib.curation_workspace.models import (
     CurationCandidate,
     CurationReviewSession,
+    CurationValidationSnapshot,
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
     DomainEnvelopeObject,
@@ -35,6 +36,8 @@ from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationSessionStatus,
+    CurationValidationScope,
+    CurationValidationSnapshotState,
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -98,6 +101,11 @@ def db_session():
 
 
 def _cleanup(db) -> None:
+    db.execute(
+        delete(CurationValidationSnapshot).where(
+            CurationValidationSnapshot.envelope_id == ENVELOPE_ID
+        )
+    )
     db.execute(delete(CurationCandidate).where(CurationCandidate.id == CANDIDATE_ID))
     for model in (
         DomainEnvelopeProjectionIndex,
@@ -168,17 +176,33 @@ def _seed_legacy_graph(db) -> None:
             adapter_key="generic",
         ),
     )
+    candidate = CurationCandidate(
+        id=CANDIDATE_ID,
+        session_id=SESSION_ID,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=0,
+        adapter_key="generic",
+        envelope_id=ENVELOPE_ID,
+        object_id="object-915",
+        envelope_revision=1,
+    )
+    db.add(candidate)
+    db.flush()
     db.add(
-        CurationCandidate(
-            id=CANDIDATE_ID,
+        CurationValidationSnapshot(
+            scope=CurationValidationScope.CANDIDATE,
             session_id=SESSION_ID,
-            source=CurationCandidateSource.EXTRACTED,
-            status=CurationCandidateStatus.PENDING,
-            order=0,
+            candidate_id=CANDIDATE_ID,
             adapter_key="generic",
             envelope_id=ENVELOPE_ID,
-            object_id="object-915",
             envelope_revision=1,
+            state=CurationValidationSnapshotState.COMPLETED,
+            field_results={"object-915.label": {"status": "valid"}},
+            summary={"status": "valid", "finding_count": 1},
+            warnings=["preserve snapshot"],
+            requested_at=datetime(2026, 8, 29, 1, 0, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 8, 29, 1, 1, tzinfo=timezone.utc),
         )
     )
     db.flush()
@@ -215,12 +239,32 @@ def _protected_state(db) -> dict:
         "domain_envelope_history",
         "domain_envelope_projection_index",
         "curation_candidates",
+        "validation_snapshots",
     ):
         counts[table_name] = db.scalar(
             text(f"SELECT count(*) FROM {table_name} WHERE envelope_id = :envelope_id"),
             {"envelope_id": ENVELOPE_ID},
         )
-    return {"envelope": dict(envelope), "counts": counts}
+    snapshots = (
+        db.execute(
+            text("""
+            SELECT id, scope, session_id, candidate_id, adapter_key,
+                   envelope_id, envelope_revision, state, field_results,
+                   summary, warnings, requested_at, completed_at
+            FROM validation_snapshots
+            WHERE envelope_id = :envelope_id
+            ORDER BY id
+            """),
+            {"envelope_id": ENVELOPE_ID},
+        )
+        .mappings()
+        .all()
+    )
+    return {
+        "envelope": dict(envelope),
+        "counts": counts,
+        "validation_snapshots": [dict(snapshot) for snapshot in snapshots],
+    }
 
 
 def test_dry_run_and_apply_preserve_the_persisted_graph(db_session) -> None:

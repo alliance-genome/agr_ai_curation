@@ -97,7 +97,7 @@ def transform_legacy_domain_envelope_payload(
         raise LegacyDomainEnvelopeRepairError(
             "renamed payload does not satisfy the current DomainEnvelope contract: "
             f"{validation_errors}"
-        ) from exc
+        ) from None
 
     return transformed
 

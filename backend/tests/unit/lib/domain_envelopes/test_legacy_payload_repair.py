@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import traceback
 
 import pytest
 
@@ -68,4 +69,11 @@ def test_transform_validation_error_does_not_echo_payload_values() -> None:
         transform_legacy_domain_envelope_payload(payload)
 
     assert "unexpected: extra_forbidden" in str(exc_info.value)
-    assert "private-curation-value" not in str(exc_info.value)
+    rendered_traceback = "".join(
+        traceback.format_exception(
+            type(exc_info.value),
+            exc_info.value,
+            exc_info.value.__traceback__,
+        )
+    )
+    assert "private-curation-value" not in rendered_traceback
