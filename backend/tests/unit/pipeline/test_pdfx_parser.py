@@ -8,11 +8,17 @@ import pytest
 from src.lib.exceptions import ConfigurationError
 from src.lib.exceptions import PDFCancellationError, PDFParsingError
 from src.lib.pipeline.pdfx_parser import (
+    PDFX_FAILURE_DETAILS_KEY,
+    PDFX_POLLING_TIMEOUT_MESSAGE,
+    PDFX_PROVIDER_FAILURE_MESSAGE,
+    PDFX_PUBLIC_MESSAGE_DETAILS_KEY,
     PDFXParser,
     _build_progress_message,
     _cache_hit_from_payloads,
+    _safe_provider_token,
     markdown_to_pipeline_elements,
 )
+from src.lib.pipeline.processing_receipt import PDFProcessingReceipt
 
 
 class _DummyResponse:
@@ -135,31 +141,44 @@ Signal from **B cells** depends on Ca<sup>2+</sup> and *kinase* activity.
     assert elements[1]["metadata"]["section_path"] == ["Results 2+"]
 
 
-def test_build_progress_message_prefers_stage_display():
+def test_build_progress_message_uses_local_text_with_valid_numeric_percent():
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
     message = _build_progress_message(
         {
             "status": "progress",
+            "message": sentinel,
             "progress": {
-                "stage_display": "Merging extraction outputs",
+                "stage_display": sentinel,
+                "stage": sentinel,
                 "percent": 80,
             },
         }
     )
-    assert message == "PDF extraction: Merging extraction outputs (80%)"
+    assert message == "Extracting PDF content... (80%)"
+    assert sentinel not in message
 
 
-def test_build_progress_message_surfaces_pdfx_queue_message():
+def test_build_progress_message_does_not_surface_pdfx_queue_message():
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
     message = _build_progress_message(
         {
             "status": "queued",
             "state": "ready",
-            "message": "PDFX worker is already processing another job. This job is queued.",
+            "message": sentinel,
         }
     )
 
-    assert message == (
-        "PDF extraction: PDFX worker is already processing another job. This job is queued."
+    assert message == "PDF extraction queued; waiting for PDFX worker..."
+    assert sentinel not in message
+
+
+@pytest.mark.parametrize("percent", [-1, 101, True, "80"])
+def test_build_progress_message_rejects_invalid_percent(percent):
+    message = _build_progress_message(
+        {"status": "running", "progress": {"percent": percent}}
     )
+
+    assert message == "Extracting PDF content..."
 
 
 def test_build_progress_message_uses_ready_queue_fallback():
@@ -179,6 +198,13 @@ def test_build_progress_message_uses_ready_queue_fallback():
 )
 def test_cache_hit_normalization_requires_explicit_boolean(payloads, expected):
     assert _cache_hit_from_payloads(*payloads) is expected
+
+
+def test_safe_provider_token_obeys_configured_bound(monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_RECEIPT_TOKEN_MAX_CHARS", "8")
+
+    assert _safe_provider_token("safe-123") == "safe-123"
+    assert _safe_provider_token("too-long-token") is None
 
 
 @pytest.mark.asyncio
@@ -331,6 +357,9 @@ async def test_parse_threads_merged_page_provenance_into_elements_and_receipt(
     assert observations[0]["cache_hit"] is True
     assert observations[0]["extraction_methods"] == ["grobid", "marker"]
     assert observations[0]["merge_enabled"] is True
+    assert observations[0]["process_id"] == "proc-wiring"
+    assert observations[0]["submit_attempt_count"] == 0
+    assert observations[0]["poll_attempt_count"] == 0
     assert observations[0]["duration_ms"] >= 0
 
 
@@ -381,6 +410,119 @@ async def test_parse_reports_external_failure_outcome(
     assert len(observations) == 1
     assert observations[0]["status"] == expected_status
     assert observations[0]["cache_hit"] is None
+    if expected_status == "failed":
+        assert observations[0]["failure_category"] == "unknown_provider_failure"
+        assert observations[0]["failure_boundary"] == "submit"
+
+
+@pytest.mark.asyncio
+async def test_parse_sanitizes_unclassified_provider_exception(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    parser = PDFXParser()
+    receipt = PDFProcessingReceipt(document_id="doc-private")
+
+    async def _submit_extraction(*_args, **_kwargs):
+        raise PDFParsingError(f"provider returned {sentinel}")
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    with pytest.raises(PDFParsingError) as raised:
+        await parser.parse_pdf_document(
+            pdf_path,
+            "doc-private",
+            "user-private",
+            observability_callback=receipt.record_external_observation,
+        )
+
+    stored_receipt = receipt.finalize("failed")
+    assert sentinel not in str(raised.value)
+    assert sentinel not in repr(raised.value.__cause__)
+    assert sentinel not in caplog.text
+    assert sentinel not in str(stored_receipt)
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY]["failure_category"] == (
+        "unknown_provider_failure"
+    )
+
+
+@pytest.mark.asyncio
+async def test_parse_preserves_sanitized_download_http_status_in_observation(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+):
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, *_args, **_kwargs):
+            return _DummyResponse(403, sentinel)
+
+    parser = PDFXParser()
+    parser.download_retry_seconds = 0
+    observations = []
+
+    async def _submit_extraction(*_args, **_kwargs):
+        parser._submit_attempt_count = 1
+        return {"process_id": "proc-download"}
+
+    async def _poll_until_complete(**_kwargs):
+        parser._poll_attempt_count = 2
+        return {"status": "complete"}
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    monkeypatch.setattr(parser, "_poll_until_complete", _poll_until_complete)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    with pytest.raises(PDFParsingError) as raised:
+        await parser.parse_pdf_document(
+            pdf_path,
+            "doc-download",
+            "user-download",
+            observability_callback=observations.append,
+        )
+
+    assert sentinel not in str(raised.value)
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY] == {
+        "failure_category": "unknown_provider_failure",
+        "failure_boundary": "download",
+        "process_id": "proc-download",
+        "http_status": 403,
+        "submit_attempt_count": 1,
+        "poll_attempt_count": 2,
+        "timeout_seconds": 300,
+    }
+    assert observations[0]["http_status"] == 403
+    assert observations[0]["failure_boundary"] == "download"
+    assert sentinel not in str(observations)
 
 
 @pytest.mark.asyncio
@@ -451,6 +593,7 @@ async def test_submit_retries_on_transient_504_and_succeeds(parser_env, monkeypa
     payload = await parser._submit_extraction(session=session, file_path=pdf_path, headers={})
     assert payload["process_id"] == "proc-123"
     assert session.post_calls == 2
+    assert parser._submit_attempt_count == 2
 
 
 @pytest.mark.asyncio
@@ -466,9 +609,14 @@ async def test_submit_fails_on_non_transient_error(parser_env, tmp_path):
         ]
     )
 
-    with pytest.raises(PDFParsingError, match="PDF extraction submit failed: 401"):
+    with pytest.raises(PDFParsingError, match="PDF extraction submit failed with HTTP 401") as raised:
         await parser._submit_extraction(session=session, file_path=pdf_path, headers={})
     assert session.post_calls == 1
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY] == {
+        "failure_category": "unknown_provider_failure",
+        "failure_boundary": "submit",
+        "http_status": 401,
+    }
 
 
 @pytest.mark.asyncio
@@ -501,7 +649,86 @@ async def test_poll_retries_transient_missing_status_until_complete(parser_env, 
 
     assert payload["status"] == "complete"
     assert session.get_calls == 3
+    assert parser._poll_attempt_count == 3
     assert any("Extracting" in msg for msg in messages)
+
+
+@pytest.mark.asyncio
+async def test_poll_classifies_terminal_failure_without_provider_prose(
+    parser_env,
+    caplog,
+):
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
+    parser = PDFXParser()
+    session = _SequenceSession(
+        get_responses=[
+            _DummyResponse(
+                200,
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "error_code": "publish_failed",
+                        "message": sentinel,
+                        "error": f"private free-form provider explanation {sentinel}",
+                    }
+                ),
+            )
+        ]
+    )
+    progress_messages = []
+
+    async def on_progress(message: str):
+        progress_messages.append(message)
+
+    with pytest.raises(PDFParsingError) as raised:
+        await parser._poll_until_complete(
+            session=session,
+            process_id="proc-terminal",
+            headers={},
+            progress_callback=on_progress,
+        )
+
+    assert "private free-form" not in str(raised.value)
+    assert sentinel not in str(raised.value)
+    assert sentinel not in caplog.text
+    assert progress_messages == []
+    assert raised.value.details[PDFX_PUBLIC_MESSAGE_DETAILS_KEY] == PDFX_PROVIDER_FAILURE_MESSAGE
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY] == {
+        "failure_category": "provider_terminal_failure",
+        "failure_boundary": "poll",
+        "process_id": "proc-terminal",
+        "provider_status": "failed",
+        "provider_error_code": "publish_failed",
+        "http_status": 200,
+    }
+    assert parser._poll_attempt_count == 1
+
+
+@pytest.mark.asyncio
+async def test_poll_classifies_bounded_timeout_separately(parser_env):
+    parser = PDFXParser()
+    parser.timeout_seconds = 0.001
+    parser.poll_interval_seconds = 0.01
+    session = _SequenceSession(
+        get_responses=[_DummyResponse(200, '{"status":"running"}')]
+    )
+
+    with pytest.raises(PDFParsingError) as raised:
+        await parser._poll_until_complete(
+            session=session,
+            process_id="proc-timeout",
+            headers={},
+            progress_callback=None,
+        )
+
+    assert raised.value.details[PDFX_PUBLIC_MESSAGE_DETAILS_KEY] == PDFX_POLLING_TIMEOUT_MESSAGE
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY] == {
+        "failure_category": "polling_timeout",
+        "failure_boundary": "poll",
+        "process_id": "proc-timeout",
+        "provider_status": "running",
+    }
+    assert parser._poll_attempt_count == 1
 
 
 @pytest.mark.asyncio

@@ -2612,6 +2612,14 @@ def get_pdf_document_error_message_max_chars() -> int:
     )
 
 
+def get_pdf_extraction_receipt_token_max_chars() -> int:
+    """Max chars retained for one content-free PDFX receipt token. Default 128."""
+    return max(
+        1,
+        _get_env_int_with_fallback("PDF_EXTRACTION_RECEIPT_TOKEN_MAX_CHARS", 128),
+    )
+
+
 def get_pdf_no_job_orphan_threshold_seconds() -> int:
     """Minimum pending-document age before no-job repair. Default 86400."""
     return max(

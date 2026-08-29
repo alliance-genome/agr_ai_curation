@@ -10,12 +10,46 @@ import time
 from src.models.pipeline import ProcessingStage
 from .tracker import PipelineTracker
 from src.models.strategy import ChunkingStrategy
-from ..exceptions import PDFCancellationError
+from ..exceptions import PDFCancellationError, PDFParsingError
 from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
 from src.lib.observability.runtime import report_runtime_exception
 from .processing_receipt import PDFProcessingReceipt
 
 logger = logging.getLogger(__name__)
+
+
+def _public_pipeline_error_message(error: Exception) -> str:
+    """Return a stable public message when an exception provides one."""
+    if isinstance(error, PDFParsingError):
+        public_message = error.details.get("public_message")
+        if isinstance(public_message, str) and public_message.strip():
+            return public_message.strip()
+    return str(error)
+
+
+def _pdfx_runtime_context(error: Exception) -> dict[str, Any]:
+    """Return only the content-free PDFX failure fields approved for telemetry."""
+    if not isinstance(error, PDFParsingError):
+        return {}
+    failure = error.details.get("pdfx_failure")
+    if not isinstance(failure, dict):
+        return {}
+    allowed_fields = {
+        "failure_category",
+        "failure_boundary",
+        "process_id",
+        "provider_status",
+        "provider_error_code",
+        "http_status",
+        "submit_attempt_count",
+        "poll_attempt_count",
+        "timeout_seconds",
+    }
+    return {
+        f"pdfx_{key}": value
+        for key, value in failure.items()
+        if key in allowed_fields and isinstance(value, (str, int))
+    }
 
 
 class PipelineError(Exception):
@@ -283,22 +317,29 @@ class DocumentPipelineOrchestrator:
             )
 
         except Exception as e:
+            runtime_context = {
+                "document_id": document_id,
+                "stages_completed_count": len(stages_completed),
+                "stages_completed": [stage.value for stage in stages_completed],
+                "validate_first": validate_first,
+                "extraction_strategy": extraction_strategy,
+            }
+            runtime_context.update(_pdfx_runtime_context(e))
             report_runtime_exception(
                 e,
                 component="document_pipeline",
                 operation="process_pdf_document_failed",
-                context={
-                    "document_id": document_id,
-                    "stages_completed_count": len(stages_completed),
-                    "stages_completed": [stage.value for stage in stages_completed],
-                    "validate_first": validate_first,
-                    "extraction_strategy": extraction_strategy,
-                },
+                context=runtime_context,
             )
             logger.warning("Pipeline failed for document %s: %s", document_id, e, exc_info=True)
+            public_error_message = _public_pipeline_error_message(e)
 
             # Mark as failed
-            await self._handle_failure(document_id, e)
+            await self._handle_failure(
+                document_id,
+                e,
+                public_error_message=public_error_message,
+            )
 
             duration = (datetime.now() - start_time).total_seconds()
 
@@ -306,7 +347,7 @@ class DocumentPipelineOrchestrator:
                 success=False,
                 document_id=document_id,
                 stages_completed=stages_completed,
-                error=str(e),
+                error=public_error_message,
                 duration_seconds=duration,
                 observability_receipt=receipt.finalize("failed"),
             )
@@ -523,12 +564,19 @@ class DocumentPipelineOrchestrator:
         finally:
             session.close()
 
-    async def _handle_failure(self, document_id: str, error: Exception):
+    async def _handle_failure(
+        self,
+        document_id: str,
+        error: Exception,
+        *,
+        public_error_message: Optional[str] = None,
+    ):
         """Handle pipeline failure."""
+        safe_message = public_error_message or _public_pipeline_error_message(error)
         await self._sync_sql_document_status(
             document_id,
             status="failed",
-            error_message=str(error),
+            error_message=safe_message,
         )
 
         try:
@@ -541,15 +589,18 @@ class DocumentPipelineOrchestrator:
                 status_error,
             )
 
+        tracker_error = error
+        if isinstance(error, PDFParsingError) and safe_message != str(error):
+            tracker_error = PDFParsingError(safe_message, error_code=error.error_code)
         await self.tracker.handle_pipeline_failure(
             document_id,
-            error,
+            tracker_error,
             stage=ProcessingStage.FAILED
         )
         await self.tracker.track_pipeline_progress(
             document_id,
             ProcessingStage.FAILED,
-            message=f"Pipeline failed: {str(error)}"
+            message=f"Pipeline failed: {safe_message}"
         )
 
 

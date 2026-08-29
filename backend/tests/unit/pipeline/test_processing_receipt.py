@@ -31,6 +31,10 @@ def test_receipt_records_successful_stages_and_explicit_cache_state():
             "merge_enabled": True,
             "download_variant": "merged",
             "cache_hit": True,
+            "process_id": "proc-123",
+            "submit_attempt_count": 1,
+            "poll_attempt_count": 3,
+            "timeout_seconds": 300,
         }
     )
 
@@ -39,7 +43,7 @@ def test_receipt_records_successful_stages_and_explicit_cache_state():
 
     stored = receipt.finalize("completed")
 
-    assert stored["schema_version"] == 1
+    assert stored["schema_version"] == 2
     assert stored["outcome"] == "completed"
     assert stored["selection"] == {
         "extraction_methods": ["grobid", "marker"],
@@ -49,6 +53,11 @@ def test_receipt_records_successful_stages_and_explicit_cache_state():
     }
     assert stored["stages"]["external_request"]["status"] == "completed"
     assert stored["stages"]["external_request"]["duration_ms"] == 2000.0
+    assert stored["stages"]["external_request"]["process_id"] == "proc-123"
+    assert stored["stages"]["external_request"]["submit_attempt_count"] == 1
+    assert stored["stages"]["external_request"]["poll_attempt_count"] == 3
+    assert stored["stages"]["external_request"]["timeout_seconds"] == 300
+    assert "failure_category" not in stored["stages"]["external_request"]
     assert stored["stages"]["chunking"]["status"] == "completed"
     assert stored["stages"]["hierarchy"] == {"status": "not_started"}
     assert stored["stages"]["total"]["status"] == "completed"
@@ -67,6 +76,37 @@ def test_receipt_retains_failed_stage_and_terminal_outcome():
     assert stored["stages"]["chunking"]["status"] == "failed"
     assert stored["stages"]["total"]["status"] == "failed"
     assert "chunk failed" not in str(stored)
+
+
+def test_receipt_records_only_whitelisted_content_free_failure_evidence():
+    receipt = receipt_module.PDFProcessingReceipt(document_id="doc-provider-failed")
+    now = datetime.now(timezone.utc)
+    receipt.record_external_observation(
+        {
+            "status": "failed",
+            "started_at": now - timedelta(seconds=1),
+            "completed_at": now,
+            "duration_ms": 1000,
+            "process_id": "proc-safe",
+            "failure_category": "provider_terminal_failure",
+            "failure_boundary": "poll",
+            "provider_status": "failed",
+            "provider_error_code": "publish_failed",
+            "http_status": 200,
+            "submit_attempt_count": 1,
+            "poll_attempt_count": 4,
+            "provider_error": "private provider prose must not persist",
+        }
+    )
+
+    stored = receipt.finalize("failed")
+    external = stored["stages"]["external_request"]
+
+    assert external["failure_category"] == "provider_terminal_failure"
+    assert external["failure_boundary"] == "poll"
+    assert external["provider_error_code"] == "publish_failed"
+    assert external["http_status"] == 200
+    assert "private provider prose" not in str(stored)
 
 
 def test_minimal_cancelled_receipt_uses_observed_job_timestamps():

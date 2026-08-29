@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator, process_pdf_document
-from src.lib.exceptions import PDFCancellationError
+from src.lib.exceptions import PDFCancellationError, PDFParsingError
+from src.lib.pipeline.pdfx_parser import PDFX_PROVIDER_FAILURE_MESSAGE
 from src.models.pipeline import ProcessingStage
 
 
@@ -132,6 +133,81 @@ async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf, monk
     assert len(failure_logs) == 1
     assert failure_logs[0].levelno == logging.WARNING
     assert failure_logs[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_pdfx_failure_keeps_operator_evidence_but_persists_safe_message(
+    orchestrator,
+    sample_pdf,
+    monkeypatch,
+):
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
+    orchestrator._sync_sql_document_status = AsyncMock()
+    runtime_reports = []
+    monkeypatch.setattr(
+        "src.lib.pipeline.orchestrator.report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
+    provider_error = PDFParsingError(
+        "PDF extraction failed for process_id=proc-safe status=failed error_code=publish_failed",
+        details={
+            "public_message": PDFX_PROVIDER_FAILURE_MESSAGE,
+            "pdfx_failure": {
+                "failure_category": "provider_terminal_failure",
+                "failure_boundary": "poll",
+                "process_id": "proc-safe",
+                "provider_status": "failed",
+                "provider_error_code": "publish_failed",
+                "http_status": 200,
+                "submit_attempt_count": 1,
+                "poll_attempt_count": 4,
+                "timeout_seconds": 300,
+                "provider_error": sentinel,
+            },
+        },
+    )
+
+    with patch(
+        "src.lib.pipeline.pdfx_parser.parse_pdf_document",
+        new=AsyncMock(side_effect=provider_error),
+    ):
+        result = await orchestrator.process_pdf_document(
+            sample_pdf,
+            "doc-safe",
+            "test_user",
+            validate_first=False,
+        )
+
+    assert result.success is False
+    assert result.error == PDFX_PROVIDER_FAILURE_MESSAGE
+    orchestrator._sync_sql_document_status.assert_any_await(
+        "doc-safe",
+        status="failed",
+        error_message=PDFX_PROVIDER_FAILURE_MESSAGE,
+    )
+    assert len(runtime_reports) == 1
+    assert runtime_reports[0][0] is provider_error
+    assert sentinel not in str(runtime_reports[0])
+    assert runtime_reports[0][1]["context"] == {
+        "document_id": "doc-safe",
+        "stages_completed_count": 0,
+        "stages_completed": [],
+        "validate_first": False,
+        "extraction_strategy": "auto",
+        "pdfx_failure_category": "provider_terminal_failure",
+        "pdfx_failure_boundary": "poll",
+        "pdfx_process_id": "proc-safe",
+        "pdfx_provider_status": "failed",
+        "pdfx_provider_error_code": "publish_failed",
+        "pdfx_http_status": 200,
+        "pdfx_submit_attempt_count": 1,
+        "pdfx_poll_attempt_count": 4,
+        "pdfx_timeout_seconds": 300,
+    }
+    tracked_errors = orchestrator.tracker.processing_errors["doc-safe"]
+    assert tracked_errors[0].error_message == PDFX_PROVIDER_FAILURE_MESSAGE
+    assert "publish_failed" not in tracked_errors[0].error_message
+    assert sentinel not in str(result.observability_receipt)
 
 
 @pytest.mark.asyncio
