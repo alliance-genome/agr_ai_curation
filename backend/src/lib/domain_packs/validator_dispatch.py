@@ -1403,7 +1403,7 @@ def run_package_scoped_validator_agent(
     agent = get_agent_by_id(
         canonical_system_agent_key(agent_definition),
         **(
-            {"authenticated_groups": authenticated_groups}
+            {"authenticated_groups": list(authenticated_groups)}
             if authenticated_groups is not None
             else {}
         ),
@@ -1588,7 +1588,7 @@ def run_package_scoped_validator_agent_batch(
     agent = get_agent_by_id(
         canonical_system_agent_key(agent_definition),
         **(
-            {"authenticated_groups": authenticated_groups}
+            {"authenticated_groups": list(authenticated_groups)}
             if authenticated_groups is not None
             else {}
         ),
