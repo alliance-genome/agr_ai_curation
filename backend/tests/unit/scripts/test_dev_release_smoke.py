@@ -102,6 +102,43 @@ def test_parse_args_allows_stream_chat_message_override():
     assert args.stream_chat_message == "Stream this exact prompt."
 
 
+@pytest.mark.parametrize(
+    ("download_info", "expected"),
+    [
+        (
+            {"pdfx_json_available": True, "source_markdown_available": False},
+            ("pdfx_json", True),
+        ),
+        (
+            {"pdfx_json_available": False, "source_markdown_available": True},
+            ("source_markdown", False),
+        ),
+        (
+            {"pdfx_json_available": True, "source_markdown_available": True},
+            ("pdfx_json", True),
+        ),
+    ],
+)
+def test_select_primary_text_artifact_supports_local_and_provider_ingestion(
+    download_info, expected
+):
+    smoke = _load_smoke_module()
+
+    assert smoke.select_primary_text_artifact(download_info) == expected
+
+
+def test_select_primary_text_artifact_rejects_missing_text_artifacts():
+    smoke = _load_smoke_module()
+
+    with pytest.raises(
+        smoke.SmokeFailure,
+        match="either pdfx_json_available or source_markdown_available",
+    ):
+        smoke.select_primary_text_artifact(
+            {"pdfx_json_available": False, "source_markdown_available": False}
+        )
+
+
 def test_resolve_auth_context_accepts_curator_id_token(tmp_path):
     smoke = _load_smoke_module()
     args = smoke.parse_args(

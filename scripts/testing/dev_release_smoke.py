@@ -1422,6 +1422,19 @@ def download_document_artifact(
     }
 
 
+def select_primary_text_artifact(download_info: Dict[str, Any]) -> tuple[str, bool]:
+    """Select the canonical text artifact for local-PDF or provider ingestion."""
+
+    if download_info.get("pdfx_json_available") is True:
+        return "pdfx_json", True
+    if download_info.get("source_markdown_available") is True:
+        return "source_markdown", False
+    raise SmokeFailure(
+        "Expected either pdfx_json_available or source_markdown_available true: "
+        f"{download_info}"
+    )
+
+
 def load_document_into_chat(
     *,
     base_url: str,
@@ -2910,21 +2923,22 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             step_name="primary_download_info",
         )
         require(download_info.get("pdf_available") is True, f"Expected pdf_available true: {download_info}")
-        require(
-            download_info.get("pdfx_json_available") is True,
-            f"Expected pdfx_json_available true: {download_info}",
-        )
         evidence["document_artifacts"]["primary_download_info"] = download_info
 
-        print_step("Downloading primary PDFX JSON artifact")
-        evidence["document_artifacts"]["primary_pdfx_json"] = download_document_artifact(
+        primary_text_artifact, primary_text_is_json = select_primary_text_artifact(download_info)
+        artifact_label = "PDFX JSON" if primary_text_artifact == "pdfx_json" else "source Markdown"
+        evidence_key = (
+            "primary_pdfx_json" if primary_text_artifact == "pdfx_json" else "primary_source_markdown"
+        )
+        print_step(f"Downloading primary {artifact_label} artifact")
+        evidence["document_artifacts"][evidence_key] = download_document_artifact(
             base_url=base_url,
             document_id=primary_document_id,
-            file_type="pdfx_json",
+            file_type=primary_text_artifact,
             headers=headers,
             checks=checks,
-            step_name="primary_pdfx_json_download",
-            require_json=True,
+            step_name=f"primary_{primary_text_artifact}_download",
+            require_json=primary_text_is_json,
         )
 
         if not args.skip_chat:
