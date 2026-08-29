@@ -683,14 +683,14 @@ Run the read-only audit first:
 
 ```bash
 docker compose run --rm --no-deps backend python \
-  scripts/migrations/repair_legacy_domain_envelope_objects_key.py --json
+  /app/scripts/migrations/repair_legacy_domain_envelope_objects_key.py --json
 ```
 
 Apply requires all four counts from that same environment's fresh dry-run:
 
 ```bash
 docker compose run --rm --no-deps backend python \
-  scripts/migrations/repair_legacy_domain_envelope_objects_key.py \
+  /app/scripts/migrations/repair_legacy_domain_envelope_objects_key.py \
   --apply \
   --expect-envelopes <envelope_count> \
   --expect-candidate-references <candidate_reference_count> \
