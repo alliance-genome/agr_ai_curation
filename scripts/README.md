@@ -669,6 +669,41 @@ Evidence output:
 
 - `file_outputs/temp/abc_literature_identifier_import_smoke_<timestamp>.json`
 
+## One-off data migrations
+
+### migrations/repair_legacy_domain_envelope_objects_key.py
+
+Audits and repairs persisted `domain_envelopes.envelope_json` payloads that use
+the retired `objects` key. The only mutation is an atomic rename to
+`extracted_objects`; envelope revisions, source hashes, candidate references,
+checkpoint metadata, and materialized object/finding/history/projection rows
+are not changed.
+
+Run the read-only audit first:
+
+```bash
+docker compose run --rm --no-deps backend python \
+  /app/scripts/migrations/repair_legacy_domain_envelope_objects_key.py --json
+```
+
+Apply requires all four counts from that same environment's fresh dry-run:
+
+```bash
+docker compose run --rm --no-deps backend python \
+  /app/scripts/migrations/repair_legacy_domain_envelope_objects_key.py \
+  --apply \
+  --expect-envelopes <envelope_count> \
+  --expect-candidate-references <candidate_reference_count> \
+  --expect-sessions <session_count> \
+  --expect-objects <object_count> \
+  --json
+```
+
+The command locks the selected envelope rows, validates every transformed
+payload against the current `DomainEnvelope` model, fails closed on mixed or
+malformed payloads, and commits all repairs together. A repeated dry-run should
+report zero targets after a successful apply.
+
 ## Utilities
 
 ### utilities/check_services.sh
