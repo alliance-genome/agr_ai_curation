@@ -394,12 +394,19 @@ async def test_execute_upload_marks_failed_for_failure_result(monkeypatch):
                 document_id="doc-2",
                 error="boom",
                 observability_receipt={
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "outcome": "failed",
                     "stages": {
                         "external_request": {
                             "status": "failed",
                             "duration_ms": 456.7,
+                            "process_id": "proc-failed",
+                            "failure_category": "provider_terminal_failure",
+                            "failure_boundary": "poll",
+                            "provider_status": "failed",
+                            "provider_error_code": "publish_failed",
+                            "submit_attempt_count": 1,
+                            "poll_attempt_count": 4,
                         }
                     },
                 },
@@ -441,12 +448,19 @@ async def test_execute_upload_marks_failed_for_failure_result(monkeypatch):
             "stage": ProcessingStage.FAILED.value,
             "metadata": {
                 "pdf_processing_receipt": {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "outcome": "failed",
                     "stages": {
                         "external_request": {
                             "status": "failed",
                             "duration_ms": 456.7,
+                            "process_id": "proc-failed",
+                            "failure_category": "provider_terminal_failure",
+                            "failure_boundary": "poll",
+                            "provider_status": "failed",
+                            "provider_error_code": "publish_failed",
+                            "submit_attempt_count": 1,
+                            "poll_attempt_count": 4,
                         }
                     },
                 }

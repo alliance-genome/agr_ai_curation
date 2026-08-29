@@ -15,7 +15,7 @@ from src.lib.observability.sentry import (
 
 
 PDF_PROCESSING_RECEIPT_KEY = "pdf_processing_receipt"
-PDF_PROCESSING_RECEIPT_VERSION = 1
+PDF_PROCESSING_RECEIPT_VERSION = 2
 PDF_PROCESSING_STAGES = (
     "external_request",
     "hierarchy",
@@ -89,6 +89,26 @@ class PDFProcessingReceipt:
             completed_at=completed_at,
             duration_ms=float(observation["duration_ms"]),
         )
+        external_stage = self._receipt["stages"]["external_request"]
+        for key in (
+            "process_id",
+            "failure_category",
+            "failure_boundary",
+            "provider_status",
+            "provider_error_code",
+        ):
+            value = observation.get(key)
+            if isinstance(value, str) and value:
+                external_stage[key] = value
+        for key in (
+            "submit_attempt_count",
+            "poll_attempt_count",
+            "timeout_seconds",
+            "http_status",
+        ):
+            value = observation.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                external_stage[key] = value
         self.set_selection(
             extraction_methods=observation.get("extraction_methods"),
             merge_enabled=observation.get("merge_enabled"),

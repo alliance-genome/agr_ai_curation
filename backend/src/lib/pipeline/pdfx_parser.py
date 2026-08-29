@@ -43,6 +43,79 @@ ObservabilityCallback = Callable[[Dict[str, Any]], None]
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _TRANSIENT_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
+_SAFE_PROVIDER_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+
+PDFX_FAILURE_DETAILS_KEY = "pdfx_failure"
+PDFX_PUBLIC_MESSAGE_DETAILS_KEY = "public_message"
+PDFX_PROVIDER_FAILURE_MESSAGE = (
+    "The PDF extraction service could not complete this document. Please try again later."
+)
+PDFX_POLLING_TIMEOUT_MESSAGE = (
+    "PDF extraction did not finish within the configured time. Please try again later."
+)
+PDFX_UNKNOWN_FAILURE_MESSAGE = (
+    "PDF extraction could not be completed. Please try again later."
+)
+
+
+def _safe_provider_token(value: Any) -> str | None:
+    """Return a bounded content-free provider token, never free-form prose."""
+    if not isinstance(value, str):
+        return None
+    token = value.strip()
+    return token if _SAFE_PROVIDER_TOKEN.fullmatch(token) else None
+
+
+def _pdfx_failure_error(
+    message: str,
+    *,
+    category: str,
+    boundary: str,
+    public_message: str,
+    process_id: str | None = None,
+    provider_status: str | None = None,
+    provider_error_code: str | None = None,
+    http_status: int | None = None,
+) -> PDFParsingError:
+    """Build a technical exception with a separate stable public message."""
+    failure: Dict[str, Any] = {
+        "failure_category": category,
+        "failure_boundary": boundary,
+    }
+    if process_id:
+        failure["process_id"] = process_id
+    if provider_status:
+        failure["provider_status"] = provider_status
+    if provider_error_code:
+        failure["provider_error_code"] = provider_error_code
+    if http_status is not None:
+        failure["http_status"] = http_status
+    return PDFParsingError(
+        message,
+        details={
+            PDFX_PUBLIC_MESSAGE_DETAILS_KEY: public_message,
+            PDFX_FAILURE_DETAILS_KEY: failure,
+        },
+    )
+
+
+def _with_attempt_evidence(
+    failure: Dict[str, Any],
+    *,
+    submit_attempt_count: int,
+    poll_attempt_count: int,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    """Copy failure evidence and add bounded request counters."""
+    evidence = dict(failure)
+    evidence.update(
+        {
+            "submit_attempt_count": submit_attempt_count,
+            "poll_attempt_count": poll_attempt_count,
+            "timeout_seconds": timeout_seconds,
+        }
+    )
+    return evidence
 
 
 def _cache_hit_from_payloads(*payloads: Any) -> bool | None:
@@ -131,6 +204,8 @@ class PDFXParser:
 
         self.invocation_count = 0
         self.max_invocations_per_session = 50
+        self._submit_attempt_count = 0
+        self._poll_attempt_count = 0
 
         logger.info(
             "Initialized PDF extraction parser service=%s timeout=%ss poll_interval=%ss "
@@ -178,6 +253,11 @@ class PDFXParser:
         external_started_at = datetime.now(timezone.utc)
         external_started_monotonic = time.monotonic()
         external_status = "failed"
+        external_boundary = "authentication"
+        process_id = ""
+        failure_evidence: Dict[str, Any] = {}
+        self._submit_attempt_count = 0
+        self._poll_attempt_count = 0
         submit_payload: Dict[str, Any] = {}
         status_payload: Dict[str, Any] = {}
         external_span_context = pdf_processing_stage_span(
@@ -194,6 +274,7 @@ class PDFXParser:
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     headers = await self._build_auth_headers(session)
+                    external_boundary = "submit"
                     submit_payload = await self._submit_extraction(session, file_path, headers)
                     process_id = str(submit_payload.get("process_id", "")).strip()
                     if not process_id:
@@ -208,6 +289,7 @@ class PDFXParser:
                             "PDF extraction cancelled by user request before polling started"
                         )
 
+                    external_boundary = "poll"
                     status_payload = await self._poll_until_complete(
                         session=session,
                         process_id=process_id,
@@ -215,6 +297,7 @@ class PDFXParser:
                         progress_callback=progress_callback,
                         cancel_requested_callback=cancel_requested_callback,
                     )
+                    external_boundary = "download"
                     merged_markdown = await self._download_markdown(session, process_id, headers)
                     page_provenance = None
                     if self.merge_enabled:
@@ -228,10 +311,64 @@ class PDFXParser:
             except PDFCancellationError:
                 external_status = "cancelled"
                 raise
+            except PDFParsingError as exc:
+                failure = exc.details.get(PDFX_FAILURE_DETAILS_KEY)
+                if not isinstance(failure, dict):
+                    wrapped = _pdfx_failure_error(
+                        str(exc),
+                        category="unknown_provider_failure",
+                        boundary=external_boundary,
+                        public_message=PDFX_UNKNOWN_FAILURE_MESSAGE,
+                        process_id=_safe_provider_token(process_id),
+                    )
+                    failure_evidence = _with_attempt_evidence(
+                        wrapped.details[PDFX_FAILURE_DETAILS_KEY],
+                        submit_attempt_count=self._submit_attempt_count,
+                        poll_attempt_count=self._poll_attempt_count,
+                        timeout_seconds=self.timeout_seconds,
+                    )
+                    wrapped.details[PDFX_FAILURE_DETAILS_KEY] = failure_evidence
+                    raise wrapped from exc
+                failure_evidence = _with_attempt_evidence(
+                    failure,
+                    submit_attempt_count=self._submit_attempt_count,
+                    poll_attempt_count=self._poll_attempt_count,
+                    timeout_seconds=self.timeout_seconds,
+                )
+                exc.details[PDFX_FAILURE_DETAILS_KEY] = failure_evidence
+                raise
             except asyncio.TimeoutError as exc:
-                raise PDFParsingError(f"PDF extraction timeout after {self.timeout_seconds} seconds") from exc
+                wrapped = _pdfx_failure_error(
+                    f"PDF extraction request timeout after {self.timeout_seconds} seconds",
+                    category="unknown_provider_failure",
+                    boundary=external_boundary,
+                    public_message=PDFX_UNKNOWN_FAILURE_MESSAGE,
+                    process_id=_safe_provider_token(process_id),
+                )
+                failure_evidence = _with_attempt_evidence(
+                    wrapped.details[PDFX_FAILURE_DETAILS_KEY],
+                    submit_attempt_count=self._submit_attempt_count,
+                    poll_attempt_count=self._poll_attempt_count,
+                    timeout_seconds=self.timeout_seconds,
+                )
+                wrapped.details[PDFX_FAILURE_DETAILS_KEY] = failure_evidence
+                raise wrapped from exc
             except aiohttp.ClientError as exc:
-                raise PDFParsingError(f"Network error calling PDF extraction service: {exc}") from exc
+                wrapped = _pdfx_failure_error(
+                    f"Network error calling PDF extraction service: {exc}",
+                    category="unknown_provider_failure",
+                    boundary=external_boundary,
+                    public_message=PDFX_UNKNOWN_FAILURE_MESSAGE,
+                    process_id=_safe_provider_token(process_id),
+                )
+                failure_evidence = _with_attempt_evidence(
+                    wrapped.details[PDFX_FAILURE_DETAILS_KEY],
+                    submit_attempt_count=self._submit_attempt_count,
+                    poll_attempt_count=self._poll_attempt_count,
+                    timeout_seconds=self.timeout_seconds,
+                )
+                wrapped.details[PDFX_FAILURE_DETAILS_KEY] = failure_evidence
+                raise wrapped from exc
         finally:
             external_completed_at = datetime.now(timezone.utc)
             external_duration_ms = (time.monotonic() - external_started_monotonic) * 1000
@@ -260,6 +397,11 @@ class PDFXParser:
                             "merge_enabled": self.merge_enabled,
                             "download_variant": self.download_variant,
                             "cache_hit": cache_hit,
+                            "process_id": _safe_provider_token(process_id),
+                            "submit_attempt_count": self._submit_attempt_count,
+                            "poll_attempt_count": self._poll_attempt_count,
+                            "timeout_seconds": self.timeout_seconds,
+                            **failure_evidence,
                         }
                     )
                 except Exception as exc:
@@ -371,13 +513,20 @@ class PDFXParser:
         file_path: Path,
         headers: Dict[str, str],
     ) -> Dict[str, Any]:
-        """Submit extraction request and return service response payload."""
+        """Submit extraction request and return service response payload.
+
+        The existing bounded POST retry is intentionally unchanged here. The
+        current PDFX proxy allocates a new process ID per POST, so broadening
+        retries requires a separately reviewed cross-service idempotency
+        contract.
+        """
         extract_endpoint = f"{self.service_url}/api/v1/extract"
         submit_deadline = time.monotonic() + self.timeout_seconds
         attempt = 0
 
         while True:
             attempt += 1
+            self._submit_attempt_count = attempt
             try:
                 with open(file_path, "rb") as file_handle:
                     data = aiohttp.FormData()
@@ -398,7 +547,7 @@ class PDFXParser:
                             except json.JSONDecodeError as exc:
                                 raise PDFParsingError("PDF extraction submit returned non-JSON response") from exc
 
-                        error_message = f"PDF extraction submit failed: {response.status} - {body_text}"
+                        error_message = f"PDF extraction submit failed with HTTP {response.status}"
                         if response.status in _TRANSIENT_HTTP_STATUS and time.monotonic() < submit_deadline:
                             logger.warning(
                                 "Transient PDF extraction submit error (attempt %s): %s",
@@ -407,7 +556,13 @@ class PDFXParser:
                             )
                             await asyncio.sleep(self.poll_interval_seconds)
                             continue
-                        raise PDFParsingError(error_message)
+                        raise _pdfx_failure_error(
+                            error_message,
+                            category="unknown_provider_failure",
+                            boundary="submit",
+                            public_message=PDFX_UNKNOWN_FAILURE_MESSAGE,
+                            http_status=response.status,
+                        )
             except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
                 if time.monotonic() < submit_deadline:
                     logger.warning(
@@ -417,7 +572,12 @@ class PDFXParser:
                     )
                     await asyncio.sleep(self.poll_interval_seconds)
                     continue
-                raise PDFParsingError(f"Network error calling PDF extraction service: {exc}") from exc
+                raise _pdfx_failure_error(
+                    f"Network error calling PDF extraction service: {exc}",
+                    category="unknown_provider_failure",
+                    boundary="submit",
+                    public_message=PDFX_UNKNOWN_FAILURE_MESSAGE,
+                ) from exc
 
     async def _poll_until_complete(
         self,
@@ -441,10 +601,16 @@ class PDFXParser:
                 )
 
             if time.monotonic() >= deadline:
-                raise PDFParsingError(
-                    f"PDF extraction timed out before completion for process_id={process_id}"
+                raise _pdfx_failure_error(
+                    f"PDF extraction timed out before completion for process_id={process_id}",
+                    category="polling_timeout",
+                    boundary="poll",
+                    public_message=PDFX_POLLING_TIMEOUT_MESSAGE,
+                    process_id=_safe_provider_token(process_id),
+                    provider_status=_safe_provider_token(latest_status),
                 )
 
+            self._poll_attempt_count += 1
             async with session.get(status_endpoint, headers=headers) as response:
                 body_text = await response.text()
                 payload: Dict[str, Any] = {}
@@ -513,8 +679,22 @@ class PDFXParser:
                 if status in {"complete", "succeeded", "success"}:
                     return payload
                 if status in {"failed", "failure"}:
-                    error = payload.get("error") or payload.get("detail") or "Unknown extraction failure"
-                    raise PDFParsingError(f"PDF extraction failed for process_id={process_id}: {error}")
+                    provider_error_code = _safe_provider_token(payload.get("error_code"))
+                    code_suffix = (
+                        f" error_code={provider_error_code}"
+                        if provider_error_code
+                        else ""
+                    )
+                    raise _pdfx_failure_error(
+                        f"PDF extraction failed for process_id={process_id} status={status}{code_suffix}",
+                        category="provider_terminal_failure",
+                        boundary="poll",
+                        public_message=PDFX_PROVIDER_FAILURE_MESSAGE,
+                        process_id=_safe_provider_token(process_id),
+                        provider_status=status,
+                        provider_error_code=provider_error_code,
+                        http_status=response.status,
+                    )
 
             await asyncio.sleep(self.poll_interval_seconds)
 
