@@ -1,13 +1,23 @@
 """Unit tests for auth API helper behavior."""
 
 import importlib
+import logging
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from fastapi.security import SecurityScopes
+from jwt.exceptions import (
+    DecodeError,
+    ExpiredSignatureError,
+    InvalidAudienceError,
+    InvalidSignatureError,
+    PyJWKClientConnectionError,
+    PyJWKClientError,
+)
 
 auth_api = importlib.import_module("src.api.auth")
+http_errors = importlib.import_module("src.lib.http_errors")
 
 
 def _request(headers=None, cookies=None, base_url="https://app.example.org/"):
@@ -97,27 +107,112 @@ async def test_get_user_from_cookie_provider_success(monkeypatch):
     assert "devs" in result["groups"]
 
 
+@pytest.mark.parametrize(
+    ("token_error", "expected_reason"),
+    [
+        (ExpiredSignatureError("expired-secret-token"), "expired"),
+        (DecodeError("malformed-secret-token"), "malformed"),
+        (InvalidSignatureError("signature-secret-token"), "invalid_signature"),
+        (InvalidAudienceError("claims-secret-token"), "invalid_claims"),
+        (
+            PyJWKClientError(
+                'Unable to find a signing key that matches: "unknown-key-secret-token"'
+            ),
+            "unknown_signing_key",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_get_user_from_cookie_provider_failure(monkeypatch):
+async def test_get_user_from_cookie_rejects_expected_token_failures_once(
+    monkeypatch,
+    caplog,
+    token_error,
+    expected_reason,
+):
     monkeypatch.delenv("TESTING_API_KEY", raising=False)
     monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
     monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
 
     class _Provider:
         async def validate_token(self, _token):
-            raise RuntimeError("bad token")
+            raise token_error
 
         def extract_principal(self, _claims):
             raise AssertionError("should not be called")
 
     monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+    reported = []
+    monkeypatch.setattr(
+        http_errors,
+        "report_runtime_exception",
+        lambda exc, **_kwargs: reported.append(exc) or True,
+    )
+    caplog.set_level(logging.INFO, logger=auth_api.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await auth_api._get_user_from_cookie_impl(
-            _request(cookies={"auth_token": "bad"}),
+            _request(cookies={"auth_token": "cookie-secret-token"}),
             SecurityScopes(),
         )
     assert exc.value.status_code == 401
+    assert exc.value.detail == "Invalid authentication token"
+
+    rejection_records = [
+        record for record in caplog.records if record.message == "Authentication token rejected"
+    ]
+    assert len(rejection_records) == 1
+    assert rejection_records[0].reason == expected_reason
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert reported == []
+    assert "secret-token" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        PyJWKClientConnectionError("JWKS connection unavailable"),
+        PyJWKClientError("The JWKS endpoint did not return a JSON object"),
+        PyJWKClientError("The JWKS endpoint did not contain any signing keys"),
+        RuntimeError("unexpected provider failure"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_user_from_cookie_reports_unexpected_provider_failures(
+    monkeypatch,
+    caplog,
+    provider_error,
+):
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+
+    class _Provider:
+        async def validate_token(self, _token):
+            raise provider_error
+
+        def extract_principal(self, _claims):
+            raise AssertionError("should not be called")
+
+    reported = []
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+    monkeypatch.setattr(
+        http_errors,
+        "report_runtime_exception",
+        lambda exc, **_kwargs: reported.append(exc) or True,
+    )
+    caplog.set_level(logging.ERROR, logger=auth_api.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await auth_api._get_user_from_cookie_impl(
+            _request(cookies={"auth_token": "cookie-secret-token"}),
+            SecurityScopes(),
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Authentication provider unavailable"
+    assert reported == [provider_error]
+    assert len([record for record in caplog.records if record.levelno >= logging.ERROR]) == 1
+    assert "cookie-secret-token" not in caplog.text
 
 
 def test_build_logout_redirect_uri_prefers_provider_redirect_uri():

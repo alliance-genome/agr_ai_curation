@@ -288,7 +288,7 @@ async def test_get_user_from_cookie_impl_dev_mode_unknown_group_fallback(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_get_user_from_cookie_impl_rejects_principal_missing_subject(monkeypatch):
+async def test_get_user_from_cookie_impl_rejects_principal_missing_subject(monkeypatch, caplog):
     class _Provider:
         async def validate_token(self, _token):
             return {"ok": True}
@@ -300,10 +300,20 @@ async def test_get_user_from_cookie_impl_rejects_principal_missing_subject(monke
     monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
     monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
     monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+    caplog.set_level(logging.INFO, logger=auth_api.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await auth_api._get_user_from_cookie_impl(_request(cookies={"auth_token": "jwt"}), SecurityScopes())
     assert exc.value.status_code == 401
+    assert len(
+        [
+            record
+            for record in caplog.records
+            if record.message == "Authentication token rejected"
+            and record.reason == "missing_subject"
+        ]
+    ) == 1
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 @pytest.mark.asyncio

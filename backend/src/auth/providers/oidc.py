@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import logging
 import threading
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
@@ -12,12 +11,10 @@ from urllib.parse import urlencode
 import httpx
 import jwt
 from jwt import PyJWKClient
-from jwt.exceptions import PyJWTError
 
 from src.auth.base import AuthPrincipal, AuthProvider, TokenSet
 
 
-logger = logging.getLogger(__name__)
 DEFAULT_JWT_ALGORITHMS = ["RS256", "RS384", "ES256", "ES384"]
 
 
@@ -163,20 +160,14 @@ class OIDCAuthProvider(AuthProvider):
         signing_key = await asyncio.to_thread(jwks_client.get_signing_key_from_jwt, token)
 
         issuer = discovery.get("issuer", self.issuer_url)
-        try:
-            decoded = await asyncio.to_thread(
-                jwt.decode,
-                token,
-                signing_key.key,
-                algorithms=DEFAULT_JWT_ALGORITHMS,
-                audience=self.client_id,
-                issuer=issuer,
-            )
-        except PyJWTError as exc:
-            logger.error("OIDC token validation failed: %s", exc)
-            raise
-
-        return decoded
+        return await asyncio.to_thread(
+            jwt.decode,
+            token,
+            signing_key.key,
+            algorithms=DEFAULT_JWT_ALGORITHMS,
+            audience=self.client_id,
+            issuer=issuer,
+        )
 
     def extract_principal(self, claims: Dict[str, Any]) -> AuthPrincipal:
         groups = self._extract_groups(claims)

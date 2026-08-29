@@ -1,9 +1,11 @@
 """Unit tests for OIDC auth provider internals."""
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
+from jwt.exceptions import PyJWTError
 
 from src.auth.providers import oidc as oidc_module
 from src.auth.providers.oidc import OIDCAuthProvider
@@ -55,8 +57,8 @@ def test_validate_token_uses_pyjwt_decode(monkeypatch):
     assert captured["issuer"] == "https://issuer.example.org"
 
 
-def test_validate_token_reraises_pyjwt_errors(monkeypatch):
-    """validate_token should surface PyJWT decode errors."""
+def test_validate_token_reraises_pyjwt_errors_without_error_log(monkeypatch, caplog):
+    """The API boundary should classify surfaced PyJWT decode errors."""
     provider = OIDCAuthProvider(
         {
             "issuer_url": "https://issuer.example.org",
@@ -76,15 +78,18 @@ def test_validate_token_reraises_pyjwt_errors(monkeypatch):
         return func(*args, **kwargs)
 
     def _failing_decode(*_args, **_kwargs):
-        raise oidc_module.PyJWTError("bad token")
+        raise PyJWTError("bad token")
 
     monkeypatch.setattr(provider, "_discover_async", _discover_async)
     monkeypatch.setattr(provider, "_get_jwks_client", lambda: _FakeJwksClient())
     monkeypatch.setattr(oidc_module.asyncio, "to_thread", _direct_to_thread)
     monkeypatch.setattr(oidc_module.jwt, "decode", _failing_decode)
+    caplog.set_level(logging.ERROR)
 
-    with pytest.raises(oidc_module.PyJWTError, match="bad token"):
+    with pytest.raises(PyJWTError, match="bad token"):
         asyncio.run(provider.validate_token("id-token"))
+
+    assert not caplog.records
 
 
 def test_get_jwks_client_is_cached(monkeypatch):

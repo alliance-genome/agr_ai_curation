@@ -15,7 +15,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import SecurityScopes
-from jwt.exceptions import PyJWTError
+from jwt.exceptions import (
+    DecodeError,
+    ExpiredSignatureError,
+    InvalidSignatureError,
+    InvalidTokenError,
+    PyJWKClientConnectionError,
+    PyJWKClientError,
+)
 from sqlalchemy.orm import Session
 
 from src.auth.base import AuthProvider
@@ -36,8 +43,26 @@ _provider_failed: bool = False
 _provider_lock = threading.Lock()
 
 
-class _InvalidAuthTokenError(PyJWTError):
+class _InvalidAuthTokenError(InvalidTokenError):
     """Raised when authenticated claims are structurally invalid."""
+
+
+def _is_unknown_signing_key_error(exc: PyJWKClientError) -> bool:
+    """Return whether PyJWT rejected the token because its key ID is unknown."""
+    return str(exc).startswith("Unable to find a signing key that matches:")
+
+
+def _expected_token_failure_reason(exc: Exception) -> str:
+    """Return a non-sensitive category for expected credential rejection."""
+    if isinstance(exc, _InvalidAuthTokenError):
+        return "missing_subject"
+    if isinstance(exc, ExpiredSignatureError):
+        return "expired"
+    if isinstance(exc, InvalidSignatureError):
+        return "invalid_signature"
+    if isinstance(exc, DecodeError):
+        return "malformed"
+    return "invalid_claims"
 
 
 def _get_provider_or_503() -> AuthProvider:
@@ -255,12 +280,42 @@ async def _get_user_from_cookie_impl(
         }
         payload = _with_group_claim_aliases(payload, principal.groups)
         return _build_mock_user(payload)
-    except PyJWTError as exc:
-        logger.error("Token validation failed: %s", exc)
+    except PyJWKClientConnectionError as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=503,
+            detail="Authentication provider unavailable",
+            log_message="Authentication provider unavailable during token validation",
+            exc=exc,
+        )
+    except PyJWKClientError as exc:
+        if not _is_unknown_signing_key_error(exc):
+            raise_sanitized_http_exception(
+                logger,
+                status_code=503,
+                detail="Authentication provider unavailable",
+                log_message="Authentication provider returned unusable signing keys",
+                exc=exc,
+            )
+        logger.info(
+            "Authentication token rejected",
+            extra={"reason": "unknown_signing_key"},
+        )
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    except InvalidTokenError as exc:
+        logger.info(
+            "Authentication token rejected",
+            extra={"reason": _expected_token_failure_reason(exc)},
+        )
         raise HTTPException(status_code=401, detail="Invalid authentication token")
     except Exception as exc:
-        logger.error("Authentication provider error: %s", exc)
-        raise HTTPException(status_code=401, detail="Invalid authentication token")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=503,
+            detail="Authentication provider unavailable",
+            log_message="Unexpected authentication provider failure",
+            exc=exc,
+        )
 
 
 def get_auth_dependency():
