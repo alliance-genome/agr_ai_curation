@@ -1,5 +1,7 @@
 """Integration coverage for the bounded legacy envelope payload repair."""
 
+# pyright: reportAttributeAccessIssue=false, reportMissingImports=false
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
