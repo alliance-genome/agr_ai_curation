@@ -141,31 +141,44 @@ Signal from **B cells** depends on Ca<sup>2+</sup> and *kinase* activity.
     assert elements[1]["metadata"]["section_path"] == ["Results 2+"]
 
 
-def test_build_progress_message_prefers_stage_display():
+def test_build_progress_message_uses_local_text_with_valid_numeric_percent():
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
     message = _build_progress_message(
         {
             "status": "progress",
+            "message": sentinel,
             "progress": {
-                "stage_display": "Merging extraction outputs",
+                "stage_display": sentinel,
+                "stage": sentinel,
                 "percent": 80,
             },
         }
     )
-    assert message == "PDF extraction: Merging extraction outputs (80%)"
+    assert message == "Extracting PDF content... (80%)"
+    assert sentinel not in message
 
 
-def test_build_progress_message_surfaces_pdfx_queue_message():
+def test_build_progress_message_does_not_surface_pdfx_queue_message():
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
     message = _build_progress_message(
         {
             "status": "queued",
             "state": "ready",
-            "message": "PDFX worker is already processing another job. This job is queued.",
+            "message": sentinel,
         }
     )
 
-    assert message == (
-        "PDF extraction: PDFX worker is already processing another job. This job is queued."
+    assert message == "PDF extraction queued; waiting for PDFX worker..."
+    assert sentinel not in message
+
+
+@pytest.mark.parametrize("percent", [-1, 101, True, "80"])
+def test_build_progress_message_rejects_invalid_percent(percent):
+    message = _build_progress_message(
+        {"status": "running", "progress": {"percent": percent}}
     )
+
+    assert message == "Extracting PDF content..."
 
 
 def test_build_progress_message_uses_ready_queue_fallback():

@@ -906,26 +906,20 @@ class PDFXParser:
 
 
 def _build_progress_message(payload: Dict[str, Any]) -> str:
-    """Build curator-facing progress message from extraction status payload."""
+    """Build a stable curator-facing message without provider-authored prose."""
     status = str(payload.get("status", "")).strip().lower()
     state = str(payload.get("state", "")).strip().lower()
-    payload_message = str(payload.get("message", "")).strip()
     progress = payload.get("progress")
+    percent: int | None = None
     if isinstance(progress, dict):
-        stage_display = str(progress.get("stage_display", "")).strip()
-        stage_name = str(progress.get("stage", "")).strip()
-        percent = progress.get("percent")
-        if stage_display:
-            if isinstance(percent, (int, float)):
-                return f"PDF extraction: {stage_display} ({int(percent)}%)"
-            return f"PDF extraction: {stage_display}"
-        if stage_name:
-            if isinstance(percent, (int, float)):
-                return f"PDF extraction: {stage_name} ({int(percent)}%)"
-            return f"PDF extraction: {stage_name}"
+        raw_percent = progress.get("percent")
+        if (
+            isinstance(raw_percent, (int, float))
+            and not isinstance(raw_percent, bool)
+            and 0 <= raw_percent <= 100
+        ):
+            percent = int(raw_percent)
 
-    if payload_message and status in {"queued", "pending", "warming", "warming_up"}:
-        return f"PDF extraction: {payload_message}"
     if status in {"queued", "pending"}:
         if state in {"ready", "busy"}:
             return "PDF extraction queued; waiting for PDFX worker..."
@@ -933,6 +927,8 @@ def _build_progress_message(payload: Dict[str, Any]) -> str:
     if status in {"warming", "warming_up"}:
         return "PDF extraction service is starting..."
     if status in {"started", "progress", "running"}:
+        if percent is not None:
+            return f"Extracting PDF content... ({percent}%)"
         return "Extracting PDF content..."
     if status in {"complete", "succeeded", "success"}:
         return "PDF extraction complete. Finalizing..."
