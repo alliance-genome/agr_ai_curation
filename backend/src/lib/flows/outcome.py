@@ -129,10 +129,17 @@ class FlowRunOutcome:
         if event_type == "FLOW_ERROR":
             # Retain only stable machine metadata. The accompanying message and
             # other details may contain curator or provider content.
-            self.failure_type = (
-                self.failure_type
-                or self._machine_failure_value(event, "error_type", "reason")
+            incoming_failure_type = self._machine_failure_value(
+                event,
+                "error_type",
+                "reason",
             )
+            if self.failure_type is None:
+                self.failure_type = incoming_failure_type
+                self.failure_already_reported = (
+                    incoming_failure_type
+                    in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
+                )
             self.failure_phase = (
                 self.failure_phase
                 or self._machine_failure_value(event, "phase")
@@ -143,10 +150,6 @@ class FlowRunOutcome:
             )
             self.failure_provider = (
                 self.failure_provider or self._machine_failure_value(event, "provider")
-            )
-            self.failure_already_reported = self.failure_already_reported or (
-                self._machine_failure_value(event, "reason", "error_type")
-                in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
             )
             return
 

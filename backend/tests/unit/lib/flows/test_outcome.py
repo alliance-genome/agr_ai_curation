@@ -87,6 +87,39 @@ def test_flow_error_reason_is_retained_until_failed_terminal_confirmation():
     )
 
 
+def test_later_reported_persistence_failure_does_not_own_prior_runner_failure():
+    outcome = FlowRunOutcome()
+    outcome.observe(
+        {
+            "type": "RUN_ERROR",
+            "data": {
+                "message": "specialist failed",
+                "error_type": "SpecialistOutputError",
+                "phase": "specialist_stream",
+            },
+        }
+    )
+    outcome.observe(
+        {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_failed",
+                "message": "Extraction persistence also failed.",
+            },
+        }
+    )
+    outcome.observe(
+        {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "failed", "failure_reason": "Flow failed."},
+        }
+    )
+
+    assert outcome.failure_type == "SpecialistOutputError"
+    assert outcome.failure_phase == "specialist_stream"
+    assert outcome.failure_already_reported is False
+
+
 def test_failure_metadata_rejects_human_readable_tag_values():
     outcome = FlowRunOutcome()
     outcome.observe(
