@@ -149,7 +149,7 @@ def test_phenotype_annotation_declares_protected_data_provider_fields():
     assert data_provider.metadata["provider_refs"]["alliance_linkml"] == {
         "schema_ref": "alliance.linkml",
         "commit": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
-        "source_file": "model/schema/phenotypeAndDiseaseAnnotation.yaml",
+        "source_file": "model/schema/core.yaml",
         "class": "PhenotypeAnnotation",
         "slot": "data_provider",
         "range": "Organization",
