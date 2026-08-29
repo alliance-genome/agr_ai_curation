@@ -58,3 +58,14 @@ def test_transform_rejects_ambiguous_or_invalid_payloads(mutation, message) -> N
 
     with pytest.raises(LegacyDomainEnvelopeRepairError, match=message):
         transform_legacy_domain_envelope_payload(payload)
+
+
+def test_transform_validation_error_does_not_echo_payload_values() -> None:
+    payload = _legacy_payload()
+    payload["unexpected"] = "private-curation-value"
+
+    with pytest.raises(LegacyDomainEnvelopeRepairError) as exc_info:
+        transform_legacy_domain_envelope_payload(payload)
+
+    assert "unexpected: extra_forbidden" in str(exc_info.value)
+    assert "private-curation-value" not in str(exc_info.value)

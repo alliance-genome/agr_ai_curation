@@ -90,9 +90,13 @@ def transform_legacy_domain_envelope_payload(
     try:
         DomainEnvelope.model_validate(transformed)
     except ValidationError as exc:
+        validation_errors = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['type']}"
+            for error in exc.errors(include_input=False, include_url=False)
+        )
         raise LegacyDomainEnvelopeRepairError(
             "renamed payload does not satisfy the current DomainEnvelope contract: "
-            f"{exc}"
+            f"{validation_errors}"
         ) from exc
 
     return transformed
