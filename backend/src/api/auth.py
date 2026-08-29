@@ -47,6 +47,11 @@ class _InvalidAuthTokenError(InvalidTokenError):
     """Raised when authenticated claims are structurally invalid."""
 
 
+def _is_unknown_signing_key_error(exc: PyJWKClientError) -> bool:
+    """Return whether PyJWT rejected the token because its key ID is unknown."""
+    return str(exc).startswith("Unable to find a signing key that matches:")
+
+
 def _expected_token_failure_reason(exc: Exception) -> str:
     """Return a non-sensitive category for expected credential rejection."""
     if isinstance(exc, _InvalidAuthTokenError):
@@ -57,8 +62,6 @@ def _expected_token_failure_reason(exc: Exception) -> str:
         return "invalid_signature"
     if isinstance(exc, DecodeError):
         return "malformed"
-    if isinstance(exc, PyJWKClientError):
-        return "unknown_signing_key"
     return "invalid_claims"
 
 
@@ -285,7 +288,21 @@ async def _get_user_from_cookie_impl(
             log_message="Authentication provider unavailable during token validation",
             exc=exc,
         )
-    except (InvalidTokenError, PyJWKClientError) as exc:
+    except PyJWKClientError as exc:
+        if not _is_unknown_signing_key_error(exc):
+            raise_sanitized_http_exception(
+                logger,
+                status_code=503,
+                detail="Authentication provider unavailable",
+                log_message="Authentication provider returned unusable signing keys",
+                exc=exc,
+            )
+        logger.info(
+            "Authentication token rejected",
+            extra={"reason": "unknown_signing_key"},
+        )
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    except InvalidTokenError as exc:
         logger.info(
             "Authentication token rejected",
             extra={"reason": _expected_token_failure_reason(exc)},

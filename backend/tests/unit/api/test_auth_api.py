@@ -114,7 +114,12 @@ async def test_get_user_from_cookie_provider_success(monkeypatch):
         (DecodeError("malformed-secret-token"), "malformed"),
         (InvalidSignatureError("signature-secret-token"), "invalid_signature"),
         (InvalidAudienceError("claims-secret-token"), "invalid_claims"),
-        (PyJWKClientError("unknown-key-secret-token"), "unknown_signing_key"),
+        (
+            PyJWKClientError(
+                'Unable to find a signing key that matches: "unknown-key-secret-token"'
+            ),
+            "unknown_signing_key",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -166,6 +171,8 @@ async def test_get_user_from_cookie_rejects_expected_token_failures_once(
     "provider_error",
     [
         PyJWKClientConnectionError("JWKS connection unavailable"),
+        PyJWKClientError("The JWKS endpoint did not return a JSON object"),
+        PyJWKClientError("The JWKS endpoint did not contain any signing keys"),
         RuntimeError("unexpected provider failure"),
     ],
 )
