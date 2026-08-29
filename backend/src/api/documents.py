@@ -606,7 +606,7 @@ async def _recover_renamed_document(
     source_path: FilePath,
     destination_path: FilePath,
     index_updated: bool,
-) -> None:
+) -> _DocumentMetadataUpdateError | None:
     """Recover to one usable metadata state after a rename transaction fails.
 
     The old hardlink remains present until the metadata commit succeeds. If the
@@ -645,17 +645,20 @@ async def _recover_renamed_document(
 
     document.filename = new_filename
     document.file_path = new_file_path
+    forward_recovery_failure: _DocumentMetadataUpdateError | None = None
     try:
         session.commit()
     except Exception as exc:
         session.rollback()
+        forward_recovery_failure = _sanitized_document_metadata_error(exc)
         report_runtime_exception(
-            _sanitized_document_metadata_error(exc),
+            forward_recovery_failure,
             component="documents",
             operation="filename_forward_recovery_failed",
             context={"document_id": document_id},
         )
-        raise _sanitized_document_metadata_error(exc) from exc
+    if forward_recovery_failure is not None:
+        return forward_recovery_failure
 
     try:
         source_path.unlink(missing_ok=True)
@@ -774,7 +777,7 @@ async def _update_owned_document_metadata(
             and request.filename is not None
             and new_file_path is not None
         ):
-            await _recover_renamed_document(
+            recovery_failure = await _recover_renamed_document(
                 session=session,
                 document=document,
                 document_id=document_id,
@@ -787,11 +790,14 @@ async def _update_owned_document_metadata(
                 destination_path=moved_paths[1],
                 index_updated=index_updated,
             )
-        if isinstance(exc, HTTPException):
-            raise
-        if isinstance(exc, _DocumentMetadataUpdateError):
-            raise
-        sanitized_failure = _sanitized_document_metadata_error(exc)
+            if recovery_failure is not None:
+                sanitized_failure = recovery_failure
+        if sanitized_failure is None:
+            if isinstance(exc, HTTPException):
+                raise
+            if isinstance(exc, _DocumentMetadataUpdateError):
+                raise
+            sanitized_failure = _sanitized_document_metadata_error(exc)
 
     if sanitized_failure is None:  # pragma: no cover - defensive invariant
         raise _DocumentMetadataUpdateError("Document metadata update failed")

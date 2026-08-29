@@ -614,6 +614,7 @@ async def test_update_document_endpoint_completes_forward_when_index_rollback_fa
     )
     session = _FakeSession()
     index_updates = []
+    reported = []
     commit_attempts = 0
 
     def _fail_first_commit():
@@ -627,6 +628,10 @@ async def test_update_document_endpoint_completes_forward_when_index_rollback_fa
         index_updates.append(filename)
         if filename == "old.pdf":
             raise RuntimeError("index rollback failed")
+
+    def _record_report(exc, **kwargs):
+        reported.append((exc, kwargs))
+        return True
 
     session.commit = _fail_first_commit
     monkeypatch.setattr(documents, "SessionLocal", lambda: session)
@@ -647,7 +652,7 @@ async def test_update_document_endpoint_completes_forward_when_index_rollback_fa
         lambda *_args: _async_value(None),
     )
     monkeypatch.setattr(documents, "update_document_filename", _update_index)
-    monkeypatch.setattr(documents, "report_runtime_exception", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(documents, "report_runtime_exception", _record_report)
     _patch_indexed_document_status(monkeypatch)
 
     with pytest.raises(HTTPException) as exc:
@@ -665,6 +670,107 @@ async def test_update_document_endpoint_completes_forward_when_index_rollback_fa
     assert not source_path.exists()
     assert commit_attempts == 2
     assert session.commits == 1
+    assert [item[1]["operation"] for item in reported] == [
+        "filename_index_rollback_failed"
+    ]
+    assert isinstance(reported[0][0], documents._DocumentMetadataUpdateError)
+    assert reported[0][0].__cause__ is None
+    assert reported[0][0].__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_update_document_endpoint_sanitizes_failed_forward_recovery(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    document_id = str(uuid4())
+    source_path = tmp_path / "user-1" / document_id / "old.pdf"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"old")
+    new_path = source_path.with_name("renamed.pdf")
+    document = SimpleNamespace(
+        title=None,
+        filename="old.pdf",
+        file_path=str(source_path.relative_to(tmp_path)),
+        status="completed",
+        user_id=7,
+    )
+    session = _FakeSession()
+    index_updates = []
+    reported = []
+    commit_attempts = 0
+    sensitive_text = "INSERT ... params: SECRET-CURATOR-TEXT"
+
+    def _fail_commits():
+        nonlocal commit_attempts
+        commit_attempts += 1
+        if commit_attempts == 1:
+            raise RuntimeError("initial commit failed")
+        raise RuntimeError(sensitive_text)
+
+    async def _update_index(_user_sub, _doc_id, filename):
+        index_updates.append(filename)
+        if filename == "old.pdf":
+            raise RuntimeError("index rollback failed")
+
+    def _record_report(exc, **kwargs):
+        reported.append((exc, kwargs))
+        return True
+
+    session.commit = _fail_commits
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: document,
+    )
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        documents.pipeline_tracker,
+        "get_pipeline_status",
+        lambda *_args: _async_value(None),
+    )
+    monkeypatch.setattr(documents, "update_document_filename", _update_index)
+    monkeypatch.setattr(documents, "report_runtime_exception", _record_report)
+    _patch_indexed_document_status(monkeypatch)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.update_document_endpoint(
+            DocumentUpdateRequest(filename="renamed.pdf"),
+            document_id,
+            {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to update document"
+    assert index_updates == ["renamed.pdf", "old.pdf"]
+    assert document.filename == "renamed.pdf"
+    assert document.file_path == str(new_path.relative_to(tmp_path))
+    assert source_path.read_bytes() == b"old"
+    assert new_path.read_bytes() == b"old"
+    assert commit_attempts == 2
+    assert session.rollbacks == 2
+
+    recovery_reports = [
+        item
+        for item in reported
+        if item[1]["operation"] == "filename_forward_recovery_failed"
+    ]
+    assert len(recovery_reports) == 1
+    reported_exc = recovery_reports[0][0]
+    assert isinstance(reported_exc, documents._DocumentMetadataUpdateError)
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__cause__ is None
+    assert reported_exc.__context__ is None
+    assert sensitive_text not in str(reported_exc)
+    assert sensitive_text not in caplog.text
 
 
 @pytest.mark.asyncio
