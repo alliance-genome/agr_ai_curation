@@ -1195,7 +1195,7 @@ async def execute_flow_endpoint(
                     transcript=True,
                     extraction_result_refs=extraction_result_refs,
                 )
-                if outcome.status == "failed":
+                if outcome.status == "failed" and not outcome.failure_already_reported:
                     report_runtime_exception(
                         outcome.terminal_failure_exception(),
                         component="execute_flow_stream",

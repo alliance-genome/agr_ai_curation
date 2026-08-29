@@ -1313,25 +1313,26 @@ async def _run_resolved_chat_route(
             await flow_stream.aclose()
 
         if outcome.status != "completed":
-            report_runtime_exception(
-                outcome.terminal_failure_exception(),
-                component="preferred_flow_chat_stream",
-                operation="terminal_outcome_failed",
-                tags={
-                    "ai_curation.flow.id_hash": hash_sentry_identifier(flow.id),
-                    "flow_failure_type": outcome.failure_type,
-                    "phase": outcome.failure_phase or "flow_finalization",
-                    "provider": outcome.failure_provider,
-                    "tool_name": outcome.failure_tool,
-                },
-                context={
-                    "session_id": session_id,
-                    "turn_id": turn_id,
-                    "flow_id": str(flow.id),
-                    "flow_run_id": route.flow_run_id,
-                    "document_id": document_id,
-                },
-            )
+            if not outcome.failure_already_reported:
+                report_runtime_exception(
+                    outcome.terminal_failure_exception(),
+                    component="preferred_flow_chat_stream",
+                    operation="terminal_outcome_failed",
+                    tags={
+                        "ai_curation.flow.id_hash": hash_sentry_identifier(flow.id),
+                        "flow_failure_type": outcome.failure_type,
+                        "phase": outcome.failure_phase or "flow_finalization",
+                        "provider": outcome.failure_provider,
+                        "tool_name": outcome.failure_tool,
+                    },
+                    context={
+                        "session_id": session_id,
+                        "turn_id": turn_id,
+                        "flow_id": str(flow.id),
+                        "flow_run_id": route.flow_run_id,
+                        "document_id": document_id,
+                    },
+                )
             failure_reason = outcome.failure_reason or "Flow execution did not complete."
             yield {
                 "type": "RUN_ERROR",

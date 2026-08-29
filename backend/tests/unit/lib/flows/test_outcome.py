@@ -81,6 +81,7 @@ def test_flow_error_reason_is_retained_until_failed_terminal_confirmation():
     assert outcome.failure_type == "extraction_persistence_failed"
     assert outcome.failure_phase == "flow_execution"
     assert outcome.failure_tool is None
+    assert outcome.failure_already_reported is True
     assert "private extraction failure details" not in str(
         outcome.terminal_failure_exception()
     )

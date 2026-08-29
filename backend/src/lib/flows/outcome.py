@@ -12,6 +12,11 @@ FlowPersistenceStatus = Literal["pending", "succeeded", "failed"]
 
 _TYPED_SUCCESS_OUTPUT_EVENTS = {"FILE_READY", "CHAT_OUTPUT_READY"}
 _MACHINE_FAILURE_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
+FLOW_FAILURE_REASONS_REPORTED_UPSTREAM = {
+    "extraction_persistence_empty_result",
+    "extraction_persistence_failed",
+    "extraction_persistence_partial_result",
+}
 
 
 def flow_typed_output_transcript_values(
@@ -63,6 +68,7 @@ class FlowRunOutcome:
     failure_phase: str | None = None
     failure_tool: str | None = None
     failure_provider: str | None = None
+    failure_already_reported: bool = False
     final_user_visible_text: str | None = None
     persistence_status: FlowPersistenceStatus = "pending"
     persistence_result: dict[str, Any] = field(default_factory=dict)
@@ -110,6 +116,10 @@ class FlowRunOutcome:
             self.failure_phase = self._machine_failure_value(event, "phase") or "runner"
             self.failure_tool = self._machine_failure_value(event, "tool_name")
             self.failure_provider = self._machine_failure_value(event, "provider")
+            self.failure_already_reported = (
+                self._machine_failure_value(event, "reason", "error_type")
+                in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
+            )
             self.final_user_visible_text = None
             self._success_output_events = []
             self._run_finished_event = None
@@ -133,6 +143,10 @@ class FlowRunOutcome:
             )
             self.failure_provider = (
                 self.failure_provider or self._machine_failure_value(event, "provider")
+            )
+            self.failure_already_reported = self.failure_already_reported or (
+                self._machine_failure_value(event, "reason", "error_type")
+                in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
             )
             return
 
@@ -165,6 +179,7 @@ class FlowRunOutcome:
             self.failure_phase = None
             self.failure_tool = None
             self.failure_provider = None
+            self.failure_already_reported = False
 
     @property
     def terminal(self) -> bool:
@@ -210,6 +225,7 @@ class FlowRunOutcome:
         self.failure_reason = reason
         self.failure_type = "FlowOutcomePersistenceFailure"
         self.failure_phase = "outcome_persistence"
+        self.failure_already_reported = False
         self.final_user_visible_text = None
         self._success_output_events = []
         self._run_finished_event = None

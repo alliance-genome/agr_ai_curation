@@ -456,6 +456,66 @@ async def test_failed_preferred_flow_reports_one_sanitized_terminal_failure(monk
 
 
 @pytest.mark.asyncio
+async def test_preferred_flow_does_not_recapture_upstream_persistence_failure(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="RGD GO and Disease Paper Review")
+    captures: list[dict] = []
+
+    async def _execute_flow(**_kwargs):
+        yield {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_failed",
+                "message": "Extraction persistence failed.",
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "failed",
+                "failure_reason": "Extraction persistence failed.",
+            },
+        }
+
+    monkeypatch.setattr(chat_common, "execute_flow", _execute_flow)
+    monkeypatch.setattr(
+        chat_common,
+        "report_runtime_exception",
+        lambda exc, **kwargs: captures.append({"exception": exc, **kwargs}),
+    )
+
+    events = [
+        event
+        async for event in chat_common._run_resolved_chat_route(
+            route=ResolvedChatRoute(
+                mode="flow",
+                target_id=str(flow_id),
+                target_display_name=flow.name,
+                flow_run_id="flow-run-persistence-failed",
+            ),
+            db=SimpleNamespace(get=lambda _model, _id: flow),
+            db_user_id=7,
+            context_messages=[{"role": "user", "content": "review this"}],
+            user_id="auth-sub",
+            session_id="session-1",
+            turn_id="turn-1",
+            document_id=None,
+            document_name=None,
+            active_groups=["RGD"],
+            supervisor_model=None,
+            specialist_model=None,
+            supervisor_temperature=None,
+            specialist_temperature=None,
+            supervisor_reasoning=None,
+            specialist_reasoning=None,
+        )
+    ]
+
+    assert captures == []
+    assert [event["type"] for event in events] == ["FLOW_ERROR", "RUN_ERROR"]
+
+
+@pytest.mark.asyncio
 async def test_selected_rgd_flow_followup_inspects_prior_refs_without_redispatch(
     monkeypatch,
 ):

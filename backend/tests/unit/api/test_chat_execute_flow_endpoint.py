@@ -1004,16 +1004,7 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
     assert not any(message.message_type == "file_download" for message in stored_messages)
-    assert len(runtime_reports) == 1
-    reported_exc, report_kwargs = runtime_reports[0]
-    assert str(reported_exc) == "extraction_persistence_failed during flow_execution"
-    assert report_kwargs["tags"] == {
-        "ai_curation.flow.id_hash": chat.hash_sentry_identifier(flow_id),
-        "flow_failure_type": "extraction_persistence_failed",
-        "phase": "flow_execution",
-        "provider": None,
-        "tool_name": None,
-    }
+    assert runtime_reports == []
 
 
 
