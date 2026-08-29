@@ -918,13 +918,13 @@ describe('DocumentList', () => {
   });
 
   describe('edit document functionality', () => {
-    it('accepts onTitleUpdate prop', () => {
-      const onTitleUpdate = vi.fn();
-      // Should render without errors when onTitleUpdate is provided
+    it('accepts onMetadataUpdate prop', () => {
+      const onMetadataUpdate = vi.fn();
+      // Should render without errors when onMetadataUpdate is provided
       const { container } = render(
         <DocumentList
           {...defaultProps}
-          onTitleUpdate={onTitleUpdate}
+          onMetadataUpdate={onMetadataUpdate}
         />
       );
 
@@ -932,10 +932,10 @@ describe('DocumentList', () => {
       expect(container.querySelector('[data-testid="documents-table-root"]')).toBeInTheDocument();
     });
 
-    it('renders without onTitleUpdate prop', () => {
+    it('renders without onMetadataUpdate prop', () => {
       const { container } = render(<DocumentList {...defaultProps} />);
 
-      // Component should render successfully without onTitleUpdate
+      // Component should render successfully without onMetadataUpdate
       expect(container.querySelector('[data-testid="documents-table-root"]')).toBeInTheDocument();
     });
   });

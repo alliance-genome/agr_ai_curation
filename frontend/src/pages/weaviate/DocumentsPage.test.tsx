@@ -25,6 +25,7 @@ interface MockDocumentListProps {
   onRefresh?: () => void;
   onDelete?: (id: string) => void;
   onReembed?: (id: string) => void;
+  onMetadataUpdate?: (id: string, title: string, filename: string) => Promise<void>;
 }
 
 interface MockInlineFilterBarProps {
@@ -46,6 +47,7 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
     onRefresh,
     onDelete,
     onReembed,
+    onMetadataUpdate,
   }: MockDocumentListProps) => (
     <section
       data-testid="document-list"
@@ -81,6 +83,16 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
       </button>
       <button type="button" onClick={() => onReembed?.(documents[0]?.id ?? '')}>
         Re-embed first document
+      </button>
+      <button
+        type="button"
+        onClick={() => void onMetadataUpdate?.(
+          documents[0]?.id ?? '',
+          'Renamed title',
+          'renamed.pdf',
+        )}
+      >
+        Rename first document
       </button>
     </section>
   ),
@@ -260,6 +272,34 @@ describe('DocumentsPage request ownership', () => {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         method,
+      }),
+    ]);
+  });
+
+  it('updates title and filename in row state immediately after PATCH success', async () => {
+    const refreshResponse = deferred<Response>();
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(documentListResponse('metadata-document', 1))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        document_id: 'metadata-document',
+        title: 'Renamed title',
+        filename: 'renamed.pdf',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockImplementationOnce(() => refreshResponse.promise);
+
+    render(<DocumentsPage />);
+    await screen.findByText('metadata-document.pdf');
+    fireEvent.click(screen.getByRole('button', { name: 'Rename first document' }));
+
+    expect(await screen.findByText('renamed.pdf')).toBeInTheDocument();
+    expect(vi.mocked(global.fetch).mock.calls[1]).toEqual([
+      '/api/weaviate/documents/metadata-document',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ title: 'Renamed title', filename: 'renamed.pdf' }),
       }),
     ]);
   });

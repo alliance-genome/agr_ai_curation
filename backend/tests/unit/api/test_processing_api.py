@@ -12,6 +12,35 @@ from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
 
 
+class _ClaimSession:
+    def __init__(self):
+        self.commits = 0
+        self.rollbacks = 0
+        self.closed = False
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+    def close(self):
+        self.closed = True
+
+
+def _patch_reprocess_claim(monkeypatch, file_path):
+    claim_session = _ClaimSession()
+    claim_calls = []
+
+    def _source_path(*_args, **kwargs):
+        claim_calls.append(kwargs)
+        return file_path
+
+    monkeypatch.setattr(processing, "SessionLocal", lambda: claim_session)
+    monkeypatch.setattr(processing, "_owned_source_file_path", _source_path)
+    return claim_session, claim_calls
+
+
 @pytest.mark.asyncio
 async def test_reprocess_document_not_found(monkeypatch):
     async def _get_document(_user_id, _doc_id):
@@ -94,7 +123,7 @@ async def test_reprocess_document_treats_unknown_status_as_pending(monkeypatch, 
 
     monkeypatch.setattr(processing, "get_document", _get_document)
     monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    _patch_reprocess_claim(monkeypatch, file_dir / filename)
     monkeypatch.setattr(processing, "update_document_status", _update_status)
     monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
@@ -132,7 +161,7 @@ async def test_reprocess_document_success_schedules_background_task(monkeypatch,
 
     monkeypatch.setattr(processing, "get_document", _get_document)
     monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    claim_session, claim_calls = _patch_reprocess_claim(monkeypatch, file_dir / filename)
     monkeypatch.setattr(processing, "update_document_status", _update_status)
     monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
@@ -151,6 +180,9 @@ async def test_reprocess_document_success_schedules_background_task(monkeypatch,
     assert len(background.tasks) == 1
     assert status_calls == [(document_id, user_id, ProcessingStatus.PROCESSING)]
     assert track_calls == [(document_id, ProcessingStage.PARSING)]
+    assert claim_session.commits == 1
+    assert claim_session.closed is True
+    assert claim_calls == [{"session": claim_session, "for_update": True}]
 
 
 @pytest.mark.asyncio
@@ -197,7 +229,7 @@ async def test_reprocess_background_failure_reports_observability(
 
     monkeypatch.setattr(processing, "get_document", _get_document)
     monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    _patch_reprocess_claim(monkeypatch, file_dir / filename)
     monkeypatch.setattr(processing, "update_document_status", _update_status)
     monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
     monkeypatch.setattr(processing, "get_connection", lambda: object())
@@ -424,7 +456,7 @@ async def test_reprocess_document_allows_stale_processing_status_when_job_termin
     monkeypatch.setattr(processing, "get_document", _get_document)
     monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: SimpleNamespace(status="failed"))
     monkeypatch.setattr(processing.pipeline_tracker, "get_pipeline_status", _pipeline_status)
-    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    _patch_reprocess_claim(monkeypatch, file_dir / filename)
     monkeypatch.setattr(processing, "update_document_status", _update_status)
     monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
