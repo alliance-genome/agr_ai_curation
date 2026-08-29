@@ -516,6 +516,7 @@ async def _execute_flow_for_document(
     flow_output_branches: list[dict[str, Any]] = []
     flow_failure_message: Optional[str] = None
     flow_failure_already_reported = False
+    flow_failure_event_seen = False
 
     try:
         # Execute the flow and collect events
@@ -658,10 +659,12 @@ async def _execute_flow_for_document(
                     or event.get("message")
                     or "Flow execution failed."
                 )
-                flow_failure_already_reported = (
-                    failure_details.get("reason")
-                    in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
-                )
+                if not flow_failure_event_seen:
+                    flow_failure_already_reported = (
+                        failure_details.get("reason")
+                        in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
+                    )
+                    flow_failure_event_seen = True
 
             # Log supervisor completion for debugging
             if event_type == "SUPERVISOR_COMPLETE":

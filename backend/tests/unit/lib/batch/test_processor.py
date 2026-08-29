@@ -660,6 +660,45 @@ def test_execute_flow_for_document_marks_reported_persistence_flow_error(monkeyp
     assert published_events[0]["type"] == "FLOW_ERROR"
 
 
+def test_execute_flow_for_document_keeps_first_failure_capture_owner(monkeypatch):
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "RUN_ERROR",
+            "details": {
+                "reason": "specialist_step_failed",
+                "message": "Specialist execution failed",
+            },
+        }
+        yield {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_partial_result",
+                "message": "Extraction persistence was incomplete",
+            },
+        }
+
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(publish_sync=lambda *_args, **_kwargs: None),
+    )
+
+    with pytest.raises(processor.BatchFlowExecutionError) as exc_info:
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=SimpleNamespace(name="Batch Flow"),
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=str(uuid4()),
+                active_groups=[],
+            )
+        )
+
+    assert str(exc_info.value) == "Extraction persistence was incomplete"
+    assert exc_info.value.sentry_already_reported is False
+
+
 def test_execute_flow_for_document_preserves_formatter_failure_reason(monkeypatch):
     formatter_reason = (
         "Formatter could not create an output: the bound extraction result does "
