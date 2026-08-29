@@ -190,11 +190,12 @@ def _flow_definition(adapter_keys: Iterable[str], *, exit_agent_id: str = "curat
     previous = "pdf"
     for index, adapter_key in enumerate(adapter_keys, start=1):
         node_id = f"extract_{index}"
+        agent_id = "gene_extractor" if adapter_key == "gene" else adapter_key
         nodes.append(
             {
                 "id": node_id,
                 "type": "agent",
-                "data": {"agent_id": adapter_key, "agent_display_name": adapter_key},
+                "data": {"agent_id": agent_id, "agent_display_name": adapter_key},
             }
         )
         edges.append({"id": f"edge_{previous}_{node_id}", "source": previous, "target": node_id})
