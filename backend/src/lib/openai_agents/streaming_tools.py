@@ -111,6 +111,7 @@ from src.lib.observability.sentry import (
     gen_ai_conversation_scope,
     gen_ai_invoke_agent_span,
     set_redacted_ai_span_data,
+    terminal_failure_capture_owned,
 )
 from src.lib.curation_workspace.extraction_results import (
     InlineExtractionPersistenceResult,
@@ -1199,7 +1200,7 @@ def _emit_specialist_evidence_summary_or_raise(
         len(live_evidence_records),
         unverified_record_ids,
         evidence_reference_report,
-        extra={"sentry_skip_event": True},
+        extra={"sentry_skip_event": terminal_failure_capture_owned()},
     )
     add_specialist_event({
         "type": "SPECIALIST_ERROR",
@@ -5336,7 +5337,7 @@ async def run_specialist_with_events(
             e,
             total_event_count,
             event_type_counts,
-            extra={"sentry_skip_event": True},
+            extra={"sentry_skip_event": terminal_failure_capture_owned()},
         )
         builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
         raise
@@ -5408,7 +5409,7 @@ async def run_specialist_with_events(
             "%s required-tool enforcement failure: %s",
             specialist_name,
             required_tool_error,
-            extra={"sentry_skip_event": True},
+            extra={"sentry_skip_event": terminal_failure_capture_owned()},
         )
         add_specialist_event({
             "type": "SPECIALIST_ERROR",
@@ -5800,7 +5801,7 @@ async def run_specialist_with_events(
                             specialist_name,
                             retry_event_count,
                             retry_duration_ms,
-                            extra={"sentry_skip_event": True},
+                            extra={"sentry_skip_event": terminal_failure_capture_owned()},
                         )
 
                         # Emit ERROR audit event so it shows in the audit panel
@@ -5845,7 +5846,7 @@ async def run_specialist_with_events(
                         "%s retry mechanism error: %s",
                         specialist_name,
                         e,
-                        extra={"sentry_skip_event": True},
+                        extra={"sentry_skip_event": terminal_failure_capture_owned()},
                     )
                     error_message = f"{specialist_name} retry failed with error: {str(e)}"
                     _record_builder_specialist_output_failure(
@@ -5898,7 +5899,7 @@ async def run_specialist_with_events(
                         "finalizerToolCalls"
                     ],
                     "operation": "builder_finalization_missing",
-                    "sentry_skip_event": True,
+                    "sentry_skip_event": terminal_failure_capture_owned(),
                 },
             )
             add_specialist_event({
@@ -5937,7 +5938,7 @@ async def run_specialist_with_events(
                     "builder_run_id": builder_workspace.run_id,
                     "builder_invocation_id": builder_workspace.builder_invocation_id,
                     "operation": "builder_materializer_tool_name_missing",
-                    "sentry_skip_event": True,
+                    "sentry_skip_event": terminal_failure_capture_owned(),
                 },
             )
             add_specialist_event({

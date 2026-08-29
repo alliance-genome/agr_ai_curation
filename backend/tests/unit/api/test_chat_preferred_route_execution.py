@@ -380,6 +380,82 @@ async def test_selected_rgd_flow_receives_current_message_and_surfaces_distinct_
 
 
 @pytest.mark.asyncio
+async def test_failed_preferred_flow_reports_one_sanitized_terminal_failure(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="RGD GO and Disease Paper Review")
+    captures: list[dict] = []
+
+    async def _execute_flow(**_kwargs):
+        yield {
+            "type": "RUN_ERROR",
+            "data": {
+                "message": "provider payload that must not enter Sentry",
+                "error_type": "InvalidStatus",
+                "phase": "provider_call",
+                "provider": "openai",
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "failed",
+                "failure_reason": "provider payload that must not enter Sentry",
+            },
+        }
+
+    monkeypatch.setattr(chat_common, "execute_flow", _execute_flow)
+    monkeypatch.setattr(
+        chat_common,
+        "report_runtime_exception",
+        lambda exc, **kwargs: captures.append({"exception": exc, **kwargs}),
+    )
+
+    events = [
+        event
+        async for event in chat_common._run_resolved_chat_route(
+            route=ResolvedChatRoute(
+                mode="flow",
+                target_id=str(flow_id),
+                target_display_name=flow.name,
+                flow_run_id="flow-run-failed",
+            ),
+            db=SimpleNamespace(get=lambda _model, _id: flow),
+            db_user_id=7,
+            context_messages=[{"role": "user", "content": "review this"}],
+            user_id="auth-sub",
+            session_id="session-1",
+            turn_id="turn-1",
+            document_id=None,
+            document_name=None,
+            active_groups=["RGD"],
+            supervisor_model=None,
+            specialist_model=None,
+            supervisor_temperature=None,
+            specialist_temperature=None,
+            supervisor_reasoning=None,
+            specialist_reasoning=None,
+        )
+    ]
+
+    assert len(captures) == 1
+    capture = captures[0]
+    assert str(capture["exception"]) == "InvalidStatus during provider_call"
+    assert capture["component"] == "preferred_flow_chat_stream"
+    assert capture["operation"] == "terminal_outcome_failed"
+    assert capture["tags"] == {
+        "ai_curation.flow.id_hash": chat_common.hash_sentry_identifier(flow_id),
+        "flow_failure_type": "InvalidStatus",
+        "phase": "provider_call",
+        "provider": "openai",
+        "tool_name": None,
+    }
+    assert [event["type"] for event in events] == ["RUN_ERROR"]
+    assert events[0]["data"]["message"] == (
+        "provider payload that must not enter Sentry"
+    )
+
+
+@pytest.mark.asyncio
 async def test_selected_rgd_flow_followup_inspects_prior_refs_without_redispatch(
     monkeypatch,
 ):

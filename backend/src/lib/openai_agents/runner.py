@@ -17,6 +17,7 @@ import os
 import time
 import uuid
 from collections import deque
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -1200,7 +1201,7 @@ async def _run_agent_with_tracing(
                     extra={
                         "trace_id": trace_id,
                         "user_id": user_id,
-                        "sentry_skip_event": True,
+                        "sentry_skip_event": defer_terminal_failure_capture,
                     },
                     exc_info=True,
                 )
@@ -2388,7 +2389,11 @@ async def run_agent_streamed(
                         defer_terminal_failure_capture=propagate_runtime_exceptions,
                     )
                     try:
-                        with application_owned_terminal_failure_capture():
+                        with (
+                            application_owned_terminal_failure_capture()
+                            if propagate_runtime_exceptions
+                            else nullcontext()
+                        ):
                             async for event in agent_stream:
                                 # Capture completion data to update span
                                 if event.get("type") == "RUN_FINISHED":
@@ -2435,7 +2440,7 @@ async def run_agent_streamed(
                             "user_id": user_id,
                             "specialist_name": e.specialist_name,
                             "output_type": e.output_type_name,
-                            "sentry_skip_event": True,
+                            "sentry_skip_event": propagate_runtime_exceptions,
                         },
                         exc_info=True
                     )
@@ -2460,9 +2465,6 @@ async def run_agent_streamed(
                         root_span,
                         output=trace_final_output,
                     )
-                    if propagate_runtime_exceptions:
-                        traced_runtime_exception = e
-                        raise
                     _alert_task = asyncio.create_task(
                         notify_tool_failure(
                             error_type="SpecialistOutputError",
@@ -2534,7 +2536,6 @@ async def run_agent_streamed(
                             "session_id": session_id,
                             "user_id": user_id,
                             "error_type": type(e).__name__,
-                            "sentry_skip_event": True,
                         },
                         exc_info=True,
                     )
@@ -2671,7 +2672,11 @@ async def run_agent_streamed(
                     defer_terminal_failure_capture=propagate_runtime_exceptions,
                 )
                 try:
-                    with application_owned_terminal_failure_capture():
+                    with (
+                        application_owned_terminal_failure_capture()
+                        if propagate_runtime_exceptions
+                        else nullcontext()
+                    ):
                         async for event in agent_stream:
                             yield event
                 finally:
@@ -2728,7 +2733,11 @@ async def run_agent_streamed(
                 defer_terminal_failure_capture=propagate_runtime_exceptions,
             )
             try:
-                with application_owned_terminal_failure_capture():
+                with (
+                    application_owned_terminal_failure_capture()
+                    if propagate_runtime_exceptions
+                    else nullcontext()
+                ):
                     async for event in agent_stream:
                         yield event
             finally:

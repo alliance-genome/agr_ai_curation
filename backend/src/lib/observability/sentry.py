@@ -161,6 +161,12 @@ def application_owned_terminal_failure_capture():
         _TERMINAL_FAILURE_CAPTURE_OWNED.reset(token)
 
 
+def terminal_failure_capture_owned() -> bool:
+    """Return whether the active run has an application-owned Sentry capture."""
+
+    return _TERMINAL_FAILURE_CAPTURE_OWNED.get()
+
+
 _RUNTIME_TEXT_LIST_CONTEXT_KEYS = {"stages_completed"}
 
 _SECRET_PATTERNS = (
