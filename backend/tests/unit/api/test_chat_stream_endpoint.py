@@ -1954,6 +1954,93 @@ def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, capl
     assert "runner exploded" in caplog.text
 
 
+def test_preferred_flow_run_error_log_skips_duplicate_sentry_capture(monkeypatch, caplog):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="Paper Review")
+    captures = []
+
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
+        "_prepare_chat_stream_turn",
+        lambda **_kwargs: chat.PreparedChatStreamTurn(
+            turn_id="turn-flow-failed",
+            effective_user_message="review this",
+            route=chat.ResolvedChatRoute(
+                mode="flow",
+                target_id=str(flow_id),
+                target_display_name=flow.name,
+                flow_run_id="flow-run-failed",
+            ),
+            user_turn_created=True,
+        ),
+    )
+
+    async def _register_active_stream(*_args, **_kwargs):
+        return True
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    async def _not_cancelled(*_args, **_kwargs):
+        return False
+
+    async def _execute_flow(**_kwargs):
+        yield {
+            "type": "RUN_ERROR",
+            "data": {
+                "message": "provider failure detail",
+                "error_type": "InvalidStatus",
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "failed",
+                "failure_reason": "provider failure detail",
+            },
+        }
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _noop)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _noop)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _not_cancelled)
+    _patch_chat_impl(monkeypatch, "execute_flow", _execute_flow)
+    monkeypatch.setattr(
+        chat_common,
+        "report_runtime_exception",
+        lambda exc, **kwargs: captures.append((exc, kwargs)),
+    )
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="review this",
+                session_id="session-flow-failed",
+                turn_id="turn-flow-failed",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+            db=SimpleNamespace(get=lambda _model, _id: flow, rollback=lambda: None),
+        )
+    )
+    events = asyncio.run(_consume_stream(response))
+
+    assert len(captures) == 1
+    assert [event["type"] for event in events] == ["turn_failed"]
+    log_record = next(
+        record
+        for record in caplog.records
+        if record.message.startswith("Agent error during streaming chat")
+    )
+    assert log_record.sentry_skip_event is True
+
+
 def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()

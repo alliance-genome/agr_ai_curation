@@ -2474,6 +2474,7 @@ async def run_agent_streamed(
                             trace_id=trace_id,
                             session_id=session_id,
                             curator_id=user_id,
+                            capture_sentry=not propagate_runtime_exceptions,
                         )
                     )
                     # Audit event: SPECIALIST_ERROR (more specific than SUPERVISOR_ERROR)

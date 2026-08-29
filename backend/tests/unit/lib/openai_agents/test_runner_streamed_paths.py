@@ -760,6 +760,7 @@ async def test_flow_owned_specialist_output_error_keeps_notification_and_termina
         "RUN_ERROR",
     ]
     assert notifications[0]["error_type"] == "SpecialistOutputError"
+    assert notifications[0]["capture_sentry"] is False
     specialist_records = [
         record
         for record in caplog.records

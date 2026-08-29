@@ -336,7 +336,11 @@ async def chat_endpoint(
                     logger.error(
                         "Agent error during non-streaming chat: %s",
                         error_message,
-                        extra={"session_id": session_id, "user_id": user_id},
+                        extra={
+                            "session_id": session_id,
+                            "user_id": user_id,
+                            "sentry_skip_event": resolved_route.mode == "flow",
+                        },
                     )
                     break
 
@@ -777,6 +781,7 @@ async def chat_stream_endpoint(
                             "user_id": user_id,
                             "trace_id": trace_id,
                             "turn_id": current_turn_id,
+                            "sentry_skip_event": resolved_route.mode == "flow",
                         },
                     )
                     break
@@ -928,6 +933,7 @@ async def chat_stream_endpoint(
                             "user_id": user_id,
                             "trace_id": trace_id,
                             "turn_id": current_turn_id,
+                            "sentry_skip_event": resolved_route.mode == "flow",
                         },
                     )
                     runner_error_message = (
